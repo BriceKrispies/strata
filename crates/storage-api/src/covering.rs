@@ -4,12 +4,19 @@
 //! found missing (`InsufficientState`) while it ran. A planned query read finds the next page of
 //! candidates missing this way, so a read loads exactly the pages it examines (KRN-2521).
 //! [`load_covering`] is that loop for any attempt that runs kernel reads against one snapshot: a
-//! view runs every section's read in it (KRN-2526), and the tests count what it loads.
+//! view runs every section's read in it (KRN-2526), [`crate::query`] runs one read in it, and the
+//! tests count what it loads.
+//!
+//! A read whose rows follow references into records the snapshot lacks asks, through
+//! [`read_asking`], for exactly those records of every row it examined, in one round
+//! (KRN-2922, WG-5180). Nothing here widens a missing record to its object type.
 
 use crate::{ExecuteError, Store};
 use std::collections::BTreeSet;
 use strata_kernel::ext::*;
-use strata_kernel::{DomainError, ErrorKind, Need, State, TenantId};
+use strata_kernel::{
+    Context, DomainError, ErrorKind, Need, ReadRequest, ReadResult, State, TenantId,
+};
 
 /// The most rounds of loading one attempt may take after the first, as in [`crate::query`].
 pub const MAX_ROUNDS: usize = 32;
@@ -34,8 +41,9 @@ pub struct Covered<T> {
 /// Load `initial`, run `attempt` on the snapshot, and load again with what it asks for until it
 /// asks for nothing more or [`MAX_ROUNDS`] rounds have passed. The attempt asks in two ways: by
 /// pushing needs to its second argument (all of them are added at once), and by failing with
-/// `InsufficientState` naming one need. A missing single record is widened to its object type,
-/// as [`crate::query`] does, so that a rule followed on every row costs one round.
+/// `InsufficientState` naming one need, which is loaded as it is named: a missing record is
+/// loaded alone, never as its object type. An attempt that reads names every missing record of
+/// its rows at once with [`read_asking`].
 pub fn load_covering<T>(
     store: &dyn Store,
     tenant: &TenantId,
@@ -80,10 +88,7 @@ pub fn load_covering<T>(
         };
         match missing {
             Some(need) if rounds < MAX_ROUNDS && !wanted.contains(&need) => {
-                wanted.insert(match need {
-                    Need::Record { object, .. } => Need::AllOf(object),
-                    other => other,
-                });
+                wanted.insert(need);
                 rounds += 1;
             }
             missing => {
@@ -98,4 +103,27 @@ pub fn load_covering<T>(
             }
         }
     }
+}
+
+/// Run a kernel read on `state` as an attempt of [`load_covering`]: when the snapshot lacks
+/// state, every need the kernel can name at once goes to `asked`
+/// ([`strata_kernel::query_plan::read_missing`]: each record the examined rows refer to, and the
+/// page of candidates the read stopped at), so one round answers every row (KRN-2922).
+pub fn read_asking(
+    state: &State,
+    request: &ReadRequest,
+    ctx: &Context,
+    asked: &mut Vec<Need>,
+) -> Result<ReadResult, DomainError> {
+    let outcome = strata_kernel::read(state, request, ctx);
+    if let Err(DomainError {
+        kind: ErrorKind::InsufficientState,
+        missing,
+        ..
+    }) = &outcome
+    {
+        asked.extend(strata_kernel::query_plan::read_missing(state, request, ctx));
+        asked.extend(missing.iter().cloned());
+    }
+    outcome
 }

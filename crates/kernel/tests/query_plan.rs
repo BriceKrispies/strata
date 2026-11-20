@@ -1,12 +1,15 @@
-//! Index plans of named queries (KRN-2520 to KRN-2524): which queries are planned, that a planned
-//! read returns exactly the rows a scan returns in the same order for every reader across pages,
-//! that its loads are bounded whatever the size of the table, that its cursor resumes exactly
-//! after records are inserted and deleted, and that no field the reader may not read shows
-//! through the rows, their order or the page boundaries.
+//! Index plans of named queries (KRN-2520 to KRN-2524, KRN-2920 to KRN-2923): which queries are
+//! planned, that a planned read returns exactly the rows a scan returns in the same order for
+//! every reader across pages, that its loads are bounded whatever the size of the table, that its
+//! cursor resumes exactly after records are inserted and deleted, that no field the reader may not
+//! read shows through the rows, their order or the page boundaries, that an equality ordered by
+//! another attribute is served by a pair index, that a read whose rows follow references loads
+//! exactly the records they name, and what a scan's warning says would plan it.
 //!
 //! The snapshots are cut from a complete tenant by the needs the kernel names, as a store does,
-//! and a read that finds a need missing is asked again with it loaded (the loop of
-//! `strata_storage_api::query`). The random data is drawn from a fixed seed.
+//! and a read that finds a need missing is asked again with it and everything
+//! `query_plan::read_missing` names loaded (the loop of `strata_storage_api::query`). The random
+//! data is drawn from a fixed seed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -143,6 +146,63 @@ fn planned_queries() -> Vec<QueryDef> {
             &["s"],
             order("score", true),
         ),
+        // Pair plans (KRN-2920): an equality or a list of values on one field ordered by
+        // another attribute.
+        query(
+            "owner_newest",
+            eq(rec("owner"), param("who")),
+            &["who"],
+            order("$created_at", true),
+        ),
+        query(
+            "owner_by_at",
+            eq(param("who"), rec("owner")),
+            &["who"],
+            order("at", true),
+        ),
+        query(
+            "groups_by_score",
+            Expr::In(Box::new(rec("grp")), Box::new(param("gs"))),
+            &["gs"],
+            order("score", false),
+        ),
+        query(
+            "mine_by_at",
+            eq(rec("owner"), Expr::Principal),
+            &[],
+            order("at", false),
+        ),
+        query(
+            "open_by_updated",
+            Expr::And(vec![
+                eq(rec("status"), lit("open")),
+                cmp(CmpOp::Gt, rec("score"), int(-10)),
+            ]),
+            &[],
+            order("$updated_at", false),
+        ),
+        query(
+            "listed_groups_down",
+            Expr::In(
+                Box::new(rec("grp")),
+                Box::new(Expr::Lit(Value::List(vec![text("g1"), text("g2")]))),
+            ),
+            &[],
+            order("score", true),
+        ),
+        // A filter that follows a reference (KRN-2922).
+        query(
+            "owner_open_team",
+            Expr::And(vec![
+                eq(rec("owner"), param("who")),
+                eq(
+                    Expr::Through(Scope::Record, "team".into(), "open".into()),
+                    Expr::Lit(Value::Bool(true)),
+                ),
+            ]),
+            &["who"],
+            order("$created_at", true),
+        ),
     ]
 }
 
@@ -167,10 +227,38 @@ fn policy(id: &str, role_name: &str, condition: Option<Expr>) -> SchemaChange {
 /// Items: anyone reads an open one, a writer reads its own, an editor reads all. Only an editor
 /// may read `secret`.
 fn item_schema() -> Vec<SchemaChange> {
-    let mut changes = vec![SchemaChange::DefineObject {
-        id: object("item"),
-        label: "Item".into(),
-    }];
+    let mut changes = vec![
+        SchemaChange::DefineObject {
+            id: object("team"),
+            label: "Team".into(),
+        },
+        SchemaChange::DefineField {
+            object: object("team"),
+            field: field_def("open", FieldType::Bool, false),
+        },
+        SchemaChange::DefinePolicy(PolicyDef {
+            id: PolicyId::new("public_reads_teams").unwrap(),
+            role: role("public"),
+            resource: Resource::Object(object("team")),
+            actions: BTreeSet::from([Action::Read]),
+            condition: None,
+        }),
+        SchemaChange::DefineObject {
+            id: object("item"),
+            label: "Item".into(),
+        },
+        SchemaChange::DefineField {
+            object: object("item"),
+            field: field_def(
+                "team",
+                FieldType::Ref {
+                    target: object("team"),
+                    on_delete: OnDelete::SetNull,
+                },
+                false,
+            ),
+        },
+    ];
     for (name, ty) in [
         ("owner", FieldType::Str),
         ("grp", FieldType::Str),
@@ -222,14 +310,15 @@ fn item_world() -> World {
         .0
 }
 
+/// An item. Its creation and update times repeat, so the orders by them have ties.
 fn item(id: u64, fields: &[(&str, Value)]) -> Arc<Record> {
     Arc::new(Record {
         id: RecordId(id),
         object: object("item"),
         version: 1,
         created_by: None,
-        created_at: Timestamp(1),
-        updated_at: Timestamp(1),
+        created_at: Timestamp(((id * 7_919) % 97) as i64),
+        updated_at: Timestamp(((id * 31) % 13) as i64),
         fields: fields
             .iter()
             .filter(|(_, v)| *v != Value::Null || id % 7 == 0)
@@ -238,11 +327,38 @@ fn item(id: u64, fields: &[(&str, Value)]) -> Arc<Record> {
     })
 }
 
-/// The tenant of `world` with `items` added directly.
+/// The teams of the tenants the tests build; an even one is open.
+const TEAMS: u64 = 6;
+
+fn team(id: u64) -> Arc<Record> {
+    Arc::new(Record {
+        id: RecordId(id),
+        object: object("team"),
+        version: 1,
+        created_by: None,
+        created_at: Timestamp(1),
+        updated_at: Timestamp(1),
+        fields: BTreeMap::from([(field("open"), Value::Bool(id % 2 == 0))]),
+    })
+}
+
+/// The tenant of `world` with `items` and the teams added directly.
 fn with_items(world: &World, items: impl IntoIterator<Item = Arc<Record>>) -> Arc<TenantState> {
+    with_teams(world, items, (1..=TEAMS).map(team))
+}
+
+fn with_teams(
+    world: &World,
+    items: impl IntoIterator<Item = Arc<Record>>,
+    teams: impl IntoIterator<Item = Arc<Record>>,
+) -> Arc<TenantState> {
     let mut tenant = TenantState::clone(&world.tenants[&tenant_id(TENANT)]);
     let records = tenant.records.entry(object("item")).or_default();
     for record in items {
+        records.insert(record.id, record);
+    }
+    let records = tenant.records.entry(object("team")).or_default();
+    for record in teams {
         records.insert(record.id, record);
     }
     Arc::new(tenant)
@@ -282,6 +398,10 @@ fn random_item(rng: &mut Lcg, id: u64) -> Arc<Record> {
         0 => Value::Null,
         _ => Value::Time(rng.below(50) as i64),
     };
+    let team = match rng.below(5) {
+        0 => Value::Null,
+        _ => Value::Ref(RecordId(1 + rng.below(TEAMS))),
+    };
     item(
         id,
         &[
@@ -294,6 +414,7 @@ fn random_item(rng: &mut Lcg, id: u64) -> Arc<Record> {
                 text(if rng.below(3) == 0 { "closed" } else { "open" }),
             ),
             ("secret", Value::Int(rng.below(10) as i64)),
+            ("team", team),
         ],
     )
 }
@@ -338,6 +459,26 @@ fn partial(tenant: &TenantState, wanted: &BTreeSet<Need>) -> State {
             .into_iter()
             .cloned()
             .collect(),
+            Need::PairPage {
+                object,
+                field,
+                value,
+                order,
+                descending,
+                after,
+                limit,
+            } => query_plan::pair_page(
+                tenant.records_of(object),
+                field,
+                value,
+                order,
+                *descending,
+                after.as_ref(),
+                *limit,
+            )
+            .into_iter()
+            .cloned()
+            .collect(),
             other => panic!("a named query read does not ask for {other:?}"),
         };
         for record in found {
@@ -354,11 +495,24 @@ fn partial(tenant: &TenantState, wanted: &BTreeSet<Need>) -> State {
     }
 }
 
-/// A read through the store loop, and the most records one of its snapshots held.
-fn run(tenant: &TenantState, request: &ReadRequest, context: &Context) -> (ReadResult, usize) {
+/// What a read through the store loop loaded.
+struct Loaded {
+    /// The most records one of its snapshots held.
+    most: usize,
+    /// How many snapshots it took.
+    rounds: usize,
+    /// Every need of its last snapshot.
+    wanted: BTreeSet<Need>,
+    /// Its last snapshot.
+    last: State,
+}
+
+/// A read through the store loop: a need found missing is loaded with everything
+/// `read_missing` names, as `strata_storage_api::query` does.
+fn traced(tenant: &TenantState, request: &ReadRequest, context: &Context) -> (ReadResult, Loaded) {
     let mut wanted: BTreeSet<Need> = read_needs(&tenant.schema, request).into_iter().collect();
     let mut most = 0;
-    for _ in 0..64 {
+    for rounds in 1..=64 {
         let state = partial(tenant, &wanted);
         most = most.max(state.tenant.as_ref().unwrap().record_count());
         match read(&state, request, context) {
@@ -367,12 +521,28 @@ fn run(tenant: &TenantState, request: &ReadRequest, context: &Context) -> (ReadR
                 missing: Some(need),
                 ..
             }) if !wanted.contains(&need) => {
+                wanted.extend(query_plan::read_missing(&state, request, context));
                 wanted.insert(need);
             }
-            other => return (other.expect("the read is answered"), most),
+            other => {
+                let result = other.expect("the read is answered");
+                let loaded = Loaded {
+                    most,
+                    rounds,
+                    wanted,
+                    last: state,
+                };
+                return (result, loaded);
+            }
         }
     }
     panic!("the read kept asking for more");
+}
+
+/// A read through the store loop, and the most records one of its snapshots held.
+fn run(tenant: &TenantState, request: &ReadRequest, context: &Context) -> (ReadResult, usize) {
+    let (result, loaded) = traced(tenant, request, context);
+    (result, loaded.most)
 }
 
 fn named(
@@ -482,6 +652,29 @@ fn params_of(rng: &mut Lcg, name: &str) -> BTreeMap<String, Value> {
         "score_eq_ordered" => {
             params.insert("s".into(), number(&mut *rng));
         }
+        "owner_newest" | "owner_by_at" | "owner_open_team" => {
+            let who = match rng.below(6) {
+                0 => Value::Null,
+                1 => text("nobody"),
+                // Longer than the index key limit: answered by the scan.
+                2 => text(&"w".repeat(300)),
+                _ => text(rng.pick(&OWNERS)),
+            };
+            params.insert("who".into(), who);
+        }
+        "groups_by_score" => {
+            let gs = match rng.below(5) {
+                0 => Value::Null,
+                _ => Value::List(
+                    GROUPS
+                        .iter()
+                        .filter(|_| rng.below(2) == 0)
+                        .map(|g| text(g))
+                        .collect(),
+                ),
+            };
+            params.insert("gs".into(), gs);
+        }
         _ => {}
     }
     params
@@ -525,6 +718,47 @@ fn each_shape_is_planned_and_everything_else_is_a_scan() {
         Probe::Eq(query_plan::Operand::Principal)
     ));
     assert_eq!(index("group_by_id").order, PlanOrder::Id);
+    // An equality or a list of values on one field ordered by another attribute: a pair plan
+    // (KRN-2920).
+    let by = |attribute: &str, descending| PlanOrder::By {
+        attribute: attribute.into(),
+        descending,
+    };
+    assert_eq!(index("owner_newest").field, field("owner"));
+    assert_eq!(index("owner_newest").order, by("$created_at", true));
+    assert!(matches!(index("owner_newest").probe, Probe::Eq(_)));
+    assert_eq!(index("owner_by_at").order, by("at", true));
+    assert!(matches!(index("groups_by_score").probe, Probe::InParam(_)));
+    assert_eq!(index("groups_by_score").order, by("score", false));
+    assert!(matches!(
+        index("mine_by_at").probe,
+        Probe::Eq(query_plan::Operand::Principal)
+    ));
+    assert_eq!(index("open_by_updated").field, field("status"));
+    assert_eq!(index("open_by_updated").order, by("$updated_at", false));
+    assert!(matches!(
+        index("listed_groups_down").probe,
+        Probe::InList(_)
+    ));
+    assert_eq!(index("owner_open_team").order, by("$created_at", true));
+    // The pairs the store keeps are exactly those the plans read (KRN-2921).
+    let pairs: BTreeSet<(String, String)> = query_plan::index_pairs(schema)
+        .into_iter()
+        .map(|pair| {
+            assert_eq!(pair.object, object("item"));
+            (pair.field.as_str().to_string(), pair.order)
+        })
+        .collect();
+    let expected: BTreeSet<(String, String)> = [
+        ("owner", "$created_at"),
+        ("owner", "at"),
+        ("grp", "score"),
+        ("status", "$updated_at"),
+    ]
+    .iter()
+    .map(|(f, o)| (f.to_string(), o.to_string()))
+    .collect();
+    assert_eq!(pairs, expected);
     for def in planned_queries() {
         assert!(
             plan(&format!("{}_scan", def.id)).is_scan(),
@@ -547,15 +781,46 @@ fn each_shape_is_planned_and_everything_else_is_a_scan() {
         order("grp", false),
     ));
     assert!(text_range.contains("integer and time"), "{text_range}");
-    let other_order = reason(query(
+    // Ordered by a text field, an equality on another field is not served: the pair index
+    // orders integers and times.
+    let text_order = reason(query(
         "q",
         eq(rec("owner"), lit("x")),
         &[],
-        order("score", false),
+        order("status", false),
     ));
     assert!(
-        other_order.contains("no condition on score"),
-        "{other_order}"
+        text_order.contains("no condition on status")
+            && text_order.contains("not an integer or time field"),
+        "{text_order}"
+    );
+    // Neither an equality on a field with a read condition nor an order by one is paired.
+    let hidden_pair = reason(query(
+        "q",
+        eq(rec("secret"), int(3)),
+        &[],
+        order("at", false),
+    ));
+    assert!(
+        hidden_pair.contains("pair index (secret, at)") && hidden_pair.contains("read condition"),
+        "{hidden_pair}"
+    );
+    let hidden_order = reason(query(
+        "q",
+        eq(rec("owner"), lit("x")),
+        &[],
+        order("secret", true),
+    ));
+    assert!(hidden_order.contains("read condition"), "{hidden_order}");
+    let no_equality = reason(query(
+        "q",
+        cmp(CmpOp::Gt, rec("score"), int(1)),
+        &[],
+        order("at", false),
+    ));
+    assert!(
+        no_equality.contains("no condition on at") && no_equality.contains("another field"),
+        "{no_equality}"
     );
     let range_by_id = reason(query(
         "q",
@@ -575,7 +840,7 @@ fn each_shape_is_planned_and_everything_else_is_a_scan() {
         "q",
         eq(rec("owner"), lit("x")),
         &[],
-        order("$created_at", false),
+        order("$version", false),
     ));
     assert!(system.contains("system attribute"), "{system}");
     let unfiltered = QueryDef {
@@ -624,14 +889,14 @@ fn a_schema_change_says_which_queries_are_scans_and_why() {
             .collect()
     };
     let scan = define(query(
-        "by_owner_and_score",
+        "by_owner_and_status",
         eq(rec("owner"), lit("x")),
         &[],
-        order("score", true),
+        order("status", true),
     ));
     let found = warnings(&scan);
     assert_eq!(found.len(), 1, "{:?}", scan.evidence);
-    assert_eq!(found[0].rule, "query-plan:by_owner_and_score");
+    assert_eq!(found[0].rule, "query-plan:by_owner_and_status");
     assert!(found[0].passed, "a warning never refuses the change");
     assert!(
         found[0].detail.starts_with("warning:"),
@@ -639,10 +904,21 @@ fn a_schema_change_says_which_queries_are_scans_and_why() {
         found[0].detail
     );
     assert!(found[0].detail.contains("10000"), "{}", found[0].detail);
-    assert!(found[0].detail.contains("score"), "{}", found[0].detail);
+    assert!(found[0].detail.contains("status"), "{}", found[0].detail);
 
     let planned = define(query("by_group", eq(rec("grp"), lit("g1")), &[], vec![]));
     assert!(warnings(&planned).is_empty(), "{:?}", planned.evidence);
+    // "Posts by this author, newest first" is planned, so its definition warns of nothing
+    // (WG-5181).
+    for (name, attribute) in [("by_owner_newest", "$created_at"), ("by_owner_at", "at")] {
+        let paired = define(query(
+            name,
+            eq(rec("owner"), param("who")),
+            &["who"],
+            order(attribute, true),
+        ));
+        assert!(warnings(&paired).is_empty(), "{:?}", paired.evidence);
+    }
 
     // A read condition put on the field turns its planned query into a scan, and says so.
     let hide = world
@@ -742,6 +1018,19 @@ fn a_planned_query_over_a_hundred_thousand_records_loads_a_bounded_number() {
         ),
         (
             "groups_down",
+            BTreeMap::from([("gs".to_string(), Value::List(vec![text("g1"), text("g2")]))]),
+        ),
+        // Posts by this author, newest first (KRN-2920).
+        (
+            "owner_newest",
+            BTreeMap::from([("who".to_string(), text("x"))]),
+        ),
+        (
+            "owner_by_at",
+            BTreeMap::from([("who".to_string(), text("x"))]),
+        ),
+        (
+            "groups_by_score",
             BTreeMap::from([("gs".to_string(), Value::List(vec![text("g1"), text("g2")]))]),
         ),
     ] {
@@ -862,6 +1151,18 @@ fn the_cursor_resumes_exactly_after_records_are_inserted_and_deleted() {
             "groups_down",
             BTreeMap::from([("gs".to_string(), Value::List(vec![text("g0"), text("g4")]))]),
         ),
+        (
+            "owner_newest",
+            BTreeMap::from([("who".to_string(), text("x"))]),
+        ),
+        (
+            "groups_by_score",
+            BTreeMap::from([("gs".to_string(), Value::List(vec![text("g1"), text("g3")]))]),
+        ),
+        (
+            "owner_by_at",
+            BTreeMap::from([("who".to_string(), text("alpha:writer1"))]),
+        ),
     ] {
         let (first, _) = run(&before, &named(name, &params, 15, None), &context);
         let cursor = first.next.clone().expect("more than one page");
@@ -890,10 +1191,15 @@ fn the_cursor_resumes_exactly_after_records_are_inserted_and_deleted() {
         let QueryPlan::Index(plan) = plan_query(&after.schema, def) else {
             panic!("{name} is planned");
         };
-        let beyond = |r: &Record| match (&cursor, plan.order) {
+        let beyond = |r: &Record| match (&cursor, &plan.order) {
             (PageCursor::After(id), PlanOrder::Id) => r.id > *id,
-            (PageCursor::At(at), PlanOrder::Field { descending }) => {
-                query_plan::is_after(r.get(&plan.field), r.id, at, descending)
+            (PageCursor::At(at), order @ (PlanOrder::Field { .. } | PlanOrder::By { .. })) => {
+                query_plan::is_after(
+                    &query_plan::plan_value(&plan, r),
+                    r.id,
+                    at,
+                    order.descending(),
+                )
             }
             other => panic!("{other:?}"),
         };
@@ -1070,4 +1376,293 @@ fn the_index_page_is_the_values_between_the_bounds_in_order_after_the_position()
         vec![3],
         "descending after (5, 1): the rest of 5, then below it, at most the limit"
     );
+}
+
+// Verifies: KRN-2920
+#[test]
+fn the_pair_page_is_one_values_records_in_the_order_of_the_other_attribute() {
+    use query_plan::{pair_page, IndexPosition};
+    // Item 3 has no `at` and item 7 an explicit null; item 8 holds a grandfathered integer, which
+    // sorts before every time; the owner of item 6 is a list and that of item 4 another value.
+    let records: Vec<Arc<Record>> = [
+        (1, text("x"), Value::Time(5)),
+        (2, text("x"), Value::Time(3)),
+        (3, text("x"), Value::Null),
+        (4, text("y"), Value::Time(9)),
+        (5, text("x"), Value::Time(5)),
+        (6, Value::List(vec![text("x")]), Value::Time(1)),
+        (7, text("x"), Value::Null),
+        (8, text("x"), Value::Int(4)),
+    ]
+    .into_iter()
+    .map(|(id, owner, at)| item(id, &[("owner", owner), ("at", at)]))
+    .collect();
+    let ids = |page: Vec<&Arc<Record>>| page.iter().map(|r| r.id.0).collect::<Vec<_>>();
+    let owner = field("owner");
+    let page = |order: &str, descending, after: Option<&IndexPosition>, limit| {
+        ids(pair_page(
+            records.iter(),
+            &owner,
+            &text("x"),
+            order,
+            descending,
+            after,
+            limit,
+        ))
+    };
+    assert_eq!(
+        page("at", false, None, 10),
+        vec![3, 7, 8, 2, 1, 5],
+        "a missing or null value first, then by value, ties by id; only single values equal to x"
+    );
+    assert_eq!(page("at", true, None, 10), vec![1, 5, 2, 8, 3, 7]);
+    let at_five = IndexPosition {
+        value: Value::Time(5),
+        id: RecordId(1),
+    };
+    assert_eq!(page("at", true, Some(&at_five), 2), vec![5, 2]);
+    let at_null = IndexPosition {
+        value: Value::Null,
+        id: RecordId(3),
+    };
+    assert_eq!(page("at", false, Some(&at_null), 10), vec![7, 8, 2, 1, 5]);
+    // Created at (62 * id) mod 97: 1 at 62, 2 at 27, 3 at 89, 5 at 19, 7 at 46, 8 at 11.
+    assert_eq!(page("$created_at", true, None, 10), vec![3, 1, 7, 2, 5, 8]);
+    // Neither null nor a list equals a single value.
+    for value in [Value::Null, Value::List(vec![text("x")])] {
+        assert!(pair_page(records.iter(), &owner, &value, "at", false, None, 10).is_empty());
+    }
+}
+
+// Verifies: KRN-2921
+#[test]
+fn the_pairs_a_store_keeps_follow_the_queries_that_read_them() {
+    let world = item_world();
+    let step = |world: &World, change: SchemaChange| {
+        world
+            .step(
+                &Intent::ChangeSchema {
+                    changes: vec![change],
+                    expected_version: None,
+                    existing: ExistingData::Reject,
+                },
+                &ctx(TENANT, owner(), 5_000),
+            )
+            .expect("the change is accepted")
+            .0
+    };
+    let pairs = |world: &World| -> BTreeSet<(String, String)> {
+        query_plan::index_pairs(&world.tenants[&tenant_id(TENANT)].schema)
+            .into_iter()
+            .map(|pair| (pair.field.as_str().to_string(), pair.order))
+            .collect()
+    };
+    let status_at = ("status".to_string(), "at".to_string());
+    let status_created = ("status".to_string(), "$created_at".to_string());
+    assert!(!pairs(&world).contains(&status_at));
+    let defined = step(
+        &world,
+        SchemaChange::DefineQuery(query(
+            "status_at",
+            eq(rec("status"), param("s")),
+            &["s"],
+            order("at", true),
+        )),
+    );
+    assert!(pairs(&defined).contains(&status_at));
+    // Redefined with another order: the old pair goes and the new one comes.
+    let redefined = step(
+        &defined,
+        SchemaChange::DefineQuery(query(
+            "status_at",
+            eq(rec("status"), param("s")),
+            &["s"],
+            order("$created_at", false),
+        )),
+    );
+    assert!(!pairs(&redefined).contains(&status_at));
+    assert!(pairs(&redefined).contains(&status_created));
+    let removed = step(
+        &redefined,
+        SchemaChange::RemoveQuery(QueryId::new("status_at").unwrap()),
+    );
+    assert!(!pairs(&removed).contains(&status_created));
+    assert_eq!(pairs(&removed), pairs(&world));
+}
+
+// Verifies: KRN-2923
+#[test]
+fn a_scan_warning_names_the_one_change_that_would_plan_it() {
+    let world = item_world();
+    let tenant = &world.tenants[&tenant_id(TENANT)];
+    let schema = &tenant.schema;
+    let hint = |def: QueryDef| {
+        assert!(plan_query(schema, &def).is_scan(), "{} is a scan", def.id);
+        query_plan::plan_hint(schema, &def)
+    };
+    let by_status = hint(query(
+        "q",
+        eq(rec("owner"), lit("x")),
+        &[],
+        order("status", true),
+    ));
+    assert!(
+        by_status.contains("ordering by $created_at descending instead of status")
+            && by_status.contains("pair index (owner, $created_at)"),
+        "{by_status}"
+    );
+    let two_keys = hint(QueryDef {
+        order: vec![
+            OrderKey {
+                field: "at".into(),
+                descending: false,
+            },
+            OrderKey {
+                field: "status".into(),
+                descending: false,
+            },
+        ],
+        ..query("q", eq(rec("owner"), lit("x")), &[], vec![])
+    });
+    assert!(
+        two_keys.contains("ordering by at alone") && two_keys.contains("pair index (owner, at)"),
+        "{two_keys}"
+    );
+    let hidden = hint(query("q", eq(rec("secret"), int(3)), &[], vec![]));
+    assert!(
+        hidden.contains("removing the read condition of secret")
+            && hidden.contains("the index of secret"),
+        "{hidden}"
+    );
+    let down = hint(query(
+        "q",
+        eq(rec("grp"), lit("g1")),
+        &[],
+        order("$id", true),
+    ));
+    assert!(
+        down.contains("ordering by the record id ascending"),
+        "{down}"
+    );
+    // When no single change plans it, the hint says so.
+    let hidden_pair = hint(QueryDef {
+        order: vec![
+            OrderKey {
+                field: "secret".into(),
+                descending: false,
+            },
+            OrderKey {
+                field: "status".into(),
+                descending: false,
+            },
+        ],
+        ..query("q", eq(rec("owner"), lit("x")), &[], vec![])
+    });
+    assert!(hidden_pair.contains("no single change"), "{hidden_pair}");
+    let unequal = hint(query(
+        "q",
+        cmp(CmpOp::Ne, rec("owner"), lit("x")),
+        &[],
+        order("at", false),
+    ));
+    assert!(unequal.contains("no single change"), "{unequal}");
+
+    // The warning of the schema change carries the hint.
+    let (_, transition) = world
+        .step(
+            &Intent::ChangeSchema {
+                changes: vec![SchemaChange::DefineQuery(query(
+                    "owner_by_status",
+                    eq(rec("owner"), param("who")),
+                    &["who"],
+                    order("status", true),
+                ))],
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
+            &ctx(TENANT, owner(), 5_000),
+        )
+        .expect("the query is accepted");
+    let warning = transition
+        .evidence
+        .iter()
+        .find(|c| c.rule == "query-plan:owner_by_status")
+        .expect("a scan warning");
+    assert!(
+        warning
+            .detail
+            .contains("To serve it from an index: ordering by $created_at descending"),
+        "{}",
+        warning.detail
+    );
+}
+
+// Verifies: KRN-2922
+#[test]
+fn a_read_whose_rows_follow_references_loads_exactly_the_records_they_name() {
+    let world = item_world();
+    // Ten thousand items, each on its own team of twenty thousand; the team of every fourth item
+    // is closed.
+    let tenant = with_teams(
+        &world,
+        (1..=10_000).map(|id| {
+            let team_id = if id % 4 == 0 { 2 * id - 1 } else { 2 * id };
+            item(
+                id,
+                &[
+                    ("owner", text(OWNERS[(id % 3) as usize])),
+                    ("status", text("open")),
+                    ("team", Value::Ref(RecordId(team_id))),
+                ],
+            )
+        }),
+        (1..=20_000).map(team),
+    );
+    let complete = State::complete(tenant.clone());
+    let who = BTreeMap::from([("who".to_string(), text("x"))]);
+    let context = ctx(TENANT, user("alpha:editor"), 9_000);
+    let examined = (MAX_PLAN_CANDIDATES + INDEX_PAGE) as usize;
+    let mut cursor = None;
+    for size in [1, 20, 200, 200] {
+        let request = named("owner_open_team", &who, size, cursor.clone());
+        let (page, loaded) = traced(&tenant, &request, &context);
+        assert_eq!(
+            page,
+            read(&complete, &request, &context).unwrap(),
+            "pages of {size}: the read of the complete state"
+        );
+        assert_eq!(page.rows.len(), size as usize);
+        let wide: Vec<&Need> = loaded
+            .wanted
+            .iter()
+            .filter(|need| matches!(need, Need::AllOf(_) | Need::PageOf { .. }))
+            .collect();
+        assert!(
+            wide.is_empty(),
+            "pages of {size}: no object type and no scan is loaded: {wide:?}"
+        );
+        let teams = loaded
+            .last
+            .tenant
+            .as_ref()
+            .unwrap()
+            .records_of(&object("team"))
+            .count();
+        let named_teams = loaded
+            .wanted
+            .iter()
+            .filter(|need| matches!(need, Need::Record { object: o, .. } if *o == object("team")))
+            .count();
+        assert_eq!(teams, named_teams, "each team loaded was named alone");
+        assert!(
+            teams <= examined,
+            "pages of {size}: {teams} of 20000 teams loaded"
+        );
+        assert!(
+            loaded.rounds <= 2 + (MAX_PLAN_CANDIDATES / INDEX_PAGE) as usize,
+            "pages of {size}: {} rounds",
+            loaded.rounds
+        );
+        cursor = page.next;
+    }
 }

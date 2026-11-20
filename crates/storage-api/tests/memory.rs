@@ -32,6 +32,13 @@ fn memory_store_conforms() {
     );
 }
 
+/// The pair index of named queries follows writes and query definitions.
+// Verifies: KRN-2921
+#[test]
+fn memory_store_answers_pair_pages() {
+    conformance::pair_pages_follow_writes_and_definitions(&MemoryStore::new());
+}
+
 /// The identity service's documents are kept per tenant and kind.
 #[test]
 fn memory_store_keeps_documents() {
