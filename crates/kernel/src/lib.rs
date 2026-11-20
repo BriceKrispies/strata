@@ -30,6 +30,7 @@ pub mod limits;
 pub mod object_meta;
 pub mod operations;
 pub mod products;
+pub mod query_plan;
 pub mod read;
 pub mod rules;
 pub mod schema;

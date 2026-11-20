@@ -1,4 +1,5 @@
-//! The SQLite adapter. Every SQL statement and table of the tenant store lives in this file.
+//! The SQLite adapter. Every SQL statement and table of the tenant store lives in this file, and
+//! in `index_page.rs` for the record index's keys and its pages.
 //!
 //! Layout (TEN-001): a **control database** and **one database file per tenant**.
 //!
@@ -66,6 +67,8 @@ use strata_storage_api::{
     SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
     ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord, IDEMPOTENCY_RETENTION_MS,
 };
+
+mod index_page;
 
 /// The ledger table of the control database's migrations.
 const CONTROL_LEDGER: &str = "control_migrations";
@@ -519,6 +522,11 @@ const TENANT_MIGRATIONS: &[Migration] = &[
     );
     ",
     },
+    Migration {
+        version: 16,
+        name: "order keys of the record index",
+        sql: index_page::ORDER_KEYS_SQL,
+    },
 ];
 
 /// The steps of a tenant file's layout, for tests that build a file at an older level.
@@ -527,8 +535,9 @@ pub fn tenant_migration_steps() -> &'static [Migration] {
     TENANT_MIGRATIONS
 }
 
-/// Index values longer than this are not indexed; lookups for them scan the object type.
-const MAX_INDEXED: usize = 240;
+/// Index values longer than this are not indexed; lookups for them scan the object type. The
+/// kernel's query planner knows the same limit.
+const MAX_INDEXED: usize = strata_kernel::query_plan::INDEX_KEY_BYTES;
 
 /// Device names Windows reserves whatever their extension; a tenant with such an id gets a file
 /// name that no tenant id can produce (tenant ids never contain `-`).
@@ -625,24 +634,6 @@ fn decode<T: DeserializeOwned>(text: &str, what: &str) -> StoreResult<T> {
 
 fn corrupt_id(e: strata_kernel::IdError) -> StoreError {
     StoreError::Corrupt(e.to_string())
-}
-
-/// The index rows of a record: `(field, value key)`.
-fn index_rows(record: &Record) -> Vec<(String, String)> {
-    let mut rows = BTreeSet::new();
-    for (field, value) in &record.fields {
-        let items: Vec<&Value> = match value {
-            Value::List(items) => items.iter().collect(),
-            other => vec![other],
-        };
-        for item in items {
-            let key = encode(item);
-            if key.len() <= MAX_INDEXED {
-                rows.insert((field.as_str().to_string(), key));
-            }
-        }
-    }
-    rows.into_iter().collect()
 }
 
 /// The header of the tenant in an open tenant file, without records.
@@ -877,17 +868,7 @@ fn write_record(tx: &Transaction<'_>, record: &Record) -> StoreResult<()> {
         params![object, id],
     )
     .map_err(db)?;
-    let mut insert = tx
-        .prepare_cached(
-            "INSERT INTO record_index (object, field, value, id) VALUES (?1, ?2, ?3, ?4)",
-        )
-        .map_err(db)?;
-    for (field, value) in index_rows(record) {
-        insert
-            .execute(params![object, field, value, id])
-            .map_err(db)?;
-    }
-    Ok(())
+    index_page::insert_rows(tx, record)
 }
 
 /// A throttle counter of an open tenant file.
@@ -1494,6 +1475,7 @@ impl SqliteStore {
             .map_or(self.opened_at.0, |d| d.as_millis() as i64);
         db.migrate(TENANT_LEDGER, TENANT_MIGRATIONS, ran_at)
             .map_err(dbe)?;
+        db.write(dbe, index_page::rebuild_if_marked)?;
         Ok(db)
     }
 
@@ -2052,7 +2034,7 @@ impl SqliteStore {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The segment block (tenant migration 12)
+// The segment block (tenant migration 15)
 // ---------------------------------------------------------------------------------------------
 
 fn segment_id(text: &str) -> StoreResult<seg::SegmentId> {
@@ -2522,6 +2504,24 @@ impl Store for SqliteStore {
                         ledger::load(tx, &mut state, want)?;
                         Vec::new()
                     }
+                    Need::IndexPage {
+                        object,
+                        field,
+                        lower,
+                        upper,
+                        descending,
+                        after,
+                        limit,
+                    } => index_page::index_page(
+                        tx,
+                        object,
+                        field,
+                        lower,
+                        upper,
+                        *descending,
+                        after.as_ref(),
+                        *limit,
+                    )?,
                 };
                 put_records(&mut state, rows)?;
             }

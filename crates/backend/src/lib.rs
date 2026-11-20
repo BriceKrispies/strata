@@ -28,6 +28,7 @@ pub mod segments;
 pub mod service;
 pub mod settings;
 pub mod signin;
+pub mod view_load;
 pub mod worker;
 pub mod ws;
 

@@ -2,16 +2,14 @@
 //! policies do not grant.
 
 use crate::expr::{self, Env};
-use crate::intent::{
-    Check, CheckExt, Context, DomainError, DomainErrorExt, ErrorKind, ReadRequest, ReadResult,
-};
+use crate::intent::{Context, DomainError, DomainErrorExt, ErrorKind, ReadRequest, ReadResult};
 use crate::limits;
 use crate::rules::{
     authorize, authorize_needing, insufficient, missing_error, roles_of, Lookup, Subject,
 };
 use crate::schema::{Action, Resource, TenantSchema};
 use crate::state::{Need, Principal, Record, State, TenantState};
-use crate::types::{PageCursor, QueryDef, RecordId, RoleId, Timestamp, Value};
+use crate::types::{RoleId, Timestamp, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -120,103 +118,20 @@ pub fn visible_in(
     Ok(allowed)
 }
 
-/// How a named query is served: a window of at most `MAX_PAGE_SIZE` records in id order after a
-/// cursor, when the query has no filter and its order is none or the record id ascending, or
-/// the sorted scan of the object type, paged by offset.
-enum Plan {
-    ById { after: Option<RecordId>, size: u32 },
-    Scan { offset: usize, size: usize },
-}
-
-/// Whether a window of the object type can answer the query (KRN-1287): it has no filter, so a
-/// window holds what the page needs, and its order is the order records are stored in.
-fn is_windowed(def: &QueryDef) -> bool {
-    def.filter.is_none()
-        && match def.order.as_slice() {
-            [] => true,
-            [key] => key.field == "$id" && !key.descending,
-            _ => false,
-        }
-}
-
-/// The page size of a named query read (KRN-1285): the one the request names, else the one the
-/// query declares, else the default.
-fn page_size(def: &QueryDef, asked: Option<u32>) -> Result<u32, DomainError> {
-    let size = asked.or(def.limit).unwrap_or(limits::DEFAULT_PAGE_SIZE);
-    if size == 0 {
-        return Err(DomainError::new(
-            ErrorKind::InvalidIntent,
-            "a page size is at least 1",
-        ));
-    }
-    if size > limits::MAX_PAGE_SIZE {
-        return Err(DomainError::new(
-            ErrorKind::LimitExceeded,
-            format!(
-                "a page size of {size} is more than the maximum of {}",
-                limits::MAX_PAGE_SIZE
-            ),
-        ));
-    }
-    Ok(size)
-}
-
-fn plan(
-    def: &QueryDef,
-    asked: Option<u32>,
-    cursor: Option<&PageCursor>,
-) -> Result<Plan, DomainError> {
-    let size = page_size(def, asked)?;
-    let wrong = || {
-        DomainError::new(
-            ErrorKind::InvalidIntent,
-            "the cursor is not one this query issued",
-        )
-    };
-    match (is_windowed(def), cursor) {
-        (true, None) => Ok(Plan::ById { after: None, size }),
-        (true, Some(PageCursor::After(after))) => Ok(Plan::ById {
-            after: Some(*after),
-            size,
-        }),
-        (false, None) => Ok(Plan::Scan {
-            offset: 0,
-            size: size as usize,
-        }),
-        (false, Some(PageCursor::Offset(offset))) => Ok(Plan::Scan {
-            offset: *offset as usize,
-            size: size as usize,
-        }),
-        _ => Err(wrong()),
-    }
-}
-
 /// The state a read is expected to need. A named query needs a bounded window of its object
 /// type, never the whole of it (KRN-1286); a request the kernel will refuse needs nothing.
 pub fn read_needs(schema: &TenantSchema, request: &ReadRequest) -> Vec<Need> {
     match request {
         ReadRequest::Named {
             query,
+            params,
             page_size,
             cursor,
-            ..
         } => {
             let Some(def) = schema.queries.get(query) else {
                 return Vec::new();
             };
-            match plan(def, *page_size, cursor.as_ref()) {
-                Ok(Plan::ById { after, .. }) => vec![Need::PageOf {
-                    object: def.object.clone(),
-                    after,
-                    limit: limits::MAX_PAGE_SIZE,
-                }],
-                Ok(Plan::Scan { .. }) => vec![Need::PageOf {
-                    object: def.object.clone(),
-                    after: None,
-                    limit: limits::MAX_SCAN_RECORDS + 1,
-                }],
-                Err(_) => Vec::new(),
-            }
+            crate::query_plan::named_needs(schema, def, params, *page_size, cursor.as_ref())
         }
         ReadRequest::Records { object, ids } if ids.len() <= limits::MAX_READ_IDS => ids
             .iter()
@@ -252,7 +167,7 @@ pub fn read(
     };
     let schema = &tenant.schema;
 
-    let mut next = None;
+    let next = None;
     let rows: Vec<Arc<Record>> = match request {
         ReadRequest::Records { object, ids } => {
             if ids.len() > limits::MAX_READ_IDS {
@@ -281,129 +196,21 @@ pub fn read(
             }
             rows
         }
+        // Named queries are planned, read and redacted in `query_plan` (KRN-2520).
         ReadRequest::Named {
             query,
             params,
             page_size,
             cursor,
         } => {
-            let def = schema.queries.get(query).ok_or_else(|| {
-                DomainError::new(ErrorKind::UnknownQuery, format!("no query {query}"))
-            })?;
-            if let Some(extra) = params.keys().find(|name| !def.params.contains(*name)) {
-                return Err(DomainError::new(
-                    ErrorKind::InvalidIntent,
-                    format!("query {query} has no parameter {extra}"),
-                ));
-            }
-            let plan = plan(def, *page_size, cursor.as_ref())?;
-            let mut window_end = None;
-            let window = match plan {
-                Plan::ById { after, .. } => {
-                    let window = lookup.page_of(&def.object, after, limits::MAX_PAGE_SIZE)?;
-                    if window.len() == limits::MAX_PAGE_SIZE as usize {
-                        window_end = window.last().map(|r| r.id);
-                    }
-                    window
-                }
-                Plan::Scan { .. } => {
-                    let window = lookup.page_of(&def.object, None, limits::MAX_SCAN_RECORDS + 1)?;
-                    if window.len() > limits::MAX_SCAN_RECORDS as usize {
-                        return Err(DomainError::new(
-                            ErrorKind::LimitExceeded,
-                            format!(
-                                "query {query} orders {} records, more than the scan bound of {}",
-                                def.object,
-                                limits::MAX_SCAN_RECORDS
-                            ),
-                        )
-                        .with(vec![Check::fail(
-                            format!("scan-bound:{query}"),
-                            "the query is not served by a window of the object type",
-                        )]));
-                    }
-                    window
-                }
-            };
-            let roles = roles_of(tenant, &ctx.principal);
-            let mut keyed = Vec::new();
-            for record in window {
-                if !visible_in(lookup, &ctx.principal, record, ctx.now)? {
-                    continue;
-                }
-                if let Some(filter) = &def.filter {
-                    let env = Env {
-                        record: Some(record),
-                        old: Some(record),
-                        new: Some(record),
-                        params,
-                        now: ctx.now,
-                        principal: &ctx.principal,
-                        roles: &roles,
-                        lookup: Some(lookup),
-                    };
-                    let outcome = expr::holds(filter, &env);
-                    if outcome.is_err() {
-                        if let Some(missing) = missing_error(filter, &env) {
-                            return Err(missing);
-                        }
-                    }
-                    // A record the filter cannot be evaluated on (a grandfathered value of the
-                    // wrong type, say) is left out of the answer; it does not fail the query
-                    // for every reader.
-                    if !outcome.unwrap_or(false) {
-                        continue;
-                    }
-                }
-                let mut key = Vec::with_capacity(def.order.len());
-                for order in &def.order {
-                    match expr::attribute(Some(record), &order.field) {
-                        Ok(value) => key.push(value),
-                        Err(_) => break,
-                    }
-                }
-                if key.len() != def.order.len() {
-                    continue;
-                }
-                keyed.push((key, record.clone()));
-            }
-            keyed.sort_by(|(a, ra), (b, rb)| {
-                for (i, order) in def.order.iter().enumerate() {
-                    let ordering = a[i].cmp(&b[i]);
-                    let ordering = if order.descending {
-                        ordering.reverse()
-                    } else {
-                        ordering
-                    };
-                    if ordering.is_ne() {
-                        return ordering;
-                    }
-                }
-                ra.id.cmp(&rb.id)
-            });
-            let (offset, size) = match plan {
-                Plan::ById { size, .. } => {
-                    let size = size as usize;
-                    next = match keyed.get(size.wrapping_sub(1)) {
-                        Some((_, last)) if keyed.len() > size => Some(last.id),
-                        _ => window_end,
-                    }
-                    .map(PageCursor::After);
-                    (0, size)
-                }
-                Plan::Scan { offset, size } => {
-                    if offset.saturating_add(size) < keyed.len() {
-                        next = Some(PageCursor::Offset((offset + size) as u32));
-                    }
-                    (offset, size)
-                }
-            };
-            keyed
-                .into_iter()
-                .skip(offset)
-                .take(size)
-                .map(|(_, record)| record)
-                .collect()
+            return crate::query_plan::read_named(
+                lookup,
+                query,
+                params,
+                *page_size,
+                cursor.as_ref(),
+                ctx,
+            );
         }
     };
     let roles = roles_of(tenant, &ctx.principal);

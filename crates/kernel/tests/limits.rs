@@ -337,8 +337,18 @@ fn only_a_query_without_a_filter_ordered_by_nothing_or_the_id_is_a_window() {
     };
     assert_eq!(limit_of("plain"), limits::MAX_PAGE_SIZE);
     assert_eq!(limit_of("by_id"), limits::MAX_PAGE_SIZE);
-    for scan in ["by_id_down", "by_rank", "filtered"] {
+    for scan in ["by_id_down", "by_rank"] {
         assert_eq!(limit_of(scan), limits::MAX_SCAN_RECORDS + 1, "{scan}");
+    }
+    // KRN-2520: an equality on a field is served by that field's index, a page at a time.
+    match read_needs(&schema, &named("filtered", None, None)).as_slice() {
+        [Need::IndexPage {
+            field: f, limit, ..
+        }] => {
+            assert_eq!(f, &field("status"));
+            assert_eq!(*limit, limits::MAX_PAGE_SIZE);
+        }
+        other => panic!("{other:?}"),
     }
 }
 

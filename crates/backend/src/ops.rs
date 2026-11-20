@@ -11,7 +11,7 @@ use strata_kernel::ext::*;
 use strata_kernel::{
     read, read_needs, visible, Check, Context, DomainError, ErrorKind, FieldId, Intent,
     InvitationId, Need, ObjectTypeId, Output, PageCursor, Principal, PrincipalId, ReadRequest,
-    ReadResult, Record, RecordId, RoleId, State, TeamId, TenantId, TenantState,
+    ReadResult, Record, RecordId, RoleId, State, TeamId, TenantId, TenantState, ViewSection,
 };
 use strata_protocol::api::{
     ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest, MAX_VIEW_LIMIT,
@@ -416,8 +416,9 @@ fn page_of_request(
     Ok((limit, Some((section.to_string(), cursor))))
 }
 
-/// Answer one read against the snapshot, loading what the read needs first and what it reports
-/// missing after: a section loads the window of its page, never every record of its type.
+/// Answer one read against the snapshot, loading what the read needs when the snapshot does not
+/// cover it and what it reports missing after: a section loads the window of its page, never
+/// every record of its type.
 #[allow(clippy::too_many_arguments)]
 fn read_loaded(
     app: &App,
@@ -434,9 +435,11 @@ fn read_loaded(
         *state = app.store.load(tenant, &wanted)?;
         Ok(())
     };
-    let before = needs.len();
-    needs.extend(read_needs(schema, request));
-    if needs.len() != before {
+    // The view's snapshot (`view_load`) normally covers the read already; only a read it does not
+    // cover loads, and then everything this view has had to load so far.
+    let wanted = read_needs(schema, request);
+    if wanted.iter().any(|need| !state.coverage.covers(need)) {
+        needs.extend(wanted);
         reload(state, needs)?;
     }
     // A policy that follows a reference names the record it lacks; it is loaded and the read made
@@ -479,9 +482,9 @@ fn aggregate_loaded(
         *state = app.store.load(tenant, &wanted)?;
         Ok(())
     };
-    let before = needs.len();
-    needs.extend(strata_kernel::aggregates::needs(schema, request));
-    if needs.len() != before {
+    let wanted = strata_kernel::aggregates::needs(schema, request);
+    if wanted.iter().any(|need| !state.coverage.covers(need)) {
+        needs.extend(wanted);
         reload(state, needs)?;
     }
     for _ in 0..32 {
@@ -514,10 +517,7 @@ fn aggregate_loaded(
 ///
 /// Implements: CT-093
 pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<ViewData, ApiError> {
-    let mut state = app.store.load(&identity.tenant, &[])?;
-    let tenant = state.tenant.clone().ok_or_else(|| {
-        ApiError::new(ErrorCode::NotFound, format!("no site {}", identity.tenant))
-    })?;
+    let tenant = header(app, identity)?;
     let schema = &tenant.schema;
     let (def, route) = match_route(schema, &request.path).ok_or_else(|| {
         ApiError::new(ErrorCode::NotFound, format!("nothing at {}", request.path))
@@ -545,7 +545,32 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             }
         }
     }
+    // Each section loads only the page its query reads (WG-5104, KRN-2526). The snapshot is found
+    // with the very requests the sections below make: the page and cursor of the request included.
+    let page_of = |section: &ViewSection| -> (Option<u32>, Option<PageCursor>) {
+        if section.single {
+            return (None, None);
+        }
+        let cursor = continued
+            .as_ref()
+            .filter(|(name, _)| {
+                def.sections
+                    .get(name)
+                    .is_some_and(|held| std::ptr::eq(held, section))
+            })
+            .map(|(_, cursor)| cursor.clone());
+        (limit, cursor)
+    };
+    let request_of = |section: &ViewSection, done: &BTreeMap<String, Option<Arc<Record>>>| {
+        let (size, cursor) = page_of(section);
+        with_page(
+            section_request(section, &route, &request.request, done),
+            size,
+            cursor,
+        )
+    };
     let ctx = identity.context(app);
+    let mut state = crate::view_load::load_view_state(app, &ctx, def, &depends_on, &request_of)?;
     let anonymous = identity.anonymous();
     let shown = |record: &Arc<Record>| {
         let trimmed = without_others_authorship(&identity.principal, record);
@@ -589,22 +614,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             );
             continue;
         }
-        let (size, cursor) = if section.single {
-            (None, None)
-        } else {
-            (
-                limit,
-                continued
-                    .as_ref()
-                    .filter(|(section, _)| section == name)
-                    .map(|(_, cursor)| cursor.clone()),
-            )
-        };
-        let wanted = with_page(
-            section_request(section, &route, &request.request, &done),
-            size,
-            cursor,
-        );
+        let wanted = request_of(section, &done);
         let result = read_loaded(
             app,
             &identity.tenant,

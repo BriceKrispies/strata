@@ -22,3 +22,4 @@ pub mod project;
 pub mod proposal;
 pub mod subscribe;
 pub mod theme;
+pub mod view_needs;
