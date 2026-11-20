@@ -8,13 +8,28 @@
 # Build from the repository root.
 
 # ---- Rust: both binaries, built once ------------------------------------------------------
-FROM rust:1.96.0-alpine3.23 AS rust-build
+# cargo-chef splits the build in two layers: the dependencies, cooked from a recipe that changes
+# only when Cargo.toml or Cargo.lock do, and the workspace's own crates. A change to Strata's code
+# rebuilds only the second.
+FROM rust:1.96.0-alpine3.23 AS chef
 # SQLite is bundled in rusqlite, so it is compiled here: it needs a C compiler and musl headers.
-RUN apk add --no-cache musl-dev gcc make
+RUN apk add --no-cache musl-dev gcc make  && cargo install cargo-chef --locked --version 0.1.78
 WORKDIR /src
 ENV CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
+
+# The recipe: every manifest of the workspace and the lock file, nothing else.
+FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS rust-build
+COPY --from=planner /src/recipe.json recipe.json
+RUN cargo chef cook --release --locked --recipe-path recipe.json -p strata-backend -p strata-bff
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+# The gateway compiles in the screens table the generator writes for the web app (crates/bff/src/routes.rs).
+COPY web/src/generated/screens.rs web/src/generated/screens.rs
 RUN cargo build --release --locked -p strata-backend -p strata-bff
 
 # ---- Web: the bundle the gateway serves ---------------------------------------------------
