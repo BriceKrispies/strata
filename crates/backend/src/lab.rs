@@ -140,6 +140,35 @@ pub struct Lab {
     verify_pool: Pool,
     runs_per_tenant: usize,
     verify_interval_ms: i64,
+    /// The keys callers gave to start a projection, by tenant, person and key (D-6595).
+    keys: Mutex<BTreeMap<KeyScope, KeyedStart>>,
+}
+
+/// The tenant, the person and the key a start was made under.
+type KeyScope = (String, String, String);
+
+/// How long a key is honoured: 24 hours (D-6595).
+const KEY_HELD_MS: i64 = 86_400_000;
+
+/// What a key stands for.
+enum KeyedStart {
+    /// The start is being made; the request is held as the text the repeat is compared with.
+    Starting(String),
+    /// The start was made at `at` and answered `answer`.
+    Started {
+        request: String,
+        answer: Json,
+        at: i64,
+    },
+}
+
+fn key_mismatch() -> ApiError {
+    let mut error = ApiError::new(
+        ErrorCode::Invalid,
+        "This idempotency key was used for a projection with other input.",
+    );
+    error.0.kind = Some("IdempotencyMismatch".into());
+    error
 }
 
 const KEPT_RUNS: usize = 12;
@@ -166,6 +195,67 @@ impl Lab {
             verify_pool: Pool::new("lab-verify", 1, 2),
             runs_per_tenant: limits.lab_runs_per_tenant,
             verify_interval_ms: limits.verify_interval_ms,
+            keys: Mutex::default(),
+        }
+    }
+
+    /// Take the key for a start. `Ok(Some(answer))` is a repeat of a start already made with the
+    /// same request: its first answer. The same key with another request is refused as an
+    /// idempotency mismatch, and a repeat that arrives while the first is still being made is a
+    /// conflict. `Ok(None)` means the caller makes the start and then calls [`Lab::settle_key`].
+    fn claim_key(
+        &self,
+        scope: &KeyScope,
+        request: &str,
+        now: i64,
+    ) -> Result<Option<Json>, ApiError> {
+        let mut keys = self.keys.lock().map_err(|_| {
+            ApiError::hidden(
+                ErrorCode::Internal,
+                "the table of idempotency keys is poisoned",
+            )
+        })?;
+        keys.retain(|_, held| match held {
+            KeyedStart::Started { at, .. } => now - *at < KEY_HELD_MS,
+            KeyedStart::Starting(_) => true,
+        });
+        match keys.get(scope) {
+            Some(KeyedStart::Started {
+                request: first,
+                answer,
+                ..
+            }) if first == request => Ok(Some(answer.clone())),
+            Some(KeyedStart::Starting(first)) if first == request => Err(ApiError::new(
+                ErrorCode::Conflict,
+                "A projection with this idempotency key is being started. Try again.",
+            )),
+            Some(_) => Err(key_mismatch()),
+            None => {
+                keys.insert(scope.clone(), KeyedStart::Starting(request.to_string()));
+                Ok(None)
+            }
+        }
+    }
+
+    /// Record how a start made under a key ended: an answer is kept for a repeat, and a refusal
+    /// gives the key back, since nothing was started.
+    fn settle_key(&self, scope: &KeyScope, request: &str, answer: Option<&Json>, now: i64) {
+        if let Ok(mut keys) = self.keys.lock() {
+            match answer {
+                Some(answer) => {
+                    keys.insert(
+                        scope.clone(),
+                        KeyedStart::Started {
+                            request: request.to_string(),
+                            answer: answer.clone(),
+                            at: now,
+                        },
+                    );
+                }
+                None => {
+                    keys.remove(scope);
+                }
+            }
         }
     }
 
@@ -730,7 +820,38 @@ fn build_scenario(
 
 /// Start a projection in the background and return its id. Progress and the result are sent to
 /// the caller's WebSocket connections; the result can also be fetched by id.
+///
+/// A request that carries an idempotency key starts one projection for that key, tenant and person
+/// within 24 hours: a repeat with the same request answers the first answer, and the same key
+/// with another request is refused as an idempotency mismatch (D-6595, ARC-1599). The keys, like
+/// the runs, are held in this backend process.
 pub fn start(
+    shared: &Shared,
+    app: &App,
+    identity: &Identity,
+    request: RunRequest,
+) -> Result<Json, ApiError> {
+    let Some(key) = identity.idempotency_key.clone() else {
+        return start_once(shared, app, identity, request);
+    };
+    let principal = principal_of(identity)?;
+    let scope: KeyScope = (
+        identity.tenant.as_str().to_string(),
+        principal.as_str().to_string(),
+        key,
+    );
+    let held = format!("{request:?}");
+    let now = app.now().0;
+    if let Some(first) = app.lab.claim_key(&scope, &held, now)? {
+        return Ok(first);
+    }
+    let started = start_once(shared, app, identity, request);
+    app.lab
+        .settle_key(&scope, &held, started.as_ref().ok(), now);
+    started
+}
+
+fn start_once(
     shared: &Shared,
     app: &App,
     identity: &Identity,

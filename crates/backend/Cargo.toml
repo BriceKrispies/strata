@@ -52,6 +52,8 @@ webauthn-authenticator-rs = { version = "=0.6.2", default-features = false, feat
 tokio-tungstenite.workspace = true
 # The notes fixture the automation worker's tests run on.
 strata-kernel = { workspace = true, features = ["testkit"] }
+# The generated functions the backend's error mapping is compared with.
+strata-model-core.workspace = true
 
 # These drive the running service through the development routes.
 [[test]]

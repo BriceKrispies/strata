@@ -5,15 +5,20 @@
 //! listed fails.
 
 use std::time::Duration;
-use strata_backend::app::{ThrottleLimits, DEFAULT_SESSION_IDLE_MS, DEFAULT_SESSION_TTL_MS};
+use strata_backend::app::{
+    ApiError, ThrottleLimits, DEFAULT_SESSION_IDLE_MS, DEFAULT_SESSION_TTL_MS,
+};
 use strata_backend::limits::Limits;
+use strata_kernel::{DomainError, ErrorKind};
 use strata_model::machines::guess_throttle_flow_impl::{
     Emitted, Event, GuessThrottleFlowImpl, PwAttemptPayload, PwLockoutEndedPayload, State, Vars,
 };
 use strata_model::quotas::{self, Quota};
+use strata_model_core::functions::{error_code_of, store_error_code};
+use strata_model_core::types::StoreErrorKind;
 use strata_runtime::machine::TimerCommand;
 use strata_runtime::{Machine, Time};
-use strata_storage_api::{throttle_step, ThrottleRow, ThrottleRule};
+use strata_storage_api::{throttle_step, StoreError, ThrottleRow, ThrottleRule};
 
 // ---------------------------------------------------------------------------------------
 // Session lifetime
@@ -498,4 +503,176 @@ fn the_throttle_and_the_machine_differ_only_by_time() {
             failures: 10
         }
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// Error mapping (WG-4893, WG-4939)
+// ---------------------------------------------------------------------------------------
+
+/// The HTTP status of each error kind: `system.generation.errorKinds` of the specification.
+const ERROR_KIND_STATUS: &[(&str, u16)] = &[
+    ("unauthenticated", 401),
+    ("forbidden", 403),
+    ("not_found", 404),
+    ("conflict", 409),
+    ("invalid", 422),
+    ("throttled", 429),
+    ("unavailable", 503),
+    ("internal", 500),
+];
+
+/// Every kind of kernel rejection. The match has no wildcard, so a kind added to the
+/// specification stops this test compiling until it is listed here and compared below.
+fn every_kind() -> Vec<ErrorKind> {
+    let all = vec![
+        ErrorKind::TenantMismatch,
+        ErrorKind::TenantExists,
+        ErrorKind::TenantNotFound,
+        ErrorKind::Unauthorized,
+        ErrorKind::UnknownObject,
+        ErrorKind::UnknownField,
+        ErrorKind::UnknownRecord,
+        ErrorKind::UnknownRole,
+        ErrorKind::UnknownQuery,
+        ErrorKind::TypeMismatch,
+        ErrorKind::MissingRequired,
+        ErrorKind::ConstraintViolated,
+        ErrorKind::UniqueViolated,
+        ErrorKind::DanglingReference,
+        ErrorKind::StillReferenced,
+        ErrorKind::WorkflowViolation,
+        ErrorKind::VersionConflict,
+        ErrorKind::SchemaConflict,
+        ErrorKind::InvalidSchema,
+        ErrorKind::MigrationRejected,
+        ErrorKind::InsufficientState,
+        ErrorKind::Evaluation,
+        ErrorKind::InvalidIntent,
+        ErrorKind::LimitExceeded,
+        ErrorKind::IdempotencyMismatch,
+    ];
+    for kind in &all {
+        match kind {
+            ErrorKind::TenantMismatch
+            | ErrorKind::TenantExists
+            | ErrorKind::TenantNotFound
+            | ErrorKind::Unauthorized
+            | ErrorKind::UnknownObject
+            | ErrorKind::UnknownField
+            | ErrorKind::UnknownRecord
+            | ErrorKind::UnknownRole
+            | ErrorKind::UnknownQuery
+            | ErrorKind::TypeMismatch
+            | ErrorKind::MissingRequired
+            | ErrorKind::ConstraintViolated
+            | ErrorKind::UniqueViolated
+            | ErrorKind::DanglingReference
+            | ErrorKind::StillReferenced
+            | ErrorKind::WorkflowViolation
+            | ErrorKind::VersionConflict
+            | ErrorKind::SchemaConflict
+            | ErrorKind::InvalidSchema
+            | ErrorKind::MigrationRejected
+            | ErrorKind::InsufficientState
+            | ErrorKind::Evaluation
+            | ErrorKind::InvalidIntent
+            | ErrorKind::LimitExceeded
+            | ErrorKind::IdempotencyMismatch => {}
+        }
+    }
+    all
+}
+
+/// The wire name of an error code, which the specification's `error-code` and the backend's
+/// `ErrorCode` both write in snake_case.
+fn wire<T: serde::Serialize>(code: &T) -> String {
+    serde_json::to_value(code)
+        .expect("an error code serialises")
+        .as_str()
+        .expect("an error code is a string")
+        .to_string()
+}
+
+/// A kernel rejection becomes the error code and the HTTP status that the specification's
+/// `error-code-of` and `system.generation.errorKinds` give, for every kind of rejection, for an
+/// anonymous caller and a signed-in one alike.
+#[test]
+fn a_kernel_rejection_is_answered_with_the_code_and_status_the_specification_states() {
+    for kind in every_kind() {
+        for anonymous in [true, false] {
+            let error = DomainError {
+                kind,
+                message: "refused".to_string(),
+                evidence: Vec::new(),
+                missing: None,
+            };
+            let backend = ApiError::domain(error, anonymous);
+            let stated = error_code_of(&kind, anonymous);
+            assert_eq!(
+                wire(&backend.0.code),
+                wire(&stated),
+                "{kind:?} (anonymous: {anonymous})"
+            );
+            let status = ERROR_KIND_STATUS
+                .iter()
+                .find(|(name, _)| *name == wire(&stated))
+                .map(|(_, status)| *status);
+            assert_eq!(
+                Some(backend.0.code.status()),
+                status,
+                "the status of {kind:?} (anonymous: {anonymous})"
+            );
+            assert_eq!(
+                backend.0.kind.as_deref(),
+                Some(format!("{kind:?}").as_str()),
+                "the reply names the kind of the rejection"
+            );
+        }
+    }
+}
+
+/// A store failure becomes the code that `store-error-code` states, and the generic message that
+/// `store-api-error` states for it, with the detail kept out of the reply.
+#[test]
+fn a_store_failure_is_answered_with_the_code_the_specification_states() {
+    let cases = [
+        (
+            StoreError::Conflict {
+                expected: None,
+                found: None,
+            },
+            StoreErrorKind::Conflict,
+            "Someone else changed this at the same moment. Try again.",
+        ),
+        (
+            StoreError::NotFound("a record".to_string()),
+            StoreErrorKind::NotFound,
+            "That could not be found.",
+        ),
+        (
+            StoreError::Invalid("a detail".to_string()),
+            StoreErrorKind::Invalid,
+            "The request could not be stored.",
+        ),
+        (
+            StoreError::Unavailable("busy".to_string()),
+            StoreErrorKind::Unavailable,
+            "The service is not available right now.",
+        ),
+        (
+            StoreError::Corrupt("a page".to_string()),
+            StoreErrorKind::Corrupt,
+            "Something went wrong on our side.",
+        ),
+    ];
+    for (failure, kind, message) in cases {
+        let backend = ApiError::from(failure);
+        assert_eq!(
+            wire(&backend.0.code),
+            wire(&store_error_code(&kind)),
+            "{kind:?}"
+        );
+        assert_eq!(backend.0.message, message, "{kind:?}");
+        assert!(backend.0.kind.is_none() && backend.0.failed.is_empty());
+    }
 }

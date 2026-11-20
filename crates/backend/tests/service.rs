@@ -4019,6 +4019,70 @@ async fn projections_are_limited_per_tenant() {
     );
 }
 
+/// WG-5075: a projection started twice under one key is started once. The repeat answers the
+/// first run, the same key with another request is refused, and another key starts another run.
+#[tokio::test]
+async fn a_projection_started_twice_under_one_key_is_started_once() {
+    let backend = start().await;
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let request = json!({ "change": "require post.excerpt", "existing": "grandfather", "source": "generated", "steps": 50, "seed": 5, "faults": false });
+    let (status, first) = backend
+        .call_keyed(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/lab/run",
+            request.clone(),
+            "key-lab-0001",
+        )
+        .await;
+    assert_eq!(status, 200, "{first}");
+    let (status, again) = backend
+        .call_keyed(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/lab/run",
+            request.clone(),
+            "key-lab-0001",
+        )
+        .await;
+    assert_eq!(status, 200, "{again}");
+    assert_eq!(again, first, "the repeat answers the first run");
+
+    let mut other = request.clone();
+    other["seed"] = json!(6);
+    let (status, refused) = backend
+        .call_keyed(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/lab/run",
+            other,
+            "key-lab-0001",
+        )
+        .await;
+    assert_eq!(
+        (status, refused["code"].as_str()),
+        (422, Some("invalid")),
+        "{refused}"
+    );
+
+    let (status, second) = backend
+        .call_keyed(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/lab/run",
+            request,
+            "key-lab-0002",
+        )
+        .await;
+    assert_eq!(status, 200, "{second}");
+    assert_ne!(
+        second["run"], first["run"],
+        "another key starts another run"
+    );
+}
+
 /// A tenants directory of its own under the build directory, holding the given `tenant.json`
 /// files by directory name.
 fn tenants_dir_with(name: &str, bundles: &[(&str, String)]) -> PathBuf {

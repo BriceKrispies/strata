@@ -3835,6 +3835,7 @@ dependencies = [
  "strata-kernel",
  "strata-machine-store",
  "strata-model",
+ "strata-model-core",
  "strata-protocol",
  "strata-runtime",
  "strata-simulation",

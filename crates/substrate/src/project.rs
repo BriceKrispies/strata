@@ -82,7 +82,7 @@ pub struct ViewData {
     pub schema_version: SchemaVersion,
     /// What the kernel will check on a record of each object type the reader asked about (the
     /// request names them in `rules`), for this reader: see `strata_kernel::editor_rules`. Sent
-    /// in the model's `data` as `$record_rules`; left out while nothing was asked.
+    /// in the model as `record_rules`; left out while nothing was asked.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub record_rules: BTreeMap<String, Json>,
 }
@@ -423,7 +423,7 @@ fn project_row(record: &Record, section: &SectionData) -> Json {
 /// Project raw view data into the plain view model the browser renders. A single section
 /// becomes one object or `null`; any other section becomes an array.
 pub fn project(data: &ViewData) -> Json {
-    let mut sections: Map<String, Json> = data
+    let sections: Map<String, Json> = data
         .sections
         .iter()
         .map(|(name, section)| {
@@ -446,15 +446,12 @@ pub fn project(data: &ViewData) -> Json {
             (name.clone(), value)
         })
         .collect();
-    if !data.record_rules.is_empty() {
-        sections.insert("$record_rules".to_string(), json!(data.record_rules));
-    }
     let next: Map<String, Json> = data
         .sections
         .iter()
         .filter_map(|(name, section)| Some((name.clone(), json!(section.next.as_ref()?))))
         .collect();
-    json!({
+    let mut model = json!({
         "view": data.view.as_str(),
         "title": data.title,
         "params": data.params,
@@ -463,5 +460,11 @@ pub fn project(data: &ViewData) -> Json {
         "depends_on": data.depends_on.iter().map(|o| o.as_str()).collect::<Vec<_>>(),
         "revision": data.revision.0,
         "schema_version": data.schema_version.0,
-    })
+    });
+    // The editor's rules are a member of the model of their own, the output `record-rules` of the
+    // view contract (CT-251), not a section of `data`: a section is a record or a list of them.
+    if !data.record_rules.is_empty() {
+        model["record_rules"] = json!(data.record_rules);
+    }
+    model
 }
