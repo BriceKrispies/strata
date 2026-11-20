@@ -1,0 +1,227 @@
+{
+  "content": {
+    "automations": [
+      {
+        "id": "badge_milestones__silver",
+        "label": "Award the Silver badge at 500 points",
+        "run-as": {
+          "roles": [
+            "badge_milestones__awarder"
+          ]
+        },
+        "run-key": "param.owner",
+        "start": "award",
+        "steps": {
+          "award": {
+            "action": {
+              "CreateRecord": {
+                "fields": {
+                  "awarded_at": "param.at",
+                  "badge": "\"silver\"",
+                  "person": "param.owner"
+                },
+                "object": "badge_milestones__award"
+              }
+            },
+            "next": "notify",
+            "retry": {
+              "attempts": 5
+            }
+          },
+          "done": {
+            "action": "End"
+          },
+          "follow_up": {
+            "action": {
+              "SendMail": {
+                "category": "transactional",
+                "template": "badge_milestones__silver_follow_up",
+                "to": "param.owner"
+              }
+            },
+            "next": "done"
+          },
+          "mail": {
+            "action": {
+              "SendMail": {
+                "category": "transactional",
+                "template": "badge_milestones__silver_mail",
+                "to": "param.owner"
+              }
+            },
+            "next": "wait",
+            "retry": {
+              "attempts": 8,
+              "first-delay": 60000,
+              "max-delay": 3600000
+            },
+            "timeout": 30000
+          },
+          "notify": {
+            "action": {
+              "CreateNotice": {
+                "record": "param.award_record",
+                "template": "badge_milestones__silver_notice",
+                "to": "param.owner"
+              }
+            },
+            "next": "mail"
+          },
+          "viewed": {
+            "action": {
+              "Branch": {
+                "condition": "is_null(record.viewed_at)",
+                "else": "done",
+                "object": "badge_milestones__award",
+                "record": "param.award_record",
+                "then": "follow_up"
+              }
+            }
+          },
+          "wait": {
+            "action": {
+              "WaitFor": {
+                "duration": 604800000
+              }
+            },
+            "next": "viewed"
+          }
+        }
+      }
+    ],
+    "ledger-units": [
+      {
+        "description": "Points a person earns; the Silver badge is awarded when a person's balance reaches 500.",
+        "unit": "badge_milestones__points"
+      }
+    ],
+    "mail-templates": [
+      {
+        "body": "[{\"type\":\"paragraph\",\"text\":\"You have not yet looked at your Silver badge. Open your inbox to see it.\"}]",
+        "subject": "Your Silver badge is waiting",
+        "template": "badge_milestones__silver_follow_up"
+      },
+      {
+        "body": "[{\"type\":\"paragraph\",\"text\":\"Your points reached 500 and you earned the Silver badge.\"}]",
+        "subject": "You earned the Silver badge",
+        "template": "badge_milestones__silver_mail"
+      }
+    ],
+    "notice-templates": [
+      {
+        "body": "[{\"type\":\"paragraph\",\"text\":\"Your points reached 500.\"}]",
+        "template": "badge_milestones__silver_notice",
+        "title": "You earned the Silver badge"
+      }
+    ],
+    "objects": {
+      "badge_milestones__award": {
+        "constraints": {},
+        "fields": {
+          "awarded_at": {
+            "id": "awarded_at",
+            "label": "Awarded at",
+            "required": true,
+            "ty": "Time",
+            "unique": false
+          },
+          "badge": {
+            "id": "badge",
+            "label": "Badge",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          },
+          "person": {
+            "id": "person",
+            "label": "Person",
+            "personal": {
+              "kind": "identifier",
+              "searchable": false,
+              "subject": {
+                "Field": {
+                  "field": "person"
+                }
+              }
+            },
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          },
+          "viewed_at": {
+            "id": "viewed_at",
+            "label": "Viewed at",
+            "required": false,
+            "ty": "Time",
+            "unique": false
+          }
+        },
+        "id": "badge_milestones__award",
+        "label": "Badge award",
+        "retention": {
+          "days": 730,
+          "from": "Created"
+        }
+      }
+    },
+    "policies": {
+      "badge_milestones__awarder_awards": {
+        "actions": [
+          "Create",
+          "Read"
+        ],
+        "id": "badge_milestones__awarder_awards",
+        "resource": {
+          "Object": "badge_milestones__award"
+        },
+        "role": "badge_milestones__awarder"
+      },
+      "badge_milestones__member_own_awards": {
+        "actions": [
+          "Read",
+          "Update"
+        ],
+        "condition": "record.person == principal",
+        "id": "badge_milestones__member_own_awards",
+        "resource": {
+          "Object": "badge_milestones__award"
+        },
+        "role": "member"
+      }
+    },
+    "role-permissions": {
+      "badge_milestones__awarder": [
+        {
+          "Capability": "content-read"
+        },
+        {
+          "Capability": "content-write"
+        }
+      ]
+    },
+    "roles": {
+      "badge_milestones__awarder": {
+        "id": "badge_milestones__awarder",
+        "label": "Milestone awarder"
+      }
+    },
+    "triggers": [
+      {
+        "automation": "badge_milestones__silver",
+        "condition": "param.owner != null and param.balance_before < 500 and param.balance >= 500",
+        "id": "badge_milestones__silver_on_points",
+        "on": {
+          "LedgerPosted": {
+            "unit": "badge_milestones__points"
+          }
+        }
+      }
+    ]
+  },
+  "name": "Badge milestones",
+  "platform": {
+    "min": "0.2"
+  },
+  "product": "badge-milestones",
+  "version": "1.0.0"
+}

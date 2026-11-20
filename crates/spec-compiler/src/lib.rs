@@ -22,6 +22,7 @@
 //! a time.
 
 pub mod backend;
+pub mod bundle;
 pub mod budget;
 pub mod catalogue;
 pub mod codetext;

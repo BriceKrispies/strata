@@ -1,0 +1,53 @@
+{
+  // A small complete product for specc bundle (WG-5063): a capability of its own, a role that holds it
+  // beside a platform capability, a ledger unit, a mail template and a claim. Its header states the
+  // version and the platform range of the bundle; the claim is not tenant metadata and stays out of
+  // the bundle. The expected bundle is tests/fixtures/products/expected/member-tiers.bundle.json.
+  "product": {
+    "id": "member-tiers",
+    "name": "Member tiers",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../../../../specifications/spec.jsonc",
+      "entities": ["content-read", "product-module"]
+    }
+  },
+  "capabilities": [
+    {
+      "id": "member_tiers__promote",
+      "name": "Promote members",
+      "description": "Promote a member to a higher tier."
+    }
+  ],
+  "roles": [
+    {
+      "id": "member_tiers__editor",
+      "name": "Tier editor",
+      "description": "Promotes members.",
+      "level": "tenant",
+      "holders": ["person", "team"],
+      "capabilities": ["member_tiers__promote", "content-read"]
+    }
+  ],
+  "ledgerUnits": [
+    { "id": "member_tiers__points", "description": "Points a member earns." }
+  ],
+  "mailTemplates": [
+    {
+      "id": "member_tiers__promoted",
+      "subject": "You moved up a tier",
+      "body": "[{\"type\":\"paragraph\",\"text\":\"You are now in a higher tier.\"}]"
+    }
+  ],
+  "claims": [
+    {
+      "id": "member_tiers__promote-needs-capability",
+      "kind": "structural",
+      "statement": "A member SHALL be promoted only by a person who holds member_tiers__promote.",
+      "subjects": ["product-module"],
+      "rationale": "The capability is the only way to reach the promotion.",
+      "evaluate": { "method": "external-evidence" }
+    }
+  ]
+}

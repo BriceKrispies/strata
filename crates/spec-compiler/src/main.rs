@@ -13,6 +13,7 @@
 //! specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]
 //! specc catalogue    --spec <file> --out <dir> [--spec-hash <hash>]
 //! specc check-catalogue --spec <file> --out <dir> [--spec-hash <hash>]
+//! specc bundle       --spec <file> --product <file> --out <dir>
 //! ```
 //!
 //! Every command also takes `--product <file>`, any number of times: a product file layered on the
@@ -20,6 +21,12 @@
 //! specification before anything else happens, and the command is refused with one `error[layer.*]`
 //! line per problem. A product is tenant metadata, so nothing is generated from it: the files a
 //! command writes or checks are exactly those it writes or checks without `--product`.
+//!
+//! `bundle` is the one command that is about a product: it takes exactly one `--product` and writes
+//! `<product id>.bundle.json` into `<dir>`, the tenant bundle a tenant installs
+//! (`strata_spec_compiler::bundle`). The product header carries the `version` and the `platform`
+//! range of the bundle; a product without a version, a section a bundle has no place for and two
+//! entities with one id are refused with `error[bundle.*]` lines.
 //!
 //! `--spec-hash <hash>` is the specification's semantic hash as `exegra validate` reports it
 //! (`semanticHash`). It is written into the header of every generated file, so a file generated
@@ -72,8 +79,8 @@ use std::process::ExitCode;
 use strata_spec_compiler::emit::relative_path;
 use strata_spec_compiler::layers::{self, ProductFile};
 use strata_spec_compiler::{
-    catalogue, deploy, e2e, generate, generate_with_core, model_core, output, scenarios, web,
-    GeneratedFile, Options, RuntimeDependency,
+    bundle, catalogue, deploy, e2e, generate, generate_with_core, model_core, output, scenarios,
+    web, GeneratedFile, Options, RuntimeDependency,
 };
 
 const USAGE: &str = "usage:
@@ -89,7 +96,8 @@ const USAGE: &str = "usage:
   specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]
   specc catalogue    --spec <file> --out <dir> [--spec-hash <hash>]
   specc check-catalogue --spec <file> --out <dir> [--spec-hash <hash>]
-every command also takes --product <file>, repeatable: a product file layered on the specification";
+  specc bundle       --spec <file> --product <file> --out <dir>
+every command also takes --product <file>, repeatable: a product file layered on the specification (bundle takes exactly one)";
 
 /// The runtime crate of the checkout specc was built from.
 const DEFAULT_RUNTIME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime");
@@ -108,6 +116,7 @@ enum Command {
     CheckWeb,
     Catalogue,
     CheckCatalogue,
+    Bundle,
 }
 
 struct Args {
@@ -141,6 +150,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         Some((c, rest)) if c == "check-web" => (Command::CheckWeb, rest),
         Some((c, rest)) if c == "catalogue" => (Command::Catalogue, rest),
         Some((c, rest)) if c == "check-catalogue" => (Command::CheckCatalogue, rest),
+        Some((c, rest)) if c == "bundle" => (Command::Bundle, rest),
         Some((c, _)) => return Err(format!("unknown command \"{c}\"")),
         None => return Err("no command given".to_string()),
     };
@@ -205,9 +215,12 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             | Command::CheckWeb
             | Command::Catalogue
             | Command::CheckCatalogue
+            | Command::Bundle
     );
     if deploys && crate_name.is_some() {
-        return Err("--crate-name does not apply to deploy, e2e, web or catalogue".to_string());
+        return Err(
+            "--crate-name does not apply to deploy, e2e, web, catalogue or bundle".to_string(),
+        );
     }
     let end_to_end = matches!(command, Command::E2e | Command::CheckE2e);
     if !end_to_end && (origin.is_some() || expect_fail_prefix.is_some()) {
@@ -315,6 +328,10 @@ fn run() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if args.command == Command::Bundle {
+        // The bundle checks its product itself: the header carries the version of the bundle.
+        return run_bundle(&args, &text);
+    }
     if let Err(code) = check_products(&args, &text) {
         return code;
     }
@@ -402,7 +419,49 @@ fn run() -> ExitCode {
         | Command::Web
         | Command::CheckWeb
         | Command::Catalogue
-        | Command::CheckCatalogue => ExitCode::from(2),
+        | Command::CheckCatalogue
+        | Command::Bundle => ExitCode::from(2),
+    }
+}
+
+/// `bundle`: the product file as a tenant bundle, `<product id>.bundle.json` in `--out`.
+fn run_bundle(args: &Args, text: &str) -> ExitCode {
+    let [path] = args.products.as_slice() else {
+        eprintln!("specc: bundle takes exactly one --product <file>\n{USAGE}");
+        return ExitCode::from(2);
+    };
+    let product = match std::fs::read_to_string(path) {
+        Ok(product) => ProductFile {
+            path: path.clone(),
+            text: product,
+            file: absolute(Path::new(path)).ok(),
+        },
+        Err(e) => {
+            eprintln!("specc: cannot read the product file {path}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let platform = absolute(Path::new(&args.spec)).ok();
+    match bundle::generate(&args.spec, text, platform.as_deref(), &product) {
+        Ok(output) => {
+            for (section, count) in &output.omitted {
+                eprintln!(
+                    "specc: bundle {}: {count} item(s) of \"{section}\" state facts about the product, not tenant metadata, and are not in the bundle",
+                    output.product
+                );
+            }
+            run_generate(&args.out, &output.files)
+        }
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprintln!("{d}");
+            }
+            eprintln!(
+                "specc: refused {path} with {} diagnostic(s); nothing was written",
+                diagnostics.len()
+            );
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -851,6 +910,32 @@ mod tests {
             .unwrap()
             .products
             .is_empty());
+    }
+
+    #[test]
+    fn bundle_names_a_product_and_takes_no_crate_name() {
+        let parsed = parse_args(&args(&[
+            "bundle",
+            "--spec",
+            "s.jsonc",
+            "--product",
+            "p.jsonc",
+            "--out",
+            "o",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.command, Command::Bundle);
+        assert_eq!(parsed.products, vec!["p.jsonc"]);
+        assert!(parse_args(&args(&[
+            "bundle",
+            "--spec",
+            "s",
+            "--out",
+            "o",
+            "--crate-name",
+            "c"
+        ]))
+        .is_err());
     }
 
     #[test]
