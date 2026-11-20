@@ -221,75 +221,97 @@ pub trait Fetch: Send + Sync {
     fn post_form(&self, url: &str, form: &[(&str, &str)]) -> Result<Json, String>;
 }
 
-/// The HTTP fetcher. It follows no redirect (a provider that redirects is misconfigured, and a
-/// redirect is how a request is steered somewhere else), times out and reads a bounded answer.
+/// The HTTP fetcher: every fetch goes through the outbound gate (FED-261, D-702, K-252), which
+/// resolves the provider's host once, judges every address it resolves to, connects to the address
+/// it judged, bounds the time and the size of the answer, and follows no redirect, since only the
+/// address the configuration names may be reached. A name that resolves to an address of the
+/// platform's own network is refused, not only an address written as one.
+///
+/// The development exception (FED-2644): in a process started in development mode the gate also
+/// allows plain HTTP, any port and any address, so that a provider on this machine can be used.
+/// No configuration opens it outside development.
 ///
 /// The backend's request code is synchronous and runs on a thread meant for blocking, so a call
-/// waits for the client's answer on that thread.
+/// waits for the gate's answer on that thread.
+///
+/// Implements: FED-261, FED-2644, CT-207
 pub struct Http {
-    client: reqwest::Client,
+    gate: crate::outbound::Gate,
 }
 
 impl Default for Http {
+    /// Outside development: the outbound rule without exception.
     fn default() -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_default();
-        Http { client }
+        Http::new(false)
     }
 }
 
-async fn read_json(response: reqwest::Response) -> Result<Json, String> {
-    if !response.status().is_success() {
-        return Err(format!("the provider answered {}", response.status()));
+impl Http {
+    /// The fetcher through the system's outbound gate, with the development exception when
+    /// `development` is set; the time of a fetch is bounded at ten seconds.
+    pub fn new(development: bool) -> Self {
+        let policy = crate::outbound::Policy {
+            development,
+            total_timeout: std::time::Duration::from_secs(10),
+            max_bytes: MAX_BYTES as u64,
+            // Only the address the configuration names is reached (FED-261): a redirect elsewhere
+            // is refused, not followed.
+            max_redirects: 0,
+            ..crate::outbound::Policy::default()
+        };
+        Http::with_gate(crate::outbound::Gate::new(
+            std::sync::Arc::new(crate::outbound::transport::SystemResolver),
+            std::sync::Arc::new(crate::outbound::transport::HttpTransport),
+            policy,
+        ))
     }
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_BYTES as u64)
-    {
-        return Err("the provider's answer is too large".into());
+
+    /// The fetcher through `gate`, as a test builds it to control resolution and the network.
+    pub fn with_gate(gate: crate::outbound::Gate) -> Self {
+        Http { gate }
     }
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-    if bytes.len() > MAX_BYTES {
-        return Err("the provider's answer is too large".into());
+
+    fn fetch(&self, request: crate::outbound::Request) -> Result<Json, String> {
+        let response = self
+            .gate
+            .call(&request)
+            .map_err(|failure| failure.to_string())?;
+        if !(200..300).contains(&response.status) {
+            return Err(format!("the provider answered {}", response.status));
+        }
+        serde_json::from_slice(&response.body).map_err(|e| e.to_string())
     }
-    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
 }
 
-fn wait<T>(work: impl std::future::Future<Output = Result<T, String>>) -> Result<T, String> {
-    let handle = tokio::runtime::Handle::try_current()
-        .map_err(|_| "no runtime to fetch with".to_string())?;
-    handle.block_on(work)
+/// A form as `application/x-www-form-urlencoded` text.
+fn form_text(form: &[(&str, &str)]) -> String {
+    let Ok(mut url) = reqwest::Url::parse("https://form.invalid/") else {
+        return String::new();
+    };
+    url.query_pairs_mut().extend_pairs(form);
+    url.query().unwrap_or("").to_string()
 }
 
 impl Fetch for Http {
     fn get_json(&self, url: &str) -> Result<Json, String> {
-        wait(async {
-            let response = self
-                .client
-                .get(url)
-                .header("accept", "application/json")
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
-            read_json(response).await
-        })
+        let mut request = crate::outbound::Request::new(crate::outbound::Method::Get, url, "oidc");
+        request.headers = vec![("accept".into(), "application/json".into())];
+        request.max_bytes = Some(MAX_BYTES as u64);
+        self.fetch(request)
     }
 
     fn post_form(&self, url: &str, form: &[(&str, &str)]) -> Result<Json, String> {
-        wait(async {
-            let response = self
-                .client
-                .post(url)
-                .header("accept", "application/json")
-                .form(form)
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
-            read_json(response).await
-        })
+        let mut request = crate::outbound::Request::new(crate::outbound::Method::Post, url, "oidc");
+        request.headers = vec![
+            ("accept".into(), "application/json".into()),
+            (
+                "content-type".into(),
+                "application/x-www-form-urlencoded".into(),
+            ),
+        ];
+        request.body = form_text(form).into_bytes();
+        request.max_bytes = Some(MAX_BYTES as u64);
+        self.fetch(request)
     }
 }
 
@@ -450,6 +472,13 @@ impl Federation {
             providers.insert(tenant_id, parsed);
         }
         Ok(Federation::new(providers, Arc::new(Http::default())))
+    }
+
+    /// The same providers, fetched from with `fetch`: main gives the fetcher the development
+    /// exception only in development (FED-2644).
+    pub fn with_fetch(mut self, fetch: Arc<dyn Fetch>) -> Self {
+        self.fetch = fetch;
+        self
     }
 
     /// The same providers and these SAML providers of each tenant.

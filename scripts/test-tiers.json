@@ -125,6 +125,13 @@
       "unmeasured": true
     },
     {
+      "package": "strata-backend",
+      "target": "outbound",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
       "package": "strata-bff",
       "target": "backend_call",
       "tier": "routine",

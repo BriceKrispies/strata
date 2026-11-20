@@ -13,7 +13,8 @@
 //! same intent, so the idempotency record answers it.
 //!
 //! Built: create, update and delete a record, post to the ledger (decided by the kernel's ledger
-//! module through the intent post-ledger, keyed by the step key), branch on a condition (on a record read through the
+//! module through the intent post-ledger, keyed by the step key), call a webhook (a signed delivery
+//! queued once for the step key, crate::outbound::deliveries), branch on a condition (on a record read through the
 //! kernel as the automation principal), wait for a duration or until a time (the next step's job
 //! is created due then: nothing sleeps, D-6535), and end. Every other kind of the catalogue fails
 //! its step with the error "step kind ... is not built", recorded on the step and the run; it is
@@ -185,6 +186,9 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
             step,
             sequence,
         } => run_step(app, tenant, lease, run, automation, step, *sequence, now),
+        JobWork::Deliver { .. } => {
+            crate::outbound::deliveries::run_delivery(app, tenant, lease, now)
+        }
     }
 }
 
@@ -855,6 +859,47 @@ fn act(
                 },
                 other => Err(StepError::fatal(format!("unexpected output {other:?}"))),
             }
+        }
+        AutomationStep::CallWebhook { subscription, body } => {
+            // A signed delivery through the outbound gate (WFL-010, WFL-250): queued once for
+            // the step key, so an attempt made again queues nothing more; the delivery job makes
+            // the attempts and keeps the log (crate::outbound::deliveries). The status is 0,
+            // queued: the delivery's log has the answer.
+            use crate::outbound::deliveries::{enqueue_from_step, value_json, EnqueueError};
+            let mut fields = serde_json::Map::new();
+            for (name, e) in body {
+                fields.insert(name.clone(), value_json(&eval(name.as_str(), e)?));
+            }
+            let step_name = match &job.work {
+                JobWork::Step { step, .. } => Some(step.clone()),
+                _ => None,
+            };
+            let delivery = enqueue_from_step(
+                app,
+                tenant,
+                &def.id,
+                &run.run,
+                step_name.as_ref(),
+                key,
+                subscription,
+                serde_json::Value::Object(fields),
+                now,
+            )
+            .map_err(|error| match error {
+                EnqueueError::Missing(why) => StepError::fatal(why),
+                EnqueueError::Store(why) => StepError::retry(why),
+            })?;
+            Ok(Done {
+                result: AutomationStepResult::CallWebhook {
+                    delivery,
+                    status: 0,
+                },
+                outputs: vec![
+                    ("delivery", Value::Str(delivery.to_string())),
+                    ("status", Value::Int(0)),
+                ],
+                next: then(),
+            })
         }
         AutomationStep::End => Ok(Done {
             result: AutomationStepResult::End,

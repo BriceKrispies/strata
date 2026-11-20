@@ -23,6 +23,7 @@ pub mod relay;
 pub mod routes;
 pub mod signin;
 pub mod token;
+pub mod webhooks;
 
 use serde_json::json;
 use std::collections::BTreeMap;

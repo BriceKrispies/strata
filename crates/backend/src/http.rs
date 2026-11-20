@@ -1167,7 +1167,8 @@ pub fn router(app: Shared) -> Router {
             "/internal/automation/exceptions/settle",
             post(crate::worker::routes::settle_route),
         )
-        .route("/internal/ws", get(socket));
+        .route("/internal/ws", get(socket))
+        .merge(crate::outbound::routes::router());
     // The development routes are compiled only with the `development` feature, and mounted only
     // when the process was started in development mode.
     #[cfg(feature = "development")]

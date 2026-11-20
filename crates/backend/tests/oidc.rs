@@ -67,7 +67,8 @@ fn provider(mock: &Mock, adjust: impl FnOnce(&mut ProviderConfig)) -> ProviderCo
 fn federation(providers: Vec<ProviderConfig>, floor_ms: Option<i64>) -> Federation {
     let federation = Federation::new(
         BTreeMap::from([(TenantId::new("fieldnotes").unwrap(), providers)]),
-        Arc::new(Http::default()),
+        // The provider is on this machine over plain HTTP: the development exception (FED-2644).
+        Arc::new(Http::new(true)),
     );
     match floor_ms {
         Some(floor) => federation.with_refresh_floor(floor),
