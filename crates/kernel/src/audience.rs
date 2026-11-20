@@ -144,7 +144,7 @@ impl<'a> Footprint<'a> {
                 let reaches = match &policy.resource {
                     Resource::AnyObject => true,
                     Resource::Object(named) => named == object,
-                    Resource::Schema | Resource::Members => false,
+                    Resource::Schema | Resource::Members | Resource::Ledger { .. } => false,
                 };
                 if reaches && policy.actions.contains(&Action::Read) {
                     self.policies.push(policy);

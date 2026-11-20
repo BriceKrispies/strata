@@ -834,6 +834,7 @@ fn a_ledger_posting_starts_the_run_of_a_trigger_on_its_unit_with_the_balance_on_
     once.run_key = Some(Expr::Param("owner".into()));
     let world = defined(vec![
         SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+            expiry: None,
             unit: points_unit(),
             description: "Points".into(),
         }),
@@ -898,10 +899,12 @@ fn a_trigger_on_one_unit_does_not_match_a_posting_to_another() {
     let other = LedgerUnit::new("stars").unwrap();
     let world = defined(vec![
         SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+            expiry: None,
             unit: points_unit(),
             description: "Points".into(),
         }),
         SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+            expiry: None,
             unit: other.clone(),
             description: "Stars".into(),
         }),

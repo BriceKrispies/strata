@@ -1042,9 +1042,12 @@ pub fn partial(from: &LedgerState, need: &LedgerNeed, into: &mut LedgerState) {
             cutoff,
             limit,
         } => {
-            for account in
-                ledger_expiry::due_accounts(from.accounts.values(), unit, Timestamp(*cutoff), *limit as usize)
-            {
+            for account in ledger_expiry::due_accounts(
+                from.accounts.values(),
+                unit,
+                Timestamp(*cutoff),
+                *limit as usize,
+            ) {
                 put_account(into, account);
             }
         }

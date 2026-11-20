@@ -347,6 +347,7 @@ fn name(s: &str) -> StepName {
 /// `award`: one step that ends the run.
 fn award() -> AutomationDef {
     AutomationDef {
+        state: None,
         id: WorkflowId::new("award").unwrap(),
         label: "award".to_string(),
         run_as: RunAs {

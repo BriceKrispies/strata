@@ -403,7 +403,7 @@ pub fn copy_dependencies(
         .iter()
         .filter_map(|setting| {
             let def = definition(&tenant.schema, setting)?;
-            let found = resolve_definition(tenant, def, principal);
+            let found = resolve_definition(tenant, def, principal, &PlatformLevels::new());
             let refinement = match (found.source, principal, found.team) {
                 (SettingSource::Person, Principal::User(person), _) => {
                     Refinement::Person(person.clone())

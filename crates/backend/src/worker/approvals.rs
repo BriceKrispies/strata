@@ -121,6 +121,7 @@ pub(super) fn begin(
         steps: vec![waiting],
         exceptions: Vec::new(),
         jobs: vec![deadline_job],
+        ..WorkerWrites::default()
     }))
 }
 
@@ -180,6 +181,7 @@ pub(super) fn resolve(
         steps: vec![record],
         exceptions: Vec::new(),
         jobs: vec![job],
+        ..WorkerWrites::default()
     })
 }
 
@@ -248,6 +250,7 @@ pub(super) fn timeout(
             steps: vec![waiting],
             exceptions: vec![removed],
             jobs: Vec::new(),
+            ..WorkerWrites::default()
         });
     };
     let decision = ApprovalDecision {

@@ -427,7 +427,10 @@ pub fn notice(
                 SettingLevel::Team => match principal {
                     Principal::User(id) => TeamId::new(subject.as_str())
                         .ok()
-                        .and_then(|team| tenant.schema.team(&team).map(|t| t.members.contains(id)))
+                        .and_then(|team| {
+                            use strata_kernel::ext::TenantSchemaExt;
+                            tenant.schema.team(&team).map(|t| t.members.contains(id))
+                        })
                         .unwrap_or(false),
                     _ => false,
                 },

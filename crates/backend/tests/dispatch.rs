@@ -93,6 +93,7 @@ fn template(id: &str, subject: &str) -> SchemaChange {
 fn notify() -> AutomationDef {
     let send = StepName::new("send").unwrap();
     AutomationDef {
+        state: None,
         id: WorkflowId::new("notify").unwrap(),
         label: "notify".into(),
         run_as: RunAs {
@@ -833,6 +834,7 @@ fn an_automations_send_mail_step_sends_once() {
         &WorkflowId::new("notify").unwrap(),
         &run,
         &StepName::new("send").unwrap(),
+        steps[0].sequence,
     );
     let again = dispatch::step_send(
         &app,

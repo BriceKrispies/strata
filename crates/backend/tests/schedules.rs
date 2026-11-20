@@ -91,6 +91,7 @@ fn make_note(title: &str) -> AutomationStep {
 
 fn automation(id: &str, start: &str, steps: Vec<(&str, AutomationStepDef)>) -> AutomationDef {
     AutomationDef {
+        state: None,
         id: WorkflowId::new(id).unwrap(),
         label: id.to_string(),
         run_as: RunAs {

@@ -107,6 +107,7 @@ fn record_type(
     retention: RetentionRule,
 ) -> ObjectTypeDef {
     ObjectTypeDef {
+        searchable: None,
         id: ObjectTypeId::new(id).expect("object id"),
         label: id.to_string(),
         fields: fields.into_iter().collect(),

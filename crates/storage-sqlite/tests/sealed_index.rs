@@ -176,6 +176,8 @@ fn the_erasure_of_the_subject_removes_the_index_row_of_a_searchable_field() {
             subject: principal_id("alpha:ada"),
             resume_object: None,
             resume_after: None,
+            held_objects: Vec::new(),
+            addressed_invitations: Vec::new(),
         },
         &ctx("alpha", owner(), 20),
     )

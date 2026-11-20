@@ -48,7 +48,7 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    fn done(writes: WorkerWrites) -> Self {
+    pub(super) fn done(writes: WorkerWrites) -> Self {
         Outcome {
             report: JobReport::Succeeded,
             writes,

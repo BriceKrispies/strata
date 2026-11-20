@@ -1300,7 +1300,8 @@ pub async fn define_template(
     as_caller(&app, &headers, move |app, identity| {
         person(identity)?;
         same_tenant(app, identity, &body)?;
-        require_capability(&header(app, identity)?, identity, MAIL_CONFIGURE)?;
+        let state = header(app, identity)?;
+        require_capability(&state, identity, MAIL_CONFIGURE)?;
         let template = text(&body, "template", 64)?;
         let title = text(&body, "title", 998)?;
         let blocks = body

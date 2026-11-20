@@ -2850,6 +2850,7 @@ pub fn automation_purge_conforms(store: &dyn Store) {
         .unwrap();
 
     let run = |id: &str, ended: Option<i64>| RunRecord {
+        started_by: None,
         run: id.into(),
         automation: automation.clone(),
         trigger: None,
@@ -2871,6 +2872,7 @@ pub fn automation_purge_conforms(store: &dyn Store) {
         seq: 0,
     };
     let step = |run: &str| StepRecord {
+        approval: None,
         run: run.into(),
         sequence: 1,
         step: StepName::new("first").expect("name"),

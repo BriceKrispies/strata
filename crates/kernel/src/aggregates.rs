@@ -259,7 +259,7 @@ fn depends_on(schema: &TenantSchema, def: &QueryDef, agg: &AggregateDef) -> BTre
         let reaches = match &policy.resource {
             Resource::AnyObject => true,
             Resource::Object(named) => *named == def.object,
-            Resource::Schema | Resource::Members => false,
+            Resource::Schema | Resource::Members | Resource::Ledger { .. } => false,
         };
         if reaches && policy.actions.contains(&Action::Read) {
             if let Some(condition) = &policy.condition {

@@ -27,7 +27,7 @@ use strata_storage_api::{execute, segments as kept, ExecuteError, SessionRecord,
 use strata_substrate::bundle::{
     plan_install, plan_remove, run_planned, InstalledRecord, Planned, ProductBundle, ProductTarget,
 };
-use strata_substrate::subscribe::{segment_notice, Notice, Selector};
+use strata_substrate::subscribe::{segment_notice, Notice, Selector, SelectorExt};
 
 /// The time the tests start at: noon of a quota day, so that a few minutes never cross midnight.
 const T0: i64 = 1_728_043_200_000;
@@ -91,6 +91,7 @@ fn step(action: AutomationStep, next: Option<&str>) -> AutomationStepDef {
 
 fn automation(id: &str, start: &str, steps: Vec<(&str, AutomationStepDef)>) -> AutomationDef {
     AutomationDef {
+        state: None,
         id: WorkflowId::new(id).unwrap(),
         label: id.to_string(),
         run_as: RunAs {
@@ -799,7 +800,7 @@ fn a_restored_snapshot_leaves_membership_equal_to_a_fresh_evaluation_once_the_ba
         .tenant
         .unwrap()
         .records_of(&object("member"))
-        .filter(|r| r.get(&field("tier")) == text("gold"))
+        .filter(|r| r.get(&field("tier")) == &text("gold"))
         .filter_map(|r| match r.get(&field("principal")) {
             Value::Str(person) => Some(person.clone()),
             _ => None,

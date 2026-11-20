@@ -267,6 +267,8 @@ pub fn touched(change: &SchemaChange) -> Vec<EntityRef> {
         | C::DefineUnique { object, .. }
         | C::RemoveUnique { object, .. }
         | C::SetRetention { object, .. }
+        | C::SetSearchable { object, .. }
+        | C::ClearSearchable { object }
         | C::ClearRetention { object }
         | C::SetPublication { object, .. }
         | C::ClearPublication { object }

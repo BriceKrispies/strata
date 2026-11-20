@@ -1105,6 +1105,7 @@ fn notifier(id: &str, run_as: &str) -> strata_kernel::AutomationDef {
         compensate: None,
     };
     strata_kernel::AutomationDef {
+        state: None,
         id: strata_kernel::WorkflowId::new(id).unwrap(),
         label: id.to_string(),
         run_as: strata_kernel::RunAs {

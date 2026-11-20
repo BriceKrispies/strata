@@ -104,6 +104,7 @@ pub(super) fn begin(
             steps: vec![record],
             exceptions: Vec::new(),
             jobs: vec![job],
+            ..WorkerWrites::default()
         },
     }
 }
@@ -135,6 +136,7 @@ fn step_record(
         .and_then(|steps| steps.into_iter().find(|held| held.sequence == sequence));
     found.unwrap_or_else(|| StepRecord {
         run: run.run.clone(),
+        approval: None,
         sequence,
         step: step.clone(),
         state: StepState::Waiting,
@@ -241,6 +243,7 @@ pub(super) fn run_batch(
                 steps: vec![record],
                 exceptions: vec![removed],
                 jobs: Vec::new(),
+                ..WorkerWrites::default()
             },
         };
     };
@@ -364,6 +367,7 @@ pub(super) fn run_batch(
             steps: vec![record],
             exceptions: Vec::new(),
             jobs: follow,
+            ..WorkerWrites::default()
         },
     }
 }

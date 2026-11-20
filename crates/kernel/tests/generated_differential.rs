@@ -877,6 +877,7 @@ fn award(broken: bool) -> AutomationDef {
 fn keyed() -> AutomationDef {
     let done = StepName::new("done").unwrap();
     AutomationDef {
+        state: None,
         id: WorkflowId::new("keyed").unwrap(),
         label: "Keyed".into(),
         run_as: RunAs {
@@ -1018,6 +1019,7 @@ fn ledger_change(kind: u8) -> SchemaChange {
         0 | 1 => {
             let unit = if kind == 0 { "credits" } else { "points" };
             SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+                expiry: None,
                 unit: LedgerUnit::new(unit).unwrap(),
                 description: format!("The unit {unit}"),
             })
@@ -1768,7 +1770,7 @@ fn compare_settings(world: &World, tally: &mut Tally) {
                 let hand = strata_kernel::settings::resolve(tenant, &principal, setting);
                 let generated = spec::resolve_setting(tenant, &principal, setting);
                 let generated = generated.map_err(|failure| {
-                    domain_error(failure).unwrap_or_else(|fault| {
+                    domain_error(Failure::Error(failure)).unwrap_or_else(|fault| {
                         panic!("resolve-setting of {setting} faulted: {fault}")
                     })
                 });
@@ -1973,6 +1975,7 @@ fn the_ledger_periods_and_limits_agree_with_the_generated_functions() {
                 units: BTreeMap::from([(
                     LedgerUnit::new("credits").unwrap(),
                     LedgerUnitDecl {
+                        expiry: None,
                         unit: LedgerUnit::new("credits").unwrap(),
                         description: "Store credit".into(),
                     },
@@ -1987,7 +1990,14 @@ fn the_ledger_periods_and_limits_agree_with_the_generated_functions() {
                     principal: principal_id(owner),
                 };
                 let credits = LedgerUnit::new("credits").unwrap();
-                let hand = strata_kernel::ledger::limits_of(&schema, &owner, &credits, scope);
+                // The kernel keeps account limits outside the schema (WG-5172) and is handed the
+                // account's own limit; the spec function still finds it among the schema's limits.
+                let of_account = limits.iter().find(|l| {
+                    l.unit == credits
+                        && l.owner.as_ref() == Some(&owner)
+                        && l.scope.as_ref().map_or("", |s| s.0.as_str()) == scope
+                });
+                let hand = strata_kernel::ledger::limits_of(&schema, of_account, &credits);
                 let generated =
                     spec::ledger_limits_of(&schema, &owner, &credits, &scope.to_string());
                 assert_eq!(hand.floor, generated.floor.map(|amount| amount.0));

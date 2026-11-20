@@ -1866,6 +1866,7 @@ impl Store for SealedStore {
         let Some(def) = opened.schema.objects.get(&probe.object) else {
             return Ok(Vec::new());
         };
+        use strata_kernel::ext::TenantStateExt;
         Ok(strata_kernel::search::candidates_in(
             opened.records_of(&probe.object),
             def,
