@@ -13,26 +13,30 @@
     }
   },
   "types": [
-    { "id": "badges-tier", "name": "Badge tier", "kind": "enum", "values": ["bronze", "silver", "gold"], "description": "How rare a badge is." }
+    { "id": "badges__tier", "name": "Badge tier", "kind": "enum", "values": ["bronze", "silver", "gold"], "description": "How rare a badge is." }
   ],
   "roles": [
     {
-      "id": "badges-curator",
+      "id": "badges__curator",
       "name": "Badge curator",
       "description": "A member of a tenant who defines and awards the tenant's badges.",
       "level": "tenant",
       "holders": ["person"],
-      "capabilities": ["content-read", "content-write"]
+      "capabilities": ["content-read", "content-write", "badges__grant"]
     }
   ],
   "claims": [
     {
-      "id": "badges-installed-as-metadata",
+      "id": "badges__installed-as-metadata",
       "kind": "structural",
       "statement": "The badges product is installed into a tenant as a bundle through the platform's install-bundle contract, with no change to the kernel.",
       "subjects": ["product-module"],
       "rationale": "Its types and roles are tenant data that install-bundle writes through kernel intents (ARC-112, ARC-113).",
       "evaluate": { "method": "external-evidence" }
     }
+  ],
+  // A product may declare capabilities: names that tenant roles grant, in the namespace of the product (D-6590).
+  "capabilities": [
+    { "id": "badges__grant", "name": "Grant badges", "description": "Award a badge to a member of the tenant." }
   ]
 }

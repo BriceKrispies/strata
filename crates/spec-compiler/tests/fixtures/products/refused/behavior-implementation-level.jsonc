@@ -1,5 +1,5 @@
 {
   // Refused: a product behavior at implementation level (layer.platform-power).
   "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": ["kernel"] } },
-  "behaviors": [ { "id": "badges-flow", "name": "Badge flow", "subject": "kernel", "level": "implementation", "initial": "badges-flow-start", "states": [ { "id": "badges-flow-start", "name": "Start" } ] } ]
+  "behaviors": [ { "id": "badges__flow", "name": "Badge flow", "subject": "kernel", "level": "implementation", "initial": "badges__flow-start", "states": [ { "id": "badges__flow-start", "name": "Start" } ] } ]
 }

@@ -1,6 +1,6 @@
 {
   // Refused: uses the platform type "tenant-id" and capability "content-write" without importing them (layer.import-missing).
   "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
-  "types": [ { "id": "badges-award", "name": "Badge award", "kind": "struct", "fields": [ { "name": "tenant", "type": "tenant-id" } ] } ],
-  "roles": [ { "id": "badges-curator", "name": "Badge curator", "level": "tenant", "holders": ["person"], "capabilities": ["content-write"] } ]
+  "types": [ { "id": "badges__award", "name": "Badge award", "kind": "struct", "fields": [ { "name": "tenant", "type": "tenant-id" } ] } ],
+  "roles": [ { "id": "badges__curator", "name": "Badge curator", "level": "tenant", "holders": ["person"], "capabilities": ["content-write"] } ]
 }

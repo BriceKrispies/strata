@@ -34,16 +34,21 @@
 //!   contract implemented by a platform component or realised in code, an implementation-level
 //!   behavior, a domain, timer or delivery-guaranteed event);
 //! - `layer.platform-references-product`: a platform entity that names a product entity;
-//! - `layer.outside-catalogue`: a trigger whose event, or an automation whose step action, is not a
-//!   variant of the platform's published catalogue, the unions `trigger-event` and
-//!   `automation-step` (INT-153, INT-1522, D-6536).
+//! - `layer.namespace-missing`: a product entity whose id is not in the namespace of its product,
+//!   the product id with each hyphen replaced by an underscore, followed by two underscores
+//!   (D-6582, D-6597);
+//! - `layer.value-invalid`, `layer.outside-catalogue`: a value in a typed section (see
+//!   [`crate::layer_values`]) that does not conform to its platform type, or a union value whose
+//!   variant the platform's union lacks (INT-153, INT-1522, D-6536);
+//! - `layer.reference-unknown`, `layer.cross-product-reference`: a name in a typed section, or a
+//!   product capability in a `capabilities` or `requires` list, that no entity of the product
+//!   declares, or that another product file declares.
 //!
 //! References between entities are typed by Exegra's meta-model. specc does not have it, so it
 //! reads the keys that hold references ([`REFERENCE_KEYS`], checked against the meta-model by
 //! `tests/layers.rs`) and requires an import for a platform entity named under one; Exegra checks
-//! the typed references themselves (`layer.reference-unknown`,
-//! `layer.cross-product-reference`). Nothing is generated from a product: its entities are tenant
-//! metadata, installed into a tenant as a bundle, not code of the kernel.
+//! the typed references of the entity sections itself. Nothing is generated from a product: its
+//! entities are tenant metadata, installed into a tenant as a bundle, not code of the kernel.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -52,13 +57,15 @@ use serde_json::{Map, Value};
 
 use crate::diagnostic::Diagnostic;
 use crate::ir::Spec;
+use crate::layer_values::{self, RefUse, Types, NAMESPACE_SEPARATOR};
 use crate::{jsonc, load};
 
 /// The header key of a product file.
 pub const PRODUCT_HEADER: &str = "product";
 
-/// The sections a product file may declare, in the order the messages list them, and what each
-/// is for. Settings are a record type; permissions are roles over platform capabilities.
+/// The entity sections a product file may declare (entities of the specification format), in the
+/// order the messages list them, and what each is for. Permissions are roles over platform
+/// capabilities; the one platform section a product adds to is its own capabilities (D-6590).
 pub const PRODUCT_SECTIONS: &[(&str, &str)] = &[
     ("records", "record types"),
     ("types", "the value types of its records and operations"),
@@ -76,14 +83,25 @@ pub const PRODUCT_SECTIONS: &[(&str, &str)] = &[
     ("claims", "claims about its own entities"),
     ("evidence", "evidence of its claims"),
     (
-        "triggers",
-        "triggers (values of the platform type trigger-def)",
-    ),
-    (
-        "automations",
-        "automations (values of the platform type automation-def)",
+        "capabilities",
+        "capabilities (names that tenant roles grant; each id in the namespace of the product, D-6590)",
     ),
 ];
+
+/// Every section a product file may declare, in the order the messages list them: the entity
+/// sections of [`PRODUCT_SECTIONS`], then the typed sections of
+/// [`layer_values::TYPED_SECTIONS`] (each conforms to a platform type).
+pub fn product_sections() -> Vec<(&'static str, &'static str)> {
+    PRODUCT_SECTIONS
+        .iter()
+        .copied()
+        .chain(
+            layer_values::TYPED_SECTIONS
+                .iter()
+                .map(|s| (s.section, s.purpose)),
+        )
+        .collect()
+}
 
 /// The platform union whose variants are the step kinds an automation may name (D-6522).
 pub const STEP_CATALOGUE: &str = "automation-step";
@@ -106,8 +124,16 @@ pub const IMPORT_UNKNOWN: &str = "layer.import-unknown";
 pub const IMPORT_MISSING: &str = "layer.import-missing";
 /// An id the platform or another product file already declares.
 pub const REDEFINES_ENTITY: &str = "layer.redefines-entity";
-/// A trigger event or a step action outside the platform's published catalogue.
+/// A union value (a trigger event, a step action) outside the platform's published catalogue.
 pub const OUTSIDE_CATALOGUE: &str = "layer.outside-catalogue";
+/// A value in a typed section that does not conform to its platform type.
+pub const VALUE_INVALID: &str = "layer.value-invalid";
+/// A product entity whose id is not in the namespace of its product.
+pub const NAMESPACE_MISSING: &str = "layer.namespace-missing";
+/// A name in the namespace of a product that nothing declares.
+pub const REFERENCE_UNKNOWN: &str = "layer.reference-unknown";
+/// A name that another product file declares.
+pub const CROSS_PRODUCT_REFERENCE: &str = "layer.cross-product-reference";
 /// The code of a product file that is not JSONC.
 pub const SYNTAX: &str = "layer.syntax";
 /// Two product files with one `product.id`.
@@ -343,29 +369,45 @@ pub fn load_layered(
     let loaded = load::load(platform_path, platform_text);
     let mut diagnostics = Vec::new();
     let platform_value = jsonc::parse(platform_text).ok();
-    let (platform_ids, catalogue) = match &platform_value {
-        Some(value) => (declared_ids(value), Catalogue::of(value)),
+    let platform_ids = match &platform_value {
+        Some(value) => declared_ids(value),
         // load::load has reported the syntax error.
-        None => (BTreeMap::new(), Catalogue::default()),
+        None => BTreeMap::new(),
     };
+    let none = Value::Null;
+    let types = Types::of(platform_value.as_ref().unwrap_or(&none));
     let mut layers = Vec::new();
-    // Ids the products declare, with the file that declares each, to find a second declaration.
-    let mut product_ids: BTreeMap<String, String> = BTreeMap::new();
+    // Ids the products declare, with the file and section that declare each, to find a second
+    // declaration and to resolve names.
+    let mut product_ids: BTreeMap<String, (String, String)> = BTreeMap::new();
+    // The namespace of each product file that has a sound header.
+    let mut namespaces: BTreeMap<String, String> = BTreeMap::new();
+    // The names in typed values and capability lists that must resolve to an entity of the product.
+    let mut refs: Vec<RefUse> = Vec::new();
     // `product.id` of each product file, with the file, to find a second file with the same id.
     let mut header_ids: BTreeMap<String, String> = BTreeMap::new();
     for product in products {
         if let Some(layer) = check_product(
             product,
             &platform_ids,
-            &catalogue,
+            &types,
             platform_file,
             &mut product_ids,
+            &mut namespaces,
+            &mut refs,
             &mut header_ids,
             &mut diagnostics,
         ) {
             layers.push(layer);
         }
     }
+    resolve_refs(
+        &refs,
+        &platform_ids,
+        &product_ids,
+        &namespaces,
+        &mut diagnostics,
+    );
     if let Some(value) = &platform_value {
         check_platform_independent(value, &product_ids, &mut diagnostics);
     }
@@ -420,9 +462,11 @@ fn collect_ids(section: &str, item: &Value, ids: &mut BTreeMap<String, String>) 
 fn check_product(
     product: &ProductFile,
     platform_ids: &BTreeMap<String, String>,
-    catalogue: &Catalogue,
+    types: &Types<'_>,
     platform_file: Option<&Path>,
-    product_ids: &mut BTreeMap<String, String>,
+    product_ids: &mut BTreeMap<String, (String, String)>,
+    namespaces: &mut BTreeMap<String, String>,
+    refs: &mut Vec<RefUse>,
     header_ids: &mut BTreeMap<String, String>,
     out: &mut Vec<Diagnostic>,
 ) -> Option<ProductLayer> {
@@ -471,6 +515,10 @@ fn check_product(
         .as_ref()
         .map(|(_, _, imports)| imports.clone())
         .unwrap_or_default();
+    let namespace = parsed.as_ref().map(|(id, _, _)| namespace_of(id));
+    if let Some(namespace) = &namespace {
+        namespaces.insert(file.clone(), namespace.clone());
+    }
     if let Some((product_id, _, _)) = &parsed {
         match header_ids.get(product_id) {
             Some(other) => out.push(Diagnostic::new(
@@ -486,11 +534,12 @@ fn check_product(
 
     // Every key that is neither the header nor a product section is refused.
     let mut entities = Vec::new();
+    let sections = product_sections();
     for key in top.keys() {
-        if key == PRODUCT_HEADER || PRODUCT_SECTIONS.iter().any(|(s, _)| s == key) {
+        if key == PRODUCT_HEADER || sections.iter().any(|(s, _)| s == key) {
             continue;
         }
-        let allowed = PRODUCT_SECTIONS
+        let allowed = sections
             .iter()
             .map(|(s, _)| *s)
             .collect::<Vec<_>>()
@@ -512,14 +561,14 @@ fn check_product(
             format!("{file} declares \"{key}\", which a product file may not declare. A product adds only tenant metadata with no change to the kernel (ARC-113), in these sections: {allowed}. {why}"),
         ));
     }
-    let own: BTreeSet<String> = PRODUCT_SECTIONS
+    let own: BTreeSet<String> = sections
         .iter()
         .filter_map(|(s, _)| top.get(*s).and_then(Value::as_array))
         .flatten()
         .filter_map(|item| item.get("id").and_then(Value::as_str))
         .map(str::to_string)
         .collect();
-    for (section, _) in PRODUCT_SECTIONS {
+    for (section, _) in &sections {
         let Some(value) = top.get(*section) else {
             continue;
         };
@@ -547,6 +596,20 @@ fn check_product(
                     format!("The id \"{id}\" of an entity in \"{section}\" of {file} does not match the id pattern ^[a-z][a-z0-9_]*(-[a-z0-9_]+)*$; write it as lower-case words joined by hyphens, prefixed with the product id."),
                 ));
             }
+            if is_id(id) {
+                if let Some(namespace) = &namespace {
+                    if id
+                        .strip_prefix(namespace.as_str())
+                        .is_none_or(str::is_empty)
+                    {
+                        out.push(Diagnostic::new(
+                            NAMESPACE_MISSING,
+                            id,
+                            format!("The id \"{id}\" of an entity in \"{section}\" of {file} is not in the namespace of its product (D-6582). Every id of product \"{}\" begins with \"{namespace}\" followed by a local name; write it as \"{namespace}<local name>\".", header_product_id(&parsed)),
+                        ));
+                    }
+                }
+            }
             check_power(&file, section, id, item, platform_ids, out);
             let mut ids = BTreeMap::new();
             collect_ids(section, item, &mut ids);
@@ -557,14 +620,14 @@ fn check_product(
                         declared,
                         format!("{file} declares \"{declared}\" in \"{in_section}\", but the platform specification already declares \"{declared}\" in \"{platform_section}\". A product file cannot redefine or change a platform entity. Give the product's entity an id of its own (prefix it with the product id), or, to use the platform's, delete this declaration, list \"{declared}\" in product.imports.entities and refer to it by id; to change the platform's, change the platform specification."),
                     ));
-                } else if let Some(other) = product_ids.get(declared) {
+                } else if let Some((other, _)) = product_ids.get(declared) {
                     out.push(Diagnostic::new(
                         REDEFINES_ENTITY,
                         declared,
                         format!("{file} declares \"{declared}\", but product file {other} already declares it. Ids must be unique across the platform and every product file of a project; rename one of them (prefix it with its product id)."),
                     ));
                 } else {
-                    product_ids.insert(declared.clone(), file.clone());
+                    product_ids.insert(declared.clone(), (file.clone(), in_section.clone()));
                 }
             }
             entities.push(ProductEntity {
@@ -572,8 +635,12 @@ fn check_product(
                 id: id.to_string(),
             });
             if parsed.is_some() {
-                named_uses(&file, id, item, platform_ids, &imports, &own, out);
-                catalogue_uses(&file, id, section, item, catalogue, out);
+                match layer_values::typed_section(section) {
+                    Some(typed) => {
+                        layer_values::check_item(types, &file, typed, id, item, out, refs)
+                    }
+                    None => named_uses(&file, id, item, platform_ids, &imports, &own, out, refs),
+                }
             }
         }
     }
@@ -599,6 +666,67 @@ fn check_product(
         imports,
         entities,
     })
+}
+
+/// The namespace of the entities of a product: its id with each hyphen replaced by an underscore,
+/// followed by two underscores (D-6582).
+pub fn namespace_of(product_id: &str) -> String {
+    format!("{}{NAMESPACE_SEPARATOR}", product_id.replace('-', "_"))
+}
+
+fn header_product_id(parsed: &Option<(String, String, Vec<String>)>) -> &str {
+    parsed.as_ref().map_or("", |(id, _, _)| id.as_str())
+}
+
+/// Resolves the names collected from the typed sections and the capability lists. A name with the
+/// namespace separator must be declared by the product file that holds it, in one of the sections
+/// its type allows; another product's entity is a cross-product reference. A name without it names
+/// something outside the product and is not checked.
+fn resolve_refs(
+    refs: &[RefUse],
+    platform_ids: &BTreeMap<String, String>,
+    declared: &BTreeMap<String, (String, String)>,
+    namespaces: &BTreeMap<String, String>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let mut seen = BTreeSet::new();
+    for r in refs {
+        if !namespaces.contains_key(&r.file)
+            || !r.name.contains(NAMESPACE_SEPARATOR)
+            || platform_ids.contains_key(&r.name)
+            || !seen.insert((
+                r.file.clone(),
+                r.entity.clone(),
+                r.at.clone(),
+                r.name.clone(),
+            ))
+        {
+            continue;
+        }
+        let (entity, file, at, name) = (&r.entity, &r.file, &r.at, &r.name);
+        let wanted = r.sections.join(" or ");
+        match declared.get(name) {
+            Some((owner, section)) if owner == file => {
+                if !r.sections.contains(&section.as_str()) {
+                    out.push(Diagnostic::new(
+                        REFERENCE_UNKNOWN,
+                        entity,
+                        format!("\"{entity}\" in {file} names \"{name}\" at {at}, which the product declares in \"{section}\", but a name there is one declared in \"{wanted}\". Name an entity of the right kind, or declare \"{name}\" in \"{wanted}\"."),
+                    ));
+                }
+            }
+            Some((owner, _)) => out.push(Diagnostic::new(
+                CROSS_PRODUCT_REFERENCE,
+                entity,
+                format!("\"{entity}\" in {file} names \"{name}\" at {at}, which product file {owner} declares. A product may name only platform entities and its own; move what is shared into the platform specification, or declare one under this product's own namespace."),
+            )),
+            None => out.push(Diagnostic::new(
+                REFERENCE_UNKNOWN,
+                entity,
+                format!("\"{entity}\" in {file} names \"{name}\" at {at}, which no product file declares (a name in \"{wanted}\" is expected). Declare it in this file under that name, or correct the name."),
+            )),
+        }
+    }
 }
 
 /// Checks the header; returns its id, name and imported ids when it is well-formed.
@@ -696,51 +824,8 @@ fn check_header(
     Some((id?.to_string(), name?.to_string(), ids))
 }
 
-/// The platform's published catalogue (INT-153, INT-1522): the tags of the variants of the unions
-/// [`STEP_CATALOGUE`] and [`EVENT_CATALOGUE`], as a value of each is written (its
-/// `encoding.variantCase`). `None` when the platform declares no such union.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Catalogue {
-    /// The tags of the step kinds an automation may name.
-    pub steps: Option<BTreeSet<String>>,
-    /// The tags of the events a trigger may subscribe to.
-    pub events: Option<BTreeSet<String>>,
-}
-
-impl Catalogue {
-    /// Reads the catalogue from the parsed platform specification.
-    pub fn of(platform: &Value) -> Self {
-        Catalogue {
-            steps: union_tags(platform, STEP_CATALOGUE),
-            events: union_tags(platform, EVENT_CATALOGUE),
-        }
-    }
-}
-
-/// The tags of the variants of the union type `id`, or `None` when the platform declares none.
-fn union_tags(platform: &Value, id: &str) -> Option<BTreeSet<String>> {
-    let ty = platform
-        .get("types")?
-        .as_array()?
-        .iter()
-        .find(|t| t.get("id").and_then(Value::as_str) == Some(id))?;
-    let case = ty
-        .get("encoding")
-        .and_then(|e| e.get("variantCase"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let variants = ty.get("variants")?.as_array()?;
-    Some(
-        variants
-            .iter()
-            .filter_map(|v| v.get("name").and_then(Value::as_str))
-            .map(|name| variant_tag(name, case))
-            .collect(),
-    )
-}
-
 /// How a variant name is written as the tag of a value, under the union's `variantCase`.
-fn variant_tag(name: &str, case: &str) -> String {
+pub(crate) fn variant_tag(name: &str, case: &str) -> String {
     match case {
         "PascalCase" => name
             .split(|c: char| c == '-' || c == '_')
@@ -754,86 +839,6 @@ fn variant_tag(name: &str, case: &str) -> String {
             .collect(),
         "snake_case" => name.replace('-', "_"),
         _ => name.to_string(),
-    }
-}
-
-/// Refuses a trigger whose `on`, or an automation whose step `action`, is not a variant of the
-/// platform's catalogue (`layer.outside-catalogue`).
-fn catalogue_uses(
-    file: &str,
-    entity: &str,
-    section: &str,
-    item: &Value,
-    catalogue: &Catalogue,
-    out: &mut Vec<Diagnostic>,
-) {
-    match section {
-        "triggers" => check_tag(
-            file,
-            entity,
-            "on",
-            item.get("on"),
-            catalogue.events.as_ref(),
-            EVENT_CATALOGUE,
-            out,
-        ),
-        "automations" => {
-            let Some(steps) = item.get("steps").and_then(Value::as_object) else {
-                return;
-            };
-            for (name, step) in steps {
-                check_tag(
-                    file,
-                    entity,
-                    &format!("steps.{name}.action"),
-                    step.get("action"),
-                    catalogue.steps.as_ref(),
-                    STEP_CATALOGUE,
-                    out,
-                );
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Refuses `value` unless it is one variant of the union `union`: an object with one key that is
-/// a published tag, or, for a variant without fields, the tag as a string.
-fn check_tag(
-    file: &str,
-    entity: &str,
-    at: &str,
-    value: Option<&Value>,
-    published: Option<&BTreeSet<String>>,
-    union: &str,
-    out: &mut Vec<Diagnostic>,
-) {
-    let Some(published) = published else {
-        out.push(Diagnostic::new(
-            OUTSIDE_CATALOGUE,
-            entity,
-            format!("\"{entity}\" in {file} declares {at}, but the platform specification publishes no catalogue for it: it declares no union \"{union}\". Remove the entity, or layer the product on a platform that publishes \"{union}\"."),
-        ));
-        return;
-    };
-    let tag = match value {
-        Some(Value::String(tag)) => Some(tag.as_str()),
-        Some(Value::Object(map)) if map.len() == 1 => map.keys().next().map(String::as_str),
-        _ => None,
-    };
-    let variants = published.iter().cloned().collect::<Vec<_>>().join(", ");
-    match tag {
-        Some(tag) if published.contains(tag) => {}
-        Some(tag) => out.push(Diagnostic::new(
-            OUTSIDE_CATALOGUE,
-            entity,
-            format!("\"{entity}\" in {file} names \"{tag}\" at {at}, which is outside the published catalogue (INT-153): the platform's union \"{union}\" has the variants {variants}. Use one of them; a kind the catalogue lacks belongs in the platform specification, not in a product."),
-        )),
-        None => out.push(Diagnostic::new(
-            OUTSIDE_CATALOGUE,
-            entity,
-            format!("{at} of \"{entity}\" in {file} must be one variant of the platform's union \"{union}\", written {{\"<Variant>\": {{ ... }}}}, or \"<Variant>\" for a variant without fields; the variants are {variants}."),
-        )),
     }
 }
 
@@ -857,11 +862,22 @@ fn named_uses(
     imports: &[String],
     own: &BTreeSet<String>,
     out: &mut Vec<Diagnostic>,
+    refs: &mut Vec<RefUse>,
 ) {
     let mut seen = BTreeSet::new();
     let mut uses = Vec::new();
     walk_uses(item, "", &mut uses);
     for (name, sections, at) in uses {
+        if sections == CAPABILITIES && name.contains(NAMESPACE_SEPARATOR) {
+            refs.push(RefUse {
+                file: file.to_string(),
+                entity: entity.to_string(),
+                at,
+                name,
+                sections,
+            });
+            continue;
+        }
         let declared_in_section = platform_ids
             .get(&name)
             .is_some_and(|s| sections.is_empty() || sections.contains(&s.as_str()));
@@ -956,7 +972,7 @@ fn walk_uses(value: &Value, at: &str, out: &mut Vec<Use>) {
 /// a reference key, in a type text, or in a capability list.
 fn check_platform_independent(
     platform: &Value,
-    product_ids: &BTreeMap<String, String>,
+    product_ids: &BTreeMap<String, (String, String)>,
     out: &mut Vec<Diagnostic>,
 ) {
     if product_ids.is_empty() {
@@ -972,7 +988,7 @@ fn check_platform_independent(
             walk_uses(item, "", &mut uses);
             let mut seen = BTreeSet::new();
             for (name, _, at) in uses {
-                let Some(file) = product_ids.get(&name) else {
+                let Some((file, _)) = product_ids.get(&name) else {
                     continue;
                 };
                 if !seen.insert(name.clone()) {
@@ -1053,6 +1069,30 @@ fn check_power(
                 refuse(
                     format!("declares realisation \"{realisation}\""),
                     "only the platform puts code behind a contract; remove realisation (or use \"facade\").",
+                );
+            }
+        }
+        "capabilities" => {
+            if item.get("core").and_then(Value::as_bool) == Some(true) {
+                refuse(
+                    "is a core capability".to_string(),
+                    "core capabilities are held by every tenant whatever its plan; a product capability is entitled by a plan like any other. Remove \"core\".",
+                );
+            }
+        }
+        "settings" => {
+            let platform_level = |key: &str| {
+                item.get(key)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .any(|l| l == "platform")
+            };
+            if platform_level("levels") || text("locked-by") == Some("platform") {
+                refuse(
+                    "is set at, or locked by, the platform level".to_string(),
+                    "the platform level of a setting is the platform's; a product setting takes the levels tenant, team and person (D-6594).",
                 );
             }
         }
@@ -1204,21 +1244,27 @@ mod tests {
     }
 
     #[test]
-    fn the_catalogue_is_read_from_the_platform_unions() {
-        let platform: Value = serde_json::json!({ "types": [
-            { "id": "automation-step", "kind": "union", "encoding": { "variantCase": "PascalCase" },
-              "variants": [ { "name": "wait-for" }, { "name": "end" } ] }
-        ] });
-        let catalogue = Catalogue::of(&platform);
+    fn a_namespace_is_the_product_id_with_underscores_and_two_underscores() {
+        assert_eq!(namespace_of("badge-milestones"), "badge_milestones__");
+        assert_eq!(namespace_of("badges"), "badges__");
+    }
+
+    #[test]
+    fn the_typed_sections_are_listed_once_beside_the_entity_sections() {
+        let sections = product_sections();
+        for typed in layer_values::TYPED_SECTIONS {
+            assert_eq!(
+                sections.iter().filter(|(s, _)| *s == typed.section).count(),
+                1,
+                "{}",
+                typed.section
+            );
+            assert!(PRODUCT_SECTIONS.iter().all(|(s, _)| *s != typed.section));
+        }
         assert_eq!(
-            catalogue.steps,
-            Some(
-                ["End".to_string(), "WaitFor".to_string()]
-                    .into_iter()
-                    .collect()
-            )
+            sections.len(),
+            PRODUCT_SECTIONS.len() + layer_values::TYPED_SECTIONS.len()
         );
-        assert_eq!(catalogue.events, None);
     }
 
     #[test]

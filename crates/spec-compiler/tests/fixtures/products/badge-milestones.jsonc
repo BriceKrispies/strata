@@ -1,67 +1,134 @@
 {
   // A product that reacts to the ledger with an automation (WG-5031): "when a person's points balance
   // crosses 500, award the Silver badge once, notify them in-app and by mail, and after 7 days send a
-  // follow-up if they have not viewed it". It uses only the platform's catalogue: the trigger event
-  // is a variant of trigger-event, every step action a variant of automation-step (D-6522), and the
-  // automation acts as its automation principal with the roles of its run-as (D-6525).
-  // tests/layers.rs loads it with specc's loader; refused/step-outside-catalogue.jsonc is its
-  // negative. Exegra does not read the triggers and automations sections yet (D-6536).
+  // follow-up if they have not viewed it". It is complete: it declares everything it names, in its own
+  // namespace badge_milestones__ (D-6582), so a tenant can install it from this file alone (WG-5046).
   //
-  // Values are written as the platform types are written in a tenant bundle: unions externally
-  // tagged in PascalCase, durations in milliseconds, expressions as tenant rule language text over
-  // the parameters D-6523 states (param.balance_before is the balance before the posting).
+  // Each typed section holds values of a platform type (src/layer_values.rs, src/core/layer-values.js):
+  // objects of object-type-def, policies of policy-def, ledgerUnits of ledger-unit-decl, mailTemplates
+  // of mail-template-decl, noticeTemplates of notice-template-decl, triggers of trigger-def and
+  // automations of automation-def. The trigger event is a variant of trigger-event and every step
+  // action a variant of automation-step (D-6522); the automation acts as its automation principal with
+  // the roles of its run-as (D-6525). Unions are externally tagged in PascalCase, durations are in
+  // milliseconds, and an expression is tenant rule language text (the AST type expr may be written as
+  // text, D-6546); the parameters are those of D-6523 (param.balance_before is the balance before
+  // the posting).
   //
-  // What this file names but cannot declare, because a product file has no section for it yet:
-  // the object type milestones_award (fields person, badge, awarded_at, viewed_at, with a policy
-  // that lets a person set viewed_at on their own award), the ledger unit points, and the mail
-  // templates milestones_silver_notice, milestones_silver_mail and milestones_silver_follow_up.
+  // What it leaves out, because the platform does not have it yet: nothing it needs. A policy lets a
+  // person update the whole award, not only viewed_at, because a policy is per object type and action
+  // (D-6590); the follow-up branch reads viewed_at, so a person who sets it stops the follow-up.
+  // The block text of the templates is JSON text; the platform specification does not state the block
+  // schema (structured-blocks), so the templates use one paragraph block each.
   "product": {
     "id": "badge-milestones",
     "name": "Badge milestones",
     "description": "Awards the Silver badge once when a person's points balance crosses 500, tells the person in the inbox and by mail, and follows up by mail after seven days if the award has not been viewed.",
     "imports": {
       "spec": "../../../../../specifications/spec.jsonc",
-      "entities": ["content-read", "content-write", "product-module", "trigger-def", "trigger-event", "automation-def", "automation-step", "ledger-entry-posted"]
+      "entities": ["content-read", "content-write", "product-module"]
     }
   },
   "roles": [
     {
-      "id": "milestones_awarder",
+      "id": "badge_milestones__awarder",
       "name": "Milestone awarder",
-      "description": "The role the automation principal of milestones_silver holds (its run-as): it creates and reads badge awards. An owner may confer it under ADM-152.",
+      "description": "The role the automation principal of badge_milestones__silver holds (its run-as): it creates and reads badge awards. An owner may confer it under ADM-152.",
       "level": "tenant",
-      "holders": ["service"],
+      "holders": ["person", "team", "agent"],
       "capabilities": ["content-read", "content-write"]
+    }
+  ],
+  "objects": [
+    {
+      "id": "badge_milestones__award",
+      "label": "Badge award",
+      "fields": {
+        "person": {
+          "id": "person",
+          "label": "Person",
+          "ty": "Str",
+          "required": true,
+          "unique": false,
+          // The principal the badge is awarded to: personal data of that person, sealed under their key (D-6584).
+          "personal": { "kind": "identifier", "subject": { "Field": { "field": "person" } }, "searchable": false }
+        },
+        "badge": { "id": "badge", "label": "Badge", "ty": "Str", "required": true, "unique": false },
+        "awarded_at": { "id": "awarded_at", "label": "Awarded at", "ty": "Time", "required": true, "unique": false },
+        "viewed_at": { "id": "viewed_at", "label": "Viewed at", "ty": "Time", "required": false, "unique": false }
+      },
+      "constraints": {},
+      // A type with a personal field carries a retention rule (D-6584).
+      "retention": { "days": 730, "from": "Created" }
+    }
+  ],
+  "policies": [
+    {
+      "id": "badge_milestones__awarder_awards",
+      "role": "badge_milestones__awarder",
+      "resource": { "Object": "badge_milestones__award" },
+      "actions": ["Create", "Read"]
+    },
+    {
+      "id": "badge_milestones__member_own_awards",
+      "role": "member",
+      "resource": { "Object": "badge_milestones__award" },
+      "actions": ["Read", "Update"],
+      "condition": "record.person == principal"
+    }
+  ],
+  "ledgerUnits": [
+    {
+      "id": "badge_milestones__points",
+      "description": "Points a person earns; the Silver badge is awarded when a person's balance reaches 500."
+    }
+  ],
+  "mailTemplates": [
+    {
+      "id": "badge_milestones__silver_mail",
+      "subject": "You earned the Silver badge",
+      "body": "[{\"type\":\"paragraph\",\"text\":\"Your points reached 500 and you earned the Silver badge.\"}]"
+    },
+    {
+      "id": "badge_milestones__silver_follow_up",
+      "subject": "Your Silver badge is waiting",
+      "body": "[{\"type\":\"paragraph\",\"text\":\"You have not yet looked at your Silver badge. Open your inbox to see it.\"}]"
+    }
+  ],
+  "noticeTemplates": [
+    {
+      "id": "badge_milestones__silver_notice",
+      "title": "You earned the Silver badge",
+      "body": "[{\"type\":\"paragraph\",\"text\":\"Your points reached 500.\"}]"
     }
   ],
   "triggers": [
     {
-      "id": "milestones_silver_on_points",
-      "on": { "LedgerPosted": { "unit": "points" } },
+      "id": "badge_milestones__silver_on_points",
+      "on": { "LedgerPosted": { "unit": "badge_milestones__points" } },
       "condition": "param.owner != null and param.balance_before < 500 and param.balance >= 500",
-      "automation": "milestones_silver"
+      "automation": "badge_milestones__silver"
     }
   ],
   "automations": [
     {
-      "id": "milestones_silver",
+      "id": "badge_milestones__silver",
       "label": "Award the Silver badge at 500 points",
-      "run-as": { "roles": ["milestones_awarder"] },
+      "run-as": { "roles": ["badge_milestones__awarder"] },
       // Once per person, for as long as the automation exists (SCH-1536).
       "run-key": "param.owner",
       "start": "award",
       "steps": {
         "award": {
-          "action": { "CreateRecord": { "object": "milestones_award", "fields": { "person": "param.owner", "badge": "\"silver\"", "awarded_at": "param.at" } } },
+          "action": { "CreateRecord": { "object": "badge_milestones__award", "fields": { "person": "param.owner", "badge": "\"silver\"", "awarded_at": "param.at" } } },
           "next": "notify",
           "retry": { "attempts": 5 }
         },
         "notify": {
-          "action": { "CreateNotice": { "template": "milestones_silver_notice", "to": "param.owner", "record": "param.award_record" } },
+          "action": { "CreateNotice": { "template": "badge_milestones__silver_notice", "to": "param.owner", "record": "param.award_record" } },
           "next": "mail"
         },
         "mail": {
-          "action": { "SendMail": { "template": "milestones_silver_mail", "to": "param.owner", "category": "transactional" } },
+          "action": { "SendMail": { "template": "badge_milestones__silver_mail", "to": "param.owner", "category": "transactional" } },
           "next": "wait",
           "retry": { "attempts": 8, "first-delay": 60000, "max-delay": 3600000 },
           "timeout": 30000
@@ -71,10 +138,10 @@
           "next": "viewed"
         },
         "viewed": {
-          "action": { "Branch": { "condition": "is_null(record.viewed_at)", "object": "milestones_award", "record": "param.award_record", "then": "follow_up", "else": "done" } }
+          "action": { "Branch": { "condition": "is_null(record.viewed_at)", "object": "badge_milestones__award", "record": "param.award_record", "then": "follow_up", "else": "done" } }
         },
         "follow_up": {
-          "action": { "SendMail": { "template": "milestones_silver_follow_up", "to": "param.owner", "category": "transactional" } },
+          "action": { "SendMail": { "template": "badge_milestones__silver_follow_up", "to": "param.owner", "category": "transactional" } },
           "next": "done"
         },
         "done": { "action": "End" }
@@ -83,20 +150,20 @@
   ],
   "claims": [
     {
-      "id": "milestones-silver-once",
-      "kind": "requirement",
+      "id": "badge_milestones__silver-once",
+      "kind": "structural",
       "statement": "A person whose points balance crosses 500 SHALL receive one Silver badge award, one inbox notice and one mail, however often the balance crosses 500 again and however many times a step is attempted.",
       "subjects": ["product-module"],
-      "rationale": "The run key of milestones_silver is the person (SCH-1536) and every step carries its derived key (SCH-1524).",
-      "evaluate": { "method": "scenario" }
+      "rationale": "The run key of badge_milestones__silver is the person (SCH-1536) and every step carries its derived key (SCH-1524).",
+      "evaluate": { "method": "external-evidence" }
     },
     {
-      "id": "milestones-follow-up-unviewed",
-      "kind": "requirement",
+      "id": "badge_milestones__follow-up-unviewed",
+      "kind": "structural",
       "statement": "Seven days after the award, a follow-up mail SHALL be sent to the person when the award's viewed_at is empty, and no follow-up SHALL be sent when it is set.",
       "subjects": ["product-module"],
       "rationale": "The wait step resumes the run after 604800000 ms (WFL-1537) and the branch reads the award as it is then.",
-      "evaluate": { "method": "scenario" }
+      "evaluate": { "method": "external-evidence" }
     }
   ]
 }

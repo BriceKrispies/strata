@@ -1,7 +1,7 @@
 {
   // Refused: platform entities named under reference keys without an import (layer.import-missing): event.contract, record.owner and behavior.subject.
   "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
-  "events": [ { "id": "badges-exported", "name": "Badges exported", "contract": "export-tenant" } ],
-  "records": [ { "id": "badges-badge", "name": "Badge", "owner": "kernel", "fields": [] } ],
-  "behaviors": [ { "id": "badges-flow", "name": "Badge flow", "subject": "kernel", "initial": "badges-flow-start", "states": [ { "id": "badges-flow-start", "name": "Start" } ] } ]
+  "events": [ { "id": "badges__exported", "name": "Badges exported", "contract": "export-tenant" } ],
+  "records": [ { "id": "badges__badge", "name": "Badge", "owner": "kernel", "fields": [] } ],
+  "behaviors": [ { "id": "badges__flow", "name": "Badge flow", "subject": "kernel", "initial": "badges__flow-start", "states": [ { "id": "badges__flow-start", "name": "Start" } ] } ]
 }

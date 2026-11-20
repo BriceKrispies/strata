@@ -1,5 +1,5 @@
 {
   // Refused: a product contract that is public with the anonymous scheme (layer.platform-power).
   "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
-  "contracts": [ { "id": "badges-show", "name": "Show a badge", "exposure": "public", "auth": { "scheme": "anonymous" } } ]
+  "contracts": [ { "id": "badges__show", "name": "Show a badge", "exposure": "public", "auth": { "scheme": "anonymous" } } ]
 }

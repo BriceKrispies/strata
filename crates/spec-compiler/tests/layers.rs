@@ -10,6 +10,11 @@
 //!   the same platform semantic hash (the one the generated headers carry) with and without the
 //!   product.
 //!
+//! - The typed sections (objects, policies, segments, settings, ledger units, pools and limits,
+//!   mail and notice templates, tokens, triggers, automations, operations) hold values of platform
+//!   types; `badge-milestones.jsonc` and `promotions.jsonc` are complete products (they declare
+//!   everything they name, in their own namespace) that specc and Exegra both accept.
+//!
 //! The Exegra checks need the Exegra CLI (see `support`).
 
 mod support;
@@ -19,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
+use strata_spec_compiler::layer_values::{self, Types};
 use strata_spec_compiler::layers::{self, ProductFile};
 use strata_spec_compiler::load;
 
@@ -77,16 +83,17 @@ fn the_fixture_product_is_accepted_beside_the_platform() {
     assert_eq!(
         ids,
         vec![
-            "badges-tier",
-            "badges-curator",
-            "badges-installed-as-metadata"
+            "badges__tier",
+            "badges__curator",
+            "badges__installed-as-metadata",
+            "badges__grant"
         ]
     );
 }
 
-/// The redeem-a-promotion product (WG-5032): two record types and two tenant operations over the
-/// ledger and segments. specc's loader accepts it beside the platform; Exegra's acceptance of
-/// tenant record types and operations waits on WG-5011, so it is not asserted here.
+/// The redeem-a-promotion product (WG-5032): two object types, the ledger units, pool and floor of
+/// its stock and two tenant operations. specc's loader accepts it beside the platform, and so does
+/// Exegra (`exegra_accepts_the_complete_products`).
 #[test]
 fn the_promotions_product_is_accepted_beside_the_platform() {
     let layered = match load_with(&[product("promotions.jsonc")]) {
@@ -110,12 +117,16 @@ fn the_promotions_product_is_accepted_beside_the_platform() {
     assert_eq!(
         ids,
         vec![
-            ("records", "promotions-promotion"),
-            ("records", "promotions-redemption"),
-            ("contracts", "promotions-create"),
-            ("contracts", "promotions-redeem"),
-            ("roles", "promotions-manager"),
-            ("claims", "promotions-redeem-is-one-operation"),
+            ("roles", "promotions__manager"),
+            ("claims", "promotions__redeem-is-one-operation"),
+            ("objects", "promotions__promotion"),
+            ("objects", "promotions__redemption"),
+            ("ledgerUnits", "promotions__stock"),
+            ("ledgerUnits", "promotions__redemptions"),
+            ("ledgerPools", "promotions__pool"),
+            ("ledgerLimits", "promotions__stock_floor"),
+            ("operations", "promotions__create"),
+            ("operations", "promotions__redeem"),
         ]
     );
 }
@@ -226,10 +237,53 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
     (
         "import-missing-reference",
         layers::IMPORT_MISSING,
+        &["\"kernel\"", "without importing it"],
+    ),
+    (
+        "id-not-namespaced",
+        layers::NAMESPACE_MISSING,
         &[
-            "\"kernel\"",
-            "without importing it",
+            "\"badges-tier\"",
+            "not in the namespace of its product",
+            "\"badges__\"",
         ],
+    ),
+    (
+        "value-invalid",
+        layers::VALUE_INVALID,
+        &[
+            "\"colour\"",
+            "is not a field of its type",
+            "object-type-def",
+        ],
+    ),
+    (
+        "step-outside-catalogue",
+        layers::OUTSIDE_CATALOGUE,
+        &[
+            "outside the published catalogue",
+            "belongs in the platform specification",
+        ],
+    ),
+    (
+        "operation-step-outside",
+        layers::OUTSIDE_CATALOGUE,
+        &["\"SendMail\"", "\"tenant-operation-step\"", "PostLedger"],
+    ),
+    (
+        "reference-unknown-object",
+        layers::REFERENCE_UNKNOWN,
+        &["\"member_tiers__ghost\"", "no product file declares"],
+    ),
+    (
+        "capability-core",
+        layers::PLATFORM_POWER,
+        &["is a core capability", "Remove \"core\""],
+    ),
+    (
+        "setting-platform-level",
+        layers::PLATFORM_POWER,
+        &["platform level", "tenant, team and person"],
     ),
     (
         "import-mismatch",
@@ -296,18 +350,21 @@ fn an_automation_product_is_accepted_beside_the_platform() {
         .iter()
         .map(|e| (e.section.as_str(), e.id.as_str()))
         .collect();
-    assert!(
-        declared.contains(&("triggers", "milestones_silver_on_points")),
-        "{declared:?}"
-    );
-    assert!(
-        declared.contains(&("automations", "milestones_silver")),
-        "{declared:?}"
-    );
+    for (section, id) in [
+        ("objects", "badge_milestones__award"),
+        ("ledgerUnits", "badge_milestones__points"),
+        ("mailTemplates", "badge_milestones__silver_mail"),
+        ("mailTemplates", "badge_milestones__silver_follow_up"),
+        ("noticeTemplates", "badge_milestones__silver_notice"),
+        ("triggers", "badge_milestones__silver_on_points"),
+        ("automations", "badge_milestones__silver"),
+    ] {
+        assert!(declared.contains(&(section, id)), "{declared:?}");
+    }
 }
 
-/// The step catalogue refusal is specc's alone for now: Exegra does not read the triggers and
-/// automations sections yet (D-6536), so this fixture is not in [`REFUSED`].
+/// Both refusals of the catalogue, with the variants the platform's unions have (the fixture is
+/// also in [`REFUSED`], which Exegra refuses too).
 // Verifies: INT-1522
 #[test]
 fn a_step_or_trigger_outside_the_catalogue_is_refused() {
@@ -349,6 +406,118 @@ fn a_step_or_trigger_outside_the_catalogue_is_refused() {
         diagnostics.iter().all(|d| d.code.starts_with("layer.")),
         "other refusals too: {diagnostics:?}"
     );
+}
+
+#[test]
+fn a_value_that_does_not_fit_its_platform_type_says_what_is_missing() {
+    let diagnostics = load_with(&[product("refused/value-invalid.jsonc")]).unwrap_err();
+    let messages: Vec<&str> = diagnostics
+        .iter()
+        .filter(|d| d.code == layers::VALUE_INVALID)
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(messages.len(), 2, "{diagnostics:?}");
+    assert!(messages
+        .iter()
+        .any(|m| m.contains("\"colour\" is not a field of its type")));
+    assert!(messages
+        .iter()
+        .any(|m| m.contains("\"fields.name\" lacks the required field \"ty\"")));
+}
+
+#[test]
+fn a_name_in_a_typed_section_must_be_declared_by_the_product() {
+    let diagnostics = load_with(&[product("refused/reference-unknown-object.jsonc")]).unwrap_err();
+    let unknown: Vec<&str> = diagnostics
+        .iter()
+        .filter(|d| d.code == layers::REFERENCE_UNKNOWN)
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(unknown.len(), 2, "{diagnostics:?}");
+    assert!(unknown
+        .iter()
+        .any(|m| m.contains("\"member_tiers__ghost\" at on.RecordCreated.object")));
+    assert!(unknown
+        .iter()
+        .any(|m| m.contains("\"member_tiers__nothing\" at automation")));
+}
+
+#[test]
+fn a_capability_is_confined_to_the_product_that_declares_it() {
+    let diagnostics = load_with(&[
+        product("badges.jsonc"),
+        product("refused/capability-other-product.jsonc"),
+    ])
+    .unwrap_err();
+    let found = diagnostics
+        .iter()
+        .find(|d| d.code == layers::CROSS_PRODUCT_REFERENCE)
+        .unwrap_or_else(|| panic!("no cross-product reference in {diagnostics:?}"));
+    assert!(
+        found.message.contains("\"badges__grant\""),
+        "{}",
+        found.message
+    );
+    assert!(
+        found.message.contains("badges.jsonc declares"),
+        "{}",
+        found.message
+    );
+    // Alone, the name is one that nothing declares.
+    let alone = load_with(&[product("refused/capability-other-product.jsonc")]).unwrap_err();
+    assert!(alone.iter().any(|d| d.code == layers::REFERENCE_UNKNOWN));
+}
+
+/// The table of typed sections names platform types that exist, are structs, and are listed with
+/// the other sections; the reference types too (so a renamed platform type is noticed here).
+#[test]
+fn the_typed_sections_name_platform_types() {
+    let text = platform_text();
+    let platform: Value = layers_json(&text);
+    let types = Types::of(&platform);
+    let sections: Vec<&str> = layers::product_sections().iter().map(|(s, _)| *s).collect();
+    for typed in layer_values::TYPED_SECTIONS {
+        assert!(
+            sections.contains(&typed.section),
+            "{} is not listed",
+            typed.section
+        );
+        let ty = types.get(typed.ty).unwrap_or_else(|| {
+            panic!(
+                "{} names the platform type {}, which is not declared",
+                typed.section, typed.ty
+            )
+        });
+        assert_eq!(ty["kind"], "struct", "{} is not a struct", typed.ty);
+        if let Some(field) = typed.id_field {
+            assert!(
+                ty["fields"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|f| f["name"] == field),
+                "{} has no member {field}",
+                typed.ty
+            );
+        }
+    }
+    for (ty, sections_of) in layer_values::REFERENCE_TYPES {
+        assert!(
+            types.get(ty).is_some(),
+            "the reference type {ty} is not declared"
+        );
+        for s in *sections_of {
+            assert!(
+                layer_values::typed_section(s).is_some() || ["roles"].contains(s),
+                "{s}"
+            );
+        }
+    }
+}
+
+/// The platform specification as JSON, comments removed by specc's own parser.
+fn layers_json(text: &str) -> Value {
+    strata_spec_compiler::jsonc::parse(text).expect("the platform parses")
 }
 
 #[test]
@@ -407,7 +576,7 @@ fn two_product_files_with_one_product_id_are_refused() {
 #[test]
 fn an_external_holder_is_a_platform_power() {
     let text = r#"{ "product": { "id": "badges", "name": "Badges", "imports": { "spec": "x.jsonc", "entities": [] } },
-        "roles": [ { "id": "badges-hook", "name": "Hook", "level": "tenant", "holders": ["external"], "capabilities": [] } ] }"#;
+        "roles": [ { "id": "badges__hook", "name": "Hook", "level": "tenant", "holders": ["external"], "capabilities": [] } ] }"#;
     let file = ProductFile {
         path: "inline.jsonc".to_string(),
         text: text.to_string(),
@@ -426,7 +595,7 @@ fn a_platform_entity_that_names_a_product_entity_is_refused() {
     assert!(platform.contains(marker));
     let edited = platform.replacen(
         marker,
-        "\"id\": \"content-read\", \"contract\": \"badges-tier\",",
+        "\"id\": \"content-read\", \"contract\": \"badges__tier\",",
         1,
     );
     let diagnostics = layers::load_layered(
@@ -446,7 +615,7 @@ fn a_platform_entity_that_names_a_product_entity_is_refused() {
             )
         });
     assert!(found.message.contains("\"content-read\""));
-    assert!(found.message.contains("\"badges-tier\""));
+    assert!(found.message.contains("\"badges__tier\""));
     assert!(found.message.contains("badges.jsonc"));
     // The unedited platform with the same product is accepted.
     assert!(load_with(&[product("badges.jsonc")]).is_ok());
@@ -725,6 +894,85 @@ fn exegra_accepts_the_product_and_reports_the_platform_hash_unchanged() {
         layered["result"]["products"][0]["product"],
         Value::from("badges")
     );
+}
+
+#[test]
+fn exegra_accepts_the_complete_products_and_reports_the_platform_hash_unchanged() {
+    let Some(cli) = support::exegra_cli("the complete products") else {
+        return;
+    };
+    let specs = exegra_specs(
+        "exegra-complete",
+        &["badge-milestones.jsonc", "promotions.jsonc"],
+    );
+    let alone = exegra_validate(&cli, &specs, "platform");
+    let layered = exegra_validate(&cli, &specs, "layered");
+    assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
+    assert_eq!(layered["result"]["errors"], Value::from(0), "{layered}");
+    assert_eq!(layered["semanticHash"], alone["semanticHash"]);
+    let products: Vec<&str> = layered["result"]["products"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p["product"].as_str())
+        .collect();
+    assert_eq!(products, vec!["badge-milestones", "promotions"]);
+}
+
+#[test]
+fn exegra_refuses_a_capability_of_another_product() {
+    let Some(cli) = support::exegra_cli("the capability confinement") else {
+        return;
+    };
+    let specs = exegra_specs(
+        "exegra-capability",
+        &["badges.jsonc", "refused/capability-other-product.jsonc"],
+    );
+    let out = exegra_validate(&cli, &specs, "layered");
+    assert_eq!(out["ok"], Value::Bool(false), "{out}");
+    let codes: Vec<&str> = out["result"]["diagnostics"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|d| d["code"].as_str())
+        .collect();
+    assert!(
+        codes.contains(&layers::CROSS_PRODUCT_REFERENCE),
+        "{codes:?}"
+    );
+}
+
+/// Exegra reads the same table of typed sections (`src/core/layer-values.js`): the sections, the
+/// platform type of each and the member that names an item.
+#[test]
+fn exegra_has_the_same_typed_sections() {
+    let Some(cli) = support::exegra_cli("the typed section comparison") else {
+        return;
+    };
+    let module = cli
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("src/core/layer-values.js");
+    let url = format!("file:///{}", module.to_string_lossy().replace('\\', "/"));
+    let output = Command::new("node")
+        .args([
+            "--input-type=module",
+            "-e",
+            &format!(
+                "import('{url}').then((m) => console.log(JSON.stringify(m.TYPED_SECTIONS.map((s) => [s.section, s.type, s.idField ?? null]))))"
+            ),
+        ])
+        .output()
+        .expect("node runs");
+    let theirs: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&output.stderr)));
+    let ours: Vec<Value> = layer_values::TYPED_SECTIONS
+        .iter()
+        .map(|s| serde_json::json!([s.section, s.ty, s.id_field]))
+        .collect();
+    assert_eq!(theirs, Value::Array(ours));
 }
 
 #[test]
