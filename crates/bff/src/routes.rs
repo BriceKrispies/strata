@@ -24,8 +24,8 @@ use std::time::Instant;
 use strata_kernel::TenantId;
 use strata_protocol::api::{
     valid_correlation, valid_idempotency_key, ErrorCode, ErrorReply, LoginReply, MembersRequest,
-    Mutation, SessionReply, SessionView, ViewRequest, HEADER_CORRELATION, HEADER_IDEMPOTENCY,
-    HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
+    Mutation, OperationRequest, SessionReply, SessionView, ViewRequest, HEADER_CORRELATION,
+    HEADER_IDEMPOTENCY, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
 use strata_runtime::server::Shutdown;
@@ -1561,6 +1561,40 @@ async fn setting_set_person(
     guarded(&bff, &headers, "/internal/settings/set-person", body).await
 }
 
+/// Invoke a tenant operation: `POST /api/operations/invoke` with `{operation, inputs, dry_run}`
+/// as the body and the key in the `idempotency-key` header (contract invoke-tenant-operation,
+/// CT-805). The request must come from one of our pages with the session's request token. No
+/// fresh sign-in is asked for, because an operation's definition declares no step-up. The
+/// backend's kernel decides; this route adds nothing.
+async fn operations_invoke(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<OperationRequest>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    let key = headers
+        .get(HEADER_IDEMPOTENCY)
+        .and_then(|value| value.to_str().ok())
+        .filter(|key| strata_kernel::operations::valid_key(key))
+        .ok_or_else(|| {
+            Failure::new(
+                ErrorCode::Invalid,
+                "An invocation needs an idempotency key of 1 to 128 visible ASCII characters.",
+                &visit.correlation,
+            )
+        })?;
+    backend_keyed(
+        &bff,
+        &visit,
+        "/internal/operations/invoke",
+        &json!(request),
+        Some(key),
+    )
+    .await
+    .map(Json)
+}
+
 #[derive(serde::Deserialize)]
 struct PreviewRequest {
     markdown: String,
@@ -2414,6 +2448,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/settings/set-team", post(setting_set_team))
         .route("/settings/set-person", post(setting_set_person))
         .route("/settings/:setting", get(setting_resolve))
+        .route("/operations/invoke", post(operations_invoke))
         .route("/preview", post(preview))
         .route("/lab/overview", get(lab_overview))
         .route("/lab/run", post(lab_run))

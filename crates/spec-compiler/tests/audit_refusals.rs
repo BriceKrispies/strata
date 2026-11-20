@@ -292,8 +292,9 @@ fn an_exemption_of_the_conventions_that_matches_nothing_is_refused() {
     use strata_spec_compiler::contract_rules::{exemptions, CONVENTION_EXEMPTION_STALE};
     // Verifies: ARC-1599
     let diagnostics = refuse(&fixture("convention-breaks.jsonc"));
+    // The checked-in list may be empty (WG-5070 removed its last entry); the stale rule itself is
+    // shown on a list of its own by contract_rules.rs an_exemption_that_matches_no_violation_is_stale.
     let listed = exemptions().unwrap();
-    assert!(!listed.is_empty());
     for entry in &listed {
         assert!(
             diagnostics

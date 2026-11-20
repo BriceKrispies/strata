@@ -26,6 +26,7 @@ pub mod erasure;
 pub mod expr;
 pub mod intent;
 pub mod limits;
+pub mod operations;
 pub mod read;
 pub mod rules;
 pub mod schema;

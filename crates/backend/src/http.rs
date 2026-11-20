@@ -1094,6 +1094,10 @@ pub fn router(app: Shared) -> Router {
             "/internal/settings/resolve-for",
             post(crate::settings::resolve_for),
         )
+        .route(
+            "/internal/operations/invoke",
+            post(crate::operations::route),
+        )
         .route("/internal/diagnostics", post(diagnostics))
         .route("/internal/platform/diagnostics", post(platform_diagnostics))
         .route("/internal/platform/tenants", post(platform_create_tenant))

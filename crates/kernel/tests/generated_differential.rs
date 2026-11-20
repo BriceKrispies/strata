@@ -104,6 +104,11 @@
 //!      a named person and for a caller with a session; the generated `roles-of` and
 //!      `reserved-principal` do not yet. Guarded: `assert_no_automation_principal` fails on a
 //!      context whose principal has the prefix.
+//!  12. Not exercised, and not mirrored: the invocation of a tenant operation (`InvokeOperation`,
+//!      `crates/kernel/src/operations.rs`, WG-5100). The generated `intent-decision` refuses it
+//!      with `operation:decided_by_the_kernel` and the generated `needs` plans nothing for it,
+//!      because the function language does not state the decision yet. The operation generator
+//!      draws no invocation, and `compare_transition` fails on one.
 //!
 //! Difference 7 is guarded: `assert_no_input_of_a_known_difference` runs on every snapshot the
 //! test decides or reads, and fails when a snapshot has an automation step with a retry, a
@@ -998,6 +1003,10 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         state.tenant_id
     );
     assert_no_input_of_a_known_difference(state);
+    assert!(
+        !matches!(intent, Intent::InvokeOperation { .. }),
+        "{label}: the generated functions do not decide a tenant operation (difference 12)"
+    );
     assert_no_automation_principal(context);
     let mut hand = transition(state, intent, context);
     without_kernel_only(&mut hand);
