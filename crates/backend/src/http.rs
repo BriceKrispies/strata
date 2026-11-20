@@ -88,6 +88,7 @@ where
     .map_err(|error| error.with_correlation(&correlation))
 }
 
+/// Implements: CT-050
 async fn health(State(app): State<Shared>) -> Result<Json<Json_>, ApiError> {
     // Liveness only: it opens no tenant file. The integrity check is in the platform
     // diagnostics, behind the service credential.

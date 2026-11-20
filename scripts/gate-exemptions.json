@@ -1,43 +1,5 @@
 {
-  "handlers": [
-    {
-      "reason": "Handled by methods of the Store trait (crates/storage-api/src/lib.rs, implemented in crates/storage-sqlite/src/lib.rs) under other names, with no Implements mark naming the contract (WG-5047).",
-      "items": [
-        "store-capabilities",
-        "store-health",
-        "list-storage-migrations",
-        "list-store-tenants",
-        "load-complete-tenant",
-        "commit-transition",
-        "list-events-after",
-        "list-outbox",
-        "mark-outbox-published",
-        "list-journal-after",
-        "find-session-by-token",
-        "find-session-by-id",
-        "list-live-sessions",
-        "purge-ended-sessions",
-        "find-account",
-        "list-snapshots",
-        "reset-store",
-        "commit-accepted"
-      ]
-    },
-    {
-      "reason": "Handled by code the check cannot find: no Implements mark, no mounted bffRoute, no route at the contract path (WG-5048).",
-      "items": [
-        "health-check",
-        "deliver-view",
-        "subscribe-events",
-        "show-sign-in-page",
-        "show-authoring-view",
-        "run-scenario",
-        "project-change",
-        "install-bundle",
-        "parse-bundle"
-      ]
-    }
-  ],
+  "handlers": [],
   "tables": [
     {
       "reason": "The table name is built at run time (CREATE TABLE IF NOT EXISTS {ledger}); the two ledgers it creates are described by tbl-control-migrations and tbl-tenant-migrations. Not a gap.",
