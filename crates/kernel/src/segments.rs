@@ -281,6 +281,12 @@ pub struct SegmentWrite {
     /// Refreshes skipped for want of job quota (SEG-1544).
     #[serde(default)]
     pub refresh_skipped: Vec<(SegmentId, Timestamp)>,
+    /// The position of the event log handed on to the job worker, as `(before, after)`: the
+    /// store refuses the write as a conflict when its cursor is not `before`, and raises it to
+    /// `after` in the same transaction as the jobs the write creates, so a position is handed on
+    /// once (D-7280).
+    #[serde(default)]
+    pub published: Option<(u64, u64)>,
 }
 
 impl SegmentWrite {
@@ -294,6 +300,7 @@ impl SegmentWrite {
             && self.batches.is_empty()
             && self.erased.is_empty()
             && self.refresh_skipped.is_empty()
+            && self.published.is_none()
     }
 
     /// Both writes, as one.
@@ -311,6 +318,9 @@ impl SegmentWrite {
         self.batches.extend(other.batches);
         self.erased.extend(other.erased);
         self.refresh_skipped.extend(other.refresh_skipped);
+        if other.published.is_some() {
+            self.published = other.published;
+        }
     }
 }
 
@@ -383,6 +393,14 @@ impl SegmentTables {
                 return Err(WriteConflict(format!(
                     "the membership of {} in {} changed since it was read",
                     change.person, change.segment
+                )));
+            }
+        }
+        if let Some((before, _)) = write.published {
+            if self.published != before {
+                return Err(WriteConflict(format!(
+                    "the event log is handed on up to {}, the decision saw {before}",
+                    self.published
                 )));
             }
         }
@@ -469,6 +487,9 @@ impl SegmentTables {
             }
         }
         self.events.extend(write.events.iter().cloned());
+        if let Some((_, after)) = write.published {
+            self.published = self.published.max(after);
+        }
         Ok(())
     }
 
@@ -1867,7 +1888,7 @@ pub fn needs_for(catalog: &[Segment], state: &State, targets: &[Target]) -> Vec<
 }
 
 /// The subject record of a target, when the snapshot holds it and it still stands for the person.
-fn locate<'a>(
+pub fn locate<'a>(
     segment: &Segment,
     lookup: &Lookup<'a>,
     target: &Target,

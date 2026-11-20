@@ -12,7 +12,8 @@
 //! A batch is the continuation a decision leaves when a change reaches more persons than one
 //! transaction evaluates, a predicate changed, or a refresh is due. The kernel writes it as a
 //! `rec-segment-batch` row; the job worker runs the pending ones with [`run_batch`], each in a
-//! transaction of its own (CT-297). Until that worker exists, [`run_pending`] runs them in order.
+//! transaction of its own (CT-297): every write that leaves one creates its job in the same
+//! transaction ([`crate::segment_jobs`]). [`run_pending`] runs them in order without the worker.
 
 use crate::{Commit, ExecuteError, Receipt, Store, StoreError, StoreResult};
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,14 @@ pub struct SegmentCommit {
     /// tenant is at another.
     pub revision: StateRevision,
     pub write: SegmentWrite,
+    /// What the write creates beside the segment rows, in the same transaction: the jobs that run
+    /// the continuations it leaves and hand its events on ([`crate::segment_jobs::of_write`]), the
+    /// jobs and exception records of the triggers the event log starts, and the records of a
+    /// fan-out. A job whose key the tenant holds already is not created again.
+    #[serde(default)]
+    pub work: crate::jobs::WorkerWrites,
+    /// The time the write was decided at: the creation time of its jobs.
+    pub now: strata_kernel::Timestamp,
 }
 
 /// How often a segment write is decided again after losing a race, and how many rounds a
@@ -201,9 +210,10 @@ pub fn decide_change(
 /// Commit a segment write of its own, deciding it again after a lost race.
 fn commit_own(
     store: &dyn Store,
-    tenant: &TenantId,
+    ctx: &Context,
     decide: &mut dyn FnMut(&TenantState, &[Segment]) -> Result<SegmentWrite, ExecuteError>,
 ) -> Result<(SegmentWrite, Receipt), ExecuteError> {
+    let tenant = &ctx.tenant;
     let mut retries = 0;
     loop {
         let header = store.load(tenant, &[])?;
@@ -215,10 +225,16 @@ fn commit_own(
         };
         let catalog = store.segment_catalog(tenant)?;
         let write = decide(stored, &catalog)?;
+        let salt = format!("{}@{}", ctx.correlation, stored.revision.0);
         let commit = SegmentCommit {
             tenant: tenant.clone(),
             revision: stored.revision,
+            work: crate::jobs::WorkerWrites {
+                jobs: crate::segment_jobs::of_write(&write, &salt, ctx.now),
+                ..Default::default()
+            },
             write: write.clone(),
+            now: ctx.now,
         };
         match store.commit_segments(&commit) {
             Ok(receipt) => return Ok((write, receipt)),
@@ -244,7 +260,7 @@ pub fn define(
     def: &Definition,
 ) -> Result<DefineOutcome, ExecuteError> {
     let mut decided: Option<seg::Defined> = None;
-    commit_own(store, &ctx.tenant, &mut |tenant, catalog| {
+    commit_own(store, ctx, &mut |tenant, catalog| {
         let defined = seg::define(tenant, catalog, def.clone(), ctx).map_err(domain)?;
         let write = defined.write.clone();
         decided = Some(defined);
@@ -265,7 +281,7 @@ pub fn define(
 
 /// Remove a segment, its memberships, wake rows and batches, with no exit event (CT-291).
 pub fn remove(store: &dyn Store, ctx: &Context, id: SegmentId) -> Result<(), ExecuteError> {
-    commit_own(store, &ctx.tenant, &mut |tenant, catalog| {
+    commit_own(store, ctx, &mut |tenant, catalog| {
         seg::remove(tenant, catalog, id, ctx).map_err(domain)
     })
     .map(|_| ())
@@ -384,10 +400,18 @@ pub fn run_batch(
             (write, next)
         };
         let written = write.events.len();
+        // The continuation this batch leaves and the events it writes are jobs of its own
+        // transaction (WG-5165); the salt is the decision's correlation, which the job names.
+        let work = crate::jobs::WorkerWrites {
+            jobs: crate::segment_jobs::of_write(&write, &ctx.correlation, ctx.now),
+            ..Default::default()
+        };
         let commit = SegmentCommit {
             tenant: tenant.clone(),
             revision: stored.revision,
             write,
+            work,
+            now: ctx.now,
         };
         match store.commit_segments(&commit) {
             Ok(_) => {
@@ -424,7 +448,7 @@ pub fn start_refresh(
     id: SegmentId,
 ) -> Result<Option<Batch>, ExecuteError> {
     let mut started = None;
-    commit_own(store, &ctx.tenant, &mut |_, catalog| {
+    commit_own(store, ctx, &mut |_, catalog| {
         let pending = store.segment_batches(&ctx.tenant)?;
         let mut write = SegmentWrite::default();
         started = catalog
@@ -442,7 +466,7 @@ pub fn start_refresh(
 
 /// Record a refresh skipped for want of job quota on its segment (SEG-1544).
 pub fn skip_refresh(store: &dyn Store, ctx: &Context, id: SegmentId) -> Result<(), ExecuteError> {
-    commit_own(store, &ctx.tenant, &mut |_, catalog| {
+    commit_own(store, ctx, &mut |_, catalog| {
         Ok(catalog
             .iter()
             .find(|s| s.id == id)
@@ -462,7 +486,7 @@ pub fn erase(
     person: &PrincipalId,
     sealed: &PrincipalId,
 ) -> Result<usize, ExecuteError> {
-    let (write, _) = commit_own(store, &ctx.tenant, &mut |tenant, _| {
+    let (write, _) = commit_own(store, ctx, &mut |tenant, _| {
         let memberships = store.segment_memberships_of(&ctx.tenant, person)?;
         let wakes = store.segment_wakes_of(&ctx.tenant, person)?;
         let occasion = Occasion {

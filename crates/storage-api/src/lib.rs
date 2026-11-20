@@ -38,6 +38,8 @@
 pub mod covering;
 pub mod jobs;
 pub mod memory;
+pub mod segment_jobs;
+pub mod segment_pump;
 pub mod segments;
 
 #[cfg(feature = "conformance")]
@@ -1374,6 +1376,12 @@ pub trait Store: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// The position of the segment event log handed on to the job worker (D-7280): the events at
+    /// or before it have been matched against the triggers; 0 before any.
+    fn segment_cursor(&self, _tenant: &TenantId) -> StoreResult<u64> {
+        Ok(0)
+    }
+
     /// Commit an accepted transition together with the segment write its change decided, in one
     /// atomic step: both, or neither (SEG-008, SEG-012). The write is refused, and nothing is
     /// changed, with [`StoreError::Conflict`] when a segment or membership row it rests on moved.
@@ -1660,7 +1668,9 @@ pub fn execute_by(
             }
         };
         // The memberships the change moves, decided for the same commit (SEG-008, D-5022).
-        let decided = match segments::decide_change(store, &transition, ctx, 0) {
+        // A change an automation causes carries the hops of its chain (SEG-031, SEG-032).
+        let hop = u64::from(ctx.hop.unwrap_or(0));
+        let decided = match segments::decide_change(store, &transition, ctx, hop) {
             Ok(decided) => decided,
             Err(ExecuteError::Store(StoreError::Conflict { .. }))
                 if conflicts < MAX_CONFLICT_RETRIES =>
@@ -1675,7 +1685,14 @@ pub fn execute_by(
         if let Some(error) = expired() {
             return Err(error);
         }
-        match store.commit_with_segments(&Commit::of(intent, ctx, &transition), &decided.write) {
+        let mut commit = Commit::of(intent, ctx, &transition);
+        // The continuations and events the change leaves are jobs of the same commit (WG-5165).
+        commit.jobs.extend(segment_jobs::of_write(
+            &decided.write,
+            &format!("rev{}", transition.delta.new_revision.0),
+            ctx.now,
+        ));
+        match store.commit_with_segments(&commit, &decided.write) {
             Ok(receipt) => {
                 return Ok(Executed {
                     transition,

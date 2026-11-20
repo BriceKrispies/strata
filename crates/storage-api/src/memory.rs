@@ -258,14 +258,25 @@ impl Store for MemoryStore {
                 found,
             });
         }
+        check_jobs(&commit.work.jobs)?;
         let tables = inner.segments.entry(commit.tenant.clone()).or_default();
         tables
             .apply(&commit.write)
             .map_err(|_| crate::segments::write_conflict())?;
+        // The jobs and records of the write are part of it: created under the same lock.
+        inner.write(&commit.tenant, &commit.work, commit.now);
         Ok(Receipt {
             revision: commit.revision,
             last_position: None,
         })
+    }
+
+    fn segment_cursor(&self, tenant: &TenantId) -> StoreResult<u64> {
+        Ok(self
+            .lock()?
+            .segments
+            .get(tenant)
+            .map_or(0, |tables| tables.published))
     }
 
     fn segment_catalog(&self, tenant: &TenantId) -> StoreResult<Vec<seg::Segment>> {
@@ -1412,6 +1423,26 @@ impl Store for MemoryStore {
             .journal
             .retain(|entry| entry.tenant != *tenant || entry.revision <= state.revision);
         inner.tenants.insert(tenant.clone(), state);
+        // The membership and wake rows no longer rest on the records that were put back: every
+        // segment is evaluated again as if its predicate had changed (WG-5167).
+        let catalog = inner
+            .segments
+            .get(tenant)
+            .map(seg::SegmentTables::catalog)
+            .unwrap_or_default();
+        if !catalog.is_empty() {
+            let write = strata_kernel::segment_flow::restore_write(&catalog);
+            if let Some(tables) = inner.segments.get_mut(tenant) {
+                tables.memberships.clear();
+                tables.wakes.clear();
+                let _ = tables.apply(&write);
+                for segment in tables.segments.values_mut() {
+                    segment.member_count = 0;
+                }
+            }
+            let jobs = crate::segment_jobs::of_write(&write, "restore", Timestamp(0));
+            inner.add_jobs(tenant, &jobs, Timestamp(0));
+        }
         Ok(())
     }
 

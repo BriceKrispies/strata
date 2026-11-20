@@ -161,6 +161,9 @@ pub enum JobWork {
         /// The position of the step in its run, from one.
         sequence: u64,
     },
+    /// Work of a segment: a batch, a refresh, the event log, a batch of a fan-out
+    /// ([`crate::segment_jobs`]).
+    Segment(crate::segment_jobs::SegmentWork),
 }
 
 /// A job to create: its key, what it does, when it is due and how it is retried.
@@ -723,7 +726,7 @@ pub fn trigger_intake(
 }
 
 /// The job that starts the run a trigger asked for.
-fn start_job(start: &AutomationStart, now: Timestamp) -> NewJob {
+pub(crate) fn start_job(start: &AutomationStart, now: Timestamp) -> NewJob {
     let key = match &start.run_key {
         Some(run_key) => format!("start:{}:key:{run_key}", start.automation),
         None => format!(
@@ -751,7 +754,7 @@ fn start_job(start: &AutomationStart, now: Timestamp) -> NewJob {
 
 /// The declined exception record of a trigger the kernel declined; the id is derived from the
 /// tenant, the trigger, the event and the reason, so a decision made again writes it once.
-fn declined_record(
+pub(crate) fn declined_record(
     tenant: &TenantId,
     decline: &AutomationDecline,
     now: Timestamp,

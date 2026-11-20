@@ -86,6 +86,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "segment_jobs",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Runs the worker over a segment of 350 people, its refresh, its event log, a fan-out and a bundle install, on the in-memory store"
+    },
+    {
+      "package": "strata-backend",
       "target": "segments",
       "tier": "routine",
       "seconds": null,
