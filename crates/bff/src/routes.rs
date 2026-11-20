@@ -2094,6 +2094,68 @@ async fn identity_write(
     Ok(uncached(reply))
 }
 
+/// What the desk may change of the products installed in the tenant, and where it is at the
+/// backend: install-bundle, upgrade-bundle and remove-bundle (CT-236, CT-835, CT-836). Each is the
+/// owner's with a fresh factor, and the backend checks that again.
+const PRODUCT_WRITES: &[(&str, &str)] = &[
+    ("install", "/internal/products/install"),
+    ("upgrade", "/internal/products/upgrade"),
+    ("remove", "/internal/products/remove"),
+];
+
+/// `GET /api/products`: the products installed in the tenant (list-installed-products, CT-837).
+///
+/// Implements: CT-837
+async fn products_list(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let reply: Json_ = backend(&bff, &visit, "/internal/products", &json!({})).await?;
+    Ok(uncached(reply))
+}
+
+/// `POST /api/products/<install|upgrade|remove>`: the contract's inputs as the JSON body. The
+/// browser's idempotency key is passed on as it is, so that a retry after a lost reply changes the
+/// tenant once (D-6595). The request must come from one of our pages with the session's request
+/// token; the kernel decides, and this route adds nothing.
+///
+/// Implements: CT-236, CT-835, CT-836
+async fn products_write(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(action): Path<String>,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    let Some((_, path)) = PRODUCT_WRITES
+        .iter()
+        .find(|(name, _)| *name == action.trim_start_matches('/'))
+    else {
+        return Err(Failure::new(
+            ErrorCode::NotFound,
+            "No such endpoint.",
+            &visit.correlation,
+        ));
+    };
+    let key = match headers.get(HEADER_IDEMPOTENCY) {
+        None => None,
+        Some(value) => Some(
+            value
+                .to_str()
+                .ok()
+                .filter(|key| valid_idempotency_key(key))
+                .ok_or_else(|| {
+                    Failure::new(
+                        ErrorCode::Invalid,
+                        "An idempotency key is 1 to 255 visible ASCII characters.",
+                        &visit.correlation,
+                    )
+                })?,
+        ),
+    };
+    let reply: Json_ = backend_keyed(&bff, &visit, path, &body, key).await?;
+    Ok(uncached(reply))
+}
+
 pub fn router(bff: Shared) -> Router {
     let api = Router::new()
         .route("/session", get(session))
@@ -2135,6 +2197,8 @@ pub fn router(bff: Shared) -> Router {
         .route("/diagnostics", get(diagnostics))
         .route("/dev/:action", post(dev))
         .route("/identity/*action", get(identity_read).post(identity_write))
+        .route("/products", get(products_list))
+        .route("/products/:action", post(products_write))
         .fallback(api_not_found);
     Router::new()
         .nest("/api", api)
