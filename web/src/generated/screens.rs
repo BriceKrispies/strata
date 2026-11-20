@@ -36,74 +36,74 @@ pub struct ViewInfo {
 pub const VIEWS: &[ViewInfo] = &[
     ViewInfo {
         view: "home",
-        title: Some(&[][..]),
+        title: Some(&[]),
         outputs: &[
         ],
     },
     ViewInfo {
         view: "post",
-        title: Some(&[TitlePart::Path(&["data", "post", "fields", "title"])][..]),
+        title: Some(&[TitlePart::Path(&["data", "post", "fields", "title"])]),
         outputs: &[
         ],
     },
     ViewInfo {
         view: "topics",
-        title: Some(&[TitlePart::Text("Topics")][..]),
+        title: Some(&[TitlePart::Text("Topics")]),
         outputs: &[
         ],
     },
     ViewInfo {
         view: "topic",
-        title: Some(&[TitlePart::Path(&["data", "category", "fields", "name"])][..]),
+        title: Some(&[TitlePart::Path(&["data", "category", "fields", "name"])]),
         outputs: &[
         ],
     },
     ViewInfo {
         view: "authors",
-        title: Some(&[TitlePart::Text("Authors")][..]),
+        title: Some(&[TitlePart::Text("Authors")]),
         outputs: &[
         ],
     },
     ViewInfo {
         view: "author",
-        title: Some(&[TitlePart::Path(&["data", "author", "fields", "name"])][..]),
+        title: Some(&[TitlePart::Path(&["data", "author", "fields", "name"])]),
         outputs: &[
         ],
     },
     ViewInfo {
         view: "search",
-        title: Some(&[TitlePart::Text("Search")][..]),
+        title: Some(&[TitlePart::Text("Search")]),
         outputs: &[
         ],
     },
     ViewInfo {
         view: "about",
-        title: Some(&[TitlePart::Text("About")][..]),
+        title: Some(&[TitlePart::Text("About")]),
         outputs: &[
         ],
     },
     ViewInfo {
         view: "login",
-        title: Some(&[TitlePart::Text("Sign in")][..]),
+        title: Some(&[TitlePart::Text("Sign in")]),
         outputs: &[
         ],
     },
     ViewInfo {
         view: "missing",
-        title: Some(&[TitlePart::Text("Page not found")][..]),
+        title: Some(&[TitlePart::Text("Page not found")]),
         outputs: &[
         ],
     },
     ViewInfo {
         view: "desk",
-        title: Some(&[TitlePart::Text("Writing desk")][..]),
+        title: Some(&[TitlePart::Text("Writing desk")]),
         outputs: &[
             ViewOutput { output: "articles", kind: "rows", from: "posts", args: &[("article_id", "id"), ("version", "version"), ("title", "fields.title"), ("slug", "fields.slug"), ("body", "fields.body"), ("status", "fields.status")] },
         ],
     },
     ViewInfo {
         view: "desk_new",
-        title: Some(&[TitlePart::Text("New article")][..]),
+        title: Some(&[TitlePart::Text("New article")]),
         outputs: &[
             ViewOutput { output: "topics", kind: "choices", from: "categories", args: &[("leading-label", "No topic")] },
             ViewOutput { output: "authors", kind: "choices", from: "authors", args: &[] },
@@ -111,7 +111,7 @@ pub const VIEWS: &[ViewInfo] = &[
     },
     ViewInfo {
         view: "desk_edit",
-        title: Some(&[TitlePart::Text("Editing: "), TitlePart::Path(&["data", "post", "fields", "title"])][..]),
+        title: Some(&[TitlePart::Text("Editing: "), TitlePart::Path(&["data", "post", "fields", "title"])]),
         outputs: &[
             ViewOutput { output: "topics", kind: "choices", from: "categories", args: &[("leading-label", "No topic")] },
             ViewOutput { output: "authors", kind: "choices", from: "authors", args: &[] },
@@ -121,7 +121,7 @@ pub const VIEWS: &[ViewInfo] = &[
     },
     ViewInfo {
         view: "desk_settings",
-        title: Some(&[TitlePart::Text("Publication settings")][..]),
+        title: Some(&[TitlePart::Text("Publication settings")]),
         outputs: &[
             ViewOutput { output: "accents", kind: "theme-names", from: "accents", args: &[] },
             ViewOutput { output: "papers", kind: "theme-names", from: "papers", args: &[] },
@@ -131,7 +131,7 @@ pub const VIEWS: &[ViewInfo] = &[
     },
     ViewInfo {
         view: "lab",
-        title: Some(&[TitlePart::Text("Impact Lab")][..]),
+        title: Some(&[TitlePart::Text("Impact Lab")]),
         outputs: &[
         ],
     },

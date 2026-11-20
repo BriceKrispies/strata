@@ -22,8 +22,8 @@
 //! a time.
 
 pub mod backend;
-pub mod bundle;
 pub mod budget;
+pub mod bundle;
 pub mod catalogue;
 pub mod codetext;
 pub mod constructs;
@@ -35,9 +35,9 @@ pub mod emit;
 pub mod function;
 pub mod ir;
 pub mod jsonc;
+pub mod language;
 pub mod layer_expr;
 pub mod layer_values;
-pub mod language;
 pub mod layers;
 pub mod load;
 pub mod model_core;

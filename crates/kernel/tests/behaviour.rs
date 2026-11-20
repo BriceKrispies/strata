@@ -3,6 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
+use strata_model_core::types::{
+    DataSubject, PersonalDeclaration, PersonalKind, RetentionRule, RetentionStart,
+};
 
 fn step(
     world: &World,

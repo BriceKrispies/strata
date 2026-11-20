@@ -699,7 +699,7 @@ pub fn generate(value: &Value) -> Result<(String, String), Vec<Diagnostic>> {
     for i in &infos {
         let title = i.title.as_deref().map_or("None".to_string(), |parts| {
             format!(
-                "Some(&[{}][..])",
+                "Some(&[{}])",
                 parts
                     .iter()
                     .map(|p| match p {

@@ -77,13 +77,23 @@ fn first_missing(expr: &Expr, env: &Env<'_>, lookup: Lookup<'_>) -> Option<Need>
         | Expr::Now
         | Expr::Principal
         | Expr::HasRole(_) => None,
-        Expr::Not(a) | Expr::IsNull(a) | Expr::Len(a) | Expr::Lower(a) | Expr::IsSlug(a) => {
-            first_missing(a, env, lookup)
-        }
+        Expr::Not(a)
+        | Expr::IsNull(a)
+        | Expr::Len(a)
+        | Expr::Lower(a)
+        | Expr::IsSlug(a)
+        | Expr::Duration(_, a)
+        | Expr::Text(a) => first_missing(a, env, lookup),
         Expr::And(items) | Expr::Or(items) => items
             .iter()
             .find_map(|item| first_missing(item, env, lookup)),
-        Expr::Cmp(_, a, b) | Expr::In(a, b) | Expr::Contains(a, b) | Expr::StartsWith(a, b) => {
+        Expr::Cmp(_, a, b)
+        | Expr::In(a, b)
+        | Expr::Contains(a, b)
+        | Expr::StartsWith(a, b)
+        | Expr::Arith(_, a, b)
+        | Expr::MsBetween(a, b)
+        | Expr::Concat(a, b) => {
             first_missing(a, env, lookup).or_else(|| first_missing(b, env, lookup))
         }
         Expr::If(a, b, c) => first_missing(a, env, lookup)
