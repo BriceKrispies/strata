@@ -51,11 +51,21 @@ impl Outcome {
     }
 }
 
-/// The step key of D-6528 (SCH-1524): the SHA-256 of the tenant, the automation, the run, the
-/// step and the member of a fan-out (none here), the same on every attempt.
-pub fn step_key(tenant: &TenantId, automation: &WorkflowId, run: &str, step: &StepName) -> String {
+/// The step key of D-6528 (SCH-1524, D-7700): the SHA-256 of the tenant, the automation, the run,
+/// the step, the member of a fan-out (none here) and the position of the step in the run
+/// (`sequence`, from one). The position is what tells the visits of a step apart when a run goes
+/// back to it through a branch: each visit has a key of its own, and every attempt of one visit
+/// has the same key, so a retry of a visit has no second effect.
+pub fn step_key(
+    tenant: &TenantId,
+    automation: &WorkflowId,
+    run: &str,
+    step: &StepName,
+    sequence: u64,
+) -> String {
     canon::hash_bytes(
-        format!("strata/step-key/v1\0{tenant}\0{automation}\0{run}\0{step}\0").as_bytes(),
+        format!("strata/step-key/v2\0{tenant}\0{automation}\0{run}\0{step}\0\0{sequence}")
+            .as_bytes(),
     )
 }
 
@@ -114,7 +124,7 @@ fn automation_of<'a>(schema: &'a TenantSchema, id: &WorkflowId) -> Option<&'a Au
 
 /// An exception record of the run of a job, with an id derived from the job and the reason.
 #[allow(clippy::too_many_arguments)]
-fn exception(
+pub(super) fn exception(
     tenant: &TenantId,
     kind: ExceptionKind,
     reason: &str,
@@ -163,6 +173,7 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
             params,
             caused_by,
             on_behalf_of,
+            run_key,
             ..
         } => start_run(
             app,
@@ -176,9 +187,13 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
                 params,
                 caused_by: caused_by.clone(),
                 on_behalf_of: on_behalf_of.clone(),
+                run_key: run_key.clone(),
             },
             now,
         ),
+        JobWork::ScheduleDue { schedule, due } => {
+            super::schedules::run_due(app, tenant, lease, schedule, *due, now)
+        }
         JobWork::Step {
             run,
             automation,
@@ -200,7 +215,13 @@ struct StartOf<'a> {
     caused_by: Option<strata_kernel::PrincipalId>,
     /// The person the automation acts for: its definer (D-7204).
     on_behalf_of: Option<strata_kernel::PrincipalId>,
+    /// The hash of the run key the automation's expression gave (D-6534).
+    run_key: Option<String>,
 }
+
+/// How long a start waits, in milliseconds, when an earlier event of its run key has not started
+/// its run yet (SCH-1534).
+const RUN_KEY_WAIT_MS: i64 = 5_000;
 
 /// A failure of a job that is not a step of a run: retried while its policy allows, then failed
 /// with a dead-lettered record.
@@ -280,6 +301,7 @@ fn start_run(
                 format!("automation {} does not exist", start.automation),
                 now,
             )],
+            run_keys_released: vec![start.automation.clone()],
             ..WorkerWrites::default()
         });
     };
@@ -316,6 +338,70 @@ fn start_run(
             now,
         );
     };
+    let mut claims = Vec::new();
+    if let Some(key) = &start.run_key {
+        // At most one run for each value of the run key, for as long as the automation exists
+        // (SCH-1536, D-6534): a repeat starts no run and writes a declined record.
+        match app.store.run_key_holder(tenant, start.automation, key) {
+            Ok(Some(holder)) if holder != run_id => {
+                let mut declined = exception(
+                    tenant,
+                    ExceptionKind::Declined,
+                    "run-key-repeated",
+                    start.automation,
+                    None,
+                    None,
+                    &lease.job,
+                    format!("run {holder} already started for this run key"),
+                    now,
+                );
+                declined.trigger = start.trigger.clone();
+                declined.event_seq = start.event_seq;
+                declined.hop = Some(start.hop);
+                return Outcome::done(WorkerWrites {
+                    exceptions: vec![declined],
+                    ..WorkerWrites::default()
+                });
+            }
+            Ok(_) => {}
+            Err(error) => {
+                return job_failure(tenant, lease, start.automation, error.to_string(), now)
+            }
+        }
+        // The runs of one key of one trigger start in the order of their events (SCH-1534,
+        // D-6532): a start waits while an earlier event's start has not ended.
+        match app.store.open_run_key_starts(tenant, start.automation, key) {
+            Ok(open) => {
+                let mine = start.event_seq.unwrap_or(0);
+                let earlier = open.iter().any(|other| match &other.work {
+                    JobWork::StartRun {
+                        trigger, event_seq, ..
+                    } => {
+                        other.id != lease.job.id
+                            && *trigger == start.trigger
+                            && event_seq.unwrap_or(0) < mine
+                    }
+                    _ => false,
+                });
+                if earlier {
+                    return Outcome {
+                        report: JobReport::Deferred {
+                            until: Timestamp(now.0.saturating_add(RUN_KEY_WAIT_MS)),
+                        },
+                        writes: WorkerWrites::default(),
+                    };
+                }
+            }
+            Err(error) => {
+                return job_failure(tenant, lease, start.automation, error.to_string(), now)
+            }
+        }
+        claims.push(jobs::RunKeyClaim {
+            automation: start.automation.clone(),
+            key: key.clone(),
+            run: run_id.clone(),
+        });
+    }
     let run = RunRecord {
         run: run_id.clone(),
         automation: start.automation.clone(),
@@ -345,6 +431,7 @@ fn start_run(
             1,
             now,
         )],
+        run_keys: claims,
         ..WorkerWrites::default()
     })
 }
@@ -406,7 +493,7 @@ fn run_step(
         // The run ended (cancelled, failed) after this job was created: nothing to do.
         return Outcome::done(WorkerWrites::default());
     }
-    let key = step_key(tenant, automation, run_id, step);
+    let key = step_key(tenant, automation, run_id, step, sequence);
     let mut record = StepRecord {
         run: run_id.to_string(),
         sequence,
@@ -449,7 +536,8 @@ fn run_step(
             runs: vec![run],
             steps: vec![record],
             exceptions: vec![removed],
-            jobs: Vec::new(),
+            run_keys_released: vec![automation.clone()],
+            ..WorkerWrites::default()
         });
     };
     if let Some(role) = &def.suspended_for {
@@ -477,7 +565,7 @@ fn run_step(
             runs: vec![run],
             steps: vec![record],
             exceptions: vec![suspended],
-            jobs: Vec::new(),
+            ..WorkerWrites::default()
         });
     }
     let attempt = match def.steps.get(step) {
@@ -536,8 +624,8 @@ fn run_step(
             Outcome::done(WorkerWrites {
                 runs: vec![run],
                 steps: vec![record],
-                exceptions: Vec::new(),
                 jobs: follow,
+                ..WorkerWrites::default()
             })
         }
         Err(error) => {
@@ -580,7 +668,7 @@ fn run_step(
                     runs: vec![run],
                     steps: vec![record],
                     exceptions,
-                    jobs: Vec::new(),
+                    ..WorkerWrites::default()
                 },
             }
         }

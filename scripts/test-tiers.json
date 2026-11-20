@@ -86,6 +86,13 @@
     },
     {
       "package": "strata-backend",
+      "target": "schedules",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
       "target": "segments",
       "tier": "routine",
       "seconds": null,

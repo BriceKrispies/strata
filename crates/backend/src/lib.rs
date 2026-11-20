@@ -119,6 +119,18 @@ fn purge(app: &App) {
         ("factor_challenges", app.store.purge_factor_challenges(now)),
         ("saml_requests", app.store.purge_saml_requests(now)),
         ("saml_assertions", app.store.purge_saml_assertions(now)),
+        // Ended jobs after thirty days, ended runs and their steps and declined or settled
+        // exception records after ninety; never an unsettled parked or dead-lettered record
+        // (OPS-348, D-7703): one call.
+        (
+            "automation_records",
+            app.store
+                .purge_automation(
+                    now,
+                    &strata_storage_api::schedules::AutomationRetention::default(),
+                )
+                .map(|purged| purged.total()),
+        ),
         (
             "sessions",
             app.store
