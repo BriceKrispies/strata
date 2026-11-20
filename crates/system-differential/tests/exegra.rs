@@ -12,9 +12,14 @@
 //!   record whose other fields hold placeholder values of their types: the one instance of an
 //!   unkeyed machine under a placeholder key, and each key the scenario's inputs route to for a
 //!   keyed one. That stands for the contract that creates the record, which Exegra leaves out.
+//!   The one instance of an unkeyed machine that does create its records is set up the same way:
+//!   the host reaches an instance through a record, and a route to every instance names no key to
+//!   create one under (WG-5090).
 //! - The external entries (the scenario's steps and injected events: Exegra's initial queue) are
 //!   submitted at their times before the run, in Exegra's order, so they take the lowest sequence
-//!   numbers as in Exegra.
+//!   numbers as in Exegra. An entry a fault will drop, lose or delay is not submitted: the
+//!   dispatcher in front of the host does not have it until its delayed copy is queued, so the
+//!   queue comparison leaves it out of Exegra's queue as well.
 //! - Then, for each step of the trace, the clock is set to the time of the next due entry, which
 //!   must be the step's time, and the host takes one step. After it the test compares: the entry
 //!   delivered (event and payload), the state and variables of every instance Exegra has, and the
@@ -65,7 +70,7 @@ use strata_runtime::{
     DispatchError, Dispatcher, Envelope, Member, MemoryStore, Router, System, TenantId, TestClock,
     Time,
 };
-use strata_spec_compiler::ir::{Spec, TypeKind};
+use strata_spec_compiler::ir::{variant_wire_name, Spec, TypeKind, UnionTag};
 use strata_spec_compiler::resolve::{Builtin, TypeRef};
 use strata_spec_compiler::{jsonc, load};
 
@@ -290,8 +295,70 @@ fn placeholder(spec: &Spec, t: &TypeRef) -> Value {
                     })
                     .collect(),
             ),
-            // No record field holds a union yet; its wire form depends on its encoding.
-            Some(TypeKind::Union { .. }) | None => Value::Null,
+            // The first variant, written as the union's encoding writes it on the wire.
+            Some(TypeKind::Union { variants, encoding }) => match variants.first() {
+                None => Value::Null,
+                Some(variant) => {
+                    let name = variant_wire_name(&variant.name, encoding.variant_case);
+                    let content = if variant.fields.is_empty() {
+                        None
+                    } else if variant.tuple {
+                        Some(Value::Array(
+                            variant
+                                .fields
+                                .iter()
+                                .map(|f| placeholder(spec, &TypeRef::parse(&f.type_name)))
+                                .collect(),
+                        ))
+                    } else if variant.newtype {
+                        variant
+                            .fields
+                            .first()
+                            .map(|f| placeholder(spec, &TypeRef::parse(&f.type_name)))
+                    } else {
+                        Some(Value::Object(
+                            variant
+                                .fields
+                                .iter()
+                                .filter(|f| !f.optional)
+                                .map(|f| {
+                                    (
+                                        f.name.clone(),
+                                        placeholder(spec, &TypeRef::parse(&f.type_name)),
+                                    )
+                                })
+                                .collect(),
+                        ))
+                    };
+                    match encoding.tag {
+                        UnionTag::External => match content {
+                            None => json!(name),
+                            Some(c) => {
+                                let mut out = serde_json::Map::new();
+                                out.insert(name, c);
+                                Value::Object(out)
+                            }
+                        },
+                        UnionTag::Internal => {
+                            let mut out = match content {
+                                Some(Value::Object(o)) => o,
+                                _ => serde_json::Map::new(),
+                            };
+                            out.insert(encoding.tag_field.clone().unwrap_or_default(), json!(name));
+                            Value::Object(out)
+                        }
+                        UnionTag::Adjacent => {
+                            let mut out = serde_json::Map::new();
+                            out.insert(encoding.tag_field.clone().unwrap_or_default(), json!(name));
+                            if let Some(c) = content {
+                                out.insert(encoding.content_field.clone().unwrap_or_default(), c);
+                            }
+                            Value::Object(out)
+                        }
+                    }
+                }
+            },
+            None => Value::Null,
         },
     }
 }
@@ -503,7 +570,14 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
             singles.insert(member.name.to_string(), text);
             vec![key]
         };
-        if member.creates {
+        // A keyed machine that creates its records starts an instance on the first entry routed
+        // to its key, as Exegra does. An unkeyed one has its one instance from the start in
+        // Exegra, but the host reaches an instance only through a record, and a route to every
+        // instance (`Routing::every`) names no key to create one under: so the one instance is
+        // set up as for a machine that does not create its records, under the placeholder key.
+        // The host cannot start such an instance by itself: that gap of the specification is
+        // WG-5090, and this branch goes when it is closed.
+        if member.creates && b.instances.is_some() {
             continue;
         }
         for key in keys {
@@ -817,10 +891,14 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
                 .await
                 .map_err(|e| diverged(format!("{context}: {e}")))?;
         }
+        // The entries the host holds: not those Exegra's fault will drop or delay later (or has
+        // lost), which the dispatcher in front of the host has not submitted yet; a delayed copy
+        // is submitted when Exegra queues it, so it is here.
         let expected: Vec<(i64, String, Value)> = step["config"]["pending"]
             .as_array()
             .into_iter()
             .flatten()
+            .filter(|p| reaches_host(p))
             .map(|p| {
                 (
                     time_of(&p["time"]),
