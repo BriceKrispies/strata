@@ -1,0 +1,5 @@
+{
+  // Refused: imports "tenant-identifier", which the platform does not declare (layer.import-unknown).
+  "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": ["tenant-identifier"] } },
+  "types": [ { "id": "badges-tier", "name": "Badge tier", "kind": "enum", "values": ["bronze", "gold"] } ]
+}

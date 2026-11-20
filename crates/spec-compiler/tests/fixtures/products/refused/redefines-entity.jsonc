@@ -1,0 +1,5 @@
+{
+  // Refused: declares the type "tenant-id", which the platform already declares (layer.redefines-entity).
+  "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "types": [ { "id": "tenant-id", "name": "Tenant id", "kind": "id", "repr": "string" } ]
+}

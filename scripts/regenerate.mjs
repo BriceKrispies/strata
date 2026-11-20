@@ -17,11 +17,15 @@
 //
 // The headers carry the specification's semantic hash, which Exegra reports (see spec-hash.mjs).
 //
+// Product specifications in specifications/products (WG-4989) are passed to steps 2 to 4 with
+// --product: specc checks them against the platform and refuses a bad one, and generates nothing
+// from them (they are tenant metadata), so every file written is the platform's alone.
+//
 // The first failing step stops the run. Cargo runs with two jobs.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { semanticHash } from './spec-hash.mjs';
+import { productArgs, semanticHash } from './spec-hash.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const libs = [join(root, 'crates', 'model', 'src', 'lib.rs'), join(root, 'crates', 'model-core', 'src', 'lib.rs')];
@@ -36,6 +40,7 @@ if (!specHash) {
 }
 console.log(`specification semantic hash ${specHash}`);
 const env = { ...process.env, CARGO_BUILD_JOBS: '2' };
+const products = productArgs(root);
 
 // Runs one specc command through cargo. Output goes straight to the terminal.
 function specc(name, specArgs) {
@@ -69,13 +74,13 @@ for (const lib of libs) {
 
 specc('generate the backend model (crates/model and crates/model-core)', [
   'generate', '--spec', 'specifications/spec.jsonc', '--out', 'crates/model', '--crate-name', 'strata-model', '--runtime', 'crates/runtime',
-  '--core-out', 'crates/model-core', '--core-crate-name', 'strata-model-core', '--spec-hash', specHash,
+  '--core-out', 'crates/model-core', '--core-crate-name', 'strata-model-core', '--spec-hash', specHash, ...products,
 ]);
 specc('generate the web modules (web/src/generated)', [
-  'web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated', '--spec-hash', specHash,
+  'web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated', '--spec-hash', specHash, ...products,
 ]);
 specc('generate the browser journeys (tests/e2e/generated)', [
-  'e2e', '--spec', 'specifications/spec.jsonc', '--out', 'tests/e2e/generated', '--origin', 'http://127.0.0.1:4200',
+  'e2e', '--spec', 'specifications/spec.jsonc', '--out', 'tests/e2e/generated', '--origin', 'http://127.0.0.1:4200', ...products,
 ]);
 specc('generate the step fixtures (tests/e2e/step-checks)', [
   'e2e', '--spec', 'tests/e2e/step-fixtures/spec.jsonc', '--out', 'tests/e2e/step-checks', '--expect-fail-prefix', 'violates-',
