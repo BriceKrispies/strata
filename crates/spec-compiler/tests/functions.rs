@@ -30,7 +30,7 @@ use strata_kernel::{
 use strata_spec_compiler_functions_fixture::functions;
 use strata_spec_compiler_functions_fixture::rule_language;
 use strata_spec_compiler_functions_fixture::types::{
-    Action, DomainError, PolicyDef, Principal, Resource, Subject, Tenant, Unit, Value,
+    Action, DomainError, PolicyDef, Principal, Resource, Subject, Tenant, Value,
 };
 
 fn value(v: &KValue) -> Value {
@@ -302,7 +302,7 @@ fn check_version_agrees_with_the_kernel() {
                 assert_eq!(e.kind, ErrorKind::VersionConflict, "{expected:?}: {e:?}");
                 assert_eq!(&e.message, message, "{expected:?}");
             }
-            (Ok(_), Ok(Unit::Unit)) => {}
+            (Ok(_), Ok(())) => {}
             (Err(e), Ok(_)) => assert_ne!(
                 e.kind,
                 ErrorKind::VersionConflict,

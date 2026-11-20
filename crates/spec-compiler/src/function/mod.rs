@@ -36,7 +36,12 @@
 //!   Exegra WG-4968), calls an adapter whose `follow` reads the lookup as Exegra does: a field it
 //!   does not hold is the error `the lookup does not cover <field>`, a target it does not hold is
 //!   null, a target it holds is read as a record scope. With three arguments following a
-//!   reference is an error, as before.
+//!   reference is an error, as before. `print(L, e)` is `ToString::to_string` of `e`: the
+//!   language module implements `Display` for its AST type with the printer of its authoring
+//!   syntax, which is the kernel's `Display` of `Expr` (WG-4966).
+//! - `unit` (Exegra WG-4957) is Rust's `()`: the type of a function that can fail but gives
+//!   nothing returns `Result<(), E>`, `()` is the value, `==` compares it, `{:?}` writes `()`,
+//!   and an example writes it as `null`. A declared type named `unit` shadows it, as in Exegra.
 //! - A function calls itself by structural recursion only ([`recursion`], Exegra WG-4957): every
 //!   call of itself passes, at one union parameter, a strict sub-value of it. It is ordinary
 //!   recursive Rust; Exegra bounds neither depth nor steps, and every such recursion ends on a
@@ -136,7 +141,7 @@
 //!
 //! # Not compiled (refused)
 //!
-//! `bytes`, `uuid` and `json`; `print` and the unit value `()`; a call of itself that is not
+//! `bytes`, `uuid` and `json`; a call of itself that is not
 //! structural, and mutual recursion; dividing a timestamp or a duration; `{:?}` of a value
 //! holding a timestamp or a duration; an f64 sort key or
 //! set item; `==` between a set and a list other than `[]`, or a shared and a plain value; an
@@ -898,7 +903,11 @@ fn assemble(
             clippy::redundant_clone,
             clippy::single_match,
             clippy::unnecessary_fold,
-            clippy::float_cmp
+            clippy::float_cmp,
+            clippy::unit_arg,
+            clippy::unit_cmp,
+            clippy::let_unit_value,
+            clippy::unused_unit
         )]
 
         #types_use
@@ -1406,16 +1415,57 @@ mod tests {
         );
     }
 
+    // WG-4966: the built-in unit is Rust's (); an example writes it as null, and a declared type
+    // named unit shadows it.
     #[test]
-    fn print_is_refused_as_not_compiled() {
+    fn unit_is_rusts_unit_and_an_example_writes_it_as_null() {
+        let text = spec(
+            r#"{ "id": "nothing", "params": [{ "name": "n", "type": "i64" }], "returns": "unit", "body": "()",
+                 "examples": [{ "args": { "n": 1 }, "result": null }] },
+               { "id": "same", "params": [{ "name": "n", "type": "i64" }], "returns": "bool", "body": "call nothing(n) == ()",
+                 "examples": [{ "args": { "n": 1 }, "result": true }] }"#,
+            "",
+        );
+        let out = module(&text);
+        assert!(out.contains("pub fn nothing ("), "{out}");
+        assert!(out.contains("-> ()"), "{out}");
+        assert!(out.contains("fn nothing_example_1"), "{out}");
+        assert!(out.contains("fn same_example_1"), "{out}");
+        // A value other than null is not an example of unit.
+        let wrong = text.replacen(r#""result": null"#, r#""result": 1"#, 1);
+        assert!(!refusals(&wrong).is_empty());
+    }
+
+    // WG-4966: print(L, e) is the Display the language module implements for its AST type; a
+    // first argument that is not a declared language, or an expression of another type, is
+    // refused as Exegra refuses it.
+    #[test]
+    fn print_compiles_to_the_language_printer() {
+        let out = module(FIXTURE);
+        assert!(out.contains("pub fn print_condition ("), "{out}");
+        assert!(
+            out.contains("std :: string :: ToString :: to_string ("),
+            "{out}"
+        );
+        assert!(out.contains("fn print_condition_example_1"), "{out}");
         let d = refusals(&spec(
             r#"{ "id": "p", "params": [{ "name": "s", "type": "string" }], "returns": "string", "body": "print(l, s)",
                  "examples": [{ "args": { "s": "a" }, "result": "a" }] }"#,
             "",
         ));
         assert!(
-            d.iter()
-                .any(|d| d.code == FUNCTION_UNSUPPORTED && d.message.contains("print")),
+            d.iter().any(
+                |d| d.code == FUNCTION_INVALID && d.message.contains("not a declared language")
+            ),
+            "{d:?}"
+        );
+        let wrong = FIXTURE.replacen("print(rule-language, c)", "print(rule-language, 1)", 1);
+        assert_ne!(wrong, FIXTURE);
+        let d = refusals(&wrong);
+        assert!(
+            d.iter().any(
+                |d| d.code == FUNCTION_INVALID && d.message.contains("the expression of print")
+            ),
             "{d:?}"
         );
     }

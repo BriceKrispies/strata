@@ -16,10 +16,6 @@
 //!
 //! The two sides are given the same types: the kernel re-exports the generated types. The
 //! adapters are small:
-//!   - the generated functions take `texts` (`IntentTexts`), the printed forms of expressions the
-//!     function language cannot print (WG-4957); `texts_for` derives them from the snapshot's
-//!     schema and the intent, with `Expr`'s `Display`, which is what the hand-written kernel
-//!     prints;
 //!   - the generated functions fail with `Failure<Rejection>`; a `Rejection::Rejected` payload is
 //!     the hand-written kernel's `DomainError`, and a `Failure::Fault` (integer overflow,
 //!     division by zero) fails the test, because the hand-written kernel has no such outcome;
@@ -33,19 +29,6 @@
 //!      generated `policy-check-text` writes `<condition>: evaluation failed`, because
 //!      `policy-check` does not carry the error (a gap of WG-4938). Compared as: the generated
 //!      detail minus its suffix is a prefix of the hand-written detail.
-//!   2. Not mirrored: a query filter, a field read condition or a Read policy condition that
-//!      follows a reference (`through`), and the `InsufficientState` the hand-written kernel
-//!      answers when the snapshot lacks the record it would follow (`expr::missing`,
-//!      `visible_in`, WG-5096). The generated `kernel-read`, filters, `redact` and `visible`
-//!      evaluate without a lookup, so they fail such a condition. Guarded:
-//!      `assert_no_input_of_a_known_difference` fails on a filter or a field read condition that
-//!      follows a reference and on a policy that follows one and applies to Read. A policy
-//!      condition of a transition is mirrored (`authorize-needing`, `rule-lookup`,
-//!      `rule-missing`, WG-5132, WG-5133), with one difference kept: the generated lookup leaves
-//!      out a reference field when the snapshot does not cover the field's target in the old or
-//!      in the new record, so a condition that follows the covered one of two different targets
-//!      fails where the kernel follows it. An update of the corpus never changes a reference, and
-//!      `compare_attributed` fails on an intent that does.
 //!   3. Not exercised: a query order key over a list-valued attribute. The generated order
 //!      does not order a list element by element, as `Value`'s derived order does.
 //!      The corpus has no list-valued order key (it has a list-valued field, `tags`, which no
@@ -55,24 +38,9 @@
 //!      `DefineQuery`, `DefineRolePermissions`, `RemoveField`, the definitions of triggers,
 //!      automations, tenant operations and composite unique constraints (and their removals), of
 //!      settings and of capabilities, which the generator below adds to the seven intents of
-//!      `properties.rs`, with the writes of settings, `DefineTeam` and `AddTeamMember`. `texts_for` reads defaults and
-//!      constraints only from `DefineField` and `DefineConstraint`; the definitions print no
-//!      expression. The functions of the other intents are mirrored all the same (the conferral
+//!      `properties.rs`, with the writes of settings, `DefineTeam` and `AddTeamMember`. The functions of the other intents are mirrored all the same (the conferral
 //!      of a role, the owner that remains, the reserved `team:` prefix, the rewrite of records
 //!      by a schema change), each with examples in the specification.
-//!   5. Not exercised: a list nested three deep in a stored value. The generated limit and
-//!      size functions (`value-limit-problem`, `value-json-bytes`) look two levels into a list
-//!      where `limits.rs` looks as deep as there are lists: they were written before specc
-//!      compiled structural recursion (WG-5133) and are not restated yet; a field admits a list
-//!      of scalars only, so such a value is a type mismatch
-//!      whose only other effect is the order of two refusals on a record over the size limit.
-//!      The corpus draws no nested list.
-//!   6. Not exercised: a policy on every object whose condition reads a field is found by
-//!      `policy-problems` as a condition that does not check against no fields, where the
-//!      hand-written `mentions_field` walks the expression (a recursion `policy-problems` does
-//!      not use yet, though specc compiles it since WG-5133). The two
-//!      differ for a condition that fails to check for another reason, or that reads a field in
-//!      a branch that never runs. The corpus defines no policy on every object.
 //!   7. Not exercised, and not mirrored: the bounds the kernel checks on a definition that the
 //!      specification does not state yet (specc compiles durations and structural recursion
 //!      since WG-5132 and WG-5133, but the functions are not written): retry delays, attempt
@@ -88,8 +56,8 @@
 //!      is mirrored by `after-decision`): (a) the check that a condition or a run key reads nothing
 //!      the automation principal may not read (`unreadable`, which declines with `condition-failed`)
 //!      and the `InsufficientState` of a record a condition follows to (`expr::missing`): both walk
-//!      the expression tree, a structural recursion that specc refuses, and following a reference
-//!      is difference 2; (b) the run key of a started run: the kernel writes the SHA-256 of the
+//!      the expression tree, and the generated `decide-run` evaluates a trigger condition without
+//!      the snapshot's lookup; (b) the run key of a started run: the kernel writes the SHA-256 of the
 //!      canonical JSON of the value, and the function language has no hash, so the generated
 //!      `trigger-start` writes the canonical JSON itself (`value-canonical-json`) and the test
 //!      hashes it with `canon::hash_bytes` before comparing, which compares the hash of the same
@@ -106,14 +74,20 @@
 //!      with `operation:decided_by_the_kernel` and the generated `needs` plans nothing for it,
 //!      because the function language does not state the decision yet. The operation generator
 //!      draws no invocation, and `compare_transition` fails on one.
-//!  11. Not mirrored: the posting of the tenant ledger (`strata_kernel::ledger::post`, the
-//!      `PostLedger` intent, a transfer as two postings committed together; WG-5083) and
-//!      everything that reads an account. An account is named by a UUID derived from the
+//!  11. Not mirrored: the posting of the tenant ledger from the reading of an account on
+//!      (`strata_kernel::ledger::post`, the `PostLedger` intent, a transfer as two postings
+//!      committed together; WG-5083) and everything that reads an account. Mirrored, and compared
+//!      on the postings `OpKind::PostLedger` draws: the decision of `PostLedger` up to the account
+//!      (`ledger-intent-decision`, `ledger-posting-precheck`; WG-5170): the capability
+//!      `ledger-post`, the count of postings, and the checks of the first posting before its
+//!      account is read (a declared unit, an owner that exists, the amount, the key, the reason
+//!      and the scope); the generated `intent-decision` refuses a first posting that passes them
+//!      with `ledger:decided_by_the_ledger_module`. An account is named by a UUID derived from the
 //!      SHA-256 of its tenant, owner, unit and scope (`account_id`), and the function language
 //!      has neither a hash nor a way to build a uuid; and an example argument or result of a
 //!      generated function may not contain a uuid, which every account header and entry holds,
 //!      so no example of a decision over a snapshot with accounts can be written. The generated
-//!      `intent-decision` refuses `PostLedger` (`ledger:decided_by_the_ledger_module`),
+//!      `intent-decision` refuses such a `PostLedger` (`ledger:decided_by_the_ledger_module`),
 //!      `apply-delta` leaves a ledger operation out, the plan of a posting (`refine_needs`) is not
 //!      stated, and the branch of `ledger-removal-check` that finds an account naming a unit or a
 //!      pool has no example. Mirrored: the declarations (`declare-ledger-unit`, `-pool`,
@@ -130,7 +104,7 @@
 //!      `intent-decision` refuses with `ledger:decided_by_the_ledger_module`. Guarded:
 //!      `assert_no_input_of_a_known_difference` fails on a snapshot whose state holds a ledger
 //!      (an account or an entry) and on a policy that names the ledger, and `compare_transition`
-//!      on a posting or an expiry.
+//!      on an expiry and on a posting that the kernel decides after reading its account.
 //!  12. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
 //!      templates, tokens and product records of the tenant schema that the hand-written
 //!      `schema.problems` makes through `object_meta::problems`, `templates::problems` and
@@ -174,19 +148,42 @@
 //!      of their type. The generated `automation-step-problems` checks only the expressions of its
 //!      inputs. Guarded: `assert_no_input_of_a_known_difference` fails on an automation that holds
 //!      such a step.
+//!  16. Not mirrored: a rule of a transition (a policy condition, a workflow guard or assignment)
+//!      that follows the covered one of two different targets of one reference field. The
+//!      generated lookup (`rule-lookup`) is keyed by field: it holds a field only when the snapshot
+//!      covers the field's targets in both the stored record and the candidate, because Exegra's
+//!      lookup tells a target the snapshot covers but does not hold (null) from a field it does
+//!      not cover (an error), and has no way to say that one target of a field it holds is not
+//!      covered. The kernel's `Lookup` refuses per record. So when an update changes a reference
+//!      and the snapshot covers only one of the two targets, a rule that follows the covered one
+//!      fails to evaluate where the kernel follows it. A read has one record as old and new and
+//!      cannot reach this. Guarded: an update of the corpus never changes a reference, and
+//!      `compare_attributed` fails on an intent that does.
 //!
 //! Every difference that is not compared through an adjustment is guarded, so that a corpus that
 //! grows into one is told to mirror the rule or to count the difference here:
 //! `assert_no_input_of_a_known_difference` runs on every snapshot the test decides or reads and
-//! fails on an input of differences 2, 7, 8, 9, 11, 12 or 15; `compare_transition` fails on an
+//! fails on an input of differences 7, 8, 9, 11, 12 or 15; `compare_transition` fails on an
 //! intent of differences 10, 11 or 14 and on a schema change that warns of a scan (difference
 //! 13); `compare_read` fails on a read of a planned query (difference 13); `compare_attributed`
-//! fails on an update that changes a reference (difference 2). Difference 1 is compared through
+//! fails on an update that changes a reference (difference 16). Difference 1 is compared through
 //! an adjustment (the detail's prefix) and the run key of difference 9 through another
-//! (`hash_run_keys`). Differences 3 to 6 are guarded by the operation generator drawing nothing
-//! that reaches them.
+//! (`hash_run_keys`). Differences 3 and 4 are guarded by the operation generator drawing nothing
+//! that reaches them. (Numbers 2, 5 and 6 are free: their differences are mirrored now.)
 //!
-//! Mirrored, so no longer differences: a policy condition of a transition that follows a
+//! Mirrored, so no longer differences: the reads, query filters, field read conditions and
+//! workflow guards that follow a reference, through the snapshot's lookup, with the
+//! `InsufficientState` naming the record they need when the snapshot does not cover it
+//! (`visible-in`, `redact`, `named-read`, `workflow-step` with `rule-lookup` and `rule-missing`;
+//! WG-5096), compared by `compare_following_reads` on a Read policy, a filter and a field read
+//! condition that read `record.author.name`, over the complete snapshot and over one that covers
+//! only what the read plans to load, and by `compare_attributed` on a workflow guard that reads
+//! `old.author.name`; the limits and sizes of a stored value at any depth
+//! (`value-limit-problem`, `value-json-bytes`, restated by structural recursion; WG-5133),
+//! compared on lists nested two and three deep (`BigShape::DeepString`, `DeepList`, `DeepFine`);
+//! a policy on every object whose condition reads a field (`mentions-field` in
+//! `policy-problems`, the kernel's `mentions_field`; WG-5133), compared on the policies of
+//! `SchemaOp::AnyObjectPolicy`; a policy condition of a transition that follows a
 //! reference, through the lookup the snapshot gives, and the `InsufficientState` naming the record
 //! it needs when the snapshot does not cover it (`authorize-needing`, `require`; WG-5132,
 //! WG-5133), compared by `compare_attributed` on a policy that reads `record.author.name`, over
@@ -225,7 +222,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_model_core::functions::{self as spec, Failure};
-use strata_model_core::types::{IntentTexts, Rejection};
+use strata_model_core::types::Rejection;
 
 /// How many random operation sequences run from each starting world, and how long each is.
 const SEQUENCES: usize = 24;
@@ -317,6 +314,13 @@ enum OpKind {
     AddToTeam {
         who: usize,
     },
+    /// A `PostLedger` intent refused before any account is read (WG-5170): 0 a unit no tenant
+    /// declares, 1 an amount of 0, 2 an owner who is not a member, 3 a pool no tenant declares,
+    /// 4 an amount past 2^53-1, 5 an empty idempotency key, 6 a key with the expiry prefix, 7 a
+    /// reason of 257 bytes, 8 no posting, 9 nine postings.
+    PostLedger {
+        kind: u8,
+    },
 }
 
 /// What a `Big` operation writes, at or just over a limit of `limits.rs`.
@@ -339,6 +343,13 @@ enum BigShape {
     LongList,
     /// A list of 1000 items.
     LimitList,
+    /// A string of 65537 bytes three lists deep in `tags`: a limit `limits.rs` finds at any depth
+    /// (WG-5133), and a type mismatch, since a field admits a list of scalars only.
+    DeepString,
+    /// A list of 1001 items two lists deep in `tags`.
+    DeepList,
+    /// Lists nested three deep within every limit: only the type mismatch.
+    DeepFine,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -391,6 +402,10 @@ enum SchemaOp {
     /// posting of the unit `credits`.
     Ledger(u8),
     DefineLedgerTrigger,
+    /// A policy on every object (WG-5133): 0 whose condition reads only `$created_by`, 1 that
+    /// reads a field in a branch that never runs, 2 that reads no field and names a role the
+    /// tenant does not define, 3 that follows a reference.
+    AnyObjectPolicy(u8),
 }
 
 const MEMBERS: [&str; 5] = ["owner", "editor", "writer1", "writer2", "stranger"];
@@ -429,6 +444,7 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         1 => any::<bool>().prop_map(SchemaOp::GrantProductCapability),
         5 => (0u8..13).prop_map(SchemaOp::Ledger),
         1 => Just(SchemaOp::DefineLedgerTrigger),
+        2 => (0u8..4).prop_map(SchemaOp::AnyObjectPolicy),
     ];
     let big = prop_oneof![
         Just(BigShape::LongTitle),
@@ -439,6 +455,9 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         Just(BigShape::FatRecord),
         Just(BigShape::LongList),
         Just(BigShape::LimitList),
+        Just(BigShape::DeepString),
+        Just(BigShape::DeepList),
+        Just(BigShape::DeepFine),
     ];
     let kind = prop_oneof![
         1 => ("[a-z ]{0,4}", 0usize..2).prop_map(|(name, owner)| OpKind::CreateTenant { name, owner }),
@@ -457,6 +476,7 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         }),
         1 => Just(OpKind::DefineTeam),
         1 => (0usize..5).prop_map(|who| OpKind::AddToTeam { who }),
+        2 => (0u8..10).prop_map(|kind| OpKind::PostLedger { kind }),
     ];
     (0usize..3, 0usize..3, 0usize..9, kind, 0u8..10, 0u8..8).prop_map(
         |(tenant, other, actor, kind, cross, hop)| Op {
@@ -533,6 +553,18 @@ fn intent_of(op: &Op) -> Intent {
                 }
                 BigShape::LimitList => {
                     fields.insert(field("tags"), Value::List(vec![text("x"); 1000]));
+                }
+                BigShape::DeepString => {
+                    let deep = Value::List(vec![Value::List(vec![long("a", 65_537)])]);
+                    fields.insert(field("tags"), Value::List(vec![deep]));
+                }
+                BigShape::DeepList => {
+                    let deep = Value::List(vec![Value::List(vec![text("x"); 1001])]);
+                    fields.insert(field("tags"), Value::List(vec![deep]));
+                }
+                BigShape::DeepFine => {
+                    let deep = Value::List(vec![Value::List(vec![text("x")])]);
+                    fields.insert(field("tags"), Value::List(vec![deep, text("y")]));
                 }
             }
             match id {
@@ -723,6 +755,9 @@ fn intent_of(op: &Op) -> Intent {
                     )],
                 },
                 SchemaOp::Ledger(kind) => ledger_change(*kind),
+                SchemaOp::AnyObjectPolicy(kind) => {
+                    SchemaChange::DefinePolicy(any_object_policy(*kind))
+                }
                 SchemaOp::DefineLedgerTrigger => SchemaChange::DefineTrigger(TriggerDef {
                     id: TriggerId::new("on_post").unwrap(),
                     on: TriggerEvent::LedgerPosted {
@@ -802,8 +837,77 @@ fn intent_of(op: &Op) -> Intent {
             team: TeamId::new("desk").unwrap(),
             principal: principal_id(&format!("{}:{}", WORLD_TENANTS[op.tenant], MEMBERS[*who])),
         },
+        OpKind::PostLedger { kind } => {
+            let tenant = WORLD_TENANTS[op.tenant];
+            let member = LedgerOwner::Principal {
+                principal: principal_id(&format!("{tenant}:owner")),
+            };
+            let request =
+                |unit: &str, owner: LedgerOwner, amount: i64, key: &str, reason: String| {
+                    LedgerPostingRequest {
+                        owner,
+                        unit: LedgerUnit::new(unit).unwrap(),
+                        amount: LedgerAmount(amount),
+                        idempotency_key: key.into(),
+                        reason,
+                        corrects: None,
+                        scope: None,
+                    }
+                };
+            let postings = match kind {
+                0 => vec![request("nonesuch", member, 5, "k1", "r".into())],
+                1 => vec![request("credits", member, 0, "k1", "r".into())],
+                2 => vec![request(
+                    "credits",
+                    LedgerOwner::Principal {
+                        principal: principal_id(&format!("{tenant}:ghost")),
+                    },
+                    5,
+                    "k1",
+                    "r".into(),
+                )],
+                3 => vec![request(
+                    "credits",
+                    LedgerOwner::Pool {
+                        pool: LedgerPoolName::new("nopool").unwrap(),
+                    },
+                    1,
+                    "k1",
+                    "r".into(),
+                )],
+                4 => vec![request(
+                    "credits",
+                    member,
+                    9_007_199_254_740_992,
+                    "k1",
+                    "r".into(),
+                )],
+                5 => vec![request("credits", member, 5, "", "r".into())],
+                6 => vec![request("credits", member, 5, "expiry:x", "r".into())],
+                7 => vec![request("credits", member, 5, "k1", "r".repeat(257))],
+                8 => Vec::new(),
+                _ => (0..9)
+                    .map(|i| request("credits", member.clone(), 0, &format!("k{i}"), "r".into()))
+                    .collect(),
+            };
+            Intent::PostLedger { postings }
+        }
     }
 }
+
+/// The rules of a posting's checks made before its account is read (`ledger-posting-precheck`,
+/// `ledger-intent-decision`; WG-5170): a `PostLedger` that the kernel refuses with one of them,
+/// or with a refusal that is not the ledger's, is mirrored; any other is difference 11.
+const LEDGER_PRECHECK_RULES: [&str; 8] = [
+    "permission:capability:ledger-post",
+    "ledger:postings",
+    "ledger:unknown-unit",
+    "ledger:unknown-owner",
+    "ledger:invalid-amount",
+    "ledger:invalid-key",
+    "ledger:invalid-reason",
+    "ledger:invalid-scope",
+];
 
 /// An automation that creates a note, looks at it and ends; `broken`, it names a step it does
 /// not declare and leaves one unreachable. It acts as `editor`, so its definition is checked for the
@@ -1156,80 +1260,6 @@ fn context_of(op: &Op, now: i64) -> Context {
 // The adapters.
 // ---------------------------------------------------------------------------------------
 
-/// The `texts` the generated functions take, derived as the caller (the shell) would: the
-/// printed defaults, constraints, policy conditions and query filters of the snapshot's schema,
-/// those a `ChangeSchema` intent defines, and whether a `CreateTenant` name is blank.
-fn texts_for(state: &State, intent: &Intent) -> IntentTexts {
-    let mut texts = IntentTexts {
-        defaults: BTreeMap::new(),
-        constraints: BTreeMap::new(),
-        conditions: BTreeMap::new(),
-        blank_name: false,
-    };
-    if let Some(tenant) = &state.tenant {
-        for (object_id, def) in &tenant.schema.objects {
-            for (field_id, field) in &def.fields {
-                if let Some(default) = &field.default {
-                    texts
-                        .defaults
-                        .entry(object_id.clone())
-                        .or_default()
-                        .insert(field_id.clone(), default.to_string());
-                }
-            }
-            for (constraint_id, constraint) in &def.constraints {
-                texts
-                    .constraints
-                    .entry(object_id.clone())
-                    .or_default()
-                    .insert(constraint_id.clone(), constraint.expr.to_string());
-            }
-        }
-        for (policy_id, policy) in &tenant.schema.policies {
-            if let Some(condition) = &policy.condition {
-                texts
-                    .conditions
-                    .insert(format!("policy:{}", policy_id.0), condition.to_string());
-            }
-        }
-        for (query_id, query) in &tenant.schema.queries {
-            if let Some(filter) = &query.filter {
-                texts
-                    .conditions
-                    .insert(format!("query:{}", query_id.0), filter.to_string());
-            }
-        }
-    }
-    match intent {
-        Intent::ChangeSchema { changes, .. } => {
-            for change in changes {
-                match change {
-                    SchemaChange::DefineField { object, field } => {
-                        if let Some(default) = &field.default {
-                            texts
-                                .defaults
-                                .entry(object.clone())
-                                .or_default()
-                                .insert(field.id.clone(), default.to_string());
-                        }
-                    }
-                    SchemaChange::DefineConstraint { object, constraint } => {
-                        texts
-                            .constraints
-                            .entry(object.clone())
-                            .or_default()
-                            .insert(constraint.id.clone(), constraint.expr.to_string());
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Intent::CreateTenant { name, .. } => texts.blank_name = name.trim().is_empty(),
-        _ => {}
-    }
-    texts
-}
-
 /// A generated function's failure as the hand-written kernel's error type. A fault has no
 /// counterpart there, so it is reported as a difference by the caller.
 fn domain_error(failure: Failure<Rejection>) -> Result<DomainError, String> {
@@ -1261,8 +1291,8 @@ fn reconcile_evaluation_failed(hand: &[Check], generated: &mut [Check]) -> usize
     matched
 }
 
-/// Whether an expression follows a reference (`through`): what the generated functions cannot
-/// (difference 2).
+/// Whether an expression follows a reference (`through`): what the generated trigger decisions
+/// do not follow (difference 9).
 fn mentions_through(expr: &Expr) -> bool {
     match expr {
         Expr::Through(..) => true,
@@ -1322,41 +1352,13 @@ fn reads_a_field(expr: &Expr, named: &dyn Fn(&str) -> bool) -> bool {
     }
 }
 
-/// Differences 2, 7, 8, 9, 11 and 12 of the header: fail when a snapshot holds an input of a
+/// Differences 7, 8, 9, 11, 12 and 15 of the header: fail when a snapshot holds an input of a
 /// rule the generated functions do not mirror, so the corpus cannot start to depend on one
 /// silently.
 fn assert_no_input_of_a_known_difference(state: &State) {
     let Some(tenant) = &state.tenant else {
         return;
     };
-    for (object_id, def) in &tenant.schema.objects {
-        for (field_id, field) in &def.fields {
-            if let Some(read) = &field.read {
-                assert!(
-                    !mentions_through(read),
-                    "{object_id}.{field_id} has a read condition that follows a reference; the generated redact has no lookup (difference 2)"
-                );
-            }
-        }
-    }
-    for query in tenant.schema.queries.values() {
-        if let Some(filter) = &query.filter {
-            assert!(
-                !mentions_through(filter),
-                "{} has a filter that follows a reference; the generated kernel-read has no lookup (difference 2)",
-                query.id
-            );
-        }
-    }
-    for policy in tenant.schema.policies.values() {
-        if let Some(condition) = &policy.condition {
-            assert!(
-                !(mentions_through(condition) && policy.actions.contains(&Action::Read)),
-                "{} follows a reference and applies to Read; the generated visible and kernel-read have no lookup (difference 2)",
-                policy.id.0
-            );
-        }
-    }
     for query in tenant.schema.queries.values() {
         assert!(
             query.aggregates.is_none() && query.declared_fields.is_none(),
@@ -1512,12 +1514,59 @@ struct Tally {
     attributed: usize,
     /// Of those on a partial snapshot, the ones the kernel answered with `InsufficientState`.
     attributed_insufficient: usize,
+    /// Reads compared under rules that follow a reference (`compare_following_reads`).
+    following: usize,
+    /// Of those on a partial snapshot, the ones the kernel answered with `InsufficientState`.
+    following_insufficient: usize,
+}
+
+/// The policies on every object of `SchemaOp::AnyObjectPolicy` (WG-5133): only the first is
+/// accepted; the second and fourth read a field (in a branch that never runs, and through a
+/// reference), which `mentions_field` and the generated `mentions-field` find; the third reads
+/// no field and fails its check on a role the tenant does not define.
+fn any_object_policy(kind: u8) -> PolicyDef {
+    let status = || {
+        eq(
+            var(Scope::Record, "status"),
+            Expr::Lit(Value::Str("x".into())),
+        )
+    };
+    let (id, condition) = match kind {
+        0 => (
+            "any_own",
+            eq(var(Scope::Record, "$created_by"), Expr::Principal),
+        ),
+        1 => (
+            "any_branch",
+            Expr::If(
+                Box::new(Expr::Lit(Value::Bool(true))),
+                Box::new(Expr::Lit(Value::Bool(true))),
+                Box::new(status()),
+            ),
+        ),
+        2 => ("any_ghost", Expr::HasRole(role("nobody_has_this"))),
+        _ => (
+            "any_through",
+            Expr::Not(Box::new(Expr::IsNull(Box::new(Expr::Through(
+                Scope::Record,
+                "author".into(),
+                "name".into(),
+            ))))),
+        ),
+    };
+    PolicyDef {
+        id: PolicyId::new(id).unwrap(),
+        role: role("writer"),
+        resource: Resource::AnyObject,
+        actions: BTreeSet::from([Action::Delete]),
+        condition: Some(condition),
+    }
 }
 
 /// A writer may update a note whose author record has a name: a policy that follows a
 /// reference (`record.author.name`), which the generated `require` decides through
-/// `authorize-needing` with the snapshot's lookup (WG-5132, WG-5133). It applies to Update only,
-/// since the generated reads have no lookup (difference 2). Its id sorts before
+/// `authorize-needing` with the snapshot's lookup (WG-5132, WG-5133). It applies to Update only;
+/// the reads that follow a reference are compared by `compare_following_reads`. Its id sorts before
 /// `writers_edit_own`, so it is tried first.
 fn writers_edit_attributed() -> PolicyDef {
     PolicyDef {
@@ -1558,7 +1607,7 @@ fn compare_attributed(state: &State, intent: &Intent, context: &Context, tally: 
     {
         return;
     }
-    // Difference 2: the generated lookup leaves out a field whose old and new targets differ in
+    // Difference 16: the generated lookup leaves out a field whose old and new targets differ in
     // coverage, so the comparison holds for an update that keeps every reference.
     let holds_reference = |value: &Value| match value {
         Value::Ref(_) => true,
@@ -1567,11 +1616,30 @@ fn compare_attributed(state: &State, intent: &Intent, context: &Context, tally: 
     };
     assert!(
         !fields.values().any(holds_reference),
-        "an update of the corpus changes a reference; the generated lookup does not follow the covered one of two targets (difference 2)"
+        "an update of the corpus changes a reference; the generated lookup does not follow the covered one of two targets (difference 16)"
     );
     let mut schema = TenantSchema::clone(&tenant.schema);
     let policy = writers_edit_attributed();
     schema.policies.insert(policy.id.clone(), policy);
+    // A workflow guard that follows a reference when the guard it had does not hold (WG-5096):
+    // `<guard> or not(is_null(old.author.name))`.
+    for workflow in schema.workflows.values_mut() {
+        if workflow.object != note {
+            continue;
+        }
+        for step in &mut workflow.transitions {
+            if let Some(guard) = step.guard.take() {
+                step.guard = Some(Expr::Or(vec![
+                    guard,
+                    Expr::Not(Box::new(Expr::IsNull(Box::new(Expr::Through(
+                        Scope::Old,
+                        "author".into(),
+                        "name".into(),
+                    ))))),
+                ]));
+            }
+        }
+    }
     let mut attributed = TenantState::clone(tenant);
     attributed.schema = std::sync::Arc::new(schema);
     let planned: BTreeSet<Need> = needs(Some(attributed.schema.as_ref()), intent)
@@ -1611,11 +1679,8 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         "{label}: the generated functions do not decide a tenant operation (difference 10)"
     );
     assert!(
-        !matches!(
-            intent,
-            Intent::PostLedger { .. } | Intent::ExpireLedger { .. }
-        ),
-        "{label}: the generated functions do not decide a posting or an expiry (difference 11)"
+        !matches!(intent, Intent::ExpireLedger { .. }),
+        "{label}: the generated functions do not decide an expiry (difference 11)"
     );
     assert!(
         !matches!(intent, Intent::EraseSubject { .. }),
@@ -1626,9 +1691,24 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         "{label}: the generated functions do not decide a retention deletion (difference 14)"
     );
     let mut hand = transition(state, intent, context);
+    if matches!(intent, Intent::PostLedger { .. }) {
+        let before_the_account = match &hand {
+            Ok(_) => false,
+            Err(error) => {
+                error.kind != ErrorKind::InsufficientState
+                    && error.evidence.last().is_none_or(|check| {
+                        !check.rule.starts_with("ledger:")
+                            || LEDGER_PRECHECK_RULES.contains(&check.rule.as_str())
+                    })
+            }
+        };
+        assert!(
+            before_the_account,
+            "{label}: a posting decided after its account is read is not mirrored (difference 11); the kernel gave {hand:?}"
+        );
+    }
     assert_no_scan_warning(state, intent, &hand);
-    let texts = texts_for(state, intent);
-    let mut generated = match spec::kernel_transition(state, intent, context, &texts) {
+    let mut generated = match spec::kernel_transition(state, intent, context) {
         Ok(result) => Ok(result),
         Err(failure) => Err(domain_error(failure).unwrap_or_else(|fault| {
             panic!(
@@ -1674,15 +1754,7 @@ fn compare_read(state: &State, request: &ReadRequest, context: &Context, tally: 
     assert_no_input_of_a_known_difference(state);
     assert_not_planned(state, request);
     let hand = read(state, request, context);
-    // Only the query filters are printed by a read; the intent is none.
-    let texts = texts_for(
-        state,
-        &Intent::AssignRole {
-            principal: principal_id("x"),
-            role: role("public"),
-        },
-    );
-    let mut generated = match spec::kernel_read(state, request, context, &texts) {
+    let mut generated = match spec::kernel_read(state, request, context) {
         Ok(result) => Ok(result),
         Err(failure) => Err(domain_error(failure).unwrap_or_else(|fault| {
             panic!("{label}: the generated read failed with {fault}; the hand kernel gave {hand:?}")
@@ -1748,6 +1820,111 @@ fn compare_reads_of(world: &World, now: i64, tally: &mut Tally) {
                 // A snapshot of another tenant than the context names.
                 let elsewhere = world.state(&tenant_id(WORLD_TENANTS[(actor_tenant + 1) % 3]));
                 compare_read(&elsewhere, &requests[0], &context, tally);
+            }
+        }
+    }
+}
+
+/// The tenant with three rules that follow a reference (WG-5096): a Read policy of the public role
+/// on notes, `not(is_null(record.author.name))`; the same as the filter of a query
+/// `attributed_notes`; and a read condition on a note's title, `has_role(owner) or` the same. None
+/// when the tenant's notes have no author field.
+fn following_reads(tenant: &TenantState) -> Option<TenantState> {
+    let note = object("note");
+    let named = || {
+        Expr::Not(Box::new(Expr::IsNull(Box::new(Expr::Through(
+            Scope::Record,
+            "author".into(),
+            "name".into(),
+        )))))
+    };
+    let mut schema = TenantSchema::clone(&tenant.schema);
+    let def = schema.objects.get_mut(&note)?;
+    if !def.fields.contains_key(&field("author")) {
+        return None;
+    }
+    if let Some(title) = def.fields.get_mut(&field("title")) {
+        title.read = Some(Expr::Or(vec![Expr::HasRole(role("owner")), named()]));
+    }
+    let policy = PolicyDef {
+        id: PolicyId::new("public_reads_attributed").unwrap(),
+        role: role("public"),
+        resource: Resource::Object(note.clone()),
+        actions: BTreeSet::from([Action::Read]),
+        condition: Some(named()),
+    };
+    schema.policies.insert(policy.id.clone(), policy);
+    let query = QueryDef {
+        id: QueryId::new("attributed_notes").unwrap(),
+        object: note,
+        filter: Some(named()),
+        params: BTreeSet::new(),
+        order: vec![],
+        limit: None,
+        aggregates: None,
+        declared_fields: None,
+    };
+    schema.queries.insert(query.id.clone(), query);
+    let mut out = TenantState::clone(tenant);
+    out.schema = std::sync::Arc::new(schema);
+    Some(out)
+}
+
+/// Reads under rules that follow a reference (`following_reads`; WG-5096), as every kind of
+/// principal of every tenant: the scanned query `attributed_notes` and the notes by id, over the
+/// complete snapshot and over one that covers only what the read plans to load (`read_needs`),
+/// which leaves out the people the notes refer to. On the second the kernel answers
+/// `InsufficientState` naming a person a rule needs, and the generated `kernel-read` must answer
+/// the same.
+fn compare_following_reads(world: &World, now: i64, tally: &mut Tally) {
+    let requests = [
+        ReadRequest::Named {
+            query: QueryId::new("attributed_notes").unwrap(),
+            params: BTreeMap::new(),
+            page_size: None,
+            cursor: None,
+        },
+        ReadRequest::Records {
+            object: object("note"),
+            ids: (1..9).map(RecordId).collect(),
+        },
+    ];
+    for tenant in WORLD_TENANTS {
+        let state = world.state(&tenant_id(tenant));
+        let Some(following) = state.tenant.as_deref().and_then(following_reads) else {
+            continue;
+        };
+        let complete = State {
+            tenant_id: state.tenant_id.clone(),
+            tenant: Some(std::sync::Arc::new(following)),
+            coverage: Coverage::Complete,
+        };
+        for actor_tenant in 0..WORLD_TENANTS.len() {
+            for actor in 0..8 {
+                let context = ctx(tenant, principal_of(actor_tenant, actor), now);
+                for request in &requests {
+                    compare_read(&complete, request, &context, tally);
+                    let planned: BTreeSet<Need> = complete
+                        .tenant
+                        .as_deref()
+                        .map(|t| read_needs(&t.schema, request))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect();
+                    let partial = State {
+                        tenant_id: complete.tenant_id.clone(),
+                        tenant: complete.tenant.clone(),
+                        coverage: Coverage::Partial(planned),
+                    };
+                    compare_read(&partial, request, &context, tally);
+                    if matches!(
+                        read(&partial, request, &context),
+                        Err(e) if e.kind == ErrorKind::InsufficientState
+                    ) {
+                        tally.following_insufficient += 1;
+                    }
+                    tally.following += 1;
+                }
             }
         }
     }
@@ -1844,6 +2021,7 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
             if sequence % 4 == 0 {
                 let now = 99_000 + (index * SEQUENCES + sequence) as i64;
                 compare_reads_of(&world, now, &mut tally);
+                compare_following_reads(&world, now, &mut tally);
                 compare_visibility(&world, now, &mut tally);
                 compare_settings(&world, &mut tally);
             }
@@ -1877,6 +2055,17 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
         tally.attributed_insufficient > 0,
         "no update under a policy that follows a reference asked for the record it needs"
     );
+    // The reads under rules that follow a reference are compared on complete and partial
+    // snapshots, and the partial ones reach the InsufficientState that names the record needed.
+    assert!(
+        tally.following > 100,
+        "only {} reads under rules that follow a reference",
+        tally.following
+    );
+    assert!(
+        tally.following_insufficient > 0,
+        "no read under a rule that follows a reference asked for the record it needs"
+    );
     assert!(
         tally.settings > 500,
         "only {} setting resolutions",
@@ -1885,7 +2074,8 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
     eprintln!(
         "compared {} decisions ({} accepted, {} rejected), {} reads, {} visibility checks, {} plans; \
          {} policy-condition details matched under difference 1; {} updates under a policy that \
-         follows a reference, {} of them InsufficientState on a partial snapshot",
+         follows a reference, {} of them InsufficientState on a partial snapshot; {} reads under \
+         rules that follow a reference, {} of them InsufficientState",
         tally.compared,
         tally.accepted,
         tally.rejected,
@@ -1894,7 +2084,9 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
         tally.needs,
         tally.evaluation_failed_details,
         tally.attributed,
-        tally.attributed_insufficient
+        tally.attributed_insufficient,
+        tally.following,
+        tally.following_insufficient
     );
 }
 
@@ -2022,8 +2214,7 @@ fn the_comparison_notices_a_difference() {
     let intent = new_note("A title", "a-slug");
     let state = world.state(&context.tenant);
     let hand = transition(&state, &intent, &context).expect("the owner may create a note");
-    let texts = texts_for(&state, &intent);
-    let mut other = match spec::kernel_transition(&state, &intent, &context, &texts) {
+    let mut other = match spec::kernel_transition(&state, &intent, &context) {
         Ok(result) => result,
         Err(_) => panic!("the generated kernel refused what the hand kernel accepted"),
     };

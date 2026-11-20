@@ -128,7 +128,7 @@ struct Binding {
 /// True when the generated Rust type is `Copy`.
 pub(crate) fn is_copy(t: &Ty) -> bool {
     match t {
-        Ty::Bool | Ty::Int(_) | Ty::Number | Ty::Float | Ty::Wide => true,
+        Ty::Bool | Ty::Int(_) | Ty::Number | Ty::Float | Ty::Wide | Ty::Unit => true,
         // prelude::Timestamp and prelude::DurationMs are Copy.
         Ty::Alias(..) if t.is_prelude_number() => true,
         Ty::Option(of) => is_copy(of),
@@ -183,6 +183,7 @@ pub(crate) fn rust_ty(t: &Ty) -> Result<TokenStream, Refusal> {
         }
         Ty::Float => quote! { f64 },
         Ty::Wide => quote! { i128 },
+        Ty::Unit => quote! { () },
         Ty::Shared(of) => {
             let of = rust_ty(of)?;
             quote! { std::sync::Arc<#of> }
@@ -1070,6 +1071,7 @@ impl<'a> Gen<'a> {
             }
             Kind::Bool(b) => Ok(Code::new(quote! { #b }, Prec::Postfix)),
             Kind::Null => Ok(Code::new(quote! { None }, Prec::Postfix)),
+            Kind::Unit => Ok(Code::new(quote! { () }, Prec::Postfix)),
             Kind::Ref(path, res) => self.reference(path, *res),
             Kind::Field(a, name) => {
                 let c = self.raw(a, None)?;
@@ -2326,6 +2328,30 @@ impl<'a> Gen<'a> {
                     Code::new(quote! { support::#name(#et, #ent) }, Prec::Postfix)
                         .exits(e.exits || en.exits),
                 )
+            }
+            "print" => {
+                // The language module implements `Display` for its AST type with the printer
+                // of the language's authoring syntax (`language::Plan::printer`).
+                let Kind::Ref(path, _) = &op.args[0].kind else {
+                    return Err(unsupported("print without a language"));
+                };
+                let lang = &path[0];
+                let lang_decl = self
+                    .spec
+                    .languages
+                    .iter()
+                    .find(|l| &l.id == lang)
+                    .ok_or_else(|| unsupported(format!("no language {lang}")))?;
+                let bridge = crate::language::bridge(self.spec, lang_decl)
+                    .ok_or_else(|| unsupported(format!("the language {lang} is refused")))?;
+                let ast = Ty::Union(bridge.ast_id().to_string());
+                let e = self.borrow(&op.args[1], &ast)?;
+                let et = &e.t;
+                Ok(Code::new(
+                    quote! { std::string::ToString::to_string(#et) },
+                    Prec::Postfix,
+                )
+                .exits(e.exits))
             }
             "fail" => {
                 let v = self.fail_value(op)?;
