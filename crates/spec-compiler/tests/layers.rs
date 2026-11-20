@@ -676,17 +676,28 @@ fn a_product_that_keeps_configuration_outside_a_declared_setting_is_refused() {
             .all(|d| d.code == layers::CONFIGURATION_OUTSIDE_SETTING),
         "{diagnostics:?}"
     );
-    let ids: Vec<&str> = diagnostics.iter().map(|d| d.entity.as_str()).collect();
     assert_eq!(
-        ids,
-        ["member_tiers__tier_settings", "member_tiers__entry"],
-        "the record type of the product is not refused"
+        diagnostics.len(),
+        1,
+        "only the step on the fixed record is refused, not the step on the record passed in: {diagnostics:?}"
     );
-    assert!(diagnostics[0].message.contains("the word \"settings\""));
-    assert!(diagnostics[1]
-        .message
-        .contains("a \"key\" field and a \"value\" field"));
+    assert_eq!(diagnostics[0].entity, "member_tiers__rename");
+    assert!(diagnostics[0].message.contains("`ref(1)`"));
     assert!(diagnostics[0].message.contains("declared setting"));
+}
+
+#[test]
+fn a_product_with_domain_records_named_like_configuration_is_accepted() {
+    load_with(&[product("poll-options.jsonc")]).unwrap_or_else(|diagnostics| {
+        panic!(
+            "the poll product was refused:\n{}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    });
 }
 
 // Verifies: INT-3203

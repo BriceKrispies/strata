@@ -1,0 +1,30 @@
+{
+  // Accepted: a poll whose record types are named like configuration ("poll_option", "feature_flag")
+  // and one of which has a key and a value. They are the domain of the product, and nothing in it
+  // names a record by a literal id, so the configuration rule leaves it alone (WG-5000).
+  "product": { "id": "poll", "name": "Poll", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "poll__poll",
+      "label": "Poll",
+      "fields": { "question": { "id": "question", "label": "Question", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {}
+    },
+    {
+      "id": "poll__poll_option",
+      "label": "Poll option",
+      "fields": {
+        "poll": { "id": "poll", "label": "Poll", "ty": { "Ref": { "target": "poll__poll", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "key": { "id": "key", "label": "Key", "ty": "Str", "required": true, "unique": false },
+        "value": { "id": "value", "label": "Value", "ty": "Str", "required": true, "unique": false }
+      },
+      "constraints": {}
+    },
+    {
+      "id": "poll__feature_flag",
+      "label": "Feature flag",
+      "fields": { "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {}
+    }
+  ]
+}
