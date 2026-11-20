@@ -149,7 +149,7 @@ pub fn transition(
             decision.output
         }
     };
-    Ok(draft.finish(output))
+    crate::triggers::after_decision(lookup, ctx, draft.finish(output))
 }
 
 /// The prefix of the principal that stands for a team in events. A person may not hold an id
@@ -178,6 +178,19 @@ fn refuse_reserved_principals(intent: &Intent, ctx: &Context) -> Result<(), Doma
                 format!("the principal id {id} starts with the reserved prefix {TEAM_PREFIX}"),
             ));
         }
+    }
+    // WFL-1527: an automation principal holds its run-as roles and no other, so nobody is made
+    // a member under its id. It may act as the caller: the automation worker acts as it.
+    if let Some(id) = named.filter(|id| id.as_str().starts_with(crate::triggers::AUTOMATION_PREFIX))
+    {
+        return Err(refuse(
+            ErrorKind::InvalidIntent,
+            "principal:id_is_not_reserved",
+            format!(
+                "the principal id {id} starts with the reserved prefix {}",
+                crate::triggers::AUTOMATION_PREFIX
+            ),
+        ));
     }
     Ok(())
 }
@@ -757,6 +770,8 @@ fn update_record(
     let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
     let before_workflows = candidate.fields.clone();
+    // D-7203: the transition each workflow fired, named in the event.
+    let mut fired_transitions = BTreeMap::new();
     for workflow in draft.tenant.schema.workflows_of(object) {
         let (from, to) = (
             old.get(&workflow.field),
@@ -832,6 +847,7 @@ fn update_record(
             format!("{rule}:{}", step.name),
             format!("{} -> {}", step.from, step.to),
         ));
+        fired_transitions.insert(workflow.id.clone(), step.name.clone());
     }
 
     if candidate.fields != before_workflows {
@@ -866,6 +882,7 @@ fn update_record(
     draft.events.push(EventBody::RecordUpdated {
         before: old.clone(),
         after,
+        transitions: (!fired_transitions.is_empty()).then_some(fired_transitions),
     });
     Ok(Output::Record {
         object: object.clone(),
@@ -940,9 +957,11 @@ fn delete_record(
         rewrite.updated_at = ctx.now;
         let after = Arc::new(rewrite);
         draft.ops.push(DeltaOp::PutRecord(after.clone()));
-        draft
-            .events
-            .push(EventBody::RecordUpdated { before, after });
+        draft.events.push(EventBody::RecordUpdated {
+            before,
+            after,
+            transitions: None,
+        });
     }
 
     draft.ops.push(DeltaOp::DeleteRecord {
@@ -1861,6 +1880,9 @@ fn change_schema(
     existing: ExistingData,
 ) -> Result<Output, DomainError> {
     draft.require(Action::Manage, &Resource::Schema, Subject::default())?;
+    // D-7204: who defined a trigger or an automation, and when, comes from the context.
+    let stamped = crate::triggers::stamp_definitions(changes, draft.ctx);
+    let changes = stamped.as_slice();
     let current = draft.tenant.schema.version;
     if let Some(expected) = expected_version {
         if expected != current {
@@ -1941,9 +1963,11 @@ fn change_schema(
     draft.events.extend(settings.events);
     for (before, after) in migration.rewritten {
         draft.ops.push(DeltaOp::PutRecord(after.clone()));
-        draft
-            .events
-            .push(EventBody::RecordUpdated { before, after });
+        draft.events.push(EventBody::RecordUpdated {
+            before,
+            after,
+            transitions: None,
+        });
     }
     Ok(Output::Schema { version })
 }

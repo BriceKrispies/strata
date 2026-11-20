@@ -105,6 +105,9 @@ fn award(run_as: &[&str]) -> AutomationDef {
             ),
             (name("done"), plain(AutomationStep::End, None)),
         ]),
+        defined_by: None,
+        defined_at: None,
+        suspended_for: None,
     }
 }
 
@@ -118,6 +121,8 @@ fn on_publish() -> TriggerDef {
         condition: Some(eq(var(Scope::New, "status"), lit("published"))),
         automation: WorkflowId::new("award").unwrap(),
         paused: None,
+        defined_by: None,
+        defined_at: None,
     }
 }
 
@@ -130,6 +135,8 @@ fn on_points(id: &str) -> TriggerDef {
         condition: Some(ge(param("balance"), int(500))),
         automation: WorkflowId::new("award").unwrap(),
         paused: None,
+        defined_by: None,
+        defined_at: None,
     }
 }
 
@@ -271,13 +278,22 @@ fn a_trigger_and_an_automation_are_held_under_a_new_schema_version() {
             version: after.version
         }
     );
+    // The kernel writes who defined each and when (D-7204).
     assert_eq!(
         after.automations.as_ref().unwrap()[&WorkflowId::new("award").unwrap()],
-        award(&["writer"])
+        AutomationDef {
+            defined_by: Some(principal_id("alpha:owner")),
+            defined_at: Some(Timestamp(6_000)),
+            ..award(&["writer"])
+        }
     );
     assert_eq!(
         after.triggers.as_ref().unwrap()[&TriggerId::new("on_publish").unwrap()],
-        on_publish()
+        TriggerDef {
+            defined_by: Some(principal_id("alpha:owner")),
+            defined_at: Some(Timestamp(6_000)),
+            ..on_publish()
+        }
     );
 }
 

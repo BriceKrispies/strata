@@ -600,6 +600,8 @@ fn schema_changes() -> Vec<SchemaChange> {
             condition: Some(Expr::Param("seq".into())),
             automation: WorkflowId::new("award").unwrap(),
             paused: Some(false),
+            defined_by: None,
+            defined_at: None,
         }),
         SchemaChange::RemoveTrigger(TriggerId::new("on_new").unwrap()),
         SchemaChange::DefineAutomation(AutomationDef {
@@ -626,6 +628,9 @@ fn schema_changes() -> Vec<SchemaChange> {
             )]
             .into_iter()
             .collect(),
+            defined_by: None,
+            defined_at: None,
+            suspended_for: None,
         }),
         SchemaChange::RemoveAutomation(WorkflowId::new("award").unwrap()),
         SchemaChange::DefineOperation(TenantOperationDef {
@@ -844,6 +849,7 @@ fn samples() -> Vec<(&'static str, Json)> {
         verified_address: None,
         idempotency_key: None,
         language: None,
+        hop: None,
     };
     s.push(("context", json(&context)));
     s.push(("context", json(&ctx("alpha", Principal::Anonymous, 5))));
@@ -948,9 +954,23 @@ fn samples() -> Vec<(&'static str, Json)> {
         EventBody::RecordUpdated {
             before: rec.clone(),
             after: rec.clone(),
+            transitions: None,
+        },
+        EventBody::RecordUpdated {
+            before: rec.clone(),
+            after: rec.clone(),
+            transitions: Some(BTreeMap::from([(
+                WorkflowId::new("status").unwrap(),
+                "publish".to_string(),
+            )])),
         },
         EventBody::RecordDeleted {
             before: rec.clone(),
+        },
+        EventBody::AutomationSuspended {
+            automation: WorkflowId::new("award").unwrap(),
+            definer: principal_id("alpha:editor"),
+            role: role("editor"),
         },
     ];
     for body in bodies {
@@ -973,6 +993,25 @@ fn samples() -> Vec<(&'static str, Json)> {
         Effect::RevokeSessions {
             principal: principal_id("alpha:owner"),
         },
+        Effect::StartAutomation(generated::AutomationStart {
+            trigger: TriggerId::new("on_new").unwrap(),
+            automation: WorkflowId::new("award").unwrap(),
+            event_seq: 3,
+            hop: 1,
+            caused_by: principal_id("automation:award"),
+            on_behalf_of: Some(principal_id("alpha:owner")),
+            definition_version: SchemaVersion(2),
+            run_key: Some("ab".repeat(32)),
+            params: BTreeMap::from([("seq".to_string(), Value::Int(3))]),
+        }),
+        Effect::DeclineAutomation(generated::AutomationDecline {
+            trigger: TriggerId::new("on_new").unwrap(),
+            automation: WorkflowId::new("award").unwrap(),
+            event_seq: 3,
+            hop: 9,
+            reason: generated::AutomationExceptionReason::HopLimit,
+            detail: "hop 9 is past the hop limit of 8".into(),
+        }),
     ] {
         s.push(("effect", json(&e)));
     }

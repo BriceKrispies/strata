@@ -41,6 +41,7 @@ pub fn ctx(tenant: &str, principal: Principal, now: i64) -> Context {
         verified_address: None,
         idempotency_key: None,
         language: None,
+        hop: None,
     }
 }
 

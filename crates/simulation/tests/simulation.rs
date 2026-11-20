@@ -610,6 +610,7 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
         verified_address: None,
         idempotency_key: None,
         language: None,
+        hop: None,
     };
     let role_of = |name: &str| RoleId::new(name).unwrap();
     let mut work: Vec<(Context, Intent)> =

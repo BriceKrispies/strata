@@ -81,6 +81,7 @@ impl Identity {
             // principal, so a key of theirs would be shared.
             idempotency_key: self.idempotency_key.clone().filter(|_| !self.anonymous()),
             language: None,
+            hop: None,
         }
     }
 }

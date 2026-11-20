@@ -33,6 +33,7 @@ pub mod state;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod transition;
+pub mod triggers;
 pub mod types;
 pub mod world;
 

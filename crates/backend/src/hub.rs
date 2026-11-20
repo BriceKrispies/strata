@@ -142,6 +142,7 @@ fn describe(event: &DomainEvent) -> Json {
             Some(before.id.0),
         ),
         EventBody::SettingChanged { .. } => ("setting_changed", None, None),
+        EventBody::AutomationSuspended { .. } => ("automation_suspended", None, None),
     };
     json!({
         "tenant": event.tenant.as_str(),
@@ -238,7 +239,7 @@ fn log_published(event: &DomainEvent, tenant: &TenantState) {
                 version: record.version,
             },
         ),
-        EventBody::RecordUpdated { before, after } => telemetry::record_updated(
+        EventBody::RecordUpdated { before, after, .. } => telemetry::record_updated(
             sink,
             &telemetry::RecordUpdated {
                 correlation,
@@ -273,6 +274,8 @@ fn log_published(event: &DomainEvent, tenant: &TenantState) {
                 level: level.as_str(),
             },
         ),
+        // The specification states no log line for a suspension; the event is in the outbox.
+        EventBody::AutomationSuspended { .. } => {}
     }
 }
 

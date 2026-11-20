@@ -20,7 +20,7 @@ use std::sync::Arc;
 /// failed because the snapshot lacks a record it follows: that is `InsufficientState`, so the
 /// shell loads the record and asks again. The system reads everything. Policy conditions, query filters and constraints see the whole record,
 /// because they run inside the kernel; only what leaves it is trimmed.
-fn redact(
+pub(crate) fn redact(
     lookup: Lookup<'_>,
     principal: &Principal,
     roles: &BTreeSet<RoleId>,

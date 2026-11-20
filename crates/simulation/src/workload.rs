@@ -332,6 +332,7 @@ pub fn generate(
             verified_address: None,
             idempotency_key: None,
             language: None,
+            hop: None,
         };
         if let Ok((next, _)) = scratch.step(&intent, &context) {
             scratch = next;

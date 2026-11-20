@@ -710,7 +710,7 @@ proptest! {
                         EventBody::RecordCreated { record } if record.object == object("note") => {
                             prop_assert_eq!(record.get(&status), &text("draft"));
                         }
-                        EventBody::RecordUpdated { before, after } if before.object == object("note") => {
+                        EventBody::RecordUpdated { before, after, .. } if before.object == object("note") => {
                             let (a, b) = (before.get(&status).as_str(), after.get(&status).as_str());
                             if a != b {
                                 prop_assert!(
