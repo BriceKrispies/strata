@@ -663,7 +663,7 @@ async fn lab_result(
         require_schema_manager(app, identity)?;
         app.lab
             .result(&request.id, identity)
-            .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "no such run"))
+            .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "No such run. Results are held in this backend process only: a restart loses them, and a site keeps its last 12 runs."))
     })
     .await
 }
