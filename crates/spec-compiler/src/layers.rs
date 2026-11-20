@@ -44,6 +44,10 @@
 //!   `layer.expr-unknown-param`, `layer.expr-type`: an expression text of a typed section that does
 //!   not parse or does not check in its scope ([`crate::layer_expr`], WG-5060);
 //! - `layer.retention-missing`: an object type with a personal field and no retention (D-6584);
+//! - `layer.balance-outside-ledger`: a step or transition that writes a record field from its own
+//!   current value, a mutable balance outside the ledger (WG-4998);
+//! - `layer.configuration-outside-setting`: an object type that holds configuration as records
+//!   (named for configuration, or a key and value store) instead of a declared setting (WG-5000);
 //! - `layer.reference-unknown`, `layer.cross-product-reference`: a name in a typed section, or a
 //!   product capability in a `capabilities` or `requires` list, that no entity of the product
 //!   declares, or that another product file declares.
@@ -57,6 +61,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
+use regex::Regex;
 use serde_json::{Map, Value};
 
 use crate::diagnostic::Diagnostic;
@@ -153,6 +158,11 @@ pub const PLATFORM_POWER: &str = "layer.platform-power";
 pub const RETENTION_MISSING: &str = "layer.retention-missing";
 /// A platform entity that names a product entity.
 pub const PLATFORM_REFERENCES_PRODUCT: &str = "layer.platform-references-product";
+/// An entity that keeps a mutable balance outside the ledger: a step or transition that writes a
+/// field of a record from that field's own value (WG-4998, LDG-001).
+pub const BALANCE_OUTSIDE_LEDGER: &str = "layer.balance-outside-ledger";
+/// An object type that keeps configuration as records instead of declared settings (WG-5000).
+pub const CONFIGURATION_OUTSIDE_SETTING: &str = "layer.configuration-outside-setting";
 
 /// Stands for "any section": a key listing it accepts any platform entity.
 const ANY: &[&str] = &[];
@@ -660,6 +670,10 @@ fn check_product(
                         }
                         if *section == "objects" {
                             check_retention(&file, id, item, out);
+                            check_configuration(&file, namespace.as_deref(), id, item, out);
+                        }
+                        if matches!(*section, "operations" | "automations" | "workflows") {
+                            check_balance(&file, id, item, out);
                         }
                     }
                     None => named_uses(&file, id, item, platform_ids, &imports, &own, out, refs),
@@ -1151,6 +1165,108 @@ fn check_retention(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic>
         format!(
             "The object type \"{id}\" in {file} has the personal field{} {names} and no retention (D-6584). A type with a personal field must say how long its records are kept; add \"retention\": {{ \"days\": <days>, \"from\": \"Created\" }} (or \"LastChanged\", or {{ \"Field\": {{ \"field\": <a time field> }} }}) to the object type.",
             if personal.len() == 1 { "" } else { "s" }
+        ),
+    ));
+}
+
+/// The step of an operation or automation, or the transition of a workflow, that writes a field of a
+/// record from the same field's current value (`points = record.points + 1`) keeps a balance in the
+/// record: it can be overwritten, it loses a concurrent write, and it has no journal. A balance is a
+/// ledger unit posted to by `PostLedger`, whose entries are the journal and whose limits hold under
+/// concurrent writes (WG-4998).
+fn check_balance(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic>) {
+    let mut writes: Vec<(String, String)> = Vec::new();
+    collect_self_writes(item, &mut writes);
+    for (field, text) in writes {
+        out.push(Diagnostic::new(
+            BALANCE_OUTSIDE_LEDGER,
+            id,
+            format!(
+                "\"{id}\" in {file} writes the field \"{field}\" from its own current value ({text:?}), which keeps a mutable balance in a record instead of the ledger. A count, a budget or a stock that goes up and down is a ledger unit: declare it under \"ledgerUnits\" and change it with a \"PostLedger\" step, whose entries are the journal, whose idempotency key makes a retry change nothing and whose limits hold under concurrent writes (LDG-001). Remove the write and post to the ledger."
+            ),
+        ));
+    }
+}
+
+fn collect_self_writes(value: &Value, out: &mut Vec<(String, String)>) {
+    match value {
+        Value::Object(map) => {
+            for (key, inner) in map {
+                let fields = match key.as_str() {
+                    "UpdateRecord" => inner.get("fields"),
+                    "set" => Some(inner),
+                    _ => None,
+                };
+                if let Some(Value::Object(fields)) = fields {
+                    for (field, expr) in fields {
+                        let Some(text) = expr.as_str() else { continue };
+                        let own = format!(r"\b(?:record|old|before)\.{}\b", regex::escape(field));
+                        if Regex::new(&own).is_ok_and(|re| re.is_match(text)) {
+                            out.push((field.clone(), text.to_string()));
+                        }
+                    }
+                }
+                collect_self_writes(inner, out);
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|i| collect_self_writes(i, out)),
+        _ => {}
+    }
+}
+
+/// Words in the local name of an object type that say its records are configuration.
+const CONFIGURATION_WORDS: &[&str] = &[
+    "config",
+    "configs",
+    "configuration",
+    "configurations",
+    "setting",
+    "settings",
+    "preference",
+    "preferences",
+    "flag",
+    "flags",
+    "option",
+    "options",
+    "parameter",
+    "parameters",
+];
+
+/// An object type whose records are configuration: its local name is made of a configuration word,
+/// or it has a `key` field and a `value` field, a store of named values (WG-5000). Configuration of a
+/// product is a declared setting (a `settings` entry with a type, a default and the levels that may
+/// override it), which the platform layers over platform, tenant, team and person, validates, and
+/// announces when it changes.
+fn check_configuration(
+    file: &str,
+    namespace: Option<&str>,
+    id: &str,
+    item: &Value,
+    out: &mut Vec<Diagnostic>,
+) {
+    let local = namespace
+        .and_then(|n| id.strip_prefix(n))
+        .unwrap_or(id)
+        .to_string();
+    let named = local
+        .split(['_', '-'])
+        .find(|word| CONFIGURATION_WORDS.contains(word))
+        .map(|word| format!("its name has the word \"{word}\""));
+    let has = |name: &str| {
+        item.get("fields")
+            .and_then(Value::as_object)
+            .is_some_and(|f| f.contains_key(name))
+    };
+    let reason = named.or_else(|| {
+        (has("key") && has("value"))
+            .then(|| "it has a \"key\" field and a \"value\" field".to_string())
+    });
+    let Some(reason) = reason else { return };
+    out.push(Diagnostic::new(
+        CONFIGURATION_OUTSIDE_SETTING,
+        id,
+        format!(
+            "The object type \"{id}\" in {file} holds configuration as records ({reason}). Configuration is a declared setting: add an entry to \"settings\" with a type, a default and the levels that may override it (\"tenant\", \"team\", \"person\"), and read it as the setting, so it is typed, layered, refused when a level may not override it, and announced when it changes (SET-001). Remove the object type, or rename it if its records are not configuration."
         ),
     ));
 }

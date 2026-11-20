@@ -634,6 +634,60 @@ fn a_personal_field_without_retention_is_refused_and_the_complete_products_carry
     .is_ok());
 }
 
+// Verifies: LDG-001
+#[test]
+fn a_product_that_keeps_a_mutable_balance_outside_the_ledger_is_refused() {
+    let diagnostics = load_with(&[product("refused/balance-outside-ledger.jsonc")]).unwrap_err();
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "the write from a parameter is no balance: {diagnostics:?}"
+    );
+    assert_eq!(diagnostics[0].code, layers::BALANCE_OUTSIDE_LEDGER);
+    for word in [
+        "\"member_tiers__grant\"",
+        "the field \"points\"",
+        "record.points + 1",
+        "PostLedger",
+    ] {
+        assert!(
+            diagnostics[0].message.contains(word),
+            "{word:?}: {}",
+            diagnostics[0].message
+        );
+    }
+    // The products that count in the ledger, and the one that updates a record from its inputs, pass.
+    assert!(load_with(&[
+        product("promotions.jsonc"),
+        product("badge-milestones.jsonc")
+    ])
+    .is_ok());
+}
+
+// Verifies: SET-001
+#[test]
+fn a_product_that_keeps_configuration_outside_a_declared_setting_is_refused() {
+    let diagnostics =
+        load_with(&[product("refused/configuration-outside-setting.jsonc")]).unwrap_err();
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| d.code == layers::CONFIGURATION_OUTSIDE_SETTING),
+        "{diagnostics:?}"
+    );
+    let ids: Vec<&str> = diagnostics.iter().map(|d| d.entity.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["member_tiers__tier_settings", "member_tiers__entry"],
+        "the record type of the product is not refused"
+    );
+    assert!(diagnostics[0].message.contains("the word \"settings\""));
+    assert!(diagnostics[1]
+        .message
+        .contains("a \"key\" field and a \"value\" field"));
+    assert!(diagnostics[0].message.contains("declared setting"));
+}
+
 #[test]
 fn a_name_in_a_typed_section_must_be_declared_by_the_product() {
     let diagnostics = load_with(&[product("refused/reference-unknown-object.jsonc")]).unwrap_err();

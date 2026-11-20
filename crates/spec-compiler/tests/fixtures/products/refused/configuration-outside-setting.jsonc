@@ -1,0 +1,29 @@
+{
+  // Refused: object types that hold configuration as records instead of declared settings
+  // (layer.configuration-outside-setting, WG-5000). The first is named for configuration, the second
+  // is a store of named values; the third is a record type of the product and needs no setting.
+  "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "member_tiers__tier_settings",
+      "label": "Tier settings",
+      "fields": { "gold_at": { "id": "gold_at", "label": "Gold at", "ty": "Int", "required": true, "unique": false } },
+      "constraints": {}
+    },
+    {
+      "id": "member_tiers__entry",
+      "label": "Entry",
+      "fields": {
+        "key": { "id": "key", "label": "Key", "ty": "Str", "required": true, "unique": true },
+        "value": { "id": "value", "label": "Value", "ty": "Str", "required": true, "unique": false }
+      },
+      "constraints": {}
+    },
+    {
+      "id": "member_tiers__member",
+      "label": "Member",
+      "fields": { "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {}
+    }
+  ]
+}
