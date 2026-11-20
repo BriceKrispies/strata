@@ -180,6 +180,7 @@ fn context(principal: Principal) -> Context {
         verified_address: None,
         idempotency_key: None,
         language: None,
+        hop: None,
     }
 }
 

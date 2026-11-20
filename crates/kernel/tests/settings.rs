@@ -1194,6 +1194,9 @@ fn tiny() -> AutomationDef {
                 compensate: None,
             },
         )]),
+        defined_by: None,
+        defined_at: None,
+        suspended_for: None,
     }
 }
 
@@ -1206,6 +1209,8 @@ fn on_setting(setting: &str) -> TriggerDef {
         condition: None,
         automation: WorkflowId::new("tiny").expect("workflow id"),
         paused: None,
+        defined_by: None,
+        defined_at: None,
     }
 }
 

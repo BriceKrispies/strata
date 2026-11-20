@@ -345,6 +345,9 @@ fn some_policy_could_authorise(
         Intent::InvokeOperation { .. } => return matches!(principal, Principal::User(_)),
         // A posting is authorised by a capability, not a policy; the generator draws none.
         Intent::PostLedger { .. } => return false,
+        // A setting write is authorised by the setting's write rule, not a policy; the generator
+        // draws none.
+        Intent::WriteSetting { .. } => return false,
     };
     let roles = roles_held(state, principal);
     roles.contains(&role("owner"))

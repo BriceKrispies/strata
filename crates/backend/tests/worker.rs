@@ -89,6 +89,9 @@ fn automation(
         run_key: None,
         start: name(start),
         steps: steps.into_iter().map(|(n, s)| (name(n), s)).collect(),
+        defined_by: None,
+        defined_at: None,
+        suspended_for: None,
     }
 }
 
@@ -304,6 +307,7 @@ fn signed_in(tenant: &str, who: &str) -> Identity {
         state: SessionState::Active,
         correlation: "t-worker".into(),
         verified_address: None,
+        idempotency_key: None,
     }
 }
 

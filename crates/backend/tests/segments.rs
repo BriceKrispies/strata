@@ -123,6 +123,7 @@ fn as_admin(now: i64) -> Context {
         verified_address: None,
         idempotency_key: None,
         language: None,
+        hop: None,
     }
 }
 

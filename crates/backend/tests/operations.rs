@@ -181,6 +181,7 @@ impl Backend {
             verified_address: None,
             idempotency_key: None,
             language: None,
+            hop: None,
         };
         execute(self.store.as_ref(), &intent, &ctx).expect("the owner defines the operations");
     }

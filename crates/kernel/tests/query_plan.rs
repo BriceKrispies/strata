@@ -53,6 +53,8 @@ fn query(id: &str, filter: Expr, params: &[&str], order: Vec<OrderKey>) -> Query
         params: params.iter().map(|p| p.to_string()).collect(),
         order,
         limit: None,
+        aggregates: None,
+        declared_fields: None,
     }
 }
 

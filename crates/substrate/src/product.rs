@@ -1785,6 +1785,7 @@ pub fn run_planned<E>(
             verified_address: None,
             idempotency_key: target.idempotency_key.clone(),
             language: None,
+            hop: None,
         };
         match execute(ctx, change.intent(target.expected_version)) {
             Ok(Output::Schema { version }) => version.0,

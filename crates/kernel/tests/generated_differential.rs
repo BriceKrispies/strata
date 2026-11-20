@@ -561,6 +561,8 @@ fn intent_of(op: &Op) -> Intent {
                     params: BTreeSet::new(),
                     order: vec![],
                     limit: Some(*limit),
+                    aggregates: None,
+                    declared_fields: None,
                 }),
                 SchemaOp::BadPermissions => SchemaChange::DefineRolePermissions {
                     role: role("editor"),

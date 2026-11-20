@@ -32,6 +32,9 @@ fn world_with_award() -> World {
                 compensate: None,
             },
         )]),
+        defined_by: None,
+        defined_at: None,
+        suspended_for: None,
     };
     notes_world()
         .step(

@@ -60,6 +60,7 @@ fn ctx(site: &TenantId, principal: Principal, now: i64, correlation: &str) -> Co
         verified_address: None,
         idempotency_key: None,
         language: None,
+        hop: None,
     }
 }
 

@@ -648,6 +648,7 @@ fn context_at(now: i64, correlation: &str) -> Context {
         verified_address: None,
         idempotency_key: None,
         language: None,
+        hop: None,
     }
 }
 

@@ -66,6 +66,8 @@ fn query_def(id: &str, filter: Expr, params: &[&str], order: Vec<OrderKey>) -> Q
         params: params.iter().map(|p| p.to_string()).collect(),
         order,
         limit: None,
+        aggregates: None,
+        declared_fields: None,
     }
 }
 
@@ -700,6 +702,7 @@ fn reads_and_views_over_a_hundred_thousand_records_load_a_bounded_number() {
             include: vec![],
             markdown: vec![],
             single,
+            aggregate: None,
         };
         let view = ViewDef {
             id: ViewId::new("board").unwrap(),

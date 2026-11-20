@@ -543,6 +543,7 @@ fn step_context(
         verified_address: None,
         idempotency_key: key.map(str::to_string),
         language: None,
+        hop: None,
     }
 }
 

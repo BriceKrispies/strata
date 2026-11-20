@@ -155,17 +155,44 @@ pub fn with_page(
 }
 
 /// A page cursor as the browser holds it: `a<id>` continues after a record, `o<n>` skips `n`
-/// rows. Opaque to the client.
+/// rows, `t<hex>` continues a query planned on the index of its order field after an index
+/// position, the hex digits of the position's JSON. Opaque to the client.
 pub fn encode_cursor(cursor: &PageCursor) -> String {
     match cursor {
         PageCursor::After(id) => format!("a{}", id.0),
         PageCursor::Offset(rows) => format!("o{rows}"),
+        PageCursor::At(position) => {
+            let text = serde_json::to_string(position).unwrap_or_default();
+            let mut out = String::with_capacity(1 + 2 * text.len());
+            out.push('t');
+            for byte in text.bytes() {
+                out.push_str(&format!("{byte:02x}"));
+            }
+            out
+        }
     }
 }
 
+/// The longest `t` cursor [`decode_cursor`] reads: an index position holds one indexed value,
+/// whose key is bounded, and a record id.
+const MAX_POSITION_CURSOR: usize = 2 * 1024;
+
 /// The cursor an [`encode_cursor`] text stands for; `None` for any other text.
 pub fn decode_cursor(text: &str) -> Option<PageCursor> {
-    let (kind, digits) = text.split_at_checked(1)?;
+    let (kind, rest) = text.split_at_checked(1)?;
+    if kind == "t" {
+        if rest.is_empty() || rest.len() > MAX_POSITION_CURSOR || rest.len() % 2 != 0 {
+            return None;
+        }
+        let bytes = (0..rest.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(rest.get(i..i + 2)?, 16).ok())
+            .collect::<Option<Vec<u8>>>()?;
+        return serde_json::from_slice::<strata_kernel::query_plan::IndexPosition>(&bytes)
+            .ok()
+            .map(PageCursor::At);
+    }
+    let digits = rest;
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
