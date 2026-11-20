@@ -3865,6 +3865,7 @@ dependencies = [
  "strata-protocol",
  "strata-runtime",
  "strata-storage-api",
+ "strata-storage-sqlite",
  "strata-substrate",
  "tokio",
  "tokio-tungstenite",

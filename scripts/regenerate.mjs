@@ -14,10 +14,15 @@
 //      written against the stack on http://127.0.0.1:4200 (STRATA_E2E_BASE_URL moves them).
 //   5. The step fixtures: tests/e2e/step-checks, from tests/e2e/step-fixtures/spec.jsonc.
 //   6. The capability catalogue: specifications/catalogue.md, from the same specification.
+//   7. The contract conformance suite: crates/bff/tests/conformance/generated, from the same
+//      specification's shipped contracts with a bffRoute (WG-5182).
+//   8. Its fixtures: crates/bff/tests/conformance/fixtures/generated, from
+//      crates/bff/tests/conformance/fixtures/spec.jsonc.
 //
 // The headers of crates/model, crates/model-core, web/src/generated and specifications/catalogue.md carry
-// the specification's semantic hash, which Exegra reports (see spec-hash.mjs). The journeys and step
-// fixtures (steps 4 and 5) carry no hash; the gate's byte comparison catches their drift.
+// the specification's semantic hash, which Exegra reports (see spec-hash.mjs). The journeys, step
+// fixtures and conformance suites (steps 4, 5, 7 and 8) carry no hash; the gate's byte comparison
+// catches their drift.
 //
 // Product specifications in specifications/products (WG-4989) are passed to steps 2 to 4 with
 // --product: specc checks them against the platform and refuses a bad one, and generates nothing
@@ -88,6 +93,13 @@ specc('generate the step fixtures (tests/e2e/step-checks)', [
 ]);
 specc('generate the capability catalogue (specifications/catalogue.md)', [
   'catalogue', '--spec', 'specifications/spec.jsonc', '--out', 'specifications', '--spec-hash', specHash,
+]);
+specc('generate the contract conformance suite (crates/bff/tests/conformance/generated)', [
+  'conformance', '--spec', 'specifications/spec.jsonc', '--out', 'crates/bff/tests/conformance/generated', ...products,
+]);
+specc('generate the conformance fixtures (crates/bff/tests/conformance/fixtures/generated)', [
+  'conformance', '--spec', 'crates/bff/tests/conformance/fixtures/spec.jsonc', '--out', 'crates/bff/tests/conformance/fixtures/generated',
+  '--expect-fail-prefix', 'violates-',
 ]);
 
 console.log('\nregenerate: done');

@@ -132,6 +132,22 @@
     },
     {
       "package": "strata-bff",
+      "target": "contract_conformance",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "The generated contract conformance suite (WG-5182): one test per shipped contract with a bffRoute, each starting the real backend on an in-memory SQLite store and the BFF, signing in several development accounts and, for a quota, a second stack; not yet measured"
+    },
+    {
+      "package": "strata-bff",
+      "target": "contract_conformance_fixtures",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "The self-test of the conformance suite: a stand-in server per fixture contract, nine of whose tests must fail; not yet measured"
+    },
+    {
+      "package": "strata-bff",
       "target": "edge",
       "tier": "routine",
       "seconds": 5.28
@@ -349,6 +365,14 @@
       "target": "catalogue",
       "tier": "routine",
       "seconds": 2.46
+    },
+    {
+      "package": "strata-spec-compiler",
+      "target": "conformance",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Loads the platform specification and formats its whole generated conformance suite with rustfmt; not yet measured"
     },
     {
       "package": "strata-spec-compiler",

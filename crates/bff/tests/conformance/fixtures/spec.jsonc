@@ -1,0 +1,224 @@
+// The fixtures of the contract conformance suite (WG-5182). The checks the generated suite makes
+// are shown to fail: every contract named violates-<rule> is served by a stand-in handler that
+// breaks exactly that rule, and its generated test must fail with [<rule>]; the conforms-* contracts
+// are served correctly and must pass, which shows the harness itself is right. The stand-in is
+// crates/bff/tests/contract_conformance_fixtures.rs.
+//
+//   specc conformance --spec crates/bff/tests/conformance/fixtures/spec.jsonc --out crates/bff/tests/conformance/fixtures/generated --expect-fail-prefix violates-
+//   cargo test -p strata-bff --test contract_conformance_fixtures
+//
+// Only specc reads this file; it is not an Exegra project.
+{
+  "system": {
+    "id": "conformance-fixtures",
+    "name": "Conformance fixtures",
+    "generation": {
+      "wireCase": "snake_case",
+      "errorKinds": { "unauthenticated": 401, "forbidden": 403, "not_found": 404, "invalid": 422, "throttled": 429, "unavailable": 503 },
+      "errorBody": { "type": "api-error" }
+    }
+  },
+  "types": [
+    { "id": "error-code", "kind": "enum", "values": ["unauthenticated", "forbidden", "not_found", "invalid", "throttled", "unavailable"] },
+    {
+      "id": "api-error", "kind": "struct",
+      "fields": [
+        { "name": "code", "type": "error-code" },
+        { "name": "message", "type": "string" },
+        { "name": "kind", "type": "string", "optional": true },
+        { "name": "correlation", "type": "string" }
+      ]
+    },
+    { "id": "tenant-id", "kind": "id", "repr": "string" },
+    { "id": "note-id", "kind": "id", "repr": "u64" },
+    {
+      "id": "note", "kind": "struct",
+      "fields": [
+        { "name": "title", "type": "string" },
+        { "name": "word-count", "type": "u32" },
+        { "name": "tags", "type": "list<string>", "optional": true }
+      ]
+    }
+  ],
+  "roles": [
+    { "id": "visitor", "capabilities": ["notes-browse"] },
+    { "id": "account-holder", "capabilities": ["session-manage"] },
+    { "id": "owner", "capabilities": ["notes-read", "notes-write", "notes-delete"] },
+    { "id": "writer", "capabilities": ["notes-read", "notes-write"] },
+    { "id": "reader", "capabilities": ["notes-read"] }
+  ],
+  "quotas": [
+    { "id": "q-ping", "contract": "conforms-ping", "scope": "source-address", "limit": 3, "window": "1 min", "onExceed": "refuse", "error": "throttled" },
+    { "id": "q-unthrottled-ping", "contract": "violates-quota", "scope": "source-address", "limit": 3, "window": "1 min", "onExceed": "refuse", "error": "throttled" }
+  ],
+  "contracts": [
+    {
+      "id": "conforms-read-note", "ref": "FX-001", "deployment": "shipped", "bffRoute": "GET /api/notes/:note",
+      "auth": { "scheme": "session", "requires": ["notes-read"] },
+      "readOnly": true, "tenantScope": "request",
+      "inputs": [{ "name": "note", "type": "note-id" }],
+      "outputs": [{ "name": "note", "type": "note" }],
+      "errors": [
+        { "name": "unauthenticated", "kind": "unauthenticated" },
+        { "name": "forbidden", "kind": "forbidden" },
+        { "name": "not-found", "kind": "not_found" }
+      ],
+      "conformanceExample": "{\"note\": 1}"
+    },
+    {
+      "id": "violates-reply-shape", "ref": "FX-002", "deployment": "shipped", "bffRoute": "GET /api/broken/notes/:note",
+      "auth": { "scheme": "session", "requires": ["notes-read"] },
+      "readOnly": true, "tenantScope": "request",
+      "inputs": [{ "name": "note", "type": "note-id" }],
+      "outputs": [{ "name": "note", "type": "note" }],
+      "errors": [
+        { "name": "unauthenticated", "kind": "unauthenticated" },
+        { "name": "forbidden", "kind": "forbidden" },
+        { "name": "not-found", "kind": "not_found" }
+      ],
+      "conformanceExample": "{\"note\": 1}"
+    },
+    {
+      "id": "violates-no-session", "ref": "FX-003", "deployment": "shipped", "bffRoute": "GET /api/broken/notes-open/:note",
+      "auth": { "scheme": "session", "requires": ["notes-read"] },
+      "readOnly": true, "tenantScope": "request",
+      "inputs": [{ "name": "note", "type": "note-id" }],
+      "outputs": [{ "name": "note", "type": "note" }],
+      "errors": [
+        { "name": "unauthenticated", "kind": "unauthenticated" },
+        { "name": "forbidden", "kind": "forbidden" },
+        { "name": "not-found", "kind": "not_found" }
+      ],
+      "conformanceExample": "{\"note\": 1}"
+    },
+    {
+      "id": "violates-declared-error", "ref": "FX-004", "deployment": "shipped", "bffRoute": "GET /api/broken/notes-undeclared/:note",
+      "auth": { "scheme": "session", "requires": ["notes-read"] },
+      "readOnly": true, "tenantScope": "request",
+      "inputs": [{ "name": "note", "type": "note-id" }],
+      "outputs": [{ "name": "note", "type": "note" }],
+      "errors": [
+        { "name": "unauthenticated", "kind": "unauthenticated" },
+        { "name": "forbidden", "kind": "forbidden" },
+        { "name": "not-found", "kind": "not_found" }
+      ],
+      "conformanceExample": "{\"note\": 1}"
+    },
+    {
+      "id": "conforms-write-note", "ref": "FX-005", "deployment": "shipped", "bffRoute": "POST /api/notes/write",
+      "auth": { "scheme": "session", "requires": ["notes-write"], "csrf": true, "origin": true, "stepUp": "15 min" },
+      "tenantScope": "request",
+      "inputs": [{ "name": "tenant", "type": "tenant-id" }, { "name": "title", "type": "string" }, { "name": "word-count", "type": "u32" }],
+      "outputs": [{ "name": "note", "type": "note-id" }],
+      "errors": [
+        { "name": "unauthenticated", "kind": "unauthenticated" },
+        { "name": "forbidden", "kind": "forbidden" },
+        { "name": "tenant-mismatch", "kind": "forbidden" },
+        { "name": "step-up-required", "kind": "forbidden" },
+        { "name": "invalid", "kind": "invalid" }
+      ],
+      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}"
+    },
+    {
+      "id": "violates-csrf", "ref": "FX-006", "deployment": "shipped", "bffRoute": "POST /api/broken/write-parses-first",
+      "auth": { "scheme": "session", "requires": ["notes-write"], "csrf": true, "origin": true, "stepUp": "15 min" },
+      "tenantScope": "request",
+      "inputs": [{ "name": "tenant", "type": "tenant-id" }, { "name": "title", "type": "string" }, { "name": "word-count", "type": "u32" }],
+      "outputs": [{ "name": "note", "type": "note-id" }],
+      "errors": [
+        { "name": "unauthenticated", "kind": "unauthenticated" },
+        { "name": "forbidden", "kind": "forbidden" },
+        { "name": "tenant-mismatch", "kind": "forbidden" },
+        { "name": "step-up-required", "kind": "forbidden" },
+        { "name": "invalid", "kind": "invalid" }
+      ],
+      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}"
+    },
+    {
+      "id": "violates-capability", "ref": "FX-007", "deployment": "shipped", "bffRoute": "POST /api/broken/write-unchecked",
+      "auth": { "scheme": "session", "requires": ["notes-write"], "csrf": true, "origin": true, "stepUp": "15 min" },
+      "tenantScope": "request",
+      "inputs": [{ "name": "tenant", "type": "tenant-id" }, { "name": "title", "type": "string" }, { "name": "word-count", "type": "u32" }],
+      "outputs": [{ "name": "note", "type": "note-id" }],
+      "errors": [
+        { "name": "unauthenticated", "kind": "unauthenticated" },
+        { "name": "forbidden", "kind": "forbidden" },
+        { "name": "tenant-mismatch", "kind": "forbidden" },
+        { "name": "step-up-required", "kind": "forbidden" },
+        { "name": "invalid", "kind": "invalid" }
+      ],
+      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}"
+    },
+    {
+      "id": "violates-other-tenant-input", "ref": "FX-008", "deployment": "shipped", "bffRoute": "POST /api/broken/write-any-tenant",
+      "auth": { "scheme": "session", "requires": ["notes-write"], "csrf": true, "origin": true, "stepUp": "15 min" },
+      "tenantScope": "request",
+      "inputs": [{ "name": "tenant", "type": "tenant-id" }, { "name": "title", "type": "string" }, { "name": "word-count", "type": "u32" }],
+      "outputs": [{ "name": "note", "type": "note-id" }],
+      "errors": [
+        { "name": "unauthenticated", "kind": "unauthenticated" },
+        { "name": "forbidden", "kind": "forbidden" },
+        { "name": "tenant-mismatch", "kind": "forbidden" },
+        { "name": "step-up-required", "kind": "forbidden" },
+        { "name": "invalid", "kind": "invalid" }
+      ],
+      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}"
+    },
+    {
+      "id": "violates-step-up", "ref": "FX-009", "deployment": "shipped", "bffRoute": "POST /api/broken/write-stale",
+      "auth": { "scheme": "session", "requires": ["notes-write"], "csrf": true, "origin": true, "stepUp": "15 min" },
+      "tenantScope": "request",
+      "inputs": [{ "name": "tenant", "type": "tenant-id" }, { "name": "title", "type": "string" }, { "name": "word-count", "type": "u32" }],
+      "outputs": [{ "name": "note", "type": "note-id" }],
+      "errors": [
+        { "name": "unauthenticated", "kind": "unauthenticated" },
+        { "name": "forbidden", "kind": "forbidden" },
+        { "name": "tenant-mismatch", "kind": "forbidden" },
+        { "name": "step-up-required", "kind": "forbidden" },
+        { "name": "invalid", "kind": "invalid" }
+      ],
+      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}"
+    },
+    {
+      "id": "conforms-delete-note", "ref": "FX-010", "deployment": "shipped", "bffRoute": "POST /api/notes/delete",
+      "auth": { "scheme": "session", "requires": ["notes-delete"], "roles": ["owner"], "csrf": true, "origin": true },
+      "tenantScope": "request",
+      "inputs": [{ "name": "note", "type": "note-id" }],
+      "outputs": [{ "name": "deleted", "type": "bool" }],
+      "errors": [
+        { "name": "unauthenticated", "kind": "unauthenticated" },
+        { "name": "forbidden", "kind": "forbidden" },
+        { "name": "invalid", "kind": "invalid" }
+      ],
+      "conformanceExample": "{\"note\": 1}"
+    },
+    {
+      "id": "conforms-ping", "ref": "FX-011", "deployment": "shipped", "bffRoute": "GET /api/ping",
+      "auth": { "scheme": "anonymous", "requires": ["notes-browse"] },
+      "readOnly": true, "tenantScope": "request",
+      "inputs": [],
+      "outputs": [{ "name": "ok", "type": "bool" }],
+      "errors": [{ "name": "throttled", "kind": "throttled" }]
+    },
+    {
+      "id": "violates-quota", "ref": "FX-012", "deployment": "shipped", "bffRoute": "GET /api/broken/ping",
+      "auth": { "scheme": "anonymous", "requires": ["notes-browse"] },
+      "readOnly": true, "tenantScope": "request",
+      "inputs": [],
+      "outputs": [{ "name": "ok", "type": "bool" }],
+      "errors": [{ "name": "throttled", "kind": "throttled" }]
+    },
+    {
+      "id": "violates-read-only", "ref": "FX-013", "deployment": "shipped", "bffRoute": "GET /api/broken/ping-writable",
+      "auth": { "scheme": "anonymous", "requires": ["notes-browse"] },
+      "readOnly": true, "tenantScope": "request",
+      "inputs": [],
+      "outputs": [{ "name": "ok", "type": "bool" }],
+      "errors": [{ "name": "throttled", "kind": "throttled" }]
+    },
+    {
+      "id": "unshipped-note", "ref": "FX-014", "deployment": "target", "bffRoute": "GET /api/notes/never",
+      "auth": { "scheme": "session" }, "inputs": [], "outputs": [], "errors": []
+    }
+  ]
+}
