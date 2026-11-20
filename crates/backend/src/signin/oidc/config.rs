@@ -176,6 +176,19 @@ impl ProviderConfig {
         if !scopes.iter().any(|scope| scope == "openid") {
             scopes.insert(0, "openid".into());
         }
+        let domains: Vec<String> = file
+            .domains
+            .iter()
+            .map(|domain| domain.trim().to_lowercase())
+            .filter(|domain| !domain.is_empty())
+            .collect();
+        crate::signin::federated::check_admission(
+            &domains,
+            file.create_on_first_sign_in,
+            file.link_verified_email,
+            file.default_role.as_deref(),
+        )
+        .map_err(bad)?;
         Ok(ProviderConfig {
             label: file.label.unwrap_or_else(|| file.id.clone()),
             id: file.id,
@@ -185,12 +198,7 @@ impl ProviderConfig {
             client_secret,
             scopes,
             algorithms,
-            domains: file
-                .domains
-                .iter()
-                .map(|domain| domain.trim().to_lowercase())
-                .filter(|domain| !domain.is_empty())
-                .collect(),
+            domains,
             create_on_first_sign_in: file.create_on_first_sign_in,
             default_role: file.default_role,
             link_verified_email: file.link_verified_email,

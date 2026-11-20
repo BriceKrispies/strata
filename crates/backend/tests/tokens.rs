@@ -800,3 +800,66 @@ async fn an_identity_outage_refuses_sessions_and_keeps_published_content() {
         200
     );
 }
+
+/// IDN-019: the owner's operations that make durable access need a recent authentication: giving a
+/// role, rotating or compromising a signing key, making a client or rotating its secret, making a
+/// provisioning token and mapping a group to a role. A session that authenticated long ago is asked
+/// to confirm first, and the operation then goes through.
+#[tokio::test]
+async fn an_owner_operation_that_makes_durable_access_needs_a_recent_authentication() {
+    let backend = start().await;
+    let owner = backend.owner().await;
+    let client = backend.client(&owner, &["read:post"]).await;
+    backend.advance(16 * MINUTE).await;
+
+    let operations = [
+        (
+            "/internal/members",
+            json!({ "op": "assign_role", "principal": "user:tomasz", "role": "owner" }),
+        ),
+        ("/internal/keys/rotate", json!({})),
+        ("/internal/keys/compromise", json!({ "kid": "any" })),
+        (
+            "/internal/clients/create",
+            json!({ "name": "Another", "scopes": ["read:post"] }),
+        ),
+        (
+            "/internal/clients/rotate-secret",
+            json!({ "id": client.id }),
+        ),
+        ("/internal/provisioning/tokens/create", json!({})),
+        (
+            "/internal/provisioning/groups/set",
+            json!({ "group": "editors", "role": "author" }),
+        ),
+    ];
+    for (path, body) in &operations {
+        let (status, refused) = backend
+            .call("fieldnotes", Some(&owner), path, body.clone())
+            .await;
+        assert_eq!(
+            (status, refused["kind"].as_str()),
+            (403, Some("step_up_required")),
+            "{path}: {refused}"
+        );
+    }
+
+    let (status, confirmed) = backend
+        .call(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/session/step-up",
+            json!({ "password": "strata-dev-admin" }),
+        )
+        .await;
+    assert_eq!(status, 200, "{confirmed}");
+    let (status, rotated) = backend
+        .call(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/keys/rotate",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{rotated}");
+}

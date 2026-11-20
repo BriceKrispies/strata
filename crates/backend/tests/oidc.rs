@@ -17,7 +17,7 @@ use std::time::Duration;
 use strata_backend::app::{Config, ThrottleLimits};
 use strata_backend::mail::{DevSink, Mailer};
 use strata_backend::signin::oidc::{Federation, Http, ProviderConfig, Secret};
-use strata_kernel::TenantId;
+use strata_kernel::{canon, TenantId, Timestamp};
 use strata_protocol::api::{
     HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
@@ -274,6 +274,17 @@ impl Backend {
     async fn sign_in(&self) -> (u16, Json) {
         let round = self.begin(None, json!({})).await;
         self.finish(&round, Some(SITE), None).await
+    }
+
+    /// Make a session look as if it authenticated `ago_ms` ago.
+    fn age(&self, token: &str, ago_ms: i64) {
+        let mut session = self
+            .store
+            .session_by_token(&canon::hash_bytes(token.as_bytes()))
+            .unwrap()
+            .expect("the session exists");
+        session.authenticated_at = Timestamp(session.authenticated_at.0 - ago_ms);
+        self.store.put_session(&session).unwrap();
     }
 
     async fn audit(&self) -> Json {
@@ -1094,6 +1105,7 @@ async fn an_asserted_address_links_to_an_existing_principal_only_when_verified_a
         federation(
             vec![provider(&mock, |p| {
                 p.link_verified_email = true;
+                p.domains = vec!["fieldnotes.example".into()];
                 p.create_on_first_sign_in = create;
             })],
             Some(0),
@@ -1121,6 +1133,116 @@ async fn an_asserted_address_links_to_an_existing_principal_only_when_verified_a
             .contains("oidc.identity_linked"),
         "a link is audited"
     );
+}
+
+/// Verifies: FED-257
+///
+/// A provider that asserts a verified address outside its own domains links to no one, however
+/// the address matches an account's login.
+#[tokio::test]
+async fn a_verified_address_outside_the_providers_domains_links_to_no_one() {
+    let mock = Mock::start().await;
+    mock.set(|t| {
+        t.sub = "someone-claiming-mirela".into();
+        t.email = Some("mirela@fieldnotes.example".into());
+        t.email_verified = true;
+    });
+    let backend = start(federation(
+        vec![provider(&mock, |p| {
+            p.link_verified_email = true;
+            p.create_on_first_sign_in = false;
+            p.domains = vec!["bound.example".into()];
+        })],
+        Some(0),
+    ))
+    .await;
+    assert_refused(
+        &backend.sign_in().await,
+        "an address outside the provider's domains",
+    );
+    let tenant = TenantId::new("fieldnotes").unwrap();
+    assert!(backend
+        .store
+        .identity(&tenant, "acme", "someone-claiming-mirela")
+        .unwrap()
+        .is_none());
+}
+
+/// A configuration file that links by verified email without domains, creates people with no
+/// domains, or makes new people owners is refused when it is loaded.
+#[test]
+fn a_provider_configuration_that_admits_everyone_or_makes_owners_is_refused_at_load() {
+    let load = |extra: &str| {
+        let path = std::env::temp_dir().join(format!(
+            "strata-oidc-config-{}-{}.json",
+            std::process::id(),
+            extra.len()
+        ));
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"tenants":{{"fieldnotes":[{{"id":"acme","issuer":"https://idp.example","client_id":"c"{extra}}}]}}}}"#
+            ),
+        )
+        .unwrap();
+        let loaded = Federation::from_file(&path);
+        let _ = std::fs::remove_file(&path);
+        loaded.map(|_| ())
+    };
+    assert!(load("").is_ok());
+    assert!(load(r#","domains":["acme.example"],"link_verified_email":true"#).is_ok());
+    assert!(load(r#","link_verified_email":true"#).is_err());
+    assert!(load(r#","create_on_first_sign_in":true"#).is_err());
+    assert!(load(
+        r#","domains":["acme.example"],"create_on_first_sign_in":true,"default_role":"owner""#
+    )
+    .is_err());
+}
+
+/// Verifies: IDN-019
+///
+/// Linking an identity to a signed-in account needs a recent authentication, at the start and at
+/// the callback.
+#[tokio::test]
+async fn linking_an_identity_needs_a_recent_authentication() {
+    let mock = Mock::start().await;
+    mock.set(|t| {
+        t.sub = "ines-at-the-provider".into();
+        t.email = Some("someone-else@elsewhere.example".into());
+    });
+    let backend = start(federation(
+        vec![provider(&mock, |p| p.create_on_first_sign_in = false)],
+        Some(0),
+    ))
+    .await;
+    let ines = backend.session_of("ines").await;
+    let tenant = TenantId::new("fieldnotes").unwrap();
+
+    // At the start: a session that authenticated long ago is asked to confirm first.
+    let started_fresh = backend.begin(Some(&ines), json!({ "link": true })).await;
+    backend.age(&ines, 16 * 60_000);
+    let (status, reply) = backend
+        .start_at(
+            Some(SITE),
+            Some(&ines),
+            json!({ "provider": "acme", "link": true }),
+        )
+        .await;
+    assert_eq!(status, 403, "{reply}");
+    assert_eq!(reply["kind"], "step_up_required");
+
+    // At the callback: the request was made fresh, and the session has gone stale since.
+    assert_refused(
+        &backend
+            .finish(&started_fresh, Some(SITE), Some(&ines))
+            .await,
+        "a session that is no longer fresh",
+    );
+    assert!(backend
+        .store
+        .identity(&tenant, "acme", "ines-at-the-provider")
+        .unwrap()
+        .is_none());
 }
 
 /// Verifies: FED-012

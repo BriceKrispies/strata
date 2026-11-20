@@ -188,6 +188,19 @@ impl SamlProvider {
         if !(0..=300).contains(&skew_secs) {
             return Err(bad("skew_secs is between 0 and 300"));
         }
+        let domains: Vec<String> = file
+            .domains
+            .iter()
+            .map(|domain| domain.trim().to_lowercase())
+            .filter(|domain| !domain.is_empty())
+            .collect();
+        crate::signin::federated::check_admission(
+            &domains,
+            file.create_on_first_sign_in,
+            file.link_verified_email,
+            file.default_role.as_deref(),
+        )
+        .map_err(bad)?;
         Ok(SamlProvider {
             label: file.label.unwrap_or_else(|| file.id.clone()),
             id: file.id,
@@ -200,12 +213,7 @@ impl SamlProvider {
             name_attribute: file.name_attribute.unwrap_or_else(|| "name".into()),
             email_verified: file.email_verified,
             skew_secs,
-            domains: file
-                .domains
-                .iter()
-                .map(|domain| domain.trim().to_lowercase())
-                .filter(|domain| !domain.is_empty())
-                .collect(),
+            domains,
             create_on_first_sign_in: file.create_on_first_sign_in,
             default_role: file.default_role,
             link_verified_email: file.link_verified_email,

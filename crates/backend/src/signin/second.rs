@@ -24,7 +24,7 @@ use crate::app::{ApiError, App};
 use crate::auth::{self, random_hex, Caller, Identity};
 use serde_json::{json, Value as Json};
 use strata_kernel::{canon, PrincipalId, TenantId};
-use strata_protocol::api::ErrorCode;
+use strata_protocol::api::{ErrorCode, ErrorReply};
 use strata_storage_api::{Account, PendingSignIn, ThrottleRule, ThrottleSettle, ThrottleVerdict};
 
 /// A waiting sign-in's identifier: 32 random bytes in hex.
@@ -40,6 +40,21 @@ fn not_accepted() -> ApiError {
 
 fn sign_in_needed() -> ApiError {
     ApiError::new(ErrorCode::Unauthenticated, "Sign in to do this.")
+}
+
+/// The refusal of a first enrolment that has only the password behind it.
+fn enrolment_needs_proof() -> ApiError {
+    ApiError(
+        ErrorReply {
+            code: ErrorCode::Forbidden,
+            message: "This site needs a second factor. Sign in with an emailed link to set one up."
+                .into(),
+            kind: Some("second_factor_enrolment_needs_proof".into()),
+            failed: Vec::new(),
+            correlation: String::new(),
+        },
+        None,
+    )
 }
 
 /// The ways a person can give a second factor now.
@@ -119,6 +134,18 @@ pub fn stage(
     }
     let available = methods(app, tenant, principal)?;
     let enrol = if available.is_empty() {
+        // The first factor of a person is enrolled only after a proof beyond the password: an
+        // emailed link or a provider has shown control of the address or the identity, a password
+        // alone has not. Otherwise whoever holds a stolen password owns the factor.
+        if !matches!(method, "link" | "oidc" | "saml" | "passkey") {
+            app.decision(
+                method,
+                "second-factor-enrolment-refused",
+                &["well-formed", "throttle", "credential"],
+                &caller.correlation,
+            );
+            return Err(enrolment_needs_proof());
+        }
         // A realm that asks for a second factor of a person who has none: the secret goes with
         // the waiting sign-in, and the first right code confirms it.
         let issuer = app
@@ -265,6 +292,22 @@ pub fn verify(app: &App, caller: &Caller, request: &Json) -> Result<SignInOutcom
     let Some(tenant) = app.store.load(&caller.site, &[])?.tenant else {
         return Err(ApiError::new(ErrorCode::NotFound, "no such site"));
     };
+    // A person their provider deactivated while the sign-in waited gets no session (FED-015).
+    if crate::service::is_disabled(app, &caller.site, principal)? {
+        app.decision(
+            &pending.method,
+            "refused",
+            &[
+                "well-formed",
+                "throttle",
+                "credential",
+                "second-factor",
+                "active",
+            ],
+            &caller.correlation,
+        );
+        return Err(not_accepted());
+    }
     app.decision(
         &pending.method,
         "accepted",

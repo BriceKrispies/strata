@@ -22,7 +22,7 @@ use strata_backend::app::{Config, ThrottleLimits};
 use strata_backend::mail::{DevSink, Mailer};
 use strata_backend::signin::oidc::Federation;
 use strata_backend::signin::saml::SamlProvider;
-use strata_kernel::TenantId;
+use strata_kernel::{canon, TenantId, Timestamp};
 use strata_protocol::api::{
     HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
@@ -1484,9 +1484,22 @@ async fn an_asserted_address_links_to_an_existing_principal_only_when_vouched_an
         "an address that is not vouched for",
     );
 
+    // An address outside the provider's domains links to no one (FED-257).
+    let elsewhere = start(federation(vec![provider(|p| {
+        p.link_verified_email = true;
+        p.create_on_first_sign_in = false;
+        p.domains = vec!["bound.example".into()];
+    })]))
+    .await;
+    assert_refused(
+        &elsewhere.sign_in_with(claiming).await,
+        "an address outside the provider's domains",
+    );
+
     let linked = start(federation(vec![provider(|p| {
         p.link_verified_email = true;
         p.create_on_first_sign_in = false;
+        p.domains = vec!["fieldnotes.example".into()];
     })]))
     .await;
     let (status, reply) = linked.sign_in_with(claiming).await;
@@ -1569,6 +1582,51 @@ async fn a_saml_identity_is_linked_only_by_the_principal_that_signed_in_first() 
             )
             .await,
         "an identity of another principal",
+    );
+}
+
+/// Verifies: IDN-019
+///
+/// Linking an identity to a signed-in account needs a recent authentication, at the start and at
+/// the response.
+#[tokio::test]
+async fn linking_a_saml_identity_needs_a_recent_authentication() {
+    let backend = start(federation(vec![provider(|p| {
+        p.create_on_first_sign_in = false
+    })]))
+    .await;
+    let ines = backend.session_of("ines").await;
+    let fresh = backend.begin(Some(&ines), json!({ "link": true })).await;
+    let xml = good(&fresh).response();
+
+    let mut session = backend
+        .store
+        .session_by_token(&canon::hash_bytes(ines.as_bytes()))
+        .unwrap()
+        .expect("the session exists");
+    session.authenticated_at = Timestamp(session.authenticated_at.0 - 16 * 60_000);
+    backend.store.put_session(&session).unwrap();
+
+    let (status, reply) = backend
+        .start_at(
+            Some(SITE),
+            Some(&ines),
+            json!({ "provider": "acme", "link": true }),
+        )
+        .await;
+    assert_eq!(status, 403, "{reply}");
+    assert_eq!(reply["kind"], "step_up_required");
+    assert_refused(
+        &backend
+            .deliver(
+                &fresh.request.relay_state,
+                &xml,
+                &fresh.binding,
+                Some(SITE),
+                Some(&ines),
+            )
+            .await,
+        "a session that is no longer fresh",
     );
 }
 

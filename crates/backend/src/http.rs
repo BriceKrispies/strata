@@ -470,7 +470,11 @@ async fn members(
     headers: HeaderMap,
     Json(request): Json<MembersRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    as_caller(&app, &headers, move |app, identity| {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        // Giving someone a role, the owner's included, is a sensitive operation (IDN-019).
+        if matches!(request, MembersRequest::AssignRole { .. }) && identity.session.is_some() {
+            stepup::require_fresh(app, caller, identity)?;
+        }
         ops::members(app, identity, &request)
     })
     .await
@@ -758,8 +762,9 @@ async fn keys_rotate(
     State(app): State<Shared>,
     headers: HeaderMap,
 ) -> Result<Json<Json_>, ApiError> {
-    as_caller(&app, &headers, |app, identity| {
+    as_caller_at(&app, &headers, |app, caller, identity| {
         service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
         keys::rotate(app, &identity.tenant, &identity.correlation)
     })
     .await
@@ -770,8 +775,9 @@ async fn keys_compromise(
     headers: HeaderMap,
     Json(body): Json<Json_>,
 ) -> Result<Json<Json_>, ApiError> {
-    as_caller(&app, &headers, move |app, identity| {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
         service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
         let kid = service::text(&body, "kid", 64)?;
         keys::compromise(app, &identity.tenant, kid, &identity.correlation)
     })
@@ -790,7 +796,9 @@ async fn clients_create(
     headers: HeaderMap,
     Json(body): Json<Json_>,
 ) -> Result<Json<Json_>, ApiError> {
-    as_caller(&app, &headers, move |app, identity| {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
         clients::create(app, identity, &body)
     })
     .await
@@ -801,7 +809,9 @@ async fn clients_rotate_secret(
     headers: HeaderMap,
     Json(body): Json<Json_>,
 ) -> Result<Json<Json_>, ApiError> {
-    as_caller(&app, &headers, move |app, identity| {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
         clients::rotate_secret(app, identity, &body)
     })
     .await
@@ -844,7 +854,9 @@ async fn provisioning_token_create(
     State(app): State<Shared>,
     headers: HeaderMap,
 ) -> Result<Json<Json_>, ApiError> {
-    as_caller(&app, &headers, |app, identity| {
+    as_caller_at(&app, &headers, |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
         scim::create_token(app, identity)
     })
     .await
@@ -876,7 +888,9 @@ async fn provisioning_group_set(
     headers: HeaderMap,
     Json(body): Json<Json_>,
 ) -> Result<Json<Json_>, ApiError> {
-    as_caller(&app, &headers, move |app, identity| {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
         scim::set_group_role(app, identity, &body)
     })
     .await
