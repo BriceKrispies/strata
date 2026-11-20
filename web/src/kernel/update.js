@@ -380,12 +380,12 @@ function editorSubmission(editor, status) {
 
 /**
  * What the page can tell of the article it is about to send, from what the server said the kernel
- * will check (the view's `$record_rules`): the kernel's failed checks, and the ones it left to the
+ * will check (the view's `record_rules`): the kernel's failed checks, and the ones it left to the
  * server. Null when the view carried nothing, which leaves everything to the server.
  * @param {any} state @param {any} editor @param {string} contract @param {Record<string, any>} inputs @param {number} now
  */
 function localVerdict(state, editor, contract, inputs, now) {
-  const rules = state.view.model?.data?.$record_rules?.[EDITOR_OBJECT];
+  const rules = state.view.model?.record_rules?.[EDITOR_OBJECT];
   if (!rules) return null;
   const body = contracts.request(contract, inputs, state.route.path).body;
   const stored = editor.id == null ? null : (state.view.model.data.post?.fields ?? null);

@@ -37,7 +37,8 @@ function editorState(recordRules) {
     revision: 1,
     schema_version: 1,
     theme: { accent: 'moss', paper: 'linen' },
-    data: { site: { id: 1, object: 'publication', version: 1, fields: { name: 'Fieldnotes' }, refs: {} }, categories: [], authors: [], ...(recordRules ? { $record_rules: { post: recordRules } } : {}) },
+    data: { site: { id: 1, object: 'publication', version: 1, fields: { name: 'Fieldnotes' }, refs: {} }, categories: [], authors: [] },
+    ...(recordRules ? { record_rules: { post: recordRules } } : {}),
     topics: [{ value: '', label: 'No topic' }],
     authors: [{ value: '4', label: 'Ines' }],
   };
