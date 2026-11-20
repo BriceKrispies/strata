@@ -41,9 +41,32 @@ pub async fn bind(addr: SocketAddr) -> Result<TcpListener, String> {
         .map_err(|e| format!("{addr}: {e}"))
 }
 
-/// Resolves when the process is asked to stop (Ctrl-C).
+/// Resolves when the process is asked to stop: Ctrl-C, or on Unix SIGTERM, which is what an
+/// orchestrator sends.
 pub async fn interrupted() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut terminate) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = terminate.recv() => {}
+            }
+            return;
+        }
+    }
     let _ = tokio::signal::ctrl_c().await;
+}
+
+/// How long, after a stop is asked for, open connections may take to finish before they are
+/// dropped (`STRATA_DRAIN_TIMEOUT_SECS`, default 30).
+pub fn drain_deadline() -> Duration {
+    let secs = env_number("STRATA_DRAIN_TIMEOUT_SECS", 30)
+        .ok()
+        .and_then(|v| u64::try_from(v).ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(30);
+    Duration::from_secs(secs)
 }
 
 /// What a server allows a connection and a request to cost.
@@ -201,7 +224,14 @@ pub async fn serve_with(
         });
     }
     drop(listener);
-    while connections.join_next().await.is_some() {}
+    // Connections finish what they are doing; any still open at the deadline are dropped.
+    let drained = tokio::time::timeout(drain_deadline(), async {
+        while connections.join_next().await.is_some() {}
+    })
+    .await;
+    if drained.is_err() {
+        connections.abort_all();
+    }
     Ok(())
 }
 

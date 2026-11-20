@@ -6,7 +6,7 @@
 //! never honoured from a peer that is not trusted, so a visitor cannot choose its own source.
 
 use std::net::IpAddr;
-use strata_runtime::limits::{Cap, Permit};
+use strata_runtime::limits::{Cap, Permit, Rate};
 
 /// What the BFF allows one session or source to hold open.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -15,6 +15,9 @@ pub struct Limits {
     pub sockets_per_session: usize,
     /// Open sockets one source address may hold, signed in or not (`STRATA_BFF_SOCKETS_PER_SOURCE`).
     pub sockets_per_source: usize,
+    /// Page and view requests one source address may make per minute
+    /// (`STRATA_BFF_REQUESTS_PER_MINUTE`).
+    pub requests_per_minute: usize,
 }
 
 impl Default for Limits {
@@ -22,6 +25,7 @@ impl Default for Limits {
         Limits {
             sockets_per_session: 8,
             sockets_per_source: 32,
+            requests_per_minute: 600,
         }
     }
 }
@@ -35,6 +39,7 @@ pub struct Places {
 pub struct Admission {
     by_session: Cap,
     by_source: Cap,
+    requests: Rate,
 }
 
 impl Admission {
@@ -42,7 +47,13 @@ impl Admission {
         Admission {
             by_session: Cap::new(limits.sockets_per_session),
             by_source: Cap::new(limits.sockets_per_source),
+            requests: Rate::new(limits.requests_per_minute, 60_000),
         }
+    }
+
+    /// Count a page or view request from `source` at `now_ms`; `false` when it is over the rate.
+    pub fn request(&self, source: &str, now_ms: i64) -> bool {
+        self.requests.allow(source, now_ms)
     }
 
     /// Places for a new socket of `session` (when there is one) from `source`; `Err` carries what
@@ -175,6 +186,7 @@ mod tests {
         let admission = Admission::new(&Limits {
             sockets_per_session: 1,
             sockets_per_source: 2,
+            requests_per_minute: 2,
         });
         let first = admission.socket(Some("s1"), Some("a")).unwrap();
         assert!(admission.socket(Some("s1"), Some("b")).is_err());
@@ -182,5 +194,19 @@ mod tests {
         assert!(admission.socket(None, Some("a")).is_err());
         drop(first);
         assert!(admission.socket(Some("s1"), Some("a")).is_ok());
+    }
+
+    #[test]
+    fn page_requests_are_rated_per_source() {
+        let admission = Admission::new(&Limits {
+            sockets_per_session: 1,
+            sockets_per_source: 1,
+            requests_per_minute: 2,
+        });
+        assert!(admission.request("a", 0));
+        assert!(admission.request("a", 1));
+        assert!(!admission.request("a", 2));
+        assert!(admission.request("b", 2), "another source");
+        assert!(admission.request("a", 60_001), "the window moved on");
     }
 }

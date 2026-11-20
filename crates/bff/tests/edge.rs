@@ -76,6 +76,7 @@ async fn start_with(
         ],
         dist,
         dev: true,
+        token_secret: None,
         trusted_proxies: Vec::new(),
         limits: Default::default(),
     };
@@ -1292,6 +1293,7 @@ async fn an_origin_counts_only_for_its_own_site() {
     assert_eq!(status, 200);
 }
 
+/// Verifies: GWY-1408
 /// The gateway's part of the diagnostics names no other site and no configuration: not the host
 /// map and not the allowed origins.
 #[tokio::test]
@@ -1306,7 +1308,83 @@ async fn diagnostics_name_no_other_site() {
     for other in ["tidewater", "localhost", "allowed_origins", "\"sites\""] {
         assert!(!text.contains(other), "{other} is in the report: {text}");
     }
-    assert!(report["bff"]["open_sockets"].is_number());
+    assert!(
+        report.get("bff").is_none(),
+        "the gateway's counts span every tenant: {report}"
+    );
+    assert!(report["backend"].is_object());
+}
+
+/// Verifies: GWY-1403
+/// Assets are cached for a year only when they were served; source maps are not served at all.
+#[tokio::test]
+async fn assets_are_cached_only_on_success_and_source_maps_are_not_served() {
+    let edge = start_with(
+        |cfg| {
+            std::fs::write(cfg.dist.join("assets/app-abc.js"), "export {};").unwrap();
+            std::fs::write(cfg.dist.join("assets/app-abc.js.map"), "{}").unwrap();
+        },
+        |_| {},
+    )
+    .await;
+    let (status, _, reply) = edge.get("127.0.0.1", "/assets/app-abc.js", None).await;
+    assert_eq!(status, 200);
+    assert!(reply.headers["cache-control"]
+        .to_str()
+        .unwrap()
+        .contains("immutable"));
+    let (status, _, reply) = edge.get("127.0.0.1", "/assets/missing.js", None).await;
+    assert_eq!(status, 404);
+    assert!(
+        reply
+            .headers
+            .get("cache-control")
+            .map_or(true, |v| !v.to_str().unwrap().contains("immutable")),
+        "a failure is not cached for a year"
+    );
+    let (status, _, _) = edge.get("127.0.0.1", "/assets/app-abc.js.map", None).await;
+    assert_eq!(
+        status, 404,
+        "the map exists on disk and is still not served"
+    );
+}
+
+/// Verifies: GWY-1404
+/// Transport headers: Strict-Transport-Security and `upgrade-insecure-requests` where the origin
+/// is https, Permissions-Policy everywhere.
+#[tokio::test]
+async fn an_https_origin_gets_strict_transport_security_and_a_plain_one_does_not() {
+    let plain = start().await;
+    let (_, _, reply) = plain.get("127.0.0.1", "/", None).await;
+    assert!(reply.headers.get("strict-transport-security").is_none());
+    assert!(reply.headers.get("permissions-policy").is_some());
+    let secure = start_with(|cfg| cfg.origins.push("https://127.0.0.1".into()), |_| {}).await;
+    let (_, _, reply) = secure.get("127.0.0.1", "/", None).await;
+    assert!(reply.headers["strict-transport-security"]
+        .to_str()
+        .unwrap()
+        .contains("max-age="));
+    assert!(reply.headers["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("upgrade-insecure-requests"));
+    assert!(reply.headers.get("permissions-policy").is_some());
+}
+
+/// Verifies: GWY-1405
+/// Page requests are limited per source at the edge.
+#[tokio::test]
+async fn page_requests_are_limited_per_source() {
+    let edge = start_with(|cfg| cfg.limits.requests_per_minute = 5, |_| {}).await;
+    let mut refused = 0;
+    for _ in 0..12 {
+        if edge.get("127.0.0.1", "/", None).await.0 == 429 {
+            refused += 1;
+        }
+    }
+    assert!(refused >= 1, "a source that keeps asking is slowed");
+    let (status, _, _) = edge.get("127.0.0.1", "/api/session", None).await;
+    assert_eq!(status, 200, "the session read is not a page request");
 }
 
 /// One sign-in attempt through the edge, from a browser that says it comes from `claimed`.
