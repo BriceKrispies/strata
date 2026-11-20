@@ -824,10 +824,10 @@
     },
     {
       "package": "strata-storage-sqlite",
-      "target": "query_plan",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
+      "target": "query_plan_scale",
+      "tier": "full",
+      "seconds": 1432,
+      "reason": "Planned reads and views over 100,000 records on SQLite and the memory store; measured 1432 s in the routine run of 2026-11-20, far past the routine budget"
     },
     {
       "package": "strata-storage-sqlite",
