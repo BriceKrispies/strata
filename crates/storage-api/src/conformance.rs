@@ -469,7 +469,14 @@ fn events_are_ordered_and_stay_in_the_outbox_until_published(store: &dyn Store) 
             && alpha_pending[0].event.seq < alpha_pending[1].event.seq,
         "the outbox follows commit order within a tenant"
     );
-    assert_eq!(store.outbox(2).unwrap().len(), 2);
+    let shared = store.outbox(2).unwrap();
+    assert_eq!(shared.len(), 2);
+    assert!(
+        !of_tenant(&shared, "alpha").is_empty() && !of_tenant(&shared, "beta").is_empty(),
+        "a small batch is shared between the tenants with events waiting"
+    );
+    assert_eq!(store.outbox_pending_of(&tenant_id("alpha")).unwrap(), 2);
+    assert_eq!(store.outbox_pending_of(&tenant_id("beta")).unwrap(), 1);
     store
         .mark_published(&tenant_id("alpha"), alpha_pending[0].position)
         .unwrap();
@@ -706,6 +713,20 @@ fn sessions_are_stored_revoked_and_purged(store: &dyn Store) {
         .map(|s| s.id.to_string())
         .collect();
     assert_eq!(live, ["s2"], "s1 is revoked and s3 has expired");
+    let of = |tenant: &str, principal: Option<&str>| -> Vec<String> {
+        let principal = principal.map(principal_id);
+        store
+            .live_sessions_of(&tenant_id(tenant), principal.as_ref(), Timestamp(100))
+            .unwrap()
+            .iter()
+            .map(|s| s.id.to_string())
+            .collect()
+    };
+    assert_eq!(of("alpha", None), ["s2"]);
+    assert_eq!(of("alpha", Some("alpha:editor")), ["s2"]);
+    assert!(of("alpha", Some("alpha:writer1")).is_empty());
+    assert!(of("beta", None).is_empty(), "s3 has expired");
+    store.liveness().unwrap();
     assert_eq!(store.purge_sessions(Timestamp(100)).unwrap(), 1);
     assert!(store
         .session(&SessionId::new("s3").unwrap())

@@ -297,10 +297,7 @@ pub fn end_sessions(
 ) -> Result<usize, ApiError> {
     let sessions: Vec<_> = app
         .store
-        .live_sessions(app.now())?
-        .into_iter()
-        .filter(|s| s.tenant == *tenant && s.principal == *principal)
-        .collect();
+        .live_sessions_of(tenant, Some(principal), app.now())?;
     let count = sessions.len();
     for session in sessions {
         crate::auth::revoke(app, session, correlation)?;

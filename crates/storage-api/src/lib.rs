@@ -524,14 +524,33 @@ pub struct Health {
     pub outbox_pending: u64,
 }
 
+/// An outbox problem the store skipped past instead of failing the scan: a tenant whose file
+/// would not open, or an event that would not decode and was parked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutboxFault {
+    pub tenant: TenantId,
+    /// The outbox position of the parked event, or `None` when the whole tenant was skipped.
+    pub position: Option<u64>,
+    pub reason: String,
+}
+
 /// The persistence contract. See the crate documentation for the guarantees.
 pub trait Store: Send + Sync {
     fn capabilities(&self) -> Capabilities;
+    /// The full integrity check: every tenant is opened and checked. Expensive, and for the
+    /// operator only; neither a tenant nor an unauthenticated caller may reach it. A tenant that
+    /// cannot be checked makes the answer `ok: false`; it does not make the call fail.
     fn health(&self) -> StoreResult<Health>;
+    /// Cheap liveness: the store answers. Opens no tenant file.
+    fn liveness(&self) -> StoreResult<()>;
     /// The adapter's storage layout history.
     fn migrations(&self) -> StoreResult<Vec<StorageMigration>>;
 
+    /// Every tenant. A tenant that cannot be read is left out.
     fn tenants(&self) -> StoreResult<Vec<TenantSummary>>;
+
+    /// One tenant's summary, or `None` when it does not exist. Reads that tenant only.
+    fn tenant_summary(&self, tenant: &TenantId) -> StoreResult<Option<TenantSummary>>;
 
     /// A snapshot of one tenant holding at least the records that answer `needs`, with partial
     /// coverage stating exactly `needs`. The tenant's schema, members and counters are always
@@ -554,8 +573,20 @@ pub trait Store: Send + Sync {
     ) -> StoreResult<Vec<DomainEvent>>;
 
     /// At most `limit` events not yet marked published, from every tenant's outbox: each tenant's
-    /// in its commit order, the tenants in no promised order against each other.
+    /// in its commit order, the tenants in no promised order against each other. The batch is
+    /// shared between the tenants, so a tenant with a long backlog does not hold back another. A
+    /// tenant that cannot be read, or an event that cannot be decoded, does not fail the scan: the
+    /// tenant is skipped, the event is parked (never offered again), and either is reported by
+    /// [`Store::outbox_faults`].
     fn outbox(&self, limit: usize) -> StoreResult<Vec<OutboxEntry>>;
+
+    /// The outbox problems skipped since the store opened, most recent last. Bounded.
+    fn outbox_faults(&self) -> Vec<OutboxFault> {
+        Vec::new()
+    }
+
+    /// How many events of one tenant are waiting in its outbox. Reads that tenant only.
+    fn outbox_pending_of(&self, tenant: &TenantId) -> StoreResult<u64>;
 
     /// Mark every outbox entry of `tenant` up to and including `position` as published. Other
     /// tenants' outboxes are untouched.
@@ -572,8 +603,18 @@ pub trait Store: Send + Sync {
     fn put_session(&self, session: &SessionRecord) -> StoreResult<()>;
     fn session_by_token(&self, token_hash: &str) -> StoreResult<Option<SessionRecord>>;
     fn session(&self, id: &SessionId) -> StoreResult<Option<SessionRecord>>;
-    /// Every session that is neither revoked nor past its end at `now`.
+    /// Every session that is neither revoked nor past its end at `now`, of every tenant. A scan
+    /// of the whole platform: no request path may call it. A tenant that cannot be read is
+    /// skipped.
     fn live_sessions(&self, now: Timestamp) -> StoreResult<Vec<SessionRecord>>;
+    /// The live sessions of one tenant, or of one principal of it, by session id. Reads that
+    /// tenant only; a tenant that does not exist has none.
+    fn live_sessions_of(
+        &self,
+        tenant: &TenantId,
+        principal: Option<&PrincipalId>,
+        now: Timestamp,
+    ) -> StoreResult<Vec<SessionRecord>>;
     /// Remove sessions that ended before `before`. Returns how many were removed.
     fn purge_sessions(&self, before: Timestamp) -> StoreResult<u64>;
 

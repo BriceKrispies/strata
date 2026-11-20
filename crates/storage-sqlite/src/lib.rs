@@ -38,6 +38,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::ext::*;
 use strata_kernel::{
@@ -47,10 +48,11 @@ use strata_kernel::{
 use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, Capabilities,
-    Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyCeremony,
-    PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SamlRequest,
-    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
-    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, OutboxFault,
+    PasskeyCeremony, PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest,
+    SamlRequest, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError,
+    StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+    TotpRecord,
 };
 
 /// The ledger table of the control database's migrations.
@@ -364,12 +366,32 @@ enum Place {
     Memory,
 }
 
+/// The default bound on open tenant files.
+pub const DEFAULT_MAX_OPEN: usize = 256;
+/// How many outbox problems are remembered.
+const MAX_FAULTS: usize = 200;
+/// `events.published` of an event that could not be decoded: neither waiting nor published.
+const PARKED: i64 = 2;
+
 /// Implements: H-008
 pub struct SqliteStore {
     control: Database,
     place: Place,
     /// Open tenant files, by tenant. In memory this is where the tenant databases live.
     open: Mutex<BTreeMap<TenantId, Database>>,
+    /// When each open tenant file was last used, by a counter; the least recently used file is
+    /// closed when more than `max_open` are open.
+    recency: Mutex<BTreeMap<TenantId, u64>>,
+    clock: AtomicU64,
+    /// The most tenant files kept open on disk. In memory the databases are the data and are
+    /// never closed.
+    max_open: usize,
+    /// One gate per tenant being opened, so a cold open blocks only callers of that tenant.
+    opening: Mutex<BTreeMap<TenantId, Arc<Mutex<()>>>>,
+    /// Where the next outbox sweep starts among the tenants.
+    sweep: AtomicUsize,
+    /// Outbox problems skipped past, most recent last.
+    faults: Mutex<Vec<OutboxFault>>,
     /// When the store was opened: recorded in the ledger of the tenant files it lays out.
     opened_at: Timestamp,
 }
@@ -787,8 +809,25 @@ impl SqliteStore {
             control,
             place,
             open: Mutex::new(BTreeMap::new()),
+            recency: Mutex::new(BTreeMap::new()),
+            clock: AtomicU64::new(0),
+            max_open: DEFAULT_MAX_OPEN,
+            opening: Mutex::new(BTreeMap::new()),
+            sweep: AtomicUsize::new(0),
+            faults: Mutex::new(Vec::new()),
             opened_at: now,
         })
+    }
+
+    /// Keep at most `max` tenant files open (at least one); the least recently used is closed.
+    pub fn with_max_open(mut self, max: usize) -> Self {
+        self.max_open = max.max(1);
+        self
+    }
+
+    /// How many tenant files are open now.
+    pub fn open_count(&self) -> usize {
+        self.open.lock().map(|open| open.len()).unwrap_or(0)
     }
 
     /// The directory of the tenant files, or `None` in memory.
@@ -853,21 +892,164 @@ impl SqliteStore {
     }
 
     /// The open database of an active tenant, or `None` when the directory has no such tenant.
+    /// The map lock is held only to look up and to insert, never across the control query, the
+    /// file open or the migration; a cold open waits on its own tenant's gate only.
     fn tenant_db(&self, tenant: &TenantId) -> StoreResult<Option<Database>> {
-        let mut open = self.lock_open()?;
-        if let Some(found) = open.get(tenant) {
-            return Ok(Some(found.clone()));
+        if let Some(found) = self.cached(tenant)? {
+            return Ok(Some(found));
         }
         // Another process may have created the tenant since; in memory nothing else can.
         if matches!(self.place, Place::Memory) {
             return Ok(None);
         }
-        let Some(file) = self.directory_file(tenant, "active")? else {
-            return Ok(None);
+        let gate = self
+            .opening
+            .lock()
+            .map_err(|_| StoreError::Unavailable("a writer panicked".into()))?
+            .entry(tenant.clone())
+            .or_default()
+            .clone();
+        let result = (|| -> StoreResult<Option<Database>> {
+            let _turn = gate
+                .lock()
+                .map_err(|_| StoreError::Unavailable("a writer panicked".into()))?;
+            if let Some(found) = self.cached(tenant)? {
+                return Ok(Some(found));
+            }
+            let Some(file) = self.directory_file(tenant, "active")? else {
+                return Ok(None);
+            };
+            let found = self.open_file(&file)?;
+            let mut open = self.lock_open()?;
+            let kept = open.entry(tenant.clone()).or_insert(found).clone();
+            self.touch(tenant);
+            self.evict(&mut open, tenant);
+            Ok(Some(kept))
+        })();
+        if let Ok(mut opening) = self.opening.lock() {
+            opening.remove(tenant);
+        }
+        result
+    }
+
+    fn cached(&self, tenant: &TenantId) -> StoreResult<Option<Database>> {
+        let open = self.lock_open()?;
+        let found = open.get(tenant).cloned();
+        if found.is_some() {
+            self.touch(tenant);
+        }
+        Ok(found)
+    }
+
+    fn touch(&self, tenant: &TenantId) {
+        let tick = self.clock.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Ok(mut recency) = self.recency.lock() {
+            recency.insert(tenant.clone(), tick);
+        }
+    }
+
+    /// Close the least recently used tenant files beyond the bound, never `keep`. Callers hold
+    /// the `open` lock, so the order of locks is always `open` then `recency`.
+    fn evict(&self, open: &mut BTreeMap<TenantId, Database>, keep: &TenantId) {
+        if matches!(self.place, Place::Memory) {
+            return;
+        }
+        let Ok(mut recency) = self.recency.lock() else {
+            return;
         };
-        let found = self.open_file(&file)?;
-        open.insert(tenant.clone(), found.clone());
-        Ok(Some(found))
+        recency.retain(|tenant, _| open.contains_key(tenant));
+        while open.len() > self.max_open {
+            let oldest = open
+                .keys()
+                .filter(|tenant| *tenant != keep)
+                .min_by_key(|tenant| recency.get(*tenant).copied().unwrap_or(0))
+                .cloned();
+            let Some(oldest) = oldest else {
+                break;
+            };
+            open.remove(&oldest);
+            recency.remove(&oldest);
+        }
+    }
+
+    /// Remember an outbox problem, once.
+    fn fault(&self, tenant: &TenantId, position: Option<u64>, reason: String) {
+        let Ok(mut faults) = self.faults.lock() else {
+            return;
+        };
+        if faults
+            .iter()
+            .any(|f| f.tenant == *tenant && f.position == position && f.reason == reason)
+        {
+            return;
+        }
+        if faults.len() >= MAX_FAULTS {
+            faults.remove(0);
+        }
+        faults.push(OutboxFault {
+            tenant: tenant.clone(),
+            position,
+            reason,
+        });
+    }
+
+    /// Up to `room` (at least one) waiting events of one tenant after outbox position `after`.
+    /// An event that cannot be decoded is parked and reported; a tenant that cannot be read is
+    /// skipped and reported. Returns the events and whether the tenant may have more.
+    fn outbox_of(&self, tenant: &TenantId, after: u64, room: usize) -> (Vec<OutboxEntry>, bool) {
+        let read = || -> StoreResult<(Vec<OutboxEntry>, bool)> {
+            let Some(file) = self.tenant_db(tenant)? else {
+                return Ok((Vec::new(), false));
+            };
+            let conn = file.lock().map_err(dbe)?;
+            let mut out: Vec<OutboxEntry> = Vec::new();
+            let mut cursor = after as i64;
+            loop {
+                let want = room - out.len();
+                let mut statement = conn
+                    .prepare_cached(
+                        "SELECT position, data FROM events WHERE published = 0 AND position > ?1 ORDER BY position LIMIT ?2",
+                    )
+                    .map_err(db)?;
+                let rows = statement
+                    .query_map(params![cursor, want as i64], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(db)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(db)?;
+                drop(statement);
+                let fetched = rows.len();
+                for (position, data) in rows {
+                    cursor = position;
+                    match decode::<DomainEvent>(&data, "event") {
+                        Ok(event) => out.push(OutboxEntry {
+                            position: position as u64,
+                            event,
+                        }),
+                        Err(error) => {
+                            conn.execute(
+                                "UPDATE events SET published = ?2 WHERE position = ?1 AND published = 0",
+                                params![position, PARKED],
+                            )
+                            .map_err(db)?;
+                            self.fault(tenant, Some(position as u64), error.to_string());
+                        }
+                    }
+                }
+                if out.len() >= room || fetched < want {
+                    let capped = out.len() >= room;
+                    return Ok((out, capped));
+                }
+            }
+        };
+        match read() {
+            Ok(found) => found,
+            Err(error) => {
+                self.fault(tenant, None, error.to_string());
+                (Vec::new(), false)
+            }
+        }
     }
 
     /// The database of a tenant, creating its directory row and file when there is none.
@@ -1219,24 +1401,37 @@ impl Store for SqliteStore {
         let mut detail = format!("control quick_check {control_check}, journal {mode}");
         let (mut tenants, mut pending) = (0u64, 0u64);
         for tenant in self.directory()? {
-            let Some(file) = self.tenant_db(&tenant)? else {
-                continue;
-            };
-            let conn = file.lock().map_err(dbe)?;
-            let check = quick(&conn)?;
-            if check != "ok" {
-                ok = false;
-                detail.push_str(&format!("; {tenant} quick_check {check}"));
+            let checked = (|| -> StoreResult<Option<(String, bool, u64)>> {
+                let Some(file) = self.tenant_db(&tenant)? else {
+                    return Ok(None);
+                };
+                let conn = file.lock().map_err(dbe)?;
+                let check = quick(&conn)?;
+                let present = header(&conn, &tenant)?.is_some();
+                let waiting: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM events WHERE published = 0", [], |r| {
+                        r.get(0)
+                    })
+                    .map_err(db)?;
+                Ok(Some((check, present, waiting as u64)))
+            })();
+            match checked {
+                Ok(None) => {}
+                Ok(Some((check, present, waiting))) => {
+                    if check != "ok" {
+                        ok = false;
+                        detail.push_str(&format!("; {tenant} quick_check {check}"));
+                    }
+                    if present {
+                        tenants += 1;
+                    }
+                    pending += waiting;
+                }
+                Err(error) => {
+                    ok = false;
+                    detail.push_str(&format!("; {tenant} unavailable: {error}"));
+                }
             }
-            if header(&conn, &tenant)?.is_some() {
-                tenants += 1;
-            }
-            let waiting: i64 = conn
-                .query_row("SELECT COUNT(*) FROM events WHERE published = 0", [], |r| {
-                    r.get(0)
-                })
-                .map_err(db)?;
-            pending += waiting as u64;
         }
         Ok(Health {
             ok,
@@ -1244,6 +1439,15 @@ impl Store for SqliteStore {
             tenants,
             outbox_pending: pending,
         })
+    }
+
+    fn liveness(&self) -> StoreResult<()> {
+        self.control
+            .lock()
+            .map_err(dbe)?
+            .query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
+            .map_err(db)
+            .map(|_| ())
     }
 
     fn migrations(&self) -> StoreResult<Vec<StorageMigration>> {
@@ -1266,26 +1470,33 @@ impl Store for SqliteStore {
     fn tenants(&self) -> StoreResult<Vec<TenantSummary>> {
         let mut out = Vec::new();
         for tenant in self.directory()? {
-            let Some(file) = self.tenant_db(&tenant)? else {
-                continue;
-            };
-            let conn = file.lock().map_err(dbe)?;
-            let Some(state) = header(&conn, &tenant)? else {
-                continue;
-            };
-            let records: i64 = conn
-                .query_row("SELECT COUNT(*) FROM records", [], |r| r.get(0))
-                .map_err(db)?;
-            out.push(TenantSummary {
-                id: tenant,
-                name: state.name,
-                revision: state.revision,
-                schema_version: state.schema.version.0,
-                event_seq: state.event_seq,
-                records: records as u64,
-            });
+            // A tenant that cannot be read is left out, not a failure for the others.
+            if let Ok(Some(summary)) = self.tenant_summary(&tenant) {
+                out.push(summary);
+            }
         }
         Ok(out)
+    }
+
+    fn tenant_summary(&self, tenant: &TenantId) -> StoreResult<Option<TenantSummary>> {
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                let Some(state) = header(conn, tenant)? else {
+                    return Ok(None);
+                };
+                let records: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM records", [], |r| r.get(0))
+                    .map_err(db)?;
+                Ok(Some(TenantSummary {
+                    id: tenant.clone(),
+                    name: state.name,
+                    revision: state.revision,
+                    schema_version: state.schema.version.0,
+                    event_seq: state.event_seq,
+                    records: records as u64,
+                }))
+            })?
+            .flatten())
     }
 
     fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
@@ -1409,34 +1620,52 @@ impl Store for SqliteStore {
 
     fn outbox(&self, limit: usize) -> StoreResult<Vec<OutboxEntry>> {
         let mut out = Vec::new();
-        for tenant in self.directory()? {
+        let tenants = self.directory()?;
+        if limit == 0 || tenants.is_empty() {
+            return Ok(out);
+        }
+        // Each tenant gets an equal share of the batch, starting from a tenant that moves on at
+        // every sweep; what a short tenant leaves unused goes to the ones with more waiting.
+        let n = tenants.len();
+        let share = limit.div_ceil(n);
+        let start = self.sweep.fetch_add(1, Ordering::Relaxed) % n;
+        let mut more: Vec<(&TenantId, u64)> = Vec::new();
+        for i in 0..n {
             if out.len() >= limit {
                 break;
             }
-            let Some(file) = self.tenant_db(&tenant)? else {
-                continue;
-            };
-            let conn = file.lock().map_err(dbe)?;
-            let mut statement = conn
-                .prepare_cached(
-                    "SELECT position, data FROM events WHERE published = 0 ORDER BY position LIMIT ?1",
-                )
-                .map_err(db)?;
-            let rows = statement
-                .query_map(params![(limit - out.len()) as i64], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(db)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(db)?;
-            for (position, data) in rows {
-                out.push(OutboxEntry {
-                    position: position as u64,
-                    event: decode(&data, "event")?,
-                });
+            let tenant = &tenants[(start + i) % n];
+            let (entries, capped) = self.outbox_of(tenant, 0, share.min(limit - out.len()));
+            if capped {
+                if let Some(last) = entries.last() {
+                    more.push((tenant, last.position));
+                }
             }
+            out.extend(entries);
+        }
+        for (tenant, after) in more {
+            if out.len() >= limit {
+                break;
+            }
+            let (entries, _) = self.outbox_of(tenant, after, limit - out.len());
+            out.extend(entries);
         }
         Ok(out)
+    }
+
+    fn outbox_faults(&self) -> Vec<OutboxFault> {
+        self.faults.lock().map(|f| f.clone()).unwrap_or_default()
+    }
+
+    fn outbox_pending_of(&self, tenant: &TenantId) -> StoreResult<u64> {
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                conn.query_row("SELECT COUNT(*) FROM events WHERE published = 0", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .map_err(db)
+            })?
+            .unwrap_or(0) as u64)
     }
 
     fn mark_published(&self, tenant: &TenantId, position: u64) -> StoreResult<()> {
@@ -1532,19 +1761,37 @@ impl Store for SqliteStore {
     fn live_sessions(&self, now: Timestamp) -> StoreResult<Vec<SessionRecord>> {
         let mut out = Vec::new();
         for tenant in self.directory()? {
-            let Some(file) = self.tenant_db(&tenant)? else {
-                continue;
-            };
-            let conn = file.lock().map_err(dbe)?;
-            out.extend(sessions_where(
-                &conn,
-                &tenant,
-                "revoked_at IS NULL AND expires_at > ?1",
-                &[&now.0],
-            )?);
+            // One tenant that cannot be read does not hide the sessions of the others.
+            if let Ok(found) = self.live_sessions_of(&tenant, None, now) {
+                out.extend(found);
+            }
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(out)
+    }
+
+    fn live_sessions_of(
+        &self,
+        tenant: &TenantId,
+        principal: Option<&PrincipalId>,
+        now: Timestamp,
+    ) -> StoreResult<Vec<SessionRecord>> {
+        Ok(self
+            .on_tenant(tenant, |conn| match principal {
+                Some(principal) => sessions_where(
+                    conn,
+                    tenant,
+                    "revoked_at IS NULL AND expires_at > ?1 AND principal = ?2",
+                    &[&now.0, &principal.as_str()],
+                ),
+                None => sessions_where(
+                    conn,
+                    tenant,
+                    "revoked_at IS NULL AND expires_at > ?1",
+                    &[&now.0],
+                ),
+            })?
+            .unwrap_or_default())
     }
 
     fn purge_sessions(&self, before: Timestamp) -> StoreResult<u64> {

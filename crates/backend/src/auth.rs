@@ -414,13 +414,9 @@ fn own_live_sessions(app: &App, current: &SessionRecord) -> Result<Vec<SessionRe
     let now = app.now().0;
     Ok(app
         .store
-        .live_sessions(app.now())?
+        .live_sessions_of(&current.tenant, Some(&current.principal), app.now())?
         .into_iter()
-        .filter(|s| {
-            s.tenant == current.tenant
-                && s.principal == current.principal
-                && session_state(app, s, now) == SessionState::Active
-        })
+        .filter(|s| session_state(app, s, now) == SessionState::Active)
         .collect())
 }
 
@@ -472,13 +468,9 @@ pub fn revoke_all_of(
     let now = app.now().0;
     let live: Vec<SessionRecord> = app
         .store
-        .live_sessions(app.now())?
+        .live_sessions_of(tenant, Some(principal), app.now())?
         .into_iter()
-        .filter(|s| {
-            s.tenant == *tenant
-                && s.principal == *principal
-                && session_state(app, s, now) == SessionState::Active
-        })
+        .filter(|s| session_state(app, s, now) == SessionState::Active)
         .collect();
     let count = live.len();
     for session in live {

@@ -60,12 +60,13 @@ where
 }
 
 async fn health(State(app): State<Shared>) -> Result<Json<Json_>, ApiError> {
-    let health = app.blocking(|app| app.store.health()).await??;
+    // Liveness only: it opens no tenant file. The integrity check is in the platform
+    // diagnostics, behind the service credential.
+    app.blocking(|app| app.store.liveness()).await??;
     Ok(Json(json!({
-        "ok": health.ok,
+        "ok": true,
         "service": "backend",
         "kernel_version": strata_kernel::KERNEL_VERSION,
-        "store": health,
     })))
 }
 
