@@ -382,15 +382,14 @@ async fn every_request_that_changes_state_needs_our_origin_and_the_sessions_toke
 
     // Every other route that changes state: the lab, the development fixtures, sign-in and
     // sign-out as well. Each is sent from our own origin with the session cookie, without the
-    // token and with a wrong one, and must be refused before anything happens. The one POST that
-    // is exempt changes nothing: the Markdown preview is a pure function of its text.
+    // token and with a wrong one, and must be refused before anything happens.
     let routes = post_routes();
     assert!(
         routes.len() >= 8,
         "the routes were not read from the router: {routes:?}"
     );
     let before = edge.get("127.0.0.1", "/api/view?path=/", None).await.1;
-    for path in routes.iter().filter(|path| path.as_str() != "/api/preview") {
+    for path in &routes {
         let body = match path.as_str() {
             "/api/records" => change.clone(),
             "/api/login" => json!({ "login": "ines", "password": "strata-dev-ines" }),
@@ -423,14 +422,35 @@ async fn every_request_that_changes_state_needs_our_origin_and_the_sessions_toke
         still["session"]["authenticated"], true,
         "the refused sign-out and fixtures ended nothing"
     );
-    let preview = edge
-        .post("127.0.0.1", "/api/preview", json!({ "markdown": "a *b*" }))
-        .header("cookie", &cookie);
-    assert_eq!(
-        edge.send(preview).await.0,
-        200,
-        "the preview changes nothing"
-    );
+}
+
+/// The Markdown preview parses text for whoever asks, so it needs a live session, our origin and
+/// the session's request token, like the routes that change state.
+/// Verifies: CMS-1020
+#[tokio::test]
+async fn the_markdown_preview_is_refused_without_a_session() {
+    let edge = start().await;
+    let body = json!({ "markdown": "a *b*" });
+    // No cookie and no token: refused.
+    let (status, _, _) = edge
+        .send(edge.post("127.0.0.1", "/api/preview", body.clone()))
+        .await;
+    assert!(matches!(status, 401 | 403), "answered {status}");
+    // The request token every visitor is issued, but no session: refused.
+    let anonymous = edge
+        .post("127.0.0.1", "/api/preview", body.clone())
+        .header("x-csrf-token", edge.request_token("127.0.0.1").await);
+    let (status, _, _) = edge.send(anonymous).await;
+    assert!(matches!(status, 401 | 403), "answered {status}");
+    // A session with its own token: answered.
+    let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let signed_in = edge
+        .post("127.0.0.1", "/api/preview", body)
+        .header("cookie", format!("{SESSION_COOKIE}={token}"))
+        .header("x-csrf-token", csrf);
+    let (status, reply, _) = edge.send(signed_in).await;
+    assert_eq!(status, 200, "{reply}");
+    assert!(reply["blocks"].is_array());
 }
 
 /// Verifies: GWY-257

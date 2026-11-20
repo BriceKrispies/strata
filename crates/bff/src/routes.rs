@@ -1256,21 +1256,17 @@ struct PreviewRequest {
 }
 
 /// Parse constrained Markdown into blocks for the editor's preview. A pure function of the
-/// text: nothing is stored and the backend is not involved.
+/// text: nothing is stored. Needs a session, as the other state-changing routes do.
 async fn preview(
     State(bff): State<Shared>,
     headers: HeaderMap,
     Json(request): Json<PreviewRequest>,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
-    if !origin_allowed(&bff, &visit.site, &headers) {
-        return Err(Failure::new(
-            ErrorCode::Forbidden,
-            "This request did not come from the site.",
-            &visit.correlation,
-        ));
-    }
-    if request.markdown.len() > 200_000 {
+    // The contract says a signed-in principal: our origin, the session's request token and a live
+    // session, so a visitor with no session cannot make this process parse text.
+    guard_write(&bff, &visit, &headers).await?;
+    if request.markdown.len() > strata_substrate::markdown::MAX_SOURCE_BYTES {
         return Err(Failure::new(
             ErrorCode::Invalid,
             "The text is too long to preview.",
