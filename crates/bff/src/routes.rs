@@ -252,6 +252,24 @@ pub fn origin_allowed(bff: &Bff, site: &TenantId, headers: &HeaderMap) -> bool {
     })
 }
 
+/// Call the backend as this visit under a key the route read itself (from the body or required of
+/// the caller), in place of the key the visit carries.
+pub async fn backend_keyed<T: DeserializeOwned>(
+    bff: &Bff,
+    visit: &Visit,
+    path: &str,
+    body: &Json_,
+    key: Option<&str>,
+) -> Result<T, Failure> {
+    let keyed = Visit {
+        idempotency_key: key
+            .map(str::to_string)
+            .or_else(|| visit.idempotency_key.clone()),
+        ..visit.clone()
+    };
+    backend(bff, &keyed, path, body).await
+}
+
 /// Call the backend's internal API as this visit.
 ///
 /// Implements: H-007
