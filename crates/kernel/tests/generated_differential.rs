@@ -54,19 +54,6 @@
 //!      `properties.rs`, with the writes of settings, `DefineTeam` and `AddTeamMember`. The functions of the other intents are mirrored all the same (the conferral
 //!      of a role, the owner that remains, the reserved `team:` prefix, the rewrite of records
 //!      by a schema change), each with examples in the specification.
-//!   5. Not exercised: a list nested three deep in a stored value. The generated limit and
-//!      size functions (`value-limit-problem`, `value-json-bytes`) look two levels into a list
-//!      where `limits.rs` looks as deep as there are lists: they were written before specc
-//!      compiled structural recursion (WG-5133) and are not restated yet; a field admits a list
-//!      of scalars only, so such a value is a type mismatch
-//!      whose only other effect is the order of two refusals on a record over the size limit.
-//!      The corpus draws no nested list.
-//!   6. Not exercised: a policy on every object whose condition reads a field is found by
-//!      `policy-problems` as a condition that does not check against no fields, where the
-//!      hand-written `mentions_field` walks the expression (a recursion `policy-problems` does
-//!      not use yet, though specc compiles it since WG-5133). The two
-//!      differ for a condition that fails to check for another reason, or that reads a field in
-//!      a branch that never runs. The corpus defines no policy on every object.
 //!   7. Not exercised, and not mirrored: the bounds the kernel checks on a definition that the
 //!      specification does not state yet (specc compiles durations and structural recursion
 //!      since WG-5132 and WG-5133, but the functions are not written): retry delays, attempt
@@ -177,10 +164,15 @@
 //! 13); `compare_read` fails on a read of a planned query (difference 13); `compare_attributed`
 //! fails on an update that changes a reference (difference 2). Difference 1 is compared through
 //! an adjustment (the detail's prefix) and the run key of difference 9 through another
-//! (`hash_run_keys`). Differences 3 to 6 are guarded by the operation generator drawing nothing
-//! that reaches them.
+//! (`hash_run_keys`). Differences 3 and 4 are guarded by the operation generator drawing nothing
+//! that reaches them. (Numbers 5 and 6 are free: their differences are mirrored now.)
 //!
-//! Mirrored, so no longer differences: a policy condition of a transition that follows a
+//! Mirrored, so no longer differences: the limits and sizes of a stored value at any depth
+//! (`value-limit-problem`, `value-json-bytes`, restated by structural recursion; WG-5133),
+//! compared on lists nested two and three deep (`BigShape::DeepString`, `DeepList`, `DeepFine`);
+//! a policy on every object whose condition reads a field (`mentions-field` in
+//! `policy-problems`, the kernel's `mentions_field`; WG-5133), compared on the policies of
+//! `SchemaOp::AnyObjectPolicy`; a policy condition of a transition that follows a
 //! reference, through the lookup the snapshot gives, and the `InsufficientState` naming the record
 //! it needs when the snapshot does not cover it (`authorize-needing`, `require`; WG-5132,
 //! WG-5133), compared by `compare_attributed` on a policy that reads `record.author.name`, over
@@ -333,6 +325,13 @@ enum BigShape {
     LongList,
     /// A list of 1000 items.
     LimitList,
+    /// A string of 65537 bytes three lists deep in `tags`: a limit `limits.rs` finds at any depth
+    /// (WG-5133), and a type mismatch, since a field admits a list of scalars only.
+    DeepString,
+    /// A list of 1001 items two lists deep in `tags`.
+    DeepList,
+    /// Lists nested three deep within every limit: only the type mismatch.
+    DeepFine,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -385,6 +384,10 @@ enum SchemaOp {
     /// posting of the unit `credits`.
     Ledger(u8),
     DefineLedgerTrigger,
+    /// A policy on every object (WG-5133): 0 whose condition reads only `$created_by`, 1 that
+    /// reads a field in a branch that never runs, 2 that reads no field and names a role the
+    /// tenant does not define, 3 that follows a reference.
+    AnyObjectPolicy(u8),
 }
 
 const MEMBERS: [&str; 5] = ["owner", "editor", "writer1", "writer2", "stranger"];
@@ -423,6 +426,7 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         1 => any::<bool>().prop_map(SchemaOp::GrantProductCapability),
         5 => (0u8..13).prop_map(SchemaOp::Ledger),
         1 => Just(SchemaOp::DefineLedgerTrigger),
+        2 => (0u8..4).prop_map(SchemaOp::AnyObjectPolicy),
     ];
     let big = prop_oneof![
         Just(BigShape::LongTitle),
@@ -433,6 +437,9 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         Just(BigShape::FatRecord),
         Just(BigShape::LongList),
         Just(BigShape::LimitList),
+        Just(BigShape::DeepString),
+        Just(BigShape::DeepList),
+        Just(BigShape::DeepFine),
     ];
     let kind = prop_oneof![
         1 => ("[a-z ]{0,4}", 0usize..2).prop_map(|(name, owner)| OpKind::CreateTenant { name, owner }),
@@ -527,6 +534,18 @@ fn intent_of(op: &Op) -> Intent {
                 }
                 BigShape::LimitList => {
                     fields.insert(field("tags"), Value::List(vec![text("x"); 1000]));
+                }
+                BigShape::DeepString => {
+                    let deep = Value::List(vec![Value::List(vec![long("a", 65_537)])]);
+                    fields.insert(field("tags"), Value::List(vec![deep]));
+                }
+                BigShape::DeepList => {
+                    let deep = Value::List(vec![Value::List(vec![text("x"); 1001])]);
+                    fields.insert(field("tags"), Value::List(vec![deep]));
+                }
+                BigShape::DeepFine => {
+                    let deep = Value::List(vec![Value::List(vec![text("x")])]);
+                    fields.insert(field("tags"), Value::List(vec![deep, text("y")]));
                 }
             }
             match id {
@@ -717,6 +736,9 @@ fn intent_of(op: &Op) -> Intent {
                     )],
                 },
                 SchemaOp::Ledger(kind) => ledger_change(*kind),
+                SchemaOp::AnyObjectPolicy(kind) => {
+                    SchemaChange::DefinePolicy(any_object_policy(*kind))
+                }
                 SchemaOp::DefineLedgerTrigger => SchemaChange::DefineTrigger(TriggerDef {
                     id: TriggerId::new("on_post").unwrap(),
                     on: TriggerEvent::LedgerPosted {
@@ -1432,6 +1454,49 @@ struct Tally {
     attributed: usize,
     /// Of those on a partial snapshot, the ones the kernel answered with `InsufficientState`.
     attributed_insufficient: usize,
+}
+
+/// The policies on every object of `SchemaOp::AnyObjectPolicy` (WG-5133): only the first is
+/// accepted; the second and fourth read a field (in a branch that never runs, and through a
+/// reference), which `mentions_field` and the generated `mentions-field` find; the third reads
+/// no field and fails its check on a role the tenant does not define.
+fn any_object_policy(kind: u8) -> PolicyDef {
+    let status = || {
+        eq(
+            var(Scope::Record, "status"),
+            Expr::Lit(Value::Str("x".into())),
+        )
+    };
+    let (id, condition) = match kind {
+        0 => (
+            "any_own",
+            eq(var(Scope::Record, "$created_by"), Expr::Principal),
+        ),
+        1 => (
+            "any_branch",
+            Expr::If(
+                Box::new(Expr::Lit(Value::Bool(true))),
+                Box::new(Expr::Lit(Value::Bool(true))),
+                Box::new(status()),
+            ),
+        ),
+        2 => ("any_ghost", Expr::HasRole(role("nobody_has_this"))),
+        _ => (
+            "any_through",
+            Expr::Not(Box::new(Expr::IsNull(Box::new(Expr::Through(
+                Scope::Record,
+                "author".into(),
+                "name".into(),
+            ))))),
+        ),
+    };
+    PolicyDef {
+        id: PolicyId::new(id).unwrap(),
+        role: role("writer"),
+        resource: Resource::AnyObject,
+        actions: BTreeSet::from([Action::Delete]),
+        condition: Some(condition),
+    }
 }
 
 /// A writer may update a note whose author record has a name: a policy that follows a
