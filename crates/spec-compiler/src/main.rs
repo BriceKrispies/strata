@@ -11,6 +11,8 @@
 //! specc check-scenarios --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
 //! specc web          --spec <file> --out <dir> [--spec-hash <hash>]
 //! specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]
+//! specc catalogue    --spec <file> --out <dir> [--spec-hash <hash>]
+//! specc check-catalogue --spec <file> --out <dir> [--spec-hash <hash>]
 //! ```
 //!
 //! `--spec-hash <hash>` is the specification's semantic hash as `exegra validate` reports it
@@ -33,6 +35,10 @@
 //! is the origin the journeys' absolute addresses were written against, which the tests move to
 //! `STRATA_E2E_BASE_URL` when that is set; journeys whose id starts with `--expect-fail-prefix`
 //! are generated as tests that must fail (the fixtures that show each assertion can fail).
+//!
+//! `catalogue` and `check-catalogue` write `catalogue.md` (`strata_spec_compiler::catalogue`), the
+//! compact capability catalogue of the platform, conventionally into `specifications`; the header
+//! carries the semantic hash like every other generated file.
 //!
 //! `deploy` and `check-deploy` do for the deployment files (a compose stack, Kubernetes
 //! manifests and Prometheus alert rules; see `strata_spec_compiler::deploy`) what `generate`
@@ -59,8 +65,8 @@ use std::process::ExitCode;
 
 use strata_spec_compiler::emit::relative_path;
 use strata_spec_compiler::{
-    deploy, e2e, generate, generate_with_core, model_core, output, scenarios, web, GeneratedFile,
-    Options, RuntimeDependency,
+    catalogue, deploy, e2e, generate, generate_with_core, model_core, output, scenarios, web,
+    GeneratedFile, Options, RuntimeDependency,
 };
 
 const USAGE: &str = "usage:
@@ -73,7 +79,9 @@ const USAGE: &str = "usage:
   specc scenarios       --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
   specc check-scenarios --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
   specc web          --spec <file> --out <dir> [--spec-hash <hash>]
-  specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]";
+  specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]
+  specc catalogue    --spec <file> --out <dir> [--spec-hash <hash>]
+  specc check-catalogue --spec <file> --out <dir> [--spec-hash <hash>]";
 
 /// The runtime crate of the checkout specc was built from.
 const DEFAULT_RUNTIME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime");
@@ -90,6 +98,8 @@ enum Command {
     CheckScenarios,
     Web,
     CheckWeb,
+    Catalogue,
+    CheckCatalogue,
 }
 
 struct Args {
@@ -119,6 +129,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         Some((c, rest)) if c == "check-scenarios" => (Command::CheckScenarios, rest),
         Some((c, rest)) if c == "web" => (Command::Web, rest),
         Some((c, rest)) if c == "check-web" => (Command::CheckWeb, rest),
+        Some((c, rest)) if c == "catalogue" => (Command::Catalogue, rest),
+        Some((c, rest)) if c == "check-catalogue" => (Command::CheckCatalogue, rest),
         Some((c, _)) => return Err(format!("unknown command \"{c}\"")),
         None => return Err("no command given".to_string()),
     };
@@ -173,9 +185,11 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             | Command::CheckE2e
             | Command::Web
             | Command::CheckWeb
+            | Command::Catalogue
+            | Command::CheckCatalogue
     );
     if deploys && crate_name.is_some() {
-        return Err("--crate-name does not apply to deploy or e2e".to_string());
+        return Err("--crate-name does not apply to deploy, e2e, web or catalogue".to_string());
     }
     let end_to_end = matches!(command, Command::E2e | Command::CheckE2e);
     if !end_to_end && (origin.is_some() || expect_fail_prefix.is_some()) {
@@ -291,6 +305,9 @@ fn run() -> ExitCode {
     if matches!(args.command, Command::Web | Command::CheckWeb) {
         return run_web(&args, &text);
     }
+    if matches!(args.command, Command::Catalogue | Command::CheckCatalogue) {
+        return run_catalogue(&args, &text);
+    }
     if matches!(args.command, Command::Scenarios | Command::CheckScenarios) {
         return run_scenarios(&args, &text);
     }
@@ -333,7 +350,9 @@ fn run() -> ExitCode {
         | Command::Scenarios
         | Command::CheckScenarios
         | Command::Web
-        | Command::CheckWeb => ExitCode::from(2),
+        | Command::CheckWeb
+        | Command::Catalogue
+        | Command::CheckCatalogue => ExitCode::from(2),
     }
 }
 
@@ -441,6 +460,27 @@ fn run_web(args: &Args, text: &str) -> ExitCode {
     match args.command {
         Command::CheckWeb => run_check(&args.out, &files),
         _ => run_generate(&args.out, &files),
+    }
+}
+
+fn run_catalogue(args: &Args, text: &str) -> ExitCode {
+    let output = match catalogue::generate(&args.header_source(), text) {
+        Ok(output) => output,
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprintln!("{d}");
+            }
+            eprintln!(
+                "specc: refused {} with {} diagnostic(s); nothing was written",
+                args.spec,
+                diagnostics.len()
+            );
+            return ExitCode::from(1);
+        }
+    };
+    match args.command {
+        Command::CheckCatalogue => run_check(&args.out, &output.files),
+        _ => run_generate(&args.out, &output.files),
     }
 }
 

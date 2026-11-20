@@ -10,7 +10,8 @@
 // Steps, in order:
 //   0. specc check: crates/model and its pure crate crates/model-core are exactly what the compiler
 //      writes from the specification; check-web and check-e2e do the same for web/src/generated,
-//      tests/e2e/generated (the journeys) and tests/e2e/step-checks (the step fixtures).
+//      tests/e2e/generated (the journeys) and tests/e2e/step-checks (the step fixtures);
+//      check-catalogue does the same for specifications/catalogue.md.
 //   1. cargo test --workspace, lake build, node --test (web), npm run check (tsc), recorded under
 //      var/test-results (at most two jobs). Not run with --no-test.
 //   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata): validate the
@@ -231,6 +232,13 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
   });
   check('specc check-e2e (tests/e2e/step-checks is generated from the step fixtures)', steps.ok,
     steps.ok ? 'up to date' : `${exitText(steps)}: ${lastLine(steps.out)}; run npm run generate and commit`);
+
+  const catalogue = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check-catalogue', '--spec', 'specifications/spec.jsonc', '--out', 'specifications', ...hashArgs], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check-catalogue (specifications/catalogue.md is generated from the specification at its semantic hash)', catalogue.ok,
+    catalogue.ok ? 'up to date' : `${exitText(catalogue)}: ${lastLine(catalogue.out)}; run npm run generate and commit`);
 }
 
 // ---------------------------------------------------------------------------------------------

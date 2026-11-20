@@ -13,6 +13,7 @@
 //   4. The browser journeys: tests/e2e/generated, from the same specification's uiScenarios,
 //      written against the stack on http://127.0.0.1:4200 (STRATA_E2E_BASE_URL moves them).
 //   5. The step fixtures: tests/e2e/step-checks, from tests/e2e/step-fixtures/spec.jsonc.
+//   6. The capability catalogue: specifications/catalogue.md, from the same specification.
 //
 // The headers carry the specification's semantic hash, which Exegra reports (see spec-hash.mjs).
 //
@@ -78,6 +79,9 @@ specc('generate the browser journeys (tests/e2e/generated)', [
 ]);
 specc('generate the step fixtures (tests/e2e/step-checks)', [
   'e2e', '--spec', 'tests/e2e/step-fixtures/spec.jsonc', '--out', 'tests/e2e/step-checks', '--expect-fail-prefix', 'violates-',
+]);
+specc('generate the capability catalogue (specifications/catalogue.md)', [
+  'catalogue', '--spec', 'specifications/spec.jsonc', '--out', 'specifications', '--spec-hash', specHash,
 ]);
 
 console.log('\nregenerate: done');
