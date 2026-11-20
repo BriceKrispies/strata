@@ -12,13 +12,19 @@
 //!   except the one erasure makes, which clears `caused_by` and nothing else (LDG-027,
 //!   LDG-028). `caused_by` lives in its column only, so the JSON in `data` never names a person
 //!   and is never rewritten.
+//! - `ledger_limits`: the limit of one account, one row per unit, owner and scope, written by
+//!   `PutLimit` and `RemoveLimit` (WG-5172, [`ACCOUNT_LIMITS_MIGRATION`]). Up to 10,000 of them
+//!   no longer load with every schema; a posting loads the one row of its account.
+//! - `ledger_accounts.oldest_bucket`: the start of the oldest bucket of credit an account holds,
+//!   indexed with the unit so that the accounts whose credit is due to expire are found without a
+//!   scan (WG-5169, [`EXPIRY_MIGRATION`]).
 
 use super::{db, decode, encode};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use strata_kernel::ledger::{account_key, Anonymised};
 use strata_kernel::{
-    LedgerAccount, LedgerDelta, LedgerEntry, LedgerNeed, LedgerOrder, LedgerOwner, PrincipalId,
-    StateRevision, TenantState,
+    LedgerAccount, LedgerDelta, LedgerEntry, LedgerLimit, LedgerNeed, LedgerOrder, LedgerOwner,
+    PrincipalId, StateRevision, TenantState,
 };
 use strata_runtime::sqlite::Migration;
 use strata_storage_api::{StoreError, StoreResult};
@@ -71,6 +77,59 @@ pub(crate) const MIGRATION: Migration = Migration {
     ",
 };
 
+/// The tenant migration step that moves the limits of single accounts out of the tenant schema
+/// into the ledger's own storage (WG-5172). Its number is not chosen here: the coordinator numbers
+/// the steps of a wave, so this one is added at the end of the list under this name.
+///
+/// The rows are made from the schema of the tenant (`tenant.schema`, canonical JSON) by SQLite's
+/// JSON functions, and the schema is rewritten without them; the copies in `schema_history` are
+/// history and are left as they were. A limit of a unit (no owner) stays in the schema.
+pub(crate) const ACCOUNT_LIMITS_MIGRATION: Migration = Migration {
+    version: 17,
+    name: "tenant ledger account limits out of the schema",
+    sql: "
+    CREATE TABLE ledger_limits (
+        unit       TEXT NOT NULL,
+        owner_kind INTEGER NOT NULL CHECK (owner_kind IN (1, 2)),
+        owner_name TEXT NOT NULL,
+        scope      TEXT NOT NULL,
+        revision   INTEGER NOT NULL,
+        data       TEXT NOT NULL,
+        PRIMARY KEY (unit, owner_kind, owner_name, scope)
+    );
+    CREATE INDEX ledger_limits_owner ON ledger_limits(owner_kind, owner_name);
+    INSERT OR REPLACE INTO ledger_limits (unit, owner_kind, owner_name, scope, revision, data)
+    SELECT json_extract(l.value, '$.unit'),
+           CASE WHEN json_type(l.value, '$.owner.principal') IS NOT NULL THEN 1 ELSE 2 END,
+           COALESCE(json_extract(l.value, '$.owner.principal.principal'),
+                    json_extract(l.value, '$.owner.pool.pool')),
+           COALESCE(json_extract(l.value, '$.scope'), ''),
+           0,
+           json(l.value)
+      FROM tenant, json_each(tenant.schema, '$.ledger.limits') AS l
+     WHERE json_type(l.value, '$.owner') IS NOT NULL;
+    UPDATE tenant
+       SET schema = json_set(schema, '$.ledger.limits',
+             json((SELECT json_group_array(json(l.value))
+                     FROM json_each(tenant.schema, '$.ledger.limits') AS l
+                    WHERE json_type(l.value, '$.owner') IS NULL)))
+     WHERE json_type(schema, '$.ledger.limits') IS NOT NULL;
+    ",
+};
+
+/// The tenant migration step that indexes the accounts by the start of their oldest bucket of
+/// credit (WG-5169). Added at the end of the list under this name; the coordinator numbers it.
+/// Accounts that exist already have no bucket, and the column is null for them.
+pub(crate) const EXPIRY_MIGRATION: Migration = Migration {
+    version: 18,
+    name: "tenant ledger index of the oldest credit bucket",
+    sql: "
+    ALTER TABLE ledger_accounts ADD COLUMN oldest_bucket INTEGER;
+    CREATE INDEX ledger_accounts_expiry ON ledger_accounts(unit, oldest_bucket, account_id)
+        WHERE oldest_bucket IS NOT NULL;
+    ",
+};
+
 /// The owner of a header as the columns that order and select on it: kind 0 for an erased
 /// owner, 1 for a principal, 2 for a pool, so that `ORDER BY owner_kind, owner_name` is the
 /// order of `Option<LedgerOwner>` (LDG-1543).
@@ -111,6 +170,24 @@ fn put_entry(state: &mut TenantState, data: &str, caused_by: Option<String>) -> 
         entries.sort_by_key(|e| e.sequence);
     }
     Ok(())
+}
+
+fn put_limit(state: &mut TenantState, data: &str) -> StoreResult<()> {
+    let limit: LedgerLimit = decode(data, "ledger limit")?;
+    let limits = state
+        .ledger
+        .get_or_insert_with(strata_kernel::ledger::empty_state)
+        .limits
+        .get_or_insert_with(Vec::new);
+    limits.push(limit);
+    limits.sort();
+    Ok(())
+}
+
+/// The key columns of the limit of one account.
+fn limit_columns(owner: &LedgerOwner, scope: &str) -> (i64, String, String) {
+    let (kind, name) = owner_columns(&Some(owner.clone()));
+    (kind, name.unwrap_or_default(), scope.to_string())
 }
 
 fn select_accounts(
@@ -220,6 +297,43 @@ pub(crate) fn load(tx: &Connection, state: &mut TenantState, need: &LedgerNeed) 
                 put_account(state, &data)?;
             }
         }
+        LedgerNeed::Limit { owner, unit, scope } => {
+            let (kind, name, scope) = limit_columns(owner, scope.as_str());
+            for data in select_accounts(
+                tx,
+                "SELECT data FROM ledger_limits
+                 WHERE unit = ?1 AND owner_kind = ?2 AND owner_name = ?3 AND scope = ?4",
+                &[&unit.as_str(), &kind, &name, &scope],
+            )? {
+                put_limit(state, &data)?;
+            }
+        }
+        LedgerNeed::Limits => {
+            for data in select_accounts(
+                tx,
+                "SELECT data FROM ledger_limits ORDER BY unit, owner_kind, owner_name, scope",
+                &[],
+            )? {
+                put_limit(state, &data)?;
+            }
+        }
+        LedgerNeed::Expiring {
+            unit,
+            cutoff,
+            limit,
+        } => {
+            // The accounts whose oldest bucket is due, oldest first: the index on unit and the
+            // start of the oldest bucket, never a walk of the accounts of the unit.
+            for data in select_accounts(
+                tx,
+                "SELECT data FROM ledger_accounts
+                 WHERE unit = ?1 AND oldest_bucket IS NOT NULL AND oldest_bucket <= ?2
+                 ORDER BY oldest_bucket, account_id LIMIT ?3",
+                &[&unit.as_str(), &cutoff.0, &i64::from(*limit)],
+            )? {
+                put_account(state, &data)?;
+            }
+        }
     }
     Ok(())
 }
@@ -240,6 +354,13 @@ pub(crate) fn load_all(conn: &Connection, state: &mut TenantState) -> StoreResul
     )? {
         put_entry(state, &data, caused_by)?;
     }
+    for data in select_accounts(
+        conn,
+        "SELECT data FROM ledger_limits ORDER BY unit, owner_kind, owner_name, scope",
+        &[],
+    )? {
+        put_limit(state, &data)?;
+    }
     Ok(())
 }
 
@@ -256,12 +377,14 @@ pub(crate) fn apply(
             let (kind, name) = owner_columns(&account.owner);
             tx.execute(
                 "INSERT INTO ledger_accounts
-                     (account_id, owner_kind, owner_name, unit, scope, balance, last_sequence, revision, data)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                     (account_id, owner_kind, owner_name, unit, scope, balance, last_sequence, revision, data,
+                      oldest_bucket)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(account_id) DO UPDATE SET
                      owner_kind = excluded.owner_kind, owner_name = excluded.owner_name,
                      balance = excluded.balance, last_sequence = excluded.last_sequence,
-                     revision = excluded.revision, data = excluded.data",
+                     revision = excluded.revision, data = excluded.data,
+                     oldest_bucket = excluded.oldest_bucket",
                 params![
                     account_key(&account.account),
                     kind,
@@ -271,8 +394,40 @@ pub(crate) fn apply(
                     account.balance.0,
                     account.last_sequence as i64,
                     revision.0 as i64,
-                    encode(account)
+                    encode(account),
+                    strata_kernel::ledger_expiry::oldest_bucket(account).map(|start| start.0)
                 ],
+            )
+            .map_err(db)?;
+        }
+        LedgerDelta::PutLimit(limit) => {
+            let owner = limit.owner.as_ref().ok_or_else(|| {
+                StoreError::Invalid("a limit of a unit is not an account limit".into())
+            })?;
+            let (kind, name, scope) =
+                limit_columns(owner, limit.scope.as_ref().map_or("", |s| s.as_str()));
+            tx.execute(
+                "INSERT INTO ledger_limits (unit, owner_kind, owner_name, scope, revision, data)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(unit, owner_kind, owner_name, scope) DO UPDATE SET
+                     revision = excluded.revision, data = excluded.data",
+                params![
+                    limit.unit.as_str(),
+                    kind,
+                    name,
+                    scope,
+                    revision.0 as i64,
+                    encode(limit)
+                ],
+            )
+            .map_err(db)?;
+        }
+        LedgerDelta::RemoveLimit { owner, unit, scope } => {
+            let (kind, name, scope) = limit_columns(owner, scope.as_str());
+            tx.execute(
+                "DELETE FROM ledger_limits
+                 WHERE unit = ?1 AND owner_kind = ?2 AND owner_name = ?3 AND scope = ?4",
+                params![unit.as_str(), kind, name, scope],
             )
             .map_err(db)?;
         }
@@ -358,6 +513,12 @@ pub(crate) fn anonymise(tx: &Transaction<'_>, principal: &PrincipalId) -> StoreR
             params![principal.as_str()],
         )
         .map_err(db)? as u64;
+    // The limits of the accounts the principal owned name it too.
+    tx.execute(
+        "DELETE FROM ledger_limits WHERE owner_kind = 1 AND owner_name = ?1",
+        params![principal.as_str()],
+    )
+    .map_err(db)?;
     Ok(done)
 }
 

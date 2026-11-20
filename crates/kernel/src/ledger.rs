@@ -5,10 +5,14 @@
 //!
 //! Where the parts live:
 //!
-//! - The units, pools and limits are tenant metadata, `TenantSchema::ledger`
+//! - The units, pools and the limits of units are tenant metadata, `TenantSchema::ledger`
 //!   ([`LedgerDeclarations`]), changed by the schema changes `DeclareLedgerUnit`,
 //!   `DeclareLedgerPool`, `SetLedgerLimit` and `RemoveLedgerDefinition` ([`apply_change`],
-//!   checked by [`declaration_problems`] and [`check_removals`]).
+//!   checked by [`declaration_problems`] and [`check_removals`]). The limit of one account is
+//!   not held by the schema: the same schema changes write it to the ledger's own storage
+//!   ([`limit_ops`], `LedgerState::limits`) and a posting loads the one it needs
+//!   ([`LedgerNeed::Limit`]). A unit may declare an expiry of its credits
+//!   ([`crate::ledger_expiry`]); reads may be bounded by policies ([`crate::ledger_policy`]).
 //! - The accounts and entries are state, `TenantState::ledger` ([`LedgerState`]), loaded through
 //!   [`Need::Ledger`] and changed only by [`DeltaOp::Ledger`]. An account's header (balance, last
 //!   entry number, the credits of the current periods) loads without its entries (K-100).
@@ -29,6 +33,8 @@ use crate::intent::{
     Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, ErrorKind, EventBody, Output,
     SchemaChange,
 };
+use crate::ledger_expiry;
+use crate::ledger_policy;
 use crate::limits;
 use crate::rules::{holds_any, insufficient, Lookup};
 use crate::schema::{Grant, TenantSchema};
@@ -163,7 +169,7 @@ fn pool_declared(schema: &TenantSchema, pool: &crate::types::LedgerPoolName) -> 
 // Periods (LDG-015)
 
 /// Days since 1970-01-01 of a civil date (proleptic Gregorian), after H. Hinnant.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let y = if month <= 2 { year - 1 } else { year };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
@@ -174,7 +180,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 }
 
 /// The civil year and month of a count of days since 1970-01-01.
-fn civil_month(days: i64) -> (i64, i64) {
+pub(crate) fn civil_month(days: i64) -> (i64, i64) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -238,12 +244,32 @@ fn is_account_limit(
     &limit.unit == unit && limit.owner.as_ref() == Some(owner) && scope_text(&limit.scope) == scope
 }
 
-/// The limits that apply to the account of `owner`, `unit` and `scope` under `schema`.
-pub fn limits_of(
-    schema: &TenantSchema,
+/// The account limit of `owner`, `unit` and `scope` the snapshot holds, if there is one. Account
+/// limits live in the ledger's own storage and load by their own need ([`LedgerNeed::Limit`]), so
+/// that a decision loads the limit of its account and no other (D-6554, LDG-1550).
+fn account_limit<'a>(
+    tenant: &'a TenantState,
     owner: &LedgerOwner,
     unit: &LedgerUnit,
     scope: &str,
+) -> Option<&'a LedgerLimit> {
+    tenant
+        .ledger
+        .as_ref()
+        .and_then(|ledger| ledger.limits.as_ref())
+        .and_then(|limits| {
+            limits
+                .iter()
+                .find(|limit| is_account_limit(limit, owner, unit, scope))
+        })
+}
+
+/// The limits that apply to an account of `unit` under `schema`, given the limit of the account
+/// itself: each of its own limits, and the limit of the unit for each one it does not set.
+pub fn limits_of(
+    schema: &TenantSchema,
+    of_account: Option<&LedgerLimit>,
+    unit: &LedgerUnit,
 ) -> Limits {
     let Some(ledger) = schema.ledger.as_ref() else {
         return Limits::default();
@@ -252,10 +278,6 @@ pub fn limits_of(
         .limits
         .iter()
         .find(|limit| &limit.unit == unit && limit.owner.is_none());
-    let of_account = ledger
-        .limits
-        .iter()
-        .find(|limit| is_account_limit(limit, owner, unit, scope));
     let floor = |limit: &LedgerLimit| limit.floor.map(|a| a.0);
     let cap = |limit: &LedgerLimit| limit.cap.map(|a| a.0);
     let period = |limit: &LedgerLimit| limit.period_cap.zip(limit.period);
@@ -298,6 +320,12 @@ pub fn posting_needs(tenant: &TenantId, request: &LedgerPostingRequest) -> Vec<N
         Need::Ledger(LedgerNeed::EntryByKey {
             account,
             key: request.idempotency_key.clone(),
+        }),
+        // The limit of this account and no other (D-6554, WG-5172).
+        Need::Ledger(LedgerNeed::Limit {
+            owner: request.owner.clone(),
+            unit: request.unit.clone(),
+            scope: scope_value(scope_text(&request.scope)),
         }),
     ]
 }
@@ -406,6 +434,17 @@ pub fn post_after(
             format!(
                 "an idempotency key is 1 to {} bytes",
                 limits::MAX_LEDGER_KEY_BYTES
+            ),
+        ));
+    }
+    if key.starts_with(ledger_expiry::EXPIRY_KEY_PREFIX) {
+        return Err(refused(
+            evidence,
+            ErrorKind::InvalidIntent,
+            "ledger:invalid-key",
+            format!(
+                "the key prefix {} belongs to the expiry of credits",
+                ledger_expiry::EXPIRY_KEY_PREFIX
             ),
         ));
     }
@@ -535,7 +574,19 @@ pub fn post_after(
 
     // LDG-013: a posting may leave a balance outside a limit only when it moves a balance that is
     // already outside it back toward it.
-    let applying = limits_of(&tenant.schema, &request.owner, unit, scope);
+    require(
+        state,
+        LedgerNeed::Limit {
+            owner: request.owner.clone(),
+            unit: unit.clone(),
+            scope: scope_value(scope),
+        },
+    )?;
+    let applying = limits_of(
+        &tenant.schema,
+        account_limit(tenant, &request.owner, unit, scope),
+        unit,
+    );
     if let Some(floor) = applying.floor {
         let toward = before < floor && amount > 0;
         if after < floor && !toward {
@@ -612,6 +663,21 @@ pub fn post_after(
             }
         })
         .collect();
+    // LDG-1545: a unit that declares an expiry keeps the remaining credit of each period, and a
+    // debit consumes the oldest first.
+    let buckets = match ledger_expiry::expiry_of(&tenant.schema, unit) {
+        Some(expiry) => ledger_expiry::header_buckets(ledger_expiry::apply_entry(
+            current
+                .as_ref()
+                .and_then(|a| a.buckets.as_deref())
+                .unwrap_or(&[]),
+            before,
+            amount,
+            ctx.now,
+            expiry,
+        )),
+        None => current.as_ref().and_then(|a| a.buckets.clone()),
+    };
     let next = LedgerAccount {
         account,
         owner: match &current {
@@ -624,6 +690,7 @@ pub fn post_after(
         last_sequence: last + 1,
         opened_at: current.as_ref().map_or(ctx.now, |a| a.opened_at),
         periods,
+        buckets,
     };
     let entry = LedgerEntry {
         account,
@@ -672,7 +739,7 @@ pub fn post_after(
 }
 
 /// The balance answer of a header.
-fn balance_of(account: &LedgerAccount) -> LedgerBalance {
+pub(crate) fn balance_of(account: &LedgerAccount) -> LedgerBalance {
     LedgerBalance {
         account: account.account,
         unit: account.unit.clone(),
@@ -802,6 +869,19 @@ pub fn apply(tenant: &mut TenantState, op: &LedgerDelta) {
                 entries.sort_by_key(|e| e.sequence);
             }
         }
+        LedgerDelta::PutLimit(limit) => {
+            let scope = scope_text(&limit.scope).to_string();
+            let owner = limit.owner.clone();
+            let limits = ledger.limits.get_or_insert_with(Vec::new);
+            limits.retain(|l| !same_limit(l, &limit.unit, &owner, &scope));
+            limits.push(limit.clone());
+            limits.sort();
+        }
+        LedgerDelta::RemoveLimit { owner, unit, scope } => {
+            if let Some(limits) = ledger.limits.as_mut() {
+                limits.retain(|l| !is_account_limit(l, owner, unit, scope.as_str()));
+            }
+        }
     }
 }
 
@@ -810,15 +890,21 @@ pub fn empty_state() -> LedgerState {
     LedgerState {
         accounts: Default::default(),
         entries: Default::default(),
+        limits: None,
     }
 }
 
 /// A ledger state that holds nothing is none at all, so a snapshot without accounts reads and
 /// hashes as one of a tenant that never posted.
 pub fn tidy_state(ledger: &mut Option<LedgerState>) {
+    if let Some(l) = ledger.as_mut() {
+        if l.limits.as_ref().is_some_and(Vec::is_empty) {
+            l.limits = None;
+        }
+    }
     if ledger
         .as_ref()
-        .is_some_and(|l| l.accounts.is_empty() && l.entries.is_empty())
+        .is_some_and(|l| l.accounts.is_empty() && l.entries.is_empty() && l.limits.is_none())
     {
         *ledger = None;
     }
@@ -855,6 +941,13 @@ pub fn partial(from: &LedgerState, need: &LedgerNeed, into: &mut LedgerState) {
         if !entries.iter().any(|e| e.sequence == entry.sequence) {
             entries.push(entry.clone());
             entries.sort_by_key(|e| e.sequence);
+        }
+    }
+    fn put_limit(into: &mut LedgerState, limit: &LedgerLimit) {
+        let limits = into.limits.get_or_insert_with(Vec::new);
+        if !limits.contains(limit) {
+            limits.push(limit.clone());
+            limits.sort();
         }
     }
     match need {
@@ -922,6 +1015,32 @@ pub fn partial(from: &LedgerState, need: &LedgerNeed, into: &mut LedgerState) {
                 put_account(into, found);
             }
         }
+        LedgerNeed::Limit { owner, unit, scope } => {
+            if let Some(found) = from
+                .limits
+                .iter()
+                .flatten()
+                .find(|l| is_account_limit(l, owner, unit, scope.as_str()))
+            {
+                put_limit(into, found);
+            }
+        }
+        LedgerNeed::Limits => {
+            for found in from.limits.iter().flatten() {
+                put_limit(into, found);
+            }
+        }
+        LedgerNeed::Expiring {
+            unit,
+            cutoff,
+            limit,
+        } => {
+            for account in
+                ledger_expiry::due_accounts(from.accounts.values(), unit, *cutoff, *limit as usize)
+            {
+                put_account(into, account);
+            }
+        }
     }
 }
 
@@ -953,6 +1072,12 @@ pub fn anonymise(ledger: &mut LedgerState, principal: &PrincipalId) -> Anonymise
             entry.caused_by = None;
             done.entries += 1;
         }
+    }
+    // The limits of the accounts the principal owned name it too.
+    if let Some(limits) = ledger.limits.as_mut() {
+        limits.retain(|l| {
+            !matches!(&l.owner, Some(LedgerOwner::Principal { principal: p }) if p == principal)
+        });
     }
     done
 }
@@ -1024,6 +1149,26 @@ pub fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<
                 Some(_) => format!("redeclare ledger pool {}", decl.pool),
                 None => format!("declare ledger pool {}", decl.pool),
             }
+        }
+        SchemaChange::SetLedgerLimit(limit) if limit.owner.is_some() => {
+            // The limit of one account is not held by the schema (WG-5172): [`limit_ops`] writes
+            // it to the ledger's storage in the same commit, and [`check_limits`] counts it.
+            let mut problems = Vec::new();
+            limit_problems(schema, limit, &mut problems);
+            if let Some(first) = problems.into_iter().next() {
+                return Err(first);
+            }
+            format!(
+                "set the limits of one account of ledger unit {}",
+                limit.unit
+            )
+        }
+        SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Limit {
+            unit,
+            owner: Some(_),
+            ..
+        }) => {
+            format!("remove a limit of one account of ledger unit {unit}")
         }
         SchemaChange::SetLedgerLimit(limit) => {
             let scope = scope_text(&limit.scope).to_string();
@@ -1108,6 +1253,15 @@ pub fn declaration_problems(schema: &TenantSchema, problems: &mut Vec<String>) {
         if &decl.unit != unit {
             problems.push(format!("ledger unit {unit}: declared under another name"));
         }
+        if let Some(expiry) = &decl.expiry {
+            if !(1..=ledger_expiry::MAX_BUCKETS as u32).contains(&expiry.periods) {
+                problems.push(format!(
+                    "ledger unit {unit}: an expiry is one to {} periods, not {}",
+                    ledger_expiry::MAX_BUCKETS,
+                    expiry.periods
+                ));
+            }
+        }
     }
     for (pool, decl) in &ledger.pools {
         if &decl.pool != pool {
@@ -1115,50 +1269,88 @@ pub fn declaration_problems(schema: &TenantSchema, problems: &mut Vec<String>) {
         }
     }
     for limit in &ledger.limits {
-        let at = format!("ledger limit of {}", limit.unit);
-        if !ledger.units.contains_key(&limit.unit) {
-            problems.push(format!("{at}: unknown ledger unit {}", limit.unit));
+        limit_problems(schema, limit, problems);
+    }
+}
+
+/// The problems of one limit against the declarations of `schema`: a unit or a pool that is not
+/// declared, a limit of a unit that names a scope, a floor above the cap, an amount out of range,
+/// a cap per period without its period (or the reverse), and a limit that sets nothing (CT-286).
+fn limit_problems(schema: &TenantSchema, limit: &LedgerLimit, problems: &mut Vec<String>) {
+    let Some(ledger) = schema.ledger.as_ref() else {
+        problems.push(format!(
+            "ledger limit of {}: unknown ledger unit {}",
+            limit.unit, limit.unit
+        ));
+        return;
+    };
+    let at = format!("ledger limit of {}", limit.unit);
+    if !ledger.units.contains_key(&limit.unit) {
+        problems.push(format!("{at}: unknown ledger unit {}", limit.unit));
+    }
+    match &limit.owner {
+        Some(LedgerOwner::Pool { pool }) if !ledger.pools.contains_key(pool) => {
+            problems.push(format!("{at}: unknown ledger pool {pool}"));
         }
-        match &limit.owner {
-            Some(LedgerOwner::Pool { pool }) if !ledger.pools.contains_key(pool) => {
-                problems.push(format!("{at}: unknown ledger pool {pool}"));
-            }
-            None if limit.scope.as_ref().is_some_and(|s| !s.as_str().is_empty()) => {
-                problems.push(format!("{at}: a limit of a unit names no scope"));
-            }
-            _ => {}
+        None if limit.scope.as_ref().is_some_and(|s| !s.as_str().is_empty()) => {
+            problems.push(format!("{at}: a limit of a unit names no scope"));
         }
-        if scope_text(&limit.scope).len() > limits::MAX_LEDGER_SCOPE_BYTES {
+        _ => {}
+    }
+    if scope_text(&limit.scope).len() > limits::MAX_LEDGER_SCOPE_BYTES {
+        problems.push(format!(
+            "{at}: a scope is at most {} bytes",
+            limits::MAX_LEDGER_SCOPE_BYTES
+        ));
+    }
+    if let (Some(floor), Some(cap)) = (limit.floor, limit.cap) {
+        if floor.0 > cap.0 {
             problems.push(format!(
-                "{at}: a scope is at most {} bytes",
-                limits::MAX_LEDGER_SCOPE_BYTES
+                "{at}: the floor {} is above the cap {}",
+                floor.0, cap.0
             ));
-        }
-        if let (Some(floor), Some(cap)) = (limit.floor, limit.cap) {
-            if floor.0 > cap.0 {
-                problems.push(format!(
-                    "{at}: the floor {} is above the cap {}",
-                    floor.0, cap.0
-                ));
-            }
-        }
-        for amount in [limit.floor, limit.cap].into_iter().flatten() {
-            if amount.0.abs() > limits::MAX_LEDGER_AMOUNT {
-                problems.push(format!(
-                    "{at}: {} is outside the range of an amount",
-                    amount.0
-                ));
-            }
-        }
-        if limit.period_cap.is_some() != limit.period.is_some() {
-            problems.push(format!(
-                "{at}: a cap per period needs its period, and a period its cap"
-            ));
-        }
-        if limit.floor.is_none() && limit.cap.is_none() && limit.period_cap.is_none() {
-            problems.push(format!("{at}: sets no limit"));
         }
     }
+    for amount in [limit.floor, limit.cap].into_iter().flatten() {
+        if amount.0.abs() > limits::MAX_LEDGER_AMOUNT {
+            problems.push(format!(
+                "{at}: {} is outside the range of an amount",
+                amount.0
+            ));
+        }
+    }
+    if limit.period_cap.is_some() != limit.period.is_some() {
+        problems.push(format!(
+            "{at}: a cap per period needs its period, and a period its cap"
+        ));
+    }
+    if limit.floor.is_none() && limit.cap.is_none() && limit.period_cap.is_none() {
+        problems.push(format!("{at}: sets no limit"));
+    }
+}
+
+/// The delta operations of the account limits among `changes`, in order: the limit of one account
+/// is written to, or removed from, the ledger's own storage in the commit of the schema change
+/// (WG-5172). The limits of a unit stay in the schema.
+pub fn limit_ops(changes: &[SchemaChange]) -> Vec<DeltaOp> {
+    changes
+        .iter()
+        .filter_map(|change| match change {
+            SchemaChange::SetLedgerLimit(limit) if limit.owner.is_some() => {
+                Some(DeltaOp::Ledger(LedgerDelta::PutLimit(limit.clone())))
+            }
+            SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Limit {
+                unit,
+                owner: Some(owner),
+                scope,
+            }) => Some(DeltaOp::Ledger(LedgerDelta::RemoveLimit {
+                owner: owner.clone(),
+                unit: unit.clone(),
+                scope: scope_value(scope_text(scope)),
+            })),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The needs of the ledger changes of a schema change: whether an account names a unit or a
@@ -1173,18 +1365,33 @@ pub fn schema_change_needs(changes: &[SchemaChange]) -> Vec<Need> {
             SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Pool { pool }) => {
                 Some(Need::Ledger(LedgerNeed::PoolUsed { pool: pool.clone() }))
             }
+            // The account limits, to count them against the ceiling (LDG-1550).
+            SchemaChange::SetLedgerLimit(limit) if limit.owner.is_some() => {
+                Some(Need::Ledger(LedgerNeed::Limits))
+            }
+            SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Limit {
+                unit,
+                owner: Some(owner),
+                scope,
+            }) => Some(Need::Ledger(LedgerNeed::Limit {
+                owner: owner.clone(),
+                unit: unit.clone(),
+                scope: scope_value(scope_text(scope)),
+            })),
             _ => None,
         })
         .collect()
 }
 
 /// LDG-1549: a unit or a pool that an account names is not removed. Refused with
-/// `StillReferenced`, after the checks in `evidence`.
+/// `StillReferenced`, after the checks in `evidence`. Also the checks of the limits of single
+/// accounts among the changes ([`check_limits`]).
 pub fn check_removals(
     lookup: Lookup<'_>,
     changes: &[SchemaChange],
     evidence: &mut Vec<Check>,
 ) -> Result<(), DomainError> {
+    check_limits(lookup, changes, evidence)?;
     for change in changes {
         let (need, what, used) = match change {
             SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Unit { unit }) => (
@@ -1219,6 +1426,96 @@ pub fn check_removals(
     Ok(())
 }
 
+/// The checks of the limits of single accounts among `changes`, which live in the ledger's
+/// storage and not in the schema (WG-5172): setting one past the ceiling of
+/// [`limits::MAX_LEDGER_ACCOUNT_LIMITS`] is refused with `LimitExceeded` (LDG-1550, "too-many"),
+/// and removing one that is not set is refused with `InvalidSchema`. The count includes the limits
+/// the changes before it in the same request set or remove.
+fn check_limits(
+    lookup: Lookup<'_>,
+    changes: &[SchemaChange],
+    evidence: &mut Vec<Check>,
+) -> Result<(), DomainError> {
+    let mut held: Option<Vec<LedgerLimit>> = None;
+    for change in changes {
+        match change {
+            SchemaChange::SetLedgerLimit(limit) if limit.owner.is_some() => {
+                if held.is_none() {
+                    let need = Need::Ledger(LedgerNeed::Limits);
+                    if !lookup.coverage.covers(&need) {
+                        return Err(insufficient(need));
+                    }
+                    held = Some(
+                        lookup
+                            .tenant
+                            .ledger
+                            .iter()
+                            .flat_map(|l| l.limits.iter().flatten())
+                            .filter(|l| l.owner.is_some())
+                            .cloned()
+                            .collect(),
+                    );
+                }
+                let all = held.as_mut().expect("the limits were just loaded");
+                let scope = scope_text(&limit.scope).to_string();
+                let exists = all
+                    .iter()
+                    .any(|l| same_limit(l, &limit.unit, &limit.owner, &scope));
+                if !exists && all.len() >= limits::MAX_LEDGER_ACCOUNT_LIMITS {
+                    let message = format!(
+                        "too-many: a tenant holds at most {} account limits",
+                        limits::MAX_LEDGER_ACCOUNT_LIMITS
+                    );
+                    evidence.push(Check::fail("ledger:too-many-limits", message.clone()));
+                    return Err(
+                        DomainError::new(ErrorKind::LimitExceeded, message).with(evidence.clone())
+                    );
+                }
+                all.retain(|l| !same_limit(l, &limit.unit, &limit.owner, &scope));
+                all.push(limit.clone());
+                evidence.push(Check::pass(
+                    "ledger:account-limits",
+                    format!("{} account limit(s) after the change", all.len()),
+                ));
+            }
+            SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Limit {
+                unit,
+                owner: Some(owner),
+                scope,
+            }) => {
+                let scope = scope_text(scope).to_string();
+                if let Some(all) = held.as_mut() {
+                    let before = all.len();
+                    all.retain(|l| !is_account_limit(l, owner, unit, &scope));
+                    if all.len() == before {
+                        return Err(no_such_limit(unit, evidence));
+                    }
+                    continue;
+                }
+                let need = Need::Ledger(LedgerNeed::Limit {
+                    owner: owner.clone(),
+                    unit: unit.clone(),
+                    scope: scope_value(&scope),
+                });
+                if !lookup.coverage.covers(&need) {
+                    return Err(insufficient(need));
+                }
+                if account_limit(lookup.tenant, owner, unit, &scope).is_none() {
+                    return Err(no_such_limit(unit, evidence));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn no_such_limit(unit: &LedgerUnit, evidence: &mut Vec<Check>) -> DomainError {
+    let message = format!("no such limit of ledger unit {unit}");
+    evidence.push(Check::fail("ledger:limit-exists", message.clone()));
+    DomainError::new(ErrorKind::InvalidSchema, message).with(evidence.clone())
+}
+
 fn accounts_of(tenant: &TenantState) -> impl Iterator<Item = &LedgerAccount> {
     tenant
         .ledger
@@ -1230,30 +1527,40 @@ fn accounts_of(tenant: &TenantState) -> impl Iterator<Item = &LedgerAccount> {
 // ------------------------------------------------------------------------------------------------
 // Reads (D-5011, D-6550 to D-6554)
 
+/// How a reader reaches the accounts it may read (D-6550, [`ledger_policy`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reach {
+    /// Every account and every entry: a holder of `ledger-read` that no ledger policy bounds, or
+    /// the owner of an account reading it.
+    Everything,
+    /// What the policies of the reader's roles permit, account by account and entry by entry.
+    Policies,
+}
+
 /// Who may read the account of `owner`: a holder of `ledger-read` (the owner of the tenant holds
-/// it) any account; a signed-in person, under `ledger-read-own`, an account the person owns
-/// (LDG-026, LDG-1541). Policies over the ledger as a resource (D-6550) are not yet held by the
-/// kernel: a holder of `ledger-read` reads every entry, so balances are answered from the header.
+/// it) any account, unless a policy over the ledger bounds its roles, in which case the policies
+/// decide; a principal with such a policy and no `ledger-read` reads what they permit; and a
+/// signed-in person, under `ledger-read-own`, an account the person owns (LDG-026, LDG-1540,
+/// LDG-1541). With `owner` unset the read is one over many accounts, which only a holder of the
+/// capability or of a policy makes.
 fn may_read(
     tenant: &TenantState,
     principal: &Principal,
     owner: Option<&LedgerOwner>,
-) -> Result<Check, DomainError> {
+) -> Result<Reach, DomainError> {
+    let bounded = ledger_policy::bounded(tenant, principal);
     if holds(tenant, principal, LEDGER_READ) {
-        return Ok(Check::pass(
-            format!("permission:capability:{LEDGER_READ}"),
-            format!("holds {LEDGER_READ}"),
-        ));
+        return Ok(if bounded {
+            Reach::Policies
+        } else {
+            Reach::Everything
+        });
     }
-    if let (Principal::User(id), Some(LedgerOwner::Principal { principal: owned })) =
-        (principal, owner)
-    {
-        if id == owned {
-            return Ok(Check::pass(
-                format!("permission:capability:{LEDGER_READ_OWN}"),
-                "reads an account it owns",
-            ));
-        }
+    if bounded {
+        return Ok(Reach::Policies);
+    }
+    if ledger_policy::owns(principal, owner) {
+        return Ok(Reach::Everything);
     }
     let rule = format!("permission:capability:{LEDGER_READ}");
     Err(DomainError::new(
@@ -1324,9 +1631,23 @@ pub fn read_balance(
     ctx: &Context,
 ) -> Result<LedgerBalance, DomainError> {
     let tenant = tenant_of(state, ctx)?;
-    may_read(tenant, &ctx.principal, Some(owner))?;
+    let reach = may_read(tenant, &ctx.principal, Some(owner))?;
     if !unit_declared(&tenant.schema, unit) {
         return Err(unknown_unit(unit));
+    }
+    // LDG-1540: under a ledger policy the account is read only when the policies permit it, and
+    // an account the reader may not read is not told apart from one that does not exist.
+    if reach == Reach::Policies
+        && !ledger_policy::account_permitted(
+            tenant,
+            &ctx.principal,
+            ctx.now,
+            Some(owner),
+            unit,
+            scope,
+        )
+    {
+        return Err(no_account());
     }
     let account = account_id(&tenant.id, owner, unit, scope);
     require(state, LedgerNeed::Account { account })?;
@@ -1402,7 +1723,7 @@ pub fn read_entries(
     ctx: &Context,
 ) -> Result<(Vec<LedgerEntry>, Option<u64>), DomainError> {
     let tenant = tenant_of(state, ctx)?;
-    may_read(tenant, &ctx.principal, Some(owner))?;
+    let reach = may_read(tenant, &ctx.principal, Some(owner))?;
     if !unit_declared(&tenant.schema, unit) {
         return Err(unknown_unit(unit));
     }
@@ -1436,6 +1757,25 @@ pub fn read_entries(
     } else {
         None
     };
+    // LDG-1540: under a ledger policy only the entries the policies permit are returned; a page
+    // may hold fewer than asked, and `next` still names where the walk goes on. A first page with
+    // none is not told apart from an account that does not exist.
+    if reach == Reach::Policies {
+        entries.retain(|entry| {
+            ledger_policy::entry_permitted_for(
+                tenant,
+                &ctx.principal,
+                ctx.now,
+                owner,
+                unit,
+                scope,
+                entry,
+            )
+        });
+        if entries.is_empty() && after.is_none() {
+            return Err(no_account());
+        }
+    }
     Ok((entries, next))
 }
 
@@ -1471,9 +1811,18 @@ pub fn ranked_needs(
 }
 
 /// A page of the accounts of a unit and scope in order of balance (CT-809, LDG-1543), and the
-/// offset of the next page, if there is one. The reader holds `ledger-read`, so every entry of
-/// every account is one the reader may read (LDG-1544); an account whose owner was erased has no
-/// owner to show and is left out.
+/// offset of the next page, if there is one. An account whose owner was erased has no owner to
+/// show and is left out.
+///
+/// A reader that holds `ledger-read` and no ledger policy reads every entry of every account
+/// (LDG-1544 holds trivially). A reader that a ledger policy bounds is shown only the accounts of
+/// which the policies permit every entry ([`ledger_policy`]), and the ranking is *filtered*: the
+/// offset and the page count the accounts the reader may read, so the position of an account the
+/// reader may not read, and its existence, are not disclosed. The scan bound
+/// ([`limits::MAX_LEDGER_RANK_SCAN`]) applies to the accounts examined, readable or not: the walk
+/// starts with the accounts it needs and doubles the window while the page is not full, and is
+/// refused with `scan-bound-exceeded` when it has examined the bound and the page is still short
+/// of accounts that may follow.
 pub fn read_ranked(
     state: &State,
     unit: &LedgerUnit,
@@ -1484,7 +1833,7 @@ pub fn read_ranked(
     ctx: &Context,
 ) -> Result<(Vec<LedgerAccountRank>, Option<u32>), DomainError> {
     let tenant = tenant_of(state, ctx)?;
-    may_read(tenant, &ctx.principal, None)?;
+    let reach = may_read(tenant, &ctx.principal, None)?;
     if !unit_declared(&tenant.schema, unit) {
         return Err(unknown_unit(unit));
     }
@@ -1493,6 +1842,9 @@ pub fn read_ranked(
         unreachable!("ranked_needs names one ledger need");
     };
     let limit = page(limit, DEFAULT_RANK_PAGE, MAX_RANK_PAGE)?;
+    if reach == Reach::Policies {
+        return read_ranked_filtered(state, tenant, unit, scope, order, offset, limit, ctx);
+    }
     require(state, need)?;
     let mut matching: Vec<&LedgerAccount> = accounts_of(tenant)
         .filter(|a| &a.unit == unit && a.scope.as_str() == scope)
@@ -1507,28 +1859,123 @@ pub fn read_ranked(
     let rows = window
         .into_iter()
         .take(limit as usize)
-        .filter_map(|a| {
-            a.owner.clone().map(|owner| LedgerAccountRank {
-                owner,
-                scope: a.scope.clone(),
-                balance: a.balance,
-                last_sequence: a.last_sequence,
-            })
-        })
+        .filter_map(rank_row)
         .collect();
     Ok((rows, next))
 }
 
+/// The row of a ranked listing for an account; none when its owner was erased.
+fn rank_row(account: &LedgerAccount) -> Option<LedgerAccountRank> {
+    account.owner.clone().map(|owner| LedgerAccountRank {
+        owner,
+        scope: account.scope.clone(),
+        balance: account.balance,
+        last_sequence: account.last_sequence,
+    })
+}
+
+/// [`read_ranked`] for a reader that ledger policies bound: the walk of the accounts in rank
+/// order, each judged by the policies, until the page and one account more are found, the
+/// accounts are exhausted or the scan bound is reached.
+#[allow(clippy::too_many_arguments)]
+fn read_ranked_filtered(
+    state: &State,
+    tenant: &TenantState,
+    unit: &LedgerUnit,
+    scope: &str,
+    order: LedgerOrder,
+    offset: u32,
+    limit: u32,
+    ctx: &Context,
+) -> Result<(Vec<LedgerAccountRank>, Option<u32>), DomainError> {
+    let bound = u64::from(limits::MAX_LEDGER_RANK_SCAN);
+    let wanted = u64::from(offset) + u64::from(limit) + 1;
+    let mut window = wanted.min(bound);
+    loop {
+        require(
+            state,
+            LedgerNeed::Ranked {
+                unit: unit.clone(),
+                scope: scope_value(scope),
+                order,
+                offset: 0,
+                limit: window as u32,
+            },
+        )?;
+        let mut matching: Vec<&LedgerAccount> = accounts_of(tenant)
+            .filter(|a| &a.unit == unit && a.scope.as_str() == scope)
+            .collect();
+        matching.sort_by(rank_order(order));
+        let exhausted = (matching.len() as u64) < window;
+        let readable: Vec<&LedgerAccount> = matching
+            .into_iter()
+            .take(window as usize)
+            .filter(|a| {
+                ledger_policy::account_permitted(
+                    tenant,
+                    &ctx.principal,
+                    ctx.now,
+                    a.owner.as_ref(),
+                    &a.unit,
+                    a.scope.as_str(),
+                )
+            })
+            .collect();
+        if readable.len() as u64 >= wanted || exhausted {
+            let next = (readable.len() as u64 > u64::from(offset) + u64::from(limit))
+                .then(|| offset + limit);
+            let rows = readable
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .filter_map(rank_row)
+                .collect();
+            return Ok((rows, next));
+        }
+        if window >= bound {
+            return Err(refuse(
+                ErrorKind::LimitExceeded,
+                "ledger:scan-bound-exceeded",
+                format!(
+                    "scan-bound-exceeded: the listing examined {bound} accounts and has not found a page the reader may read"
+                ),
+            ));
+        }
+        window = (window * 2).min(bound);
+    }
+}
+
 /// Every unit, pool and limit the tenant has declared (CT-810, LDG-1548), to a holder of
-/// `ledger-read`. Needs only the header.
+/// `ledger-read`: the limits of units from the schema and those of single accounts from the
+/// ledger's storage (need [`LedgerNeed::Limits`]), in one sorted list.
 pub fn read_definitions(state: &State, ctx: &Context) -> Result<LedgerDefinitions, DomainError> {
     let tenant = tenant_of(state, ctx)?;
     may_read(tenant, &ctx.principal, None)?;
+    if !holds(tenant, &ctx.principal, LEDGER_READ) {
+        return Err(DomainError::new(
+            ErrorKind::Unauthorized,
+            format!("a read of the definitions needs {LEDGER_READ}"),
+        )
+        .with(vec![Check::fail(
+            format!("permission:capability:{LEDGER_READ}"),
+            format!("does not hold {LEDGER_READ}"),
+        )]));
+    }
+    require(state, LedgerNeed::Limits)?;
     let declared = declarations(&tenant.schema);
+    let mut all = declared.limits;
+    all.extend(
+        tenant
+            .ledger
+            .iter()
+            .flat_map(|ledger| ledger.limits.iter().flatten())
+            .cloned(),
+    );
+    all.sort();
     Ok(LedgerDefinitions {
         units: declared.units.keys().cloned().collect(),
         pools: declared.pools.keys().cloned().collect(),
-        limits: declared.limits,
+        limits: all,
     })
 }
 
@@ -1565,4 +2012,110 @@ pub fn replayed_balance(entries: &[LedgerEntry]) -> Result<i64, u64> {
         sum = sum.checked_add(entry.amount.0).ok_or(expected)?;
     }
     Ok(sum)
+}
+
+// ------------------------------------------------------------------------------------------------
+// Verification (CT-287) and notices (WG-5172)
+
+/// The replay of the journal of one account, fed page by page, so that an operator can compare a
+/// stored balance with the sum of its entries without holding the journal (CT-287, LDG-019,
+/// LDG-020).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Replay {
+    /// The sum of the amounts fed so far.
+    pub sum: i64,
+    /// The number of the last entry fed; the next must be one above it.
+    pub last: u64,
+    /// The first number that was missing, repeated or out of order, if one was.
+    pub gap: Option<u64>,
+    /// Whether the sum overflowed.
+    pub overflow: bool,
+}
+
+impl Replay {
+    /// Feed entries in the order of their numbers. After a gap the sum is no longer extended, so
+    /// that a gap is reported and not summed over (LDG-019).
+    pub fn feed(&mut self, entries: &[LedgerEntry]) {
+        for entry in entries {
+            if self.gap.is_some() {
+                return;
+            }
+            let expected = self.last + 1;
+            if entry.sequence != expected {
+                self.gap = Some(expected);
+                return;
+            }
+            match self.sum.checked_add(entry.amount.0) {
+                Some(sum) => self.sum = sum,
+                None => {
+                    self.overflow = true;
+                    self.gap = Some(expected);
+                    return;
+                }
+            }
+            self.last = expected;
+        }
+    }
+
+    /// Whether the journal replays to `stored` with no gap, and the last number is `last_sequence`.
+    pub fn agrees(&self, stored: i64, last_sequence: u64) -> bool {
+        self.gap.is_none() && self.sum == stored && self.last == last_sequence
+    }
+}
+
+/// Who may verify a balance against its journal (CT-287): a holder of `ledger-read` that no ledger
+/// policy bounds, since the replay reads every entry of the account.
+pub fn verify_access(state: &State, ctx: &Context) -> Result<(), DomainError> {
+    let tenant = tenant_of(state, ctx)?;
+    match may_read(tenant, &ctx.principal, None)? {
+        Reach::Everything if holds(tenant, &ctx.principal, LEDGER_READ) => Ok(()),
+        _ => Err(DomainError::new(
+            ErrorKind::Unauthorized,
+            format!("verifying a balance needs {LEDGER_READ}, unbounded by a ledger policy"),
+        )
+        .with(vec![Check::fail(
+            format!("permission:capability:{LEDGER_READ}"),
+            format!("does not hold {LEDGER_READ} without a ledger policy"),
+        )])),
+    }
+}
+
+/// The header of `account` in a snapshot that holds it (the need `Account`).
+pub fn header_of(state: &State, account: &LedgerAccountId) -> Option<LedgerAccount> {
+    state
+        .tenant
+        .as_deref()
+        .and_then(|tenant| header(tenant, account).cloned())
+}
+
+/// The entries of `account` a snapshot holds, in order.
+pub fn entries_of(state: &State, account: &LedgerAccountId) -> Vec<LedgerEntry> {
+    state
+        .tenant
+        .as_deref()
+        .map(|tenant| loaded_entries(tenant, account).to_vec())
+        .unwrap_or_default()
+}
+
+/// Whether the principal is told of a posting to the account of `owner`, `unit` and `scope`: the
+/// decision of a socket notice, made by the kernel with the rules of a read (D-6550). The notice
+/// itself carries the account, the unit, the scope and the number of the entry, and never the
+/// owner. An owner hears of the postings to its own accounts; a holder of `ledger-read` hears of
+/// every posting unless a ledger policy bounds it; anyone else hears of what its policies permit
+/// of the account, judged without the fields of an entry.
+pub fn may_hear(
+    tenant: &TenantState,
+    principal: &Principal,
+    now: Timestamp,
+    owner: &LedgerOwner,
+    unit: &LedgerUnit,
+    scope: &str,
+) -> bool {
+    match may_read(tenant, principal, Some(owner)) {
+        Ok(Reach::Everything) => true,
+        Ok(Reach::Policies) => {
+            ledger_policy::account_permitted(tenant, principal, now, Some(owner), unit, scope)
+        }
+        Err(_) => false,
+    }
 }

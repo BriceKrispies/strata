@@ -71,6 +71,7 @@ fn ledger_world(limits: Vec<LedgerLimit>) -> World {
         SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
             unit: points(),
             description: "Points".into(),
+            expiry: None,
         }),
         SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
             pool: budget(),
@@ -643,7 +644,8 @@ fn a_posting_loads_the_header_and_the_entry_of_its_key_and_not_the_journal() {
     let context = ctx("alpha", user("alpha:owner"), T0 + 100);
     let header_only = world.state(&tenant_id("alpha"));
     let planned = refine_needs(&header_only, &intent);
-    assert_eq!(planned.len(), 2, "{planned:?}");
+    // The header, the entry of the key and the limit of this account (WG-5172).
+    assert_eq!(planned.len(), 3, "{planned:?}");
     let state = thin(&world, &planned);
     let held = state.tenant.as_ref().unwrap().ledger.as_ref().unwrap();
     assert_eq!(
@@ -988,6 +990,7 @@ fn declarations_are_checked_and_a_unit_or_pool_in_use_is_not_removed() {
         vec![SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
             unit: LedgerUnit::new("stamps").unwrap(),
             description: "Stamps".into(),
+            expiry: None,
         })],
     )
     .unwrap_err();
@@ -998,6 +1001,7 @@ fn declarations_are_checked_and_a_unit_or_pool_in_use_is_not_removed() {
             SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
                 unit: LedgerUnit::new(format!("u{n}")).unwrap(),
                 description: String::new(),
+                expiry: None,
             })
         })
         .collect();

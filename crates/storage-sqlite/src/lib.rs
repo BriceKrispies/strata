@@ -540,6 +540,9 @@ const TENANT_MIGRATIONS: &[Migration] = &[
         name: "search entries",
         sql: search_index::SEARCH_ENTRIES_SQL,
     },
+    // The steps of the ledger's fourth wave, named; the coordinator numbers them.
+    ledger::ACCOUNT_LIMITS_MIGRATION,
+    ledger::EXPIRY_MIGRATION,
 ];
 
 /// The steps of a tenant file's layout, for tests that build a file at an older level.

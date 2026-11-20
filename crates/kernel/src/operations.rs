@@ -1176,6 +1176,12 @@ fn plan(
                     out.insert(Need::Ledger(crate::types::LedgerNeed::Account {
                         account: crate::ledger::account_id(&tenant.id, &owner, unit, &scope),
                     }));
+                    // The limit of this account, and no other (D-6554).
+                    out.insert(Need::Ledger(crate::types::LedgerNeed::Limit {
+                        owner,
+                        unit: unit.clone(),
+                        scope: crate::types::LedgerScope(scope),
+                    }));
                 }
             }
         }

@@ -185,6 +185,8 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
             step,
             sequence,
         } => run_step(app, tenant, lease, run, automation, step, *sequence, now),
+        // The expiry of ledger credits is the ledger's own job (D-6553, CT-812).
+        JobWork::ExpireLedgerCredits {} => crate::ledger::run_expiry_job(app, tenant, lease, now),
     }
 }
 

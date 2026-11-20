@@ -670,6 +670,7 @@ fn schema_changes() -> Vec<SchemaChange> {
         SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
             unit: points(),
             description: "Points".into(),
+            expiry: None,
         }),
         SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
             pool: LedgerPoolName::new("budget").unwrap(),
@@ -820,6 +821,7 @@ fn sample_header() -> LedgerAccount {
             start: Timestamp(0),
             credits: 5,
         }],
+        buckets: None,
     }
 }
 
@@ -983,6 +985,10 @@ fn samples() -> Vec<(&'static str, Json)> {
         Resource::AnyObject,
         Resource::Schema,
         Resource::Members,
+        Resource::Ledger { unit: None },
+        Resource::Ledger {
+            unit: Some(points()),
+        },
     ] {
         s.push(("resource", json(&r)));
     }

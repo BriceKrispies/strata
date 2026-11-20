@@ -135,6 +135,10 @@ pub fn exists(schema: &TenantSchema, entity: &EntityRef) -> Option<bool> {
             else {
                 return Some(false);
             };
+            // The limit of one account lives in the ledger's storage, which the schema cannot see.
+            if owner.is_some() {
+                return None;
+            }
             let scope = scope.as_ref().map_or("", |s| s.as_str());
             schema.ledger.as_ref().is_some_and(|ledger| {
                 ledger.limits.iter().any(|l| {

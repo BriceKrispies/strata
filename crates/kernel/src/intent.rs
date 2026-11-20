@@ -35,6 +35,7 @@ impl IntentExt for Intent {
             Intent::WriteSetting { .. } => "write_setting",
             Intent::InvokeOperation { .. } => "invoke_operation",
             Intent::PostLedger { .. } => "post_ledger",
+            Intent::ExpireLedger { .. } => "expire_ledger",
         }
     }
 }

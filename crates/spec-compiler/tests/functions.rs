@@ -61,6 +61,9 @@ fn resource(r: &KResource) -> Resource {
         KResource::AnyObject => Resource::AnyObject,
         KResource::Schema => Resource::Schema,
         KResource::Members => Resource::Members,
+        KResource::Ledger { .. } => {
+            unreachable!("the corpus of the fixture has no policy over the ledger")
+        }
     }
 }
 

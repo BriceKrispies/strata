@@ -18,25 +18,38 @@
 //! | `accounts`          | list-ledger-accounts (CT-809)    |
 //! | `definitions`       | list-ledger-definitions (CT-810) |
 //! | `remove-definition` | remove-ledger-definition (CT-811)|
+//! | `verify`            | verify-ledger-balance (CT-287)   |
+//! | `expire`            | expire-ledger-credits (CT-812)   |
+//!
+//! `verify` and `expire` are for operators and tests. The expiry of credits also runs as a job of
+//! each tenant that declares a unit with an expiry ([`run_expiry_job`]): the job is created
+//! through the job store when such a unit is declared, and each run creates the next one, so
+//! nothing depends on a schedule.
 
 use crate::app::{ApiError, App, Shared};
 use crate::auth::Identity;
 use crate::ops::run_intent;
+use crate::worker::steps::Outcome;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value as Json_};
+use strata_kernel::ext::DomainErrorExt;
 use strata_kernel::ledger;
+use strata_kernel::ledger_expiry;
 use strata_kernel::{
-    Context, DomainError, ErrorKind, ExistingData, Intent, LedgerDefinitionRef, LedgerLimit,
-    LedgerOrder, LedgerOwner, LedgerPoolDecl, LedgerPoolName, LedgerPostingRequest, LedgerScope,
-    LedgerUnit, LedgerUnitDecl, Need, Output, SchemaChange, State as Snapshot,
+    Context, DomainError, ErrorKind, ExistingData, Intent, LedgerAccountId, LedgerDefinitionRef,
+    LedgerExpiry, LedgerLimit, LedgerNeed, LedgerOrder, LedgerOwner, LedgerPoolDecl,
+    LedgerPoolName, LedgerPostingRequest, LedgerScope, LedgerUnit, LedgerUnitDecl, Need, Output,
+    Principal, SchemaChange, State as Snapshot, TenantId, Timestamp,
 };
 use strata_protocol::api::ErrorCode;
+use strata_storage_api::jobs::{JobReport, JobWork, Lease, NewJob, RetryPolicy, WorkerWrites};
 
-/// The operations of the route, as the BFF may name them.
-pub const OPERATIONS: [&str; 11] = [
+/// The operations of the route. The BFF names the first eleven; `verify` and `expire` are for
+/// operators and tests and are served on the internal route only.
+pub const OPERATIONS: [&str; 13] = [
     "post",
     "balance",
     "entries",
@@ -48,7 +61,20 @@ pub const OPERATIONS: [&str; 11] = [
     "accounts",
     "definitions",
     "remove-definition",
+    "verify",
+    "expire",
 ];
+
+/// How long after one run of the expiry job the next is due (LDG-1546: credit expires no later
+/// than one day after the end of its period, so an hour is well inside it).
+pub const EXPIRY_INTERVAL_MS: i64 = 3_600_000;
+/// The most batches of one unit one run of the expiry job decides; what is left waits for the
+/// next run, so a tenant with a great many due accounts does not hold its worker.
+const MAX_BATCHES_PER_RUN: usize = 20;
+/// The entries of the journal of an account one page of a verification replays.
+const VERIFY_PAGE: u32 = 500;
+/// The key of the job that starts the chain of the expiry jobs of a tenant.
+const EXPIRY_START_KEY: &str = "ledger-expiry:start";
 
 /// The fields every operation may carry: the tenant, which must be the tenant of the request
 /// when it is given (`tenant-mismatch`).
@@ -100,7 +126,26 @@ struct UnitRequest {
     unit: LedgerUnit,
     description: String,
     #[serde(default)]
-    expiry: Option<Json_>,
+    expiry: Option<LedgerExpiry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VerifyRequest {
+    #[serde(default)]
+    tenant: Option<String>,
+    account: LedgerAccountId,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExpireRequest {
+    #[serde(default)]
+    tenant: Option<String>,
+    unit: LedgerUnit,
+    /// The start of the latest bucket to expire; by default the latest whose life has ended.
+    #[serde(default)]
+    bucket: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -183,7 +228,8 @@ fn read<T>(
 ) -> Result<T, ApiError> {
     let ctx = identity.context(app);
     let mut wanted = needs;
-    for _ in 0..8 {
+    // A ranked listing under a ledger policy asks for a wider window each time its page is short.
+    for _ in 0..16 {
         let state = app.store.load(&ctx.tenant, &wanted)?;
         match answer(&state, &ctx) {
             Err(DomainError {
@@ -309,18 +355,20 @@ pub fn handle(app: &App, identity: &Identity, op: &str, body: Json_) -> Result<J
         "declare-unit" => {
             let r: UnitRequest = parse(body)?;
             same_tenant(app, identity, &r.tenant)?;
-            if r.expiry.is_some() {
-                return Err(invalid("The expiry of a unit is not offered yet."));
-            }
             let unit = r.unit.clone();
+            let expires = r.expiry.is_some();
             let mut reply = change(
                 app,
                 identity,
                 SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
                     unit: r.unit,
                     description: r.description,
+                    expiry: r.expiry,
                 }),
             )?;
+            if expires {
+                start_expiry_chain(app, &identity.tenant)?;
+            }
             reply["unit"] = json!(unit);
             Ok(reply)
         }
@@ -359,8 +407,234 @@ pub fn handle(app: &App, identity: &Identity, op: &str, body: Json_) -> Result<J
                 SchemaChange::RemoveLedgerDefinition(r.definition),
             )
         }
+        // Implements: CT-287
+        "verify" => {
+            let r: VerifyRequest = parse(body)?;
+            same_tenant(app, identity, &r.tenant)?;
+            verify(app, identity, &r.account)
+        }
+        // Implements: CT-812
+        "expire" => {
+            let r: ExpireRequest = parse(body)?;
+            same_tenant(app, identity, &r.tenant)?;
+            let ctx = identity.context(app);
+            let state = app.store.load(&tenant, &[])?;
+            if let Some(found) = state.tenant.as_deref() {
+                if !ledger_expiry::may_expire(found, &ctx.principal) {
+                    return Err(ApiError::domain(
+                        DomainError::new(
+                            ErrorKind::Unauthorized,
+                            "the expiry of credits needs ledger-configure",
+                        ),
+                        identity.anonymous(),
+                    ));
+                }
+            }
+            let schema_expiry = state
+                .tenant
+                .as_deref()
+                .and_then(|t| ledger_expiry::expiry_of(&t.schema, &r.unit).cloned());
+            let Some(expiry) = schema_expiry else {
+                return Err(invalid("That unit declares no expiry."));
+            };
+            let cutoff = r
+                .bucket
+                .map(Timestamp)
+                .unwrap_or_else(|| ledger_expiry::cutoff(&expiry, ctx.now));
+            // Nothing due is nothing to commit.
+            if first_due(app, &tenant, &r.unit, cutoff)?.is_none() {
+                return Ok(json!({ "posted": 0, "next": null }));
+            }
+            let intent = Intent::ExpireLedger {
+                unit: r.unit.clone(),
+                cutoff,
+            };
+            let done = run_intent(app, &ctx, &intent, identity.anonymous())?;
+            let posted = match done.transition.output {
+                Output::LedgerPosted { results } => results.len(),
+                other => {
+                    return Err(ApiError::hidden(
+                        ErrorCode::Internal,
+                        format!("unexpected output {other:?}"),
+                    ))
+                }
+            };
+            let next = first_due(app, &tenant, &r.unit, cutoff)?;
+            Ok(json!({ "posted": posted, "next": next }))
+        }
         _ => Err(ApiError::new(ErrorCode::NotFound, "No such endpoint.")),
     }
+}
+
+/// Compare the stored balance of an account with the sum of its journal (CT-287, LDG-019,
+/// LDG-020): `ok`, the `stored` balance, the `replayed` sum, the number of entries replayed and,
+/// when the numbers of the entries have a gap, the first number that is missing.
+fn verify(app: &App, identity: &Identity, account: &LedgerAccountId) -> Result<Json_, ApiError> {
+    let ctx = identity.context(app);
+    let wanted = [Need::Ledger(LedgerNeed::Account { account: *account })];
+    let state = app.store.load(&ctx.tenant, &wanted)?;
+    ledger::verify_access(&state, &ctx).map_err(|e| ApiError::domain(e, identity.anonymous()))?;
+    let Some(header) = ledger::header_of(&state, account) else {
+        return Err(ApiError::new(
+            ErrorCode::NotFound,
+            "No such ledger account.",
+        ));
+    };
+    let mut replay = ledger::Replay::default();
+    let mut after: Option<u64> = None;
+    loop {
+        let page = app.store.load(
+            &ctx.tenant,
+            &[Need::Ledger(LedgerNeed::Entries {
+                account: *account,
+                after,
+                limit: VERIFY_PAGE,
+            })],
+        )?;
+        let entries = ledger::entries_of(&page, account);
+        replay.feed(&entries);
+        after = entries.last().map(|e| e.sequence);
+        if replay.gap.is_some() || entries.len() < VERIFY_PAGE as usize {
+            break;
+        }
+    }
+    Ok(json!({
+        "ok": replay.agrees(header.balance.0, header.last_sequence),
+        "stored": header.balance,
+        "replayed": replay.sum,
+        "entries": replay.last,
+        "gap": replay.gap,
+    }))
+}
+
+/// The id of the first account that still has credit due at `cutoff`, if one has.
+fn first_due(
+    app: &App,
+    tenant: &TenantId,
+    unit: &LedgerUnit,
+    cutoff: Timestamp,
+) -> Result<Option<LedgerAccountId>, ApiError> {
+    let state = app.store.load(
+        tenant,
+        &[Need::Ledger(LedgerNeed::Expiring {
+            unit: unit.clone(),
+            cutoff,
+            limit: 1,
+        })],
+    )?;
+    Ok(state
+        .tenant
+        .as_deref()
+        .and_then(|t| t.ledger.as_ref())
+        .and_then(|l| {
+            ledger_expiry::due_accounts(l.accounts.values(), unit, cutoff, 1)
+                .first()
+                .map(|a| a.account)
+        }))
+}
+
+/// Create the job that starts the chain of expiry jobs of a tenant, once: the key is the same for
+/// every declaration of a unit with an expiry, so the second creates nothing (SCH-004).
+fn start_expiry_chain(app: &App, tenant: &TenantId) -> Result<(), ApiError> {
+    let now = app.now();
+    app.store.jobs_create(
+        tenant,
+        &[NewJob {
+            key: EXPIRY_START_KEY.to_string(),
+            work: JobWork::ExpireLedgerCredits {},
+            due_at: Timestamp(now.0 + EXPIRY_INTERVAL_MS),
+            policy: RetryPolicy::default(),
+        }],
+        now,
+    )?;
+    Ok(())
+}
+
+/// The job that follows `job`: due an interval after the job it follows was due (after the time it
+/// was created, for the first of a chain), under a key that names its due time. It depends on the
+/// job alone, so that a retry of the same job creates the same next job and the store creates it
+/// once; a chain that fell behind catches up one run at a time.
+fn next_expiry_job(job: &strata_storage_api::jobs::Job) -> NewJob {
+    let due = job
+        .key
+        .strip_prefix("ledger-expiry:")
+        .and_then(|n| n.parse::<i64>().ok())
+        .unwrap_or(job.created_at.0)
+        + EXPIRY_INTERVAL_MS;
+    NewJob {
+        key: format!("ledger-expiry:{due}"),
+        work: JobWork::ExpireLedgerCredits {},
+        due_at: Timestamp(due),
+        policy: RetryPolicy::default(),
+    }
+}
+
+/// Run one job of the expiry chain of a tenant at `now`: for each unit that declares an expiry,
+/// decide batches of the kernel's `ExpireLedger` (at most [`MAX_BATCHES_PER_RUN`] of one hundred
+/// accounts) while accounts with credit due remain, as the system. The next job is created in the
+/// transaction that reports this one, so the chain goes on whether or not this run succeeded; a
+/// run that fails is retried under the job's policy and posts nothing twice, because every entry
+/// has the key `expiry:<bucket start>` (LDG-1546, LDG-1547).
+pub fn run_expiry_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> Outcome {
+    let writes = WorkerWrites {
+        jobs: vec![next_expiry_job(&lease.job)],
+        ..WorkerWrites::default()
+    };
+    let report = match expire_due(app, tenant, now, &lease.job.id) {
+        Ok(_) => JobReport::Succeeded,
+        Err(error) => JobReport::Failed {
+            error,
+            retry: !lease.exhausted,
+        },
+    };
+    Outcome { report, writes }
+}
+
+/// Expire what is due at `now` in every unit of the tenant that declares an expiry; the number of
+/// entries posted.
+fn expire_due(app: &App, tenant: &TenantId, now: Timestamp, job: &str) -> Result<usize, String> {
+    let state = app.store.load(tenant, &[]).map_err(|e| e.to_string())?;
+    let Some(found) = state.tenant else {
+        return Ok(0);
+    };
+    let expiring: Vec<(LedgerUnit, LedgerExpiry)> = found
+        .schema
+        .ledger
+        .iter()
+        .flat_map(|declared| declared.units.values())
+        .filter_map(|decl| decl.expiry.clone().map(|e| (decl.unit.clone(), e)))
+        .collect();
+    let mut posted = 0;
+    for (unit, expiry) in expiring {
+        let cutoff = ledger_expiry::cutoff(&expiry, now);
+        for _ in 0..MAX_BATCHES_PER_RUN {
+            let due = first_due(app, tenant, &unit, cutoff).map_err(|e| e.describe())?;
+            if due.is_none() {
+                break;
+            }
+            let ctx = Context {
+                tenant: tenant.clone(),
+                principal: Principal::System,
+                session: None,
+                now,
+                correlation: format!("job:{job}"),
+                verified_address: None,
+                idempotency_key: None,
+                language: None,
+                hop: None,
+            };
+            let intent = Intent::ExpireLedger {
+                unit: unit.clone(),
+                cutoff,
+            };
+            let done = run_intent(app, &ctx, &intent, false).map_err(|e| e.describe())?;
+            match done.transition.output {
+                Output::LedgerPosted { results } => posted += results.len(),
+                other => return Err(format!("unexpected output {other:?}")),
+            }
+        }
+    }
+    Ok(posted)
 }
 
 /// The owner a read names: the caller for a read of one's own account (which takes no owner),
@@ -383,7 +657,7 @@ fn owner_of(
 
 /// `/internal/ledger/<operation>`.
 ///
-/// Implements: CT-281, CT-282, CT-283, CT-284, CT-285, CT-286, CT-807, CT-808, CT-809, CT-810, CT-811
+/// Implements: CT-281, CT-282, CT-283, CT-284, CT-285, CT-286, CT-287, CT-807, CT-808, CT-809, CT-810, CT-811, CT-812
 pub async fn route(
     State(app): State<Shared>,
     headers: HeaderMap,

@@ -161,6 +161,10 @@ pub enum JobWork {
         /// The position of the step in its run, from one.
         sequence: u64,
     },
+    /// Expire the credits that are due in every unit of the tenant that declares an expiry
+    /// (D-6553, LDG-1546, contract expire-ledger-credits). The tenant has one such job at a time:
+    /// each run creates the next, due an interval later, in the transaction that reports it.
+    ExpireLedgerCredits {},
 }
 
 /// A job to create: its key, what it does, when it is due and how it is retried.

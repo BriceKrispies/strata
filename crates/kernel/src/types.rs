@@ -62,11 +62,11 @@ pub use strata_model_core::types::{
 /// The tenant ledger of [`crate::ledger`]: declarations in the tenant schema, accounts and
 /// entries in the tenant state, its needs, delta operations, requests and answers.
 pub use strata_model_core::types::{
-    LedgerAccount, LedgerAccountId, LedgerAccountRank, LedgerAmount, LedgerBalance,
+    LedgerAccount, LedgerAccountId, LedgerAccountRank, LedgerAmount, LedgerBalance, LedgerBucket,
     LedgerDeclarations, LedgerDefinitionRef, LedgerDefinitions, LedgerDelta, LedgerEntry,
-    LedgerLimit, LedgerNeed, LedgerOrder, LedgerOwner, LedgerPeriod, LedgerPeriodTotal,
-    LedgerPoolDecl, LedgerPoolName, LedgerPostingRequest, LedgerPostingResult, LedgerScope,
-    LedgerState, LedgerUnit, LedgerUnitDecl,
+    LedgerExpiry, LedgerLimit, LedgerNeed, LedgerOrder, LedgerOwner, LedgerPeriod,
+    LedgerPeriodTotal, LedgerPoolDecl, LedgerPoolName, LedgerPostingRequest, LedgerPostingResult,
+    LedgerScope, LedgerState, LedgerUnit, LedgerUnitDecl,
 };
 
 /// The text types of a template and of a token (`structured-blocks`, `expression`).
