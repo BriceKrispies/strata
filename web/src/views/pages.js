@@ -177,7 +177,7 @@ export function search(page) {
     h('h1', { class: 'page-title' }, 'Search'),
     h(
       'form',
-      { class: 'search-form', role: 'search', 'data-form': 'search', action: '/search' },
+      { class: 'search-form', role: 'search', 'data-form': 'search', action: hrefFor('screen-search') },
       h('label', { for: 'search-page-q' }, 'Search the essays'),
       h(
         'div',
@@ -247,15 +247,40 @@ function secondFactor(s) {
   ];
 }
 
+/** The owner's invitation: choose a password. The link's secrets are never in the page. */
+function invitation(invite) {
+  return [
+    h('h1', { class: 'page-title' }, 'Choose your password'),
+    h('p', { class: 'standfirst' }, 'Your site is ready. Choose a password of at least 10 characters, then sign in with it.'),
+    h(
+      'form',
+      { class: 'form form--narrow', 'data-form': 'invite', novalidate: true },
+      invite.error ? h('p', { class: 'form__error', role: 'alert', id: 'invite-error' }, invite.error) : null,
+      h(
+        'div',
+        { class: 'field' },
+        h('label', { for: 'invite-password' }, 'New password'),
+        h('input', {
+          id: 'invite-password', name: 'password', type: 'password', value: invite.password, autocomplete: 'new-password', required: true,
+          'data-rev': invite.fieldError || invite.error, 'aria-invalid': invite.fieldError ? 'true' : null, 'aria-describedby': invite.fieldError ? 'invite-password-error' : null,
+        }),
+        invite.fieldError ? h('p', { class: 'form__error', role: 'alert', id: 'invite-password-error' }, invite.fieldError) : null,
+      ),
+      h('button', { class: 'button', type: 'submit', disabled: invite.busy }, invite.busy ? 'Setting your password…' : 'Set password'),
+    ),
+  ];
+}
+
 export function login(page) {
   if (page.second) return secondFactor(page.second);
   if (page.signedIn) {
     return [
       h('h1', { class: 'page-title' }, 'You are signed in'),
       h('p', { class: 'standfirst' }, `Signed in as ${page.name}.`),
-      h('p', null, h('a', { class: 'button', href: '/desk' }, 'Go to the writing desk')),
+      h('p', null, h('a', { class: 'button', href: hrefFor('screen-desk') }, 'Go to the writing desk')),
     ];
   }
+  if (page.invite?.open) return invitation(page.invite);
   if (page.link?.landing === 'working' || page.oidc?.landing === 'working') {
     return [
       h('h1', { class: 'page-title' }, 'Signing you in'),
@@ -266,6 +291,7 @@ export function login(page) {
     h('h1', { class: 'page-title' }, 'Sign in'),
     h('p', { class: 'standfirst' }, 'For the people who write and edit here. Readers do not need an account.'),
     page.link?.landingError ? h('p', { class: 'form__error', role: 'alert', id: 'link-landing-error' }, page.link.landingError) : null,
+    page.invite?.failed ? h('p', { class: 'form__error', role: 'alert', id: 'invite-failed' }, page.invite.error) : null,
     page.oidc?.landingError ? h('p', { class: 'form__error', role: 'alert', id: 'oidc-landing-error' }, page.oidc.landingError) : null,
     h(
       'form',
@@ -332,7 +358,7 @@ export function missing(page) {
   return [
     h('h1', { class: 'page-title' }, 'There is nothing at this address'),
     h('p', { class: 'standfirst' }, `No page lives at ${page.path}. It may have been unpublished, or the link may be mistyped.`),
-    h('p', null, h('a', { class: 'button', href: '/' }, 'Read the latest essays')),
+    h('p', null, h('a', { class: 'button', href: hrefFor('screen-front-page') }, 'Read the latest essays')),
   ];
 }
 
@@ -356,7 +382,7 @@ export function forbidden() {
   return [
     h('h1', { class: 'page-title' }, 'Your account cannot open this page'),
     h('p', { class: 'standfirst' }, 'It needs a role you do not hold. An editor or the site owner can change that.'),
-    h('p', null, h('a', { class: 'button', href: '/desk' }, 'Back to the writing desk')),
+    h('p', null, h('a', { class: 'button', href: hrefFor('screen-desk') }, 'Back to the writing desk')),
   ];
 }
 

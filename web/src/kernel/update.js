@@ -14,6 +14,7 @@ import * as live from '../generated/live.js';
 import { matchRoute, route as routeOf } from '../generated/routes.js';
 import { enterSections, rowAction as rowButton, rowActionAsked as rowButtonAsked } from '../generated/screens.js';
 import { factorsEnter, factorsInit, factorsInput, factorsRequireStepUp, factorsUpdate, factorsWaiting, isStepUp } from './factors.js';
+import { invitesInit, invitesInput, invitesOpened, invitesUpdate } from './invites.js';
 import { labEnter, labInit, labUpdate } from './lab.js';
 import { linksInit, linksInput, linksLand, linksOpened, linksUpdate } from './links.js';
 import { oidcEnter, oidcInit, oidcLand, oidcOpened, oidcUpdate } from './oidc.js';
@@ -81,6 +82,7 @@ export function initialState() {
     passkeys: passkeysInit(),
     factors: factorsInit(),
     links: linksInit(),
+    invites: invitesInit(),
     oidc: oidcInit(),
     /** @type {{ id: number, kind: string, text: string }[]} */
     toasts: [],
@@ -535,6 +537,7 @@ const linkSignedIn = passkeySignedIn;
 
 /** An identity provider's answer was accepted: the same, from the session on. @returns {Result} */
 const oidcSignedIn = passkeySignedIn;
+const invitesHelpers = { call, scopeOf, toast, navigate };
 
 /** Ask a refused action again, now that the person has authenticated. @returns {Result} */
 function redispatch(state, retry, msg) {
@@ -574,6 +577,9 @@ function onHttp(state, msg) {
   }
   if (pending.kind.startsWith('links.')) {
     return linksUpdate(state, { ...msg, pending, error }, { request, signedIn: linkSignedIn }) ?? { state, effects: [] };
+  }
+  if (pending.kind.startsWith('invites.')) {
+    return invitesUpdate(state, { ...msg, pending, error, outputs }, invitesHelpers) ?? { state, effects: [] };
   }
   if (pending.kind.startsWith('oidc.')) {
     return oidcUpdate(state, { ...msg, pending, error }, { request, signedIn: oidcSignedIn }) ?? { state, effects: [] };
@@ -729,6 +735,7 @@ function navigate(state, href, replace, msg) {
 function onInput(state, msg) {
   const f = state.forms;
   if (msg.form === 'link') return linksInput(state, msg.name, msg.value);
+  if (msg.form === 'invite') return invitesInput(state, msg.name, msg.value);
   if (msg.form === 'second' || msg.form === 'totpconfirm' || msg.form === 'stepup') return factorsInput(state, msg.name, msg.value);
   if (msg.form === 'login') {
     const { values } = forms.input(SIGN_IN, f.login.values, [], msg.name, msg.value);
@@ -841,6 +848,8 @@ function onSubmit(state, msg) {
   switch (msg.form) {
     case 'link':
       return linksUpdate(state, msg, { request, signedIn: linkSignedIn }) ?? { state, effects: [] };
+    case 'invite':
+      return invitesUpdate(state, msg, invitesHelpers) ?? { state, effects: [] };
     case 'login': {
       const login = state.forms.login;
       const values = forms.submitted(SIGN_IN, msg.values);
@@ -942,6 +951,10 @@ function step(state, msg) {
       const landed = linksLand(opened.state, msg, { request });
       next = landed.state;
       effects.push(...opened.effects, ...landed.effects);
+      // An owner's invitation is kept the same way, and taken out of the address bar at once.
+      const invited = invitesOpened(next, msg.hash ?? '', hrefOf(route));
+      next = invited.state;
+      effects.push(...invited.effects);
       // The same for the answer of an identity provider, and the sign-in page asks which
       // providers the site offers.
       const returned = oidcOpened(next, msg.hash ?? '', hrefOf(route));
