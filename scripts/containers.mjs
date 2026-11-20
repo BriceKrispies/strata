@@ -8,8 +8,9 @@
 //
 // The service token is generated on every `up` and handed to the containers through the
 // environment of this process; it is never written to disk. STRATA_PORT (default 4100) is the
-// host port of the gateway, the only port the stack publishes. STRATA_DEV (default 1) turns on
-// the development logins; set it to 0 for a stack without them.
+// host port of the gateway, the only port the stack publishes. STRATA_DEV is off unless set to 1;
+// only `e2e` sets it, because development logins and fixture endpoints must never be on in a
+// stack anyone else can reach, and the images carry no development accounts.
 //
 // The compose provider is `podman compose`, or `podman-compose` when that is missing; set
 // STRATA_COMPOSE to a command line to override.
@@ -39,9 +40,12 @@ function composeCommand() {
   return probe.status === 0 ? ['podman', 'compose'] : ['podman-compose'];
 }
 
+// The e2e stack adds tests/e2e/compose.e2e.yaml (development accounts mounted read-only).
+const files = () => (process.env.STRATA_DEV === '1' ? [file, 'tests/e2e/compose.e2e.yaml'] : [file]);
+
 function compose(args, env) {
   const [program, ...head] = composeCommand();
-  return run(program, [...head, '-f', file, ...args], env);
+  return run(program, [...head, ...files().flatMap((f) => ['-f', f]), ...args], env);
 }
 
 async function waitForStack() {
@@ -57,10 +61,16 @@ async function waitForStack() {
   return false;
 }
 
+// The images the generated compose file names, by Containerfile target. Built with `podman build`
+// directly: podman-compose on Windows loses the `dockerfile` path of a build block. The docker
+// image format keeps the HEALTHCHECK of the Containerfile.
+const IMAGES = { runtime: 'strata/runtime:dev', gateway: 'strata/gateway:dev' };
+
 function build() {
-  // Compose builds with the docker image format, which keeps the HEALTHCHECK of the Containerfile.
-  const status = compose(['build'], { PODMAN_BUILD_FORMAT: 'docker', BUILDAH_FORMAT: 'docker' });
-  if (status !== 0) process.exit(status);
+  for (const [target, tag] of Object.entries(IMAGES)) {
+    const status = run('podman', ['build', '--format', 'docker', '-f', 'deploy/Containerfile', '--target', target, '-t', tag, '.']);
+    if (status !== 0) process.exit(status);
+  }
 }
 
 function down(volumes) {
@@ -71,7 +81,7 @@ function down(volumes) {
 async function up(fresh) {
   if (fresh) down(true);
   const token = process.env.STRATA_SERVICE_TOKEN ?? randomBytes(32).toString('hex');
-  const status = compose(['up', '-d'], { STRATA_SERVICE_TOKEN: token });
+  const status = compose(['up', '-d', '--no-build'], { STRATA_SERVICE_TOKEN: token, STRATA_DEV: process.env.STRATA_DEV ?? '0' });
   if (status !== 0) process.exit(status);
   if (!(await waitForStack())) {
     console.error(`The stack did not answer at http://127.0.0.1:${port}/api/session. See: podman logs strata-gateway strata-runtime`);
@@ -98,7 +108,9 @@ switch (command) {
     process.exit(down(flag('volumes')));
     break;
   case 'e2e': {
-    // A fresh database each time: the tests assume a clean start.
+    // A fresh database each time: the tests assume a clean start. The tests sign in with the
+    // development accounts, so only this throwaway stack turns them on.
+    process.env.STRATA_DEV = '1';
     await up(true);
     const forwarded = rest.filter((arg) => arg !== '--');
     const status = run(process.execPath, [resolve(root, 'node_modules/@playwright/test/cli.js'), 'test', '-c', 'tests/e2e/playwright.config.js', '--project', 'site', ...forwarded], {

@@ -17,7 +17,7 @@ services:
     environment:
       STRATA_BACKEND_ADDR: "127.0.0.1:4101"
       STRATA_DB: "/var/lib/strata/strata.db"
-      STRATA_DEV: "${STRATA_DEV:-1}"
+      STRATA_DEV: "${STRATA_DEV:-0}"
       STRATA_SERVICE_TOKEN: "${STRATA_SERVICE_TOKEN}"
       STRATA_STORE: "sqlite"
       STRATA_TENANTS: "/opt/strata/tenants"
@@ -45,7 +45,7 @@ services:
     environment:
       STRATA_BACKEND_URL: "http://127.0.0.1:4101"
       STRATA_BFF_ADDR: "0.0.0.0:4100"
-      STRATA_DEV: "${STRATA_DEV:-1}"
+      STRATA_DEV: "${STRATA_DEV:-0}"
       STRATA_ORIGINS: "http://127.0.0.1:${STRATA_PORT:-4100},http://localhost:${STRATA_PORT:-4100},http://tidewater.localhost:${STRATA_PORT:-4100}"
       STRATA_SERVICE_TOKEN: "${STRATA_SERVICE_TOKEN}"
       STRATA_SITES: "127.0.0.1=fieldnotes,localhost=fieldnotes,tidewater.localhost=tidewater"

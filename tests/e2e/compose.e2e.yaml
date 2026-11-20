@@ -1,0 +1,9 @@
+# Overrides for the throwaway stack that `npm run e2e:containers` starts. The images carry no
+# development accounts (.containerignore); this mounts the repository's tenant folder, with its
+# accounts.dev.json files, read-only into the runtime so the tests can sign in. Never used for a
+# stack anyone else can reach. Relative paths resolve against deploy/, the first compose file's
+# directory.
+services:
+  runtime:
+    volumes:
+      - "../tenants:/opt/strata/tenants:ro"

@@ -16,7 +16,7 @@
         "STRATA_STORE": "sqlite",
         "STRATA_DB": "/var/lib/strata/strata.db",
         "STRATA_TENANTS": "/opt/strata/tenants",
-        "STRATA_DEV": "${STRATA_DEV:-1}"
+        "STRATA_DEV": "${STRATA_DEV:-0}"
       },
       "volumes": ["strata-data:/var/lib/strata"]
     },
@@ -33,7 +33,7 @@
         "STRATA_SITES": "127.0.0.1=fieldnotes,localhost=fieldnotes,tidewater.localhost=tidewater",
         "STRATA_ORIGINS": "http://127.0.0.1:${STRATA_PORT:-4100},http://localhost:${STRATA_PORT:-4100},http://tidewater.localhost:${STRATA_PORT:-4100}",
         "STRATA_WEB_DIST": "/opt/strata/web/dist",
-        "STRATA_DEV": "${STRATA_DEV:-1}"
+        "STRATA_DEV": "${STRATA_DEV:-0}"
       }
     }
   }

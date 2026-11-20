@@ -16,3 +16,4 @@ docs
 deploy/compose.yaml
 deploy/kubernetes
 deploy/monitoring
+tenants/*/accounts.dev.json
