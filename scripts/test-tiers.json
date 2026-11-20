@@ -14,6 +14,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "approvals",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Approval steps, compensation, the invoke-operation step and the direct start of a run through the worker on the in-memory store; not yet measured"
+    },
+    {
+      "package": "strata-backend",
       "target": "erasure",
       "tier": "routine",
       "seconds": null,
@@ -139,6 +147,13 @@
     {
       "package": "strata-kernel",
       "target": "aggregates",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
+      "target": "approvals",
       "tier": "routine",
       "seconds": null,
       "unmeasured": true
