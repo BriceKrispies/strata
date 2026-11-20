@@ -19,10 +19,11 @@ use strata_kernel::ext::TenantSchemaExt;
 use strata_kernel::{
     Context, DataSubject, DeltaOp, ExistingData, FieldDef, FieldId, FieldType, Intent,
     InvitationId, Need, ObjectTypeDef, ObjectTypeId, Output, PersonalDeclaration, PersonalKind,
-    Principal, PrincipalId, RecordId, RetentionRule, RetentionStart, RoleId, SessionId, StateDelta,
-    StateRevision, TenantId, TenantSchema, Timestamp, Transition, Value,
+    Principal, PrincipalId, QueryDef, QueryId, RecordId, RetentionRule, RetentionStart, RoleId,
+    SessionId, StateDelta, StateRevision, TenantId, TenantSchema, Timestamp, Transition, Value,
+    ViewDef, ViewId, ViewSection,
 };
-use strata_protocol::api::ErrorCode;
+use strata_protocol::api::{ErrorCode, ViewRequest};
 use strata_protocol::ws::SessionState;
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{
@@ -191,6 +192,40 @@ fn found(store: &dyn Store, name: &str) -> TenantId {
                 },
             },
         ),
+    );
+    // A view that lists every profile, as a page of the tenant does.
+    schema.queries.insert(
+        QueryId::new("all_profiles").expect("query id"),
+        QueryDef {
+            id: QueryId::new("all_profiles").expect("query id"),
+            object: ObjectTypeId::new("profile").expect("object id"),
+            filter: None,
+            params: Default::default(),
+            order: vec![],
+            limit: None,
+            aggregates: None,
+            declared_fields: None,
+        },
+    );
+    schema.views.insert(
+        ViewId::new("profiles").expect("view id"),
+        ViewDef {
+            id: ViewId::new("profiles").expect("view id"),
+            route: "/profiles".into(),
+            title: "Profiles".into(),
+            sections: [(
+                "list".to_string(),
+                ViewSection {
+                    query: QueryId::new("all_profiles").expect("query id"),
+                    args: Default::default(),
+                    include: vec![],
+                    markdown: vec![],
+                    single: false,
+                    aggregate: None,
+                },
+            )]
+            .into(),
+        },
     );
     assert!(schema.problems().is_empty(), "{:?}", schema.problems());
     let delta = StateDelta {
@@ -693,6 +728,51 @@ fn many_records_are_exported_in_bounded_batches() {
 // Restrictions
 // ---------------------------------------------------------------------------------------------
 
+/// The profiles the view at `/profiles` serves to `reader`, by person: the `name` and the `plan`
+/// each row shows, `None` where the row does not carry the field. `fields` is the reader's
+/// selection, when it names one.
+fn served_profiles(
+    app: &App,
+    reader: &Identity,
+    fields: Option<&[&str]>,
+) -> std::collections::BTreeMap<String, (Option<String>, Option<String>)> {
+    let served = strata_backend::ops::view(
+        app,
+        reader,
+        &ViewRequest {
+            path: "/profiles".into(),
+            request: Default::default(),
+            fields: fields.map(|names| names.iter().map(|n| n.to_string()).collect()),
+            cursor: None,
+            limit: None,
+        },
+    )
+    .expect("the view is served");
+    let text = |record: &strata_kernel::Record, name: &str| match record
+        .fields
+        .get(&FieldId::new(name).expect("field id"))
+    {
+        Some(Value::Str(text)) => Some(text.clone()),
+        _ => None,
+    };
+    served.sections["list"]
+        .rows
+        .iter()
+        .map(|record| {
+            let person = match record
+                .fields
+                .get(&FieldId::new("person").expect("field id"))
+            {
+                Some(Value::Str(person)) => person.clone(),
+                // The person field is not in a selection that leaves it out: the name of the
+                // record stands for it.
+                _ => format!("record {}", record.id.0),
+            };
+            (person, (text(record, "name"), text(record, "plan")))
+        })
+        .collect()
+}
+
 // Verifies: PRV-352
 // Verifies: PRV-2742
 #[test]
@@ -750,28 +830,25 @@ fn a_restriction_hides_the_personal_fields_and_keeps_the_record_from_retention()
     let placed = call(&app, &owner, "restrict", "t-r4", body).expect("restricted");
     assert_eq!(placed["restriction"]["reason"], "contested accuracy");
 
-    // A read of her records no longer shows her personal fields; Grace's stay.
-    let rights = Rights::load_restrictions(&app, &alpha).expect("rights");
-    let state = store
-        .load_complete(&alpha)
-        .expect("load")
-        .tenant
-        .expect("tenant");
-    let profile = ObjectTypeId::new("profile").expect("object id");
-    let records = &state.records[&profile];
-    let ada_record = rights.hide(&state.schema, &records[&RecordId(1)]);
-    let grace_record = rights.hide(&state.schema, &records[&RecordId(2)]);
-    let name = FieldId::new("name").expect("field id");
-    let plan = FieldId::new("plan").expect("field id");
-    assert!(ada_record.fields.get(&name).is_none());
-    assert_eq!(
-        ada_record.fields.get(&plan),
-        Some(&Value::Str("free".into()))
-    );
-    assert_eq!(
-        grace_record.fields.get(&name),
-        Some(&Value::Str("Grace Hopper".into()))
-    );
+    // A served read of her records no longer shows her personal fields, whoever reads it, the
+    // owner who placed the restriction included; Grace's stay (PRV-352, D-7741).
+    for reader in [&owner] {
+        let rows = served_profiles(&app, reader, None);
+        assert_eq!(rows.len(), 2, "both records are still served: {rows:?}");
+        assert_eq!(
+            rows["alpha:ada"],
+            (None, Some("free".into())),
+            "Ada's name is not served; her plan is not personal"
+        );
+        assert_eq!(
+            rows["alpha:grace"],
+            (Some("Grace Hopper".into()), Some("free".into()))
+        );
+    }
+    // A read that names her personal field gets none of its values either.
+    let selected = served_profiles(&app, &owner, Some(&["person", "name"]));
+    assert_eq!(selected["alpha:ada"], (None, None));
+    assert_eq!(selected["alpha:grace"].0.as_deref(), Some("Grace Hopper"));
 
     // The retention sweep deletes Grace's old record and keeps the restricted person's.
     assert!(retention::ensure_scheduled(&app, &alpha, app.now()).expect("scheduled"));
@@ -789,6 +866,13 @@ fn a_restriction_hides_the_personal_fields_and_keeps_the_record_from_retention()
     )
     .expect("lifted");
     assert_eq!(lifted["lifted"], true);
+    // Lifted, a served read shows her name again, until the sweep deletes the record.
+    assert_eq!(
+        served_profiles(&app, &owner, None)["alpha:ada"]
+            .0
+            .as_deref(),
+        Some("Ada Lovelace")
+    );
     run_jobs(&app, 2 * DAY);
     assert!(!record_exists(store, &alpha, "profile", 1));
 }

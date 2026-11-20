@@ -876,6 +876,106 @@ fn only_the_system_deletes_and_only_what_is_past_its_retention() {
     assert!(deleted.is_empty() && kept.is_empty());
 }
 
+/// A world in which a `memo` may refer to a `profile` by an optional reference.
+fn world_with_memos() -> World {
+    let mut world = personal_world();
+    let alpha = tenant_id("alpha");
+    let mut state = TenantState::clone(&world.tenants[&alpha]);
+    let mut schema = TenantSchema::clone(&state.schema);
+    schema.objects.insert(
+        object("memo"),
+        record_type(
+            "memo",
+            vec![(
+                field("about"),
+                field_def(
+                    "about",
+                    FieldType::Ref {
+                        target: object("profile"),
+                        on_delete: OnDelete::SetNull,
+                    },
+                    false,
+                ),
+            )],
+        ),
+    );
+    open_to_writers(&mut schema, "memo");
+    assert!(schema.problems().is_empty(), "{:?}", schema.problems());
+    state.schema = Arc::new(schema);
+    world.tenants.insert(alpha, Arc::new(state));
+    world
+}
+
+// Verifies: PRV-357
+#[test]
+fn a_record_that_another_record_refers_to_is_kept_by_the_sweep_until_the_reference_is_gone() {
+    let world = world_with_memos();
+    let world = must(
+        &world,
+        "owner",
+        100,
+        profile("alpha:writer1", "Ada Lovelace"),
+    );
+    // A memo that refers to profile 1.
+    let (world, made) = at(
+        &world,
+        "owner",
+        200,
+        create("memo", &[("about", Value::Ref(RecordId(1)))]),
+    )
+    .expect("accepted");
+    let memo = made
+        .events
+        .iter()
+        .find_map(|event| match &event.body {
+            EventBody::RecordCreated { record } => Some(record.id),
+            _ => None,
+        })
+        .expect("the memo was created");
+    let system = ctx("alpha", Principal::System, 45 * DAY);
+
+    // The profile is past its retention, but the memo refers to it: nothing is deleted, and the
+    // reason names the referrer.
+    let (world, outcome) = world
+        .step(&expire("profile", &[1]), &system)
+        .expect("accepted");
+    let Output::Expired { deleted, kept, .. } = &outcome.output else {
+        panic!("not an expiry");
+    };
+    assert!(deleted.is_empty(), "{deleted:?}");
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert!(
+        kept[0].contains("still referred to by") && kept[0].contains("memo"),
+        "{kept:?}"
+    );
+    assert!(world.tenants[&tenant_id("alpha")]
+        .record(&object("profile"), RecordId(1))
+        .is_some());
+
+    // Once the referring record is gone, the sweep deletes the profile.
+    let world = must(
+        &world,
+        "owner",
+        46 * DAY,
+        Intent::DeleteRecord {
+            object: object("memo"),
+            id: memo,
+            expected_version: None,
+        },
+    );
+    let (after, outcome) = world
+        .step(&expire("profile", &[1]), &system)
+        .expect("accepted");
+    let Output::Expired { deleted, kept, .. } = &outcome.output else {
+        panic!("not an expiry");
+    };
+    assert_eq!(deleted, &vec![RecordId(1)]);
+    assert!(kept.is_empty(), "{kept:?}");
+    assert!(after.tenants[&tenant_id("alpha")]
+        .record(&object("profile"), RecordId(1))
+        .is_none());
+}
+
 // Verifies: PRV-357
 // Verifies: PRV-2744
 #[test]

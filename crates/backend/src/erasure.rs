@@ -291,7 +291,8 @@ fn not_reached(unbuilt: Vec<String>, sealing_since: Option<i64>) -> Vec<String> 
         "personal fields whose subject the store cannot resolve (a subject field that refers to the record of a person, a record with no creator): stored plain, so no key reaches them; closes with WG-5116".to_string(),
         "journal intents other than create-record and update-record (the inputs of invoke-operation, the address of create-invitation), automation job parameters and run records: not sealed; closes with WG-5245".to_string(),
         "snapshots (tbl-snapshots): their records are sealed, but each keeps the members, teams and invitations of the tenant as they were, and a restore brings those back until the restore re-applies this erasure from the audit log (D-6206, D-7727); closes with WG-5246".to_string(),
-        "backup images of the tenant file (copy-tenant-backup): an image taken before the key destruction holds the subject key wrapped under the tenant key, so it opens the sealed fields until it expires at the end of its retention of 35 days (D-351); a restore re-applies the destruction from the audit log (D-6206); exports (copy-tenant-export) are not built and will hold sealed fields and wrapped keys only (D-7727); closes with WG-5246 and WG-5248".to_string(),
+        "backup images of the tenant file taken by the deployment (copy-tenant-backup): the platform keeps no list of them, so none can be named here; an image taken before the key destruction holds the subject key wrapped under the tenant key, so it opens the sealed fields until it is removed 35 days after it was taken (D-351); a restore re-applies the destruction from the audit log (D-6206); the snapshots the platform does hold are named one by one above; closes with WG-5246".to_string(),
+        "exports of the tenant (copy-tenant-export): this build writes none, so none exists to name; each would hold sealed fields and wrapped keys only and be removed 7 days after it was made (D-351, D-7727); closes with WG-5248".to_string(),
         "audit log (tbl-audit-log): lines that name the person only in a member other than principal, actor, subject, by and owner, or that hold a login or an address with no principal named, are not sealed; the log is never rewritten (PRV-359)".to_string(),
         "idempotency keys (tbl-idempotency): a row keeps the hash of the plain request and its result for 24 hours, and is removed by the first commit of the tenant after that".to_string(),
         "sign-in throttle counters (tbl-login-throttle): keyed by a hash of the login, removed by the sweep after their window".to_string(),
@@ -474,6 +475,10 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
     // Restrictions and legal holds (PRV-352, PRV-355): what was in force, and the restriction ends
     // with the erasure.
     reached.extend(rights.receipt_lines(subject));
+    // Each backup image and each export of the person's data, with its expiry (D-351).
+    reached.extend(crate::erasure_copies::of_subject(
+        app, tenant, subject, ctx.now,
+    )?);
     end_with_erasure(app, tenant, subject)?;
     // The inbox items that name an erased record, and the person's own, end with it
     // (ret-inbox-item, NTF-151).

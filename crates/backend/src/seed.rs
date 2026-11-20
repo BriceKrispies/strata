@@ -10,7 +10,7 @@
 
 use crate::app::{App, LOG};
 use crate::auth::{is_password, put_dev_account};
-use crate::ops::run_intent;
+use crate::ops::run_intent_unaudited;
 use serde_json::json;
 use strata_kernel::{Intent, PrincipalId, TenantId};
 use strata_protocol::tenants::{load_all, load_each, LoadedTenant};
@@ -63,7 +63,7 @@ pub fn install_bundle(app: &App, bundle: &Bundle) -> Result<usize, String> {
     let mut begun = false;
     let result = install::<String>(bundle, &mut |ctx, intent| {
         let creates = matches!(intent, Intent::CreateTenant { .. });
-        let output = run_intent(app, &ctx, &intent, false)
+        let output = run_intent_unaudited(app, &ctx, &intent, false)
             .map(|done| done.transition.output)
             .map_err(|e| e.describe())?;
         if creates {

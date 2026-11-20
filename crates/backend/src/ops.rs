@@ -61,7 +61,34 @@ pub fn run_intent(
 /// [`run_intent`] for a change decided on the site at revision `at`: committed only while the
 /// site is still at it, and a conflict that names the site's revision otherwise, without deciding
 /// again on the newer state ([`strata_storage_api::execute_at`]).
+///
+/// A change of configuration or of roles is an audit entry with the previous and the new value
+/// ([`crate::change_audit`], OPS-329).
 pub fn run_intent_at(
+    app: &App,
+    ctx: &Context,
+    intent: &Intent,
+    anonymous: bool,
+    at: Option<StateRevision>,
+) -> Result<Executed, ApiError> {
+    let prior = crate::change_audit::before(app, ctx, intent);
+    let done = run_intent_unaudited_at(app, ctx, intent, anonymous, at)?;
+    crate::change_audit::record(app, ctx, intent, prior, &done);
+    Ok(done)
+}
+
+/// [`run_intent`] for the installation of a tenant, which leaves no change audit entries: a tenant
+/// that is being installed has no earlier configuration to change.
+pub fn run_intent_unaudited(
+    app: &App,
+    ctx: &Context,
+    intent: &Intent,
+    anonymous: bool,
+) -> Result<Executed, ApiError> {
+    run_intent_unaudited_at(app, ctx, intent, anonymous, None)
+}
+
+fn run_intent_unaudited_at(
     app: &App,
     ctx: &Context,
     intent: &Intent,

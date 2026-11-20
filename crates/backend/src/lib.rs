@@ -6,12 +6,15 @@
 
 pub mod aggregates;
 pub mod app;
+pub mod audit_log;
 pub mod auth;
+pub mod change_audit;
 #[cfg(feature = "development")]
 pub mod dev;
 pub mod digest;
 pub mod dispatch;
 pub mod erasure;
+pub mod erasure_copies;
 pub mod files;
 pub mod hosts;
 pub mod http;

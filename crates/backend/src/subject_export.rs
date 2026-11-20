@@ -268,7 +268,7 @@ pub fn fetch(
     }))
 }
 
-fn remove_documents(app: &App, tenant: &TenantId, id: &str) -> Result<(), ApiError> {
+pub(crate) fn remove_documents(app: &App, tenant: &TenantId, id: &str) -> Result<(), ApiError> {
     app.store.doc_remove(tenant, REQUEST_KIND, id)?;
     app.store.doc_remove(tenant, RESULT_KIND, id)?;
     let prefix = format!("{id}/");

@@ -1126,6 +1126,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/members", post(members))
         .route("/internal/erasure/erase", post(erasure_erase))
         .route("/internal/erasure/receipts", post(erasure_receipts))
+        .route("/internal/audit/verify", post(crate::audit_log::route))
         .route(
             "/internal/subject-rights/:op",
             post(crate::subject_rights::route),
