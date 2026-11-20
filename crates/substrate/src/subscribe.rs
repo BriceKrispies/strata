@@ -3,9 +3,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use strata_kernel::ext::*;
+use strata_kernel::rules::Lookup;
+use strata_kernel::segment_flow;
+use strata_kernel::segments::{self as seg, Segment, SegmentDirection, SegmentEvent, SegmentId};
 use strata_kernel::{
-    owner_role, visible, DomainEvent, EventBody, ObjectTypeId, Principal, RecordId, SettingId,
-    SettingLevel, TeamId, TenantState,
+    owner_role, visible, DomainEvent, EventBody, ObjectTypeId, Principal, PrincipalId, RecordId,
+    SettingId, SettingLevel, State, TeamId, TenantState,
 };
 
 /// The kinds of event the kernel emits today, named as the specification names the variants of
@@ -41,8 +44,12 @@ pub fn kind_of(body: &EventBody) -> &'static str {
 /// of one member as OR. A selector narrows what a subscriber is told and never widens it: what
 /// remains is still decided by the kernel's read decision for that subscriber.
 ///
-/// `segments` and `units` are not members here: the kernel emits no segment or ledger event yet,
-/// and [`Selector::new`] refuses a request that names one rather than match nothing silently.
+/// `units` is not a member here: no ledger event of a unit is emitted yet, and [`Selector::new`]
+/// refuses a request that names one rather than match nothing silently.
+///
+/// `segments` selects the entry and exit events of segments (SEG-033, D-7280). They are not
+/// events of the kernel's sequence, so a selector that names segments hears only those, which are
+/// told by [`segment_notice`], and a selector that does not name them never hears one.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selector {
     /// Limit record changes to these object types. `None` means every object type.
@@ -57,6 +64,9 @@ pub struct Selector {
     /// guard let the update through.
     #[serde(default)]
     pub transitions: Option<BTreeSet<String>>,
+    /// Limit to the entry and exit events of these segments. `None` selects no segment event.
+    #[serde(default)]
+    pub segments: Option<BTreeSet<SegmentId>>,
 }
 
 impl Selector {
@@ -66,8 +76,8 @@ impl Selector {
     }
 
     /// A selector from the members of a subscription request, or the reason it is refused: a
-    /// name that is not valid, a kind the kernel does not emit, or a member (`segments`, `units`)
-    /// whose events the kernel does not emit yet.
+    /// name that is not valid, a kind the kernel does not emit, a segment id that is not one, or
+    /// a member (`units`) whose events are not emitted yet.
     pub fn new(
         objects: Option<Vec<String>>,
         kinds: Option<Vec<String>>,
@@ -75,16 +85,25 @@ impl Selector {
         units: Option<Vec<String>>,
         transitions: Option<Vec<String>>,
     ) -> Result<Selector, String> {
-        if segments.is_some() {
-            return Err(
-                "segments cannot be selected: no segment entry or exit event is emitted yet".into(),
-            );
-        }
         if units.is_some() {
             return Err(
                 "units cannot be selected: no ledger event of a unit is emitted yet".into(),
             );
         }
+        let segments = segments
+            .map(|names| {
+                if names.is_empty() {
+                    return Err("segments names no segment".to_string());
+                }
+                names
+                    .into_iter()
+                    .map(|name| {
+                        serde_json::from_value::<SegmentId>(serde_json::Value::String(name.clone()))
+                            .map_err(|_| format!("{name:?} is not a segment id"))
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()
+            })
+            .transpose()?;
         let objects = objects
             .map(|names| {
                 names
@@ -129,12 +148,17 @@ impl Selector {
             objects,
             kinds,
             transitions,
+            segments,
         })
     }
 
     /// Whether the selector lets this event through at all, before visibility is asked. Events
     /// that name no record (schema and membership changes) are not limited by `objects`.
     fn admits(&self, event: &DomainEvent) -> bool {
+        // A selector that names segments selects their events and nothing of the kernel's.
+        if self.segments.is_some() {
+            return false;
+        }
         if let Some(kinds) = &self.kinds {
             if !kinds.contains(kind_of(&event.body)) {
                 return false;
@@ -178,6 +202,63 @@ pub enum Notice {
         setting: SettingId,
         level: SettingLevel,
     },
+    /// A person entered or left a segment whose members the subscriber may see, and the subscriber
+    /// may read the person's subject record (SEG-033): the subscriber reads the members again
+    /// through the ordinary path. `position` is the position of the event in the segment event
+    /// log, which numbers its events apart from the kernel's.
+    Segment {
+        segment: SegmentId,
+        person: PrincipalId,
+        direction: SegmentDirection,
+        position: u64,
+    },
+}
+
+/// Decide what, if anything, a subscriber learns from an entry or exit event of a segment
+/// (D-7280). `state` holds the tenant with the subject record of the person of the event, and
+/// `segment` is the segment the event is of. The subscriber must have named the segment, hold
+/// the right to read its members (`segments-read`, and every object its predicate reaches in
+/// full, [`seg::may_read_members`]), and be able to read the subject record of the person
+/// ([`seg::member_visible`]): a person the subscriber could not be shown in a list of members is
+/// not announced either. An event about an erased person, whose record is gone, tells nobody.
+pub fn segment_notice(
+    state: &State,
+    principal: &Principal,
+    selector: &Selector,
+    segment: &Segment,
+    position: u64,
+    logged: &SegmentEvent,
+) -> Option<Notice> {
+    let tenant = state.tenant.as_deref()?;
+    let event = &logged.event;
+    if logged.tenant != tenant.id || segment.id != event.segment {
+        return None;
+    }
+    if !selector.segments.as_ref()?.contains(&event.segment) {
+        return None;
+    }
+    if selector.kinds.is_some() || selector.transitions.is_some() {
+        return None;
+    }
+    if let Some(objects) = &selector.objects {
+        if !objects.contains(&segment.subject) {
+            return None;
+        }
+    }
+    seg::may_read_members(tenant, principal, segment).ok()?;
+    let lookup = Lookup {
+        tenant,
+        coverage: &state.coverage,
+    };
+    let record = segment_flow::subject_of(&lookup, segment, &event.person).ok()??;
+    seg::member_visible(lookup, principal, segment, record, logged.at)
+        .ok()?
+        .then(|| Notice::Segment {
+            segment: event.segment,
+            person: event.person.clone(),
+            direction: event.direction,
+            position,
+        })
 }
 
 /// Decide what, if anything, a subscriber learns from an event.
@@ -502,6 +583,7 @@ mod tests {
                     .into(),
             ),
             transitions: None,
+            segments: None,
         };
         // The public never reads the draft: no notice of its creation, and the withdrawal is a
         // removal, as without a selector.
@@ -561,11 +643,10 @@ mod tests {
             names(&["0b1a6a7e-0000-4000-8000-000000000001"]),
             None,
             None,
-        );
-        assert!(
-            segments.unwrap_err().contains("segments"),
-            "segments are refused"
-        );
+        )
+        .unwrap();
+        assert_eq!(segments.segments.map(|set| set.len()), Some(1));
+        assert!(Selector::new(None, None, names(&["not-a-uuid"]), None, None).is_err());
         let units = Selector::new(None, None, None, names(&["eur"]), None);
         assert!(units.unwrap_err().contains("units"), "units are refused");
         // Naming nothing is still naming the member: it would match nothing, so it is refused.
