@@ -35,9 +35,14 @@ export function labEnter(state, msg, { request }) {
   return { state: next, effects: [effect] };
 }
 
-function poll(state) {
+const POLL_MS = 1500;
+const POLL_CAP_MS = 15000;
+/** Consecutive failed polls after which the run is no longer followed. */
+const POLL_FAILURES = 8;
+
+function poll(state, ms = POLL_MS) {
   const token = state.lab.timer + 1;
-  return { state: withLab(state, { timer: token }), effect: { type: 'timer', name: 'lab.poll', token, ms: 1500 } };
+  return { state: withLab(state, { timer: token }), effect: { type: 'timer', name: 'lab.poll', token, ms } };
 }
 
 /**
@@ -151,7 +156,17 @@ export function labUpdate(state, msg, { request, toast }) {
           if (!msg.ok && msg.status === 404) {
             return { state: withLab(state, { run: null, formError: 'The run is no longer available. Start it again.' }), effects: [] };
           }
-          const { state: next, effect } = poll(state);
+          // Not signed in (any more): following the run cannot work, so stop.
+          if (!msg.ok && (msg.status === 401 || msg.status === 403)) {
+            return { state: withLab(state, { run: null, formError: 'You are not signed in. Sign in again to follow the projection.' }), effects: [] };
+          }
+          // Any other failure backs off, doubling up to a cap, and ends after enough in a row.
+          const failures = msg.ok ? 0 : (lab.run.failures ?? 0) + 1;
+          if (failures >= POLL_FAILURES) {
+            return { state: withLab(state, { run: null, formError: 'The projection could not be followed. Start it again.' }), effects: [] };
+          }
+          const wait = Math.min(POLL_CAP_MS, POLL_MS * 2 ** failures);
+          const { state: next, effect } = poll(withLab(state, { run: { ...lab.run, failures } }), wait);
           return { state: next, effects: [effect] };
         }
         case 'lab.replay':

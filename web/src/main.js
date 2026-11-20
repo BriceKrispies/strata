@@ -7,6 +7,7 @@
 
 import './styles/main.css';
 import { holdValues, render } from './components/dom.js';
+import { isPageAddress } from './address.js';
 import { passkeysSupported, runPasskey } from './passkey.js';
 import { shell } from './views/shell.js';
 
@@ -17,6 +18,16 @@ let lastFocus = 0;
 // Inputs sent, and the latest the worker has said it applied. Renders made before it caught up
 // are older than what is on screen, so they must not rewrite the controls.
 let inputsSent = 0;
+// The last picture drawn: whether it holds text that is not saved, and a link's fragment to scroll to once its page is drawn.
+let lastModel = null;
+let pendingHash = '';
+
+const LEAVE_WARNING = 'You have unsaved changes. Leave without saving them?';
+
+/** True when the page on screen holds unsaved text and the person agrees to lose it, or holds none. */
+function mayLeave() {
+  return lastModel?.page?.dirty !== true || window.confirm(LEAVE_WARNING);
+}
 
 /** @param {any} message */
 function send(message) {
@@ -41,6 +52,7 @@ function bootstrap() {
 }
 
 function draw(model, applied) {
+  lastModel = model;
   const root = document.documentElement;
   root.dataset.accent = model.theme.accent;
   root.dataset.paper = model.theme.paper;
@@ -51,6 +63,11 @@ function draw(model, applied) {
     render(app, shell(model));
   } finally {
     holdValues(false);
+  }
+  if (pendingHash && model.page.kind !== 'loading') {
+    const target = document.getElementById(decodeURIComponent(pendingHash.slice(1)));
+    pendingHash = '';
+    target?.scrollIntoView();
   }
   if (model.focus.token !== lastFocus) {
     lastFocus = model.focus.token;
@@ -69,8 +86,9 @@ worker.onmessage = (event) => {
   const effect = message.effect;
   switch (effect?.type) {
     case 'push_url':
-      if (effect.replace) window.history.replaceState(null, '', effect.href);
-      else window.history.pushState(null, '', effect.href);
+      // A link's fragment stays in the address; it is scrolled to when the page is drawn.
+      if (effect.replace) window.history.replaceState(null, '', effect.href + (pendingHash && !effect.href.includes('#') ? pendingHash : ''));
+      else window.history.pushState(null, '', effect.href + (pendingHash && !effect.href.includes('#') ? pendingHash : ''));
       break;
     case 'store':
       try {
@@ -122,15 +140,21 @@ document.addEventListener('click', (event) => {
     } catch {
       arg = action.dataset.arg;
     }
+    if (action.dataset.action === 'logout' && !mayLeave()) return;
     send({ type: 'action', name: action.dataset.action, arg });
     return;
   }
   const link = /** @type {HTMLAnchorElement | null} */ (target.closest('a[href]'));
   if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   if (link.target || link.hasAttribute('download') || link.origin !== window.location.origin) return;
-  if (link.pathname.startsWith('/media/') || link.pathname.startsWith('/assets/')) return;
+  // Only the addresses the specification's routes name are the page's own; /keys, /scim, /api and
+  // the rest are resources of the server, which the browser fetches itself. The catch-all
+  // answers every other path, so it does not count.
+  if (!isPageAddress(link.pathname, link.search)) return;
   if (link.pathname === window.location.pathname && link.hash) return;
   event.preventDefault();
+  if (!mayLeave()) return;
+  pendingHash = link.hash;
   send({ type: 'navigate', href: link.pathname + link.search });
 });
 
@@ -149,6 +173,7 @@ document.addEventListener('submit', (event) => {
   const form = /** @type {HTMLFormElement} */ (event.target);
   if (!form.matches('form[data-form]')) return;
   event.preventDefault();
+  if (form.getAttribute('data-form') === 'search' && !mayLeave()) return;
   /** @type {Record<string, string | boolean>} */
   const values = {};
   for (const control of Array.from(form.elements)) {
@@ -209,5 +234,15 @@ function applyMark(mark) {
   send({ type: 'input', seq: ++inputsSent, form: 'editor', name: 'body', value: area.value });
 }
 
-// Development aid for the browser tests: a way to lose the socket as a bad network would.
-Object.defineProperty(window, '__strataDropSocket', { value: () => send({ type: 'debug_drop_socket' }) });
+// Closing the tab or reloading with unsaved text asks first (in-app navigation asks in its own handlers).
+window.addEventListener('beforeunload', (event) => {
+  if (lastModel?.page?.dirty !== true) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+
+// Development aid for the browser tests: a way to lose the socket as a bad network would. It is
+// part of development builds only (a test build of the bundle asks for it with VITE_STRATA_TEST_HOOKS=true).
+if (import.meta.env.DEV || import.meta.env.VITE_STRATA_TEST_HOOKS === 'true') {
+  Object.defineProperty(window, '__strataDropSocket', { value: () => send({ type: 'debug_drop_socket' }) });
+}

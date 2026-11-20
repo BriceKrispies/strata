@@ -4,6 +4,7 @@
 
 import * as actions from '../generated/actions.js';
 import { labView } from './lab.js';
+import { hrefOf } from './update.js';
 
 /** Cover images bundled with the application. Tenant data may only name one of these. */
 export const COVERS = [
@@ -93,7 +94,7 @@ function page(state) {
   const canWrite = signedIn && (session.may?.post ?? []).includes('create');
   const guarded = ['desk', 'desk_new', 'desk_edit', 'desk_settings', 'lab'].includes(model.view);
   // While the next page is on its way, a guarded page the visitor just left is not shown again.
-  if (guarded && !signedIn) return view.status === 'loading' ? { kind: 'loading' } : { kind: 'signin_required', next: state.route.path };
+  if (guarded && !signedIn) return view.status === 'loading' ? { kind: 'loading' } : { kind: 'signin_required', next: hrefOf(state.route) };
 
   switch (model.view) {
     case 'home':
@@ -282,8 +283,8 @@ export function view(state) {
       signedIn,
       userName: signedIn ? session.display_name : '',
       deskCurrent: path.startsWith('/desk') || path === '/lab',
-      loginHref: path === '/login' ? '/login' : `/login?next=${encodeURIComponent(path)}`,
-      connection: state.ws.status,
+      loginHref: path === '/login' ? '/login' : `/login?next=${encodeURIComponent(hrefOf(state.route))}`,
+      connection: state.wsStopped ? 'stopped' : state.ws.status,
       refreshing: state.view.status === 'loading' && !!state.view.model,
     },
     page: p,
