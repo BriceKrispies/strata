@@ -897,6 +897,7 @@ async fn deleting_a_person_removes_the_roles_they_were_given_directly() {
         verified_address: None,
         idempotency_key: None,
         language: None,
+        hop: None,
     };
     execute(
         backend.store.as_ref(),

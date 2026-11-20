@@ -2,21 +2,20 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use strata_kernel::ext::*;
 use strata_kernel::{
-    owner_role, visible, DomainEvent, EventBody, ObjectTypeId, Principal, Record, RecordId,
-    TenantState,
+    owner_role, visible, DomainEvent, EventBody, ObjectTypeId, Principal, RecordId, TenantState,
 };
 
 /// The kinds of event the kernel emits today, named as the specification names the variants of
 /// `event-body`. A selector may name these and no other kind until another kind is emitted.
-pub const EVENT_KINDS: [&str; 6] = [
+pub const EVENT_KINDS: [&str; 7] = [
     "tenant-created",
     "schema-changed",
     "member-changed",
     "record-created",
     "record-updated",
     "record-deleted",
+    "automation-suspended",
 ];
 
 /// The kind of an event: the name of its body's variant in the specification (`event-kind`).
@@ -28,6 +27,7 @@ pub fn kind_of(body: &EventBody) -> &'static str {
         EventBody::RecordCreated { .. } => "record-created",
         EventBody::RecordUpdated { .. } => "record-updated",
         EventBody::RecordDeleted { .. } => "record-deleted",
+        EventBody::AutomationSuspended { .. } => "automation-suspended",
     }
 }
 
@@ -47,9 +47,9 @@ pub struct Selector {
     #[serde(default)]
     pub kinds: Option<BTreeSet<String>>,
     /// Limit to record updates that fired one of these named workflow transitions. `None` means
-    /// every event. A record update fired a transition when a workflow of its object type has a
-    /// transition of that name from the value the workflow's field had before to the value it has
-    /// after.
+    /// every event. The kernel names in the event the transition each workflow fired (D-7203,
+    /// SCH-2202), so two transitions between the same states are told apart by the one whose
+    /// guard let the update through.
     #[serde(default)]
     pub transitions: Option<BTreeSet<String>>,
 }
@@ -129,46 +129,25 @@ impl Selector {
 
     /// Whether the selector lets this event through at all, before visibility is asked. Events
     /// that name no record (schema and membership changes) are not limited by `objects`.
-    fn admits(&self, tenant: &TenantState, event: &DomainEvent) -> bool {
+    fn admits(&self, event: &DomainEvent) -> bool {
         if let Some(kinds) = &self.kinds {
             if !kinds.contains(kind_of(&event.body)) {
                 return false;
             }
         }
         if let Some(wanted) = &self.transitions {
-            let EventBody::RecordUpdated { before, after } = &event.body else {
+            let EventBody::RecordUpdated { transitions, .. } = &event.body else {
                 return false;
             };
-            if !fired_transitions(tenant, before, after).any(|name| wanted.contains(name)) {
+            let mut fired = transitions
+                .iter()
+                .flat_map(|by_workflow| by_workflow.values());
+            if !fired.any(|name| wanted.contains(name)) {
                 return false;
             }
         }
         true
     }
-}
-
-/// The names of the workflow transitions that connect the states a record's workflow fields had
-/// before and after an update, for every workflow of its object type.
-fn fired_transitions<'a>(
-    tenant: &'a TenantState,
-    before: &'a Record,
-    after: &'a Record,
-) -> impl Iterator<Item = &'a str> {
-    tenant
-        .schema
-        .workflows_of(&after.object)
-        .flat_map(move |workflow| {
-            let (from, to) = (before.get(&workflow.field), after.get(&workflow.field));
-            workflow
-                .transitions
-                .iter()
-                .filter(move |step| {
-                    from != to
-                        && from.as_str() == Some(step.from.as_str())
-                        && to.as_str() == Some(step.to.as_str())
-                })
-                .map(|step| step.name.as_str())
-        })
 }
 
 /// What a subscriber is told. It never carries record contents: the subscriber reads again
@@ -204,7 +183,7 @@ pub fn notice(
     if event.tenant != tenant.id {
         return None;
     }
-    if !selector.admits(tenant, event) {
+    if !selector.admits(event) {
         return None;
     }
     let wants = |object: &ObjectTypeId| {
@@ -232,7 +211,7 @@ pub fn notice(
                 version: record.version,
             })
         }
-        EventBody::RecordUpdated { before, after } => {
+        EventBody::RecordUpdated { before, after, .. } => {
             if !wants(&after.object) {
                 None
             } else if sees(after) {
@@ -256,6 +235,9 @@ pub fn notice(
                 id: before.id,
             })
         }
+        // A suspension changes a definition the tenant's owner manages, not a record anyone
+        // reads; it is listed with the automation, not pushed to subscribers.
+        EventBody::AutomationSuspended { .. } => None,
     }
 }
 
@@ -405,6 +387,63 @@ mod tests {
             ..Selector::all()
         };
         assert_eq!(told(&writer, &both), [false, false, false]);
+    }
+
+    /// Verifies: SCH-2202
+    ///
+    /// Two transitions between the same states with different guards: the selector matches the
+    /// one whose guard let the update through, as the event names it, and not the other.
+    #[test]
+    fn a_transition_selector_tells_apart_two_transitions_between_the_same_states() {
+        use strata_kernel::{
+            ExistingData, Expr, SchemaChange, WorkflowDef, WorkflowId, WorkflowTransition,
+        };
+        let world = notes_world();
+        let tenant = world.tenants[&tenant_id("alpha")].clone();
+        let mut workflow: WorkflowDef =
+            tenant.schema.workflows[&WorkflowId::new("note_status").unwrap()].clone();
+        // `approve` comes first and only an owner passes its guard; an editor's publication
+        // fires `publish`.
+        let mut approve: WorkflowTransition = workflow.transitions[0].clone();
+        approve.name = "approve".into();
+        approve.guard = Some(Expr::HasRole(role("owner")));
+        workflow.transitions.insert(0, approve);
+        let mut world = world;
+        let mut events = Vec::new();
+        let mut run = |who: &str, now, intent| {
+            let (next, outcome) = world.step(&intent, &ctx("alpha", user(who), now)).unwrap();
+            world = next;
+            events.extend(outcome.events);
+        };
+        run(
+            "alpha:owner",
+            5_000,
+            Intent::ChangeSchema {
+                changes: vec![SchemaChange::DefineWorkflow(workflow)],
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
+        );
+        run("alpha:writer1", 5_001, new_note("Draft", "draft"));
+        run(
+            "alpha:editor",
+            5_002,
+            Intent::UpdateRecord {
+                object: object("note"),
+                id: strata_kernel::RecordId(1),
+                fields: [(field("status"), text("published"))].into(),
+                expected_version: None,
+            },
+        );
+        let tenant = &world.tenants[&tenant_id("alpha")];
+        let update = events.last().expect("the publication's event");
+        let editor = user("alpha:editor");
+        assert!(notice(tenant, &editor, &only_transitions(&["publish"]), update).is_some());
+        assert_eq!(
+            notice(tenant, &editor, &only_transitions(&["approve"]), update),
+            None,
+            "the transition whose guard did not hold did not fire"
+        );
     }
 
     /// Verifies: SCH-1575

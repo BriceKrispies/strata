@@ -160,6 +160,7 @@ fn grant_default_role(
         verified_address: None,
         idempotency_key: None,
         language: None,
+        hop: None,
     };
     crate::ops::run_intent(
         app,

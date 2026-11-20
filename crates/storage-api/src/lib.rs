@@ -226,7 +226,9 @@ impl Commit {
                 .iter()
                 .filter_map(|effect| match effect {
                     Effect::RevokeSessions { principal } => Some(principal.clone()),
-                    Effect::Publish { .. } => None,
+                    Effect::Publish { .. }
+                    | Effect::StartAutomation(_)
+                    | Effect::DeclineAutomation(_) => None,
                 })
                 .chain(
                     transition

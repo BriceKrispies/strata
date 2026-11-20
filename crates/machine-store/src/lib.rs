@@ -226,6 +226,7 @@ fn context(tenant: &TenantId, now: Time) -> Context {
         verified_address: None,
         idempotency_key: None,
         language: None,
+        hop: None,
     }
 }
 
@@ -558,6 +559,7 @@ impl<'a> ApiTx<'a> {
                         EventBody::RecordUpdated {
                             before: before.clone(),
                             after: after.clone(),
+                            transitions: None,
                         },
                         Intent::UpdateRecord {
                             object: after.object.clone(),

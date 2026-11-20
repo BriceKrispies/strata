@@ -535,6 +535,7 @@ pub fn install<E>(
             verified_address: None,
             idempotency_key: None,
             language: None,
+            hop: None,
         };
         execute(ctx, intent).map_err(|error| InstallError::Step { step, error })
     };
@@ -1482,6 +1483,7 @@ pub fn install_product<E>(
             verified_address: None,
             idempotency_key: None,
             language: None,
+            hop: None,
         };
         let intent = Intent::ChangeSchema {
             changes,

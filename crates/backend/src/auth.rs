@@ -72,6 +72,7 @@ impl Identity {
             verified_address: self.verified_address.clone(),
             idempotency_key: None,
             language: None,
+            hop: None,
         }
     }
 }

@@ -168,7 +168,10 @@ pub fn roles_of(tenant: &TenantState, principal: &Principal) -> BTreeSet<RoleId>
         Principal::System => BTreeSet::new(),
         Principal::Anonymous => BTreeSet::from([public_role()]),
         Principal::User(id) => {
-            let mut roles = assigned_roles(&tenant.members, &tenant.schema, id);
+            // WFL-1527: an automation principal holds the run-as roles of its automation and no
+            // other.
+            let mut roles = crate::triggers::automation_roles(&tenant.schema, id)
+                .unwrap_or_else(|| assigned_roles(&tenant.members, &tenant.schema, id));
             roles.insert(public_role());
             roles
         }

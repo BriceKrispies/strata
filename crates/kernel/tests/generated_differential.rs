@@ -74,6 +74,17 @@
 //!  10. Not exercised, and not mirrored: conditions that follow a reference are
 //!      `InsufficientState` in the hand-written kernel when the snapshot lacks the record
 //!      (difference 2 states the rest).
+//!  11. Not mirrored: what `strata_kernel::triggers` adds once the events of a decision are final
+//!      (D-7200 to D-7204, WG-5097, WG-5099, WG-5079): the `StartAutomation` and
+//!      `DeclineAutomation` effects of the triggers that match an event, the `transitions` a
+//!      record-updated event names, the `defined-by` and `defined-at` the kernel writes on a
+//!      trigger or an automation it defines, the suspension of an automation whose definer lost
+//!      authority, the roles of an automation principal and its reserved `automation:` prefix.
+//!      The generated `finish`, `update-record` and `apply-change` do not state them yet. Compared
+//!      as: both results without those effects, transitions, definers and times
+//!      (`without_kernel_only`). The suspension is guarded: the corpus's automation acts with no
+//!      run-as role, so it is never suspended, and `assert_no_input_of_a_known_difference` fails
+//!      on one that has a role. No principal of the corpus starts with `automation:`.
 //!
 //! Differences 5 to 9 are guarded: `assert_no_input_of_a_known_difference` runs on every
 //! snapshot the test decides or reads, and fails when a snapshot has a field read condition, an
@@ -405,6 +416,9 @@ fn award(broken: bool) -> AutomationDef {
         run_key: Some(Expr::Param("owner".into())),
         start: name("make"),
         steps,
+        defined_by: None,
+        defined_at: None,
+        suspended_for: None,
     }
 }
 
@@ -423,6 +437,8 @@ fn on_publish() -> TriggerDef {
         )),
         automation: WorkflowId::new("award").unwrap(),
         paused: None,
+        defined_by: None,
+        defined_at: None,
     }
 }
 
@@ -627,6 +643,11 @@ fn assert_no_input_of_a_known_difference(state: &State) {
         );
     }
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {
+        assert!(
+            automation.run_as.roles.is_empty(),
+            "{} has a run-as role; the generated functions do not suspend an automation whose definer lost authority (difference 11)",
+            automation.id
+        );
         for (name, step) in &automation.steps {
             assert!(
                 step.retry.is_none()
@@ -638,6 +659,44 @@ fn assert_no_input_of_a_known_difference(state: &State) {
                 "{}.{name} has a retry, a timeout or a wait; the generated functions do not bound durations (difference 9)",
                 automation.id
             );
+        }
+    }
+}
+
+/// Difference 11: a result without what `strata_kernel::triggers` adds and the generated
+/// functions do not state: the effects of triggers, the transitions a record-updated event names,
+/// and the definer and time written on a trigger or an automation.
+fn without_kernel_only(result: &mut Result<Transition, DomainError>) {
+    let Ok(outcome) = result else {
+        return;
+    };
+    outcome.effects.retain(|effect| {
+        !matches!(
+            effect,
+            Effect::StartAutomation(_) | Effect::DeclineAutomation(_)
+        )
+    });
+    for event in &mut outcome.events {
+        if let EventBody::RecordUpdated { transitions, .. } = &mut event.body {
+            *transitions = None;
+        }
+    }
+    for op in &mut outcome.delta.ops {
+        if let DeltaOp::PutSchema(schema) = op {
+            let mut plain = TenantSchema::clone(schema);
+            for def in plain
+                .automations
+                .iter_mut()
+                .flat_map(|all| all.values_mut())
+            {
+                def.defined_by = None;
+                def.defined_at = None;
+            }
+            for def in plain.triggers.iter_mut().flat_map(|all| all.values_mut()) {
+                def.defined_by = None;
+                def.defined_at = None;
+            }
+            *schema = std::sync::Arc::new(plain);
         }
     }
 }
@@ -662,7 +721,8 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         state.tenant_id
     );
     assert_no_input_of_a_known_difference(state);
-    let hand = transition(state, intent, context);
+    let mut hand = transition(state, intent, context);
+    without_kernel_only(&mut hand);
     let texts = texts_for(state, intent);
     let mut generated = match spec::kernel_transition(state, intent, context, &texts) {
         Ok(result) => Ok(result),
@@ -672,6 +732,7 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
             )
         })),
     };
+    without_kernel_only(&mut generated);
     match (&hand, &mut generated) {
         (Ok(h), Ok(g)) => {
             tally.evaluation_failed_details +=
