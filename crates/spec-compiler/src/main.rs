@@ -13,6 +13,12 @@
 //! specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]
 //! ```
 //!
+//! Every command also takes `--product <file>`, any number of times: a product file layered on the
+//! specification (`strata_spec_compiler::layers`). Each is loaded and checked against the
+//! specification before anything else happens, and the command is refused with one `error[layer.*]`
+//! line per problem. A product is tenant metadata, so nothing is generated from it: the files a
+//! command writes or checks are exactly those it writes or checks without `--product`.
+//!
 //! `--spec-hash <hash>` is the specification's semantic hash as `exegra validate` reports it
 //! (`semanticHash`). It is written into the header of every generated file, so a file generated
 //! from another version of the specification differs and `check` and `check-web` fail on it.
@@ -58,6 +64,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use strata_spec_compiler::emit::relative_path;
+use strata_spec_compiler::layers::{self, ProductFile};
 use strata_spec_compiler::{
     deploy, e2e, generate, generate_with_core, model_core, output, scenarios, web, GeneratedFile,
     Options, RuntimeDependency,
@@ -73,7 +80,8 @@ const USAGE: &str = "usage:
   specc scenarios       --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
   specc check-scenarios --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
   specc web          --spec <file> --out <dir> [--spec-hash <hash>]
-  specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]";
+  specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]
+every command also takes --product <file>, repeatable: a product file layered on the specification";
 
 /// The runtime crate of the checkout specc was built from.
 const DEFAULT_RUNTIME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime");
@@ -105,6 +113,8 @@ struct Args {
     e2e: e2e::Options,
     /// The pure crate's directory and package name, when the generation is split.
     core: Option<(PathBuf, String)>,
+    /// The product files layered on the specification (`--product`, in order).
+    products: Vec<String>,
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
@@ -133,8 +143,16 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut expect_fail_prefix = None;
     let mut core_out = None;
     let mut core_crate_name = None;
+    let mut products = Vec::new();
     let mut iter = rest.iter();
     while let Some(flag) = iter.next() {
+        if flag == "--product" {
+            let Some(value) = iter.next() else {
+                return Err("--product needs a value".to_string());
+            };
+            products.push(value.clone());
+            continue;
+        }
         let slot = match flag.as_str() {
             "--spec" => &mut spec,
             "--out" => &mut out,
@@ -237,6 +255,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             expect_fail_prefix,
         },
         core,
+        products,
     })
 }
 
@@ -282,6 +301,9 @@ fn run() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if let Err(code) = check_products(&args, &text) {
+        return code;
+    }
     if matches!(args.command, Command::Deploy | Command::CheckDeploy) {
         return run_deploy(&args, &text);
     }
@@ -334,6 +356,55 @@ fn run() -> ExitCode {
         | Command::CheckScenarios
         | Command::Web
         | Command::CheckWeb => ExitCode::from(2),
+    }
+}
+
+/// Loads the product files of `--product` and checks them against the specification. Nothing is
+/// generated from them, so the command goes on with the specification alone; a product that does
+/// not pass refuses the whole command before anything is written.
+fn check_products(args: &Args, text: &str) -> Result<(), ExitCode> {
+    if args.products.is_empty() {
+        return Ok(());
+    }
+    let mut files = Vec::new();
+    for path in &args.products {
+        match std::fs::read_to_string(path) {
+            Ok(product) => files.push(ProductFile {
+                path: path.clone(),
+                text: product,
+                file: absolute(Path::new(path)).ok(),
+            }),
+            Err(e) => {
+                eprintln!("specc: cannot read the product file {path}: {e}");
+                return Err(ExitCode::from(1));
+            }
+        }
+    }
+    let platform = absolute(Path::new(&args.spec)).ok();
+    match layers::load_layered(&args.spec, text, platform.as_deref(), &files) {
+        Ok(layered) => {
+            for product in &layered.products {
+                eprintln!(
+                    "specc: product {} ({}) checked against {}: {} entities of tenant metadata, from which nothing is generated",
+                    product.id,
+                    product.path,
+                    args.spec,
+                    product.entities.len()
+                );
+            }
+            Ok(())
+        }
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprintln!("{d}");
+            }
+            eprintln!(
+                "specc: refused {} with its product files, {} diagnostic(s); nothing was written",
+                args.spec,
+                diagnostics.len()
+            );
+            Err(ExitCode::from(1))
+        }
     }
 }
 
@@ -668,6 +739,28 @@ mod tests {
         let out = workspace.join("target/specc-out/generated");
         let path = runtime_path(&out, Path::new(DEFAULT_RUNTIME)).unwrap();
         assert_eq!(path, "../../../crates/runtime");
+    }
+
+    #[test]
+    fn product_files_are_collected_in_order() {
+        let parsed = parse_args(&args(&[
+            "web",
+            "--spec",
+            "s.jsonc",
+            "--product",
+            "a.jsonc",
+            "--out",
+            "o",
+            "--product",
+            "b.jsonc",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.products, vec!["a.jsonc", "b.jsonc"]);
+        assert!(parse_args(&args(&["web", "--spec", "s", "--out", "o", "--product"])).is_err());
+        assert!(parse_args(&args(&["web", "--spec", "s", "--out", "o"]))
+            .unwrap()
+            .products
+            .is_empty());
     }
 
     #[test]

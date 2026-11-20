@@ -10,7 +10,9 @@
 // Steps, in order:
 //   0. specc check: crates/model and its pure crate crates/model-core are exactly what the compiler
 //      writes from the specification; check-web and check-e2e do the same for web/src/generated,
-//      tests/e2e/generated (the journeys) and tests/e2e/step-checks (the step fixtures).
+//      tests/e2e/generated (the journeys) and tests/e2e/step-checks (the step fixtures). The product
+//      specifications in specifications/products go with --product to every check of the platform
+//      specification, which refuses a product that does not pass (WG-4989).
 //   1. cargo test --workspace, lake build, node --test (web), npm run check (tsc), recorded under
 //      var/test-results (at most two jobs). Not run with --no-test.
 //   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata): validate the
@@ -28,7 +30,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
-import { savedTraces, semanticHash, traceFreshness } from './spec-hash.mjs';
+import { productArgs, savedTraces, semanticHash, traceFreshness } from './spec-hash.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const exegraHome = resolve(root, process.env.EXEGRA_HOME ?? '../exegra');
@@ -192,16 +194,17 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
   check('exegra reports the specification semantic hash (generated files and saved traces name it)', hash !== null,
     hash ?? `no hash from ${exegraHome} (set EXEGRA_HOME and EXEGRA_PROJECT)`);
   const hashArgs = hash ? ['--spec-hash', hash] : [];
+  const products = productArgs(root);
   const specc = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
     'check', '--spec', 'specifications/spec.jsonc', '--out', 'crates/model', '--crate-name', 'strata-model', '--runtime', 'crates/runtime',
-    '--core-out', 'crates/model-core', '--core-crate-name', 'strata-model-core', ...hashArgs], {
+    '--core-out', 'crates/model-core', '--core-crate-name', 'strata-model-core', ...hashArgs, ...products], {
     env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
   });
   check('specc check (crates/model and crates/model-core are generated from the specification at its semantic hash)', specc.ok,
     specc.ok ? 'up to date' : `${exitText(specc)}: ${lastLine(specc.out)}; run npm run generate and commit`);
 
   const web = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check-web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated', ...hashArgs], {
+    'check-web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated', ...hashArgs, ...products], {
     env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
   });
   check('specc check-web (web/src/generated is generated from the specification at its semantic hash)', web.ok,
@@ -219,7 +222,7 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
   }
 
   const e2e = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check-e2e', '--spec', 'specifications/spec.jsonc', '--out', 'tests/e2e/generated', '--origin', 'http://127.0.0.1:4200'], {
+    'check-e2e', '--spec', 'specifications/spec.jsonc', '--out', 'tests/e2e/generated', '--origin', 'http://127.0.0.1:4200', ...products], {
     env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
   });
   check('specc check-e2e (tests/e2e/generated is generated from the specification)', e2e.ok,

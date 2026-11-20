@@ -11,6 +11,21 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
+/**
+ * The product specifications layered on the platform specification (WG-4989): every *.jsonc in
+ * specifications/products, in name order, as specc arguments (`--product <file>` each, relative to
+ * the root). specc checks them against the platform and generates nothing from them, so the files
+ * it writes stay the platform's alone. None while the directory does not exist.
+ */
+export function productArgs(root) {
+  const dir = join(root, 'specifications', 'products');
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith('.jsonc'))
+    .sort()
+    .flatMap((name) => ['--product', `specifications/products/${name}`]);
+}
+
 /** Runs the Exegra CLI and returns its parsed JSON envelope, or null when it printed none. */
 export function exegraJson(exegraHome, args) {
   const cli = resolve(exegraHome, 'cli/exegra.js');

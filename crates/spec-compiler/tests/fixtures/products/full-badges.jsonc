@@ -1,0 +1,13 @@
+{
+  // A product layered on the golden fixture tests/fixtures/full/spec.jsonc, for the test that
+  // generating with and without a product file writes the same bytes (tests/layers.rs).
+  "product": {
+    "id": "badges",
+    "name": "Badges",
+    "imports": { "spec": "../full/spec.jsonc", "entities": ["tenant-id"] }
+  },
+  "types": [
+    { "id": "badges-tier", "name": "Badge tier", "kind": "enum", "values": ["bronze", "silver", "gold"] },
+    { "id": "badges-award", "name": "Badge award", "kind": "struct", "fields": [ { "name": "tenant", "type": "tenant-id" }, { "name": "tier", "type": "badges-tier" } ] }
+  ]
+}

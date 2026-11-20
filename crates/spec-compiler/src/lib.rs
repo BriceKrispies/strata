@@ -13,6 +13,9 @@
 //!    rather than written unformatted.
 //! 4. [`output`]: the files are written to a directory, or a directory is compared with them.
 //!
+//! Product files layered on the specification ([`layers`]) are loaded and checked with it; they
+//! are tenant metadata, so nothing is generated from them and the output is the platform's alone.
+//!
 //! Output depends only on the specification text, the path it is named by, the crate name and
 //! the rustfmt version (the repository pins its toolchain in `rust-toolchain.toml`):
 //! everything is emitted in declaration order, nothing iterates a hash map, and nothing records
@@ -30,6 +33,7 @@ pub mod function;
 pub mod ir;
 pub mod jsonc;
 pub mod language;
+pub mod layers;
 pub mod load;
 pub mod model_core;
 pub mod naming;
