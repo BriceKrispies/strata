@@ -84299,6 +84299,26 @@
             }
           },
           "result": true
+        },
+        {
+          "description": "state.rs Coverage::covers: a ledger need is covered only by itself; no object need covers it.",
+          "args": {
+            "coverage": {
+              "partial": [
+                {
+                  "all-of": "note"
+                }
+              ]
+            },
+            "wanted": {
+              "ledger": {
+                "account": {
+                  "account": "0b6c6f5e-1d3a-8c4e-9f00-112233445566"
+                }
+              }
+            }
+          },
+          "result": false
         }
       ]
     },
@@ -141693,7 +141713,7 @@
     },
     {
       "id": "apply-change",
-      "description": "transition.rs apply_change: one schema change applied to a working copy, and the line that describes it. Every Define is define-or-replace (DefineObject keeps the fields and constraints of an object type it relabels); changing an object type that does not exist, removing something that does not exist, and defining a built-in role (public, owner) are refused with the problem. define-trigger, define-automation and define-operation are define-or-replace; removing a trigger, an automation, an operation or a unique constraint that does not exist is refused, and an automation is not removed while a trigger names it (D-6539). A table left empty is none, so the schema hashes as one that never held it. Every other change, which is one of the declarations of an object type, the removal of an object type or a role, a template, a token or the ownership record of a product, is applied by apply-meta-change (D-7340, D-7341); every schema built here carries the tables of templates, tokens and products on.",
+      "description": "transition.rs apply_change: one schema change applied to a working copy, and the line that describes it. Every Define is define-or-replace (DefineObject keeps the fields and constraints of an object type it relabels); changing an object type that does not exist, removing something that does not exist, and defining a built-in role (public, owner) are refused with the problem. define-trigger, define-automation and define-operation are define-or-replace; removing a trigger, an automation, an operation or a unique constraint that does not exist is refused, and an automation is not removed while a trigger names it (D-6539). A table left empty is none, so the schema hashes as one that never held it. define-setting and define-capability are define-or-replace, and removing a setting or a capability that is not held is refused, a table left empty being none (settings.rs and capabilities.rs apply_define and apply_remove). The ledger declarations are refused here: the kernel ledger module applies them and these functions do not mirror it. Every other change, which is one of the declarations of an object type, the removal of an object type or a role, a template, a token or the ownership record of a product, is applied by apply-meta-change (D-7340, D-7341); every schema built here carries the tables of settings and capabilities, the ledger declarations and the tables of templates, tokens and products on.",
       "params": [
         {
           "name": "schema",
@@ -141706,7 +141726,7 @@
       ],
       "returns": "schema-step",
       "errors": "schema-problem",
-      "body": "match change { define-object{id, label} => schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, id, match get(schema.objects, id) { Some(o) => object-type-def{id: o.id, label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique}, None => object-type-def{id, label, fields: {}, constraints: {}} }), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define object {}', id)}, define-field{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: insert(o.fields, field.id, field), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: if get(o.fields, field.id) != null then format('redefine field {}.{}', object, field.id) else format('define field {}.{}', object, field.id)} }, define-relationship{object, field, label, target, on-delete, required} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: insert(o.fields, field, field-def{id: field, label, ty: field-type.ref{target, on-delete}, required, unique: false}), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define relationship {}.{} -> {}', object, field, target)} }, remove-field{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(o.fields, field) == null then fail(schema-problem.problem(format('no field {}.{}', object, field))) else let o2 = object-type-def{id: o.id, label: o.label, fields: remove(o.fields, field), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove field {}.{}', object, field)} }, define-constraint{object, constraint} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: insert(o.constraints, constraint.id, constraint), retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define constraint {}.{}', object, constraint.id)} }, remove-constraint{object, constraint} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(o.constraints, constraint) == null then fail(schema-problem.problem(format('no constraint {}.{}', object, constraint))) else let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: remove(o.constraints, constraint), retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove constraint {}.{}', object, constraint)} }, define-role(role) => if role.id == 'public' || role.id == 'owner' then fail(schema-problem.problem(format('{} is built in', role.id))) else schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: insert(schema.roles, role.id, role), role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define role {}', role.id)}, define-role-permissions{role, permissions} => if get(schema.roles, role) == null then fail(schema-problem.problem(format('no role {}', role))) else schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: call role-permissions-with(schema, role, permissions), teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define permissions of role {}', role)}, define-policy(p) => schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: insert(schema.policies, p.id, p), workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define policy {}', p.id)}, remove-policy(id) => if get(schema.policies, id) == null then fail(schema-problem.problem(format('no policy {}', id))) else schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: remove(schema.policies, id), workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove policy {}', id)}, define-workflow(w) => schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: insert(schema.workflows, w.id, w), queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define workflow {}', w.id)}, remove-workflow(id) => if get(schema.workflows, id) == null then fail(schema-problem.problem(format('no workflow {}', id))) else schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: remove(schema.workflows, id), queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove workflow {}', id)}, define-query(q) => schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: insert(schema.queries, q.id, q), views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define query {}', q.id)}, remove-query(id) => if get(schema.queries, id) == null then fail(schema-problem.problem(format('no query {}', id))) else schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: remove(schema.queries, id), views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove query {}', id)}, define-view(w) => schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: insert(schema.views, w.id, w), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define view {}', w.id)}, remove-view(id) => if get(schema.views, id) == null then fail(schema-problem.problem(format('no view {}', id))) else schema-step{schema: tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: remove(schema.views, id), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove view {}', id)}, define-trigger(t) => schema-step{schema: tenant-schema{version: schema.version, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: insert(call triggers-of(schema), t.id, t), automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define trigger {}', t.id)}, remove-trigger(id) => if get(call triggers-of(schema), id) == null then fail(schema-problem.problem(format('no trigger {}', id))) else let rest = remove(call triggers-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: if keys(rest) == [] then null else rest, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove trigger {}', id)}, define-automation(a) => schema-step{schema: tenant-schema{version: schema.version, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: insert(call automations-of(schema), a.id, a), operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define automation {}', a.id)}, remove-automation(id) => if get(call automations-of(schema), id) == null then fail(schema-problem.problem(format('no automation {}', id))) else match find(t in values(call triggers-of(schema)), t.automation == id) { Some(t) => fail(schema-problem.problem(format('automation {} is named by trigger {}', id, t.id))), None => let rest = remove(call automations-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: if keys(rest) == [] then null else rest, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove automation {}', id)} }, define-operation(op) => schema-step{schema: tenant-schema{version: schema.version, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: insert(call operations-of(schema), op.id, op), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define operation {}', op.id)}, remove-operation(id) => if get(call operations-of(schema), id) == null then fail(schema-problem.problem(format('no operation {}', id))) else let rest = remove(call operations-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: if keys(rest) == [] then null else rest, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove operation {}', id)}, define-unique{object, unique} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: insert(call uniques-of(o), unique.id, unique)} in schema-step{schema: tenant-schema{version: schema.version, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define unique constraint {}.{}', object, unique.id)} }, remove-unique{object, unique} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(call uniques-of(o), unique) == null then fail(schema-problem.problem(format('no unique constraint {}.{}', object, unique))) else let rest = remove(call uniques-of(o), unique) in let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: if keys(rest) == [] then null else rest} in schema-step{schema: tenant-schema{version: schema.version, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove unique constraint {}.{}', object, unique)} }, _ => try call apply-meta-change(schema, change) }",
+      "body": "match change { define-object{id, label} => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, id, match get(schema.objects, id) { Some(o) => object-type-def{id: o.id, label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique}, None => object-type-def{id, label, fields: {}, constraints: {}} }), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define object {}', id)}, define-field{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: insert(o.fields, field.id, field), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: if get(o.fields, field.id) != null then format('redefine field {}.{}', object, field.id) else format('define field {}.{}', object, field.id)} }, define-relationship{object, field, label, target, on-delete, required} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: insert(o.fields, field, field-def{id: field, label, ty: field-type.ref{target, on-delete}, required, unique: false}), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define relationship {}.{} -> {}', object, field, target)} }, remove-field{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(o.fields, field) == null then fail(schema-problem.problem(format('no field {}.{}', object, field))) else let o2 = object-type-def{id: o.id, label: o.label, fields: remove(o.fields, field), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove field {}.{}', object, field)} }, define-constraint{object, constraint} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: insert(o.constraints, constraint.id, constraint), retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define constraint {}.{}', object, constraint.id)} }, remove-constraint{object, constraint} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(o.constraints, constraint) == null then fail(schema-problem.problem(format('no constraint {}.{}', object, constraint))) else let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: remove(o.constraints, constraint), retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove constraint {}.{}', object, constraint)} }, define-role(role) => if role.id == 'public' || role.id == 'owner' then fail(schema-problem.problem(format('{} is built in', role.id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: insert(schema.roles, role.id, role), role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define role {}', role.id)}, define-role-permissions{role, permissions} => if get(schema.roles, role) == null then fail(schema-problem.problem(format('no role {}', role))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: call role-permissions-with(schema, role, permissions), teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define permissions of role {}', role)}, define-policy(p) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: insert(schema.policies, p.id, p), workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define policy {}', p.id)}, remove-policy(id) => if get(schema.policies, id) == null then fail(schema-problem.problem(format('no policy {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: remove(schema.policies, id), workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove policy {}', id)}, define-workflow(w) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: insert(schema.workflows, w.id, w), queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define workflow {}', w.id)}, remove-workflow(id) => if get(schema.workflows, id) == null then fail(schema-problem.problem(format('no workflow {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: remove(schema.workflows, id), queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove workflow {}', id)}, define-query(q) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: insert(schema.queries, q.id, q), views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define query {}', q.id)}, remove-query(id) => if get(schema.queries, id) == null then fail(schema-problem.problem(format('no query {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: remove(schema.queries, id), views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove query {}', id)}, define-view(w) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: insert(schema.views, w.id, w), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define view {}', w.id)}, remove-view(id) => if get(schema.views, id) == null then fail(schema-problem.problem(format('no view {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: remove(schema.views, id), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove view {}', id)}, define-trigger(t) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: insert(call triggers-of(schema), t.id, t), automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define trigger {}', t.id)}, remove-trigger(id) => if get(call triggers-of(schema), id) == null then fail(schema-problem.problem(format('no trigger {}', id))) else let rest = remove(call triggers-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: if keys(rest) == [] then null else rest, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove trigger {}', id)}, define-automation(a) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: insert(call automations-of(schema), a.id, a), operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define automation {}', a.id)}, remove-automation(id) => if get(call automations-of(schema), id) == null then fail(schema-problem.problem(format('no automation {}', id))) else match find(t in values(call triggers-of(schema)), t.automation == id) { Some(t) => fail(schema-problem.problem(format('automation {} is named by trigger {}', id, t.id))), None => let rest = remove(call automations-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: if keys(rest) == [] then null else rest, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove automation {}', id)} }, define-operation(op) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: insert(call operations-of(schema), op.id, op), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define operation {}', op.id)}, remove-operation(id) => if get(call operations-of(schema), id) == null then fail(schema-problem.problem(format('no operation {}', id))) else let rest = remove(call operations-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: if keys(rest) == [] then null else rest, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove operation {}', id)}, define-unique{object, unique} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: insert(call uniques-of(o), unique.id, unique)} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('define unique constraint {}.{}', object, unique.id)} }, remove-unique{object, unique} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(call uniques-of(o), unique) == null then fail(schema-problem.problem(format('no unique constraint {}.{}', object, unique))) else let rest = remove(call uniques-of(o), unique) in let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: if keys(rest) == [] then null else rest} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove unique constraint {}.{}', object, unique)} }, define-setting(sd) => schema-step{schema: call schema-with-settings(schema, insert(call settings-of(schema), sd.id, sd)), line: format('define setting {}', sd.id)}, remove-setting(id) => if get(call settings-of(schema), id) == null then fail(schema-problem.problem(format('no setting {}', id))) else schema-step{schema: call schema-with-settings(schema, remove(call settings-of(schema), id)), line: format('remove setting {}', id)}, define-capability(cd) => schema-step{schema: call schema-with-capabilities(schema, insert(call capabilities-of(schema), cd.id, cd)), line: format('define capability {}', cd.id)}, remove-capability(id) => if get(call capabilities-of(schema), id) == null then fail(schema-problem.problem(format('no capability {}', id))) else schema-step{schema: call schema-with-capabilities(schema, remove(call capabilities-of(schema), id)), line: format('remove capability {}', id)}, declare-ledger-unit(u) => fail(schema-problem.problem(format('ledger unit {} is declared by the kernel ledger module', u.unit))), declare-ledger-pool(p) => fail(schema-problem.problem(format('ledger pool {} is declared by the kernel ledger module', p.pool))), set-ledger-limit(l) => fail(schema-problem.problem(format('a limit of ledger unit {} is set by the kernel ledger module', l.unit))), remove-ledger-definition(_) => fail(schema-problem.problem('a ledger definition is removed by the kernel ledger module')), _ => try call apply-meta-change(schema, change) }",
       "examples": [
         {
           "args": {
@@ -161592,6 +161612,309 @@
           "error": {
             "problem": "note declares no retention"
           }
+        },
+        {
+          "description": "settings.rs apply_define: a setting definition is added to a schema that held none.",
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            },
+            "change": {
+              "define-setting": {
+                "id": "theme",
+                "label": "Theme",
+                "type": "string",
+                "default": {
+                  "str": "light"
+                },
+                "levels": [
+                  "tenant",
+                  "person"
+                ]
+              }
+            }
+          },
+          "result": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {},
+              "settings": {
+                "theme": {
+                  "id": "theme",
+                  "label": "Theme",
+                  "type": "string",
+                  "default": {
+                    "str": "light"
+                  },
+                  "levels": [
+                    "tenant",
+                    "person"
+                  ]
+                }
+              }
+            },
+            "line": "define setting theme"
+          }
+        },
+        {
+          "description": "settings.rs apply_remove: removing the last setting leaves no table.",
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {},
+              "settings": {
+                "theme": {
+                  "id": "theme",
+                  "label": "Theme",
+                  "type": "string",
+                  "default": {
+                    "str": "light"
+                  },
+                  "levels": [
+                    "tenant",
+                    "person"
+                  ]
+                }
+              }
+            },
+            "change": {
+              "remove-setting": "theme"
+            }
+          },
+          "result": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            },
+            "line": "remove setting theme"
+          }
+        },
+        {
+          "description": "settings.rs apply_remove: removing a setting that is not defined is refused.",
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            },
+            "change": {
+              "remove-setting": "theme"
+            }
+          },
+          "error": {
+            "problem": "no setting theme"
+          }
+        },
+        {
+          "description": "capabilities.rs apply_define: a declared capability is added.",
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            },
+            "change": {
+              "define-capability": {
+                "id": "badges.award",
+                "name": "Award a badge",
+                "description": "Gives a person a badge."
+              }
+            }
+          },
+          "result": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {},
+              "capabilities": {
+                "badges.award": {
+                  "id": "badges.award",
+                  "name": "Award a badge",
+                  "description": "Gives a person a badge."
+                }
+              }
+            },
+            "line": "define capability badges.award"
+          }
+        },
+        {
+          "description": "capabilities.rs apply_remove: removing a capability that is not declared is refused.",
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            },
+            "change": {
+              "remove-capability": "badges.award"
+            }
+          },
+          "error": {
+            "problem": "no capability badges.award"
+          }
+        },
+        {
+          "description": "capabilities.rs apply_remove: removing the last declared capability leaves no table.",
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {},
+              "capabilities": {
+                "badges.award": {
+                  "id": "badges.award",
+                  "name": "Award a badge",
+                  "description": "Gives a person a badge."
+                }
+              }
+            },
+            "change": {
+              "remove-capability": "badges.award"
+            }
+          },
+          "result": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            },
+            "line": "remove capability badges.award"
+          }
         }
       ]
     },
@@ -162922,7 +163245,7 @@
         },
         {
           "name": "schema",
-          "expr": "tenant-schema{version: current.version + 1, triggers: applied.schema.triggers, automations: applied.schema.automations, operations: applied.schema.operations, objects: applied.schema.objects, roles: applied.schema.roles, role-permissions: applied.schema.role-permissions, teams: applied.schema.teams, invitations: applied.schema.invitations, policies: applied.schema.policies, workflows: applied.schema.workflows, queries: applied.schema.queries, views: applied.schema.views}"
+          "expr": "tenant-schema{version: current.version + 1, triggers: applied.schema.triggers, automations: applied.schema.automations, operations: applied.schema.operations, objects: applied.schema.objects, roles: applied.schema.roles, role-permissions: applied.schema.role-permissions, teams: applied.schema.teams, invitations: applied.schema.invitations, policies: applied.schema.policies, workflows: applied.schema.workflows, queries: applied.schema.queries, views: applied.schema.views, settings: applied.schema.settings, capabilities: applied.schema.capabilities, ledger: applied.schema.ledger, mail-templates: applied.schema.mail-templates, notice-templates: applied.schema.notice-templates, tokens: applied.schema.tokens, products: applied.schema.products}"
         }
       ],
       "body": "match get(problems, 0) { Some(first) => fail(rejection.rejected(domain-error{kind: error-kind.invalid-schema, message: first, evidence: concat(applied.evidence, map(p in problems, check{rule: 'schema:consistency', passed: false, detail: p}))})), None => match get(try call unique-duplicates(tenant, coverage, current, schema, changes), 0) { Some(c) => fail(rejection.rejected(domain-error{kind: error-kind.unique-violated, message: format('{}: {}', c.rule, c.detail), evidence: concat(applied.evidence, [c])})), None => fold(o in call touched-objects(changes), acc = migration-plan{schema, summary: applied.summary, rewritten: [], violations: []}, match get(schema.objects, o) { None => acc, Some(def) => if get(current.objects, o) == null then acc else fold(r in try call lookup-all(tenant, coverage, o), a = acc, let stripped = fold(k in keys(r.fields), m = {}, if get(def.fields, k) == null then m else match get(r.fields, k) { Some(x) => insert(m, k, x), None => m }) in let same = keys(stripped) == keys(r.fields) in let candidate = if same then r else record{id: r.id, object: r.object, version: r.version + 1, created-by: r.created-by, created-at: r.created-at, updated-at: now, fields: stripped} in let outcome = try call validate-record(tenant, coverage, schema, def, candidate, null, principal.system, now, match get(texts.constraints, o) { Some(m) => m, None => {} }) in migration-plan{schema: a.schema, summary: a.summary, rewritten: if same then a.rewritten else concat(a.rewritten, [candidate]), violations: concat(a.violations, map(f in outcome.failed, violation{object: o, id: r.id, check: f.check, kind: f.kind}))}) }) } }",
@@ -173768,7 +174091,7 @@
     },
     {
       "id": "intent-decision",
-      "description": "transition.rs transition, the body of contract decide-intent (CT-001) through kernel-transition, and the decision of execute-intent (CT-031, execute-decide) and mutate-record (CT-263, decide-mutation): decide an intent against a snapshot, purely. The snapshot must be of the context's tenant (TenantMismatch, tenant:snapshot_matches_context); CreateTenant needs no tenant (TenantExists, tenant:does_not_exist), every other intent an existing one (TenantNotFound, tenant:exists) that is the context's (TenantMismatch, \"snapshot holds another tenant\"). A principal id that starts with the reserved prefix team: (the caller, the owner of a new tenant, the principal an assignment or a team membership names) is InvalidIntent, principal:id_is_not_reserved (reserved-principal). Then the intent's own function fills a fresh draft (the dispatch's CreateTenant arm cannot be reached), and finish makes the transition. The revoke-invitation intent runs revoke-invitation (ADM-1083). texts are the printed expressions and the blank-name fact (intent-texts). The invoke-operation intent is refused here (operation:decided_by_the_kernel): the hand-written kernel decides it in crates/kernel/src/operations.rs (WG-5100), and the differential lists the difference.",
+      "description": "transition.rs transition, the body of contract decide-intent (CT-001) through kernel-transition, and the decision of execute-intent (CT-031, execute-decide) and mutate-record (CT-263, decide-mutation): decide an intent against a snapshot, purely. The snapshot must be of the context's tenant (TenantMismatch, tenant:snapshot_matches_context); CreateTenant needs no tenant (TenantExists, tenant:does_not_exist), every other intent an existing one (TenantNotFound, tenant:exists) that is the context's (TenantMismatch, \"snapshot holds another tenant\"). A principal id that starts with the reserved prefix team: (the caller, the owner of a new tenant, the principal an assignment or a team membership names) is InvalidIntent, principal:id_is_not_reserved (reserved-principal). Then the intent's own function fills a fresh draft (the dispatch's CreateTenant arm cannot be reached), and finish makes the transition. The revoke-invitation intent runs revoke-invitation (ADM-1083). texts are the printed expressions and the blank-name fact (intent-texts). The invoke-operation intent is refused here (operation:decided_by_the_kernel): the hand-written kernel decides it in crates/kernel/src/operations.rs (WG-5100), and the differential lists the difference. The erase-subject, write-setting and invoke-operation intents are refused here (erasure:decided_by_the_kernel, setting:decided_by_the_kernel, operation:decided_by_the_kernel): the hand-written kernel decides them in crates/kernel/src/erasure.rs, settings.rs and operations.rs, and the differential lists each difference.",
       "params": [
         {
           "name": "state",
@@ -173789,7 +174112,7 @@
       ],
       "returns": "transition-result",
       "errors": "rejection",
-      "body": "if state.tenant-id != ctx.tenant then fail(rejection.rejected(call refuse(error-kind.tenant-mismatch, 'tenant:snapshot_matches_context', format('snapshot is of {}, context names {}', state.tenant-id, ctx.tenant)))) else match call reserved-principal(intent, ctx) { Some(id) => fail(rejection.rejected(call refuse(error-kind.invalid-intent, 'principal:id_is_not_reserved', format('the principal id {} starts with the reserved prefix team:', id)))), None => match intent { create-tenant{name, owner} => match state.tenant { None => try call create-tenant(ctx, name, owner, texts.blank-name), Some(_) => fail(rejection.rejected(call refuse(error-kind.tenant-exists, 'tenant:does_not_exist', 'the tenant already exists'))) }, _ => match state.tenant { None => fail(rejection.rejected(call refuse(error-kind.tenant-not-found, 'tenant:exists', 'no such tenant'))), Some(t) => if t.id != ctx.tenant then fail(rejection.rejected(call refuse(error-kind.tenant-mismatch, 'tenant:snapshot_matches_context', 'snapshot holds another tenant'))) else let d = draft{tenant: t, ctx, coverage: state.coverage, ops: [], events: [], effects: [], evidence: [], next-record: t.next-record} in let done = match intent { create-tenant => fail(rejection.rejected(call refuse(error-kind.tenant-exists, 'tenant:does_not_exist', 'the tenant already exists'))), change-schema{changes, expected-version, existing} => try call change-schema(d, changes, expected-version, existing, texts), assign-role{principal: p, role} => try call change-member(d, p, role, true, texts), revoke-role{principal: p, role} => try call change-member(d, p, role, false, texts), define-team{team, label} => try call define-team(d, team, label, texts), assign-team-role{team, role} => try call team-role(d, team, role, true, texts), revoke-team-role{team, role} => try call team-role(d, team, role, false, texts), add-team-member{team, principal: p} => try call team-member(d, team, p, true, texts), remove-team-member{team, principal: p} => try call team-member(d, team, p, false, texts), create-invitation{invitation, address, roles} => try call create-invitation(d, invitation, address, roles, texts), redeem-invitation{invitation} => try call redeem-invitation-intent(d, invitation), revoke-invitation{invitation} => try call revoke-invitation(d, invitation, texts), create-record{object, fields} => try call create-record(d, object, fields, texts), update-record{object, id, fields, expected-version} => try call update-record(d, object, id, fields, expected-version, texts), delete-record{object, id, expected-version} => try call delete-record(d, object, id, expected-version, texts), post-ledger => fail(rejection.rejected(call refuse(error-kind.invalid-intent, 'ledger:decided_by_the_ledger_module', 'a posting is decided by the kernel ledger module, which these functions do not mirror'))) } in call finish(done.draft, done.output) } } }",
+      "body": "if state.tenant-id != ctx.tenant then fail(rejection.rejected(call refuse(error-kind.tenant-mismatch, 'tenant:snapshot_matches_context', format('snapshot is of {}, context names {}', state.tenant-id, ctx.tenant)))) else match call reserved-principal(intent, ctx) { Some(id) => fail(rejection.rejected(call refuse(error-kind.invalid-intent, 'principal:id_is_not_reserved', format('the principal id {} starts with the reserved prefix team:', id)))), None => match intent { create-tenant{name, owner} => match state.tenant { None => try call create-tenant(ctx, name, owner, texts.blank-name), Some(_) => fail(rejection.rejected(call refuse(error-kind.tenant-exists, 'tenant:does_not_exist', 'the tenant already exists'))) }, _ => match state.tenant { None => fail(rejection.rejected(call refuse(error-kind.tenant-not-found, 'tenant:exists', 'no such tenant'))), Some(t) => if t.id != ctx.tenant then fail(rejection.rejected(call refuse(error-kind.tenant-mismatch, 'tenant:snapshot_matches_context', 'snapshot holds another tenant'))) else let d = draft{tenant: t, ctx, coverage: state.coverage, ops: [], events: [], effects: [], evidence: [], next-record: t.next-record} in let done = match intent { create-tenant => fail(rejection.rejected(call refuse(error-kind.tenant-exists, 'tenant:does_not_exist', 'the tenant already exists'))), change-schema{changes, expected-version, existing} => try call change-schema(d, changes, expected-version, existing, texts), assign-role{principal: p, role} => try call change-member(d, p, role, true, texts), revoke-role{principal: p, role} => try call change-member(d, p, role, false, texts), define-team{team, label} => try call define-team(d, team, label, texts), assign-team-role{team, role} => try call team-role(d, team, role, true, texts), revoke-team-role{team, role} => try call team-role(d, team, role, false, texts), add-team-member{team, principal: p} => try call team-member(d, team, p, true, texts), remove-team-member{team, principal: p} => try call team-member(d, team, p, false, texts), create-invitation{invitation, address, roles} => try call create-invitation(d, invitation, address, roles, texts), redeem-invitation{invitation} => try call redeem-invitation-intent(d, invitation), revoke-invitation{invitation} => try call revoke-invitation(d, invitation, texts), create-record{object, fields} => try call create-record(d, object, fields, texts), update-record{object, id, fields, expected-version} => try call update-record(d, object, id, fields, expected-version, texts), delete-record{object, id, expected-version} => try call delete-record(d, object, id, expected-version, texts), erase-subject => fail(rejection.rejected(call refuse(error-kind.invalid-intent, 'erasure:decided_by_the_kernel', 'an erasure of a data subject is decided by the kernel module erasure.rs, which these functions do not state yet'))), write-setting => fail(rejection.rejected(call refuse(error-kind.invalid-intent, 'setting:decided_by_the_kernel', 'a setting write is decided by the kernel module settings.rs, which these functions do not state yet'))), invoke-operation => fail(rejection.rejected(call refuse(error-kind.invalid-intent, 'operation:decided_by_the_kernel', 'an invocation of a tenant operation is decided by the kernel module operations.rs, which these functions do not state yet'))), post-ledger => fail(rejection.rejected(call refuse(error-kind.invalid-intent, 'ledger:decided_by_the_ledger_module', 'a posting is decided by the kernel ledger module, which these functions do not mirror'))) } in call finish(done.draft, done.output) } } }",
       "examples": [
         {
           "description": "behaviour.rs create_applies_defaults_and_allocates_the_next_id.",
@@ -179702,7 +180025,7 @@
       "let": [
         {
           "name": "sorted",
-          "expr": "sortBy(n in sortBy(n in sortBy(n in sortBy(n in sortBy(n in sortBy(n in sortBy(n in sortBy(n in sortBy(n in xs, match n { page-of{limit} => limit, _ => 0 }), match n { page-of{after} => match after { Some(a) => a, None => 0 }, _ => 0 }), match n { page-of{after} => match after { Some(_) => 1, None => 0 }, _ => 0 }), match n { record{id} => id, by-field{value} => match value { int(i) => i, time(t) => t, ref(r) => r, bool(b) => if b then 1 else 0, _ => 0 }, _ => 0 }), match n { by-field{value} => match value { str(s) => s, _ => '' }, _ => '' }), match n { by-field{value} => match value { bool(_) => 1, int(_) => 2, str(_) => 3, time(_) => 4, ref(_) => 5, list(_) => 6, _ => 0 }, _ => 0 }), match n { by-field{field} => field, _ => '' }), match n { record{object} => object, by-field{object} => object, all-of(o) => o, page-of{object} => object, by-fields{object} => object, _ => '' }), match n { record => 0, by-field => 1, all-of => 2, page-of => 3, by-fields => 4, _ => 5 })"
+          "expr": "sortBy(n in sortBy(n in sortBy(n in sortBy(n in sortBy(n in sortBy(n in sortBy(n in sortBy(n in sortBy(n in xs, match n { page-of{limit} => limit, _ => 0 }), match n { page-of{after} => match after { Some(a) => a, None => 0 }, _ => 0 }), match n { page-of{after} => match after { Some(_) => 1, None => 0 }, _ => 0 }), match n { record{id} => id, by-field{value} => match value { int(i) => i, time(t) => t, ref(r) => r, bool(b) => if b then 1 else 0, _ => 0 }, _ => 0 }), match n { by-field{value} => match value { str(s) => s, _ => '' }, _ => '' }), match n { by-field{value} => match value { bool(_) => 1, int(_) => 2, str(_) => 3, time(_) => 4, ref(_) => 5, list(_) => 6, _ => 0 }, _ => 0 }), match n { by-field{field} => field, _ => '' }), match n { record{object} => object, by-field{object} => object, all-of(o) => o, page-of{object} => object, by-fields{object} => object, _ => '' }), match n { record => 0, by-field => 1, all-of => 2, page-of => 3, by-fields => 4, ledger => 5, index-page => 6 })"
         }
       ],
       "body": "fold(n in sorted, acc = [], if any(a in acc, a == n) then acc else concat(acc, [n]))",
@@ -180766,7 +181089,7 @@
         }
       ],
       "returns": "list<need>",
-      "body": "match schema { None => [], Some(s) => call need-order(match intent { create-tenant => [], assign-role => [], revoke-role => [], define-team => [], assign-team-role => [], revoke-team-role => [], add-team-member => [], remove-team-member => [], create-invitation => [], redeem-invitation => [], revoke-invitation => [], post-ledger => [], create-record{object, fields} => call field-needs(s, object, fields), update-record{object, id, fields} => concat([need.record{object, id}], call field-needs(s, object, fields)), delete-record{object, id} => concat([need.record{object, id}], map(rf in call referrers(s, object), need.by-field{object: rf.object.id, field: rf.field.id, value: value.ref(id)})), change-schema{changes} => let changed = fold(c in changes, acc = s, match call apply-change(acc, c) { Ok(st) => st.schema, Err(_) => acc }) in fold(o in call touched-objects(changes), acc = [], concat(concat(concat(acc, call ref-needs(s, o)), call ref-needs(changed, o)), [need.all-of(o)])) }) }",
+      "body": "match schema { None => [], Some(s) => call need-order(match intent { create-tenant => [], assign-role => [], revoke-role => [], define-team => [], assign-team-role => [], revoke-team-role => [], add-team-member => [], remove-team-member => [], create-invitation => [], redeem-invitation => [], revoke-invitation => [], post-ledger => [], erase-subject => [], write-setting => [], invoke-operation => [], create-record{object, fields} => call field-needs(s, object, fields), update-record{object, id, fields} => concat([need.record{object, id}], call field-needs(s, object, fields)), delete-record{object, id} => concat([need.record{object, id}], map(rf in call referrers(s, object), need.by-field{object: rf.object.id, field: rf.field.id, value: value.ref(id)})), change-schema{changes} => let changed = fold(c in changes, acc = s, match call apply-change(acc, c) { Ok(st) => st.schema, Err(_) => acc }) in fold(o in call touched-objects(changes), acc = [], concat(concat(concat(acc, call ref-needs(s, o)), call ref-needs(changed, o)), [need.all-of(o)])) }) }",
       "examples": [
         {
           "description": "behaviour.rs a_thin_snapshot_is_refused_with_the_missing_need: the uniqueness lookup.",
@@ -184264,6 +184587,72 @@
             }
           },
           "result": []
+        },
+        {
+          "description": "transition.rs needs: an erasure plans no need here; the kernel erasure module plans its own batches.",
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            },
+            "intent": {
+              "erase-subject": {
+                "subject": "alpha:writer1",
+                "resume-object": null,
+                "resume-after": null
+              }
+            }
+          },
+          "result": []
+        },
+        {
+          "description": "transition.rs needs: a setting write needs nothing beyond the tenant header, which holds the definitions and the overrides.",
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            },
+            "intent": {
+              "write-setting": {
+                "setting": "theme",
+                "level": "tenant",
+                "team": null,
+                "value": {
+                  "str": "dark"
+                },
+                "expected-revision": 0
+              }
+            }
+          },
+          "result": []
         }
       ]
     },
@@ -184293,10 +184682,10 @@
         },
         {
           "name": "next",
-          "expr": "fold(op in delta.ops, s = start, match op { create-tenant => s, ledger(_) => s, put-schema(sc) => tenant-state{id: s.id, name: s.name, revision: s.revision, next-record: s.next-record, event-seq: s.event-seq, schema: sc, members: s.members, records: s.records}, put-member{principal: p, roles} => tenant-state{id: s.id, name: s.name, revision: s.revision, next-record: s.next-record, event-seq: s.event-seq, schema: s.schema, members: if roles == [] then remove(s.members, p) else insert(s.members, p, roles), records: s.records}, put-record(r) => tenant-state{id: s.id, name: s.name, revision: s.revision, next-record: s.next-record, event-seq: s.event-seq, schema: s.schema, members: s.members, records: insert(s.records, r.object, insert(match get(s.records, r.object) { Some(m) => m, None => {} }, r.id, r))}, delete-record{object, id} => match get(s.records, object) { None => s, Some(m) => let left = remove(m, id) in tenant-state{id: s.id, name: s.name, revision: s.revision, next-record: s.next-record, event-seq: s.event-seq, schema: s.schema, members: s.members, records: if keys(left) == [] then remove(s.records, object) else insert(s.records, object, left)} } })"
+          "expr": "fold(op in delta.ops, s = start, match op { create-tenant => s, ledger(_) => s, put-setting-override(_) => s, delete-setting-override => s, put-setting-revision => s, put-schema(sc) => tenant-state{id: s.id, name: s.name, revision: s.revision, next-record: s.next-record, event-seq: s.event-seq, schema: sc, members: s.members, records: s.records, setting-values: s.setting-values, ledger: s.ledger}, put-member{principal: p, roles} => tenant-state{id: s.id, name: s.name, revision: s.revision, next-record: s.next-record, event-seq: s.event-seq, schema: s.schema, members: if roles == [] then remove(s.members, p) else insert(s.members, p, roles), records: s.records, setting-values: s.setting-values, ledger: s.ledger}, put-record(r) => tenant-state{id: s.id, name: s.name, revision: s.revision, next-record: s.next-record, event-seq: s.event-seq, schema: s.schema, members: s.members, records: insert(s.records, r.object, insert(match get(s.records, r.object) { Some(m) => m, None => {} }, r.id, r)), setting-values: s.setting-values, ledger: s.ledger}, delete-record{object, id} => match get(s.records, object) { None => s, Some(m) => let left = remove(m, id) in tenant-state{id: s.id, name: s.name, revision: s.revision, next-record: s.next-record, event-seq: s.event-seq, schema: s.schema, members: s.members, records: if keys(left) == [] then remove(s.records, object) else insert(s.records, object, left), setting-values: s.setting-values, ledger: s.ledger} } })"
         }
       ],
-      "body": "tenant-state{id: next.id, name: next.name, revision: delta.new-revision, next-record: delta.next-record, event-seq: delta.event-seq, schema: next.schema, members: next.members, records: next.records}",
+      "body": "tenant-state{id: next.id, name: next.name, revision: delta.new-revision, next-record: delta.next-record, event-seq: delta.event-seq, schema: next.schema, members: next.members, records: next.records, setting-values: next.setting-values, ledger: next.ledger}",
       "examples": [
         {
           "description": "testkit.rs add_notes_tenant: the CreateTenant delta.",
@@ -206212,7 +206601,7 @@
         }
       ],
       "returns": "tenant-schema",
-      "body": "tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: insert(call teams-of(schema), team.id, team), invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}",
+      "body": "tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: insert(call teams-of(schema), team.id, team), invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}",
       "examples": [
         {
           "args": {
@@ -206308,7 +206697,7 @@
         }
       ],
       "returns": "tenant-schema",
-      "body": "tenant-schema{version: schema.version, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: insert(call invitations-of(schema), invitation.id, invitation), policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}",
+      "body": "tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: insert(call invitations-of(schema), invitation.id, invitation), policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}",
       "examples": [
         {
           "args": {
@@ -241641,7 +242030,7 @@
         }
       ],
       "returns": "tenant-schema",
-      "body": "tenant-schema{version: schema.version, objects: objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}",
+      "body": "tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}",
       "examples": [
         {
           "args": {
@@ -242619,7 +243008,7 @@
         }
       ],
       "returns": "tenant-schema",
-      "body": "tenant-schema{version: schema.version, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: if keys(mail) == [] then null else mail, notice-templates: if keys(notice) == [] then null else notice, tokens: if keys(tokens) == [] then null else tokens, products: if keys(products) == [] then null else products}",
+      "body": "tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: if keys(mail) == [] then null else mail, notice-templates: if keys(notice) == [] then null else notice, tokens: if keys(tokens) == [] then null else tokens, products: if keys(products) == [] then null else products}",
       "examples": [
         {
           "args": {
@@ -244290,7 +244679,7 @@
       ],
       "returns": "schema-step",
       "errors": "schema-problem",
-      "body": "match change { set-retention{object, retention} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, retention, o.publication, o.language-field, o.translation-group))), line: format('set retention of {}', object)} }, clear-retention{object} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if o.retention == null then fail(schema-problem.problem(format('{} declares no retention', object))) else schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, null, o.publication, o.language-field, o.translation-group))), line: format('clear retention of {}', object)} }, set-publication{object, publication} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, publication, o.language-field, o.translation-group))), line: format('set publication of {}', object)} }, clear-publication{object} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if o.publication == null then fail(schema-problem.problem(format('{} declares no publication', object))) else schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, null, o.language-field, o.translation-group))), line: format('clear publication of {}', object)} }, set-language-field{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, o.publication, field, o.translation-group))), line: format('set language field of {} to {}', object, field)} }, clear-language-field{object} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if o.language-field == null then fail(schema-problem.problem(format('{} declares no language field', object))) else schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, o.publication, null, o.translation-group))), line: format('clear language field of {}', object)} }, set-translation-group{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, o.publication, o.language-field, field))), line: format('set translation group of {} to {}', object, field)} }, clear-translation-group{object} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if o.translation-group == null then fail(schema-problem.problem(format('{} declares no translation group', object))) else schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, o.publication, o.language-field, null))), line: format('clear translation group of {}', object)} }, remove-object{id} => match get(schema.objects, id) { None => fail(schema-problem.problem(format('no object type {}', id))), Some(_) => schema-step{schema: call schema-with-objects(schema, remove(schema.objects, id)), line: format('remove object {}', id)} }, remove-role(role) => if role == 'public' || role == 'owner' then fail(schema-problem.problem(format('{} is built in', role))) else match get(schema.roles, role) { None => fail(schema-problem.problem(format('no role {}', role))), Some(_) => schema-step{schema: tenant-schema{version: schema.version, objects: schema.objects, roles: remove(schema.roles, role), role-permissions: call role-permissions-with(schema, role, []), teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove role {}', role)} }, define-mail-template(d) => schema-step{schema: call schema-with-tables(schema, insert(call mail-templates-of(schema), d.template, d), call notice-templates-of(schema), call tokens-of(schema), call products-of(schema)), line: format('define mail template {}', d.template)}, remove-mail-template(id) => if get(call mail-templates-of(schema), id) == null then fail(schema-problem.problem(format('no mail template {}', id))) else schema-step{schema: call schema-with-tables(schema, remove(call mail-templates-of(schema), id), call notice-templates-of(schema), call tokens-of(schema), call products-of(schema)), line: format('remove mail template {}', id)}, define-notice-template(d) => schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), insert(call notice-templates-of(schema), d.template, d), call tokens-of(schema), call products-of(schema)), line: format('define notice template {}', d.template)}, remove-notice-template(id) => if get(call notice-templates-of(schema), id) == null then fail(schema-problem.problem(format('no notice template {}', id))) else schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), remove(call notice-templates-of(schema), id), call tokens-of(schema), call products-of(schema)), line: format('remove notice template {}', id)}, define-token(d) => schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), call notice-templates-of(schema), insert(call tokens-of(schema), d.name, d), call products-of(schema)), line: format('define token {}', d.name)}, remove-token(id) => if get(call tokens-of(schema), id) == null then fail(schema-problem.problem(format('no token {}', id))) else schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), call notice-templates-of(schema), remove(call tokens-of(schema), id), call products-of(schema)), line: format('remove token {}', id)}, record-product(p) => schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), call notice-templates-of(schema), call tokens-of(schema), insert(call products-of(schema), p.product, p)), line: format('record product {} {}', p.product, p.version)}, remove-product(id) => if get(call products-of(schema), id) == null then fail(schema-problem.problem(format('no product {}', id))) else schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), call notice-templates-of(schema), call tokens-of(schema), remove(call products-of(schema), id)), line: format('remove product {}', id)}, _ => fail(schema-problem.problem('not a change of a declaration, a template, a token or a product')) }",
+      "body": "match change { set-retention{object, retention} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, retention, o.publication, o.language-field, o.translation-group))), line: format('set retention of {}', object)} }, clear-retention{object} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if o.retention == null then fail(schema-problem.problem(format('{} declares no retention', object))) else schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, null, o.publication, o.language-field, o.translation-group))), line: format('clear retention of {}', object)} }, set-publication{object, publication} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, publication, o.language-field, o.translation-group))), line: format('set publication of {}', object)} }, clear-publication{object} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if o.publication == null then fail(schema-problem.problem(format('{} declares no publication', object))) else schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, null, o.language-field, o.translation-group))), line: format('clear publication of {}', object)} }, set-language-field{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, o.publication, field, o.translation-group))), line: format('set language field of {} to {}', object, field)} }, clear-language-field{object} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if o.language-field == null then fail(schema-problem.problem(format('{} declares no language field', object))) else schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, o.publication, null, o.translation-group))), line: format('clear language field of {}', object)} }, set-translation-group{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, o.publication, o.language-field, field))), line: format('set translation group of {} to {}', object, field)} }, clear-translation-group{object} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if o.translation-group == null then fail(schema-problem.problem(format('{} declares no translation group', object))) else schema-step{schema: call schema-with-objects(schema, insert(schema.objects, object, call object-with(o, o.retention, o.publication, o.language-field, null))), line: format('clear translation group of {}', object)} }, remove-object{id} => match get(schema.objects, id) { None => fail(schema-problem.problem(format('no object type {}', id))), Some(_) => schema-step{schema: call schema-with-objects(schema, remove(schema.objects, id)), line: format('remove object {}', id)} }, remove-role(role) => if role == 'public' || role == 'owner' then fail(schema-problem.problem(format('{} is built in', role))) else match get(schema.roles, role) { None => fail(schema-problem.problem(format('no role {}', role))), Some(_) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: remove(schema.roles, role), role-permissions: call role-permissions-with(schema, role, []), teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}, line: format('remove role {}', role)} }, define-mail-template(d) => schema-step{schema: call schema-with-tables(schema, insert(call mail-templates-of(schema), d.template, d), call notice-templates-of(schema), call tokens-of(schema), call products-of(schema)), line: format('define mail template {}', d.template)}, remove-mail-template(id) => if get(call mail-templates-of(schema), id) == null then fail(schema-problem.problem(format('no mail template {}', id))) else schema-step{schema: call schema-with-tables(schema, remove(call mail-templates-of(schema), id), call notice-templates-of(schema), call tokens-of(schema), call products-of(schema)), line: format('remove mail template {}', id)}, define-notice-template(d) => schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), insert(call notice-templates-of(schema), d.template, d), call tokens-of(schema), call products-of(schema)), line: format('define notice template {}', d.template)}, remove-notice-template(id) => if get(call notice-templates-of(schema), id) == null then fail(schema-problem.problem(format('no notice template {}', id))) else schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), remove(call notice-templates-of(schema), id), call tokens-of(schema), call products-of(schema)), line: format('remove notice template {}', id)}, define-token(d) => schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), call notice-templates-of(schema), insert(call tokens-of(schema), d.name, d), call products-of(schema)), line: format('define token {}', d.name)}, remove-token(id) => if get(call tokens-of(schema), id) == null then fail(schema-problem.problem(format('no token {}', id))) else schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), call notice-templates-of(schema), remove(call tokens-of(schema), id), call products-of(schema)), line: format('remove token {}', id)}, record-product(p) => schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), call notice-templates-of(schema), call tokens-of(schema), insert(call products-of(schema), p.product, p)), line: format('record product {} {}', p.product, p.version)}, remove-product(id) => if get(call products-of(schema), id) == null then fail(schema-problem.problem(format('no product {}', id))) else schema-step{schema: call schema-with-tables(schema, call mail-templates-of(schema), call notice-templates-of(schema), call tokens-of(schema), remove(call products-of(schema), id)), line: format('remove product {}', id)}, _ => fail(schema-problem.problem('not a change of a declaration, a template, a token or a product')) }",
       "examples": [
         {
           "description": "A retention is set on an object type.",
@@ -280409,6 +280798,427 @@
             ]
           },
           "result": []
+        }
+      ]
+    },
+    {
+      "id": "settings-of",
+      "description": "The setting definitions of a schema by id, none when it holds no table of them (TenantSchema.settings, an optional map; settings.rs definition).",
+      "params": [
+        {
+          "name": "schema",
+          "type": "tenant-schema"
+        }
+      ],
+      "returns": "map<setting-id, setting-def>",
+      "body": "match schema.settings { Some(m) => m, None => {} }",
+      "examples": [
+        {
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            }
+          },
+          "result": {}
+        },
+        {
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {},
+              "settings": {
+                "theme": {
+                  "id": "theme",
+                  "label": "Theme",
+                  "type": "string",
+                  "default": {
+                    "str": "light"
+                  },
+                  "levels": [
+                    "tenant",
+                    "person"
+                  ]
+                }
+              }
+            }
+          },
+          "result": {
+            "theme": {
+              "id": "theme",
+              "label": "Theme",
+              "type": "string",
+              "default": {
+                "str": "light"
+              },
+              "levels": [
+                "tenant",
+                "person"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "capabilities-of",
+      "description": "The declared capabilities of a schema by name, none when it holds no table of them (TenantSchema.capabilities, an optional map; capabilities.rs).",
+      "params": [
+        {
+          "name": "schema",
+          "type": "tenant-schema"
+        }
+      ],
+      "returns": "map<capability-name, capability-def>",
+      "body": "match schema.capabilities { Some(m) => m, None => {} }",
+      "examples": [
+        {
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            }
+          },
+          "result": {}
+        },
+        {
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {},
+              "capabilities": {
+                "badges.award": {
+                  "id": "badges.award",
+                  "name": "Award a badge",
+                  "description": "Gives a person a badge."
+                }
+              }
+            }
+          },
+          "result": {
+            "badges.award": {
+              "id": "badges.award",
+              "name": "Award a badge",
+              "description": "Gives a person a badge."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "schema-with-settings",
+      "description": "The schema with its table of setting definitions replaced; a table left empty is none, so a schema that defines no setting hashes as one that never did (settings.rs apply_define, apply_remove).",
+      "params": [
+        {
+          "name": "schema",
+          "type": "tenant-schema"
+        },
+        {
+          "name": "settings",
+          "type": "map<setting-id, setting-def>"
+        }
+      ],
+      "returns": "tenant-schema",
+      "body": "tenant-schema{version: schema.version, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, settings: if keys(settings) == [] then null else settings, capabilities: schema.capabilities, ledger: schema.ledger, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}",
+      "examples": [
+        {
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            },
+            "settings": {
+              "theme": {
+                "id": "theme",
+                "label": "Theme",
+                "type": "string",
+                "default": {
+                  "str": "light"
+                },
+                "levels": [
+                  "tenant",
+                  "person"
+                ]
+              }
+            }
+          },
+          "result": {
+            "version": 2,
+            "objects": {},
+            "roles": {
+              "owner": {
+                "id": "owner",
+                "label": "Owner"
+              },
+              "public": {
+                "id": "public",
+                "label": "Everyone"
+              }
+            },
+            "policies": {},
+            "workflows": {},
+            "queries": {},
+            "views": {},
+            "settings": {
+              "theme": {
+                "id": "theme",
+                "label": "Theme",
+                "type": "string",
+                "default": {
+                  "str": "light"
+                },
+                "levels": [
+                  "tenant",
+                  "person"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {},
+              "settings": {
+                "theme": {
+                  "id": "theme",
+                  "label": "Theme",
+                  "type": "string",
+                  "default": {
+                    "str": "light"
+                  },
+                  "levels": [
+                    "tenant",
+                    "person"
+                  ]
+                }
+              }
+            },
+            "settings": {}
+          },
+          "result": {
+            "version": 2,
+            "objects": {},
+            "roles": {
+              "owner": {
+                "id": "owner",
+                "label": "Owner"
+              },
+              "public": {
+                "id": "public",
+                "label": "Everyone"
+              }
+            },
+            "policies": {},
+            "workflows": {},
+            "queries": {},
+            "views": {}
+          }
+        }
+      ]
+    },
+    {
+      "id": "schema-with-capabilities",
+      "description": "The schema with its table of declared capabilities replaced; a table left empty is none, so a schema that declares no capability hashes as one that never did (capabilities.rs apply_define, apply_remove).",
+      "params": [
+        {
+          "name": "schema",
+          "type": "tenant-schema"
+        },
+        {
+          "name": "capabilities",
+          "type": "map<capability-name, capability-def>"
+        }
+      ],
+      "returns": "tenant-schema",
+      "body": "tenant-schema{version: schema.version, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, settings: schema.settings, capabilities: if keys(capabilities) == [] then null else capabilities, ledger: schema.ledger, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products}",
+      "examples": [
+        {
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {}
+            },
+            "capabilities": {
+              "badges.award": {
+                "id": "badges.award",
+                "name": "Award a badge",
+                "description": "Gives a person a badge."
+              }
+            }
+          },
+          "result": {
+            "version": 2,
+            "objects": {},
+            "roles": {
+              "owner": {
+                "id": "owner",
+                "label": "Owner"
+              },
+              "public": {
+                "id": "public",
+                "label": "Everyone"
+              }
+            },
+            "policies": {},
+            "workflows": {},
+            "queries": {},
+            "views": {},
+            "capabilities": {
+              "badges.award": {
+                "id": "badges.award",
+                "name": "Award a badge",
+                "description": "Gives a person a badge."
+              }
+            }
+          }
+        },
+        {
+          "args": {
+            "schema": {
+              "version": 2,
+              "objects": {},
+              "roles": {
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                }
+              },
+              "policies": {},
+              "workflows": {},
+              "queries": {},
+              "views": {},
+              "capabilities": {
+                "badges.award": {
+                  "id": "badges.award",
+                  "name": "Award a badge",
+                  "description": "Gives a person a badge."
+                }
+              }
+            },
+            "capabilities": {}
+          },
+          "result": {
+            "version": 2,
+            "objects": {},
+            "roles": {
+              "owner": {
+                "id": "owner",
+                "label": "Owner"
+              },
+              "public": {
+                "id": "public",
+                "label": "Everyone"
+              }
+            },
+            "policies": {},
+            "workflows": {},
+            "queries": {},
+            "views": {}
+          }
         }
       ]
     }
