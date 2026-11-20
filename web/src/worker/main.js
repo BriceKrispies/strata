@@ -50,6 +50,7 @@ async function http(effect) {
     headers['content-type'] = 'application/json';
   }
   if (effect.csrf) headers['x-csrf-token'] = effect.csrf;
+  if (effect.idempotencyKey) headers['idempotency-key'] = effect.idempotencyKey;
   let reply = { ok: false, status: 0, body: null };
   try {
     const response = await fetch(effect.path, {

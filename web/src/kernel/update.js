@@ -68,7 +68,9 @@ export function initialState() {
     sessionFlow: sessionInit(),
     site: { name: '', tagline: '' },
     theme: { mode: 'auto', systemDark: false, accent: 'moss', paper: 'linen' },
-    view: { status: 'loading', model: null, error: null, request: 0 },
+    // `next` holds, for each list section with more rows, the cursor of its next page; `more` is the
+    // id of the request that loads one (0 when none is).
+    view: { status: 'loading', model: null, error: null, request: 0, next: {}, more: 0 },
     ws: liveInit(),
     forms: {
       login: { values: forms.initialValues(SIGN_IN, {}), busy: false, error: '', flow: submitInit() },
@@ -131,7 +133,7 @@ export const slugify = forms.slug;
 /**
  * Register a request and return the state and its effect.
  * @param {any} state @param {string} kind
- * @param {{ method?: 'GET' | 'POST', path: string, body?: any, write?: boolean, meta?: any }} spec
+ * @param {{ method?: 'GET' | 'POST', path: string, body?: any, write?: boolean, idempotencyKey?: string, meta?: any }} spec
  * @param {Message} msg
  * @returns {[any, Effect]}
  */
@@ -154,9 +156,20 @@ export function request(state, kind, spec, msg) {
       body: spec.body,
       write: spec.write ?? false,
       csrf: spec.write ? state.session?.csrf_token : undefined,
+      idempotencyKey: spec.idempotencyKey,
       correlation,
     },
   ];
+}
+
+/**
+ * A key for one user action that creates something, made once and sent with every attempt of
+ * that action, so that a retry after a lost reply creates one record (D-6595). Time and chance
+ * arrive on the message, as everywhere in the kernel.
+ * @param {any} state @param {Message} msg
+ */
+function newKey(state, msg) {
+  return `k-${state.nextId}-${Math.floor(msg.rand * 0xffffffff).toString(16).padStart(8, '0')}-${Math.floor(msg.at).toString(36)}`;
 }
 
 /**
@@ -167,7 +180,13 @@ export function request(state, kind, spec, msg) {
  */
 function call(state, kind, contract, inputs, msg, meta = {}) {
   const req = contracts.request(contract, inputs, state.route.path);
-  return request(state, kind, { ...req, meta: { contract, inputs, ...meta } }, msg);
+  // A create carries a key. A retry of the same create (`meta.retryKey`, the key of an attempt
+  // whose outcome was not learned) reuses it when the request is the same; any other request has
+  // another key, since a key with other input is refused.
+  const body = req.write && req.body?.op === 'create' ? JSON.stringify(req.body) : null;
+  const key = body === null ? undefined : meta.retryKey?.body === body ? meta.retryKey.key : newKey(state, msg);
+  const sent = key === undefined ? {} : { sent: { key, body } };
+  return request(state, kind, { ...req, idempotencyKey: key, meta: { contract, inputs, ...meta, ...sent } }, msg);
 }
 
 function toast(state, kind, text) {
@@ -317,12 +336,12 @@ function decodeView(state, body) {
 }
 
 /** Take a view model in: page data, site chrome, theme, and the forms that edit it. */
-function acceptView(state, model) {
+function acceptView(state, model, cursors = {}) {
   const site = model.data.site?.fields;
   let next = {
     ...state,
     ready: true,
-    view: { status: 'ready', model, error: null, request: 0 },
+    view: { status: 'ready', model, error: null, request: 0, next: cursors ?? {}, more: 0 },
     // A confirmation belongs to the view it was asked on; a view that replaces it disarms it.
     confirmDelete: null,
     site: site ? { name: site.name ?? '', tagline: site.tagline ?? '' } : state.site,
@@ -363,7 +382,7 @@ function saveEditor(state, msg, status) {
   if (!stepped?.sends) return { state, effects: [] };
   const form = editorSubmission(editor, status);
   const contract = forms.FORMS[form].contract;
-  const [next, effect] = call(state, 'editor.save', contract, forms.inputs(form, editor.values, scopeOf(state)), msg, { form, status });
+  const [next, effect] = call(state, 'editor.save', contract, forms.inputs(form, editor.values, scopeOf(state)), msg, { form, status, retryKey: editor.createKey });
   return {
     state: { ...next, forms: { ...next.forms, editor: { ...editor, flow: stepped.flow, busy: true, errors: {}, formError: '' } } },
     effects: [effect],
@@ -544,6 +563,32 @@ function redispatch(state, retry, msg) {
   return onAction(state, { type: 'action', name: retry.name, arg: retry.arg, at: msg.at, rand: msg.rand });
 }
 
+/**
+ * Whether a refused or failed request may have been carried out all the same: no answer came, or
+ * the server failed. Only then is a key kept for the retry.
+ * @param {{ ok: boolean, status: number }} msg
+ */
+function unknownOutcome(msg) {
+  return !msg.ok && (msg.status === 0 || msg.status >= 500);
+}
+
+/**
+ * Ask for the next page of a list section of the view, with the cursor the last answer gave.
+ * @param {any} state @param {Message} msg @param {string} section
+ * @returns {Result}
+ */
+function loadMore(state, msg, section) {
+  const cursor = state.view.next?.[section];
+  if (typeof cursor !== 'string' || state.view.more || state.view.status !== 'ready') return { state, effects: [] };
+  const query = new URLSearchParams({ path: state.route.path, cursor });
+  for (const [name, value] of Object.entries(state.route.query)) {
+    // The view's own parameters; the delivery interface's names are not a page's to set.
+    if (!['path', 'cursor', 'fields', 'limit'].includes(name)) query.set(name, String(value));
+  }
+  const [next, effect] = request(state, 'view.more', { path: `/api/view?${query}`, meta: { section } }, msg);
+  return { state: { ...next, view: { ...next.view, more: effect.type === 'http' ? effect.id : 0 } }, effects: [effect] };
+}
+
 /** @returns {Result} */
 function onHttp(state, msg) {
   const pending = state.pending[msg.id];
@@ -608,7 +653,7 @@ function onHttp(state, msg) {
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
       if (msg.ok) {
-        const accepted = acceptView(state, decodeView(state, msg.body));
+        const accepted = acceptView(state, decodeView(state, msg.body), msg.body?.next);
         return enterScreen(accepted, msg, msg.body.view);
       }
       const status = msg.status === 404 ? 'missing' : 'error';
@@ -616,6 +661,22 @@ function onHttp(state, msg) {
         state: { ...state, ready: true, view: { status, model: null, error, request: 0 }, forms: { ...state.forms, editor: null, settings: null } },
         effects: [],
       };
+    }
+    case 'view.more': {
+      // A reply for a page that was left, or that a fresh reading of the view replaced, is dropped.
+      if (state.view.more !== msg.id || !state.view.model) return { state, effects: [] };
+      const { section } = pending;
+      const idle = { ...state, view: { ...state.view, more: 0 } };
+      const rows = msg.body?.data?.[section];
+      if (!msg.ok || !Array.isArray(rows) || !Array.isArray(state.view.model.data[section])) {
+        return { state: toast(idle, 'warn', 'More could not be loaded.'), effects: [] };
+      }
+      // The next page continues the rows held, with none repeated.
+      const held = new Set(state.view.model.data[section].map((/** @type {any} */ row) => row.id));
+      const model = { ...state.view.model, data: { ...state.view.model.data, [section]: [...state.view.model.data[section], ...rows.filter((row) => !held.has(row.id))] } };
+      const { [section]: _read, ...others } = state.view.next ?? {};
+      const next = msg.body.next?.[section] ? { ...others, [section]: msg.body.next[section] } : others;
+      return { state: { ...idle, view: { ...idle.view, model, next } }, effects: [] };
     }
     case 'login': {
       const login = state.forms.login;
@@ -666,7 +727,7 @@ function onHttp(state, msg) {
           state: {
             ...state,
             announce,
-            forms: { ...state.forms, editor: { ...editor, flow, busy: busy(flow), errors, formError } },
+            forms: { ...state.forms, editor: { ...editor, flow, busy: busy(flow), errors, formError, createKey: unknownOutcome(msg) ? pending.sent ?? editor.createKey ?? null : null } },
             focus: first ? { target: `editor-${first}`, token: msg.id } : state.focus,
           },
           effects: [],
@@ -674,7 +735,7 @@ function onHttp(state, msg) {
       }
       let flow = submitStep(editor.flow, 'ui-form-accepted', {}, msg.at)?.flow ?? editor.flow;
       const response = pending.first ? forms.bothResponses(pending.first, outputs) : outputs;
-      const saved = { ...editor, id: response.article_id, version: response.version, key: response.slug, dirty: false, remoteChanged: false };
+      const saved = { ...editor, id: response.article_id, version: response.version, key: response.slug, dirty: false, remoteChanged: false, createKey: null };
       const scope = scopeOf(state, { form: editor.values, response });
       const second = pending.first ? null : forms.followUp(pending.form, scope);
       if (second) {
@@ -829,6 +890,8 @@ function onAction(state, msg) {
     }
     case 'reload':
       return fetchView(state, msg, false);
+    case 'view.more':
+      return loadMore(state, msg, String(arg));
     case 'dev.expire': {
       const [next, effect] = request(state, 'dev', { method: 'POST', path: '/api/dev/expire-session', write: true, body: {} }, msg);
       return { state: next, effects: [effect] };
@@ -936,7 +999,7 @@ function step(state, msg) {
         effects.push(effect);
       }
       if (boot?.view && boot.path === route.path) {
-        next = acceptView(next, decodeView(next, boot.view));
+        next = acceptView(next, decodeView(next, boot.view), boot.view.next);
         const entered = enterScreen(next, msg, boot.view.view);
         next = entered.state;
         effects.push(...entered.effects);

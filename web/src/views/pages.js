@@ -4,7 +4,7 @@
 import { h } from '../components/dom.js';
 import { hrefFor } from '../generated/routes.js';
 import { SIGN_IN_SCREEN } from '../generated/screens.js';
-import { date, index, marginNotes, prose, qrCode } from '../components/parts.js';
+import { date, index, loadMore, marginNotes, prose, qrCode } from '../components/parts.js';
 
 function topicList(topics, label) {
   if (!topics.length) return null;
@@ -41,6 +41,7 @@ export function home(page, shell) {
       page.recent.length || lead
         ? index(page.recent)
         : h('p', { class: 'empty' }, 'Nothing has been published yet. When an essay is, it appears here without a reload.'),
+      loadMore(page.more),
     ),
     h(
       'section',
@@ -121,6 +122,7 @@ export function topic(page) {
     h('h1', { class: 'page-title' }, page.topic.name),
     page.topic.description ? h('p', { class: 'standfirst' }, page.topic.description) : null,
     page.posts.length ? index(page.posts, 'h2') : h('p', { class: 'empty' }, 'No essays are filed under this topic yet.'),
+    loadMore(page.more),
     h(
       'section',
       { class: 'section section--quiet', 'aria-labelledby': 'other-topics' },
@@ -160,6 +162,7 @@ export function author(page) {
       { class: 'section', 'aria-labelledby': 'author-essays' },
       h('h2', { class: 'section__title', id: 'author-essays' }, 'Essays'),
       page.posts.length ? index(page.posts) : h('p', { class: 'empty' }, 'Nothing published yet.'),
+      loadMore(page.more),
     ),
   ];
 }
@@ -188,6 +191,7 @@ export function search(page) {
     ),
     h('p', { class: 'search-summary', role: 'status' }, summary),
     count ? index(page.results, 'h2') : null,
+    loadMore(page.more),
   ];
 }
 

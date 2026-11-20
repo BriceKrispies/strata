@@ -3,7 +3,7 @@
 
 import { h } from '../components/dom.js';
 import { hrefFor } from '../generated/routes.js';
-import { control, date, prose, qrCode } from '../components/parts.js';
+import { control, date, loadMore, prose, qrCode } from '../components/parts.js';
 
 const STATUS = { draft: 'Draft', published: 'Published' };
 
@@ -225,6 +225,7 @@ export function desk(page) {
           ),
         )
       : h('p', { class: 'empty' }, 'You have not written anything yet. Start with a draft; nobody sees it until you publish.'),
+    loadMore(page.more),
     sessionsSection(page.sessions),
     passkeysSection(page.passkeys),
     factorsSection(page.factors),

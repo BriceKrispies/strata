@@ -85,12 +85,22 @@ function rowLabels(model, row) {
   return labels;
 }
 
+/**
+ * The sign that a list section has more rows to load: the section's name, and whether its next
+ * page is on its way. `null` at the end of the list.
+ * @param {any} state @param {string} section
+ */
+function more(state, section) {
+  return state.view.next?.[section] ? { section, busy: state.view.more !== 0 } : null;
+}
+
 function field(form, name) {
   return { value: form.values[name], error: form.errors?.[name] ?? '' };
 }
 
-registerPageBuilder('home', (_state, { d }) => ({
+registerPageBuilder('home', (state, { d }) => ({
   kind: 'home',
+  more: more(state, 'recent'),
   tagline: d.site?.fields.tagline ?? '',
   featured: d.featured ? entry(d.featured) : null,
   recent: d.recent.filter((r) => r.id !== d.featured?.id).map((r) => entry(r)),
@@ -119,17 +129,17 @@ registerPageBuilder('topics', (_state, { d }) => ({
 
 registerPageBuilder('topic', (state, { d }) => {
   if (!d.category) return { kind: 'missing', path: state.route.path };
-  return { kind: 'topic', topic: topic(d.category), posts: d.posts.map((r) => entry(r)), topics: d.categories.map(topic) };
+  return { kind: 'topic', topic: topic(d.category), posts: d.posts.map((r) => entry(r)), more: more(state, 'posts'), topics: d.categories.map(topic) };
 });
 
 registerPageBuilder('authors', (_state, { d }) => ({ kind: 'authors', authors: d.authors.map((a) => ({ ...person(a), bio: a.fields.bio ?? '' })) }));
 
 registerPageBuilder('author', (state, { d }) => {
   if (!d.author) return { kind: 'missing', path: state.route.path };
-  return { kind: 'author', author: { ...person(d.author), bio: d.author.fields.bio ?? '' }, posts: d.posts.map((r) => entry(r)) };
+  return { kind: 'author', author: { ...person(d.author), bio: d.author.fields.bio ?? '' }, posts: d.posts.map((r) => entry(r)), more: more(state, 'posts') };
 });
 
-registerPageBuilder('search', (state, { d }) => ({ kind: 'search', q: state.route.query.q ?? '', results: d.results.map((r) => entry(r)) }));
+registerPageBuilder('search', (state, { d }) => ({ kind: 'search', q: state.route.query.q ?? '', results: d.results.map((r) => entry(r)), more: more(state, 'results') }));
 
 registerPageBuilder('about', (_state, { d }) => ({
   kind: 'about',
@@ -168,6 +178,7 @@ registerPageBuilder('login', (state, { session, signedIn }) => {
 
 registerPageBuilder('desk', (state, { model, d, session, canWrite }) => ({
   kind: 'desk',
+  more: more(state, 'posts'),
   name: session.display_name,
   canWrite,
   canSettings: (session.may?.publication ?? []).includes('update'),

@@ -146,3 +146,17 @@ export function qrCode(modules, label) {
     h('path', { d: path, fill: '#000000' }),
   );
 }
+
+/**
+ * The button that loads the next page of a list section, when the view has one (`more` of a page
+ * model: the section's name and whether its next page is on its way).
+ * @param {{ section: string, busy: boolean } | null | undefined} more
+ */
+export function loadMore(more) {
+  if (!more) return null;
+  return h(
+    'p',
+    { class: 'toolbar' },
+    h('button', { class: 'button button--quiet', type: 'button', disabled: more.busy, 'data-action': 'view.more', 'data-arg': JSON.stringify(more.section) }, more.busy ? 'Loading…' : 'Load more'),
+  );
+}

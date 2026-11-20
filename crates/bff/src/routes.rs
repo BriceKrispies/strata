@@ -73,6 +73,10 @@ pub struct Visit {
     /// The origin the request was made from, when it is one of the site's own. A passkey is made
     /// and used at that address.
     pub origin: Option<String>,
+    /// The browser's `Idempotency-Key`, checked once by `visit`. Every call to the backend that
+    /// this visit makes carries it, so that a change a retried request repeats is made once
+    /// (OPS-318); a call that reads ignores it.
+    pub idempotency_key: Option<String>,
 }
 
 fn text(headers: &HeaderMap, name: impl axum::http::header::AsHeaderName) -> Option<&str> {
@@ -195,7 +199,27 @@ pub fn visit(bff: &Bff, headers: &HeaderMap) -> Result<Visit, Failure> {
     let origin = origin_allowed(bff, &site, headers)
         .then(|| text(headers, ORIGIN).map(str::to_string))
         .flatten();
+    // The one check of the key's format at the edge: a key that cannot be used is refused, not
+    // dropped, so that a change is never made without the protection the caller asked for.
+    let idempotency_key = match headers.get(HEADER_IDEMPOTENCY) {
+        None => None,
+        Some(value) => Some(
+            value
+                .to_str()
+                .ok()
+                .filter(|key| valid_idempotency_key(key))
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    Failure::new(
+                        ErrorCode::Invalid,
+                        "An idempotency key is 1 to 128 visible ASCII characters.",
+                        &correlation,
+                    )
+                })?,
+        ),
+    };
     Ok(Visit {
+        idempotency_key,
         site,
         token: cookie(headers),
         correlation,
@@ -237,18 +261,9 @@ pub async fn backend<T: DeserializeOwned>(
     path: &str,
     body: &Json_,
 ) -> Result<T, Failure> {
-    backend_keyed(bff, visit, path, body, None).await
-}
-
-/// [`backend`] for a change that carries the browser's idempotency key: the backend scopes it by
-/// tenant and principal and answers a repeat with the first result (OPS-318).
-pub async fn backend_keyed<T: DeserializeOwned>(
-    bff: &Bff,
-    visit: &Visit,
-    path: &str,
-    body: &Json_,
-    idempotency_key: Option<&str>,
-) -> Result<T, Failure> {
+    // The visit's idempotency key goes along: the backend scopes it by tenant and principal and
+    // answers a repeat with the first result (OPS-318).
+    let idempotency_key = visit.idempotency_key.as_deref();
     let unavailable = |why: String| {
         LOG.error(
             "backend.unreachable",
@@ -1153,12 +1168,22 @@ async fn logout(State(bff): State<Shared>, headers: HeaderMap) -> Result<Respons
     Ok(response)
 }
 
+/// What a view request asks beyond the path and the request map (CMS-163, CMS-164): the fields to
+/// keep, the cursor of one section's next page and the size of a page.
+#[derive(Default)]
+struct Paging {
+    fields: Option<Vec<String>>,
+    cursor: Option<String>,
+    limit: Option<u32>,
+}
+
 /// Fetch a view from the backend and project it into the browser's view model.
 async fn view_model(
     bff: &Bff,
     visit: &Visit,
     path: &str,
     request: BTreeMap<String, String>,
+    paging: Paging,
 ) -> Result<Json_, Failure> {
     let data: ViewData = backend(
         bff,
@@ -1166,7 +1191,10 @@ async fn view_model(
         "/internal/view",
         &json!(ViewRequest {
             path: path.to_string(),
-            request
+            request,
+            fields: paging.fields,
+            cursor: paging.cursor,
+            limit: paging.limit,
         }),
     )
     .await?;
@@ -1293,8 +1321,35 @@ async fn view(
         .remove("path")
         .filter(|p| p.starts_with('/') && p.len() <= 300)
         .unwrap_or_else(|| "/".into());
+    // `fields`, `cursor` and `limit` are the delivery interface's own (CMS-163, CMS-164) and are
+    // never a view's request parameters. The backend checks the names against the view's fields.
+    let refuse = |why: &str| Failure::new(ErrorCode::Invalid, why, &visit.correlation);
+    let fields = match query.remove("fields") {
+        Some(list) if list.len() <= 2000 => Some(list.split(',').map(str::to_string).collect()),
+        Some(_) => return Err(refuse("The field selection is too long.")),
+        None => None,
+    };
+    let limit = match query.remove("limit") {
+        Some(text) => Some(
+            text.parse::<u32>()
+                .map_err(|_| refuse("A limit is a whole number."))?,
+        ),
+        None => None,
+    };
+    let cursor = match query.remove("cursor") {
+        Some(text) if text.len() <= 200 => Some(text),
+        Some(_) => return Err(refuse("The cursor is not one this view issued.")),
+        None => None,
+    };
     query.retain(|name, value| name.len() <= 32 && value.len() <= 200);
-    view_model(&bff, &visit, &path, query).await.map(Json)
+    let paging = Paging {
+        fields,
+        cursor,
+        limit,
+    };
+    view_model(&bff, &visit, &path, query, paging)
+        .await
+        .map(Json)
 }
 
 async fn records(
@@ -1304,25 +1359,8 @@ async fn records(
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
-    // The browser's key is passed on as it is. A change that names a key it cannot use is
-    // refused rather than made without one.
-    let key = match headers.get(HEADER_IDEMPOTENCY) {
-        None => None,
-        Some(value) => Some(
-            value
-                .to_str()
-                .ok()
-                .filter(|key| valid_idempotency_key(key))
-                .ok_or_else(|| {
-                    Failure::new(
-                        ErrorCode::Invalid,
-                        "An idempotency key is 1 to 255 visible ASCII characters.",
-                        &visit.correlation,
-                    )
-                })?,
-        ),
-    };
-    backend_keyed(&bff, &visit, "/internal/mutate", &json!(mutation), key)
+    // The browser's key, if it sent one, was checked by `visit` and goes to the backend with the call.
+    backend(&bff, &visit, "/internal/mutate", &json!(mutation))
         .await
         .map(Json)
 }
@@ -1628,7 +1666,7 @@ async fn page(State(bff): State<Shared>, headers: HeaderMap, request: Request) -
         })
         .unwrap_or_default();
     let session = backend::<SessionReply>(&bff, &visit, "/internal/session", &json!({})).await;
-    let view = view_model(&bff, &visit, &path, query).await;
+    let view = view_model(&bff, &visit, &path, query, Paging::default()).await;
     let status = match &view {
         Err(Failure(reply)) if reply.code == ErrorCode::NotFound => StatusCode::NOT_FOUND,
         Err(Failure(reply)) if reply.code == ErrorCode::Unavailable => {

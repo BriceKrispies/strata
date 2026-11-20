@@ -9,17 +9,18 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use strata_kernel::ext::*;
 use strata_kernel::{
-    read, visible, Check, Context, DomainError, ErrorKind, Intent, InvitationId, Need,
-    ObjectTypeId, Output, Principal, PrincipalId, ReadRequest, Record, RecordId, RoleId, TeamId,
-    TenantId, TenantState,
+    read, read_needs, visible, Check, Context, DomainError, ErrorKind, FieldId, Intent,
+    InvitationId, Need, ObjectTypeId, Output, PageCursor, Principal, PrincipalId, ReadRequest,
+    ReadResult, Record, RecordId, RoleId, State, TeamId, TenantId, TenantState,
 };
 use strata_protocol::api::{
-    ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest,
+    ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest, MAX_VIEW_LIMIT,
 };
 use strata_storage_api::{execute_by, ExecuteError, Executed};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
-    included_refs, match_route, section_order, section_request, SectionData, ViewData,
+    decode_cursor, encode_cursor, included_refs, match_route, section_order, section_request,
+    select_fields, with_page, SectionData, ViewData,
 };
 
 /// The tenant's schema, members and counters, without records.
@@ -112,13 +113,13 @@ fn object_id(name: &str) -> Result<ObjectTypeId, ApiError> {
 
 /// Apply a record mutation given as plain JSON.
 ///
-/// `idempotency_key` is the caller's key for this change, when it sent one: repeating the request
-/// with the same key returns the first reply and changes nothing.
+/// The caller's idempotency key, when it sent one, is in the identity and so in the context of
+/// the intent: repeating the request with the same key returns the first reply and changes
+/// nothing.
 pub fn mutate(
     app: &App,
     identity: &Identity,
     mutation: &Mutation,
-    idempotency_key: Option<&str>,
 ) -> Result<MutationReply, ApiError> {
     let tenant = header(app, identity)?;
     let fields_of = |object: &ObjectTypeId, fields: &serde_json::Map<String, Json>| {
@@ -170,14 +171,13 @@ pub fn mutate(
     // A key is scoped by principal. Every anonymous caller is the same principal, so one of them
     // could read another's first result under a key they both chose: a key needs a signed-in
     // caller.
-    if idempotency_key.is_some() && identity.anonymous() {
+    if identity.idempotency_key.is_some() && identity.anonymous() {
         return Err(ApiError::new(
             ErrorCode::Unauthenticated,
             "Sign in to use an idempotency key.",
         ));
     }
-    let mut ctx = identity.context(app);
-    ctx.idempotency_key = idempotency_key.map(str::to_string);
+    let ctx = identity.context(app);
     let done = match run_intent(app, &ctx, &intent, identity.anonymous()) {
         Err(error) if error.0.kind.as_deref() == Some("Unauthorized") => {
             return Err(hide_unreadable(app, identity, &intent).unwrap_or(error))
@@ -322,14 +322,165 @@ pub fn members(
     })
 }
 
+/// The fields a view declares: those of the object of each section's query and of the objects its
+/// included references lead to.
+fn declared_fields(
+    schema: &strata_kernel::TenantSchema,
+    def: &strata_kernel::ViewDef,
+) -> BTreeSet<FieldId> {
+    let mut declared = BTreeSet::new();
+    for section in def.sections.values() {
+        let Some(query) = schema.queries.get(&section.query) else {
+            continue;
+        };
+        let Some(object) = schema.objects.get(&query.object) else {
+            continue;
+        };
+        declared.extend(object.fields.keys().cloned());
+        for field in &section.include {
+            if let Some((target, _, _)) = object.fields.get(field).and_then(|f| f.ty.ref_target()) {
+                if let Some(target) = schema.objects.get(target) {
+                    declared.extend(target.fields.keys().cloned());
+                }
+            }
+        }
+    }
+    declared
+}
+
+/// The field selection of a delivery request, checked against the fields the view declares
+/// (CMS-163): at least one name, each a field of the view. A name the view does not declare is
+/// refused, not ignored, so that a misspelt field is not mistaken for one that is empty.
+fn field_selection(
+    schema: &strata_kernel::TenantSchema,
+    def: &strata_kernel::ViewDef,
+    names: &[String],
+) -> Result<BTreeSet<FieldId>, ApiError> {
+    if names.is_empty() {
+        return Err(ApiError::new(
+            ErrorCode::Invalid,
+            "A field selection names at least one field.",
+        ));
+    }
+    let declared = declared_fields(schema, def);
+    let mut selected = BTreeSet::new();
+    for name in names {
+        let field = named("fields", FieldId::new(name.as_str()))?;
+        if !declared.contains(&field) {
+            return Err(ApiError::new(
+                ErrorCode::Invalid,
+                format!("view {} has no field {name}", def.id.as_str()),
+            ));
+        }
+        selected.insert(field);
+    }
+    Ok(selected)
+}
+
+/// The page of a delivery request: the size, and the section its cursor continues with that
+/// cursor. A cursor is `<section>:<position>`, as [`view`] answered it in `next`.
+fn page_of_request(
+    def: &strata_kernel::ViewDef,
+    request: &ViewRequest,
+) -> Result<(Option<u32>, Option<(String, PageCursor)>), ApiError> {
+    let limit = match request.limit {
+        Some(0) => {
+            return Err(ApiError::new(ErrorCode::Invalid, "A limit is at least 1."));
+        }
+        Some(n) if n > MAX_VIEW_LIMIT => {
+            return Err(ApiError::new(
+                ErrorCode::Invalid,
+                format!("A limit is at most {MAX_VIEW_LIMIT}."),
+            ));
+        }
+        other => other,
+    };
+    let Some(text) = request.cursor.as_deref() else {
+        return Ok((limit, None));
+    };
+    let wrong = || {
+        ApiError::new(
+            ErrorCode::Invalid,
+            "The cursor is not one this view issued.",
+        )
+    };
+    let (section, position) = text.rsplit_once(':').ok_or_else(wrong)?;
+    let listed = def.sections.get(section).is_some_and(|s| !s.single);
+    let cursor = decode_cursor(position)
+        .filter(|_| listed)
+        .ok_or_else(wrong)?;
+    Ok((limit, Some((section.to_string(), cursor))))
+}
+
+/// Answer one read against the snapshot, loading what the read needs first and what it reports
+/// missing after: a section loads the window of its page, never every record of its type.
+#[allow(clippy::too_many_arguments)]
+fn read_loaded(
+    app: &App,
+    tenant: &TenantId,
+    schema: &strata_kernel::TenantSchema,
+    state: &mut State,
+    needs: &mut BTreeSet<Need>,
+    request: &ReadRequest,
+    ctx: &Context,
+    anonymous: bool,
+) -> Result<ReadResult, ApiError> {
+    let reload = |state: &mut State, needs: &BTreeSet<Need>| -> Result<(), ApiError> {
+        let wanted: Vec<Need> = needs.iter().cloned().collect();
+        *state = app.store.load(tenant, &wanted)?;
+        Ok(())
+    };
+    let before = needs.len();
+    needs.extend(read_needs(schema, request));
+    if needs.len() != before {
+        reload(state, needs)?;
+    }
+    // A policy that follows a reference names the record it lacks; it is loaded and the read made
+    // again, a bounded number of times.
+    for _ in 0..32 {
+        let result = read(state, request, ctx);
+        let missing = match &result {
+            Err(error) if error.kind == ErrorKind::InsufficientState => error.missing.clone(),
+            _ => None,
+        };
+        match missing {
+            Some(need) if !needs.contains(&need) => {
+                needs.insert(need);
+                reload(state, needs)?;
+            }
+            _ => return result.map_err(|error| ApiError::domain(error, anonymous)),
+        }
+    }
+    Err(ApiError::new(
+        ErrorCode::Internal,
+        "A read kept asking for more state than it was given.",
+    ))
+}
+
 /// Evaluate the view whose route matches a path. Every section is read from one snapshot, and
 /// every row and every included record passes through the kernel's read authorization.
+///
+/// A section loads and answers one page of its query (the request's `limit`, else the query's own
+/// size), with the cursor of the page after it in `next`; a request `cursor` continues one section.
+/// A field selection narrows each row and included record to the fields it names after the read,
+/// so it can only take away from what the reader may see (CMS-163, CMS-164).
+///
+/// Implements: CT-093
 pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<ViewData, ApiError> {
-    let tenant = header(app, identity)?;
+    let mut state = app.store.load(&identity.tenant, &[])?;
+    let tenant = state.tenant.clone().ok_or_else(|| {
+        ApiError::new(ErrorCode::NotFound, format!("no site {}", identity.tenant))
+    })?;
     let schema = &tenant.schema;
     let (def, route) = match_route(schema, &request.path).ok_or_else(|| {
         ApiError::new(ErrorCode::NotFound, format!("nothing at {}", request.path))
     })?;
+    let (limit, continued) = page_of_request(def, request)?;
+    let selected = request
+        .fields
+        .as_ref()
+        .map(|names| field_selection(schema, def, names))
+        .transpose()?;
 
     let mut depends_on = BTreeSet::new();
     for section in def.sections.values() {
@@ -347,52 +498,76 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             }
         }
     }
-    let needs: Vec<Need> = depends_on.iter().cloned().map(Need::AllOf).collect();
-    let state = app.store.load(&identity.tenant, &needs)?;
     let ctx = identity.context(app);
     let anonymous = identity.anonymous();
-    let fail = |error| ApiError::domain(error, anonymous);
+    let shown = |record: &Arc<Record>| {
+        let trimmed = without_others_authorship(&identity.principal, record);
+        match &selected {
+            Some(fields) => select_fields(&trimmed, fields),
+            None => trimmed,
+        }
+    };
 
+    let mut needs = BTreeSet::new();
     let mut done = BTreeMap::new();
     let mut sections = BTreeMap::new();
     let mut revision = tenant.revision;
     for name in section_order(def) {
         let section = &def.sections[name];
-        let result = read(
-            &state,
-            &section_request(section, &route, &request.request, &done),
+        let (size, cursor) = if section.single {
+            (None, None)
+        } else {
+            (
+                limit,
+                continued
+                    .as_ref()
+                    .filter(|(section, _)| section == name)
+                    .map(|(_, cursor)| cursor.clone()),
+            )
+        };
+        let wanted = with_page(
+            section_request(section, &route, &request.request, &done),
+            size,
+            cursor,
+        );
+        let result = read_loaded(
+            app,
+            &identity.tenant,
+            schema,
+            &mut state,
+            &mut needs,
+            &wanted,
             &ctx,
-        )
-        .map_err(fail)?;
+            anonymous,
+        )?;
         revision = result.revision;
         let object = &schema.queries[&section.query].object;
         let mut included = BTreeMap::new();
         for (field, (target, ids)) in included_refs(schema, object, section, &result.rows) {
-            let found = read(
-                &state,
+            let found = read_loaded(
+                app,
+                &identity.tenant,
+                schema,
+                &mut state,
+                &mut needs,
                 &ReadRequest::Records {
                     object: target,
                     ids,
                 },
                 &ctx,
-            )
-            .map_err(fail)?;
+                anonymous,
+            )?;
             included.insert(
                 field,
                 found
                     .rows
                     .iter()
-                    .map(|record| {
-                        (
-                            record.id,
-                            without_others_authorship(&identity.principal, record),
-                        )
-                    })
+                    .map(|record| (record.id, shown(record)))
                     .collect(),
             );
         }
-        // Later sections may read this one's row, authorship included; only what is sent is
-        // trimmed.
+        // Later sections may read this one's row, authorship and every field included; only what
+        // is sent is trimmed and narrowed.
         if section.single {
             done.insert(name.clone(), result.rows.first().cloned());
         }
@@ -400,13 +575,23 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             name.clone(),
             SectionData {
                 single: section.single,
-                rows: result
-                    .rows
-                    .iter()
-                    .map(|record| without_others_authorship(&identity.principal, record))
-                    .collect(),
+                rows: result.rows.iter().map(&shown).collect(),
                 included,
-                markdown: section.markdown.clone(),
+                markdown: section
+                    .markdown
+                    .iter()
+                    .filter(|field| {
+                        selected
+                            .as_ref()
+                            .is_none_or(|fields| fields.contains(*field))
+                    })
+                    .cloned()
+                    .collect(),
+                next: result
+                    .next
+                    .as_ref()
+                    .filter(|_| !section.single)
+                    .map(|cursor| format!("{name}:{}", encode_cursor(cursor))),
             },
         );
     }

@@ -369,3 +369,54 @@ test('the desk is entered through the hooks its screen names', () => {
   const home = boot('/', anonymous, homeShell());
   assert.equal(home.effects.filter((e) => e.type === 'http').some((e) => e.path === '/api/sessions'), false);
 });
+
+// Verifies: CMS-164
+test('a list that has more rows loads its next page and the rows continue with none repeated', () => {
+  const article = (id) => ({ id, version: 1, created_at: 1, updated_at: 2, refs: {}, fields: { title: `Essay ${id}`, slug: `essay-${id}`, status: 'published', published_at: '2026-01-01T00:00:00Z' } });
+  const model = { ...homeShell(), data: { site, featured: null, recent: [article(1), article(2)], categories: [] }, next: { recent: 'recent:o2' } };
+  const start = boot('/', anonymous, model).state;
+  assert.deepEqual(view(start).page.more, { section: 'recent', busy: false }, 'a section with a cursor offers more');
+
+  const asked = update(start, { type: 'action', name: 'view.more', arg: 'recent', ...stamp });
+  const [effect] = asked.effects;
+  assert.equal(effect.method, 'GET');
+  assert.equal(effect.path, '/api/view?path=%2F&cursor=recent%3Ao2');
+  assert.equal(view(asked.state).page.more.busy, true);
+  assert.deepEqual(update(asked.state, { type: 'action', name: 'view.more', arg: 'recent', ...stamp }).effects, [], 'one page at a time');
+
+  // The second page starts where the first ended; a row both hold is held once.
+  const reply = { type: 'http_result', id: effect.id, ok: true, status: 200, body: { data: { recent: [article(2), article(3)] }, next: {} }, ...stamp };
+  const done = update(asked.state, reply).state;
+  assert.deepEqual(done.view.model.data.recent.map((r) => r.id), [1, 2, 3]);
+  assert.equal(view(done).page.more, null, 'the end of the list offers no more');
+
+  // A reply for a page the reader has left is dropped.
+  const left = update(asked.state, { type: 'navigate', href: '/about', ...stamp }).state;
+  assert.equal(update(left, reply).state.view.model?.data?.recent?.length ?? 0, left.view.model?.data?.recent?.length ?? 0);
+});
+
+// Verifies: OPS-318
+test('a create is sent with a key made once, and a retry of the same create reuses it', () => {
+  const newArticle = { view: 'desk_new', title: 'New article', path: '/desk/new', params: {}, depends_on: [], revision: 1, schema_version: 1, theme, data: { site, categories: [], authors: [] } };
+  const start = boot('/desk/new', editor, newArticle).state;
+  const press = (state) => update(state, { type: 'action', name: 'editor.publish', ...stamp });
+  const sentOf = (result) => result.effects.find((e) => e.type === 'http' && e.write);
+
+  const first = press(start);
+  const key = sentOf(first).idempotencyKey;
+  assert.match(key, /^[\x21-\x7e]{1,128}$/, 'a key is visible ASCII of at most 128 bytes');
+
+  // No answer came: the create may have been made, so the retry carries the same key.
+  const lost = update(first.state, { type: 'http_result', id: sentOf(first).id, ok: false, status: 0, body: null, ...stamp }).state;
+  const retry = press(lost);
+  assert.equal(sentOf(retry).idempotencyKey, key);
+
+  // A refusal answered: nothing was made, and a new attempt is a new action with a key of its own.
+  const refused = update(retry.state, { type: 'http_result', id: sentOf(retry).id, ok: false, status: 422, body: { code: 'invalid', message: 'No.', failed: [], correlation: 'c' }, ...stamp }).state;
+  assert.notEqual(sentOf(press(refused)).idempotencyKey, key);
+
+  // A change that is not a create carries none.
+  const update_ = boot('/desk', editor, deskModel).state;
+  const asked = update(update(update_, { type: 'action', name: 'post.ask_delete', arg: { id: 7 }, ...stamp }).state, { type: 'action', name: 'post.delete', arg: { id: 7, version: 3 }, ...stamp });
+  assert.equal(sentOf(asked)?.idempotencyKey, undefined);
+});
