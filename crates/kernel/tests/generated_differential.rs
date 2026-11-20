@@ -72,8 +72,7 @@
 //!      function language cannot state, because it compiles neither durations nor recursion:
 //!      retry delays, attempt timeouts and waits of an automation step, and the two hundred
 //!      nodes of an operation condition. The generator draws no definition that breaks one, nor
-//!      a hundred and one triggers. Its automation acts with no run-as role, so the conferral of
-//!      a run-as role is compared only through the specification's examples.
+//!      a hundred and one triggers.
 //!   8. Not mirrored: the problems of the aggregates a named query declares, of its declared
 //!      fields and of a view section that names an aggregate (`strata_kernel::aggregates`,
 //!      AGG-001 to AGG-023): the generated `schema-problems` states none of them, and the
@@ -90,23 +89,19 @@
 //!      a setting. The corpus holds no setting, no capability and no override:
 //!      `assert_no_input_of_a_known_difference` fails when a snapshot holds one, and
 //!      `compare_transition` fails on a write-setting intent.
-//!  10. Not mirrored: what `strata_kernel::triggers` adds once the events of a decision are final
-//!      (D-7200 to D-7204, WG-5097, WG-5099, WG-5079): the `StartAutomation` and
-//!      `DeclineAutomation` effects of the triggers that match an event, the `transitions` a
-//!      record-updated event names, the `defined-by` and `defined-at` the kernel writes on a
-//!      trigger or an automation it defines, the suspension of an automation whose definer lost
-//!      authority, the roles of an automation principal and its reserved `automation:` prefix.
-//!      The generated `finish`, `update-record` and `apply-change` do not state them yet. Compared
-//!      as: both results without those effects, transitions, definers and times
-//!      (`without_kernel_only`). The suspension is guarded: the corpus's automation acts with no
-//!      run-as role, so it is never suspended, and `assert_no_input_of_a_known_difference` fails
-//!      on one that has a role. No principal of the corpus starts with `automation:`.
-//!  11. Not exercised, and not mirrored: the automation principal (`strata_kernel::automation`,
-//!      WFL-1527). The hand-written `roles_of` gives a principal `automation:<id>` exactly the
-//!      run-as roles of its automation, and `refuse_reserved_principals` refuses the prefix for
-//!      a named person and for a caller with a session; the generated `roles-of` and
-//!      `reserved-principal` do not yet. Guarded: `assert_no_automation_principal` fails on a
-//!      context whose principal has the prefix.
+//!  10. Not mirrored, in the trigger decisions of `strata_kernel::triggers` (the rest of the module
+//!      is mirrored by `after-decision`): (a) the check that a condition or a run key reads nothing
+//!      the automation principal may not read (`unreadable`, which declines with `condition-failed`)
+//!      and the `InsufficientState` of a record a condition follows to (`expr::missing`): both walk
+//!      the expression tree, a structural recursion that specc refuses, and following a reference
+//!      is difference 2; (b) the run key of a started run: the kernel writes the SHA-256 of the
+//!      canonical JSON of the value, and the function language has no hash, so the generated
+//!      `trigger-start` writes the canonical JSON itself (`value-canonical-json`) and the test
+//!      hashes it with `canon::hash_bytes` before comparing, which compares the hash of the same
+//!      text; a run key that is a list holding a list is written one level deep only, and the
+//!      corpus has no such key. Guarded: `assert_no_input_of_a_known_difference` fails on a trigger
+//!      condition or an automation run key that follows a reference or reads a field some object
+//!      type protects with a read condition.
 //!  12. Not exercised, and not mirrored: the invocation of a tenant operation (`InvokeOperation`,
 //!      `crates/kernel/src/operations.rs`, WG-5100). The generated `intent-decision` refuses it
 //!      with `operation:decided_by_the_kernel` and the generated `needs` plans nothing for it,
@@ -148,13 +143,18 @@
 //! grows into one is told to mirror the rule or to count the difference here:
 //! `assert_no_input_of_a_known_difference` runs on every snapshot the test decides or reads and
 //! fails on an input of differences 2, 7, 8, 9, 10, 13 or 14; `compare_transition` fails on an
-//! intent of differences 9, 12, 13 or 16, on a context of difference 11
-//! (`assert_no_automation_principal`) and on a schema change that warns of a scan (difference 15);
-//! `compare_read` fails on a read of a planned query (difference 15). Differences 1 and 10 are
-//! compared through an adjustment (the detail's prefix, `without_kernel_only`). Differences 3 to
-//! 6 are guarded by the operation generator drawing nothing that reaches them.
+//! intent of differences 9, 12, 13 or 16 and on a schema change that warns of a scan (difference
+//! 15); `compare_read` fails on a read of a planned query (difference 15). Difference 1 is
+//! compared through an adjustment (the detail's prefix) and the run key of difference 10 through
+//! another (`hash_run_keys`). Differences 3 to 6 are guarded by the operation generator drawing
+//! nothing that reaches them.
 //!
-//! Mirrored, so no longer differences: the size limits of `limits.rs` (the bytes of a record, the
+//! Mirrored, so no longer differences: the automation principal (`automation:<id>` holds the
+//! run-as roles of its automation and no other, and the prefix is reserved: `roles-of`,
+//! `reserved-principal`, `automation-roles`; WG-5160), the trigger decisions at commit (the
+//! effects `StartAutomation` and `DeclineAutomation`, the `transitions` of a record-updated event,
+//! the definer and time stamped on a trigger or an automation, the suspension of an automation
+//! whose definer lost authority: `after-decision`, `stamp-definitions`; WG-5136), the size limits of `limits.rs` (the bytes of a record, the
 //! length of a string or a list, the encoded size of a value of a unique field: `record-limit-check`,
 //! `limit-step`; WG-5092), the field-level read conditions (`redact`, in `kernel-read` and
 //! `named-read`; WG-5093), the deletion of a record that two fields of one record refer to (one
@@ -194,9 +194,14 @@ const EVALUATION_FAILED_DETAIL: &str = ": evaluation failed";
 struct Op {
     tenant: usize,
     actor_tenant: usize,
-    /// 0..=3 the members of the tenant, 4 a stranger, 5 an anonymous visitor, 6 the system.
+    /// 0..=3 the members of the tenant, 4 a stranger, 5 an anonymous visitor, 6 the system, 7 the
+    /// automation `award` acting as its principal without a session, 8 that principal with a
+    /// session, which the kernel refuses.
     actor: usize,
     kind: OpKind,
+    /// Whether the change carries a hop count past the limit of the triggers (the hop of the
+    /// automation worker): one op in eight.
+    past_hop_limit: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -276,9 +281,13 @@ enum SchemaOp {
     TightenTitle(i64),
     Nonsense,
     DefineAutomation,
+    /// An automation whose run key is a parameter of the event, so a started run carries a hash.
+    DefineKeyedAutomation,
     BrokenAutomation,
     RemoveAutomation,
     DefineTrigger,
+    /// A trigger on the creation of a note that starts the keyed automation.
+    DefineCreateTrigger,
     RemoveTrigger,
     DefineOperation,
     RemoveOperation,
@@ -314,9 +323,11 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         3 => (3i64..30).prop_map(SchemaOp::TightenTitle),
         1 => Just(SchemaOp::Nonsense),
         2 => Just(SchemaOp::DefineAutomation),
+        1 => Just(SchemaOp::DefineKeyedAutomation),
         1 => Just(SchemaOp::BrokenAutomation),
         1 => Just(SchemaOp::RemoveAutomation),
         2 => Just(SchemaOp::DefineTrigger),
+        1 => Just(SchemaOp::DefineCreateTrigger),
         1 => Just(SchemaOp::RemoveTrigger),
         2 => Just(SchemaOp::DefineOperation),
         1 => Just(SchemaOp::RemoveOperation),
@@ -355,12 +366,13 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         2 => (0usize..5, 0usize..5).prop_map(|(who, role)| OpKind::Assign { who, role }),
         2 => (0usize..5, 0usize..5).prop_map(|(who, role)| OpKind::Revoke { who, role }),
     ];
-    (0usize..3, 0usize..3, 0usize..7, kind, 0u8..10).prop_map(
-        |(tenant, other, actor, kind, cross)| Op {
+    (0usize..3, 0usize..3, 0usize..9, kind, 0u8..10, 0u8..8).prop_map(
+        |(tenant, other, actor, kind, cross, hop)| Op {
             tenant,
             actor_tenant: if cross == 0 { other } else { tenant },
             actor,
             kind,
+            past_hop_limit: hop == 0,
         },
     )
 }
@@ -506,11 +518,13 @@ fn intent_of(op: &Op) -> Intent {
                     field: field("nothing"),
                 },
                 SchemaOp::DefineAutomation => SchemaChange::DefineAutomation(award(false)),
+                SchemaOp::DefineKeyedAutomation => SchemaChange::DefineAutomation(keyed()),
                 SchemaOp::BrokenAutomation => SchemaChange::DefineAutomation(award(true)),
                 SchemaOp::RemoveAutomation => {
                     SchemaChange::RemoveAutomation(WorkflowId::new("award").unwrap())
                 }
                 SchemaOp::DefineTrigger => SchemaChange::DefineTrigger(on_publish()),
+                SchemaOp::DefineCreateTrigger => SchemaChange::DefineTrigger(on_create()),
                 SchemaOp::RemoveTrigger => {
                     SchemaChange::RemoveTrigger(TriggerId::new("on_publish").unwrap())
                 }
@@ -629,8 +643,9 @@ fn intent_of(op: &Op) -> Intent {
 }
 
 /// An automation that creates a note, looks at it and ends; `broken`, it names a step it does
-/// not declare and leaves one unreachable. It acts with no role, so the comparison is of the
-/// definitions and not of the conferral of a run-as role (difference 7).
+/// not declare and leaves one unreachable. It acts as `editor`, so its definition is checked for the
+/// conferral of that role, its principal reads what an editor reads and it is suspended when its
+/// definer loses the authority to confer the role (WFL-1528, WFL-1529).
 fn award(broken: bool) -> AutomationDef {
     let name = |n: &str| StepName::new(n).unwrap();
     let step = |action: AutomationStep, next: Option<&str>| AutomationStepDef {
@@ -680,14 +695,57 @@ fn award(broken: bool) -> AutomationDef {
         id: WorkflowId::new("award").unwrap(),
         label: "Award".into(),
         run_as: RunAs {
-            roles: BTreeSet::new(),
+            roles: BTreeSet::from([role("editor")]),
         },
-        run_key: Some(Expr::Param("owner".into())),
+        run_key: None,
         start: name("make"),
         steps,
         defined_by: None,
         defined_at: None,
         suspended_for: None,
+    }
+}
+
+/// An automation that only ends, run as `editor`, with a run key that is the sequence of the event:
+/// a run it starts carries the hash of that value (difference 10 b).
+fn keyed() -> AutomationDef {
+    let done = StepName::new("done").unwrap();
+    AutomationDef {
+        id: WorkflowId::new("keyed").unwrap(),
+        label: "Keyed".into(),
+        run_as: RunAs {
+            roles: BTreeSet::from([role("editor")]),
+        },
+        run_key: Some(Expr::Param("seq".into())),
+        start: done.clone(),
+        steps: BTreeMap::from([(
+            done,
+            AutomationStepDef {
+                action: AutomationStep::End,
+                next: None,
+                retry: None,
+                timeout: None,
+                compensate: None,
+            },
+        )]),
+        defined_by: None,
+        defined_at: None,
+        suspended_for: None,
+    }
+}
+
+/// A trigger on the creation of a note that starts `keyed`, with no condition.
+fn on_create() -> TriggerDef {
+    TriggerDef {
+        id: TriggerId::new("on_create").unwrap(),
+        on: TriggerEvent::RecordCreated {
+            object: object("note"),
+        },
+        condition: None,
+        automation: WorkflowId::new("keyed").unwrap(),
+        paused: None,
+        defined_by: None,
+        defined_at: None,
     }
 }
 
@@ -763,19 +821,28 @@ fn redeem() -> TenantOperationDef {
 }
 
 fn principal_of(tenant: usize, actor: usize) -> Principal {
-    if actor == 6 {
-        Principal::System
-    } else {
-        principals(WORLD_TENANTS[tenant])[actor].clone()
+    match actor {
+        6 => Principal::System,
+        7 | 8 => Principal::User(strata_kernel::automation::automation_principal(
+            &WorkflowId::new("award").unwrap(),
+        )),
+        _ => principals(WORLD_TENANTS[tenant])[actor].clone(),
     }
 }
 
 fn context_of(op: &Op, now: i64) -> Context {
-    ctx(
+    let mut context = ctx(
         WORLD_TENANTS[op.tenant],
         principal_of(op.actor_tenant, op.actor),
         now,
-    )
+    );
+    if op.actor == 8 {
+        context.session = Some(SessionId::new("s-1").unwrap());
+    }
+    if op.past_hop_limit {
+        context.hop = Some(9);
+    }
+    context
 }
 
 // ---------------------------------------------------------------------------------------
@@ -917,6 +984,37 @@ fn mentions_through(expr: &Expr) -> bool {
     }
 }
 
+/// Whether an expression reads a field of a record scope whose name satisfies `named`.
+fn reads_a_field(expr: &Expr, named: &dyn Fn(&str) -> bool) -> bool {
+    match expr {
+        Expr::Var(_, name) => named(name),
+        Expr::Through(..)
+        | Expr::Lit(_)
+        | Expr::Param(_)
+        | Expr::Now
+        | Expr::Principal
+        | Expr::HasRole(_) => false,
+        Expr::Not(a)
+        | Expr::IsNull(a)
+        | Expr::Len(a)
+        | Expr::Lower(a)
+        | Expr::IsSlug(a)
+        | Expr::Duration(_, a)
+        | Expr::Text(a) => reads_a_field(a, named),
+        Expr::And(items) | Expr::Or(items) => items.iter().any(|item| reads_a_field(item, named)),
+        Expr::Cmp(_, a, b)
+        | Expr::In(a, b)
+        | Expr::Contains(a, b)
+        | Expr::StartsWith(a, b)
+        | Expr::Arith(_, a, b)
+        | Expr::MsBetween(a, b)
+        | Expr::Concat(a, b) => reads_a_field(a, named) || reads_a_field(b, named),
+        Expr::If(a, b, c) => {
+            reads_a_field(a, named) || reads_a_field(b, named) || reads_a_field(c, named)
+        }
+    }
+}
+
 /// Differences 2, 7, 8, 9, 10, 13 and 14 of the header: fail when a snapshot holds an input of a
 /// rule the generated functions do not mirror, so the corpus cannot start to depend on one
 /// silently.
@@ -975,10 +1073,28 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             "{object_id} declares retention, publication, a language field or a translation group; the generated functions do not state their checks (difference 14)"
         );
     }
+    let protected: BTreeSet<&str> = tenant
+        .schema
+        .objects
+        .values()
+        .flat_map(|def| def.fields.values())
+        .filter(|field| field.read.is_some())
+        .map(|field| field.id.as_str())
+        .collect();
+    let unreadable = |expr: &Expr| {
+        mentions_through(expr) || reads_a_field(expr, &|name| protected.contains(name))
+    };
+    for trigger in tenant.schema.triggers.iter().flat_map(BTreeMap::values) {
+        assert!(
+            !trigger.condition.as_ref().is_some_and(unreadable),
+            "trigger {} has a condition that follows a reference or reads a protected field; the generated decide-run does not check what the automation may read (difference 10)",
+            trigger.id
+        );
+    }
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {
         assert!(
-            automation.run_as.roles.is_empty(),
-            "{} has a run-as role; the generated functions do not suspend an automation whose definer lost authority (difference 10)",
+            !automation.run_key.as_ref().is_some_and(unreadable),
+            "{} has a run key that follows a reference or reads a protected field; the generated decide-run does not check what the automation may read (difference 10)",
             automation.id
         );
         for (name, step) in &automation.steps {
@@ -996,52 +1112,20 @@ fn assert_no_input_of_a_known_difference(state: &State) {
     }
 }
 
-/// Difference 10: a result without what `strata_kernel::triggers` adds and the generated
-/// functions do not state: the effects of triggers, the transitions a record-updated event names,
-/// and the definer and time written on a trigger or an automation.
-fn without_kernel_only(result: &mut Result<Transition, DomainError>) {
+/// Difference 10 (b) of the header: the generated `trigger-start` writes the canonical JSON of a
+/// run key where the kernel writes its SHA-256 in hexadecimal; hash it, so both sides carry the
+/// hash of the same text.
+fn hash_run_keys(result: &mut Result<Transition, DomainError>) {
     let Ok(outcome) = result else {
         return;
     };
-    outcome.effects.retain(|effect| {
-        !matches!(
-            effect,
-            Effect::StartAutomation(_) | Effect::DeclineAutomation(_)
-        )
-    });
-    for event in &mut outcome.events {
-        if let EventBody::RecordUpdated { transitions, .. } = &mut event.body {
-            *transitions = None;
+    for effect in &mut outcome.effects {
+        if let Effect::StartAutomation(start) = effect {
+            start.run_key = start
+                .run_key
+                .take()
+                .map(|text| strata_kernel::canon::hash_bytes(text.as_bytes()));
         }
-    }
-    for op in &mut outcome.delta.ops {
-        if let DeltaOp::PutSchema(schema) = op {
-            let mut plain = TenantSchema::clone(schema);
-            for def in plain
-                .automations
-                .iter_mut()
-                .flat_map(|all| all.values_mut())
-            {
-                def.defined_by = None;
-                def.defined_at = None;
-            }
-            for def in plain.triggers.iter_mut().flat_map(|all| all.values_mut()) {
-                def.defined_by = None;
-                def.defined_at = None;
-            }
-            *schema = std::sync::Arc::new(plain);
-        }
-    }
-}
-
-/// Difference 11 of the header: fail when a decision or read is made as an automation principal,
-/// whose roles the generated functions do not mirror.
-fn assert_no_automation_principal(context: &Context) {
-    if let Principal::User(id) = &context.principal {
-        assert!(
-            strata_kernel::automation::automation_named(id).is_none(),
-            "{id} is an automation principal; the generated roles-of and reserved-principal do not mirror it (difference 11)"
-        );
     }
 }
 
@@ -1116,10 +1200,8 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         !matches!(intent, Intent::EraseSubject { .. }),
         "{label}: the generated functions do not decide an erasure (difference 16)"
     );
-    assert_no_automation_principal(context);
     let mut hand = transition(state, intent, context);
     assert_no_scan_warning(state, intent, &hand);
-    without_kernel_only(&mut hand);
     let texts = texts_for(state, intent);
     let mut generated = match spec::kernel_transition(state, intent, context, &texts) {
         Ok(result) => Ok(result),
@@ -1129,7 +1211,7 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
             )
         })),
     };
-    without_kernel_only(&mut generated);
+    hash_run_keys(&mut generated);
     match (&hand, &mut generated) {
         (Ok(h), Ok(g)) => {
             tally.evaluation_failed_details +=
@@ -1165,7 +1247,6 @@ fn compare_read(state: &State, request: &ReadRequest, context: &Context, tally: 
         context.principal, context.tenant, state.tenant_id
     );
     assert_no_input_of_a_known_difference(state);
-    assert_no_automation_principal(context);
     assert_not_planned(state, request);
     let hand = read(state, request, context);
     // Only the query filters are printed by a read; the intent is none.
@@ -1233,7 +1314,7 @@ fn compare_reads_of(world: &World, now: i64, tally: &mut Tally) {
     ];
     for tenant in WORLD_TENANTS {
         for actor_tenant in 0..WORLD_TENANTS.len() {
-            for actor in 0..7 {
+            for actor in 0..8 {
                 let context = ctx(tenant, principal_of(actor_tenant, actor), now);
                 let state = world.state(&tenant_id(tenant));
                 for request in &requests {
@@ -1251,7 +1332,7 @@ fn compare_reads_of(world: &World, now: i64, tally: &mut Tally) {
 fn compare_visibility(world: &World, now: i64, tally: &mut Tally) {
     for tenant in world.tenants.values() {
         for actor_tenant in 0..WORLD_TENANTS.len() {
-            for actor in 0..7 {
+            for actor in 0..8 {
                 let principal = principal_of(actor_tenant, actor);
                 for record in tenant.records.values().flat_map(|by_id| by_id.values()) {
                     let hand = visible(tenant, &principal, record, Timestamp(now));
