@@ -128,17 +128,22 @@
 //!      `schema-problems` does not state them. The generator draws no such declaration, template,
 //!      token or product record.
 //!  15. Not exercised, and not mirrored: planned named queries (`strata_kernel::query_plan`,
-//!      KRN-2520 to KRN-2524). The hand-written kernel serves a query whose filter has an
-//!      indexable condition from `Need::IndexPage` candidates, pages them with a
-//!      `PageCursor::At` or `After` cursor, plans `read_needs` as index pages, evaluates every
-//!      query filter and order on the record as the reader receives it, and adds a
-//!      `query-plan:<query>` warning to the evidence of a schema change that defines a scan or
-//!      turns a planned query into one. The generated `kernel-read`, `read-needs` and
-//!      `change-schema` still scan every filtered query and refuse an `at` cursor; the spec
-//!      functions are wired afterwards. The rows of a planned read equal the scan's
-//!      (`tests/query_plan.rs`), so only the cursor, the needs and the evidence differ. Guarded:
-//!      `compare_read` fails on a read of a query that has an index plan, and
-//!      `compare_transition` fails on a schema change whose evidence would hold a scan warning.
+//!      KRN-2520 to KRN-2524, KRN-2920 to KRN-2923). The hand-written kernel serves a query whose
+//!      filter has an indexable condition from `Need::IndexPage` candidates, and an equality or a
+//!      list of values on one field ordered by another attribute (a pair plan,
+//!      `PlanOrder::By`) from `Need::PairPage` candidates, pages them with a `PageCursor::At` or
+//!      `After` cursor, plans `read_needs` as index and pair pages, evaluates every query filter
+//!      and order on the record as the reader receives it, and adds a `query-plan:<query>`
+//!      warning, with the one change that would plan the query (`plan_hint`), to the evidence of
+//!      a schema change that defines a scan or turns a planned query into one. The generated
+//!      `kernel-read`, `read-needs` and `change-schema` still scan every filtered query and refuse
+//!      an `at` cursor; the spec functions are wired afterwards. The rows of a planned read equal
+//!      the scan's (`tests/query_plan.rs`), so only the cursor, the needs and the evidence differ.
+//!      `query_plan::read_missing`, which names every record the rows of a read lack at once, is
+//!      a shell-side helper with no generated counterpart and takes no part in a decision.
+//!      Guarded: `compare_read` fails on a read of a query that has an index plan (a pair plan is
+//!      one), and `compare_transition` fails on a schema change whose evidence would hold a scan
+//!      warning.
 //!  16. Not exercised, and not mirrored: the erasure of a data subject (`EraseSubject`,
 //!      `crates/kernel/src/erasure.rs`, D-7460). The generated `intent-decision` refuses it with
 //!      `erasure:decided_by_the_kernel` and the generated `needs` plans nothing for it. The

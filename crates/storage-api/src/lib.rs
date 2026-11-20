@@ -1498,6 +1498,23 @@ pub fn partial_state(tenant: &TenantState, needs: &[Need]) -> State {
                 after.as_ref(),
                 *limit,
             ),
+            Need::PairPage {
+                object,
+                field,
+                value,
+                order,
+                descending,
+                after,
+                limit,
+            } => strata_kernel::query_plan::pair_page(
+                tenant.records_of(object),
+                field,
+                value,
+                order,
+                *descending,
+                after.as_ref(),
+                *limit,
+            ),
         };
         for record in found {
             thin.records
@@ -1697,6 +1714,11 @@ pub fn execute_by(
 }
 
 /// Answer a read with the kernel against a snapshot loaded from the store.
+///
+/// A rule that follows a reference reaches a record per row; when the snapshot lacks some, the
+/// kernel names every record the examined rows refer to at once
+/// ([`strata_kernel::query_plan::read_missing`]), and exactly those are loaded in the next
+/// round, never their whole object type (KRN-2922, WG-5180).
 pub fn query(
     store: &dyn Store,
     request: &ReadRequest,
@@ -1706,30 +1728,11 @@ pub fn query(
     let Some(tenant) = header.tenant.as_deref() else {
         return strata_kernel::read(&header, request, ctx).map_err(ExecuteError::Domain);
     };
-    let mut wanted: BTreeSet<Need> = strata_kernel::read_needs(&tenant.schema, request)
-        .into_iter()
-        .collect();
-    let mut rounds = 0;
-    loop {
-        let list: Vec<Need> = wanted.iter().cloned().collect();
-        let state = store.load(&ctx.tenant, &list)?;
-        match strata_kernel::read(&state, request, ctx) {
-            Err(DomainError {
-                kind: ErrorKind::InsufficientState,
-                missing: Some(need),
-                ..
-            }) if rounds < MAX_NEED_ROUNDS && !wanted.contains(&need) => {
-                // A rule that follows a reference reaches a record per row: load the whole
-                // object type it points into, so one round answers every row.
-                wanted.insert(match need {
-                    Need::Record { object, .. } => Need::AllOf(object),
-                    other => other,
-                });
-                rounds += 1;
-            }
-            other => return other.map_err(ExecuteError::Domain),
-        }
-    }
+    let initial = strata_kernel::read_needs(&tenant.schema, request);
+    let covered = covering::load_covering(store, &ctx.tenant, initial, |state, asked| {
+        covering::read_asking(state, request, ctx, asked)
+    })?;
+    covered.outcome.map_err(ExecuteError::Domain)
 }
 
 #[cfg(test)]

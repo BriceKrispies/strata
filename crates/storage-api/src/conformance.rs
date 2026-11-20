@@ -1601,6 +1601,236 @@ fn reset_removes_everything(store: &dyn Store) {
     Pair::new(store);
 }
 
+/// The pair index of named queries (KRN-2920, KRN-2921): a store answers a pair page (the records
+/// of one value of a field, in the order of another attribute and then the record id, after a
+/// position) exactly as the kernel defines it ([`strata_kernel::query_plan::pair_page`]), before
+/// any query reads the pair, once one is defined over existing records, after records are created,
+/// updated in either field and deleted, and after the query is redefined and removed; a read of
+/// the query through the store returns what the kernel returns from the complete state; and one
+/// tenant's records never answer for another.
+///
+/// Not a row of the conformance table: the adapters' tests call it by name, as they call
+/// [`documents_are_scoped_to_their_tenant_and_kind`].
+pub fn pair_pages_follow_writes_and_definitions(store: &dyn Store) {
+    use strata_kernel::query_plan::{order_value, pair_page, IndexPosition};
+    let mut pair = Pair::new(store);
+    let alpha = tenant_id("alpha");
+    let writer = || user("alpha:writer1");
+    let owner = || Principal::User(principal_id("alpha:owner"));
+    let mut ids = Vec::new();
+    let notes = [
+        ("A", Some(3)),
+        ("B", None),
+        ("A", Some(1)),
+        ("A", None),
+        ("B", Some(2)),
+        ("A", Some(3)),
+    ];
+    for (i, (title, rank)) in notes.iter().enumerate() {
+        let id = pair.note("alpha", title, &format!("s{i}"));
+        if let Some(rank) = rank {
+            pair.ok(
+                "alpha",
+                writer(),
+                Intent::UpdateRecord {
+                    object: object("note"),
+                    id,
+                    fields: BTreeMap::from([(field("rank"), Value::Int(*rank))]),
+                    expected_version: None,
+                },
+            );
+        }
+        ids.push(id);
+    }
+    pair.note("beta", "A", "s0");
+    let by_title = |order: &str, descending: bool| QueryDef {
+        id: QueryId::new("by_title").unwrap(),
+        object: object("note"),
+        filter: Some(eq(var(Scope::Record, "title"), Expr::Param("t".into()))),
+        params: std::collections::BTreeSet::from(["t".to_string()]),
+        order: vec![OrderKey {
+            field: order.into(),
+            descending,
+        }],
+        limit: None,
+        aggregates: None,
+        declared_fields: None,
+    };
+    let change = |pair: &mut Pair, changes: Vec<SchemaChange>| {
+        pair.ok(
+            "alpha",
+            owner(),
+            Intent::ChangeSchema {
+                changes,
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
+        );
+    };
+    // Every pair page of the titles, from the start and after each record's position, as the
+    // kernel defines it over the store's complete state.
+    let agree = |stage: &str| {
+        let all = store.load_complete(&alpha).unwrap().tenant.unwrap();
+        let notes_of = || all.records_of(&object("note"));
+        for title in ["A", "B", "C"] {
+            for order in ["rank", "$created_at", "$updated_at"] {
+                for descending in [false, true] {
+                    let mut positions = vec![None];
+                    positions.extend(
+                        pair_page(
+                            notes_of(),
+                            &field("title"),
+                            &text(title),
+                            order,
+                            descending,
+                            None,
+                            10,
+                        )
+                        .into_iter()
+                        .map(|r| {
+                            Some(IndexPosition {
+                                value: order_value(r, order),
+                                id: r.id,
+                            })
+                        }),
+                    );
+                    for after in positions {
+                        for limit in [1, 2, 10] {
+                            let mut expected: Vec<RecordId> = pair_page(
+                                notes_of(),
+                                &field("title"),
+                                &text(title),
+                                order,
+                                descending,
+                                after.as_ref(),
+                                limit,
+                            )
+                            .into_iter()
+                            .map(|r| r.id)
+                            .collect();
+                            expected.sort();
+                            let need = Need::PairPage {
+                                object: object("note"),
+                                field: field("title"),
+                                value: text(title),
+                                order: order.to_string(),
+                                descending,
+                                after: after.clone(),
+                                limit,
+                            };
+                            let loaded: Vec<RecordId> = store
+                                .load(&alpha, &[need.clone()])
+                                .unwrap()
+                                .tenant
+                                .unwrap()
+                                .records_of(&object("note"))
+                                .map(|r| r.id)
+                                .collect();
+                            assert_eq!(loaded, expected, "{stage}: {need:?}");
+                        }
+                    }
+                }
+            }
+        }
+    };
+    let reads_agree = |stage: &str| {
+        let complete = store.load_complete(&alpha).unwrap();
+        for reader in [writer(), user("alpha:editor"), Principal::Anonymous] {
+            let context = ctx("alpha", reader, 9_000);
+            for title in ["A", "B"] {
+                let request = ReadRequest::Named {
+                    query: QueryId::new("by_title").unwrap(),
+                    params: BTreeMap::from([("t".to_string(), text(title))]),
+                    page_size: Some(2),
+                    cursor: None,
+                };
+                assert_eq!(
+                    query(store, &request, &context).unwrap(),
+                    read(&complete, &request, &context).unwrap(),
+                    "{stage}: by_title {title}"
+                );
+            }
+        }
+    };
+    agree("before any query reads the pairs");
+    // Defined over existing records.
+    change(
+        &mut pair,
+        vec![SchemaChange::DefineQuery(by_title("rank", true))],
+    );
+    agree("defined");
+    reads_agree("defined");
+    // Created, and updated in either field.
+    let more = pair.note("alpha", "B", "s9");
+    pair.ok(
+        "alpha",
+        writer(),
+        Intent::UpdateRecord {
+            object: object("note"),
+            id: ids[0],
+            fields: BTreeMap::from([(field("title"), text("B"))]),
+            expected_version: None,
+        },
+    );
+    pair.ok(
+        "alpha",
+        writer(),
+        Intent::UpdateRecord {
+            object: object("note"),
+            id: more,
+            fields: BTreeMap::from([(field("rank"), Value::Int(7))]),
+            expected_version: None,
+        },
+    );
+    agree("updated");
+    reads_agree("updated");
+    pair.ok(
+        "alpha",
+        writer(),
+        Intent::DeleteRecord {
+            object: object("note"),
+            id: ids[2],
+            expected_version: None,
+        },
+    );
+    agree("deleted");
+    reads_agree("deleted");
+    // Redefined with another order, then removed.
+    change(
+        &mut pair,
+        vec![SchemaChange::DefineQuery(by_title("$created_at", false))],
+    );
+    agree("redefined");
+    reads_agree("redefined");
+    change(
+        &mut pair,
+        vec![SchemaChange::RemoveQuery(QueryId::new("by_title").unwrap())],
+    );
+    agree("removed");
+    // The other tenant's note of the same title is never in alpha's pages.
+    let need = Need::PairPage {
+        object: object("note"),
+        field: field("title"),
+        value: text("A"),
+        order: "$created_at".into(),
+        descending: false,
+        after: None,
+        limit: 50,
+    };
+    let beta = store
+        .load_complete(&tenant_id("beta"))
+        .unwrap()
+        .tenant
+        .unwrap();
+    let theirs: Vec<RecordId> = beta.records_of(&object("note")).map(|r| r.id).collect();
+    let loaded = store.load(&alpha, &[need]).unwrap().tenant.unwrap();
+    let all = store.load_complete(&alpha).unwrap().tenant.unwrap();
+    for record in loaded.records_of(&object("note")) {
+        assert_eq!(all.record(&object("note"), record.id), Some(record));
+    }
+    assert!(!theirs.is_empty());
+}
+
 /// The jobs of the automation worker (`crate::jobs`): created once per key, alone or with the
 /// commit that causes them and never by one that is refused; offered no earlier than they are
 /// due and only to their tenant; leased with a fencing token that refuses a superseded report;

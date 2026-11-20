@@ -69,6 +69,7 @@ use strata_storage_api::{
 };
 
 mod index_page;
+mod pair_index;
 
 /// The ledger table of the control database's migrations.
 const CONTROL_LEDGER: &str = "control_migrations";
@@ -527,6 +528,11 @@ const TENANT_MIGRATIONS: &[Migration] = &[
         name: "order keys of the record index",
         sql: index_page::ORDER_KEYS_SQL,
     },
+    Migration {
+        version: 17,
+        name: "pair index of named queries",
+        sql: pair_index::PAIR_INDEX_SQL,
+    },
 ];
 
 /// The steps of a tenant file's layout, for tests that build a file at an older level.
@@ -868,7 +874,8 @@ fn write_record(tx: &Transaction<'_>, record: &Record) -> StoreResult<()> {
         params![object, id],
     )
     .map_err(db)?;
-    index_page::insert_rows(tx, record)
+    index_page::insert_rows(tx, record)?;
+    pair_index::write_rows(tx, record)
 }
 
 /// A throttle counter of an open tenant file.
@@ -1476,6 +1483,7 @@ impl SqliteStore {
         db.migrate(TENANT_LEDGER, TENANT_MIGRATIONS, ran_at)
             .map_err(dbe)?;
         db.write(dbe, index_page::rebuild_if_marked)?;
+        db.write(dbe, pair_index::sync_stored)?;
         Ok(db)
     }
 
@@ -1951,6 +1959,7 @@ impl SqliteStore {
                 ],
             )
             .map_err(db)?;
+            pair_index::sync(tx, schema)?;
         }
         for op in &delta.ops {
             match op {
@@ -1961,6 +1970,7 @@ impl SqliteStore {
                         params![object.as_str(), id.0 as i64],
                     )
                     .map_err(db)?;
+                    pair_index::delete_rows(tx, object, id.0)?;
                 }
                 DeltaOp::PutSettingOverride(held) => write_setting_override(tx, held)?,
                 DeltaOp::DeleteSettingOverride {
@@ -2518,6 +2528,24 @@ impl Store for SqliteStore {
                         field,
                         lower,
                         upper,
+                        *descending,
+                        after.as_ref(),
+                        *limit,
+                    )?,
+                    Need::PairPage {
+                        object,
+                        field,
+                        value,
+                        order,
+                        descending,
+                        after,
+                        limit,
+                    } => pair_index::pair_page(
+                        tx,
+                        object,
+                        field,
+                        value,
+                        order,
                         *descending,
                         after.as_ref(),
                         *limit,
@@ -4427,6 +4455,7 @@ impl Store for SqliteStore {
                 ],
             )
             .map_err(db)?;
+            pair_index::reset(tx, &state.schema)?;
             for record in state.records.values().flat_map(|records| records.values()) {
                 write_record(tx, record)?;
             }

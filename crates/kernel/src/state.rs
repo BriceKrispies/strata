@@ -76,7 +76,8 @@ impl CoverageExt for Coverage {
                         | Need::ByField { object, .. }
                         | Need::ByFields { object, .. }
                         | Need::PageOf { object, .. }
-                        | Need::IndexPage { object, .. } => {
+                        | Need::IndexPage { object, .. }
+                        | Need::PairPage { object, .. } => {
                             loaded.contains(&Need::AllOf(object.clone()))
                         }
                         Need::AllOf(_) | Need::Ledger(_) => false,

@@ -18,6 +18,15 @@
 //!   at most 200 at a time. The kernel then applies the whole filter, the read authorization and
 //!   the field redaction to each candidate, exactly as a scan does, so the rows are those a scan
 //!   returns, in the same order.
+//! - **Pair index** (KRN-2920, D-7920): `field == operand` or `field in list` on one field,
+//!   ordered by another attribute (an integer or time field, `$created_at` or `$updated_at`),
+//!   ascending or descending: "posts by this author, newest first". The candidates come from
+//!   `Need::PairPage`: the records whose value of the field is one value, in the order of the
+//!   other attribute (a missing or `null` value included, first when ascending) and then the
+//!   record id, after a position, at most 200 at a time; a list of values is one stream per value,
+//!   merged in that order (at most [`MAX_IN_VALUES`] streams). The store keeps an index for
+//!   exactly the pairs some defined query reads ([`index_pairs`]), built in the commit that defines
+//!   the first such query and dropped with the last one, so writes cost what tenants query.
 //! - **Scan**: everything else. Every record of the type is loaded (refused above 10,000,
 //!   KRN-1288), filtered and sorted in memory, and the cursor is an offset. The plan says why, and
 //!   a schema change that leaves a query a scan says so in its evidence (KRN-2524).
@@ -40,18 +49,33 @@
 //! is longer is answered by a scan. Ranges are answered only for integers and times, whose keys
 //! are their numbers. Strings are compared byte by byte, which is the order of Rust's `str` and
 //! SQLite's `BINARY` collation; they are not range-planned, because a string longer than the key
-//! limit has no key and a range or order over it would miss it.
+//! limit has no key and a range or order over it would miss it. The pair index orders only
+//! `null`, integers and times, whose keys are numbers; an equality value longer than the key limit
+//! has no entry, and no probe the index serves can equal it. A record whose order value is of
+//! another kind (a value a schema change kept) cannot be placed in the order: the store then
+//! answers that pair's pages from the records of the type by [`pair_page`], so it is still found.
+//!
+//! **Loading what a read lacks** (KRN-2922, WG-5180). A filter, a read policy or a field's read
+//! condition may follow a reference into a record the snapshot lacks. The read then fails with
+//! `InsufficientState` naming that record, and [`read_missing`] names every record each row the
+//! read examines refers to that way, together with the next page of candidates, so the shell loads
+//! them in one round: exactly those records, never their whole object type.
 
 use crate::expr::{self, Env};
 use crate::intent::{
-    Check, CheckExt, Context, DomainError, DomainErrorExt, ErrorKind, ReadResult, SchemaChange,
+    Check, CheckExt, Context, DomainError, DomainErrorExt, ErrorKind, ReadRequest, ReadResult,
+    SchemaChange,
 };
 use crate::limits;
 use crate::read::{redact, visible_in};
 use crate::rules::{insufficient, missing_error, roles_of, Lookup};
-use crate::schema::{FieldDef, FieldType, ObjectTypeDef, QueryDef, TenantSchema};
-use crate::state::{CoverageExt, Need, Principal, Record, RecordExt, TenantStateExt};
-use crate::types::{CmpOp, Expr, FieldId, PageCursor, QueryId, RecordId, RoleId, Value};
+use crate::schema::{Action, FieldDef, FieldType, ObjectTypeDef, QueryDef, Resource, TenantSchema};
+use crate::state::{CoverageExt, Need, Principal, Record, RecordExt, State, TenantStateExt};
+use crate::types::{
+    CmpOp, Expr, FieldId, FieldTypeExt, ObjectTypeId, OrderKey, PageCursor, QueryId, RecordId,
+    RoleId, Value,
+};
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -94,12 +118,35 @@ pub enum Probe {
 }
 
 /// The order an index plan returns rows in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlanOrder {
     /// The record id ascending.
     Id,
     /// The value of the plan's field, then the record id ascending.
     Field { descending: bool },
+    /// The value of another attribute (an integer or time field, `$created_at` or `$updated_at`),
+    /// then the record id ascending; the probe is an equality or a list of values on the plan's
+    /// field, and the candidates come from the pair index (field, attribute) (KRN-2920).
+    By { attribute: String, descending: bool },
+}
+
+impl PlanOrder {
+    /// Whether the plan's values come in descending order.
+    pub fn descending(&self) -> bool {
+        match self {
+            PlanOrder::Id => false,
+            PlanOrder::Field { descending } | PlanOrder::By { descending, .. } => *descending,
+        }
+    }
+}
+
+/// A pair index a store keeps (KRN-2921): the records of `object` by their value of `field`, each
+/// value's records in the order of the attribute `order` and then the record id.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IndexPair {
+    pub object: ObjectTypeId,
+    pub field: FieldId,
+    pub order: String,
 }
 
 /// A query served by the index of one field.
@@ -307,63 +354,281 @@ pub fn plan_query(schema: &TenantSchema, def: &QueryDef) -> QueryPlan {
             "it orders by the record id descending, and an index serves the id ascending".into(),
         );
     }
-    let (field, field_def) = match indexable(object, &key.field) {
-        Ok(found) => found,
-        Err(reason) => return QueryPlan::Scan(format!("it orders by {}: {reason}", key.field)),
+    // The index of the field it orders by serves a condition on that field.
+    let same_why = match indexable(object, &key.field) {
+        Err(reason) => format!("it orders by {}: {reason}", key.field),
+        Ok((field, field_def)) => {
+            let order = PlanOrder::Field {
+                descending: key.descending,
+            };
+            let on: Vec<&Atom> = atoms
+                .iter()
+                .filter(|(name, _)| *name == key.field)
+                .map(|(_, atom)| atom)
+                .collect();
+            for atom in &on {
+                if let Atom::Eq(operand) = atom {
+                    return QueryPlan::Index(IndexPlan {
+                        field,
+                        probe: Probe::Eq(operand.clone()),
+                        order,
+                    });
+                }
+            }
+            for atom in &on {
+                if let Atom::In(probe) = atom {
+                    return QueryPlan::Index(IndexPlan {
+                        field,
+                        probe: probe.clone(),
+                        order,
+                    });
+                }
+            }
+            let bounds: Vec<(CmpOp, Operand)> = on
+                .iter()
+                .filter_map(|atom| match atom {
+                    Atom::Bound(op, operand) => Some((*op, operand.clone())),
+                    _ => None,
+                })
+                .collect();
+            if bounds.is_empty() {
+                format!(
+                    "it orders by {0}, but its filter has no condition on {0} at its top level, \
+                     and an index serves the field it orders by",
+                    key.field
+                )
+            } else if !rangeable(&field_def.ty) {
+                format!(
+                    "it compares {} with <, <=, > or >=, and the index orders only integer and \
+                     time fields (text longer than {INDEX_KEY_BYTES} bytes has no index key, and \
+                     references and truth values have no order)",
+                    key.field
+                )
+            } else {
+                return QueryPlan::Index(IndexPlan {
+                    field,
+                    probe: Probe::Range(bounds),
+                    order,
+                });
+            }
+        }
     };
-    let order = PlanOrder::Field {
-        descending: key.descending,
-    };
-    let on: Vec<&Atom> = atoms
-        .iter()
-        .filter(|(name, _)| *name == key.field)
-        .map(|(_, atom)| atom)
-        .collect();
-    for atom in &on {
-        if let Atom::Eq(operand) = atom {
-            return QueryPlan::Index(IndexPlan {
-                field,
-                probe: Probe::Eq(operand.clone()),
-                order,
-            });
+    // An equality or a list of values on another field is served by the pair index of that field
+    // and the attribute it orders by (KRN-2920).
+    match pair_plan(object, &atoms, key) {
+        Ok(plan) => QueryPlan::Index(plan),
+        Err(pair_why) => QueryPlan::Scan(format!("{same_why}; and {pair_why}")),
+    }
+}
+
+/// Whether the pair index orders by `name`, or why not: `$created_at`, `$updated_at`, and an
+/// integer or time field an index may use (KRN-2920).
+fn orderable(object: &ObjectTypeDef, name: &str) -> Result<(), String> {
+    match name {
+        "$created_at" | "$updated_at" => Ok(()),
+        _ if name.starts_with('$') => Err(format!(
+            "{name} is a system attribute the pair index does not order by (it orders by \
+             $created_at, $updated_at and integer and time fields)"
+        )),
+        _ => {
+            let (_, def) = indexable(object, name)?;
+            if rangeable(&def.ty) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{name} is not an integer or time field, and the pair index orders only \
+                     integers and times (text longer than {INDEX_KEY_BYTES} bytes has no key, and \
+                     references and truth values have no order)"
+                ))
+            }
         }
     }
-    for atom in &on {
-        if let Atom::In(probe) = atom {
-            return QueryPlan::Index(IndexPlan {
-                field,
-                probe: probe.clone(),
-                order,
-            });
+}
+
+/// The plan of an equality or a list of values on one field ordered by another attribute, or why
+/// there is none, as a clause.
+fn pair_plan(
+    object: &ObjectTypeDef,
+    atoms: &[(&str, Atom)],
+    key: &OrderKey,
+) -> Result<IndexPlan, String> {
+    if let Err(reason) = orderable(object, &key.field) {
+        return Err(format!(
+            "no pair index (field, {}) serves it: {reason}",
+            key.field
+        ));
+    }
+    let mut why = None;
+    for want_list in [false, true] {
+        for (name, atom) in atoms {
+            if *name == key.field {
+                continue;
+            }
+            let probe = match (atom, want_list) {
+                (Atom::Eq(operand), false) => Probe::Eq(operand.clone()),
+                (Atom::In(probe), true) => probe.clone(),
+                _ => continue,
+            };
+            match indexable(object, name) {
+                Ok((field, _)) => {
+                    return Ok(IndexPlan {
+                        field,
+                        probe,
+                        order: PlanOrder::By {
+                            attribute: key.field.clone(),
+                            descending: key.descending,
+                        },
+                    })
+                }
+                Err(reason) => {
+                    why.get_or_insert(format!(
+                        "the pair index ({name}, {}) cannot serve it: {reason}",
+                        key.field
+                    ));
+                }
+            }
         }
     }
-    let bounds: Vec<(CmpOp, Operand)> = on
-        .iter()
-        .filter_map(|atom| match atom {
-            Atom::Bound(op, operand) => Some((*op, operand.clone())),
+    Err(why.unwrap_or_else(|| {
+        format!(
+            "its filter has no condition `field == value` or `field in list` at its top level on \
+             another field, which a pair index (field, {}) would serve",
+            key.field
+        )
+    }))
+}
+
+/// The pair indexes the plans of a schema's queries read (KRN-2921): what a store keeps.
+pub fn index_pairs(schema: &TenantSchema) -> BTreeSet<IndexPair> {
+    schema
+        .queries
+        .values()
+        .filter_map(|def| match plan_query(schema, def) {
+            QueryPlan::Index(IndexPlan {
+                field,
+                order: PlanOrder::By { attribute, .. },
+                ..
+            }) => Some(IndexPair {
+                object: def.object.clone(),
+                field,
+                order: attribute,
+            }),
             _ => None,
         })
-        .collect();
-    if bounds.is_empty() {
-        return QueryPlan::Scan(format!(
-            "it orders by {0}, but its filter has no condition on {0} at its top level, and an \
-             index serves the field it orders by",
-            key.field
-        ));
+        .collect()
+}
+
+/// How a plan reads, for a sentence.
+fn describe(plan: &QueryPlan) -> String {
+    match plan {
+        QueryPlan::Window => "a window of the type in record id order".into(),
+        QueryPlan::Index(IndexPlan {
+            field,
+            order: PlanOrder::By { attribute, .. },
+            ..
+        }) => format!("the pair index ({}, {attribute})", field.as_str()),
+        QueryPlan::Index(plan) => format!("the index of {}", plan.field.as_str()),
+        QueryPlan::Scan(_) => "a scan".into(),
     }
-    if !rangeable(&field_def.ty) {
-        return QueryPlan::Scan(format!(
-            "it compares {} with <, <=, > or >=, and the index orders only integer and time \
-             fields (text longer than {INDEX_KEY_BYTES} bytes has no index key, and references and \
-             truth values have no order)",
-            key.field
-        ));
-    }
-    QueryPlan::Index(IndexPlan {
-        field,
-        probe: Probe::Range(bounds),
+}
+
+/// The one change that would let an index serve a query that is a scan (KRN-2923), found by
+/// planning the query with each candidate change: ordering by its first key alone, by the record
+/// id ascending, by `$created_at`, or the removal of one field's read condition. When none does,
+/// it names the pair index the planner could not derive and why.
+pub fn plan_hint(schema: &TenantSchema, def: &QueryDef) -> String {
+    let planned = |schema: &TenantSchema, def: &QueryDef| match plan_query(schema, def) {
+        QueryPlan::Scan(_) => None,
+        plan => Some(describe(&plan)),
+    };
+    let reorder = |order: Vec<OrderKey>| QueryDef {
         order,
-    })
+        ..def.clone()
+    };
+    if def.order.len() > 1 {
+        if let Some(how) = planned(schema, &reorder(def.order[..1].to_vec())) {
+            return format!(
+                "ordering by {} alone would let {how} serve it",
+                def.order[0].field
+            );
+        }
+    }
+    if let [key] = def.order.as_slice() {
+        if key.field == "$id" && key.descending {
+            let up = reorder(vec![OrderKey {
+                field: "$id".into(),
+                descending: false,
+            }]);
+            if let Some(how) = planned(schema, &up) {
+                return format!("ordering by the record id ascending would let {how} serve it");
+            }
+        }
+        if key.field != "$created_at" {
+            let created = reorder(vec![OrderKey {
+                field: "$created_at".into(),
+                descending: key.descending,
+            }]);
+            if let Some(how) = planned(schema, &created) {
+                return format!(
+                    "ordering by $created_at{} instead of {} would let {how} serve it",
+                    if key.descending { " descending" } else { "" },
+                    key.field
+                );
+            }
+        }
+    }
+    if let Some(object) = schema.objects.get(&def.object) {
+        for (id, field) in &object.fields {
+            if field.read.is_none() {
+                continue;
+            }
+            let mut open = TenantSchema::clone(schema);
+            if let Some(field) = open
+                .objects
+                .get_mut(&def.object)
+                .and_then(|object| object.fields.get_mut(id))
+            {
+                field.read = None;
+            }
+            if let Some(how) = planned(&open, def) {
+                return format!(
+                    "removing the read condition of {} would let {how} serve it (a field with a \
+                     read condition is never indexed, so that neither the order nor the page \
+                     boundaries show it)",
+                    id.as_str()
+                );
+            }
+        }
+    }
+    // No single change found: name the pair the filter and the order point at, and why the
+    // planner could not derive it.
+    let Some(object) = schema.objects.get(&def.object) else {
+        return format!("{} is not an object type", def.object);
+    };
+    let mut parts = Vec::new();
+    if let Some(filter) = &def.filter {
+        conjuncts(filter, &mut parts);
+    }
+    let atoms: Vec<(&str, Atom)> = parts.iter().filter_map(|p| atom_of(p, def)).collect();
+    let equal = atoms
+        .iter()
+        .find(|(_, atom)| matches!(atom, Atom::Eq(_) | Atom::In(_)))
+        .map(|(name, _)| *name);
+    match (equal, def.order.as_slice()) {
+        (Some(name), [key]) => match pair_plan(object, &atoms, key) {
+            Err(why) => format!(
+                "no single change was found; the pair index ({name}, {}) is the one its filter \
+                 and order point at, and {why}",
+                key.field
+            ),
+            Ok(_) => "no single change was found".into(),
+        },
+        _ => "no single change was found; an index serves a top-level condition `field == value` \
+              or `field in list` on a field without a read condition, ordered by nothing, by the \
+              record id, by that field, or by an integer or time field, $created_at or \
+              $updated_at"
+            .into(),
+    }
 }
 
 /// The warnings of a schema change (KRN-2524): every query it defines that is a scan, and every
@@ -395,9 +660,11 @@ pub fn scan_warnings(
                 format!("query-plan:{id}"),
                 format!(
                     "warning: query {id} is served by a scan of {}, which reads every record of \
-                     the type and is refused above {} records, because {reason}",
+                     the type and is refused above {} records, because {reason}. To serve it \
+                     from an index: {}",
                     def.object,
-                    limits::MAX_SCAN_RECORDS
+                    limits::MAX_SCAN_RECORDS,
+                    plan_hint(after, def)
                 ),
             ));
         }
@@ -473,7 +740,42 @@ pub fn index_page<'a>(
     found
 }
 
-/// An index page through the snapshot, which must cover it.
+/// The value of the attribute a pair index orders by: a field (`null` when missing), or
+/// `$created_at` or `$updated_at`. The scan orders by exactly this value.
+pub fn order_value(record: &Record, attribute: &str) -> Value {
+    expr::attribute(Some(record), attribute).unwrap_or(Value::Null)
+}
+
+/// The answer to `Need::PairPage` from a set of records (KRN-2920, KRN-2921): those whose value
+/// of `field` is the single value `value`, in the order of their value of the attribute `order`
+/// (reversed when descending; a missing or `null` value is the least) and then the record id
+/// ascending, after the position `after` (a value of `order` and a record id), at most `limit`.
+/// Every store answers exactly this; the memory store, the kernel and a SQLite file whose pair
+/// index cannot order a record compute it here.
+#[allow(clippy::too_many_arguments)]
+pub fn pair_page<'a>(
+    records: impl Iterator<Item = &'a Arc<Record>>,
+    field: &FieldId,
+    value: &Value,
+    order: &str,
+    descending: bool,
+    after: Option<&IndexPosition>,
+    limit: u32,
+) -> Vec<&'a Arc<Record>> {
+    if !scalar(value) {
+        return Vec::new();
+    }
+    let mut found: Vec<(Value, &'a Arc<Record>)> = records
+        .filter(|record| record.get(field) == value)
+        .map(|record| (order_value(record, order), record))
+        .filter(|(key, record)| after.is_none_or(|p| is_after(key, record.id, p, descending)))
+        .collect();
+    found.sort_by(|(a, ra), (b, rb)| index_cmp(a, ra.id, b, rb.id, descending));
+    found.truncate(limit as usize);
+    found.into_iter().map(|(_, record)| record).collect()
+}
+
+/// A page of candidates through the snapshot, which must cover it.
 fn fetch<'a>(lookup: Lookup<'a>, need: Need) -> Result<Vec<&'a Arc<Record>>, DomainError> {
     if !lookup.coverage.covers(&need) {
         return Err(insufficient(need));
@@ -496,13 +798,39 @@ fn fetch<'a>(lookup: Lookup<'a>, need: Need) -> Result<Vec<&'a Arc<Record>>, Dom
             after.as_ref(),
             *limit,
         ),
+        Need::PairPage {
+            object,
+            field,
+            value,
+            order,
+            descending,
+            after,
+            limit,
+        } => pair_page(
+            lookup.tenant.records_of(object),
+            field,
+            value,
+            order,
+            *descending,
+            after.as_ref(),
+            *limit,
+        ),
         _ => Vec::new(),
     })
 }
 
-fn position(record: &Record, field: &FieldId) -> IndexPosition {
+/// The value an index position of the plan holds for a record: the value of the plan's field,
+/// or of the attribute a pair plan orders by.
+pub fn plan_value(plan: &IndexPlan, record: &Record) -> Value {
+    match &plan.order {
+        PlanOrder::By { attribute, .. } => order_value(record, attribute),
+        PlanOrder::Id | PlanOrder::Field { .. } => record.get(&plan.field).clone(),
+    }
+}
+
+fn position(plan: &IndexPlan, record: &Record) -> IndexPosition {
     IndexPosition {
-        value: record.get(field).clone(),
+        value: plan_value(plan, record),
         id: record.id,
     }
 }
@@ -690,11 +1018,11 @@ enum Start {
     At(IndexPosition),
 }
 
-fn start_of(order: PlanOrder, cursor: Option<&PageCursor>) -> Option<Start> {
+fn start_of(order: &PlanOrder, cursor: Option<&PageCursor>) -> Option<Start> {
     match (order, cursor) {
         (_, None) => Some(Start::Beginning),
         (PlanOrder::Id, Some(PageCursor::After(id))) => Some(Start::AfterId(*id)),
-        (PlanOrder::Field { .. }, Some(PageCursor::At(position))) => {
+        (PlanOrder::Field { .. } | PlanOrder::By { .. }, Some(PageCursor::At(position))) => {
             Some(Start::At(position.clone()))
         }
         _ => None,
@@ -714,10 +1042,8 @@ fn stream_start(start: &Start, lower: &IndexBound) -> Option<IndexPosition> {
     }
 }
 
-fn descending_of(order: PlanOrder) -> bool {
-    matches!(order, PlanOrder::Field { descending: true })
-}
-
+/// The need of one page of a stream: an index page of the plan's field, or, for a pair plan, a
+/// pair page of the stream's one value (its bounds are that value).
 fn index_need(
     def: &QueryDef,
     plan: &IndexPlan,
@@ -725,14 +1051,28 @@ fn index_need(
     upper: IndexBound,
     after: Option<IndexPosition>,
 ) -> Need {
-    Need::IndexPage {
-        object: def.object.clone(),
-        field: plan.field.clone(),
-        lower,
-        upper,
-        descending: descending_of(plan.order),
-        after,
-        limit: INDEX_PAGE,
+    match &plan.order {
+        PlanOrder::By {
+            attribute,
+            descending,
+        } => Need::PairPage {
+            object: def.object.clone(),
+            field: plan.field.clone(),
+            value: lower.value,
+            order: attribute.clone(),
+            descending: *descending,
+            after,
+            limit: INDEX_PAGE,
+        },
+        order => Need::IndexPage {
+            object: def.object.clone(),
+            field: plan.field.clone(),
+            lower,
+            upper,
+            descending: order.descending(),
+            after,
+            limit: INDEX_PAGE,
+        },
     }
 }
 
@@ -805,7 +1145,7 @@ pub(crate) fn named_needs(
         (QueryPlan::Index(plan), cursor) => match (resolve(&plan, params, None), cursor) {
             (_, Some(PageCursor::Offset(_))) | (Resolved::Degraded, None) => scan(),
             (Resolved::Streams(streams), cursor) => {
-                let Some(start) = start_of(plan.order, cursor) else {
+                let Some(start) = start_of(&plan.order, cursor) else {
                     return Vec::new();
                 };
                 streams
@@ -843,33 +1183,181 @@ struct Stream<'a> {
     done: bool,
 }
 
+/// The reference fields an expression follows (`Expr::Through`), by name.
+fn followed(expr: &Expr, out: &mut BTreeSet<String>) {
+    match expr {
+        Expr::Through(_, field, _) => {
+            out.insert(field.clone());
+        }
+        Expr::Var(..)
+        | Expr::Lit(_)
+        | Expr::Param(_)
+        | Expr::Now
+        | Expr::Principal
+        | Expr::HasRole(_) => {}
+        Expr::Not(a)
+        | Expr::IsNull(a)
+        | Expr::Len(a)
+        | Expr::Lower(a)
+        | Expr::IsSlug(a)
+        | Expr::Duration(_, a)
+        | Expr::Text(a) => followed(a, out),
+        Expr::And(items) | Expr::Or(items) => {
+            for item in items {
+                followed(item, out);
+            }
+        }
+        Expr::Cmp(_, a, b)
+        | Expr::In(a, b)
+        | Expr::Contains(a, b)
+        | Expr::StartsWith(a, b)
+        | Expr::Arith(_, a, b)
+        | Expr::MsBetween(a, b)
+        | Expr::Concat(a, b) => {
+            followed(a, out);
+            followed(b, out);
+        }
+        Expr::If(a, b, c) => {
+            followed(a, out);
+            followed(b, out);
+            followed(c, out);
+        }
+    }
+}
+
+/// What a read run by [`read_missing`] gathers (KRN-2922): every record a row it examines refers
+/// to through a reference field that the query's filter, a read policy of the reader's roles or a
+/// field's read condition follows, and that the snapshot lacks.
+struct Collector {
+    /// The reference fields of the object type those expressions follow.
+    fields: BTreeSet<String>,
+    found: RefCell<BTreeSet<Need>>,
+}
+
+impl Collector {
+    fn new(
+        schema: &TenantSchema,
+        object: &ObjectTypeId,
+        roles: &BTreeSet<RoleId>,
+        filter: Option<&Expr>,
+    ) -> Self {
+        let mut fields = BTreeSet::new();
+        if let Some(filter) = filter {
+            followed(filter, &mut fields);
+        }
+        for policy in schema.policies.values() {
+            let reaches = match &policy.resource {
+                Resource::AnyObject => true,
+                Resource::Object(target) => target == object,
+                _ => false,
+            };
+            if reaches && roles.contains(&policy.role) && policy.actions.contains(&Action::Read) {
+                if let Some(condition) = &policy.condition {
+                    followed(condition, &mut fields);
+                }
+            }
+        }
+        if let Some(def) = schema.objects.get(object) {
+            for field in def.fields.values() {
+                if let Some(rule) = &field.read {
+                    followed(rule, &mut fields);
+                }
+            }
+        }
+        Collector {
+            fields,
+            found: RefCell::new(BTreeSet::new()),
+        }
+    }
+
+    /// The records `record` refers to through the followed fields that the snapshot lacks.
+    fn note(&self, lookup: Lookup<'_>, record: &Record) {
+        let Some(def) = lookup.tenant.schema.objects.get(&record.object) else {
+            return;
+        };
+        let mut found = self.found.borrow_mut();
+        for name in &self.fields {
+            let Ok(id) = FieldId::new(name.as_str()) else {
+                continue;
+            };
+            let Value::Ref(target) = record.get(&id) else {
+                continue;
+            };
+            let Some((object, _, false)) = def.fields.get(&id).and_then(|f| f.ty.ref_target())
+            else {
+                continue;
+            };
+            let need = Need::Record {
+                object: object.clone(),
+                id: *target,
+            };
+            if !lookup.coverage.covers(&need) {
+                found.insert(need);
+            }
+        }
+    }
+}
+
 /// A reader of one named query against one snapshot.
 struct Reader<'a> {
     lookup: Lookup<'a>,
     ctx: &'a Context,
     roles: &'a BTreeSet<RoleId>,
     params: &'a BTreeMap<String, Value>,
+    /// Set when [`read_missing`] runs the read: a row that lacks a record it refers to is noted
+    /// and passed over instead of ending the read.
+    collect: Option<&'a Collector>,
 }
 
 impl<'a> Reader<'a> {
+    /// The outcome of a step on `record`, or, when collecting, `instead` for a step that lacks a
+    /// record the row refers to, after noting the row's missing records.
+    fn absorb<T>(
+        &self,
+        record: &Record,
+        outcome: Result<T, DomainError>,
+        instead: impl FnOnce() -> T,
+    ) -> Result<T, DomainError> {
+        let Some(collector) = self.collect else {
+            return outcome;
+        };
+        match outcome {
+            Err(error)
+                if matches!(error.kind, ErrorKind::InsufficientState)
+                    && matches!(error.missing, Some(Need::Record { .. })) =>
+            {
+                collector.note(self.lookup, record);
+                Ok(instead())
+            }
+            other => other,
+        }
+    }
+
     fn visible(&self, record: &Record) -> Result<bool, DomainError> {
-        visible_in(self.lookup, &self.ctx.principal, record, self.ctx.now)
+        let outcome = visible_in(self.lookup, &self.ctx.principal, record, self.ctx.now);
+        self.absorb(record, outcome, || false)
     }
 
     fn shown(&self, record: &Arc<Record>) -> Result<Arc<Record>, DomainError> {
-        redact(
+        let outcome = redact(
             self.lookup,
             &self.ctx.principal,
             self.roles,
             self.ctx.now,
             record,
-        )
+        );
+        self.absorb(record, outcome, || record.clone())
     }
 
     /// Whether the filter holds of the record as the reader receives it (KRN-2522). A record the
     /// filter cannot be evaluated on is left out; a reference the snapshot lacks is
     /// `InsufficientState`.
     fn passes(&self, filter: Option<&Expr>, record: &Record) -> Result<bool, DomainError> {
+        let outcome = self.evaluate(filter, record);
+        self.absorb(record, outcome, || false)
+    }
+
+    fn evaluate(&self, filter: Option<&Expr>, record: &Record) -> Result<bool, DomainError> {
         let Some(filter) = filter else {
             return Ok(true);
         };
@@ -1022,11 +1510,11 @@ impl<'a> Reader<'a> {
         size: u32,
     ) -> Result<Page, DomainError> {
         let keyed = self.keyed(def, query)?;
-        let descending = descending_of(plan.order);
+        let descending = plan.order.descending();
         let beyond = |record: &Record| match start {
             Start::Beginning => true,
             Start::AfterId(id) => record.id > *id,
-            Start::At(at) => is_after(record.get(&plan.field), record.id, at, descending),
+            Start::At(at) => is_after(&plan_value(plan, record), record.id, at, descending),
         };
         let before = keyed.iter().take_while(|(_, r)| !beyond(&**r)).count();
         let size = size as usize;
@@ -1053,7 +1541,6 @@ impl<'a> Reader<'a> {
         start: Start,
         size: u32,
     ) -> Result<Page, DomainError> {
-        let field = &plan.field;
         let mut streams: Vec<Stream<'a>> = bounds
             .into_iter()
             .map(|(lower, upper)| {
@@ -1086,7 +1573,7 @@ impl<'a> Reader<'a> {
                     let page = fetch(self.lookup, need)?;
                     stream.done = page.len() < INDEX_PAGE as usize;
                     if let Some(last) = page.last() {
-                        stream.after = Some(position(last, field));
+                        stream.after = Some(position(plan, last));
                     }
                     stream.buffer.extend(page);
                 }
@@ -1095,18 +1582,22 @@ impl<'a> Reader<'a> {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, stream)| stream.buffer.front().map(|record| (i, *record)))
-                .min_by(|(_, a), (_, b)| match plan.order {
+                .min_by(|(_, a), (_, b)| match &plan.order {
                     PlanOrder::Id => a.id.cmp(&b.id),
-                    PlanOrder::Field { descending } => {
-                        index_cmp(a.get(field), a.id, b.get(field), b.id, descending)
-                    }
+                    order => index_cmp(
+                        &plan_value(plan, a),
+                        a.id,
+                        &plan_value(plan, b),
+                        b.id,
+                        order.descending(),
+                    ),
                 })
                 .map(|(i, _)| i);
             let Some(record) = first.and_then(|i| streams[i].buffer.pop_front()) else {
                 break End::Exhausted;
             };
             examined += 1;
-            let here = position(record, field);
+            let here = position(plan, record);
             last_examined = Some(here.clone());
             if self.visible(record)? {
                 last_visible = Some(here.clone());
@@ -1126,21 +1617,24 @@ impl<'a> Reader<'a> {
         let exhausted = streams
             .iter()
             .all(|stream| stream.done && stream.buffer.is_empty());
-        let cursor = |at: IndexPosition| match plan.order {
+        let cursor = |at: IndexPosition| match &plan.order {
             PlanOrder::Id => PageCursor::After(at.id),
-            PlanOrder::Field { .. } => PageCursor::At(at),
+            PlanOrder::Field { .. } | PlanOrder::By { .. } => PageCursor::At(at),
         };
         let next = match end {
             End::Exhausted => None,
             _ if exhausted => None,
             End::Full => last_row.map(cursor),
             // A record id is never hidden from a reader, so in id order the cursor is the last
-            // candidate examined. In the order of a field it is the last candidate the reader may
-            // read, whose value the reader may see.
-            End::Bound => match plan.order {
+            // candidate examined. In the order of a field or another attribute it is the last
+            // candidate the reader may read, whose value the reader may see.
+            End::Bound => match &plan.order {
                 PlanOrder::Id => last_examined.map(cursor),
-                PlanOrder::Field { .. } => match last_visible {
+                PlanOrder::Field { .. } | PlanOrder::By { .. } => match last_visible {
                     Some(at) => Some(cursor(at)),
+                    // A run of `read_missing` passes over rows it cannot decide, so it gathers
+                    // what the examined rows lack and does not fall back to the scan.
+                    None if self.collect.is_some() => None,
                     None => return self.scan_from(def, query, plan, &start, size),
                 },
             },
@@ -1157,6 +1651,19 @@ pub(crate) fn read_named(
     asked: Option<u32>,
     cursor: Option<&PageCursor>,
     ctx: &Context,
+) -> Result<ReadResult, DomainError> {
+    read_named_with(lookup, query, params, asked, cursor, ctx, None)
+}
+
+/// [`read_named`], gathering into `collect` what the rows it examines lack when it is given.
+fn read_named_with(
+    lookup: Lookup<'_>,
+    query: &QueryId,
+    params: &BTreeMap<String, Value>,
+    asked: Option<u32>,
+    cursor: Option<&PageCursor>,
+    ctx: &Context,
+    collect: Option<&Collector>,
 ) -> Result<ReadResult, DomainError> {
     let tenant = lookup.tenant;
     let schema = &tenant.schema;
@@ -1177,6 +1684,7 @@ pub(crate) fn read_named(
         ctx,
         roles: &roles,
         params,
+        collect,
     };
     let (rows, next) = match (plan_query(schema, def), cursor) {
         (QueryPlan::Window, None) => reader.window(def, None, size)?,
@@ -1199,7 +1707,7 @@ pub(crate) fn read_named(
                 (Resolved::Degraded, Some(_)) => return Err(wrong_cursor()),
                 (Resolved::Empty | Resolved::Unknown, _) => (Vec::new(), None),
                 (Resolved::Streams(bounds), cursor) => {
-                    let start = start_of(plan.order, cursor).ok_or_else(wrong_cursor)?;
+                    let start = start_of(&plan.order, cursor).ok_or_else(wrong_cursor)?;
                     reader.index(def, query, &plan, bounds, start, size)?
                 }
             }
@@ -1211,4 +1719,93 @@ pub(crate) fn read_named(
         schema_version: schema.version,
         next,
     })
+}
+
+/// Everything a read lacks in `state` that the kernel can name at once (KRN-2922, WG-5180): the
+/// read is run with every row that lacks a record it refers to passed over, and the result is
+/// every record those rows refer to that the snapshot lacks (through the reference fields the
+/// query's filter, the reader's read policies and the fields' read conditions follow), together
+/// with the window, page of candidates or record the run stopped at. Its rows are discarded.
+///
+/// A row passed over takes no part in the page, so the run examines at least the candidates the
+/// read itself examines once they are loaded: loading what it names answers every one of them in
+/// the same round, and a read takes at most one round per page of candidates it examines, whatever
+/// its page size. The records are named one by one (`Need::Record`), never as their object type.
+pub fn read_missing(state: &State, request: &ReadRequest, ctx: &Context) -> Vec<Need> {
+    let Some(tenant) = state
+        .tenant
+        .as_deref()
+        .filter(|tenant| tenant.id == ctx.tenant && state.tenant_id == ctx.tenant)
+    else {
+        return Vec::new();
+    };
+    let lookup = Lookup {
+        tenant,
+        coverage: &state.coverage,
+    };
+    let roles = roles_of(tenant, &ctx.principal);
+    let mut found: BTreeSet<Need> = BTreeSet::new();
+    match request {
+        ReadRequest::Named {
+            query,
+            params,
+            page_size,
+            cursor,
+        } => {
+            let Some(def) = tenant.schema.queries.get(query) else {
+                return Vec::new();
+            };
+            let collector =
+                Collector::new(&tenant.schema, &def.object, &roles, def.filter.as_ref());
+            let outcome = read_named_with(
+                lookup,
+                query,
+                params,
+                *page_size,
+                cursor.as_ref(),
+                ctx,
+                Some(&collector),
+            );
+            if let Err(DomainError {
+                kind: ErrorKind::InsufficientState,
+                missing: Some(need),
+                ..
+            }) = outcome
+            {
+                found.insert(need);
+            }
+            found.extend(collector.found.into_inner());
+        }
+        ReadRequest::Records { object, ids } => {
+            let collector = Collector::new(&tenant.schema, object, &roles, None);
+            for id in ids.iter().take(limits::MAX_READ_IDS) {
+                match lookup.record(object, *id) {
+                    Err(error) => found.extend(error.missing),
+                    Ok(None) => {}
+                    Ok(Some(record)) => {
+                        let visible = visible_in(lookup, &ctx.principal, record, ctx.now);
+                        let lacking = lacks(&visible)
+                            || (matches!(visible, Ok(true))
+                                && lacks(&redact(lookup, &ctx.principal, &roles, ctx.now, record)));
+                        if lacking {
+                            collector.note(lookup, record);
+                        }
+                    }
+                }
+            }
+            found.extend(collector.found.into_inner());
+        }
+    }
+    found.into_iter().collect()
+}
+
+/// Whether a step failed for state the snapshot lacks.
+fn lacks<T>(outcome: &Result<T, DomainError>) -> bool {
+    matches!(
+        outcome,
+        Err(DomainError {
+            kind: ErrorKind::InsufficientState,
+            ..
+        })
+    )
 }

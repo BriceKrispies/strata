@@ -1,18 +1,20 @@
-//! Planned named queries through the stores (KRN-2520, KRN-2521, KRN-2523, KRN-2525, KRN-2526):
-//! the SQLite adapter and the memory store answer every index page the same, a planned read
-//! through either returns the rows of a scan in the same order across pages for every reader, a
-//! read or a view over 100,000 records loads a bounded number of them, a cursor resumes exactly
-//! after commits insert and delete records, one tenant's index never answers for another, and a
-//! file whose order keys are missing is rebuilt when it is opened. Random data from a fixed seed.
+//! Planned named queries through the stores (KRN-2520, KRN-2521, KRN-2523, KRN-2525, KRN-2526,
+//! KRN-2920 to KRN-2922): the SQLite adapter and the memory store answer every index page and
+//! every pair page the same, a planned read through either returns the rows of a scan in the same
+//! order across pages for every reader, a read or a view over 100,000 records loads a bounded
+//! number of them, a cursor resumes exactly after commits insert and delete records, one tenant's
+//! index never answers for another, a file whose order keys or pair rows are missing is rebuilt
+//! when it is opened, the pair index follows record writes and query definitions, and a read whose
+//! policy follows a reference loads only the records its rows name. Random data from a fixed seed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use strata_kernel::query_plan::{self, IndexBound, IndexPosition, INDEX_PAGE};
+use strata_kernel::query_plan::{self, IndexBound, IndexPosition, INDEX_PAGE, MAX_PLAN_CANDIDATES};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
-use strata_storage_api::covering::load_covering;
+use strata_storage_api::covering::{load_covering, read_asking, Covered};
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, query, Commit, Store};
 use strata_storage_sqlite::{default_tenants_dir, SqliteStore};
@@ -115,6 +117,42 @@ fn planned_queries() -> Vec<QueryDef> {
             &["g"],
             order("grp", false),
         ),
+        // Pair plans (KRN-2920, KRN-2921): an equality or a list of values on one field ordered
+        // by another attribute.
+        query_def(
+            "owner_newest",
+            eq(rec("owner"), param("who")),
+            &["who"],
+            order("$created_at", true),
+        ),
+        query_def(
+            "owner_by_at",
+            eq(rec("owner"), param("who")),
+            &["who"],
+            order("at", false),
+        ),
+        // Some scores are text or a list, which the pair index cannot order: the store answers
+        // this pair from the records of the type.
+        query_def(
+            "groups_by_score",
+            Expr::In(Box::new(rec("grp")), Box::new(param("gs"))),
+            &["gs"],
+            order("score", true),
+        ),
+        // Some notes are longer than the key limit: they have no row, and a probe for one is a
+        // scan.
+        query_def(
+            "note_by_at",
+            eq(rec("note"), param("n")),
+            &["n"],
+            order("at", true),
+        ),
+        query_def(
+            "mine_newest",
+            eq(rec("owner"), Expr::Principal),
+            &[],
+            order("$updated_at", true),
+        ),
     ]
 }
 
@@ -147,10 +185,43 @@ fn item_schema() -> Vec<SchemaChange> {
             id: role("editor"),
             label: "Editor".into(),
         }),
+        SchemaChange::DefineRole(RoleDef {
+            id: role("member"),
+            label: "Member".into(),
+        }),
+        SchemaChange::DefineObject {
+            id: object("team"),
+            label: "Team".into(),
+        },
+        SchemaChange::DefineField {
+            object: object("team"),
+            field: field_def("open", FieldType::Bool, false),
+        },
         SchemaChange::DefineObject {
             id: object("item"),
             label: "Item".into(),
         },
+        SchemaChange::DefineField {
+            object: object("item"),
+            field: field_def(
+                "team",
+                FieldType::Ref {
+                    target: object("team"),
+                    on_delete: OnDelete::SetNull,
+                },
+                false,
+            ),
+        },
+        // A member reads an item of an open team: a read policy that follows a reference
+        // (KRN-2922).
+        policy(
+            "members_read_open_team",
+            "member",
+            Some(eq(
+                Expr::Through(Scope::Record, "team".into(), "open".into()),
+                Expr::Lit(Value::Bool(true)),
+            )),
+        ),
     ];
     for (name, ty) in [
         ("owner", FieldType::Str),
@@ -200,7 +271,11 @@ fn found(store: &dyn Store, tenant: &str) {
         existing: ExistingData::Reject,
     };
     execute(store, &change, &ctx(tenant, owner(tenant), 11)).unwrap();
-    for (who, role_name) in [("writer1", "writer"), ("editor", "editor")] {
+    for (who, role_name) in [
+        ("writer1", "writer"),
+        ("editor", "editor"),
+        ("member1", "member"),
+    ] {
         let assign = Intent::AssignRole {
             principal: principal_id(&format!("{tenant}:{who}")),
             role: role(role_name),
@@ -209,14 +284,15 @@ fn found(store: &dyn Store, tenant: &str) {
     }
 }
 
+/// An item. Its creation and update times repeat, so the orders by them have ties.
 fn item(id: u64, fields: &[(&str, Value)]) -> Arc<Record> {
     Arc::new(Record {
         id: RecordId(id),
         object: object("item"),
         version: 1,
         created_by: None,
-        created_at: Timestamp(1),
-        updated_at: Timestamp(1),
+        created_at: Timestamp(((id * 7_919) % 97) as i64),
+        updated_at: Timestamp(((id * 31) % 13) as i64),
         fields: fields
             .iter()
             .filter(|(_, v)| *v != Value::Null)
@@ -318,6 +394,10 @@ fn random_item(rng: &mut Lcg, id: u64) -> Arc<Record> {
         0 => text(&"n".repeat(300)),
         _ => text(&format!("n{}", rng.below(3))),
     };
+    let team = match rng.below(4) {
+        0 => Value::Null,
+        _ => Value::Ref(RecordId(1 + rng.below(TEAMS))),
+    };
     item(
         id,
         &[
@@ -337,8 +417,24 @@ fn random_item(rng: &mut Lcg, id: u64) -> Arc<Record> {
                 text(if rng.below(3) == 0 { "closed" } else { "open" }),
             ),
             ("note", note),
+            ("team", team),
         ],
     )
+}
+
+/// The teams of the random items; an even one is open.
+const TEAMS: u64 = 5;
+
+fn team(id: u64) -> Arc<Record> {
+    Arc::new(Record {
+        id: RecordId(id),
+        object: object("team"),
+        version: 1,
+        created_by: None,
+        created_at: Timestamp(1),
+        updated_at: Timestamp(1),
+        fields: BTreeMap::from([(field("open"), Value::Bool(id % 2 == 0))]),
+    })
 }
 
 fn named(
@@ -390,20 +486,7 @@ fn traced(
     request: &ReadRequest,
     context: &Context,
 ) -> (ReadResult, usize, usize) {
-    let schema = store
-        .load(&context.tenant, &[])
-        .unwrap()
-        .tenant
-        .unwrap()
-        .schema
-        .clone();
-    let covered = load_covering(
-        store,
-        &context.tenant,
-        read_needs(&schema, request),
-        |state, _| read(state, request, context),
-    )
-    .unwrap();
+    let covered = covered_read(store, request, context);
     let result = covered.outcome.expect("the read is answered");
     assert_eq!(
         query(store, request, context).unwrap(),
@@ -413,11 +496,34 @@ fn traced(
     (result, covered.loads, covered.records)
 }
 
+/// A read through the store loop `query` runs, with everything it loaded.
+fn covered_read(
+    store: &dyn Store,
+    request: &ReadRequest,
+    context: &Context,
+) -> Covered<ReadResult> {
+    let schema = store
+        .load(&context.tenant, &[])
+        .unwrap()
+        .tenant
+        .unwrap()
+        .schema
+        .clone();
+    load_covering(
+        store,
+        &context.tenant,
+        read_needs(&schema, request),
+        |state, asked| read_asking(state, request, context, asked),
+    )
+    .unwrap()
+}
+
 fn readers(tenant: &str) -> Vec<Principal> {
     vec![
         Principal::Anonymous,
         user(&format!("{tenant}:writer1")),
         user(&format!("{tenant}:editor")),
+        user(&format!("{tenant}:member1")),
         owner(tenant),
         Principal::System,
     ]
@@ -454,6 +560,28 @@ fn params_of(rng: &mut Lcg, name: &str) -> BTreeMap<String, Value> {
         }
         "group_ordered" => {
             params.insert("g".to_string(), text(rng.pick(&GROUPS)));
+        }
+        "owner_newest" | "owner_by_at" => {
+            let who = match rng.below(5) {
+                0 => text("nobody"),
+                _ => text(rng.pick(&OWNERS)),
+            };
+            params.insert("who".to_string(), who);
+        }
+        "groups_by_score" => {
+            let gs: Vec<Value> = GROUPS
+                .iter()
+                .filter(|_| rng.below(2) == 0)
+                .map(|g| text(g))
+                .collect();
+            params.insert("gs".to_string(), Value::List(gs));
+        }
+        "note_by_at" => {
+            let n = match rng.below(4) {
+                0 => text(&"n".repeat(300)),
+                _ => text(&format!("n{}", rng.below(4))),
+            };
+            params.insert("n".to_string(), n);
         }
         _ => {}
     }
@@ -585,6 +713,7 @@ fn a_planned_read_through_either_store_returns_the_rows_of_a_scan() {
         for (_, store) in &made {
             found(store.as_ref(), "alpha");
             put(store.as_ref(), "alpha", items.clone());
+            put(store.as_ref(), "alpha", (1..=TEAMS).map(team).collect());
         }
         for def in planned_queries() {
             let name = def.id.as_str().to_string();
@@ -640,6 +769,7 @@ fn crowded(store: &dyn Store, tenant: &str) {
 
 // Verifies: KRN-2520
 // Verifies: KRN-2526
+// Verifies: KRN-2920
 #[test]
 fn reads_and_views_over_a_hundred_thousand_records_load_a_bounded_number() {
     for (name, store) in stores() {
@@ -647,6 +777,29 @@ fn reads_and_views_over_a_hundred_thousand_records_load_a_bounded_number() {
         crowded(store, "alpha");
         let context = ctx("alpha", Principal::Anonymous, 9_000);
         let per_page = INDEX_PAGE as usize;
+        // Posts by this author, newest first (WG-5181): one page of candidates per page of rows,
+        // and the rows the kernel reads from the whole table.
+        let complete = store.load_complete(&tenant_id("alpha")).unwrap();
+        let who = BTreeMap::from([("who".to_string(), text("x"))]);
+        for query_name in ["owner_newest", "owner_by_at"] {
+            let mut cursor = None;
+            for page_number in 0..3 {
+                let request = named(query_name, &who, 25, cursor.clone());
+                let (page, loads, records) = traced(store, &request, &context);
+                assert_eq!(
+                    page,
+                    read(&complete, &request, &context).unwrap(),
+                    "{name} {query_name} page {page_number}: the rows of the whole table"
+                );
+                assert_eq!(page.rows.len(), 25);
+                assert!(
+                    loads == 1 && records <= per_page,
+                    "{name} {query_name} page {page_number}: {loads} loads, {records} records"
+                );
+                cursor = page.next;
+            }
+        }
+        drop(complete);
         for (query_name, params) in [
             ("by_owner", BTreeMap::from([("who".to_string(), text("x"))])),
             (
@@ -669,6 +822,19 @@ fn reads_and_views_over_a_hundred_thousand_records_load_a_bounded_number() {
             ),
             (
                 "groups_down",
+                BTreeMap::from([("gs".to_string(), Value::List(vec![text("g1"), text("g3")]))]),
+            ),
+            // Posts by this author, newest first (WG-5181, KRN-2920).
+            (
+                "owner_newest",
+                BTreeMap::from([("who".to_string(), text("x"))]),
+            ),
+            (
+                "owner_by_at",
+                BTreeMap::from([("who".to_string(), text("x"))]),
+            ),
+            (
+                "groups_by_score",
                 BTreeMap::from([("gs".to_string(), Value::List(vec![text("g1"), text("g3")]))]),
             ),
         ] {
@@ -793,6 +959,18 @@ fn the_cursor_survives_commits_between_pages() {
                 "groups_down",
                 BTreeMap::from([("gs".to_string(), Value::List(vec![text("g0"), text("g3")]))]),
             ),
+            (
+                "owner_newest",
+                BTreeMap::from([("who".to_string(), text("x"))]),
+            ),
+            (
+                "owner_by_at",
+                BTreeMap::from([("who".to_string(), text("alpha:editor"))]),
+            ),
+            (
+                "groups_by_score",
+                BTreeMap::from([("gs".to_string(), Value::List(vec![text("g1"), text("g2")]))]),
+            ),
         ] {
             let first = query(store, &named(query_name, &params, 10, None), &context).unwrap();
             let cursor = first.next.clone().expect("more than one page");
@@ -836,13 +1014,10 @@ fn the_cursor_survives_commits_between_pages() {
             let beyond = |r: &Record| match &cursor {
                 PageCursor::After(id) => r.id > *id,
                 PageCursor::At(at) => query_plan::is_after(
-                    r.get(&plan.field),
+                    &query_plan::plan_value(&plan, r),
                     r.id,
                     at,
-                    matches!(
-                        plan.order,
-                        query_plan::PlanOrder::Field { descending: true }
-                    ),
+                    plan.order.descending(),
                 ),
                 PageCursor::Offset(_) => panic!("a planned read gives a position"),
             };
@@ -899,6 +1074,14 @@ fn one_tenants_index_never_answers_for_another() {
                         ("lo".to_string(), Value::Int(0)),
                         ("hi".to_string(), Value::Int(100)),
                     ]),
+                ),
+                (
+                    "owner_newest",
+                    BTreeMap::from([("who".to_string(), text("x"))]),
+                ),
+                (
+                    "groups_by_score",
+                    BTreeMap::from([("gs".to_string(), Value::List(vec![text(group)]))]),
                 ),
             ] {
                 let rows = page_all(store, query_name, &params, 7, &context);
@@ -965,4 +1148,461 @@ fn a_file_whose_order_keys_are_missing_is_rebuilt_when_it_is_opened() {
         })
         .unwrap();
     assert_eq!(marked, 0, "the mark is cleared with the rebuild");
+}
+
+fn pair_need(
+    field_name: &str,
+    value: Value,
+    order: &str,
+    descending: bool,
+    after: Option<IndexPosition>,
+    limit: u32,
+) -> Need {
+    Need::PairPage {
+        object: object("item"),
+        field: field(field_name),
+        value,
+        order: order.to_string(),
+        descending,
+        after,
+        limit,
+    }
+}
+
+/// A random pair page over the items: pairs the stores keep and pairs they do not, values with
+/// and without a key, positions of every kind.
+fn random_pair_need(rng: &mut Lcg) -> Need {
+    let (field_name, value) = match rng.below(4) {
+        0 => ("owner", text(rng.pick(&OWNERS))),
+        1 => ("grp", text(rng.pick(&GROUPS))),
+        2 => (
+            "note",
+            match rng.below(3) {
+                0 => text(&"n".repeat(300)),
+                _ => text(&format!("n{}", rng.below(3))),
+            },
+        ),
+        _ => (
+            "owner",
+            match rng.below(2) {
+                0 => Value::Null,
+                _ => text("nobody"),
+            },
+        ),
+    };
+    let order = *rng.pick(&["at", "score", "$created_at", "$updated_at"]);
+    let after = match rng.below(3) {
+        0 => None,
+        _ => Some(IndexPosition {
+            value: match rng.below(6) {
+                0 => Value::Null,
+                1 => Value::Int(rng.below(30) as i64 - 15),
+                2 => Value::Time(rng.below(97) as i64),
+                3 => text("2"),
+                4 => Value::Bool(true),
+                _ => Value::Time(rng.below(40) as i64),
+            },
+            id: RecordId(rng.below(320)),
+        }),
+    };
+    let descending = rng.below(2) == 0;
+    let limit = 1 + rng.below(40) as u32;
+    pair_need(field_name, value, order, descending, after, limit)
+}
+
+/// The ids a store loads for a pair page, and those of the kernel's definition over the store's
+/// complete state.
+fn page_ids(store: &dyn Store, tenant: &str, need: &Need) -> (BTreeSet<u64>, BTreeSet<u64>) {
+    let loaded: BTreeSet<u64> = store
+        .load(&tenant_id(tenant), &[need.clone()])
+        .unwrap()
+        .tenant
+        .unwrap()
+        .records_of(&object("item"))
+        .map(|r| r.id.0)
+        .collect();
+    let all = store
+        .load_complete(&tenant_id(tenant))
+        .unwrap()
+        .tenant
+        .unwrap();
+    let Need::PairPage {
+        field,
+        value,
+        order,
+        descending,
+        after,
+        limit,
+        ..
+    } = need
+    else {
+        unreachable!()
+    };
+    let expected: BTreeSet<u64> = query_plan::pair_page(
+        all.records_of(&object("item")),
+        field,
+        value,
+        order,
+        *descending,
+        after.as_ref(),
+        *limit,
+    )
+    .iter()
+    .map(|r| r.id.0)
+    .collect();
+    (loaded, expected)
+}
+
+// Verifies: KRN-2921
+#[test]
+fn every_store_answers_a_pair_page_alike() {
+    let mut rng = Lcg(2921);
+    let items: Vec<Arc<Record>> = (1..=300).map(|id| random_item(&mut rng, id)).collect();
+    let made = stores();
+    for (_, store) in &made {
+        found(store.as_ref(), "alpha");
+        put(store.as_ref(), "alpha", items.clone());
+    }
+    for round in 0..600 {
+        let need = random_pair_need(&mut rng);
+        for (name, store) in &made {
+            let (loaded, expected) = page_ids(store.as_ref(), "alpha", &need);
+            assert_eq!(loaded, expected, "{name}, round {round}: {need:?}");
+        }
+    }
+}
+
+// Verifies: KRN-2921
+#[test]
+fn the_pair_index_follows_record_writes_and_query_definitions() {
+    let path = fresh_path("pairs");
+    let sqlite = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    let memory = MemoryStore::new();
+    let made: Vec<(&str, &dyn Store)> = vec![("memory", &memory), ("sqlite", &sqlite)];
+    let mut rng = Lcg(921);
+    let items: Vec<Arc<Record>> = (1..=300).map(|id| random_item(&mut rng, id)).collect();
+    for (_, store) in &made {
+        found(*store, "alpha");
+        put(*store, "alpha", items.clone());
+    }
+    let file = sqlite.tenant_file(&tenant_id("alpha")).unwrap().unwrap();
+    let count = |sql: &str, field_name: &str, attr: &str| -> i64 {
+        rusqlite::Connection::open(&file)
+            .unwrap()
+            .query_row(sql, rusqlite::params![field_name, attr], |r| r.get(0))
+            .unwrap()
+    };
+    let rows_of = |field_name: &str, attr: &str| {
+        count(
+            "SELECT COUNT(*) FROM record_pair_index
+             WHERE object = 'item' AND field = ?1 AND attr = ?2",
+            field_name,
+            attr,
+        )
+    };
+    let unordered = |field_name: &str, attr: &str| {
+        count(
+            "SELECT COUNT(*) FROM record_pair_index
+             WHERE object = 'item' AND field = ?1 AND attr = ?2 AND kind IS NULL",
+            field_name,
+            attr,
+        )
+    };
+    let current = || -> Vec<Arc<Record>> {
+        sqlite
+            .load_complete(&tenant_id("alpha"))
+            .unwrap()
+            .tenant
+            .unwrap()
+            .records_of(&object("item"))
+            .cloned()
+            .collect()
+    };
+    let check = |stage: &str, rng: &mut Lcg| {
+        for round in 0..80 {
+            let need = random_pair_need(rng);
+            for (name, store) in &made {
+                let (loaded, expected) = page_ids(*store, "alpha", &need);
+                assert_eq!(loaded, expected, "{name}, {stage}, round {round}: {need:?}");
+            }
+        }
+    };
+    check("put", &mut rng);
+    // One row per record and pair whose field holds a value with a key; a note longer than the
+    // key limit has none.
+    let owners = items.len() as i64;
+    assert_eq!(rows_of("owner", "$created_at"), owners);
+    assert_eq!(rows_of("owner", "at"), owners);
+    let short_notes = items
+        .iter()
+        .filter(|r| matches!(r.get(&field("note")), Value::Str(s) if s.len() < 100))
+        .count() as i64;
+    assert_eq!(rows_of("note", "at"), short_notes);
+    assert!(
+        unordered("grp", "score") > 0,
+        "a text or list score cannot be ordered, and is counted"
+    );
+    assert_eq!(unordered("owner", "at"), 0);
+
+    // Update either field of a pair: the owner of some records, the time of others.
+    let updated: Vec<Arc<Record>> = items
+        .iter()
+        .filter(|r| r.id.0 % 4 == 0)
+        .map(|r| {
+            let mut next = Record::clone(r);
+            next.version += 1;
+            next.updated_at = Timestamp(50 + (r.id.0 % 11) as i64);
+            if r.id.0 % 8 == 0 {
+                next.fields.insert(field("owner"), text(rng.pick(&OWNERS)));
+            } else {
+                next.fields
+                    .insert(field("at"), Value::Time(rng.below(40) as i64));
+            }
+            Arc::new(next)
+        })
+        .collect();
+    for (_, store) in &made {
+        put(*store, "alpha", updated.clone());
+    }
+    assert_eq!(
+        rows_of("owner", "at"),
+        owners,
+        "an update replaces its rows"
+    );
+    check("update", &mut rng);
+
+    // A value of the order attribute the index cannot place (text in a time field) is still
+    // found: the store answers that pair from the records while such a record exists.
+    let odd = item(
+        400,
+        &[
+            ("owner", text("x")),
+            ("at", text("late")),
+            ("grp", text("g1")),
+            ("status", text("open")),
+        ],
+    );
+    for (_, store) in &made {
+        put(*store, "alpha", vec![odd.clone()]);
+    }
+    assert_eq!(unordered("owner", "at"), 1);
+    for (name, store) in &made {
+        for descending in [false, true] {
+            let need = pair_need("owner", text("x"), "at", descending, None, 500);
+            let (loaded, expected) = page_ids(*store, "alpha", &need);
+            assert!(expected.contains(&400));
+            assert_eq!(loaded, expected, "{name}: the unordered record is found");
+        }
+    }
+    check("unordered", &mut rng);
+    for (_, store) in &made {
+        delete(
+            *store,
+            "alpha",
+            std::iter::once(400).chain((1..=300).filter(|id| id % 5 == 0)),
+        );
+    }
+    assert_eq!(
+        unordered("owner", "at"),
+        0,
+        "the count falls with the record"
+    );
+    assert_eq!(rows_of("owner", "at"), current().len() as i64);
+    check("delete", &mut rng);
+
+    // A query defined over existing data: its pair is built in the commit that defines it.
+    let change = |store: &dyn Store, changes: Vec<SchemaChange>| {
+        let intent = Intent::ChangeSchema {
+            changes,
+            expected_version: None,
+            existing: ExistingData::Reject,
+        };
+        execute(store, &intent, &ctx("alpha", owner("alpha"), 30)).unwrap();
+    };
+    let newest = |attribute: &str| {
+        query_def(
+            "status_newest",
+            eq(rec("status"), param("s")),
+            &["s"],
+            order(attribute, true),
+        )
+    };
+    assert_eq!(rows_of("status", "$created_at"), 0);
+    for (_, store) in &made {
+        change(
+            *store,
+            vec![
+                SchemaChange::DefineQuery(scan_twin(&newest("$created_at"))),
+                SchemaChange::DefineQuery(newest("$created_at")),
+            ],
+        );
+    }
+    let statuses = current().len() as i64;
+    assert_eq!(
+        rows_of("status", "$created_at"),
+        statuses,
+        "built in the commit"
+    );
+    let editor = ctx("alpha", user("alpha:editor"), 9_000);
+    for (name, store) in &made {
+        for status in ["open", "closed"] {
+            let params = BTreeMap::from([("s".to_string(), text(status))]);
+            let planned = page_all(*store, "status_newest", &params, 9, &editor);
+            let scanned = page_all(*store, "status_newest_scan", &params, 9, &editor);
+            assert!(!planned.is_empty());
+            assert_eq!(planned, scanned, "{name} {status}: the backfilled pair");
+        }
+    }
+    // Redefined with another order: the old pair's rows go and the new pair's come.
+    for (_, store) in &made {
+        change(
+            *store,
+            vec![
+                SchemaChange::DefineQuery(scan_twin(&newest("$updated_at"))),
+                SchemaChange::DefineQuery(newest("$updated_at")),
+            ],
+        );
+    }
+    assert_eq!(rows_of("status", "$created_at"), 0, "no query reads it");
+    assert_eq!(rows_of("status", "$updated_at"), statuses);
+    for (name, store) in &made {
+        let params = BTreeMap::from([("s".to_string(), text("open"))]);
+        let planned = page_all(*store, "status_newest", &params, 9, &editor);
+        let scanned = page_all(*store, "status_newest_scan", &params, 9, &editor);
+        assert_eq!(planned, scanned, "{name}: the redefined pair");
+    }
+    // Removed: its rows go, and a page of the pair is still answered, from the records.
+    for (_, store) in &made {
+        change(
+            *store,
+            vec![SchemaChange::RemoveQuery(
+                QueryId::new("status_newest").unwrap(),
+            )],
+        );
+    }
+    assert_eq!(rows_of("status", "$updated_at"), 0);
+    for (name, store) in &made {
+        let need = pair_need("status", text("open"), "$updated_at", true, None, 50);
+        let (loaded, expected) = page_ids(*store, "alpha", &need);
+        assert_eq!(loaded, expected, "{name}: a pair no query reads");
+    }
+}
+
+// Verifies: KRN-2921
+#[test]
+fn a_file_whose_pair_rows_are_missing_is_rebuilt_when_it_is_opened() {
+    let path = fresh_path("pair-rebuild");
+    let mut rng = Lcg(13);
+    let items: Vec<Arc<Record>> = (1..=200).map(|id| random_item(&mut rng, id)).collect();
+    let who = BTreeMap::from([("who".to_string(), text("x"))]);
+    let context = ctx("alpha", user("alpha:editor"), 9_000);
+    let (file, before) = {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        found(&store, "alpha");
+        put(&store, "alpha", items);
+        let before = page_all(&store, "owner_newest", &who, 9, &context);
+        assert!(!before.is_empty());
+        (
+            store.tenant_file(&tenant_id("alpha")).unwrap().unwrap(),
+            before,
+        )
+    };
+    // As a file whose queries were defined before the pair index existed.
+    {
+        let conn = rusqlite::Connection::open(&file).unwrap();
+        conn.execute_batch("DELETE FROM record_pair_index; DELETE FROM record_pairs;")
+            .unwrap();
+    }
+    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    assert_eq!(page_all(&store, "owner_newest", &who, 9, &context), before);
+    let rows: i64 = rusqlite::Connection::open(&file)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM record_pair_index WHERE field = 'owner' AND attr = '$created_at'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 200, "the pair is built again when the file is opened");
+}
+
+// Verifies: KRN-2922
+// Verifies: KRN-2526
+#[test]
+fn a_read_policy_that_follows_a_reference_loads_only_the_records_its_rows_name() {
+    for (name, store) in stores() {
+        let store = store.as_ref();
+        found(store, "alpha");
+        // One hundred thousand teams, half of them open, and three thousand items of owner x,
+        // each on a team; only a member reads them, through its team.
+        put(store, "alpha", (1..=100_000).map(team).collect());
+        put(
+            store,
+            "alpha",
+            (100_001..=103_000)
+                .map(|id| {
+                    item(
+                        id,
+                        &[
+                            ("owner", text("x")),
+                            ("status", text("closed")),
+                            ("team", Value::Ref(RecordId((id * 7_919) % 100_000 + 1))),
+                        ],
+                    )
+                })
+                .collect(),
+        );
+        let complete = store.load_complete(&tenant_id("alpha")).unwrap();
+        let context = ctx("alpha", user("alpha:member1"), 9_000);
+        let who = BTreeMap::from([("who".to_string(), text("x"))]);
+        for query_name in ["by_owner", "owner_newest"] {
+            let mut cursor = None;
+            for size in [1u32, 20, 200] {
+                let request = named(query_name, &who, size, cursor.clone());
+                let covered = covered_read(store, &request, &context);
+                let page = covered.outcome.clone().expect("the read is answered");
+                assert_eq!(
+                    page,
+                    read(&complete, &request, &context).unwrap(),
+                    "{name} {query_name} by {size}: the rows of the complete state"
+                );
+                assert_eq!(page, query(store, &request, &context).unwrap());
+                assert_eq!(page.rows.len(), size as usize);
+                let wide: Vec<&Need> = covered
+                    .wanted
+                    .iter()
+                    .filter(|need| matches!(need, Need::AllOf(_) | Need::PageOf { .. }))
+                    .collect();
+                assert!(
+                    wide.is_empty(),
+                    "{name} {query_name} by {size}: no object type is loaded: {wide:?}"
+                );
+                let teams = covered
+                    .state
+                    .tenant
+                    .as_ref()
+                    .unwrap()
+                    .records_of(&object("team"))
+                    .count();
+                let named_teams = covered
+                    .wanted
+                    .iter()
+                    .filter(|need| {
+                        matches!(need, Need::Record { object: o, .. } if *o == object("team"))
+                    })
+                    .count();
+                assert_eq!(teams, named_teams, "{name}: each team was named alone");
+                assert!(
+                    teams <= (MAX_PLAN_CANDIDATES + INDEX_PAGE) as usize,
+                    "{name} {query_name} by {size}: {teams} of 100000 teams loaded"
+                );
+                assert!(
+                    covered.loads <= 2 + (MAX_PLAN_CANDIDATES / INDEX_PAGE) as usize,
+                    "{name} {query_name} by {size}: {} loads",
+                    covered.loads
+                );
+                cursor = page.next;
+            }
+        }
+    }
 }

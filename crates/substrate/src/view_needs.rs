@@ -5,15 +5,18 @@
 //! a `Records` read. [`view_reads`] runs exactly those reads against a snapshot and names what the
 //! snapshot lacks for the first read it cannot answer, so a store loop
 //! (`strata_storage_api::covering::load_covering`) loads, for each section, only the page its
-//! query reads and the records it includes.
+//! query reads and the records it includes. A read that follows references into records the
+//! snapshot lacks names all of them for the rows it examined at once
+//! ([`strata_kernel::query_plan::read_missing`]), so they load in one round, alone.
 
 use crate::project::{included_refs, section_order};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use strata_kernel::ext::*;
+use strata_kernel::query_plan::read_missing;
 use strata_kernel::{
-    read, read_needs, Context, DomainError, Need, ReadRequest, Record, State, TenantSchema,
-    ViewDef, ViewSection,
+    read, read_needs, Context, DomainError, ErrorKind, Need, ReadRequest, ReadResult, Record,
+    State, TenantSchema, ViewDef, ViewSection,
 };
 
 /// The rows of the single sections read so far, by section name.
@@ -63,7 +66,7 @@ pub fn view_reads(
         if wanted(&request, asked) {
             return Ok(());
         }
-        let result = read(state, &request, ctx)?;
+        let result = read_asking(state, &request, ctx, asked)?;
         if let Some(query) = schema.queries.get(&section.query) {
             for (_, (target, ids)) in included_refs(schema, &query.object, section, &result.rows) {
                 let included = ReadRequest::Records {
@@ -73,7 +76,7 @@ pub fn view_reads(
                 if wanted(&included, asked) {
                     return Ok(());
                 }
-                read(state, &included, ctx)?;
+                read_asking(state, &included, ctx, asked)?;
             }
         }
         if section.single {
@@ -81,4 +84,23 @@ pub fn view_reads(
         }
     }
     Ok(())
+}
+
+/// A read of the view; when the snapshot lacks state, every need the kernel can name at once
+/// (each record the examined rows refer to, and the page the read stopped at) goes to `asked`,
+/// so the store loop loads exactly those records and not their object type (KRN-2922).
+fn read_asking(
+    state: &State,
+    request: &ReadRequest,
+    ctx: &Context,
+    asked: &mut Vec<Need>,
+) -> Result<ReadResult, DomainError> {
+    let outcome = read(state, request, ctx);
+    if let Err(error) = &outcome {
+        if matches!(error.kind, ErrorKind::InsufficientState) {
+            asked.extend(read_missing(state, request, ctx));
+            asked.extend(error.missing.iter().cloned());
+        }
+    }
+    outcome
 }

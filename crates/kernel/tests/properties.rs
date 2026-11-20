@@ -286,6 +286,26 @@ fn partial(tenant: &Arc<TenantState>, wanted: &BTreeSet<Need>) -> State {
             .into_iter()
             .cloned()
             .collect(),
+            Need::PairPage {
+                object,
+                field,
+                value,
+                order,
+                descending,
+                after,
+                limit,
+            } => strata_kernel::query_plan::pair_page(
+                tenant.records_of(object),
+                field,
+                value,
+                order,
+                *descending,
+                after.as_ref(),
+                *limit,
+            )
+            .into_iter()
+            .cloned()
+            .collect(),
         };
         for record in matching {
             thin.records

@@ -55,6 +55,14 @@ fn sqlite_store_conforms_on_disk() {
     );
 }
 
+/// The pair index of named queries follows writes and query definitions, on a database file.
+// Verifies: KRN-2921
+#[test]
+fn sqlite_store_answers_pair_pages() {
+    let store = SqliteStore::open(&fresh_path("pairs"), Timestamp(1)).unwrap();
+    conformance::pair_pages_follow_writes_and_definitions(&store);
+}
+
 /// The identity service's documents are kept per tenant and kind, on a database file.
 #[test]
 fn sqlite_store_keeps_documents() {
