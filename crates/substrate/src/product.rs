@@ -1637,9 +1637,7 @@ fn removal_change(entity: &OwnedEntity, delete_records: bool) -> Result<SchemaCh
         "mail-template" => SchemaChange::RemoveMailTemplate(TemplateId(id.to_string())),
         "notice-template" => SchemaChange::RemoveNoticeTemplate(TemplateId(id.to_string())),
         "token" => SchemaChange::RemoveToken(id.to_string()),
-        "capability" => {
-            SchemaChange::RemoveCapability(CapabilityName::new(id).map_err(|e| bad(e.to_string()))?)
-        }
+        "capability" => SchemaChange::RemoveCapability(CapabilityName(id.to_string())),
         "setting" => {
             SchemaChange::RemoveSetting(SettingId::new(id).map_err(|e| bad(e.to_string()))?)
         }

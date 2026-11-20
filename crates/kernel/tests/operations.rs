@@ -321,7 +321,7 @@ fn a_later_step_reads_what_an_earlier_step_made() {
     assert!(matches!(bodies[0], EventBody::RecordCreated { record } if record.version == 1));
     assert!(matches!(
         bodies[1],
-        EventBody::RecordUpdated { before, after } if before.version == 1 && after.version == 2
+        EventBody::RecordUpdated { before, after, .. } if before.version == 1 && after.version == 2
     ));
     assert_eq!(outcome.events[0].seq + 1, outcome.events[1].seq);
 }

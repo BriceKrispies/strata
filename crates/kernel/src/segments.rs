@@ -1590,7 +1590,7 @@ pub fn changes(events: &[DomainEvent]) -> Vec<(Option<Arc<Record>>, Option<Arc<R
         .iter()
         .filter_map(|event| match &event.body {
             EventBody::RecordCreated { record } => Some((None, Some(record.clone()))),
-            EventBody::RecordUpdated { before, after } => {
+            EventBody::RecordUpdated { before, after, .. } => {
                 Some((Some(before.clone()), Some(after.clone())))
             }
             EventBody::RecordDeleted { before } => Some((Some(before.clone()), None)),

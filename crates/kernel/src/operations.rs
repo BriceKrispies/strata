@@ -750,6 +750,7 @@ impl Run<'_> {
         self.events.push(EventBody::RecordUpdated {
             before: old.clone(),
             after,
+            transitions: None,
         });
         self.mark_changed(id);
         Ok(())
@@ -832,7 +833,11 @@ impl Run<'_> {
             let changed = after.id;
             self.put(after.clone());
             self.ops.push(DeltaOp::PutRecord(after.clone()));
-            self.events.push(EventBody::RecordUpdated { before, after });
+            self.events.push(EventBody::RecordUpdated {
+                before,
+                after,
+                transitions: None,
+            });
             self.mark_changed(changed);
         }
         if let Some(records) = self.work.records.get_mut(object) {

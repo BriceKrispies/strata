@@ -10,6 +10,7 @@ use std::sync::Arc;
 use strata_kernel::expr::attribute;
 use strata_kernel::ext::*;
 use strata_kernel::refs_in;
+use strata_kernel::types::{AggregateId, AggregateRequest, AggregateResult};
 use strata_kernel::{
     ArgSource, FieldId, ObjectTypeId, PageCursor, ReadRequest, Record, RecordId, SchemaVersion,
     StateRevision, TenantSchema, Value, ViewDef, ViewId, ViewSection,

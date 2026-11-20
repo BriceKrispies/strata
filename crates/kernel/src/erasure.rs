@@ -40,6 +40,7 @@ use crate::intent::{
 use crate::rules::{assigned_roles, roles_of, Lookup};
 use crate::schema::TenantSchemaExt;
 use crate::state::{Need, Principal, Record, RecordExt};
+use crate::types::ValueExt;
 use crate::types::{
     owner_role, DataSubject, FieldDef, FieldId, FieldType, FieldTypeExt, ObjectTypeDef,
     ObjectTypeId, PrincipalId, RecordId, TeamDef, TenantSchema, Timestamp, Value,
@@ -177,7 +178,7 @@ fn empty_of(ty: &FieldType) -> Option<Value> {
         FieldType::Str | FieldType::File { .. } => Some(Value::Str(String::new())),
         FieldType::Int => Some(Value::Int(0)),
         FieldType::Bool => Some(Value::Bool(false)),
-        FieldType::Time => Some(Value::Time(Timestamp(0))),
+        FieldType::Time => Some(Value::Time(0)),
         FieldType::List(_) => Some(Value::List(Vec::new())),
         FieldType::Ref { .. } | FieldType::Language => None,
     }
@@ -493,6 +494,7 @@ pub fn decide(
         events.push(EventBody::RecordUpdated {
             before: Arc::new(erased.before),
             after,
+            transitions: None,
         });
     }
     evidence.push(Check::pass(

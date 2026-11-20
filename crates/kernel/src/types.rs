@@ -56,9 +56,8 @@ pub use strata_model_core::types::{
 /// installed, held in the schema
 /// ([`crate::object_meta`], [`crate::templates`], [`crate::products`]).
 pub use strata_model_core::types::{
-    DataSubject, EntityKind, EntityRef, InstalledProduct, MailTemplateDecl, NoticeTemplateDecl,
-    PersonalDeclaration, PersonalKind, PlatformCompat, ProductId, PublicationDef, RetentionRule,
-    RetentionStart, StructuredBlocks, TemplateId, TokenDecl,
+    EntityKind, EntityRef, InstalledProduct, MailTemplateDecl, NoticeTemplateDecl, PlatformCompat,
+    ProductId, PublicationDef, StructuredBlocks, TemplateId, TokenDecl,
 };
 /// The tenant ledger of [`crate::ledger`]: declarations in the tenant schema, accounts and
 /// entries in the tenant state, its needs, delta operations, requests and answers.

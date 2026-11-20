@@ -188,6 +188,7 @@ pub struct DeadLetter {
     /// The entry as it was on the queue. For an outbox message: `seq` is the message's outbox
     /// id, `due` its `not_before`, `source` and `source_key` the emitting instance, `event` the
     /// emitted event, and no target or timer.
+    pub entry: QueueEntry,
     /// Why its step failed. For an outbox message: the receiver, the number of attempts and the
     /// error of the last one.
     pub error: String,
