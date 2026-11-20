@@ -1409,6 +1409,57 @@ fn open_tenant_files_are_bounded() {
     }
 }
 
+/// Verifies: TEN-007
+///
+/// Opening a cold tenant does not block a call for a tenant that is already open: while the cold
+/// tenant's open gate is held, as a slow open would hold it, a call for the open tenant answers
+/// and the cold tenant's call waits and then completes.
+#[test]
+fn opening_a_cold_tenant_does_not_block_an_open_one() {
+    let path = fresh_path("coldopen");
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        tenant_with_a_note(&store, "alpha", 10);
+        tenant_with_a_note(&store, "beta", 20);
+    }
+    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    assert!(store
+        .load(&tenant_id("alpha"), &[])
+        .unwrap()
+        .tenant
+        .is_some());
+    assert_eq!(store.open_count(), 1, "only alpha is open");
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        store
+            .while_opening(&tenant_id("beta"), || {
+                let store = &store;
+                scope.spawn(move || {
+                    let loaded = store.load(&tenant_id("beta"), &[]).unwrap();
+                    done_tx.send(loaded.tenant.is_some()).unwrap();
+                });
+                for _ in 0..5 {
+                    assert!(store
+                        .load(&tenant_id("alpha"), &[])
+                        .unwrap()
+                        .tenant
+                        .is_some());
+                }
+                assert!(
+                    done_rx
+                        .recv_timeout(std::time::Duration::from_millis(300))
+                        .is_err(),
+                    "the cold open of beta waits on its own gate"
+                );
+            })
+            .unwrap();
+    });
+    assert!(done_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap());
+    assert_eq!(store.open_count(), 2);
+}
+
 /// An install that stopped after its first commit leaves the directory row `provisioning`. No
 /// request reaches such a tenant, and the next start rolls it back, so the install can be made
 /// again from nothing. A finished install is not touched.

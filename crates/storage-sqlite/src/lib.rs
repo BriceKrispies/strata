@@ -1594,6 +1594,27 @@ impl SqliteStore {
         self.open.lock().map(|open| open.len()).unwrap_or(0)
     }
 
+    /// Run `during` while this tenant's open gate is held, as a slow cold open of it would hold
+    /// it. For tests of what such an open may and may not block.
+    #[doc(hidden)]
+    pub fn while_opening<R>(
+        &self,
+        tenant: &TenantId,
+        during: impl FnOnce() -> R,
+    ) -> StoreResult<R> {
+        let gate = self
+            .opening
+            .lock()
+            .map_err(|_| StoreError::Unavailable("a writer panicked".into()))?
+            .entry(tenant.clone())
+            .or_default()
+            .clone();
+        let _turn = gate
+            .lock()
+            .map_err(|_| StoreError::Unavailable("a writer panicked".into()))?;
+        Ok(during())
+    }
+
     /// The directory of the tenant files, or `None` in memory.
     pub fn tenants_dir(&self) -> Option<&Path> {
         match &self.place {
