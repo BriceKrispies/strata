@@ -974,8 +974,10 @@ impl From<StoreError> for ExecuteError {
     }
 }
 
-/// How often a commit is retried after losing a race, and how many extra needs a single
-/// decision may ask for.
+/// How often a commit is retried after losing a race, and how many rounds a single decision
+/// may spend loading state the kernel found missing. Each round adds every need the kernel can
+/// name at once, so the number of loads does not grow with the number of references a record
+/// holds.
 const MAX_CONFLICT_RETRIES: usize = 8;
 const MAX_NEED_ROUNDS: usize = 32;
 
@@ -1001,18 +1003,32 @@ pub fn execute(
     let mut conflicts = 0;
     loop {
         let header = store.load(&ctx.tenant, &[])?;
-        let mut needs =
-            strata_kernel::needs(header.tenant.as_deref().map(|t| t.schema.as_ref()), intent);
+        let mut wanted: BTreeSet<Need> =
+            strata_kernel::needs(header.tenant.as_deref().map(|t| t.schema.as_ref()), intent)
+                .into_iter()
+                .collect();
         let mut rounds = 0;
         let transition = loop {
-            let state = store.load(&ctx.tenant, &needs)?;
+            let list: Vec<Need> = wanted.iter().cloned().collect();
+            let state = store.load(&ctx.tenant, &list)?;
+            // What the loaded state itself says is still needed (the references and unique
+            // values of a stored record), asked for in one reload.
+            let more: Vec<Need> = strata_kernel::refine_needs(&state, intent)
+                .into_iter()
+                .filter(|need| !wanted.contains(need))
+                .collect();
+            if !more.is_empty() && rounds < MAX_NEED_ROUNDS {
+                wanted.extend(more);
+                rounds += 1;
+                continue;
+            }
             match strata_kernel::transition(&state, intent, ctx) {
                 Err(DomainError {
                     kind: ErrorKind::InsufficientState,
                     missing: Some(need),
                     ..
-                }) if rounds < MAX_NEED_ROUNDS && !needs.contains(&need) => {
-                    needs.push(need);
+                }) if rounds < MAX_NEED_ROUNDS && !wanted.contains(&need) => {
+                    wanted.insert(need);
                     rounds += 1;
                 }
                 Err(error) => return Err(ExecuteError::Domain(error)),
@@ -1043,7 +1059,28 @@ pub fn query(
     let Some(tenant) = header.tenant.as_deref() else {
         return strata_kernel::read(&header, request, ctx).map_err(ExecuteError::Domain);
     };
-    let needs = strata_kernel::read_needs(&tenant.schema, request);
-    let state = store.load(&ctx.tenant, &needs)?;
-    strata_kernel::read(&state, request, ctx).map_err(ExecuteError::Domain)
+    let mut wanted: BTreeSet<Need> = strata_kernel::read_needs(&tenant.schema, request)
+        .into_iter()
+        .collect();
+    let mut rounds = 0;
+    loop {
+        let list: Vec<Need> = wanted.iter().cloned().collect();
+        let state = store.load(&ctx.tenant, &list)?;
+        match strata_kernel::read(&state, request, ctx) {
+            Err(DomainError {
+                kind: ErrorKind::InsufficientState,
+                missing: Some(need),
+                ..
+            }) if rounds < MAX_NEED_ROUNDS && !wanted.contains(&need) => {
+                // A rule that follows a reference reaches a record per row: load the whole
+                // object type it points into, so one round answers every row.
+                wanted.insert(match need {
+                    Need::Record { object, .. } => Need::AllOf(object),
+                    other => other,
+                });
+                rounds += 1;
+            }
+            other => return other.map_err(ExecuteError::Domain),
+        }
+    }
 }

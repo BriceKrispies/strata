@@ -32,10 +32,12 @@ pub mod world;
 
 pub use expr::{CmpOp, Expr, Scope};
 pub use intent::*;
-pub use read::{read, read_needs, visible};
+pub use read::{read, read_needs, visible, visible_in};
 pub use schema::*;
 pub use state::*;
-pub use transition::{apply_delta, needs, plan_migration, transition, Migration, Violation};
+pub use transition::{
+    apply_delta, needs, plan_migration, refine_needs, transition, Migration, Violation,
+};
 pub use types::*;
 pub use world::World;
 

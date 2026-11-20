@@ -11,6 +11,7 @@ use crate::{
     ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::ext::*;
 use strata_kernel::{
@@ -48,11 +49,17 @@ struct Inner {
 #[derive(Default)]
 pub struct MemoryStore {
     inner: Mutex<Inner>,
+    loads: AtomicUsize,
 }
 
 impl MemoryStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// How many times `load` has been called, for tests that bound the loads of one decision.
+    pub fn loads(&self) -> usize {
+        self.loads.load(Ordering::Relaxed)
     }
 
     fn lock(&self) -> StoreResult<MutexGuard<'_, Inner>> {
@@ -123,6 +130,7 @@ impl Store for MemoryStore {
     }
 
     fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
+        self.loads.fetch_add(1, Ordering::Relaxed);
         Ok(match self.lock()?.tenants.get(tenant) {
             Some(found) => partial_state(found, needs),
             None => State::absent(tenant.clone()),

@@ -1923,3 +1923,105 @@ fn a_capability_is_held_only_through_a_role_that_names_it() {
     );
     assert_eq!(capabilities_of(&world, "writer1"), names(&[]));
 }
+
+#[test]
+fn deleting_a_record_referenced_from_two_fields_of_one_record_clears_both() {
+    let world = must(
+        &notes_world(),
+        "alpha",
+        "owner",
+        5_000,
+        Intent::ChangeSchema {
+            changes: vec![SchemaChange::DefineRelationship {
+                object: object("note"),
+                field: field("reviewer"),
+                label: "Reviewer".into(),
+                target: object("person"),
+                on_delete: OnDelete::SetNull,
+                required: false,
+            }],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    );
+    let person = Intent::CreateRecord {
+        object: object("person"),
+        fields: BTreeMap::from([(field("name"), text("Ada"))]),
+    };
+    let world = must(&world, "alpha", "editor", 5_001, person);
+    let both = Intent::CreateRecord {
+        object: object("note"),
+        fields: BTreeMap::from([
+            (field("title"), text("T")),
+            (field("slug"), text("t")),
+            (field("author"), Value::Ref(RecordId(1))),
+            (field("reviewer"), Value::Ref(RecordId(1))),
+        ]),
+    };
+    let world = must(&world, "alpha", "editor", 5_002, both);
+    let delete = Intent::DeleteRecord {
+        object: object("person"),
+        id: RecordId(1),
+        expected_version: None,
+    };
+    let (world, outcome) = step(&world, "alpha", "editor", 5_003, delete).unwrap();
+    let cleared = note(&world, "alpha", 2);
+    assert_eq!(cleared.get(&field("author")), &Value::Null);
+    assert_eq!(cleared.get(&field("reviewer")), &Value::Null);
+    assert_eq!(cleared.version, 2, "one rewrite, one version bump");
+    assert_eq!(
+        outcome.events.len(),
+        2,
+        "one update of the note, one delete"
+    );
+}
+
+#[test]
+fn a_migration_that_rewrites_records_bumps_their_version_and_emits_an_update() {
+    let world = must(
+        &notes_world(),
+        "alpha",
+        "writer1",
+        5_000,
+        new_note("First", "first"),
+    );
+    let world = must(
+        &world,
+        "alpha",
+        "writer1",
+        5_001,
+        patch(1, &[("body", text("text"))]),
+    );
+    assert_eq!(note(&world, "alpha", 1).version, 2);
+    let remove = Intent::ChangeSchema {
+        changes: vec![SchemaChange::RemoveField {
+            object: object("note"),
+            field: field("body"),
+        }],
+        expected_version: None,
+        existing: ExistingData::Reject,
+    };
+    let (world, outcome) = step(&world, "alpha", "owner", 5_002, remove).unwrap();
+    let rewritten = note(&world, "alpha", 1);
+    assert_eq!(rewritten.version, 3);
+    assert_eq!(rewritten.updated_at, Timestamp(5_002));
+    let updates = outcome
+        .events
+        .iter()
+        .filter(|event| matches!(event.body, EventBody::RecordUpdated { .. }))
+        .count();
+    assert_eq!(updates, 1, "one update event per rewritten record");
+}
+
+#[test]
+fn a_principal_id_may_not_start_with_the_team_prefix() {
+    let world = notes_world();
+    let assign = Intent::AssignRole {
+        principal: principal_id("team:ops"),
+        role: role("writer"),
+    };
+    let refused = step(&world, "alpha", "owner", 5_000, assign).unwrap_err();
+    assert_eq!(refused.kind, ErrorKind::InvalidIntent);
+    let as_team = world.step(&new_note("T", "t"), &ctx("alpha", user("team:ops"), 5_001));
+    assert_eq!(as_team.unwrap_err().kind, ErrorKind::InvalidIntent);
+}

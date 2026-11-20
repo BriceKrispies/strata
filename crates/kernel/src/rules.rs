@@ -27,7 +27,7 @@ pub struct Lookup<'a> {
     pub coverage: &'a Coverage,
 }
 
-fn insufficient(need: Need) -> DomainError {
+pub(crate) fn insufficient(need: Need) -> DomainError {
     let mut error = DomainError::new(
         ErrorKind::InsufficientState,
         format!("the snapshot does not cover {need:?}"),
@@ -37,6 +37,12 @@ fn insufficient(need: Need) -> DomainError {
         .push(Check::fail("coverage", format!("{need:?}")));
     error.missing = Some(need);
     error
+}
+
+/// `InsufficientState` for the need an expression noted as missing since `expr::clear_missing`,
+/// or `None` when the evaluation failed for another reason.
+pub(crate) fn missing_error() -> Option<DomainError> {
+    expr::take_missing().map(insufficient)
 }
 
 impl<'a> Lookup<'a> {
@@ -512,7 +518,14 @@ pub fn validate_record(
         };
         for constraint in object.constraints.values() {
             let rule = format!("constraint:{name}.{}", constraint.id);
-            match expr::eval(&constraint.expr, &env) {
+            expr::clear_missing();
+            let outcome = expr::eval(&constraint.expr, &env);
+            if outcome.is_err() {
+                if let Some(missing) = missing_error() {
+                    return Err(missing);
+                }
+            }
+            match outcome {
                 Ok(Value::Bool(false)) => out.fail(
                     ErrorKind::ConstraintViolated,
                     rule,

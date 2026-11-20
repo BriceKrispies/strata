@@ -2,10 +2,8 @@
 //! policies do not grant.
 
 use crate::expr::{self, Env};
-use crate::intent::{
-    Check, CheckExt, Context, DomainError, DomainErrorExt, ErrorKind, ReadRequest, ReadResult,
-};
-use crate::rules::{authorize, roles_of, Lookup, Subject};
+use crate::intent::{Context, DomainError, DomainErrorExt, ErrorKind, ReadRequest, ReadResult};
+use crate::rules::{authorize, missing_error, roles_of, Lookup, Subject};
 use crate::schema::{Action, Resource, TenantSchema};
 use crate::state::{Need, Principal, Record, State, TenantState};
 use crate::types::{RoleId, Timestamp, Value};
@@ -13,8 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 /// What a reader receives of a record: the record without the fields whose `read` condition
-/// does not hold for them. A condition that cannot be evaluated hides the field. The system
-/// reads everything. Policy conditions, query filters and constraints see the whole record,
+/// does not hold for them. A condition that cannot be evaluated hides the field, unless it
+/// failed because the snapshot lacks a record it follows: that is `InsufficientState`, so the
+/// shell loads the record and asks again. The system reads everything. Policy conditions, query filters and constraints see the whole record,
 /// because they run inside the kernel; only what leaves it is trimmed.
 fn redact(
     lookup: Lookup<'_>,
@@ -22,12 +21,12 @@ fn redact(
     roles: &BTreeSet<RoleId>,
     now: Timestamp,
     record: &Arc<Record>,
-) -> Arc<Record> {
+) -> Result<Arc<Record>, DomainError> {
     if matches!(principal, Principal::System) {
-        return record.clone();
+        return Ok(record.clone());
     }
     let Some(def) = lookup.tenant.schema.objects.get(&record.object) else {
-        return record.clone();
+        return Ok(record.clone());
     };
     let params: BTreeMap<String, Value> = BTreeMap::new();
     let env = Env {
@@ -40,24 +39,33 @@ fn redact(
         roles,
         lookup: Some(lookup),
     };
-    let hidden: Vec<_> = def
-        .fields
-        .values()
-        .filter(|field| {
-            field.read.as_ref().is_some_and(|rule| {
-                record.fields.contains_key(&field.id) && !expr::holds(rule, &env).unwrap_or(false)
-            })
-        })
-        .map(|field| field.id.clone())
-        .collect();
+    let mut hidden = Vec::new();
+    for field in def.fields.values() {
+        let Some(rule) = field.read.as_ref() else {
+            continue;
+        };
+        if !record.fields.contains_key(&field.id) {
+            continue;
+        }
+        expr::clear_missing();
+        let shown = expr::holds(rule, &env);
+        if shown.is_err() {
+            if let Some(missing) = missing_error() {
+                return Err(missing);
+            }
+        }
+        if !shown.unwrap_or(false) {
+            hidden.push(field.id.clone());
+        }
+    }
     if hidden.is_empty() {
-        return record.clone();
+        return Ok(record.clone());
     }
     let mut shown = Record::clone(record);
     for field in &hidden {
         shown.fields.remove(field);
     }
-    Arc::new(shown)
+    Ok(Arc::new(shown))
 }
 
 /// Whether a principal may read a record. The same decision `read` makes per row; the shell
@@ -79,6 +87,34 @@ pub fn visible(
         None,
     )
     .0
+}
+
+/// [`visible`] with the snapshot's lookup, so a Read policy that follows a reference is decided
+/// on the record it reaches. A policy that needs a record the snapshot does not hold is
+/// `InsufficientState` naming it, not a denial.
+pub fn visible_in(
+    lookup: Lookup<'_>,
+    principal: &Principal,
+    record: &Record,
+    now: Timestamp,
+) -> Result<bool, DomainError> {
+    expr::clear_missing();
+    let (allowed, _) = authorize(
+        lookup.tenant,
+        &lookup.tenant.schema,
+        principal,
+        now,
+        Action::Read,
+        &Resource::Object(record.object.clone()),
+        Subject::stored(record),
+        Some(lookup),
+    );
+    if !allowed {
+        if let Some(missing) = missing_error() {
+            return Err(missing);
+        }
+    }
+    Ok(allowed)
 }
 
 /// The state a read is expected to need.
@@ -133,7 +169,7 @@ pub fn read(
             let mut rows = Vec::new();
             for id in ids {
                 if let Some(record) = lookup.record(object, *id)? {
-                    if visible(tenant, &ctx.principal, record, ctx.now) {
+                    if visible_in(lookup, &ctx.principal, record, ctx.now)? {
                         rows.push(record.clone());
                     }
                 }
@@ -153,7 +189,7 @@ pub fn read(
             let roles = roles_of(tenant, &ctx.principal);
             let mut keyed = Vec::new();
             for record in lookup.all_of(&def.object)? {
-                if !visible(tenant, &ctx.principal, record, ctx.now) {
+                if !visible_in(lookup, &ctx.principal, record, ctx.now)? {
                     continue;
                 }
                 if let Some(filter) = &def.filter {
@@ -167,20 +203,29 @@ pub fn read(
                         roles: &roles,
                         lookup: Some(lookup),
                     };
-                    let keep = expr::holds(filter, &env).map_err(|e| {
-                        DomainError::new(ErrorKind::Evaluation, format!("query {query}: {e}")).with(
-                            vec![Check::fail(format!("query:{query}"), filter.to_string())],
-                        )
-                    })?;
-                    if !keep {
+                    expr::clear_missing();
+                    let outcome = expr::holds(filter, &env);
+                    if outcome.is_err() {
+                        if let Some(missing) = missing_error() {
+                            return Err(missing);
+                        }
+                    }
+                    // A record the filter cannot be evaluated on (a grandfathered value of the
+                    // wrong type, say) is left out of the answer; it does not fail the query
+                    // for every reader.
+                    if !outcome.unwrap_or(false) {
                         continue;
                     }
                 }
                 let mut key = Vec::with_capacity(def.order.len());
                 for order in &def.order {
-                    key.push(expr::attribute(Some(record), &order.field).map_err(|e| {
-                        DomainError::new(ErrorKind::Evaluation, format!("query {query}: {e}"))
-                    })?);
+                    match expr::attribute(Some(record), &order.field) {
+                        Ok(value) => key.push(value),
+                        Err(_) => break,
+                    }
+                }
+                if key.len() != def.order.len() {
+                    continue;
                 }
                 keyed.push((key, record.clone()));
             }
@@ -210,7 +255,7 @@ pub fn read(
     let rows: Vec<Arc<Record>> = rows
         .iter()
         .map(|record| redact(lookup, &ctx.principal, &roles, ctx.now, record))
-        .collect();
+        .collect::<Result<_, _>>()?;
     Ok(ReadResult {
         rows,
         revision: tenant.revision,
