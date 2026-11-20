@@ -3967,7 +3967,8 @@ async fn one_bundle_that_will_not_install_does_not_stop_the_others() {
 }
 
 /// A tenant is created while the process runs, behind the service token, and its owner is told
-/// where to sign in. The owner asks for a link at that site with the address and signs in with it.
+/// where to sign in. The message carries an invitation link; the owner follows it, chooses a
+/// password and signs in with it. The site's host is listed for the BFF.
 #[tokio::test]
 async fn a_tenant_is_created_while_running_and_its_owner_signs_in_by_link() {
     let dir = tenants_dir_with("runtime", &[]);
@@ -3996,36 +3997,61 @@ async fn a_tenant_is_created_while_running_and_its_owner_signs_in_by_link() {
     let welcome = strata_backend::mail::Mailer::outbox(&*sink);
     assert_eq!(welcome.len(), 1);
     assert_eq!(welcome[0].to, "new.owner@example.org");
-    assert!(welcome[0].text.contains("https://newsite.example/login"));
+    assert!(welcome[0].text.contains("https://newsite.example/login#i="));
 
     let (status, _) = backend
         .call("-", None, "/internal/platform/tenants", request)
         .await;
     assert_eq!(status, 409, "a tenant that exists is not made again");
 
-    let (status, asked) = backend
+    let address = welcome[0]
+        .text
+        .split_whitespace()
+        .find(|word| word.starts_with("https://newsite.example/login#"))
+        .expect("the message holds the invitation link")
+        .to_string();
+    let (_, fragment) = address
+        .split_once('#')
+        .expect("the secrets are in the fragment");
+    let part = |name: &str| {
+        fragment
+            .split('&')
+            .find_map(|pair| pair.strip_prefix(&format!("{name}=")))
+            .expect("fragment field")
+            .to_string()
+    };
+    let password = "a-first-password-of-mine";
+    let (status, accepted) = backend
         .call_at(
             Some(origin),
             SOURCE,
             "newsite",
             None,
-            "/internal/sign-in/link/request",
-            json!({ "email": "new.owner@example.org" }),
+            "/internal/sign-in/invite/accept",
+            json!({ "challenge": part("i"), "token": part("t"), "password": password }),
         )
         .await;
-    assert_eq!(status, 200, "{asked}");
-    let binding = asked["binding"].as_str().unwrap().to_string();
-    let link = link_in(&sink, 1);
+    assert_eq!(status, 200, "{accepted}");
+    assert_eq!(accepted["login"], "new.owner@example.org");
     let (status, signed_in) = backend
-        .call_at(
-            Some(origin),
-            SOURCE,
+        .call(
             "newsite",
             None,
-            "/internal/session/sign-in/link",
-            json!({ "challenge": link.challenge, "token": link.token, "binding": binding }),
+            "/internal/session/sign-in/password",
+            json!({ "login": "new.owner@example.org", "password": password }),
         )
         .await;
     assert_eq!(status, 200, "{signed_in}");
-    assert_eq!(signed_in["session"]["authenticated"], true);
+    assert!(signed_in["token"].as_str().is_some());
+
+    let (status, listed) = backend
+        .call("-", None, "/internal/platform/hosts", json!({}))
+        .await;
+    assert_eq!(status, 200, "{listed}");
+    assert!(
+        listed["hosts"].as_array().unwrap().iter().any(|binding| {
+            binding["host"] == "newsite.example" && binding["tenant"] == "newsite"
+        }),
+        "the new site's host is listed: {listed}"
+    );
 }

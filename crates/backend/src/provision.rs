@@ -3,10 +3,10 @@
 //! The operator's tools post a tenant bundle and the owner's address. The tenant is installed as
 //! at start (see [`crate::seed::install_bundle`]), the owner gets a login named by that address,
 //! and a message to it says where to sign in. The login has a random password nobody knows, so
-//! the way in is the emailed sign-in link of [`crate::signin::link`]: the owner asks for a link
-//! at the site's sign-in page with that address, and the link goes to the address and to no one
-//! else. The address is the operator's word that the person controls it, so the account counts it
-//! as verified.
+//! the way in is the invitation link of [`crate::signin::invite`] in that message: opening it
+//! asks the owner for a password. The site's host is also listed (see [`crate::hosts`]) so the
+//! BFF serves it. The address is the operator's word that the person controls it, so the account
+//! counts it as verified.
 
 use crate::app::{ApiError, App, LOG};
 use crate::auth::{hash_password, random_hex};
@@ -70,13 +70,21 @@ pub fn create_tenant(app: &App, request: CreateTenant) -> Result<Json, ApiError>
         let _ = app.store.reset_tenant(&tenant);
         return Err(error.into());
     }
+    // The way in: an invitation link, opened in any browser, that sets the owner's password.
+    // Whatever cannot be made leaves no tenant behind.
+    let invited = crate::signin::invite::issue(app, &tenant, &bundle.owner, &origin)
+        .and_then(|link| crate::hosts::bind_origin(app, &tenant, &origin).map(|_| link));
+    let link = match invited {
+        Ok(link) => link,
+        Err(error) => {
+            let _ = app.store.reset_tenant(&tenant);
+            return Err(error);
+        }
+    };
     let mail = Mail {
         to: login.clone(),
         subject: format!("Your site {} is ready", bundle.name),
-        text: format!(
-            "Your site is ready. Open {origin}/login, give this address and ask for a sign-in \
-             link. The link is sent to this address and works once."
-        ),
+        text: crate::signin::invite::first_sign_in_text(&link),
     };
     let notified = match app.cfg.mail.send(&mail) {
         Ok(()) => true,
