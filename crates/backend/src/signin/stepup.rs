@@ -145,7 +145,11 @@ pub fn confirm(
     let mut renewed = session.clone();
     renewed.authenticated_at = app.now();
     renewed.network = auth::network_hash(app, caller);
-    app.store.put_session(&renewed)?;
+    app.store.session_authenticated(
+        &renewed.id,
+        renewed.authenticated_at,
+        renewed.network.as_deref(),
+    )?;
     app.decision(
         "step-up",
         "accepted",

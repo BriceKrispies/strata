@@ -601,6 +601,18 @@ pub trait Store: Send + Sync {
     ) -> StoreResult<Vec<JournalEntry>>;
 
     fn put_session(&self, session: &SessionRecord) -> StoreResult<()>;
+    /// Move a session's last-seen time to `at`. Touches nothing else, so it can never undo a
+    /// revocation that landed after the caller read the session. An absent session is ignored.
+    fn session_seen(&self, id: &SessionId, at: Timestamp) -> StoreResult<()>;
+    /// Record a fresh authentication of a session: `authenticated_at` and `network` change, and
+    /// nothing else does, so a revocation that landed after the caller read the session stays.
+    /// An absent session is ignored.
+    fn session_authenticated(
+        &self,
+        id: &SessionId,
+        at: Timestamp,
+        network: Option<&str>,
+    ) -> StoreResult<()>;
     fn session_by_token(&self, token_hash: &str) -> StoreResult<Option<SessionRecord>>;
     fn session(&self, id: &SessionId) -> StoreResult<Option<SessionRecord>>;
     /// Every session that is neither revoked nor past its end at `now`, of every tenant. A scan

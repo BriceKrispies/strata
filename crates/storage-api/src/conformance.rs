@@ -706,6 +706,24 @@ fn sessions_are_stored_revoked_and_purged(store: &dyn Store) {
         "beta is untouched"
     );
 
+    // A last-seen or step-up write made from a copy read before the revocation must not undo it.
+    let s1 = SessionId::new("s1").unwrap();
+    store.session_seen(&s1, Timestamp(88)).unwrap();
+    store
+        .session_authenticated(&s1, Timestamp(99), Some("net"))
+        .unwrap();
+    let after = store.session(&s1).unwrap().unwrap();
+    assert!(
+        after.revoked_at.is_some(),
+        "a seen or step-up write keeps the revocation"
+    );
+    assert_eq!(after.last_seen_at, Timestamp(88));
+    assert_eq!(after.authenticated_at, Timestamp(99));
+    assert_eq!(after.network.as_deref(), Some("net"));
+    store
+        .session_seen(&SessionId::new("absent").unwrap(), Timestamp(1))
+        .unwrap();
+
     let live: Vec<String> = store
         .live_sessions(Timestamp(100))
         .unwrap()
