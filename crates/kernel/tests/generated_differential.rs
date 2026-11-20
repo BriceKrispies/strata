@@ -74,14 +74,20 @@
 //!      with `operation:decided_by_the_kernel` and the generated `needs` plans nothing for it,
 //!      because the function language does not state the decision yet. The operation generator
 //!      draws no invocation, and `compare_transition` fails on one.
-//!  11. Not mirrored: the posting of the tenant ledger (`strata_kernel::ledger::post`, the
-//!      `PostLedger` intent, a transfer as two postings committed together; WG-5083) and
-//!      everything that reads an account. An account is named by a UUID derived from the
+//!  11. Not mirrored: the posting of the tenant ledger from the reading of an account on
+//!      (`strata_kernel::ledger::post`, the `PostLedger` intent, a transfer as two postings
+//!      committed together; WG-5083) and everything that reads an account. Mirrored, and compared
+//!      on the postings `OpKind::PostLedger` draws: the decision of `PostLedger` up to the account
+//!      (`ledger-intent-decision`, `ledger-posting-precheck`; WG-5170): the capability
+//!      `ledger-post`, the count of postings, and the checks of the first posting before its
+//!      account is read (a declared unit, an owner that exists, the amount, the key, the reason
+//!      and the scope); the generated `intent-decision` refuses a first posting that passes them
+//!      with `ledger:decided_by_the_ledger_module`. An account is named by a UUID derived from the
 //!      SHA-256 of its tenant, owner, unit and scope (`account_id`), and the function language
 //!      has neither a hash nor a way to build a uuid; and an example argument or result of a
 //!      generated function may not contain a uuid, which every account header and entry holds,
 //!      so no example of a decision over a snapshot with accounts can be written. The generated
-//!      `intent-decision` refuses `PostLedger` (`ledger:decided_by_the_ledger_module`),
+//!      `intent-decision` refuses such a `PostLedger` (`ledger:decided_by_the_ledger_module`),
 //!      `apply-delta` leaves a ledger operation out, the plan of a posting (`refine_needs`) is not
 //!      stated, and the branch of `ledger-removal-check` that finds an account naming a unit or a
 //!      pool has no example. Mirrored: the declarations (`declare-ledger-unit`, `-pool`,
@@ -98,7 +104,7 @@
 //!      `intent-decision` refuses with `ledger:decided_by_the_ledger_module`. Guarded:
 //!      `assert_no_input_of_a_known_difference` fails on a snapshot whose state holds a ledger
 //!      (an account or an entry) and on a policy that names the ledger, and `compare_transition`
-//!      on a posting or an expiry.
+//!      on an expiry and on a posting that the kernel decides after reading its account.
 //!  12. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
 //!      templates, tokens and product records of the tenant schema that the hand-written
 //!      `schema.problems` makes through `object_meta::problems`, `templates::problems` and
@@ -308,6 +314,13 @@ enum OpKind {
     AddToTeam {
         who: usize,
     },
+    /// A `PostLedger` intent refused before any account is read (WG-5170): 0 a unit no tenant
+    /// declares, 1 an amount of 0, 2 an owner who is not a member, 3 a pool no tenant declares,
+    /// 4 an amount past 2^53-1, 5 an empty idempotency key, 6 a key with the expiry prefix, 7 a
+    /// reason of 257 bytes, 8 no posting, 9 nine postings.
+    PostLedger {
+        kind: u8,
+    },
 }
 
 /// What a `Big` operation writes, at or just over a limit of `limits.rs`.
@@ -463,6 +476,7 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         }),
         1 => Just(OpKind::DefineTeam),
         1 => (0usize..5).prop_map(|who| OpKind::AddToTeam { who }),
+        2 => (0u8..10).prop_map(|kind| OpKind::PostLedger { kind }),
     ];
     (0usize..3, 0usize..3, 0usize..9, kind, 0u8..10, 0u8..8).prop_map(
         |(tenant, other, actor, kind, cross, hop)| Op {
@@ -823,8 +837,77 @@ fn intent_of(op: &Op) -> Intent {
             team: TeamId::new("desk").unwrap(),
             principal: principal_id(&format!("{}:{}", WORLD_TENANTS[op.tenant], MEMBERS[*who])),
         },
+        OpKind::PostLedger { kind } => {
+            let tenant = WORLD_TENANTS[op.tenant];
+            let member = LedgerOwner::Principal {
+                principal: principal_id(&format!("{tenant}:owner")),
+            };
+            let request =
+                |unit: &str, owner: LedgerOwner, amount: i64, key: &str, reason: String| {
+                    LedgerPostingRequest {
+                        owner,
+                        unit: LedgerUnit::new(unit).unwrap(),
+                        amount: LedgerAmount(amount),
+                        idempotency_key: key.into(),
+                        reason,
+                        corrects: None,
+                        scope: None,
+                    }
+                };
+            let postings = match kind {
+                0 => vec![request("nonesuch", member, 5, "k1", "r".into())],
+                1 => vec![request("credits", member, 0, "k1", "r".into())],
+                2 => vec![request(
+                    "credits",
+                    LedgerOwner::Principal {
+                        principal: principal_id(&format!("{tenant}:ghost")),
+                    },
+                    5,
+                    "k1",
+                    "r".into(),
+                )],
+                3 => vec![request(
+                    "credits",
+                    LedgerOwner::Pool {
+                        pool: LedgerPoolName::new("nopool").unwrap(),
+                    },
+                    1,
+                    "k1",
+                    "r".into(),
+                )],
+                4 => vec![request(
+                    "credits",
+                    member,
+                    9_007_199_254_740_992,
+                    "k1",
+                    "r".into(),
+                )],
+                5 => vec![request("credits", member, 5, "", "r".into())],
+                6 => vec![request("credits", member, 5, "expiry:x", "r".into())],
+                7 => vec![request("credits", member, 5, "k1", "r".repeat(257))],
+                8 => Vec::new(),
+                _ => (0..9)
+                    .map(|i| request("credits", member.clone(), 0, &format!("k{i}"), "r".into()))
+                    .collect(),
+            };
+            Intent::PostLedger { postings }
+        }
     }
 }
+
+/// The rules of a posting's checks made before its account is read (`ledger-posting-precheck`,
+/// `ledger-intent-decision`; WG-5170): a `PostLedger` that the kernel refuses with one of them,
+/// or with a refusal that is not the ledger's, is mirrored; any other is difference 11.
+const LEDGER_PRECHECK_RULES: [&str; 8] = [
+    "permission:capability:ledger-post",
+    "ledger:postings",
+    "ledger:unknown-unit",
+    "ledger:unknown-owner",
+    "ledger:invalid-amount",
+    "ledger:invalid-key",
+    "ledger:invalid-reason",
+    "ledger:invalid-scope",
+];
 
 /// An automation that creates a note, looks at it and ends; `broken`, it names a step it does
 /// not declare and leaves one unreachable. It acts as `editor`, so its definition is checked for the
@@ -1596,11 +1679,8 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         "{label}: the generated functions do not decide a tenant operation (difference 10)"
     );
     assert!(
-        !matches!(
-            intent,
-            Intent::PostLedger { .. } | Intent::ExpireLedger { .. }
-        ),
-        "{label}: the generated functions do not decide a posting or an expiry (difference 11)"
+        !matches!(intent, Intent::ExpireLedger { .. }),
+        "{label}: the generated functions do not decide an expiry (difference 11)"
     );
     assert!(
         !matches!(intent, Intent::EraseSubject { .. }),
@@ -1611,6 +1691,22 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         "{label}: the generated functions do not decide a retention deletion (difference 14)"
     );
     let mut hand = transition(state, intent, context);
+    if matches!(intent, Intent::PostLedger { .. }) {
+        let before_the_account = match &hand {
+            Ok(_) => false,
+            Err(error) => {
+                error.kind != ErrorKind::InsufficientState
+                    && error.evidence.last().is_none_or(|check| {
+                        !check.rule.starts_with("ledger:")
+                            || LEDGER_PRECHECK_RULES.contains(&check.rule.as_str())
+                    })
+            }
+        };
+        assert!(
+            before_the_account,
+            "{label}: a posting decided after its account is read is not mirrored (difference 11); the kernel gave {hand:?}"
+        );
+    }
     assert_no_scan_warning(state, intent, &hand);
     let mut generated = match spec::kernel_transition(state, intent, context) {
         Ok(result) => Ok(result),
