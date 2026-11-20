@@ -21,6 +21,16 @@ use strata_storage_api::{ExecuteError, Store, StoreError};
 
 pub const LOG: Logger = Logger { service: "backend" };
 
+/// The default absolute lifetime of a session: how long after sign-in it ends (`main.rs` reads
+/// `STRATA_SESSION_TTL_MS` over it). The specification states two different values (D-700 and
+/// the machine `session-authority-flow-impl`); `tests/spec_agreement.rs` holds the one the
+/// default is checked against.
+pub const DEFAULT_SESSION_TTL_MS: i64 = 12 * 3_600_000;
+
+/// The default idle lifetime of a session: how long after its last use it ends (`main.rs` reads
+/// `STRATA_SESSION_IDLE_MS` over it).
+pub const DEFAULT_SESSION_IDLE_MS: i64 = 2 * 3_600_000;
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub addr: SocketAddr,
@@ -143,7 +153,10 @@ impl Default for ThrottleLimits {
             account_max: 10,
             account_lock_ms: 30_000,
             window_ms: 15 * 60_000,
-            source_max: 100,
+            // The quota of the specification on password sign-in from one source (IDN-250):
+            // the generated model is the one source of the number.
+            source_max: u32::try_from(strata_model::quotas::Q_SIGN_IN_WITH_PASSWORD.limit)
+                .unwrap_or(u32::MAX),
             realm_max: 1000,
             realm_interval_ms: 1000,
         }
