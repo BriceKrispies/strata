@@ -200,17 +200,20 @@ pub enum MembersRequest {
     },
     /// Redeem an invitation as the signed-in person.
     Redeem { invitation: String },
+    /// Withdraw an invitation that was neither redeemed nor revoked yet (ADM-1083).
+    RevokeInvitation { invitation: String },
 }
 
 impl MembersRequest {
     /// The operations, as the names the browser-facing route and the request's `op` use.
-    pub const OPS: [&'static str; 6] = [
+    pub const OPS: [&'static str; 7] = [
         "assign_role",
         "revoke_role",
         "add_team_member",
         "remove_team_member",
         "invite",
         "redeem",
+        "revoke_invitation",
     ];
 }
 

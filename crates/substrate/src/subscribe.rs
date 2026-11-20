@@ -2,15 +2,173 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use strata_kernel::ext::*;
 use strata_kernel::{
-    owner_role, visible, DomainEvent, EventBody, ObjectTypeId, Principal, RecordId, TenantState,
+    owner_role, visible, DomainEvent, EventBody, ObjectTypeId, Principal, Record, RecordId,
+    TenantState,
 };
 
-/// What a subscriber wants to hear about.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// The kinds of event the kernel emits today, named as the specification names the variants of
+/// `event-body`. A selector may name these and no other kind until another kind is emitted.
+pub const EVENT_KINDS: [&str; 6] = [
+    "tenant-created",
+    "schema-changed",
+    "member-changed",
+    "record-created",
+    "record-updated",
+    "record-deleted",
+];
+
+/// The kind of an event: the name of its body's variant in the specification (`event-kind`).
+pub fn kind_of(body: &EventBody) -> &'static str {
+    match body {
+        EventBody::TenantCreated { .. } => "tenant-created",
+        EventBody::SchemaChanged { .. } => "schema-changed",
+        EventBody::MemberChanged { .. } => "member-changed",
+        EventBody::RecordCreated { .. } => "record-created",
+        EventBody::RecordUpdated { .. } => "record-updated",
+        EventBody::RecordDeleted { .. } => "record-deleted",
+    }
+}
+
+/// What a subscriber wants to hear about (the specification's type `selector`, SCH-1575). Every
+/// member is optional and an absent member matches everything; members combine as AND, the values
+/// of one member as OR. A selector narrows what a subscriber is told and never widens it: what
+/// remains is still decided by the kernel's read decision for that subscriber.
+///
+/// `segments` and `units` are not members here: the kernel emits no segment or ledger event yet,
+/// and [`Selector::new`] refuses a request that names one rather than match nothing silently.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selector {
     /// Limit record changes to these object types. `None` means every object type.
+    #[serde(default)]
     pub objects: Option<BTreeSet<ObjectTypeId>>,
+    /// Limit events to these kinds (see [`EVENT_KINDS`]). `None` means every kind.
+    #[serde(default)]
+    pub kinds: Option<BTreeSet<String>>,
+    /// Limit to record updates that fired one of these named workflow transitions. `None` means
+    /// every event. A record update fired a transition when a workflow of its object type has a
+    /// transition of that name from the value the workflow's field had before to the value it has
+    /// after.
+    #[serde(default)]
+    pub transitions: Option<BTreeSet<String>>,
+}
+
+impl Selector {
+    /// The selector that matches every event.
+    pub fn all() -> Self {
+        Selector::default()
+    }
+
+    /// A selector from the members of a subscription request, or the reason it is refused: a
+    /// name that is not valid, a kind the kernel does not emit, or a member (`segments`, `units`)
+    /// whose events the kernel does not emit yet.
+    pub fn new(
+        objects: Option<Vec<String>>,
+        kinds: Option<Vec<String>>,
+        segments: Option<Vec<String>>,
+        units: Option<Vec<String>>,
+        transitions: Option<Vec<String>>,
+    ) -> Result<Selector, String> {
+        if segments.is_some() {
+            return Err(
+                "segments cannot be selected: no segment entry or exit event is emitted yet".into(),
+            );
+        }
+        if units.is_some() {
+            return Err(
+                "units cannot be selected: no ledger event of a unit is emitted yet".into(),
+            );
+        }
+        let objects = objects
+            .map(|names| {
+                names
+                    .into_iter()
+                    .map(ObjectTypeId::new)
+                    .collect::<Result<BTreeSet<_>, _>>()
+                    .map_err(|e| e.to_string())
+            })
+            .transpose()?;
+        let kinds = kinds
+            .map(|names| {
+                names
+                    .into_iter()
+                    .map(|name| {
+                        if EVENT_KINDS.contains(&name.as_str()) {
+                            Ok(name)
+                        } else {
+                            Err(format!(
+                                "the event kind {name:?} is not emitted; the kinds are {}",
+                                EVENT_KINDS.join(", ")
+                            ))
+                        }
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()
+            })
+            .transpose()?;
+        let transitions = transitions
+            .map(|names| {
+                names
+                    .into_iter()
+                    .map(|name| {
+                        if name.is_empty() || name.chars().count() > 96 {
+                            Err("a transition name is one to 96 characters".to_string())
+                        } else {
+                            Ok(name)
+                        }
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()
+            })
+            .transpose()?;
+        Ok(Selector {
+            objects,
+            kinds,
+            transitions,
+        })
+    }
+
+    /// Whether the selector lets this event through at all, before visibility is asked. Events
+    /// that name no record (schema and membership changes) are not limited by `objects`.
+    fn admits(&self, tenant: &TenantState, event: &DomainEvent) -> bool {
+        if let Some(kinds) = &self.kinds {
+            if !kinds.contains(kind_of(&event.body)) {
+                return false;
+            }
+        }
+        if let Some(wanted) = &self.transitions {
+            let EventBody::RecordUpdated { before, after } = &event.body else {
+                return false;
+            };
+            if !fired_transitions(tenant, before, after).any(|name| wanted.contains(name)) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// The names of the workflow transitions that connect the states a record's workflow fields had
+/// before and after an update, for every workflow of its object type.
+fn fired_transitions<'a>(
+    tenant: &'a TenantState,
+    before: &'a Record,
+    after: &'a Record,
+) -> impl Iterator<Item = &'a str> {
+    tenant
+        .schema
+        .workflows_of(&after.object)
+        .flat_map(move |workflow| {
+            let (from, to) = (before.get(&workflow.field), after.get(&workflow.field));
+            workflow
+                .transitions
+                .iter()
+                .filter(move |step| {
+                    from != to
+                        && from.as_str() == Some(step.from.as_str())
+                        && to.as_str() == Some(step.to.as_str())
+                })
+                .map(|step| step.name.as_str())
+        })
 }
 
 /// What a subscriber is told. It never carries record contents: the subscriber reads again
@@ -44,6 +202,9 @@ pub fn notice(
     event: &DomainEvent,
 ) -> Option<Notice> {
     if event.tenant != tenant.id {
+        return None;
+    }
+    if !selector.admits(tenant, event) {
         return None;
     }
     let wants = |object: &ObjectTypeId| {
@@ -128,7 +289,7 @@ mod tests {
     fn the_public_hears_nothing_about_a_draft_and_sees_a_withdrawal_as_a_removal() {
         let (world, events) = published_then_withdrawn();
         let tenant = &world.tenants[&tenant_id("alpha")];
-        let all = Selector { objects: None };
+        let all = Selector::all();
         let public: Vec<_> = events
             .iter()
             .map(|e| notice(tenant, &Principal::Anonymous, &all, e))
@@ -150,15 +311,190 @@ mod tests {
         let (world, events) = published_then_withdrawn();
         let people_only = Selector {
             objects: Some([object("person")].into()),
+            ..Selector::all()
         };
         let alpha = &world.tenants[&tenant_id("alpha")];
         assert!(events
             .iter()
             .all(|e| notice(alpha, &user("alpha:editor"), &people_only, e).is_none()));
         let beta = &world.tenants[&tenant_id("beta")];
-        let all = Selector { objects: None };
+        let all = Selector::all();
         assert!(events
             .iter()
             .all(|e| notice(beta, &user("beta:owner"), &all, e).is_none()));
+    }
+
+    fn only_kinds(kinds: &[&str]) -> Selector {
+        Selector {
+            kinds: Some(kinds.iter().map(|k| k.to_string()).collect()),
+            ..Selector::all()
+        }
+    }
+
+    fn only_transitions(names: &[&str]) -> Selector {
+        Selector {
+            transitions: Some(names.iter().map(|n| n.to_string()).collect()),
+            ..Selector::all()
+        }
+    }
+
+    /// Verifies: SCH-1575
+    #[test]
+    fn a_kind_selector_passes_only_events_of_those_kinds() {
+        let (world, events) = published_then_withdrawn();
+        let tenant = &world.tenants[&tenant_id("alpha")];
+        let writer = user("alpha:writer2");
+        assert_eq!(
+            kind_of(&events[0].body),
+            "record-created",
+            "the fixture's first event"
+        );
+        let told = |selector: &Selector| -> Vec<bool> {
+            events
+                .iter()
+                .map(|e| notice(tenant, &writer, selector, e).is_some())
+                .collect()
+        };
+        assert_eq!(told(&only_kinds(&["record-created"])), [true, false, false]);
+        assert_eq!(told(&only_kinds(&["record-updated"])), [false, true, true]);
+        assert_eq!(
+            told(&only_kinds(&["record-created", "record-updated"])),
+            [true, true, true],
+            "the values of one member are alternatives"
+        );
+        assert_eq!(
+            told(&only_kinds(&["record-deleted"])),
+            [false, false, false]
+        );
+        assert_eq!(told(&Selector::all()), [true, true, true]);
+    }
+
+    /// Verifies: SCH-1575
+    #[test]
+    fn a_transition_selector_passes_only_updates_that_fired_those_transitions() {
+        let (world, events) = published_then_withdrawn();
+        let tenant = &world.tenants[&tenant_id("alpha")];
+        let writer = user("alpha:writer2");
+        let told = |who: &Principal, selector: &Selector| -> Vec<bool> {
+            events
+                .iter()
+                .map(|e| notice(tenant, who, selector, e).is_some())
+                .collect()
+        };
+        // The creation fired no transition; the second event fired publish, the third unpublish.
+        assert_eq!(
+            told(&writer, &only_transitions(&["publish"])),
+            [false, true, false]
+        );
+        assert_eq!(
+            told(&writer, &only_transitions(&["unpublish"])),
+            [false, false, true]
+        );
+        assert_eq!(
+            told(&writer, &only_transitions(&["publish", "unpublish"])),
+            [false, true, true]
+        );
+        assert_eq!(
+            told(&writer, &only_transitions(&["no-such-transition"])),
+            [false, false, false]
+        );
+        // The members combine as AND: a creation is never an update that fired a transition.
+        let both = Selector {
+            kinds: Some(["record-created".to_string()].into()),
+            transitions: Some(["publish".to_string()].into()),
+            ..Selector::all()
+        };
+        assert_eq!(told(&writer, &both), [false, false, false]);
+    }
+
+    /// Verifies: SCH-1575
+    ///
+    /// A selector narrows and never widens: what the kernel's read decision hides from a
+    /// subscriber stays hidden whatever the selector names.
+    #[test]
+    fn a_selector_never_widens_what_the_kernel_lets_a_subscriber_read() {
+        let (world, events) = published_then_withdrawn();
+        let tenant = &world.tenants[&tenant_id("alpha")];
+        let everything = Selector {
+            objects: Some([object("note")].into()),
+            kinds: Some(
+                ["record-created", "record-updated"]
+                    .map(str::to_string)
+                    .into(),
+            ),
+            transitions: None,
+        };
+        // The public never reads the draft: no notice of its creation, and the withdrawal is a
+        // removal, as without a selector.
+        assert_eq!(
+            notice(tenant, &Principal::Anonymous, &everything, &events[0]),
+            None
+        );
+        assert!(matches!(
+            notice(tenant, &Principal::Anonymous, &everything, &events[2]),
+            Some(Notice::Remove { .. })
+        ));
+        // A transition selector for the creation's state change still shows the public nothing
+        // of the draft, and shows a withdrawal only as the removal the kernel allows.
+        let withdrawn = only_transitions(&["unpublish"]);
+        assert_eq!(
+            notice(tenant, &Principal::Anonymous, &withdrawn, &events[0]),
+            None
+        );
+        assert_eq!(
+            notice(tenant, &Principal::Anonymous, &withdrawn, &events[1]),
+            None
+        );
+        assert!(matches!(
+            notice(tenant, &Principal::Anonymous, &withdrawn, &events[2]),
+            Some(Notice::Remove { .. })
+        ));
+        let published = only_transitions(&["publish"]);
+        assert!(matches!(
+            notice(tenant, &Principal::Anonymous, &published, &events[1]),
+            Some(Notice::Upsert { version: 2, .. })
+        ));
+    }
+
+    /// Verifies: SCH-1575
+    #[test]
+    fn a_request_is_refused_for_what_nothing_emits_and_for_names_that_are_not_valid() {
+        let names = |list: &[&str]| Some(list.iter().map(|n| n.to_string()).collect::<Vec<_>>());
+        assert_eq!(
+            Selector::new(None, None, None, None, None),
+            Ok(Selector::all())
+        );
+        let accepted = Selector::new(
+            names(&["note"]),
+            names(&["record-updated"]),
+            None,
+            None,
+            names(&["publish"]),
+        )
+        .unwrap();
+        assert_eq!(accepted.objects, Some([object("note")].into()));
+        assert_eq!(accepted.kinds, Some(["record-updated".to_string()].into()));
+        assert_eq!(accepted.transitions, Some(["publish".to_string()].into()));
+
+        let segments = Selector::new(
+            None,
+            None,
+            names(&["0b1a6a7e-0000-4000-8000-000000000001"]),
+            None,
+            None,
+        );
+        assert!(
+            segments.unwrap_err().contains("segments"),
+            "segments are refused"
+        );
+        let units = Selector::new(None, None, None, names(&["eur"]), None);
+        assert!(units.unwrap_err().contains("units"), "units are refused");
+        // Naming nothing is still naming the member: it would match nothing, so it is refused.
+        assert!(Selector::new(None, None, Some(vec![]), None, None).is_err());
+        assert!(Selector::new(None, None, None, Some(vec![]), None).is_err());
+        let unknown = Selector::new(None, names(&["record-create"]), None, None, None);
+        assert!(unknown.unwrap_err().contains("not emitted"));
+        assert!(Selector::new(None, None, None, None, names(&[""])).is_err());
+        assert!(Selector::new(names(&["Not An Object"]), None, None, None, None).is_err());
     }
 }

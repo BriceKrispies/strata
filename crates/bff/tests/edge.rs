@@ -2064,3 +2064,199 @@ async fn forwarded_headers_without_trusted_proxies_are_refused_outside_developme
     let development = start().await;
     assert_eq!(development.send(forwarded(&development)).await.0, 200);
 }
+
+/// Verifies: SCH-1575
+///
+/// A subscription that names event kinds is told only about events of those kinds, a selector
+/// that names segments or units is refused rather than matching nothing, and the kinds of the
+/// selector never widen what the person may read.
+#[tokio::test]
+async fn a_socket_selects_events_by_kind_and_refuses_what_nothing_emits() {
+    let edge = start().await;
+    let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (mut socket, _) = connect(
+        &edge,
+        Some(edge.origin("127.0.0.1")),
+        Some(token.as_str()),
+        Some(csrf.as_str()),
+    )
+    .await
+    .unwrap();
+    async fn next(
+        socket: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+                  + Unpin),
+    ) -> Json {
+        loop {
+            let frame = tokio::time::timeout(Duration::from_secs(5), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            if let Message::Text(text) = frame {
+                return serde_json::from_str(&text).unwrap();
+            }
+        }
+    }
+    assert_eq!(next(&mut socket).await["type"], "welcome");
+
+    // Refused: the events of segments and units are not emitted, and a kind that is not one.
+    for (req, member) in [
+        (
+            "seg",
+            json!({ "segments": ["0b1a6a7e-0000-4000-8000-000000000001"] }),
+        ),
+        ("unit", json!({ "units": ["eur"] })),
+        ("kind", json!({ "kinds": ["record-create"] })),
+    ] {
+        let mut frame = json!({ "type": "subscribe", "req": req, "sub": req });
+        frame
+            .as_object_mut()
+            .unwrap()
+            .extend(member.as_object().unwrap().clone());
+        socket.send(Message::Text(frame.to_string())).await.unwrap();
+        let reply = next(&mut socket).await;
+        assert_eq!(
+            (
+                reply["type"].as_str(),
+                reply["code"].as_str(),
+                reply["req"].as_str()
+            ),
+            (Some("error"), Some("invalid"), Some(req)),
+            "{reply}"
+        );
+    }
+
+    // Two subscriptions: one for deletions, one for creations.
+    for (name, kind) in [("deleted", "record-deleted"), ("created", "record-created")] {
+        socket
+            .send(Message::Text(
+                json!({ "type": "subscribe", "req": name, "sub": name, "kinds": [kind] })
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            next(&mut socket).await,
+            json!({ "type": "ok", "req": name })
+        );
+    }
+    let as_ines = |body: Json| {
+        edge.post("127.0.0.1", "/api/records", body)
+            .header("cookie", format!("{SESSION_COOKIE}={token}"))
+            .header("x-csrf-token", &csrf)
+    };
+    let (status, created, _) = edge
+        .send(as_ines(json!({ "op": "create", "object": "category", "fields": { "name": "Kinds", "slug": "kinds" } })))
+        .await;
+    assert_eq!(status, 200, "{created}");
+    let told = next(&mut socket).await;
+    assert_eq!(
+        (told["sub"].as_str(), told["notice"]["kind"].as_str()),
+        (Some("created"), Some("upsert")),
+        "the creation reaches the creation subscription only: {told}"
+    );
+    let (status, deleted, _) = edge
+        .send(as_ines(
+            json!({ "op": "delete", "object": "category", "id": created["id"] }),
+        ))
+        .await;
+    assert_eq!(status, 200, "{deleted}");
+    let told = next(&mut socket).await;
+    assert_eq!(
+        (told["sub"].as_str(), told["notice"]["kind"].as_str()),
+        (Some("deleted"), Some("remove")),
+        "the deletion reaches the deletion subscription only: {told}"
+    );
+}
+
+/// Verifies: ADM-1083
+///
+/// The owner withdraws an invitation through `POST /api/members/revoke-invitation`, behind the
+/// origin and request-token checks, and the person it named cannot redeem it afterwards.
+#[tokio::test]
+async fn an_invitation_is_revoked_through_the_gateway_and_cannot_be_redeemed() {
+    let edge = start().await;
+    let (owner, owner_csrf) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
+    let ours = edge.origin("127.0.0.1");
+    let as_owner = |op: &str, body: Json| {
+        edge.post("127.0.0.1", &format!("/api/members/{op}"), body)
+            .header("cookie", format!("{SESSION_COOKIE}={owner}"))
+            .header("x-csrf-token", &owner_csrf)
+    };
+    let (status, invited, _) = edge
+        .send(as_owner(
+            "invite",
+            json!({ "invitation": "inv-gateway", "address": "tomasz@fieldnotes.example", "roles": ["editor"] }),
+        ))
+        .await;
+    assert_eq!(status, 200, "{invited}");
+
+    // The write guard comes first: no token, a wrong token and a foreign origin change nothing.
+    let unguarded = |csrf: Option<&str>, origin: &str| {
+        let mut request = edge
+            .http
+            .post(format!("{ours}/api/members/revoke-invitation"))
+            .header("cookie", format!("{SESSION_COOKIE}={owner}"))
+            .header("origin", origin)
+            .json(&json!({ "invitation": "inv-gateway" }));
+        if let Some(csrf) = csrf {
+            request = request.header("x-csrf-token", csrf);
+        }
+        request
+    };
+    assert_eq!(edge.send(unguarded(None, &ours)).await.0, 403, "no token");
+    assert_eq!(
+        edge.send(unguarded(Some("0000"), &ours)).await.0,
+        403,
+        "wrong token"
+    );
+    assert_eq!(
+        edge.send(unguarded(Some(&owner_csrf), "http://evil.example"))
+            .await
+            .0,
+        403,
+        "foreign origin"
+    );
+
+    // A body that does not name the invitation is refused, and so is an unknown operation.
+    let (status, _, _) = edge.send(as_owner("revoke-invitation", json!({}))).await;
+    assert_eq!(status, 422);
+    let (status, _, _) = edge
+        .send(as_owner(
+            "revoke-everything",
+            json!({ "invitation": "inv-gateway" }),
+        ))
+        .await;
+    assert_eq!(status, 404);
+
+    let (status, revoked, _) = edge
+        .send(as_owner(
+            "revoke-invitation",
+            json!({ "invitation": "inv-gateway" }),
+        ))
+        .await;
+    assert_eq!(status, 200, "{revoked}");
+    assert!(revoked["revision"].as_u64().is_some(), "{revoked}");
+    let (status, again, _) = edge
+        .send(as_owner(
+            "revoke-invitation",
+            json!({ "invitation": "inv-gateway" }),
+        ))
+        .await;
+    assert_eq!(status, 422, "a second revocation: {again}");
+
+    // The person the invitation named signs in and cannot redeem it.
+    let (guest, guest_csrf) = edge.login("127.0.0.1", "tomasz", "strata-dev-tomasz").await;
+    let (status, refused, _) = edge
+        .send(
+            edge.post(
+                "127.0.0.1",
+                "/api/members/redeem",
+                json!({ "invitation": "inv-gateway" }),
+            )
+            .header("cookie", format!("{SESSION_COOKIE}={guest}"))
+            .header("x-csrf-token", &guest_csrf),
+        )
+        .await;
+    assert_eq!(status, 422, "{refused}");
+}

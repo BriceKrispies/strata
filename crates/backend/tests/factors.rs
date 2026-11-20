@@ -1135,3 +1135,84 @@ async fn an_address_proved_by_an_emailed_link_redeems_an_invitation() {
         .await;
     assert_eq!(status, 200, "{redeemed}");
 }
+
+/// Verifies: ADM-1083
+///
+/// An owner withdraws an invitation through the members route, and what was withdrawn is not
+/// redeemed. The revocation is of one invitation only, it is refused twice and after a
+/// redemption, and it needs a session.
+#[tokio::test]
+async fn an_owner_revokes_an_invitation_and_it_can_no_longer_be_redeemed() {
+    let backend = start().await;
+    let address = "tomasz@fieldnotes.example";
+    let owner = backend.session_of("admin").await;
+    for id in ["inv-withdrawn", "inv-kept"] {
+        let (status, invited) = backend
+            .call(
+                Some(&owner),
+                "/internal/members",
+                json!({ "op": "invite", "invitation": id, "address": address, "roles": ["editor"] }),
+            )
+            .await;
+        assert_eq!(status, 200, "{invited}");
+    }
+
+    let (status, revoked) = backend
+        .call(
+            Some(&owner),
+            "/internal/members",
+            json!({ "op": "revoke_invitation", "invitation": "inv-withdrawn" }),
+        )
+        .await;
+    assert_eq!(status, 200, "{revoked}");
+    assert!(revoked["revision"].as_u64().unwrap() > 0);
+
+    // Revoking again, and revoking what does not exist, change nothing and are refused.
+    for id in ["inv-withdrawn", "inv-unknown"] {
+        let (status, again) = backend
+            .call(
+                Some(&owner),
+                "/internal/members",
+                json!({ "op": "revoke_invitation", "invitation": id }),
+            )
+            .await;
+        assert_eq!(status, 422, "{id}: {again}");
+    }
+
+    // The person the invitation named cannot redeem the revoked one, and can the other.
+    let guest = backend.session_of("tomasz").await;
+    let (status, refused) = backend
+        .call(
+            Some(&guest),
+            "/internal/members",
+            json!({ "op": "redeem", "invitation": "inv-withdrawn" }),
+        )
+        .await;
+    assert_eq!(status, 422, "{refused}");
+    let (status, redeemed) = backend
+        .call(
+            Some(&guest),
+            "/internal/members",
+            json!({ "op": "redeem", "invitation": "inv-kept" }),
+        )
+        .await;
+    assert_eq!(status, 200, "{redeemed}");
+
+    // A redeemed invitation cannot be withdrawn, and nobody without a session withdraws one.
+    let (status, late) = backend
+        .call(
+            Some(&owner),
+            "/internal/members",
+            json!({ "op": "revoke_invitation", "invitation": "inv-kept" }),
+        )
+        .await;
+    assert_eq!(status, 422, "{late}");
+    let (status, anonymous) = backend
+        .call(
+            None,
+            "/internal/members",
+            json!({ "op": "revoke_invitation", "invitation": "inv-withdrawn" }),
+        )
+        .await;
+    assert_ne!(status, 200, "{anonymous}");
+}

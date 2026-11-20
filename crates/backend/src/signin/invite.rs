@@ -172,6 +172,10 @@ pub fn accept(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiError>
     let Some(account) = app.store.account_of(&caller.site, &principal)? else {
         return Err(not_accepted());
     };
+    // A deactivated person's account is kept but does not work: no password is chosen for it.
+    if crate::service::is_disabled(app, &caller.site, &principal)? {
+        return Err(not_accepted());
+    }
     app.store.put_account(&Account {
         password_hash: hash_password(password)?,
         ..account.clone()
