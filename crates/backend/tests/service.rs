@@ -1886,7 +1886,9 @@ const WRONG: &str = "not-the-password";
 /// every one of them would pass the check of a count that is still low and be verified.
 #[tokio::test]
 async fn attempts_that_arrive_together_cannot_all_pass_the_count() {
-    let backend = Arc::new(start().await);
+    // The tenant's share of hashing places is as large as the crowd, so that only the throttle's
+    // count decides how many are checked (the share refuses at once and would hide it).
+    let backend = Arc::new(start_with(|cfg| cfg.limits.argon2_per_tenant = 40).await);
     let mut calls = Vec::new();
     for _ in 0..40 {
         let backend = backend.clone();
@@ -2859,11 +2861,15 @@ async fn a_registered_passkey_signs_its_owner_in() {
             json!({}),
         )
         .await;
-    assert!(platform["audit"].as_array().unwrap().iter().any(|entry| {
-        entry["event"] == "auth.decision"
-            && entry["method"] == "passkey"
-            && entry["outcome"] == "accepted"
-    }));
+    assert!(platform["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| {
+            entry["event"] == "auth.decision"
+                && entry["method"] == "passkey"
+                && entry["outcome"] == "accepted"
+        }));
 }
 
 /// Verifies: IDN-007
@@ -3405,12 +3411,16 @@ async fn link_first_use_in_the_requesting_browser_signs_in() {
             json!({}),
         )
         .await;
-    assert!(platform["audit"].as_array().unwrap().iter().any(|entry| {
-        entry["event"] == "auth.decision"
-            && entry["method"] == "link"
-            && entry["outcome"] == "accepted"
-    }));
-    let trail = platform["audit"].to_string();
+    assert!(platform["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| {
+            entry["event"] == "auth.decision"
+                && entry["method"] == "link"
+                && entry["outcome"] == "accepted"
+        }));
+    let trail = format!("{} {}", platform["audit"], platform["decisions"]);
     for secret in [&link.token, &link.challenge, &binding] {
         assert!(
             !trail.contains(secret.as_str()),

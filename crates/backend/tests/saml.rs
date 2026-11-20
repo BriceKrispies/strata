@@ -277,7 +277,15 @@ impl Backend {
                 json!({}),
             )
             .await;
-        platform["audit"].clone()
+        // Security events and authentication decisions are kept in separate rings.
+        let mut entries = platform["audit"].as_array().cloned().unwrap_or_default();
+        entries.extend(
+            platform["decisions"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default(),
+        );
+        Json::Array(entries)
     }
 }
 

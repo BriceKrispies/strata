@@ -131,10 +131,16 @@ pub fn accept(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiError>
     if !well_formed(id) || !well_formed(token) {
         return Err(not_accepted());
     }
-    if password.len() < PASSWORD_MIN || password.len() > PASSWORD_MAX {
+    if password.len() < PASSWORD_MIN {
         return Err(ApiError::new(
             ErrorCode::Invalid,
             format!("Choose a password of at least {PASSWORD_MIN} characters."),
+        ));
+    }
+    if password.len() > PASSWORD_MAX {
+        return Err(ApiError::new(
+            ErrorCode::Invalid,
+            format!("Choose a password of at most {PASSWORD_MAX} characters."),
         ));
     }
     let rules = rules(app, "invite-accept", id, &caller.source);

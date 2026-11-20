@@ -186,10 +186,16 @@ pub fn complete(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiErro
     if !well_formed(id) || !well_formed(token) {
         return Err(not_accepted());
     }
-    if password.len() < PASSWORD_MIN || password.len() > PASSWORD_MAX {
+    if password.len() < PASSWORD_MIN {
         return Err(ApiError::new(
             ErrorCode::Invalid,
             format!("Choose a password of at least {PASSWORD_MIN} characters."),
+        ));
+    }
+    if password.len() > PASSWORD_MAX {
+        return Err(ApiError::new(
+            ErrorCode::Invalid,
+            format!("Choose a password of at most {PASSWORD_MAX} characters."),
         ));
     }
     let rules = rules(app, "recovery-complete", id, &caller.source);
@@ -209,6 +215,12 @@ pub fn complete(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiErro
     let now = app.now();
     if now < held.completes_at {
         // Right, and too early: nothing is consumed, and the contacts still have their time.
+        // The token was checked right, so this is no guess: the attempt is given back, or the
+        // holder of the link who retries while waiting would lock the recovery they asked for.
+        for rule in &rules {
+            app.store
+                .throttle_settle(&caller.site, &rule.key, rule.max, ThrottleSettle::Refund)?;
+        }
         app.decision(
             &caller.site,
             "recovery",

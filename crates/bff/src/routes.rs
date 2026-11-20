@@ -1378,12 +1378,20 @@ struct PreviewRequest {
 async fn preview(
     State(bff): State<Shared>,
     headers: HeaderMap,
-    Json(request): Json<PreviewRequest>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     // The contract says a signed-in principal: our origin, the session's request token and a live
-    // session, so a visitor with no session cannot make this process parse text.
+    // session, so a visitor with no session cannot make this process parse text. The guard comes
+    // before the body is read, so a request without a token is refused whatever it carries.
     guard_write(&bff, &visit, &headers).await?;
+    let request: PreviewRequest = serde_json::from_slice(&body).map_err(|_| {
+        Failure::new(
+            ErrorCode::Invalid,
+            "The request needs the text to preview.",
+            &visit.correlation,
+        )
+    })?;
     if request.markdown.len() > strata_substrate::markdown::MAX_SOURCE_BYTES {
         return Err(Failure::new(
             ErrorCode::Invalid,
