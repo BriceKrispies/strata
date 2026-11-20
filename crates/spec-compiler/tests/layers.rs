@@ -138,6 +138,64 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
         &["no \"product\" header", "add it"],
     ),
     (
+        "role-platform-level",
+        layers::PLATFORM_POWER,
+        &["has level \"platform\"", "set level to \"tenant\""],
+    ),
+    (
+        "role-anonymous-holder",
+        layers::PLATFORM_POWER,
+        &["lets \"anonymous\" hold it", "remove the holder"],
+    ),
+    (
+        "role-service-holder",
+        layers::PLATFORM_POWER,
+        &["lets \"service\" hold it", "remove the holder"],
+    ),
+    (
+        "contract-public-anonymous",
+        layers::PLATFORM_POWER,
+        &["public with the anonymous scheme", "scheme \"session\""],
+    ),
+    (
+        "contract-platform-implemented",
+        layers::PLATFORM_POWER,
+        &["platform component \"kernel\"", "remove implementedBy"],
+    ),
+    (
+        "contract-realisation",
+        layers::PLATFORM_POWER,
+        &["realisation \"hand\"", "only the platform puts code"],
+    ),
+    (
+        "behavior-implementation-level",
+        layers::PLATFORM_POWER,
+        &["level \"implementation\"", "workflow model"],
+    ),
+    (
+        "event-domain",
+        layers::PLATFORM_POWER,
+        &["is a domain event", "remove \"domain\""],
+    ),
+    (
+        "entity-id-invalid",
+        layers::ENTITY_ID_INVALID,
+        &["\"BadgesTier\"", "id pattern"],
+    ),
+    (
+        "entity-id-missing",
+        layers::ENTITY_ID_MISSING,
+        &["has no \"id\"", "add it"],
+    ),
+    (
+        "import-missing-reference",
+        layers::IMPORT_MISSING,
+        &[
+            "\"kernel\"",
+            "without importing it",
+        ],
+    ),
+    (
         "import-mismatch",
         layers::IMPORT_MISMATCH,
         &[
@@ -196,6 +254,162 @@ fn two_products_declaring_one_id_are_refused() {
     assert!(diagnostics
         .iter()
         .any(|d| d.code == layers::REDEFINES_ENTITY && d.message.contains("already declares it")));
+}
+
+#[test]
+fn a_reference_key_requires_an_import_for_each_platform_entity() {
+    let diagnostics = load_with(&[product("refused/import-missing-reference.jsonc")]).unwrap_err();
+    let missing: Vec<&str> = diagnostics
+        .iter()
+        .filter(|d| d.code == layers::IMPORT_MISSING)
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(missing.len(), 3, "{missing:?}");
+    assert!(missing
+        .iter()
+        .any(|m| m.contains("\"export-tenant\"") && m.contains("at contract")));
+    assert!(missing
+        .iter()
+        .any(|m| m.contains("\"kernel\"") && m.contains("at owner")));
+    assert!(missing
+        .iter()
+        .any(|m| m.contains("\"kernel\"") && m.contains("at subject")));
+}
+
+#[test]
+fn two_product_files_with_one_product_id_are_refused() {
+    let diagnostics = load_with(&[
+        product("badges.jsonc"),
+        product("refused/duplicate-product-id.jsonc"),
+    ])
+    .unwrap_err();
+    let found = diagnostics
+        .iter()
+        .find(|d| d.code == layers::PRODUCT_ID_DUPLICATE)
+        .unwrap_or_else(|| panic!("no {} in {diagnostics:?}", layers::PRODUCT_ID_DUPLICATE));
+    assert!(found.message.contains("\"badges\""));
+    assert!(found.message.contains("badges.jsonc already has"));
+    assert!(diagnostics.iter().all(|d| d.code.starts_with("layer.")));
+}
+
+#[test]
+fn an_external_holder_is_a_platform_power() {
+    let text = r#"{ "product": { "id": "badges", "name": "Badges", "imports": { "spec": "x.jsonc", "entities": [] } },
+        "roles": [ { "id": "badges-hook", "name": "Hook", "level": "tenant", "holders": ["external"], "capabilities": [] } ] }"#;
+    let file = ProductFile {
+        path: "inline.jsonc".to_string(),
+        text: text.to_string(),
+        file: None,
+    };
+    let diagnostics = load_with(&[file]).unwrap_err();
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.code == layers::PLATFORM_POWER && d.message.contains("\"external\"")));
+}
+
+#[test]
+fn a_platform_entity_that_names_a_product_entity_is_refused() {
+    let platform = platform_text();
+    let marker = "\"id\": \"content-read\",";
+    assert!(platform.contains(marker));
+    let edited = platform.replacen(
+        marker,
+        "\"id\": \"content-read\", \"contract\": \"badges-tier\",",
+        1,
+    );
+    let diagnostics = layers::load_layered(
+        PLATFORM,
+        &edited,
+        Some(&root().join(PLATFORM)),
+        &[product("badges.jsonc")],
+    )
+    .unwrap_err();
+    let found = diagnostics
+        .iter()
+        .find(|d| d.code == layers::PLATFORM_REFERENCES_PRODUCT)
+        .unwrap_or_else(|| {
+            panic!(
+                "no {} in {diagnostics:?}",
+                layers::PLATFORM_REFERENCES_PRODUCT
+            )
+        });
+    assert!(found.message.contains("\"content-read\""));
+    assert!(found.message.contains("\"badges-tier\""));
+    assert!(found.message.contains("badges.jsonc"));
+    // The unedited platform with the same product is accepted.
+    assert!(load_with(&[product("badges.jsonc")]).is_ok());
+}
+
+/// The reference-property names of Exegra's meta-model: every property of type `ref`, in a list
+/// of refs, or inside an object's fields or a map's values.
+fn metamodel_reference_keys(model: &Value) -> std::collections::BTreeSet<String> {
+    fn walk(name: &str, prop: &Value, out: &mut std::collections::BTreeSet<String>) {
+        if prop["type"] == "ref" {
+            out.insert(name.to_string());
+        }
+        if prop["items"].is_object() {
+            walk(name, &prop["items"], out);
+        }
+        if prop["type"] == "map" && prop["values"].is_object() {
+            walk(name, &prop["values"], out);
+        }
+        if let Some(fields) = prop["fields"].as_object() {
+            for (k, v) in fields {
+                walk(k, v, out);
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for entity in model["entities"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(_, v)| v)
+    {
+        for (k, v) in entity["properties"].as_object().into_iter().flatten() {
+            walk(k, v, &mut out);
+        }
+    }
+    out
+}
+
+#[test]
+fn the_reference_keys_are_the_reference_properties_of_the_meta_model() {
+    let Some(cli) = support::exegra_cli("the reference key comparison") else {
+        return;
+    };
+    let path = cli
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("src/core/metamodel.json");
+    let model: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let in_model = metamodel_reference_keys(&model);
+    let mut ours: std::collections::BTreeSet<String> = layers::REFERENCE_KEYS
+        .iter()
+        .map(|(k, _)| k.to_string())
+        .collect();
+    for key in layers::UNCHECKED_REFERENCE_KEYS {
+        assert!(
+            ours.insert(key.to_string()),
+            "{key} is both a reference key and unchecked"
+        );
+    }
+    assert_eq!(
+        ours, in_model,
+        "REFERENCE_KEYS and UNCHECKED_REFERENCE_KEYS must name exactly the reference properties of {}",
+        path.display()
+    );
+    let sections = model["sections"].as_object().unwrap();
+    for (key, listed) in layers::REFERENCE_KEYS {
+        for section in *listed {
+            assert!(
+                sections.contains_key(*section) || *section == "ports",
+                "{key} lists {section}, which is not a section of the meta-model"
+            );
+        }
+    }
 }
 
 // ---- generated files ----------------------------------------------------------------------

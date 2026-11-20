@@ -1,0 +1,5 @@
+{
+  // Refused: an entity with no id (layer.entity-id-missing).
+  "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "types": [ { "name": "Badge tier", "kind": "enum", "values": ["bronze"] } ]
+}

@@ -25,10 +25,20 @@
 //! - `layer.import-unknown`: an imported id the platform does not declare;
 //! - `layer.import-missing`: a platform type named in a type text (`type`, `repr`) or a platform
 //!   capability in a `capabilities` or `requires` list that is not imported;
-//! - `layer.redefines-entity`: an id the platform, or another product file, already declares.
+//! - `layer.redefines-entity`: an id the platform, or another product file, already declares;
+//! - `layer.product-id-duplicate`: two product files with one `product.id`;
+//! - `layer.entity-id-invalid`, `layer.entity-id-missing`: a product entity whose id fails the id
+//!   pattern, or an item with no id;
+//! - `layer.platform-power`: a product entity that claims what only the platform may have (a
+//!   platform-level role, an anonymous, service or external holder, a public anonymous contract, a
+//!   contract implemented by a platform component or realised in code, an implementation-level
+//!   behavior, a domain, timer or delivery-guaranteed event);
+//! - `layer.platform-references-product`: a platform entity that names a product entity.
 //!
-//! References between entities are typed by Exegra's meta-model, which specc does not have; Exegra
-//! checks them (`layer.import-missing` for a reference, `layer.reference-unknown`,
+//! References between entities are typed by Exegra's meta-model. specc does not have it, so it
+//! reads the keys that hold references ([`REFERENCE_KEYS`], checked against the meta-model by
+//! `tests/layers.rs`) and requires an import for a platform entity named under one; Exegra checks
+//! the typed references themselves (`layer.reference-unknown`,
 //! `layer.cross-product-reference`). Nothing is generated from a product: its entities are tenant
 //! metadata, installed into a tenant as a bundle, not code of the kernel.
 
@@ -82,6 +92,114 @@ pub const IMPORT_MISSING: &str = "layer.import-missing";
 pub const REDEFINES_ENTITY: &str = "layer.redefines-entity";
 /// The code of a product file that is not JSONC.
 pub const SYNTAX: &str = "layer.syntax";
+/// Two product files with one `product.id`.
+pub const PRODUCT_ID_DUPLICATE: &str = "layer.product-id-duplicate";
+/// A product entity whose id fails the id pattern.
+pub const ENTITY_ID_INVALID: &str = "layer.entity-id-invalid";
+/// A product section item with no id (or not an object).
+pub const ENTITY_ID_MISSING: &str = "layer.entity-id-missing";
+/// A product entity that claims what only the platform may have.
+pub const PLATFORM_POWER: &str = "layer.platform-power";
+/// A platform entity that names a product entity.
+pub const PLATFORM_REFERENCES_PRODUCT: &str = "layer.platform-references-product";
+
+/// Stands for "any section": a key listing it accepts any platform entity.
+const ANY: &[&str] = &[];
+
+/// Keys that hold a reference to another entity (a string, or a list of strings), with the
+/// platform sections the referenced entity may be declared in (empty: any). They are the names of
+/// the reference properties of Exegra's meta-model (`src/core/metamodel.json`); `tests/layers.rs`
+/// compares them with it. A platform entity named under one of them must be imported.
+pub const REFERENCE_KEYS: &[(&str, &[&str])] = &[
+    ("component", &["components"]),
+    ("parent", &["components"]),
+    ("trusts", &["assumptions"]),
+    ("contract", &["contracts"]),
+    (
+        "from",
+        &[
+            "components",
+            "ports",
+            "roles",
+            "tokenScopes",
+            "delegations",
+            "grants",
+        ],
+    ),
+    ("to", &["components", "ports"]),
+    ("load", &["contracts"]),
+    ("commit", &["contracts"]),
+    ("implementedBy", &["components"]),
+    ("subject", &["components"]),
+    ("record", &["records"]),
+    ("createdBy", &["contracts"]),
+    ("refines", &["behaviors"]),
+    ("event", &["events"]),
+    ("resource", &["resources", "records"]),
+    ("behavior", &["behaviors"]),
+    ("target", &["components", "relationships", "environments"]),
+    ("environment", &["environments"]),
+    ("modes", &["failureModes"]),
+    ("reply", &["events"]),
+    ("behaviors", &["behaviors"]),
+    ("faults", &["faults"]),
+    ("faultModel", &["faultModels"]),
+    ("workloads", &["workloads"]),
+    ("realises", &["failureModes"]),
+    ("owner", &["components"]),
+    ("refersTo", &["records"]),
+    ("describedBy", &["types"]),
+    ("of", &["records"]),
+    ("heldBy", &["components"]),
+    ("until", &["events"]),
+    ("archiveTo", &["components"]),
+    ("issuer", &["roles"]),
+    ("grantee", &["roles"]),
+    ("viewModel", &["contracts"]),
+    ("screen", &["screens"]),
+    ("form", &["forms"]),
+    ("appliesTo", &["forms", "actions"]),
+    ("verifies", &["claims"]),
+    ("subjects", ANY),
+    ("assumptions", &["assumptions"]),
+    (
+        "realisedBy",
+        &[
+            "policies",
+            "validations",
+            "retentions",
+            "quotas",
+            "retries",
+            "audits",
+        ],
+    ),
+    ("claim", &["claims"]),
+    ("within", &["components"]),
+];
+
+/// Reference properties of the meta-model that [`REFERENCE_KEYS`] leaves out, because the same key
+/// also holds plain text or an id local to one entity: `type` is a type text (read as one),
+/// `values`, `errors` and `ast` hold literals, `source` and `basis` accept anything, and `initial`,
+/// `on`, `ignores` and `transition` name states and transitions inside one behavior.
+pub const UNCHECKED_REFERENCE_KEYS: &[&str] = &[
+    "type",
+    "values",
+    "errors",
+    "ast",
+    "source",
+    "basis",
+    "initial",
+    "on",
+    "ignores",
+    "transition",
+];
+
+/// Holders only a platform role may have.
+const PLATFORM_HOLDERS: &[&str] = &["anonymous", "service", "external"];
+
+/// Realisations that put server code behind a contract; only the platform declares those (a
+/// `facade` has none).
+const PLATFORM_REALISATIONS: &[&str] = &["generated", "hand", "derived"];
 
 /// Sections of the specification format that are the platform's alone, with the reason a
 /// product may not declare them.
@@ -206,24 +324,31 @@ pub fn load_layered(
 ) -> Result<Layered, Vec<Diagnostic>> {
     let loaded = load::load(platform_path, platform_text);
     let mut diagnostics = Vec::new();
-    let platform_ids = match jsonc::parse(platform_text) {
-        Ok(value) => declared_ids(&value),
+    let platform_value = jsonc::parse(platform_text).ok();
+    let platform_ids = match &platform_value {
+        Some(value) => declared_ids(value),
         // load::load has reported the syntax error.
-        Err(_) => BTreeMap::new(),
+        None => BTreeMap::new(),
     };
     let mut layers = Vec::new();
     // Ids the products declare, with the file that declares each, to find a second declaration.
     let mut product_ids: BTreeMap<String, String> = BTreeMap::new();
+    // `product.id` of each product file, with the file, to find a second file with the same id.
+    let mut header_ids: BTreeMap<String, String> = BTreeMap::new();
     for product in products {
         if let Some(layer) = check_product(
             product,
             &platform_ids,
             platform_file,
             &mut product_ids,
+            &mut header_ids,
             &mut diagnostics,
         ) {
             layers.push(layer);
         }
+    }
+    if let Some(value) = &platform_value {
+        check_platform_independent(value, &product_ids, &mut diagnostics);
     }
     match loaded {
         Ok(platform) if diagnostics.is_empty() => Ok(Layered {
@@ -278,6 +403,7 @@ fn check_product(
     platform_ids: &BTreeMap<String, String>,
     platform_file: Option<&Path>,
     product_ids: &mut BTreeMap<String, String>,
+    header_ids: &mut BTreeMap<String, String>,
     out: &mut Vec<Diagnostic>,
 ) -> Option<ProductLayer> {
     let file = product.path.replace('\\', "/");
@@ -325,6 +451,18 @@ fn check_product(
         .as_ref()
         .map(|(_, _, imports)| imports.clone())
         .unwrap_or_default();
+    if let Some((product_id, _, _)) = &parsed {
+        match header_ids.get(product_id) {
+            Some(other) => out.push(Diagnostic::new(
+                PRODUCT_ID_DUPLICATE,
+                product_id,
+                format!("{file} has product id \"{product_id}\", which product file {other} already has. A product is one file; give this one a product id of its own, or merge the two files."),
+            )),
+            None => {
+                header_ids.insert(product_id.clone(), file.clone());
+            }
+        }
+    }
 
     // Every key that is neither the header nor a product section is refused.
     let mut entities = Vec::new();
@@ -375,9 +513,21 @@ fn check_product(
         };
         for item in items {
             let Some(id) = item.get("id").and_then(Value::as_str) else {
-                // An entity without an id is Exegra's to report (id.missing).
+                out.push(Diagnostic::new(
+                    ENTITY_ID_MISSING,
+                    &file,
+                    format!("An item of \"{section}\" in {file} has no \"id\" (or is not an object): {item}. Every entity is an object with an \"id\" of lower-case words joined by hyphens; add it, or remove the item."),
+                ));
                 continue;
             };
+            if !is_id(id) {
+                out.push(Diagnostic::new(
+                    ENTITY_ID_INVALID,
+                    id,
+                    format!("The id \"{id}\" of an entity in \"{section}\" of {file} does not match the id pattern ^[a-z][a-z0-9_]*(-[a-z0-9_]+)*$; write it as lower-case words joined by hyphens, prefixed with the product id."),
+                ));
+            }
+            check_power(&file, section, id, item, platform_ids, out);
             let mut ids = BTreeMap::new();
             collect_ids(section, item, &mut ids);
             for (declared, in_section) in &ids {
@@ -525,8 +675,18 @@ fn check_header(
     Some((id?.to_string(), name?.to_string(), ids))
 }
 
-/// Refuses the platform types (named in `type` and `repr` texts) and capabilities (in
-/// `capabilities` and `requires` lists) an entity uses without importing them, once each.
+/// The sections of the types a type text names.
+const TYPES: &[&str] = &["types"];
+/// The sections of the capabilities a `capabilities` or `requires` list names.
+const CAPABILITIES: &[&str] = &["capabilities"];
+
+/// One name an entity uses: the name, the platform sections it would be declared in (empty: any),
+/// and where.
+type Use = (String, &'static [&'static str], String);
+
+/// Refuses the platform entities an entity names without importing them: types (in `type` and
+/// `repr` texts), capabilities (in `capabilities` and `requires` lists) and the entities under a
+/// reference key ([`REFERENCE_KEYS`]), once each.
 fn named_uses(
     file: &str,
     entity: &str,
@@ -539,18 +699,23 @@ fn named_uses(
     let mut seen = BTreeSet::new();
     let mut uses = Vec::new();
     walk_uses(item, "", &mut uses);
-    for (name, section, at) in uses {
-        if platform_ids.get(&name).map(String::as_str) != Some(section)
+    for (name, sections, at) in uses {
+        let declared_in_section = platform_ids
+            .get(&name)
+            .is_some_and(|s| sections.is_empty() || sections.contains(&s.as_str()));
+        if !declared_in_section
             || imports.iter().any(|i| *i == name)
             || own.contains(&name)
             || !seen.insert(name.clone())
         {
             continue;
         }
-        let kind = if section == "types" {
+        let kind = if sections == TYPES {
             "type"
-        } else {
+        } else if sections == CAPABILITIES {
             "capability"
+        } else {
+            "entity"
         };
         out.push(Diagnostic::new(
             IMPORT_MISSING,
@@ -560,8 +725,16 @@ fn named_uses(
     }
 }
 
-/// The names an entity uses: (name, the platform section it would be declared in, where).
-fn walk_uses(value: &Value, at: &str, out: &mut Vec<(String, &'static str, String)>) {
+/// The sections a reference key's target may be declared in, when `key` is a reference key.
+fn reference_sections(key: &str) -> Option<&'static [&'static str]> {
+    REFERENCE_KEYS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, sections)| *sections)
+}
+
+/// The names an entity uses, and where.
+fn walk_uses(value: &Value, at: &str, out: &mut Vec<Use>) {
     let join = |k: &str| {
         if at.is_empty() {
             k.to_string()
@@ -580,22 +753,173 @@ fn walk_uses(value: &Value, at: &str, out: &mut Vec<(String, &'static str, Strin
                 match (k.as_str(), v) {
                     ("type" | "repr", Value::String(text)) => {
                         for name in type_names(text) {
-                            out.push((name, "types", join(k)));
+                            out.push((name, TYPES, join(k)));
                         }
                     }
                     ("capabilities" | "requires", Value::Array(items)) => {
                         for (i, item) in items.iter().enumerate() {
                             if let Some(c) = item.as_str() {
-                                out.push((
-                                    c.to_string(),
-                                    "capabilities",
-                                    format!("{}.{i}", join(k)),
-                                ));
+                                out.push((c.to_string(), CAPABILITIES, format!("{}.{i}", join(k))));
+                            }
+                        }
+                    }
+                    (key, Value::String(name)) if reference_sections(key).is_some() => {
+                        out.push((
+                            name.clone(),
+                            reference_sections(key).unwrap_or(ANY),
+                            join(k),
+                        ));
+                    }
+                    (key, Value::Array(items))
+                        if reference_sections(key).is_some()
+                            && items.iter().all(Value::is_string) =>
+                    {
+                        let sections = reference_sections(key).unwrap_or(ANY);
+                        for (i, item) in items.iter().enumerate() {
+                            if let Some(name) = item.as_str() {
+                                out.push((name.to_string(), sections, format!("{}.{i}", join(k))));
                             }
                         }
                     }
                     _ => walk_uses(v, &join(k), out),
                 }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Refuses a platform entity that names an entity a product file declares: the platform, and
+/// everything generated from it, must not depend on a product. A name counts when it stands under
+/// a reference key, in a type text, or in a capability list.
+fn check_platform_independent(
+    platform: &Value,
+    product_ids: &BTreeMap<String, String>,
+    out: &mut Vec<Diagnostic>,
+) {
+    if product_ids.is_empty() {
+        return;
+    }
+    let Some(top) = platform.as_object() else {
+        return;
+    };
+    for (section, items) in top {
+        for item in items.as_array().into_iter().flatten() {
+            let entity = item.get("id").and_then(Value::as_str).unwrap_or(section);
+            let mut uses = Vec::new();
+            walk_uses(item, "", &mut uses);
+            let mut seen = BTreeSet::new();
+            for (name, _, at) in uses {
+                let Some(file) = product_ids.get(&name) else {
+                    continue;
+                };
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
+                out.push(Diagnostic::new(
+                    PLATFORM_REFERENCES_PRODUCT,
+                    entity,
+                    format!("The platform entity \"{entity}\" (in \"{section}\") refers to \"{name}\" (at {at}), which product file {file} declares. The platform must not depend on a product: its text and everything generated from it are the same with or without product files. Remove the reference, or move \"{name}\" into the platform specification."),
+                ));
+            }
+        }
+    }
+}
+
+/// Refuses what a product entity claims that only the platform may have: the product adds tenant
+/// metadata (ARC-113) and may not widen who can reach it or add code behind it.
+fn check_power(
+    file: &str,
+    section: &str,
+    id: &str,
+    item: &Value,
+    platform_ids: &BTreeMap<String, String>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let text = |key: &str| item.get(key).and_then(Value::as_str);
+    let mut refuse = |what: String, fix: &str| {
+        out.push(Diagnostic::new(
+            PLATFORM_POWER,
+            id,
+            format!("\"{id}\" in \"{section}\" of {file} {what}. A product adds tenant metadata only and cannot claim a power of the platform; {fix}"),
+        ));
+    };
+    match section {
+        "roles" => {
+            if text("level") == Some("platform") {
+                refuse(
+                    "has level \"platform\"".to_string(),
+                    "set level to \"tenant\": a product role is tenant data the tenant may change.",
+                );
+            }
+            for holder in item
+                .get("holders")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .filter(|h| PLATFORM_HOLDERS.contains(h))
+            {
+                refuse(
+                    format!("lets \"{holder}\" hold it"),
+                    "a product role is held by people, teams or agents; remove the holder, or declare the role in the platform specification.",
+                );
+            }
+        }
+        "contracts" => {
+            let scheme = item
+                .get("auth")
+                .and_then(|a| a.get("scheme"))
+                .and_then(Value::as_str);
+            if text("exposure") == Some("public") && scheme == Some("anonymous") {
+                refuse(
+                    "is public with the anonymous scheme".to_string(),
+                    "require a session (scheme \"session\") or make the contract internal; an anonymous public entry point is the platform's to declare.",
+                );
+            }
+            if let Some(component) = text("implementedBy") {
+                if platform_ids.get(component).map(String::as_str) == Some("components") {
+                    refuse(
+                        format!("is implemented by the platform component \"{component}\""),
+                        "a product contract is installed as tenant metadata and has no code of the platform behind it; remove implementedBy.",
+                    );
+                }
+            }
+            if let Some(realisation) =
+                text("realisation").filter(|r| PLATFORM_REALISATIONS.contains(r))
+            {
+                refuse(
+                    format!("declares realisation \"{realisation}\""),
+                    "only the platform puts code behind a contract; remove realisation (or use \"facade\").",
+                );
+            }
+        }
+        "behaviors" => {
+            if text("level") == Some("implementation") {
+                refuse(
+                    "has level \"implementation\"".to_string(),
+                    "a product behavior is a workflow model (level \"model\"); an implementation-level machine is platform code.",
+                );
+            }
+        }
+        "events" => {
+            if item.get("domain").and_then(Value::as_bool) == Some(true) {
+                refuse(
+                    "is a domain event".to_string(),
+                    "domain events are facts the running platform records; remove \"domain\".",
+                );
+            }
+            if item.get("elapsed").and_then(Value::as_bool) == Some(true) {
+                refuse(
+                    "is an elapsed-time event".to_string(),
+                    "timer events are implementation level; remove \"elapsed\".",
+                );
+            }
+            if item.get("delivery").is_some() {
+                refuse(
+                    "states a delivery guarantee".to_string(),
+                    "delivery is implementation level; remove \"delivery\".",
+                );
             }
         }
         _ => {}
