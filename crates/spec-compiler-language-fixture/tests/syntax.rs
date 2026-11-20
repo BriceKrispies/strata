@@ -104,3 +104,75 @@ fn prints_each_form_as_the_kernel_does() {
         "not(not((record.a in [1, 2])))"
     );
 }
+
+/// Checked arithmetic and time arithmetic (D-6540, D-6541, D-6543): `*` binds tighter than `+`
+/// and `-`, both bind tighter than comparison, and both group to the left. A `-` before a digit is
+/// a subtraction after an operand and the sign of a literal anywhere else.
+#[test]
+fn parses_arithmetic_with_its_precedence_and_the_sign_of_literals() {
+    for (source, printed) in [
+        ("1 + 2 * 3", "(1 + (2 * 3))"),
+        ("1 - 2 - 3", "((1 - 2) - 3)"),
+        ("2 * 3 * 4 + 1", "(((2 * 3) * 4) + 1)"),
+        ("record.n + 1 > 3", "((record.n + 1) > 3)"),
+        (
+            "now - days(7) < record.joined_at",
+            "((now - days(7)) < record.joined_at)",
+        ),
+        ("record.n -1", "(record.n - 1)"),
+        ("record.n-1", "(record.n - 1)"),
+        ("(1)-1", "(1 - 1)"),
+        ("-1", "-1"),
+        ("record.n - -1", "(record.n - -1)"),
+        ("record.n == -1", "(record.n == -1)"),
+        ("record.n in [-1, 2]", "(record.n in [-1, 2])"),
+        ("not -1 == 1", "not((-1 == 1))"),
+        ("if(true, -1, 2)", "if(true, -1, 2)"),
+        (
+            "ms_between(record.a, now) >= hours(1) + minutes(30)",
+            "(ms_between(record.a, now) >= (hours(1) + minutes(30)))",
+        ),
+        (
+            "concat(principal, concat(':', text(param.badge)))",
+            "concat(principal, concat(':', text(param.badge)))",
+        ),
+    ] {
+        let parsed = parse(source).unwrap_or_else(|e| panic!("{source}: {e}"));
+        assert_eq!(parsed.to_string(), printed, "{source}");
+        assert_eq!(parse(printed).unwrap(), parsed, "{printed}");
+    }
+}
+
+#[test]
+fn builds_the_arithmetic_variants() {
+    use strata_spec_compiler_language_fixture::types::{ArithOp, DurationUnit};
+    let boxed = |e: Expr| Box::new(e);
+    assert_eq!(
+        parse("record.earned_at + days(30)").unwrap(),
+        Expr::Arith {
+            op: ArithOp::Add,
+            left: boxed(Expr::Var {
+                scope: Scope::Record,
+                name: "earned_at".into(),
+            }),
+            right: boxed(Expr::Duration {
+                unit: DurationUnit::Days,
+                amount: boxed(Expr::Lit(Value::Int(30))),
+            }),
+        }
+    );
+    assert_eq!(
+        parse("ms_between(now, text(1))").unwrap(),
+        Expr::MsBetween {
+            from: boxed(Expr::Now),
+            to: boxed(Expr::Text(boxed(Expr::Lit(Value::Int(1))))),
+        }
+    );
+    assert_eq!(
+        parse("concat('a', 'b')").unwrap(),
+        Expr::Concat {
+            left: boxed(Expr::Lit(Value::Str("a".into()))),
+            right: boxed(Expr::Lit(Value::Str("b".into()))),
+        }
+    );
+}

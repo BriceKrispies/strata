@@ -8,17 +8,16 @@
   // object-type-def, ledgerUnits of ledger-unit-decl, ledgerPools of ledger-pool-decl, ledgerLimits of
   // ledger-limit and operations of tenant-operation-def. Expressions are tenant rule language text.
   //
-  // What this file leaves out, because the tenant rule language does not have it yet (D-6543 specifies
-  // balance, in_segment, text, concat and arithmetic, and they enter the language only once Exegra's
-  // and specc's primitive catalogues hold them):
+  // What this file leaves out, because the tenant rule language does not read balances or segments yet
+  // (D-6543 specifies balance and in_segment; WG-5062):
   // - eligibility by segment (in_segment): there is no segment and no segment field;
   // - the limit per person (balance of the member's redemptions, compared with a limit on the record):
-  //   a member may redeem as often as the stock lasts;
-  // - a stock per promotion (the scope of the account would be text(record.$id)): the stock is one
-  //   pool account, in the empty scope, that every promotion draws on.
-  // What it keeps: the window (now against the starts_at and ends_at of the record), the floor of 0 on
-  // the stock that refuses a redemption when the stock is gone, the redemption counted for the member
-  // in the ledger, and the redemption record, in one atomic invocation.
+  //   a member may redeem as often as the stock of the promotion lasts.
+  // What it keeps: the window (now against the starts_at and ends_at of the record, and at most 90 days
+  // long, through the time arithmetic of D-6541), a stock per promotion (the pool account in the scope
+  // text(record.$id), D-6542) with the floor of 0 that refuses a redemption when that stock is gone,
+  // the redemption counted for the member in the ledger, and the redemption record, in one atomic
+  // invocation.
   "product": {
     "id": "promotions",
     "name": "Promotions",
@@ -40,8 +39,8 @@
       "constraints": {
         "window": {
           "id": "window",
-          "expr": "new.ends_at > new.starts_at",
-          "message": "A promotion ends after it starts."
+          "expr": "new.ends_at > new.starts_at and new.ends_at <= new.starts_at + days(90)",
+          "message": "A promotion ends after it starts and runs at most 90 days."
         }
       }
     },
@@ -72,7 +71,7 @@
     }
   ],
   "ledgerUnits": [
-    { "id": "promotions__stock", "description": "The stock of the promotions: one account of the pool, debited by each redemption." },
+    { "id": "promotions__stock", "description": "The stock of each promotion: one account of the pool per promotion, in the scope of its id, debited by each redemption." },
     { "id": "promotions__redemptions", "description": "The redemptions of a person: one account per person, credited by each redemption." }
   ],
   "ledgerPools": [
@@ -109,7 +108,7 @@
       ],
       "invokers": { "signed-in": false, "roles": ["promotions__manager"] },
       "conditions": [
-        { "id": "window", "expr": "param.ends_at > param.starts_at", "error": "bad-window", "message": "A promotion ends after it starts." },
+        { "id": "window", "expr": "param.ends_at > param.starts_at and ms_between(param.starts_at, param.ends_at) <= days(90)", "error": "bad-window", "message": "A promotion ends after it starts and runs at most 90 days." },
         { "id": "stock", "expr": "param.stock > 0", "error": "bad-stock", "message": "The stock added is positive." }
       ],
       "steps": [
@@ -121,10 +120,13 @@
           }
         },
         {
+          // The stock of this promotion: the pool account in the scope of the new record's id, which
+          // a later step reads as param.promotion (D-6548).
           "PostLedger": {
             "id": "fund",
             "owner": { "Pool": { "pool": "promotions__pool" } },
             "unit": "promotions__stock",
+            "scope": "text(param.promotion)",
             "amount": "param.stock",
             "reason": "stock"
           }
@@ -151,6 +153,7 @@
             "id": "take_stock",
             "owner": { "Pool": { "pool": "promotions__pool" } },
             "unit": "promotions__stock",
+            "scope": "text(record.$id)",
             "amount": "-1",
             "reason": "redemption"
           }
@@ -178,7 +181,7 @@
     {
       "id": "promotions__redeem-is-one-operation",
       "kind": "structural",
-      "statement": "Redeeming a promotion is one tenant operation that checks the window, debits the stock, counts the redemption for the member and creates the redemption record in one transaction, or changes nothing.",
+      "statement": "Redeeming a promotion is one tenant operation that checks the window, debits the stock of that promotion, counts the redemption for the member and creates the redemption record in one transaction, or changes nothing.",
       "subjects": ["product-module"],
       "rationale": "OPR-1541 and OPR-1542 make the invocation atomic; the floor of the stock unit makes the stock hold under concurrent requests (LDG-017).",
       "evaluate": { "method": "external-evidence" }

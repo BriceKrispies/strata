@@ -548,13 +548,21 @@ fn mentions_field(expr: &Expr) -> bool {
         Expr::Var(_, name) => !name.starts_with('$'),
         Expr::Through(..) => true,
         Expr::Lit(_) | Expr::Param(_) | Expr::Now | Expr::Principal | Expr::HasRole(_) => false,
-        Expr::Not(a) | Expr::IsNull(a) | Expr::Len(a) | Expr::Lower(a) | Expr::IsSlug(a) => {
-            mentions_field(a)
-        }
+        Expr::Not(a)
+        | Expr::IsNull(a)
+        | Expr::Len(a)
+        | Expr::Lower(a)
+        | Expr::IsSlug(a)
+        | Expr::Duration(_, a)
+        | Expr::Text(a) => mentions_field(a),
         Expr::And(items) | Expr::Or(items) => items.iter().any(mentions_field),
-        Expr::Cmp(_, a, b) | Expr::In(a, b) | Expr::Contains(a, b) | Expr::StartsWith(a, b) => {
-            mentions_field(a) || mentions_field(b)
-        }
+        Expr::Cmp(_, a, b)
+        | Expr::In(a, b)
+        | Expr::Contains(a, b)
+        | Expr::StartsWith(a, b)
+        | Expr::Arith(_, a, b)
+        | Expr::MsBetween(a, b)
+        | Expr::Concat(a, b) => mentions_field(a) || mentions_field(b),
         Expr::If(a, b, c) => mentions_field(a) || mentions_field(b) || mentions_field(c),
     }
 }

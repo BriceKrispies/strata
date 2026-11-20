@@ -131,6 +131,79 @@ fn the_promotions_product_is_accepted_beside_the_platform() {
     );
 }
 
+/// Every expression of the promotions product is tenant rule language the kernel parses: the
+/// window through the time arithmetic of D-6541 and the stock per promotion through text (D-6542,
+/// WG-5064). Constraints are also checked against the promotion's fields.
+#[test]
+fn the_promotions_expressions_parse_and_the_window_checks() {
+    use strata_kernel::expr as kexpr;
+    use strata_kernel::testkit::field_def;
+    use strata_kernel::{FieldType, RoleId};
+
+    let doc = strata_spec_compiler::jsonc::parse(&product("promotions.jsonc").text).unwrap();
+    let mut sources: Vec<String> = Vec::new();
+    for o in doc["objects"].as_array().unwrap() {
+        for c in o["constraints"].as_object().unwrap().values() {
+            sources.push(c["expr"].as_str().unwrap().to_string());
+        }
+    }
+    for op in doc["operations"].as_array().unwrap() {
+        for c in op["conditions"].as_array().unwrap() {
+            sources.push(c["expr"].as_str().unwrap().to_string());
+        }
+        for step in op["steps"].as_array().unwrap() {
+            for body in step.as_object().unwrap().values() {
+                for key in ["amount", "scope", "record"] {
+                    if let Some(s) = body[key].as_str() {
+                        sources.push(s.to_string());
+                    }
+                }
+                if let Some(fields) = body["fields"].as_object() {
+                    sources.extend(fields.values().filter_map(|v| v.as_str()).map(String::from));
+                }
+            }
+        }
+    }
+    assert!(sources.iter().any(|s| s.contains("days(90)")));
+    assert!(sources.iter().any(|s| s == "text(record.$id)"));
+    for source in &sources {
+        let parsed = kexpr::parse(source).unwrap_or_else(|e| panic!("{source}: {e}"));
+        assert_eq!(
+            kexpr::parse(&parsed.to_string()).unwrap(),
+            parsed,
+            "{source}"
+        );
+    }
+
+    // The window constraint at the promotion: a boolean over its time fields.
+    let fields: std::collections::BTreeMap<_, _> = [
+        field_def("title", FieldType::Str, true),
+        field_def("starts_at", FieldType::Time, true),
+        field_def("ends_at", FieldType::Time, true),
+    ]
+    .into_iter()
+    .map(|d| (d.id.clone(), d))
+    .collect();
+    let (params, roles, objects) = (
+        std::collections::BTreeSet::new(),
+        std::collections::BTreeSet::<RoleId>::new(),
+        std::collections::BTreeMap::new(),
+    );
+    let env = kexpr::TypeEnv {
+        fields: &fields,
+        params: &params,
+        roles: &roles,
+        objects: &objects,
+    };
+    let window = doc["objects"][0]["constraints"]["window"]["expr"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        kexpr::check(&kexpr::parse(window).unwrap(), &env),
+        Ok(kexpr::Shape::Bool)
+    );
+}
+
 #[test]
 fn the_parsed_platform_is_unchanged_by_layering() {
     let alone = load::load(PLATFORM, &platform_text()).expect("the platform loads");
