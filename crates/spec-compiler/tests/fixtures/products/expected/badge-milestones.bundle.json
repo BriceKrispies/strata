@@ -89,6 +89,12 @@
         }
       }
     ],
+    "ledger-limits": [
+      {
+        "floor": 0,
+        "unit": "badge_milestones__points"
+      }
+    ],
     "ledger-units": [
       {
         "description": "Points a person earns; the Silver badge is awarded when a person's balance reaches 500.",
@@ -164,6 +170,53 @@
         }
       }
     },
+    "operations": [
+      {
+        "conditions": [
+          {
+            "error": "no-badge",
+            "expr": "len(param.badge) > 0",
+            "id": "named",
+            "message": "A badge is named."
+          }
+        ],
+        "id": "badge_milestones__award_by_hand",
+        "inputs": [
+          {
+            "label": "The principal to award",
+            "name": "person",
+            "required": true,
+            "ty": "Str"
+          },
+          {
+            "label": "The badge",
+            "name": "badge",
+            "required": true,
+            "ty": "Str"
+          }
+        ],
+        "invokers": {
+          "roles": [
+            "badge_milestones__awarder"
+          ],
+          "signed-in": false
+        },
+        "label": "Award a badge by hand",
+        "steps": [
+          {
+            "CreateRecord": {
+              "fields": {
+                "awarded_at": "now",
+                "badge": "param.badge",
+                "person": "param.person"
+              },
+              "id": "award",
+              "object": "badge_milestones__award"
+            }
+          }
+        ]
+      }
+    ],
     "policies": {
       "badge_milestones__awarder_awards": {
         "actions": [
@@ -187,6 +240,20 @@
           "Object": "badge_milestones__award"
         },
         "role": "member"
+      }
+    },
+    "queries": {
+      "badge_milestones__awards": {
+        "id": "badge_milestones__awards",
+        "limit": 50,
+        "object": "badge_milestones__award",
+        "order": [
+          {
+            "descending": true,
+            "field": "awarded_at"
+          }
+        ],
+        "params": []
       }
     },
     "role-permissions": {
@@ -216,7 +283,23 @@
           }
         }
       }
-    ]
+    ],
+    "views": {
+      "badge_milestones__my_badges": {
+        "id": "badge_milestones__my_badges",
+        "route": "/badges",
+        "sections": {
+          "awards": {
+            "args": {},
+            "include": [],
+            "markdown": [],
+            "query": "badge_milestones__awards",
+            "single": false
+          }
+        },
+        "title": "My badges"
+      }
+    }
   },
   "name": "Badge milestones",
   "platform": {

@@ -14,6 +14,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "badge_milestones",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "The reference product end to end on real sockets: install, ledger postings, the worker and reads as members; not yet measured"
+    },
+    {
+      "package": "strata-backend",
       "target": "erasure",
       "tier": "routine",
       "seconds": null,

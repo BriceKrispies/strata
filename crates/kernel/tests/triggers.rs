@@ -782,3 +782,135 @@ fn an_automation_principal_holds_its_run_as_roles_and_no_other() {
     let error = step_in(&world, "alpha", "owner", 7_001, assign).expect_err("reserved");
     assert_eq!(error.kind, ErrorKind::InvalidIntent);
 }
+
+// ---------------------------------------------------------------------------------------------
+// A trigger on the ledger (D-6523, D-7903).
+// ---------------------------------------------------------------------------------------------
+
+fn param_cmp(op: CmpOp, name: &str, limit: i64) -> Expr {
+    Expr::Cmp(
+        op,
+        Box::new(Expr::Param(name.into())),
+        Box::new(Expr::Lit(Value::Int(limit))),
+    )
+}
+
+fn points_unit() -> LedgerUnit {
+    LedgerUnit::new("points").unwrap()
+}
+
+fn post_points(world: &World, now: i64, to: &str, amount: i64, key: &str) -> (World, Transition) {
+    let posting = LedgerPostingRequest {
+        owner: LedgerOwner::Principal {
+            principal: principal_id(&format!("alpha:{to}")),
+        },
+        unit: points_unit(),
+        amount: LedgerAmount(amount),
+        idempotency_key: key.into(),
+        reason: "bonus".into(),
+        corrects: None,
+        scope: None,
+    };
+    must(
+        world,
+        "owner",
+        now,
+        Intent::PostLedger {
+            postings: vec![posting],
+        },
+    )
+}
+
+// Verifies: WFL-2901
+#[test]
+fn a_ledger_posting_starts_the_run_of_a_trigger_on_its_unit_with_the_balance_on_both_sides() {
+    // Crossing 500: the balance before the entry is below it and the balance after is not.
+    let crossing = Expr::And(vec![
+        param_cmp(CmpOp::Lt, "balance_before", 500),
+        param_cmp(CmpOp::Ge, "balance", 500),
+    ]);
+    let mut once = flow(&["editor"]);
+    once.run_key = Some(Expr::Param("owner".into()));
+    let world = defined(vec![
+        SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+            unit: points_unit(),
+            description: "Points".into(),
+        }),
+        SchemaChange::DefineAutomation(once),
+        SchemaChange::DefineTrigger(trigger(
+            "on_points",
+            TriggerEvent::LedgerPosted {
+                unit: points_unit(),
+            },
+            Some(crossing),
+        )),
+    ]);
+    // 300 points: below the threshold, no run.
+    let (world, first) = post_points(&world, 7_000, "writer1", 300, "a");
+    assert!(starts(&first).is_empty() && declines(&first).is_empty());
+    // 250 more: 300 before and 550 after, so the run starts, with the entry and both balances.
+    let (world, second) = post_points(&world, 7_001, "writer1", 250, "b");
+    let seq = second
+        .events
+        .iter()
+        .find(|event| matches!(event.body, EventBody::LedgerEntryPosted { .. }))
+        .expect("the posting is an event")
+        .seq;
+    let started = starts(&second);
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].trigger, TriggerId::new("on_points").unwrap());
+    assert_eq!(
+        started[0].params,
+        BTreeMap::from([
+            ("at".to_string(), Value::Time(7_001)),
+            ("hop".to_string(), Value::Int(0)),
+            ("seq".to_string(), Value::Int(seq as i64)),
+            ("owner".to_string(), text("alpha:writer1")),
+            ("unit".to_string(), text("points")),
+            ("amount".to_string(), Value::Int(250)),
+            ("balance".to_string(), Value::Int(550)),
+            ("balance_before".to_string(), Value::Int(300)),
+            ("entry_sequence".to_string(), Value::Int(2)),
+            ("reason".to_string(), text("bonus")),
+        ])
+    );
+    let key = Some(canon::hash_of(&text("alpha:writer1")));
+    assert_eq!(started[0].run_key, key);
+    // Down to 450 and up to 550 again crosses it again: the trigger fires, with the same run key,
+    // which the worker starts once (D-6534).
+    let (world, down) = post_points(&world, 7_002, "writer1", -100, "c");
+    assert!(starts(&down).is_empty());
+    let (world, up) = post_points(&world, 7_003, "writer1", 100, "d");
+    assert_eq!(starts(&up).len(), 1);
+    assert_eq!(starts(&up)[0].run_key, key);
+    // Another person's crossing has its own key.
+    let (_, other) = post_points(&world, 7_004, "writer2", 600, "e");
+    assert_eq!(
+        starts(&other)[0].run_key,
+        Some(canon::hash_of(&text("alpha:writer2")))
+    );
+}
+
+// Verifies: WFL-2901
+#[test]
+fn a_trigger_on_one_unit_does_not_match_a_posting_to_another() {
+    let other = LedgerUnit::new("stars").unwrap();
+    let world = defined(vec![
+        SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+            unit: points_unit(),
+            description: "Points".into(),
+        }),
+        SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+            unit: other.clone(),
+            description: "Stars".into(),
+        }),
+        SchemaChange::DefineAutomation(flow(&["editor"])),
+        SchemaChange::DefineTrigger(trigger(
+            "on_stars",
+            TriggerEvent::LedgerPosted { unit: other },
+            None,
+        )),
+    ]);
+    let (_, outcome) = post_points(&world, 7_000, "writer1", 10, "a");
+    assert!(starts(&outcome).is_empty() && declines(&outcome).is_empty());
+}

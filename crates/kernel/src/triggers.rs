@@ -45,8 +45,8 @@ use crate::schema::TenantSchema;
 use crate::state::{Principal, Record, RecordExt, TenantState};
 use crate::transition::apply_delta;
 use crate::types::{
-    AutomationDef, FieldId, FieldTypeExt, PrincipalId, RoleId, TriggerDef, TriggerEvent, Value,
-    WorkflowId,
+    AutomationDef, FieldId, FieldTypeExt, LedgerOwner, PrincipalId, RoleId, TriggerDef,
+    TriggerEvent, Value, WorkflowId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -142,7 +142,8 @@ fn fired(transitions: &Option<BTreeMap<WorkflowId, String>>) -> impl Iterator<It
 
 /// Whether a trigger's event matches a domain event (D-6522, D-7200): the kind and the object type
 /// and, for record-updated naming a transition, a transition the update fired (D-7203). The other
-/// trigger events come from engines outside the kernel and match no kernel event.
+/// trigger events come from engines outside the kernel and match no kernel event; a ledger-posted
+/// trigger matches the entry posted to a ledger unit it names (D-6523).
 pub fn matches(on: &TriggerEvent, body: &EventBody) -> bool {
     match (on, body) {
         (TriggerEvent::RecordCreated { object }, EventBody::RecordCreated { record }) => {
@@ -162,6 +163,10 @@ pub fn matches(on: &TriggerEvent, body: &EventBody) -> bool {
         (TriggerEvent::RecordDeleted { object }, EventBody::RecordDeleted { before }) => {
             before.object == *object
         }
+        (
+            TriggerEvent::LedgerPosted { unit },
+            EventBody::LedgerEntryPosted { unit: posted, .. },
+        ) => unit == posted,
         _ => false,
     }
 }
@@ -178,6 +183,38 @@ pub fn event_params(event: &DomainEvent, hop: u32, on: &TriggerEvent) -> BTreeMa
         ("at".to_string(), Value::Time(event.at.0)),
         ("hop".to_string(), Value::Int(i64::from(hop))),
     ]);
+    // ledger-posted binds the entry and the balance on both sides of it (D-6523); a pool has no
+    // principal, so its owner is null.
+    if let EventBody::LedgerEntryPosted {
+        owner,
+        unit,
+        amount,
+        balance,
+        balance_before,
+        entry_sequence,
+        reason,
+        ..
+    } = &event.body
+    {
+        params.extend([
+            (
+                "owner".to_string(),
+                match owner {
+                    LedgerOwner::Principal { principal } => Value::Str(principal.to_string()),
+                    LedgerOwner::Pool { .. } => Value::Null,
+                },
+            ),
+            ("unit".to_string(), Value::Str(unit.to_string())),
+            ("amount".to_string(), Value::Int(amount.0)),
+            ("balance".to_string(), Value::Int(balance.0)),
+            ("balance_before".to_string(), Value::Int(balance_before.0)),
+            (
+                "entry_sequence".to_string(),
+                Value::Int(i64::try_from(*entry_sequence).unwrap_or(i64::MAX)),
+            ),
+            ("reason".to_string(), Value::Str(reason.clone())),
+        ]);
+    }
     if let EventBody::RecordUpdated { transitions, .. } = &event.body {
         let name = match on {
             TriggerEvent::RecordUpdated {
@@ -243,6 +280,12 @@ fn scopes<'a>(
                 new: None,
             })
         }
+        // A posting is about no record: it binds parameters only.
+        EventBody::LedgerEntryPosted { .. } => Some(Scopes {
+            record: None,
+            old: None,
+            new: None,
+        }),
         _ => None,
     })
 }
