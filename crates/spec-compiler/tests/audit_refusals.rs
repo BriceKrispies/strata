@@ -305,3 +305,58 @@ fn an_exemption_of_the_conventions_that_matches_nothing_is_refused() {
         );
     }
 }
+
+#[test]
+fn a_markdown_claim_without_its_bounds_is_refused() {
+    use strata_spec_compiler::contract_rules::MARKDOWN_BOUND_MISSING;
+    let diagnostics = refuse(&fixture("markdown-bound-missing.jsonc"));
+    // Verifies: CMS-1020
+    assert_eq!(
+        codes_of(&diagnostics),
+        [(MARKDOWN_BOUND_MISSING, "cms-1020")]
+    );
+}
+
+#[test]
+fn the_markdown_bounds_the_specification_states_are_the_parsers() {
+    use strata_spec_compiler::contract_rules::markdown_bounds;
+    let text = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../specifications/spec.jsonc"),
+    )
+    .unwrap();
+    let at = text
+        .find("\"id\":\"cms-1020\"")
+        .expect("the claim cms-1020");
+    let line = text[at..].lines().next().unwrap();
+    // Verifies: CMS-1020
+    assert_eq!(
+        markdown_bounds(line),
+        (
+            Some(strata_substrate::markdown::MAX_SOURCE_BYTES as u64),
+            Some(strata_substrate::markdown::MAX_QUOTE_DEPTH as u64),
+            Some(strata_substrate::markdown::MAX_INLINE_DEPTH as u64),
+        )
+    );
+}
+
+#[test]
+fn a_contract_that_revokes_without_naming_the_conferral_rule_is_refused() {
+    use strata_spec_compiler::contract_rules::REVOCATION_AUTHORITY_MISSING;
+    let diagnostics = refuse(&fixture("revocation-authority-missing.jsonc"));
+    // Verifies: ADM-1080
+    assert_eq!(
+        codes_of(&diagnostics),
+        [(REVOCATION_AUTHORITY_MISSING, "revoke-role")]
+    );
+}
+
+#[test]
+fn a_catalogue_claim_without_a_negative_scenario_is_refused() {
+    use strata_spec_compiler::contract_rules::CATALOGUE_NEGATIVE_MISSING;
+    let diagnostics = refuse(&fixture("catalogue-negative-missing.jsonc"));
+    // Verifies: AGT-1209
+    assert_eq!(
+        codes_of(&diagnostics),
+        [(CATALOGUE_NEGATIVE_MISSING, "AGT-1209")]
+    );
+}
