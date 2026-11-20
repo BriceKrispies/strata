@@ -1670,6 +1670,40 @@ impl<'a> Gen<'a> {
                             .as_deref()
                             .and_then(Builtin::parse)
                             .ok_or_else(|| format!("\"{id}\" has no built-in repr"))?;
+                        // The generated type refuses to decode a value that breaks its
+                        // constraints, so a literal that breaks them would be a value the
+                        // machine writes and cannot read back.
+                        if let Value::String(text) = v {
+                            let c = &decl.constraints;
+                            let length = u64::try_from(text.chars().count()).unwrap_or(u64::MAX);
+                            if let Some(p) = &c.pattern {
+                                if regex::Regex::new(&crate::rules::anchored(p))
+                                    .is_ok_and(|re| !re.is_match(text))
+                                {
+                                    return Err(format!(
+                                        "{v} does not match the pattern \"{p}\" of type \"{id}\", which the generated type would refuse to decode"
+                                    ));
+                                }
+                            }
+                            if c.max_length
+                                .as_ref()
+                                .and_then(serde_json::Number::as_u64)
+                                .is_some_and(|max| length > max)
+                            {
+                                return Err(format!(
+                                    "{v} is longer than the maxLength of type \"{id}\""
+                                ));
+                            }
+                            if c.min_length
+                                .as_ref()
+                                .and_then(serde_json::Number::as_u64)
+                                .is_some_and(|min| length < min)
+                            {
+                                return Err(format!(
+                                    "{v} is shorter than the minLength of type \"{id}\""
+                                ));
+                            }
+                        }
                         let inner = self.literal(v, &TypeRef::Builtin(repr))?;
                         Ok(quote! { #name(#inner) })
                     }

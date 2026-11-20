@@ -358,6 +358,30 @@ fn literals_must_fit_their_type() {
     assert_refused(&text, m::LITERAL, "count");
 }
 
+/// The generated type of an id refuses to decode a value that breaks its pattern, so an initial
+/// value that breaks it would be one the machine writes and cannot read back.
+#[test]
+fn an_initial_value_must_meet_the_constraints_of_its_type() {
+    let constrained = |initial: Value| {
+        with(|s| {
+            s["types"] = json!([
+                { "id": "who", "name": "Who", "kind": "id", "repr": "string",
+                  "constraints": { "pattern": "[a-z]+", "maxLength": 4 } }
+            ]);
+            s["records"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "name": "owner", "type": "who" }));
+            machine(s)["variables"].as_array_mut().unwrap().push(
+                json!({ "name": "owner", "type": "string", "repr": "who", "initial": initial }),
+            );
+        })
+    };
+    assert_refused(&constrained(json!("")), m::LITERAL, "pattern");
+    assert_refused(&constrained(json!("abcde")), m::LITERAL, "maxLength");
+    assert!(generate("spec.jsonc", &constrained(json!("abc")), &options()).is_ok());
+}
+
 #[test]
 fn payloads_must_match_their_event() {
     let text = with(|s| effects(s)[2]["payload"] = json!({ "n": "count", "m": "count" }));

@@ -475,11 +475,12 @@ fn check_product(
     let value = match jsonc::parse(&product.text) {
         Ok(value) => value,
         Err(e) => {
-            out.push(Diagnostic::new(
-                e.code(SYNTAX),
-                &file,
-                format!("{file} is not valid JSONC: {e}; correct the syntax."),
-            ));
+            let message = if e.duplicate_key {
+                format!("{file}, {e}; the file is valid JSONC otherwise.")
+            } else {
+                format!("{file} is not valid JSONC: {e}; correct the syntax.")
+            };
+            out.push(Diagnostic::new(e.code(SYNTAX), &file, message));
             return None;
         }
     };
