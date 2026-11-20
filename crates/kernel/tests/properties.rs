@@ -330,7 +330,13 @@ fn may_read(roles: &BTreeSet<RoleId>, record: &Record) -> bool {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 160, ..ProptestConfig::default() })]
+    // A fixed, recorded seed: a run is the same run every time, and a failure reproduces.
+    // Change `rng_seed` on purpose to explore other inputs.
+    #![proptest_config(ProptestConfig {
+        cases: 160,
+        rng_seed: proptest::test_runner::RngSeed::Fixed(20260101),
+        ..ProptestConfig::default()
+    })]
 
     /// The same state, intent and context always give the same result, whether the state is
     /// the world's, a copy of it rebuilt from its canonical form, or a partial snapshot, and
@@ -462,7 +468,23 @@ proptest! {
                         prop_assert_eq!(error.kind, ErrorKind::Unauthorized);
                     }
                 }
-                Err(_) => {}
+                Err(error) => {
+                    // Authorisable, yet refused: a policy condition or a validation can still say
+                    // no, but never the owner, and never as `Unauthorized` without a failed
+                    // policy check to show for it.
+                    if error.kind == ErrorKind::Unauthorized {
+                        if let Some(state) = &state {
+                            prop_assert!(
+                                !roles_held(state, &context.principal).contains(&role("owner")),
+                                "the owner was refused as unauthorised: {:?}", op
+                            );
+                        }
+                        prop_assert!(
+                            error.evidence.iter().any(|c| !c.passed && c.rule.starts_with("policy:")),
+                            "refused as unauthorised with no failed policy check: {:?}", error.evidence
+                        );
+                    }
+                }
             }
         }
     }

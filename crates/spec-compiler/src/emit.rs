@@ -335,7 +335,9 @@ fn cargo_toml(spec: &Spec, options: &Options, core: &str) -> String {
          {core}\
          {sha2}\
          uuid = {{ version = \"{UUID_VERSION}\", features = [\"serde\"] }}\n\
-         {features}",
+         {features}\n\
+         [lints]\n\
+         workspace = true\n",
         header = toml_header(&spec.path),
     )
 }

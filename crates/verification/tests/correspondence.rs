@@ -47,19 +47,16 @@ fn read(name: &str) -> String {
         .replace("\r\n", "\n")
 }
 
-/// Set `STRATA_BLESS=1` to rewrite the committed files after an intended change.
+/// This test never writes the committed files. After an intended change, rewrite them with
+/// `cargo run -p strata-verification --example bless_fixtures` and review the diff.
 #[test]
 fn committed_fixtures_match_the_generator_and_the_kernel() {
     let generated = scenarios(FIXTURE_SEED, FIXTURE_COUNT);
     let expected = kernel_output(&generated);
-    if std::env::var("STRATA_BLESS").as_deref() == Ok("1") {
-        std::fs::write(lean_dir().join("fixtures/scenarios.txt"), &generated).unwrap();
-        std::fs::write(lean_dir().join("fixtures/expected.txt"), &expected).unwrap();
-    }
     assert_eq!(
         read("scenarios.txt"),
         generated,
-        "lean/fixtures/scenarios.txt is stale; rerun with STRATA_BLESS=1"
+        "lean/fixtures/scenarios.txt is stale; run the bless_fixtures example"
     );
     let committed = read("expected.txt");
     let difference = compare_outputs(&generated, &committed, &expected).first_difference;
@@ -147,6 +144,110 @@ fn the_lean_proofs_check_with_only_standard_axioms() {
             obligation.id
         );
     }
+}
+
+/// The name of the package in `crates/<dir>/Cargo.toml`, for each crate directory.
+fn crate_dirs() -> Vec<(String, PathBuf)> {
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&crates).unwrap().flatten() {
+        let Ok(manifest) = std::fs::read_to_string(entry.path().join("Cargo.toml")) else {
+            continue;
+        };
+        let name = manifest
+            .lines()
+            .skip_while(|l| l.trim() != "[package]")
+            .find_map(|l| {
+                let (key, value) = l.split_once('=')?;
+                (key.trim() == "name").then(|| value.trim().trim_matches('"').to_string())
+            });
+        if let Some(name) = name {
+            out.push((name, entry.path()));
+        }
+    }
+    out
+}
+
+/// The Rust source files that can hold the tests of `module` in a crate: `tests/<module>.rs`,
+/// `src/<module>.rs` and `src/<module>/mod.rs`.
+fn module_files(dir: &std::path::Path, module: &str) -> Vec<PathBuf> {
+    [
+        dir.join("tests").join(format!("{module}.rs")),
+        dir.join("src").join(format!("{module}.rs")),
+        dir.join("src").join(module).join("mod.rs"),
+    ]
+    .into_iter()
+    .filter(|p| p.is_file())
+    .collect()
+}
+
+/// Whether `source` defines a function called `name`.
+fn defines_function(source: &str, name: &str) -> bool {
+    source.lines().any(|line| {
+        let line = line.trim_start();
+        line.split("fn ")
+            .nth(1)
+            .filter(|_| line.starts_with("fn ") || line.contains(" fn "))
+            .is_some_and(|rest| {
+                rest.strip_prefix(name)
+                    .is_some_and(|after| after.starts_with(['(', '<']))
+            })
+    })
+}
+
+#[test]
+fn every_cited_rust_test_exists() {
+    let crates = crate_dirs();
+    let mut missing = Vec::new();
+    let mut checked = 0;
+    for obligation in obligations::all() {
+        for cited in &obligation.rust_tests {
+            checked += 1;
+            let parts: Vec<&str> = cited.split("::").collect();
+            let [krate, module, name] = parts[..] else {
+                missing.push(format!(
+                    "{}: `{cited}` is not crate::module::function",
+                    obligation.id
+                ));
+                continue;
+            };
+            let Some((_, dir)) = crates.iter().find(|(n, _)| n == krate) else {
+                missing.push(format!("{}: `{cited}`: no crate {krate}", obligation.id));
+                continue;
+            };
+            let found = module_files(dir, module).iter().any(|file| {
+                defines_function(&std::fs::read_to_string(file).unwrap_or_default(), name)
+            });
+            if !found {
+                missing.push(format!(
+                    "{}: `{cited}`: no function {name} in {krate}'s {module} sources",
+                    obligation.id
+                ));
+            }
+        }
+    }
+    assert!(checked > 0, "the obligation table cites no Rust test");
+    assert!(
+        missing.is_empty(),
+        "cited Rust tests that do not exist:
+{}",
+        missing.join(
+            "
+"
+        )
+    );
+}
+
+#[test]
+fn the_citation_check_would_catch_a_dangling_name() {
+    assert!(defines_function(
+        "    fn real_test(
+",
+        "real_test"
+    ));
+    assert!(defines_function("async fn real_test() {}", "real_test"));
+    assert!(!defines_function("fn real_test_two() {}", "real_test"));
+    assert!(!defines_function("// real_test", "real_test"));
 }
 
 #[test]

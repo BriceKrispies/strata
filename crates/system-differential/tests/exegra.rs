@@ -47,7 +47,10 @@
 //! listed as such.
 //!
 //! The test fails when `EXEGRA_HOME` is not an Exegra checkout or `node` cannot run, when a trace
-//! cannot be had, when any covered scenario diverges, and when no scenario is covered.
+//! cannot be had, when any covered scenario diverges, when a scenario the host does not run is missing from the
+//! allow-list `exegra-coverage.json` (or an entry of it no longer applies), and when fewer scenarios
+//! are covered than the floor recorded there. When both sides fail at one step, the failure is
+//! compared too: the host must leave every instance as it was before the step.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -65,6 +68,48 @@ use strata_runtime::{
 use strata_spec_compiler::ir::{Spec, TypeKind};
 use strata_spec_compiler::resolve::{Builtin, TypeRef};
 use strata_spec_compiler::{jsonc, load};
+
+/// The checked-in record of what the host does not run and how many scenarios it must run.
+const ALLOWANCES: &str = "crates/system-differential/tests/exegra-coverage.json";
+
+/// The contents of [`ALLOWANCES`]: the floor on covered scenarios, and, by scenario id with the
+/// reason, the scenarios that cannot be planned for the host and those whose inputs the generated
+/// types cannot hold.
+struct Allowances {
+    floor: usize,
+    skipped: BTreeMap<String, String>,
+    unrepresentable: BTreeMap<String, String>,
+}
+
+impl Allowances {
+    fn read() -> Self {
+        let path = workspace().join(ALLOWANCES);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} cannot be read: {e}", path.display()));
+        let json: Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("{} is not JSON: {e}", path.display()));
+        let list = |key: &str| -> BTreeMap<String, String> {
+            json[key]
+                .as_object()
+                .unwrap_or_else(|| panic!("{ALLOWANCES} has no object `{key}`"))
+                .iter()
+                .map(|(id, why)| {
+                    let why = why.as_str().unwrap_or_default().trim();
+                    assert!(!why.is_empty(), "{ALLOWANCES}: {key} {id} has no reason");
+                    (id.clone(), why.to_string())
+                })
+                .collect()
+        };
+        Allowances {
+            floor: json["floor"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{ALLOWANCES} has no number `floor`"))
+                as usize,
+            skipped: list("skipped"),
+            unrepresentable: list("unrepresentable"),
+        }
+    }
+}
 
 /// The project name of the temporary link.
 const PROJECT: &str = "strata-under-test";
@@ -641,6 +686,8 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
             .collect()
     };
     let mut before: Vec<Value> = inputs.iter().map(|i| (*i).clone()).collect();
+    // The configuration after the previous step: what a failed step leaves, as it commits nothing.
+    let mut committed = trace["initial"].clone();
     for step in &steps {
         let index = &step["index"];
         let time = time_of(&step["time"]);
@@ -681,6 +728,7 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
+            committed = step["config"].clone();
             continue;
         }
         if kind != "deliver" {
@@ -725,7 +773,34 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
                     "{context}: Exegra's step failed ({why}), the host's did not"
                 )))
             }
-            (Some(_), Some(_)) => return Ok(steps.len()),
+            (Some(host_why), Some(why)) => {
+                // Both fail at this step. Exegra ends its run here, so nothing follows to compare
+                // except what the failure left: neither commits anything, so every instance the
+                // host holds must be as it was after the previous step. Both must also say why.
+                let exegra_why = why["message"].as_str().unwrap_or_default();
+                if host_why.is_empty() || exegra_why.is_empty() {
+                    return Err(diverged(format!(
+                        "{context}: both steps fail, but one gives no reason (Exegra: {why}, host: {host_why:?})"
+                    )));
+                }
+                let expected = instances(&committed).map_err(diverged)?;
+                let actual = host_instances(expected.keys().cloned().collect())
+                    .await
+                    .map_err(diverged)?;
+                check(
+                    &format!("{context}, after the failed step"),
+                    expected,
+                    actual,
+                )
+                .map_err(diverged)?;
+                println!(
+                    "  {}: both fail at {context}
+    Exegra: {exegra_why}
+    host:   {host_why}",
+                    plan.id
+                );
+                return Ok(steps.len());
+            }
             (None, None) => {}
         }
         let expected = instances(&step["config"]).map_err(diverged)?;
@@ -784,6 +859,7 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
             .as_array()
             .cloned()
             .unwrap_or_default();
+        committed = step["config"].clone();
     }
     if trace["outcome"] == json!("quiescent") {
         if let Some(due) = system
@@ -871,13 +947,70 @@ async fn the_system_host_runs_every_scenario_as_exegra_does() {
     }
     assert!(
         diverged.is_empty(),
-        "{} scenario(s) run differently on the system host than in Exegra:\n{}",
+        "{} scenario(s) run differently on the system host than in Exegra:
+{}",
         diverged.len(),
         diverged
             .iter()
             .map(|(id, why)| format!("- {id}: {why}"))
             .collect::<Vec<_>>()
-            .join("\n")
+            .join(
+                "
+"
+            )
     );
-    assert!(!covered.is_empty(), "no scenario ran on the system host");
+
+    // Every scenario the host does not run is on the checked-in list, with its reason, and every
+    // entry of the list still names a scenario that is not run.
+    let allowances = Allowances::read();
+    let mut problems = Vec::new();
+    for (kind, listed, found) in [
+        ("skipped", &allowances.skipped, &skipped),
+        (
+            "unrepresentable",
+            &allowances.unrepresentable,
+            &unrepresentable,
+        ),
+    ] {
+        for (id, why) in found {
+            if !listed.contains_key(id) {
+                problems.push(format!(
+                    "{kind} scenario {id} is not on the allow-list of {ALLOWANCES}: {why}
+    add: {}: {}",
+                    json!(id),
+                    json!("<reason this scenario cannot run on the host>")
+                ));
+            }
+        }
+        for id in listed.keys() {
+            if !found.iter().any(|(f, _)| f == id) {
+                problems.push(format!(
+                    "{id} is on the {kind} allow-list of {ALLOWANCES} but is not {kind} now: remove it"
+                ));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "{}",
+        problems.join(
+            "
+"
+        )
+    );
+
+    assert!(
+        covered.len() >= allowances.floor,
+        "{} scenario(s) ran on the system host, below the recorded floor of {} in {ALLOWANCES};          if coverage really dropped, fix it, and if more now run, raise the floor to {}",
+        covered.len(),
+        allowances.floor,
+        covered.len()
+    );
+    if covered.len() > allowances.floor {
+        println!(
+            "note: {} scenarios are covered, above the recorded floor of {}; raise `floor` in {ALLOWANCES}",
+            covered.len(),
+            allowances.floor
+        );
+    }
 }

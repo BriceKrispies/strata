@@ -1166,7 +1166,16 @@ fn a_unique_clash_with_a_hidden_record_does_not_name_it() {
         5_002,
         new_note("Hidden", "hidden"),
     );
-    let hidden = 1;
+    // The identifier of writer1's draft, read from the world instead of assumed.
+    let hidden = {
+        let held: Vec<u64> = world.tenants[&tenant_id("alpha")]
+            .records_of(&object("note"))
+            .filter(|r| r.get(&field("slug")) == &text("hidden"))
+            .map(|r| r.id.0)
+            .collect();
+        assert_eq!(held.len(), 1, "exactly one note holds the slug: {held:?}");
+        held[0]
+    };
 
     let refused = step(
         &world,
