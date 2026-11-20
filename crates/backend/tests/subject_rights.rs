@@ -23,7 +23,7 @@ use strata_kernel::{
     SessionId, StateDelta, StateRevision, TenantId, TenantSchema, Timestamp, Transition, Value,
     ViewDef, ViewId, ViewSection,
 };
-use strata_protocol::api::{ErrorCode, ViewRequest};
+use strata_protocol::api::{ErrorCode, SearchRunRequest, ViewRequest};
 use strata_protocol::ws::SessionState;
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{
@@ -96,7 +96,7 @@ fn declared(
             personal: personal.map(|subject| PersonalDeclaration {
                 kind: PersonalKind::Other,
                 subject,
-                searchable: false,
+                searchable: true,
             }),
         },
     )
@@ -152,20 +152,25 @@ fn found(store: &dyn Store, name: &str) -> TenantId {
         days: 30,
         from: RetentionStart::Created,
     };
-    schema.objects.insert(
-        ObjectTypeId::new("profile").expect("object id"),
-        record_type(
-            "profile",
-            vec![
-                declared("person", FieldType::Str, false, None),
-                declared("name", FieldType::Str, true, person()),
-                declared("bio", FieldType::Str, false, person()),
-                declared("city", FieldType::Str, false, person()),
-                declared("plan", FieldType::Str, false, None),
-            ],
-            thirty(),
-        ),
+    let mut profile = record_type(
+        "profile",
+        vec![
+            declared("person", FieldType::Str, false, None),
+            declared("name", FieldType::Str, true, person()),
+            declared("bio", FieldType::Str, false, person()),
+            declared("city", FieldType::Str, false, person()),
+            declared("plan", FieldType::Str, false, None),
+        ],
+        thirty(),
     );
+    // The search index holds the personal `name` (declared searchable) and the plain `plan`.
+    profile.searchable = Some(vec![
+        FieldId::new("name").expect("field id"),
+        FieldId::new("plan").expect("field id"),
+    ]);
+    schema
+        .objects
+        .insert(ObjectTypeId::new("profile").expect("object id"), profile);
     schema.objects.insert(
         ObjectTypeId::new("diary").expect("object id"),
         record_type(
@@ -1296,4 +1301,95 @@ fn an_invitation_addressed_to_the_erased_person_cannot_be_redeemed() {
         .expect("encode")
         .to_lowercase()
         .contains("ada@example.org"));
+}
+
+/// The hits of a search for `words` as `reader`, by person: the `name` each hit carries, `None`
+/// where the hit does not carry it. A hit's person is read from its `person` field.
+fn found_by(
+    app: &App,
+    reader: &Identity,
+    words: &str,
+) -> std::collections::BTreeMap<String, (Option<String>, Vec<String>)> {
+    let result = strata_backend::search::run(
+        app,
+        reader,
+        &SearchRunRequest {
+            query: words.into(),
+            objects: vec!["profile".into()],
+            cursor: None,
+            limit: None,
+        },
+    )
+    .expect("the search runs");
+    result["hits"]
+        .as_array()
+        .expect("hits")
+        .iter()
+        .map(|hit| {
+            let person = hit["fields"]["person"]
+                .as_str()
+                .expect("person")
+                .to_string();
+            let name = hit["fields"]["name"].as_str().map(str::to_string);
+            let matched = hit["matched"]
+                .as_array()
+                .expect("matched")
+                .iter()
+                .map(|f| f.as_str().expect("field").to_string())
+                .collect();
+            (person, (name, matched))
+        })
+        .collect()
+}
+
+// Verifies: PRV-352
+#[test]
+fn a_restriction_hides_the_personal_fields_from_search_and_a_query_on_them_finds_nothing() {
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    let app = app_on(store.clone());
+    let store = store.as_ref();
+    let alpha = found(store, "alpha");
+    // Two people with the same name, so one query reaches both records through the personal field.
+    profile_at(store, &alpha, app.now().0, "alpha:ada", "Lovelace");
+    profile_at(store, &alpha, app.now().0, "alpha:grace", "Lovelace");
+    give_credentials(store, &alpha, &who("alpha:ada"), 2_002);
+    let owner = identity(&app, &alpha, "alpha:owner", 0);
+
+    let before = found_by(&app, &owner, "lovelace");
+    assert_eq!(before.len(), 2, "both are found: {before:?}");
+    assert_eq!(before["alpha:ada"].0.as_deref(), Some("Lovelace"));
+
+    call(
+        &app,
+        &owner,
+        "restrict",
+        "t-s1",
+        json!({ "principal": "alpha:ada", "reason": "contested accuracy" }),
+    )
+    .expect("restricted");
+
+    // Her name is the only field the query matches: no hit, so no hit tells the value. The
+    // unrestricted person's identical record is found, name and all.
+    let during = found_by(&app, &owner, "lovelace");
+    assert_eq!(during.len(), 1, "only Grace is found: {during:?}");
+    assert_eq!(during["alpha:grace"].0.as_deref(), Some("Lovelace"));
+    assert_eq!(during["alpha:grace"].1, vec!["name".to_string()]);
+
+    // A query on a field that is not personal still finds her, without her personal fields.
+    let by_plan = found_by(&app, &owner, "free");
+    assert_eq!(by_plan.len(), 2, "{by_plan:?}");
+    assert_eq!(by_plan["alpha:ada"], (None, vec!["plan".to_string()]));
+    assert_eq!(by_plan["alpha:grace"].0.as_deref(), Some("Lovelace"));
+
+    call(
+        &app,
+        &owner,
+        "lift-restriction",
+        "t-s2",
+        json!({ "principal": "alpha:ada" }),
+    )
+    .expect("lifted");
+    let after = found_by(&app, &owner, "lovelace");
+    assert_eq!(after.len(), 2, "findable again: {after:?}");
+    assert_eq!(after["alpha:ada"].0.as_deref(), Some("Lovelace"));
 }

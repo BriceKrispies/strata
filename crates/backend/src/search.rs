@@ -47,11 +47,15 @@ pub fn run(app: &App, identity: &Identity, request: &SearchRunRequest) -> Result
     let ctx = identity.context(app);
     let result = strata_storage_api::search::run(app.store.as_ref(), &ask, &ctx)
         .map_err(|error| ApiError::execute(error, identity.anonymous()))?;
+    // A restricted person's personal fields are not shown, and a record found only by one of them
+    // is not a hit (PRV-352, D-7741): the same restriction a view applies.
+    let restrictions = crate::subject_rights::Rights::load_restrictions(app, &identity.tenant)?;
     let hits: Vec<Json> = result
         .hits
         .iter()
-        .map(|hit| {
-            let record = &hit.record;
+        .filter_map(|hit| restrictions.hide_hit(&tenant.schema, &hit.record, &hit.matched))
+        .map(|(record, matched)| {
+            let record = &record;
             let fields: Map<String, Json> = record
                 .fields
                 .iter()
@@ -68,7 +72,7 @@ pub fn run(app: &App, identity: &Identity, request: &SearchRunRequest) -> Result
                 "object": record.object.as_str(),
                 "id": record.id.0,
                 "status": status,
-                "matched": hit.matched.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
+                "matched": matched.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
                 "fields": fields,
             })
         })

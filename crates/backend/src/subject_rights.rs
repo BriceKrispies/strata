@@ -251,6 +251,25 @@ impl Rights {
         }
     }
 
+    /// A search hit as a read may show it (PRV-352, D-7741): the record with its restricted
+    /// personal fields removed ([`Rights::hide`]) and the matched fields that are still in it. `None`
+    /// when no matched field survives: the record was found only by a field the restriction hides,
+    /// and returning it would tell the reader that field's value.
+    pub fn hide_hit(
+        &self,
+        schema: &TenantSchema,
+        record: &Arc<Record>,
+        matched: &[strata_kernel::FieldId],
+    ) -> Option<(Arc<Record>, Vec<strata_kernel::FieldId>)> {
+        let shown = self.hide(schema, record);
+        let kept: Vec<strata_kernel::FieldId> = matched
+            .iter()
+            .filter(|field| shown.fields.contains_key(*field))
+            .cloned()
+            .collect();
+        (!kept.is_empty()).then_some((shown, kept))
+    }
+
     /// What the receipt of an erasure says of restrictions and holds, for the subject.
     pub fn receipt_lines(&self, subject: &PrincipalId) -> Vec<String> {
         let mut lines = Vec::new();
