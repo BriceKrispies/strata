@@ -326,6 +326,12 @@ const TENANT_MIGRATIONS: &[Migration] = &[
     },
 ];
 
+/// The steps of a tenant file's layout, for tests that build a file at an older level.
+#[doc(hidden)]
+pub fn tenant_migration_steps() -> &'static [Migration] {
+    TENANT_MIGRATIONS
+}
+
 /// Index values longer than this are not indexed; lookups for them scan the object type.
 const MAX_INDEXED: usize = 240;
 
@@ -849,9 +855,12 @@ impl SqliteStore {
     }
 
     fn lock_open(&self) -> StoreResult<MutexGuard<'_, BTreeMap<TenantId, Database>>> {
-        self.open
+        // A panic while the map was held leaves it whole (it is only inserted into and cleared),
+        // so the next caller takes it instead of every call failing until restart.
+        Ok(self
+            .open
             .lock()
-            .map_err(|_| StoreError::Unavailable("a writer panicked".into()))
+            .unwrap_or_else(|poisoned| poisoned.into_inner()))
     }
 
     /// The file a directory row in `state` names for a tenant.
@@ -886,7 +895,11 @@ impl SqliteStore {
             Place::Disk(dir) => Database::open(&dir.join(file)).map_err(dbe)?,
             Place::Memory => Database::open_in_memory().map_err(dbe)?,
         };
-        db.migrate(TENANT_LEDGER, TENANT_MIGRATIONS, self.opened_at.0)
+        // The ledger records when the step ran, which is now and not when the process started.
+        let ran_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(self.opened_at.0, |d| d.as_millis() as i64);
+        db.migrate(TENANT_LEDGER, TENANT_MIGRATIONS, ran_at)
             .map_err(dbe)?;
         Ok(db)
     }
@@ -2977,7 +2990,7 @@ impl Store for SqliteStore {
         file.write(dbe, |tx| {
             tx.execute("DELETE FROM records", []).map_err(db)?;
             tx.execute(
-                "UPDATE tenant SET name = ?1, revision = ?2, next_record = ?3, event_seq = ?4, schema = ?5, members = ?6
+                "UPDATE tenant SET name = ?1, revision = ?2, next_record = ?3, event_seq = MAX(event_seq, ?4), schema = ?5, members = ?6
                  WHERE id = ?7",
                 params![
                     state.name,
@@ -2993,11 +3006,8 @@ impl Store for SqliteStore {
             for record in state.records.values().flat_map(|records| records.values()) {
                 write_record(tx, record)?;
             }
-            tx.execute(
-                "DELETE FROM events WHERE seq > ?1",
-                params![state.event_seq as i64],
-            )
-            .map_err(db)?;
+            // Events stay and the counter does not go back (`MAX` above): a subscriber that has
+            // passed a sequence number must still see every later event.
             tx.execute(
                 "DELETE FROM journal WHERE revision > ?1",
                 params![state.revision.0 as i64],

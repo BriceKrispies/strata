@@ -33,6 +33,19 @@ pub enum DbError {
     Poisoned,
     /// A migration ledger name that is not a plain identifier.
     BadLedger(String),
+    /// The ledger holds a step this binary does not know: the file was migrated by a newer
+    /// version, and running against its layout is not safe.
+    LedgerAhead {
+        /// The ledger table.
+        ledger: String,
+        /// The highest step recorded in the file.
+        recorded: u32,
+        /// The highest step this binary knows.
+        known: u32,
+    },
+    /// The journal mode of a database file is not the WAL, so the durability this module promises
+    /// does not hold.
+    NotWal(String),
 }
 
 impl fmt::Display for DbError {
@@ -41,6 +54,18 @@ impl fmt::Display for DbError {
             DbError::Sql(error) => error.fmt(f),
             DbError::Poisoned => f.write_str("a writer panicked"),
             DbError::BadLedger(name) => write!(f, "bad migration ledger name {name:?}"),
+            DbError::LedgerAhead {
+                ledger,
+                recorded,
+                known,
+            } => write!(
+                f,
+                "the migration ledger {ledger} records step {recorded}, but this version knows                  steps only up to {known}: the file was migrated by a newer version, and is not                  opened"
+            ),
+            DbError::NotWal(mode) => write!(
+                f,
+                "the database file did not enter write-ahead logging (journal mode is {mode})"
+            ),
         }
     }
 }
@@ -61,7 +86,9 @@ impl From<DbError> for StorageError {
             {
                 StorageError::Invalid(error.to_string())
             }
-            DbError::BadLedger(_) => StorageError::Invalid(error.to_string()),
+            DbError::BadLedger(_) | DbError::LedgerAhead { .. } => {
+                StorageError::Invalid(error.to_string())
+            }
             _ => StorageError::Unavailable(error.to_string()),
         }
     }
@@ -108,7 +135,10 @@ impl Database {
 
     fn prepare(conn: Connection, location: String) -> Result<Self, DbError> {
         conn.busy_timeout(Duration::from_secs(5))?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+        if location != ":memory:" && !mode.eq_ignore_ascii_case("wal") {
+            return Err(DbError::NotWal(mode));
+        }
         conn.pragma_update(None, "synchronous", "FULL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         Ok(Database {
@@ -127,9 +157,14 @@ impl Database {
         &*self.location != ":memory:"
     }
 
-    /// The connection, exclusively.
+    /// The connection, exclusively. A thread that panicked while holding it does not disable the
+    /// database: an open transaction is rolled back when its guard unwinds, so the connection is
+    /// in a usable state and the next caller takes it.
     pub fn lock(&self) -> Result<MutexGuard<'_, Connection>, DbError> {
-        self.conn.lock().map_err(|_| DbError::Poisoned)
+        Ok(self
+            .conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()))
     }
 
     /// Apply the steps of `migrations` whose version is above the highest one recorded in the
@@ -155,6 +190,14 @@ impl Database {
             [],
             |r| r.get(0),
         )?;
+        let known = migrations.iter().map(|m| m.version).max().unwrap_or(0);
+        if applied > known {
+            return Err(DbError::LedgerAhead {
+                ledger: ledger.to_string(),
+                recorded: applied,
+                known,
+            });
+        }
         for step in migrations.iter().filter(|m| m.version > applied) {
             tx.execute_batch(step.sql)?;
             tx.execute(

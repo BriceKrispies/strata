@@ -883,16 +883,17 @@ fn snapshots_restore_to_the_same_hash(store: &dyn Store) {
         Err(StoreError::NotFound(_))
     ));
 
+    let passed_seq = pair.world.tenants[&alpha].event_seq;
     store.restore_snapshot(&alpha, info.id).unwrap();
-    pair.world
-        .tenants
-        .insert(alpha.clone(), kept_world.tenants[&alpha].clone());
+    // The restored state is the snapshot's, except that its event counter stays where it was.
+    let mut restored = kept_world.tenants[&alpha].clone();
+    std::sync::Arc::make_mut(&mut restored).event_seq = passed_seq;
+    pair.world.tenants.insert(alpha.clone(), restored);
     pair.agree("alpha");
     assert_eq!(
         canon::hash_of(&store.load_complete(&tenant_id("beta")).unwrap().tenant),
         beta_before
     );
-    let kept_seq = kept_world.tenants[&alpha].event_seq;
     assert_eq!(
         store
             .events_after(&alpha, 0, 1_000)
@@ -900,7 +901,8 @@ fn snapshots_restore_to_the_same_hash(store: &dyn Store) {
             .last()
             .unwrap()
             .seq,
-        kept_seq
+        passed_seq,
+        "no event sequence number is taken back"
     );
     // Life goes on from the restored state.
     pair.note("alpha", "After", "after");

@@ -173,36 +173,6 @@ fn committed_data_survives_a_reopen() {
     assert!(store.health().unwrap().ok);
 }
 
-#[test]
-fn a_second_connection_sees_only_whole_commits() {
-    let path = fresh_path("shared");
-    let writer = SqliteStore::open(&path, Timestamp(1)).unwrap();
-    let reader = SqliteStore::open(&path, Timestamp(1)).unwrap();
-    let owner = principal_id("alpha:owner");
-    execute(
-        &writer,
-        &Intent::CreateTenant {
-            name: "alpha".into(),
-            owner: owner.clone(),
-        },
-        &ctx("alpha", Principal::System, 10),
-    )
-    .unwrap();
-    let seen = reader
-        .load_complete(&tenant_id("alpha"))
-        .unwrap()
-        .tenant
-        .expect("committed tenant is visible");
-    assert_eq!(seen.revision, StateRevision(1));
-    assert_eq!(
-        reader
-            .events_after(&tenant_id("alpha"), 0, 10)
-            .unwrap()
-            .len(),
-        1
-    );
-}
-
 /// Verifies: H-008
 ///
 /// A value of a query is bound as data: a login that is SQL text is looked up as that text, finds

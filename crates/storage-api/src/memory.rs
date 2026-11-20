@@ -995,14 +995,17 @@ impl Store for MemoryStore {
 
     fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()> {
         let mut inner = self.lock()?;
-        let state = inner
+        let mut state = inner
             .snapshots
             .get(&(tenant.clone(), id))
             .map(|(_, state)| state.clone())
             .ok_or_else(|| StoreError::NotFound(format!("snapshot {id} of {tenant}")))?;
-        inner
-            .events
-            .retain(|(_, event, _)| event.tenant != *tenant || event.seq <= state.event_seq);
+        // Event sequence numbers are never reused: the events stay and the counter does not go
+        // back, so a subscriber that has passed a number still sees every later event.
+        let seen = inner.tenants.get(tenant).map_or(0, |t| t.event_seq);
+        if seen > state.event_seq {
+            Arc::make_mut(&mut state).event_seq = seen;
+        }
         inner
             .journal
             .retain(|entry| entry.tenant != *tenant || entry.revision <= state.revision);

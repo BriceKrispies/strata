@@ -54,6 +54,37 @@ fn read_json(path: &Path) -> Result<Json, String> {
     serde_json::from_str(&read(path)?).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// The file a bundle names by a relative path, refused when it is outside what the bundle may
+/// read: its own directory, and, for a template only, a shared directory (its name starts with
+/// `_`) directly under the tenants root, which is where templates live. Symbolic links and `..`
+/// are resolved before the check.
+fn confined(dir: &Path, relative: &str, shared_allowed: bool) -> Result<PathBuf, String> {
+    let outside = || {
+        format!(
+            "{relative}: the path is outside the tenant directory {}",
+            dir.display()
+        )
+    };
+    let base = fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = fs::canonicalize(dir.join(relative)).map_err(|e| format!("{relative}: {e}"))?;
+    if path.starts_with(&base) {
+        return Ok(path);
+    }
+    if shared_allowed {
+        if let Some(root) = base.parent() {
+            let shared = path
+                .strip_prefix(root)
+                .ok()
+                .and_then(|inside| inside.components().next())
+                .is_some_and(|first| first.as_os_str().to_string_lossy().starts_with('_'));
+            if shared {
+                return Ok(path);
+            }
+        }
+    }
+    Err(outside())
+}
+
 /// Load one tenant directory.
 pub fn load_tenant(dir: &Path) -> Result<LoadedTenant, String> {
     let mut doc = read_json(&dir.join("tenant.json"))?;
@@ -61,7 +92,7 @@ pub fn load_tenant(dir: &Path) -> Result<LoadedTenant, String> {
 
     if let Some(template) = root.remove("template") {
         let relative = template.as_str().ok_or("template must be a path")?;
-        let template = read_json(&dir.join(relative))?;
+        let template = read_json(&confined(dir, relative, true)?)?;
         for section in TEMPLATE_SECTIONS {
             if let (Some(value), false) = (template.get(section), root.contains_key(section)) {
                 root.insert(section.to_string(), value.clone());
@@ -82,7 +113,7 @@ pub fn load_tenant(dir: &Path) -> Result<LoadedTenant, String> {
                     .and_then(Json::as_str);
                 if let Some(relative) = file {
                     *value = Json::String(
-                        read(&dir.join(relative))?
+                        read(&confined(dir, relative, false)?)?
                             .replace("\r\n", "\n")
                             .trim()
                             .to_string(),
