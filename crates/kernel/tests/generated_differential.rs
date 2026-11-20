@@ -828,15 +828,17 @@ fn award(broken: bool) -> AutomationDef {
     }
 }
 
-/// An automation that only ends, run as `editor`, with a run key that is the sequence of the event:
-/// a run it starts carries the hash of that value (difference 10 b).
+/// An automation that only ends, run as `writer`, with a run key that is the sequence of the event:
+/// a run it starts carries the hash of that value (difference 10 b). The powers of `writer` are
+/// given by policies, so defining it checks the conferral of a role whose powers come from
+/// policies (`may-confer`, `holds-policy-power`; WG-5102).
 fn keyed() -> AutomationDef {
     let done = StepName::new("done").unwrap();
     AutomationDef {
         id: WorkflowId::new("keyed").unwrap(),
         label: "Keyed".into(),
         run_as: RunAs {
-            roles: BTreeSet::from([role("editor")]),
+            roles: BTreeSet::from([role("writer")]),
         },
         run_key: Some(Expr::Param("seq".into())),
         start: done.clone(),
