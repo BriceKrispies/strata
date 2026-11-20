@@ -29,7 +29,7 @@ Databases differ, and the contract does not pretend otherwise. `Capabilities` re
 adapter's name, whether it is durable, how it orders concurrent commits and what a reader can
 observe. The diagnostics endpoint shows it.
 
-## The two adapters
+## The adapters
 
 **Memory** (`storage-api/src/memory.rs`): one lock, plain maps. The contract in its simplest form.
 Not durable. Used by tests and by `--store memory`.
@@ -59,6 +59,42 @@ and SAML flows, second factors, recovery codes). The complete layout is the `CON
 
 Tenant structure is data, so there are no per-tenant tables and no DDL when a tenant changes its
 schema. The layout itself changes only by appending to `MIGRATIONS`.
+
+**PostgreSQL** (`storage-postgres/src/lib.rs`): the same tables as SQLite, on a PostgreSQL server,
+through the synchronous `postgres` crate (no TLS yet), with a small pool of connections per
+database.
+
+- **Connecting.** `PostgresStore::connect(control_url, now)` takes a connection string such as
+  `postgres://strata:secret@127.0.0.1:5432/strata`. `PostgresStore::connect_with(control_url,
+  placement, now)` takes a placement rule as well.
+- **Placement.** The control connection's database holds, in the schema `strata_control`, what
+  SQLite keeps in its control database: the tenant directory, the session directory, the job wake
+  index, the platform level of settings, and the ledger `control_migrations`. Where a tenant's
+  tables live is a `Placement`: a rule that maps a tenant to a connection string and a schema. The
+  default rule, `SchemaPerTenant`, puts every tenant in the control database, each in a schema
+  `t_<tenant id>` (`tenant_schema`; an id that would not fit 63 bytes is shortened and given a
+  hash). A rule may put tenants in other databases, one each or a few shared; the database must
+  exist, and the adapter creates the schema in it. The directory records each tenant's schema;
+  the connection string is always the rule's, so none is stored. Each tenant schema holds the
+  tables of a SQLite tenant file and its own ledger `tenant_migrations`. The control and tenant
+  steps have SQLite's numbers and names, so `migrations()` reports the same list.
+- **Isolation.** Commits run at READ COMMITTED. Every write of a tenant first takes a
+  transaction-level advisory lock on the tenant's schema, so the writers of one tenant go one at a
+  time; a commit then locks the tenant's row (`SELECT ... FOR UPDATE`), compares the revision
+  under that lock, and gives its events outbox positions from a counter on that row, so positions
+  follow commit order and never come from a sequence. Loads run in REPEATABLE READ, READ ONLY
+  transactions and see whole commits only. `Capabilities` states this.
+- **Types.** Timestamps are `BIGINT` milliseconds, as SQLite stores them. Text that is compared or
+  ordered is `COLLATE "C"`, so it orders by bytes whatever the database's collation. The JSON the
+  statements read into (jobs, runs, exception records) is `JSONB`; every other document is the
+  canonical JSON text SQLite holds. A broken constraint (SQLSTATE class 23, the ledger's
+  append-only trigger included) is `Invalid`; any other database error, a serialisation failure
+  included, is `Unavailable`.
+- **Conformance.** `crates/storage-postgres/tests/postgres.rs` runs every conformance entry point
+  the SQLite test runs against the server named by `STRATA_PG_URL` (for example
+  `postgres://strata:strata@127.0.0.1:55432/strata`; the role must be allowed to create
+  databases). Each case gets a fresh database `strata_conf_*`; the ones a previous run left are
+  dropped first. Without the variable the test fails and names it. It is in the full tier.
 
 ## Adding a database
 
