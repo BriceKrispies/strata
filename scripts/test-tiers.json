@@ -7,6 +7,14 @@
   "tests": [
     {
       "package": "strata-backend",
+      "target": "aggregate_copies",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Stored aggregate results with a fixed-seed property over random schemas, roles and writes on an in-process backend; scoped runs include it when the backend, the kernel's audience or aggregates modules, or a store changed"
+    },
+    {
+      "package": "strata-backend",
       "target": "aggregates",
       "tier": "routine",
       "seconds": null,
@@ -150,6 +158,14 @@
       "target": "edge",
       "tier": "routine",
       "seconds": 5.28
+    },
+    {
+      "package": "strata-kernel",
+      "target": "audience",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Audience classes with a fixed-seed property over random schemas, roles and records; scoped runs include it when the kernel's audience or aggregates modules changed"
     },
     {
       "package": "strata-kernel",

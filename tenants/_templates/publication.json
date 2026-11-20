@@ -170,7 +170,14 @@
   "queries": [
     { "id": "publication", "object": "publication", "limit": 1 },
     { "id": "featured_post", "object": "post", "where": "record.status == 'published' and record.featured == true", "order": ["-published_at"], "limit": 1 },
-    { "id": "recent_posts", "object": "post", "where": "record.status == 'published'", "order": ["-published_at"], "limit": 24 },
+    {
+      "id": "recent_posts", "object": "post", "where": "record.status == 'published'", "order": ["-published_at"], "limit": 24,
+      "declared_fields": ["category", "published_at"],
+      "aggregates": [
+        { "id": "posts_by_category", "kind": "count", "group_by": "category", "scan_bound": 10000 },
+        { "id": "latest_published", "kind": "top", "field": "published_at", "n": 5, "descending": true, "scan_bound": 10000 }
+      ]
+    },
     { "id": "post_by_slug", "object": "post", "where": "record.slug == param.slug", "params": ["slug"], "limit": 1 },
     { "id": "posts_in_category", "object": "post", "where": "record.status == 'published' and record.category == param.category", "params": ["category"], "order": ["-published_at"] },
     { "id": "posts_by_author", "object": "post", "where": "record.status == 'published' and record.author == param.author", "params": ["author"], "order": ["-published_at"] },

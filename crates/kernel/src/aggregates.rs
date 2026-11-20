@@ -20,9 +20,11 @@
 //! since the records beyond the window cannot be examined and not examining them would answer
 //! in part.
 //!
-//! The kernel does not derive an audience class from the policies of a tenant today (CPY-005,
-//! AGG-033), so nothing here is stored or shared: the answer is computed for the principal who
-//! asks, on every request, and carries no class.
+//! The result names the object types it depends on ([`dependencies`], AGG-042), and the audience
+//! class of a reader for it is derived by [`crate::audience`]. `run` is a pure computation for the
+//! principal of its context; a result may be stored for one audience class and served to the
+//! readers of that class under a key holding the revision of each of those object types (D-5064,
+//! D-5065, AGG-030 to AGG-034), which is the work of the shell (`strata-backend`).
 //!
 //! The definition-time checks ([`problems`]) are run by `TenantSchemaExt::problems`, so a query or
 //! a view section that declares something this module refuses is refused when it is defined.
@@ -32,7 +34,7 @@ use crate::intent::{Check, CheckExt, Context, DomainError, DomainErrorExt, Error
 use crate::limits;
 use crate::read::visible_in;
 use crate::rules::{missing_error, roles_of, Lookup};
-use crate::schema::{FieldType, ObjectTypeDef, TenantSchema};
+use crate::schema::{Action, FieldType, ObjectTypeDef, Resource, TenantSchema};
 use crate::state::{Need, Principal, Record, RecordExt, State};
 use crate::types::{
     AggregateDef, AggregateGroup, AggregateId, AggregateKind, AggregateRequest, AggregateResult,
@@ -49,12 +51,12 @@ pub const SUM_OVERFLOW: &str = "sum-overflow";
 pub const GROUP_BOUND_EXCEEDED: &str = "group-bound-exceeded";
 
 /// The aggregates a query declares; none for a query stored before aggregates.
-fn aggregates_of(def: &QueryDef) -> &[AggregateDef] {
+pub(crate) fn aggregates_of(def: &QueryDef) -> &[AggregateDef] {
     def.aggregates.as_deref().unwrap_or_default()
 }
 
 /// The fields a query declares that a request filter or an aggregate may name.
-fn declared_of(def: &QueryDef) -> &[FieldId] {
+pub(crate) fn declared_of(def: &QueryDef) -> &[FieldId] {
     def.declared_fields.as_deref().unwrap_or_default()
 }
 
@@ -228,14 +230,13 @@ pub(crate) fn walk(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
     }
 }
 
-/// The object types an aggregate depends on (AGG-042): the object type of its query, and the
-/// object types the query filter and the read rules of the fields it names follow a reference
-/// into. The Read policies of the object type are not walked.
-fn depends_on(
-    schema: &TenantSchema,
-    def: &QueryDef,
-    rules: &[(&FieldId, &Expr)],
-) -> BTreeSet<ObjectTypeId> {
+/// The object types an aggregate depends on (AGG-042): the object type of its query, and every
+/// object type that something the result is made of follows a reference into. That is the query
+/// filter, the Read policies of the object type (the ones that name Read on it or on every object
+/// type, so a change to a record that a policy follows changes who may be counted) and the read
+/// rules of the fields the aggregate can name: the one it reads, the one it groups by and every
+/// field its query declares. The set depends on neither the reader nor the request.
+fn depends_on(schema: &TenantSchema, def: &QueryDef, agg: &AggregateDef) -> BTreeSet<ObjectTypeId> {
     let mut found = BTreeSet::from([def.object.clone()]);
     let Some(object) = schema.objects.get(&def.object) else {
         return found;
@@ -254,10 +255,43 @@ fn depends_on(
     if let Some(filter) = &def.filter {
         walk(filter, &mut follow);
     }
-    for (_, rule) in rules {
-        walk(rule, &mut follow);
+    for policy in schema.policies.values() {
+        let reaches = match &policy.resource {
+            Resource::AnyObject => true,
+            Resource::Object(named) => *named == def.object,
+            Resource::Schema | Resource::Members => false,
+        };
+        if reaches && policy.actions.contains(&Action::Read) {
+            if let Some(condition) = &policy.condition {
+                walk(condition, &mut follow);
+            }
+        }
+    }
+    let named: BTreeSet<&FieldId> = declared_of(def)
+        .iter()
+        .chain(agg.field.iter())
+        .chain(agg.group_by.iter())
+        .collect();
+    for field in named {
+        if let Some(rule) = object.fields.get(field).and_then(|f| f.read.as_ref()) {
+            walk(rule, &mut follow);
+        }
     }
     found
+}
+
+/// The object types the aggregate `aggregate` of the query `query` depends on under `schema`
+/// (AGG-042), or `None` when the query or the aggregate does not exist. A stored result is keyed by
+/// the revision of each of them (D-5064), so this is asked before the result is computed; it is
+/// the set that a result of the same aggregate names in `depends_on`.
+pub fn dependencies(
+    schema: &TenantSchema,
+    query: &crate::types::QueryId,
+    aggregate: &AggregateId,
+) -> Option<BTreeSet<ObjectTypeId>> {
+    let def = schema.queries.get(query)?;
+    let agg = aggregates_of(def).iter().find(|a| a.id == *aggregate)?;
+    Some(depends_on(schema, def, agg))
 }
 
 /// Run one aggregate of a named query for the principal of `ctx`.
@@ -498,7 +532,7 @@ pub fn run(
         aggregate: agg.id.clone(),
         groups,
         scanned: selected.len() as u32,
-        depends_on: depends_on(schema, def, &rules),
+        depends_on: depends_on(schema, def, agg),
         revision: tenant.revision,
         schema_version: schema.version,
     })

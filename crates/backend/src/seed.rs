@@ -208,5 +208,7 @@ pub fn reset_tenant(app: &App, tenant: &TenantId) -> Result<bool, String> {
         .find(|loaded| loaded.bundle.id == *tenant)
         .ok_or_else(|| format!("no bundle for {tenant}"))?;
     app.store.reset_tenant(tenant).map_err(|e| e.to_string())?;
+    // The tenant starts a new history, whose change counters may repeat those of the old one.
+    app.aggregate_copies.forget(tenant);
     install_one(app, &loaded)
 }

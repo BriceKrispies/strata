@@ -214,6 +214,50 @@ pub struct QuerySpec {
     pub order: Vec<String>,
     #[serde(default)]
     pub limit: Option<u32>,
+    /// The aggregates of the query (AGG-001).
+    #[serde(default)]
+    pub aggregates: Vec<AggregateSpec>,
+    /// The fields that a request filter or an aggregate may name (D-5060).
+    #[serde(default)]
+    pub declared_fields: Vec<FieldId>,
+}
+
+/// An aggregate of a query: what it computes over which field, grouped by which, and how many
+/// records it may examine (`aggregate-def`, D-5062). The kernel refuses one that names a field the
+/// query does not declare when the bundle is installed.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AggregateSpec {
+    pub id: AggregateId,
+    /// `count`, `sum`, `minimum`, `maximum` or `top`.
+    pub kind: AggregateKind,
+    /// The field a sum, minimum, maximum or top list reads.
+    #[serde(default)]
+    pub field: Option<FieldId>,
+    #[serde(default)]
+    pub group_by: Option<FieldId>,
+    /// The length of a top list.
+    #[serde(default)]
+    pub n: Option<u32>,
+    /// Whether a top list puts the greatest value first.
+    #[serde(default)]
+    pub descending: bool,
+    pub scan_bound: u32,
+}
+
+impl AggregateSpec {
+    /// The kernel's definition.
+    pub fn def(&self) -> AggregateDef {
+        AggregateDef {
+            id: self.id.clone(),
+            kind: self.kind,
+            field: self.field.clone(),
+            group_by: self.group_by.clone(),
+            n: self.n,
+            descending: self.descending,
+            scan_bound: self.scan_bound,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -239,6 +283,9 @@ pub struct SectionSpec {
     pub markdown: Vec<FieldId>,
     #[serde(default)]
     pub single: bool,
+    /// The aggregate of the query that the section shows in place of its rows (AGG-041).
+    #[serde(default)]
+    pub aggregate: Option<AggregateId>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -530,8 +577,10 @@ impl Bundle {
                     })
                     .collect(),
                 limit: query.limit,
-                aggregates: None,
-                declared_fields: None,
+                aggregates: (!query.aggregates.is_empty())
+                    .then(|| query.aggregates.iter().map(AggregateSpec::def).collect()),
+                declared_fields: (!query.declared_fields.is_empty())
+                    .then(|| query.declared_fields.clone()),
             }));
         }
         for view in &self.views {
@@ -552,7 +601,7 @@ impl Bundle {
                         include: section.include.clone(),
                         markdown: section.markdown.clone(),
                         single: section.single,
-                        aggregate: None,
+                        aggregate: section.aggregate.clone(),
                     },
                 );
             }

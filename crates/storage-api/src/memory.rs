@@ -16,7 +16,7 @@ use crate::{
     ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord, IDEMPOTENCY_RETENTION_MS,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::ext::*;
 use strata_kernel::segments as seg;
@@ -28,6 +28,8 @@ use strata_kernel::{
 #[derive(Default)]
 struct Inner {
     tenants: BTreeMap<TenantId, Arc<TenantState>>,
+    /// The change counter of each object type of each tenant ([`Store::object_revisions`]).
+    object_revisions: BTreeMap<(TenantId, ObjectTypeId), u64>,
     /// Every event in commit order, with its position in its tenant's outbox and whether it was
     /// published.
     events: Vec<(u64, DomainEvent, bool)>,
@@ -141,6 +143,9 @@ fn check_jobs(new: &[NewJob]) -> StoreResult<()> {
 pub struct MemoryStore {
     inner: Mutex<Inner>,
     loads: AtomicUsize,
+    /// Added to every object type's counter, and raised when a snapshot is restored or a tenant
+    /// is reset, so that no counter repeats a value for different records.
+    epoch: AtomicU64,
 }
 
 impl MemoryStore {
@@ -218,6 +223,26 @@ impl Store for MemoryStore {
             event_seq: t.event_seq,
             records: t.record_count() as u64,
         }))
+    }
+
+    fn object_revisions(
+        &self,
+        tenant: &TenantId,
+        objects: &[ObjectTypeId],
+    ) -> StoreResult<BTreeMap<ObjectTypeId, u64>> {
+        let inner = self.lock()?;
+        let epoch = self.epoch.load(Ordering::Relaxed);
+        Ok(objects
+            .iter()
+            .map(|object| {
+                let counter = inner
+                    .object_revisions
+                    .get(&(tenant.clone(), object.clone()))
+                    .copied()
+                    .unwrap_or(0);
+                (object.clone(), epoch + counter)
+            })
+            .collect())
     }
 
     fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
@@ -1431,16 +1456,23 @@ impl Store for MemoryStore {
             .journal
             .retain(|entry| entry.tenant != *tenant || entry.revision <= state.revision);
         inner.tenants.insert(tenant.clone(), state);
+        self.epoch.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
     fn reset(&self) -> StoreResult<()> {
-        *self.lock()? = Inner::default();
+        let mut inner = self.lock()?;
+        // The counters are kept: a counter that fell back could repeat a value for other records.
+        let counters = std::mem::take(&mut inner.object_revisions);
+        *inner = Inner::default();
+        inner.object_revisions = counters;
+        self.epoch.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
     fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()> {
         let mut inner = self.lock()?;
+        self.epoch.fetch_add(1, Ordering::Relaxed);
         inner.tenants.remove(tenant);
         inner.positions.remove(tenant);
         inner.events.retain(|(_, event, _)| event.tenant != *tenant);
@@ -1800,6 +1832,12 @@ fn commit_in(
 
     // Nothing above changed the store; everything below cannot fail.
     inner.tenants.insert(tenant.clone(), Arc::new(next));
+    for object in crate::changed_objects(&commit.delta) {
+        *inner
+            .object_revisions
+            .entry((tenant.clone(), object))
+            .or_insert(0) += 1;
+    }
     if let Some(write) = write.filter(|w| !w.is_empty()) {
         let tables = inner.segments.entry(tenant.clone()).or_default();
         // Checked above, under the same lock.

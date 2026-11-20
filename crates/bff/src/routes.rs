@@ -1421,7 +1421,10 @@ async fn view(
 /// Run one aggregate of a named query: `GET /api/aggregate?query=&aggregate=&filter=`, the filter
 /// being a JSON object of field values. The backend's kernel decides what the reader may count.
 ///
-/// Implements: CT-310
+/// A `tenant` that is not the one of the host and session is refused by the backend as
+/// `tenant-mismatch`.
+///
+/// Implements: CT-310, CT-311
 async fn aggregate_run(
     State(bff): State<Shared>,
     headers: HeaderMap,
@@ -1449,7 +1452,9 @@ async fn aggregate_run(
         },
         Some(_) => return Err(invalid("The filter is too long.")),
     };
+    let tenant = query.remove("tenant").filter(|value| value.len() <= 64);
     let request = strata_protocol::api::AggregateRunRequest {
+        tenant,
         query: wanted,
         aggregate,
         filter,

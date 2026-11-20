@@ -651,3 +651,47 @@ fn specc_bundle_takes_exactly_one_product() {
     assert_eq!(two.status.code(), Some(2));
     assert!(!root().join("var/specc-bundle/two").exists());
 }
+
+// Verifies: AGG-001
+// Verifies: AGG-041
+#[test]
+fn a_query_with_aggregates_and_a_section_that_names_one_reach_the_bundle() {
+    let output = bundle_of(&product("bundle/score-board.jsonc"));
+    assert_eq!(output.files[0].path, "score-board.bundle.json");
+    let bundle = the_bundle(&output);
+    let query = &bundle["content"]["queries"]["score_board__entries"];
+    assert_eq!(query["declared-fields"], json!(["player", "points"]));
+    assert_eq!(query["aggregates"][0]["id"], "leaders");
+    assert_eq!(query["aggregates"][0]["kind"], "top");
+    assert_eq!(query["aggregates"][0]["n"], 3);
+    assert_eq!(query["aggregates"][1]["group-by"], "player");
+    assert_eq!(query["aggregates"][1]["scan-bound"], 1000);
+    assert_eq!(
+        bundle["content"]["views"]["score_board__leaderboard"]["sections"]["leaders"]["aggregate"],
+        "leaders"
+    );
+}
+
+// Verifies: AGG-001
+#[test]
+fn an_aggregate_that_is_not_a_value_of_aggregate_def_is_refused_by_the_layer_checks() {
+    let file = product("bundle/score-board.jsonc");
+    let mut top = jsonc::parse(&file.text).unwrap();
+    // A kind the platform type does not have, and a bound that is not a number.
+    top["queries"][0]["aggregates"][0]["kind"] = json!("median");
+    top["queries"][0]["aggregates"][1]["scan-bound"] = json!("many");
+    let refused = ProductFile {
+        text: top.to_string(),
+        ..file
+    };
+    let diagnostics = match generate(&refused) {
+        Err(diagnostics) => diagnostics,
+        Ok(_) => panic!("the product is refused"),
+    };
+    assert!(
+        diagnostics.iter().all(|d| d.code.starts_with("layer.")),
+        "{:?}",
+        codes(&diagnostics)
+    );
+    assert!(!diagnostics.is_empty());
+}
