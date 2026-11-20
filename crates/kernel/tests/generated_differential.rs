@@ -50,11 +50,12 @@
 //!      does not order a list element by element, as `Value`'s derived order does.
 //!      The corpus has no list-valued order key (it has a list-valued field, `tags`, which no
 //!      query orders by).
-//!   4. Not exercised: the intents of teams and invitations, and schema changes other than
-//!      `DefineField`, `DefineRelationship`, `DefineConstraint`, `DefineQuery`,
-//!      `DefineRolePermissions`, `RemoveField` and the definitions of triggers, automations, tenant
-//!      operations and composite unique constraints (and their removals), which the generator
-//!      below adds to the seven intents of `properties.rs`. `texts_for` reads defaults and
+//!   4. Not exercised: the intents of invitations and of the roles and removals of teams, and
+//!      schema changes other than `DefineField`, `DefineRelationship`, `DefineConstraint`,
+//!      `DefineQuery`, `DefineRolePermissions`, `RemoveField`, the definitions of triggers,
+//!      automations, tenant operations and composite unique constraints (and their removals), of
+//!      settings and of capabilities, which the generator below adds to the seven intents of
+//!      `properties.rs`, with the writes of settings, `DefineTeam` and `AddTeamMember`. `texts_for` reads defaults and
 //!      constraints only from `DefineField` and `DefineConstraint`; the definitions print no
 //!      expression. The functions of the other intents are mirrored all the same (the conferral
 //!      of a role, the owner that remains, the reserved `team:` prefix, the rewrite of records
@@ -77,55 +78,34 @@
 //!      since WG-5132 and WG-5133, but the functions are not written): retry delays, attempt
 //!      timeouts and waits of an automation step, and the two hundred
 //!      nodes of an operation condition. The generator draws no definition that breaks one, nor
-//!      a hundred and one triggers. Its automation acts with no run-as role, so the conferral of
-//!      a run-as role is compared only through the specification's examples.
+//!      a hundred and one triggers.
 //!   8. Not mirrored: the problems of the aggregates a named query declares, of its declared
 //!      fields and of a view section that names an aggregate (`strata_kernel::aggregates`,
 //!      AGG-001 to AGG-023): the generated `schema-problems` states none of them, and the
 //!      aggregate itself is not a read of the generated `kernel-read`. The corpus defines no
 //!      query with an aggregate.
-//!   9. Not exercised, and not mirrored in full: layered settings and product capabilities
-//!      (`settings.rs`, `capabilities.rs`). The generated `apply-change` applies define-setting,
-//!      remove-setting, define-capability and remove-capability as the hand-written one does, but
-//!      `intent-decision` refuses the intent write-setting (`setting:decided_by_the_kernel`),
-//!      `apply-delta` leaves the override operations out, the generated `change-schema` writes
-//!      none of the overrides, revisions and events a change of a definition brings
-//!      (`settings::schema_change_effects`), and `schema-problems` has not the checks of setting
-//!      definitions, of the grants of declared capabilities and of the references of a trigger to
-//!      a setting. The corpus holds no setting, no capability and no override:
-//!      `assert_no_input_of_a_known_difference` fails when a snapshot holds one, and
-//!      `compare_transition` fails on a write-setting intent.
-//!  10. Not mirrored: what `strata_kernel::triggers` adds once the events of a decision are final
-//!      (D-7200 to D-7204, WG-5097, WG-5099, WG-5079): the `StartAutomation` and
-//!      `DeclineAutomation` effects of the triggers that match an event, the `transitions` a
-//!      record-updated event names, the `defined-by` and `defined-at` the kernel writes on a
-//!      trigger or an automation it defines, the suspension of an automation whose definer lost
-//!      authority, the roles of an automation principal and its reserved `automation:` prefix.
-//!      The generated `finish`, `update-record` and `apply-change` do not state them yet. Compared
-//!      as: both results without those effects, transitions, definers and times
-//!      (`without_kernel_only`). The suspension is guarded: the corpus's automation acts with no
-//!      run-as role, so it is never suspended, and `assert_no_input_of_a_known_difference` fails
 //!      on one that has a role. No principal of the corpus starts with `automation:`. A trigger of
 //!      the event ledger-posted starts a run for the entry a ledger posting writes, with the
 //!      parameters owner, unit, amount, balance, balance_before, entry_sequence and reason; the
 //!      generated `event-params` does not, and the generator declares no ledger unit.
-//!  11. Not exercised, and not mirrored: the automation principal (`strata_kernel::automation`,
-//!      WFL-1527). The hand-written `roles_of` gives a principal `automation:<id>` exactly the
-//!      run-as roles of its automation, and `refuse_reserved_principals` refuses the prefix for
-//!      a named person and for a caller with a session; the generated `roles-of` and
-//!      `reserved-principal` do not yet. Guarded: `assert_no_automation_principal` fails on a
-//!      context whose principal has the prefix.
-//!  12. Not exercised, and not mirrored: the invocation of a tenant operation (`InvokeOperation`,
+//!   9. Not mirrored, in the trigger decisions of `strata_kernel::triggers` (the rest of the module
+//!      is mirrored by `after-decision`): (a) the check that a condition or a run key reads nothing
+//!      the automation principal may not read (`unreadable`, which declines with `condition-failed`)
+//!      and the `InsufficientState` of a record a condition follows to (`expr::missing`): both walk
+//!      the expression tree, a structural recursion that specc refuses, and following a reference
+//!      is difference 2; (b) the run key of a started run: the kernel writes the SHA-256 of the
+//!      canonical JSON of the value, and the function language has no hash, so the generated
+//!      `trigger-start` writes the canonical JSON itself (`value-canonical-json`) and the test
+//!      hashes it with `canon::hash_bytes` before comparing, which compares the hash of the same
+//!      text; a run key that is a list holding a list is written one level deep only, and the
+//!      corpus has no such key. Guarded: `assert_no_input_of_a_known_difference` fails on a trigger
+//!      condition or an automation run key that follows a reference or reads a field some object
+//!      type protects with a read condition.
+//!  10. Not exercised, and not mirrored: the invocation of a tenant operation (`InvokeOperation`,
 //!      `crates/kernel/src/operations.rs`, WG-5100). The generated `intent-decision` refuses it
 //!      with `operation:decided_by_the_kernel` and the generated `needs` plans nothing for it,
 //!      because the function language does not state the decision yet. The operation generator
 //!      draws no invocation, and `compare_transition` fails on one.
-//!  13. Not mirrored: the tenant ledger (`strata_kernel::ledger`, WG-5083). The generated
-//!      `intent-decision` refuses `PostLedger`, `apply-change` refuses the ledger schema changes,
-//!      `needs` plans no ledger need, `apply-delta` leaves a ledger operation out and
-//!      `schema-problems` does not check ledger declarations; the functions that rebuild a tenant
-//!      schema or state carry its `ledger` member unchanged. The generator draws no ledger intent
-//!      or change: `assert_no_input_of_a_known_difference` fails on a snapshot that holds a
 //!      ledger, and `compare_transition` on a posting. Also not mirrored, for the same reason
 //!      (WG-5168, WG-5169, WG-5172): a policy over the ledger resource (the generated
 //!      `policy-problems` checks its condition against no fields and has no arm for the fields of
@@ -134,7 +114,25 @@
 //!      intent `ExpireLedger`, which the generated `intent-decision` refuses with
 //!      `ledger:decided_by_the_ledger_module`. Guarded by the same assertion, which also fails on
 //!      a policy that names the ledger, and by `compare_transition` on that intent.
-//!  14. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
+//!  11. Not mirrored: the posting of the tenant ledger (`strata_kernel::ledger::post`, the
+//!      `PostLedger` intent, a transfer as two postings committed together; WG-5083) and
+//!      everything that reads an account. An account is named by a UUID derived from the
+//!      SHA-256 of its tenant, owner, unit and scope (`account_id`), and the function language
+//!      has neither a hash nor a way to build a uuid; and an example argument or result of a
+//!      generated function may not contain a uuid, which every account header and entry holds,
+//!      so no example of a decision over a snapshot with accounts can be written. The generated
+//!      `intent-decision` refuses `PostLedger` (`ledger:decided_by_the_ledger_module`),
+//!      `apply-delta` leaves a ledger operation out, the plan of a posting (`refine_needs`) is not
+//!      stated, and the branch of `ledger-removal-check` that finds an account naming a unit or a
+//!      pool has no example. Mirrored: the declarations (`declare-ledger-unit`, `-pool`,
+//!      `set-ledger-limit`, `remove-ledger-definition` in `apply-change`), their problems
+//!      (`ledger-problems`), the capability `ledger-configure`, the needs of a removal, the
+//!      references of a trigger, an automation step and an operation step to a unit, and, compared
+//!      directly (`the_ledger_periods_and_limits_agree_with_the_generated_functions`), the
+//!      calendar periods and the limits of an account (`ledger-period-start`, `ledger-limits-of`).
+//!      Guarded: `assert_no_input_of_a_known_difference` fails on a snapshot whose state holds a
+//!      ledger (an account or an entry), and `compare_transition` on a posting.
+//!  12. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
 //!      templates, tokens and product records of the tenant schema that the hand-written `schema.problems` makes through
 //!      `object_meta::problems`, `templates::problems` and `products::problems` (retention from a
 //!      timestamp field, the states of a publication, the type of a language field, the one-line
@@ -146,7 +144,7 @@
 //!      capability bundle-install of a change that carries a product record, D-6582, INT-1582):
 //!      the generated `schema-problems` and `change-schema` do not state them. The generator
 //!      draws no such declaration, template, token or product record.
-//!  15. Not exercised, and not mirrored: planned named queries (`strata_kernel::query_plan`,
+//!  13. Not exercised, and not mirrored: planned named queries (`strata_kernel::query_plan`,
 //!      KRN-2520 to KRN-2524, KRN-2920 to KRN-2923). The hand-written kernel serves a query whose
 //!      filter has an indexable condition from `Need::IndexPage` candidates, and an equality or a
 //!      list of values on one field ordered by another attribute (a pair plan,
@@ -163,7 +161,7 @@
 //!      Guarded: `compare_read` fails on a read of a query that has an index plan (a pair plan is
 //!      one), and `compare_transition` fails on a schema change whose evidence would hold a scan
 //!      warning.
-//!  16. Not exercised, and not mirrored: the erasure of a data subject (`EraseSubject`,
+//!  14. Not exercised, and not mirrored: the erasure of a data subject (`EraseSubject`,
 //!      `crates/kernel/src/erasure.rs`, D-7460). The generated `intent-decision` refuses it with
 //!      `erasure:decided_by_the_kernel` and the generated `needs` plans nothing for it. The
 //!  17. Not mirrored: the checks of an invoke-operation step (`definitions::invoke_operation_problems`,
@@ -179,13 +177,25 @@
 //! Every difference that is not compared through an adjustment is guarded, so that a corpus that
 //! grows into one is told to mirror the rule or to count the difference here:
 //! `assert_no_input_of_a_known_difference` runs on every snapshot the test decides or reads and
-//! fails on an input of differences 2, 7, 8, 9, 10, 13 or 14; `compare_transition` fails on an
-//! intent of differences 9, 12, 13 or 16, on a context of difference 11
-//! (`assert_no_automation_principal`) and on a schema change that warns of a scan (difference 15);
-//! `compare_read` fails on a read of a planned query (difference 15). Differences 1 and 10 are
-//! compared through an adjustment (the detail's prefix, `without_kernel_only`). Differences 3 to
-//! 6 are guarded by the operation generator drawing nothing that reaches them.
+//! fails on an input of differences 2, 7, 8, 9, 11 or 12; `compare_transition` fails on an
+//! intent of differences 10, 11 or 14 and on a schema change that warns of a scan (difference
+//! 13); `compare_read` fails on a read of a planned query (difference 13). Difference 1 is
+//! compared through an adjustment (the detail's prefix) and the run key of difference 9 through
+//! another (`hash_run_keys`). Differences 3 to 6 are guarded by the operation generator drawing
+//! nothing that reaches them.
 //!
+//! Mirrored, so no longer differences: the automation principal (`automation:<id>` holds the
+//! run-as roles of its automation and no other, and the prefix is reserved: `roles-of`,
+//! `reserved-principal`, `automation-roles`; WG-5160), the trigger decisions at commit (the
+//! effects `StartAutomation` and `DeclineAutomation`, the `transitions` of a record-updated event,
+//! the definer and time stamped on a trigger or an automation, the suspension of an automation
+//! whose definer lost authority: `after-decision`, `stamp-definitions`; WG-5136), layered settings
+//! and product capabilities (the write of an override, the resolution, the effects of a change of
+//! definitions, the checks of definitions and of the grants of declared capabilities:
+//! `write-setting`, `resolve-setting`, `setting-change-effects`, `setting-problems`,
+//! `capability-problems`, `capability-grant-problem`; WG-5140), the declarations of the tenant
+//! ledger (units, pools and limits: `apply-change`, `ledger-problems`, `ledger-removal-check`,
+//! `ledger-change-needs`, the capability `ledger-configure`; WG-5170), the size limits of `limits.rs` (the bytes of a record, the
 //! Mirrored, so no longer differences: a policy condition of a transition that follows a
 //! reference, through the lookup the snapshot gives, and the `InsufficientState` naming the record
 //! it needs when the snapshot does not cover it (`authorize-needing`, `require`; WG-5132,
@@ -231,9 +241,14 @@ const EVALUATION_FAILED_DETAIL: &str = ": evaluation failed";
 struct Op {
     tenant: usize,
     actor_tenant: usize,
-    /// 0..=3 the members of the tenant, 4 a stranger, 5 an anonymous visitor, 6 the system.
+    /// 0..=3 the members of the tenant, 4 a stranger, 5 an anonymous visitor, 6 the system, 7 the
+    /// automation `award` acting as its principal without a session, 8 that principal with a
+    /// session, which the kernel refuses.
     actor: usize,
     kind: OpKind,
+    /// Whether the change carries a hop count past the limit of the triggers (the hop of the
+    /// automation worker): one op in eight.
+    past_hop_limit: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -283,6 +298,24 @@ enum OpKind {
         who: usize,
         role: usize,
     },
+    /// The write of an override of a setting (or its removal), at a level, with a revision the
+    /// caller claims to have read.
+    WriteSetting {
+        /// 0 `theme`, 1 `mode`, 2 a setting that is not defined.
+        setting: u8,
+        /// 0 tenant, 1 team, 2 person, 3 platform.
+        level: u8,
+        /// 0 none, 1 the team `desk`, 2 a team that does not exist.
+        team: u8,
+        /// 0 and 1 a string, 2 an integer, 3 the null, 4 no value (a removal), 5 a bool.
+        value: u8,
+        expected: u64,
+    },
+    /// The team `desk`, so that the team level of a setting has someone to resolve for.
+    DefineTeam,
+    AddToTeam {
+        who: usize,
+    },
 }
 
 /// What a `Big` operation writes, at or just over a limit of `limits.rs`.
@@ -313,9 +346,13 @@ enum SchemaOp {
     TightenTitle(i64),
     Nonsense,
     DefineAutomation,
+    /// An automation whose run key is a parameter of the event, so a started run carries a hash.
+    DefineKeyedAutomation,
     BrokenAutomation,
     RemoveAutomation,
     DefineTrigger,
+    /// A trigger on the creation of a note that starts the keyed automation.
+    DefineCreateTrigger,
     RemoveTrigger,
     DefineOperation,
     RemoveOperation,
@@ -339,6 +376,20 @@ enum SchemaOp {
     BadPermissions,
     /// A hundred more fields, which is over the most an object type may have.
     ManyFields,
+    /// A setting `theme` (0 a string that every level may override, 1 a bool, which changes the
+    /// type of the first, 2 a string a lock of the tenant closes below the tenant level) and the
+    /// setting `mode`, a string that only the person level overrides (3).
+    DefineSetting(u8),
+    RemoveSetting(u8),
+    /// A capability a product declares, one with an id of no product form, and a grant of a
+    /// capability of the product form to a role.
+    DefineCapability,
+    DefineBadCapability,
+    GrantProductCapability(bool),
+    /// One of the changes of the ledger declarations `ledger_change` lists, and a trigger on a
+    /// posting of the unit `credits`.
+    Ledger(u8),
+    DefineLedgerTrigger,
 }
 
 const MEMBERS: [&str; 5] = ["owner", "editor", "writer1", "writer2", "stranger"];
@@ -351,9 +402,11 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         3 => (3i64..30).prop_map(SchemaOp::TightenTitle),
         1 => Just(SchemaOp::Nonsense),
         2 => Just(SchemaOp::DefineAutomation),
+        1 => Just(SchemaOp::DefineKeyedAutomation),
         1 => Just(SchemaOp::BrokenAutomation),
         1 => Just(SchemaOp::RemoveAutomation),
         2 => Just(SchemaOp::DefineTrigger),
+        1 => Just(SchemaOp::DefineCreateTrigger),
         1 => Just(SchemaOp::RemoveTrigger),
         2 => Just(SchemaOp::DefineOperation),
         1 => Just(SchemaOp::RemoveOperation),
@@ -368,6 +421,13 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         1 => prop_oneof![Just(0u32), Just(201u32)].prop_map(SchemaOp::BadQueryLimit),
         1 => Just(SchemaOp::BadPermissions),
         1 => Just(SchemaOp::ManyFields),
+        3 => (0u8..4).prop_map(SchemaOp::DefineSetting),
+        1 => (0u8..2).prop_map(SchemaOp::RemoveSetting),
+        1 => Just(SchemaOp::DefineCapability),
+        1 => Just(SchemaOp::DefineBadCapability),
+        1 => any::<bool>().prop_map(SchemaOp::GrantProductCapability),
+        5 => (0u8..13).prop_map(SchemaOp::Ledger),
+        1 => Just(SchemaOp::DefineLedgerTrigger),
     ];
     let big = prop_oneof![
         Just(BigShape::LongTitle),
@@ -391,13 +451,19 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         2 => (schema_op, any::<bool>()).prop_map(|(change, grandfather)| OpKind::ChangeSchema { change, grandfather }),
         2 => (0usize..5, 0usize..5).prop_map(|(who, role)| OpKind::Assign { who, role }),
         2 => (0usize..5, 0usize..5).prop_map(|(who, role)| OpKind::Revoke { who, role }),
+        4 => (0u8..3, 0u8..4, 0u8..3, 0u8..6, 0u64..4).prop_map(|(setting, level, team, value, expected)| {
+            OpKind::WriteSetting { setting, level, team, value, expected }
+        }),
+        1 => Just(OpKind::DefineTeam),
+        1 => (0usize..5).prop_map(|who| OpKind::AddToTeam { who }),
     ];
-    (0usize..3, 0usize..3, 0usize..7, kind, 0u8..10).prop_map(
-        |(tenant, other, actor, kind, cross)| Op {
+    (0usize..3, 0usize..3, 0usize..9, kind, 0u8..10, 0u8..8).prop_map(
+        |(tenant, other, actor, kind, cross, hop)| Op {
             tenant,
             actor_tenant: if cross == 0 { other } else { tenant },
             actor,
             kind,
+            past_hop_limit: hop == 0,
         },
     )
 }
@@ -543,11 +609,13 @@ fn intent_of(op: &Op) -> Intent {
                     field: field("nothing"),
                 },
                 SchemaOp::DefineAutomation => SchemaChange::DefineAutomation(award(false)),
+                SchemaOp::DefineKeyedAutomation => SchemaChange::DefineAutomation(keyed()),
                 SchemaOp::BrokenAutomation => SchemaChange::DefineAutomation(award(true)),
                 SchemaOp::RemoveAutomation => {
                     SchemaChange::RemoveAutomation(WorkflowId::new("award").unwrap())
                 }
                 SchemaOp::DefineTrigger => SchemaChange::DefineTrigger(on_publish()),
+                SchemaOp::DefineCreateTrigger => SchemaChange::DefineTrigger(on_create()),
                 SchemaOp::RemoveTrigger => {
                     SchemaChange::RemoveTrigger(TriggerId::new("on_publish").unwrap())
                 }
@@ -628,6 +696,43 @@ fn intent_of(op: &Op) -> Intent {
                         },
                     ],
                 },
+                SchemaOp::DefineSetting(kind) => SchemaChange::DefineSetting(setting_def(*kind)),
+                SchemaOp::RemoveSetting(kind) => SchemaChange::RemoveSetting(
+                    SettingId::new(if *kind == 0 { "theme" } else { "mode" }).unwrap(),
+                ),
+                SchemaOp::DefineCapability => SchemaChange::DefineCapability(CapabilityDef {
+                    id: CapabilityName("member_tiers__promote".into()),
+                    name: "Promote".into(),
+                    description: "Promote a member of a tier".into(),
+                }),
+                SchemaOp::DefineBadCapability => SchemaChange::DefineCapability(CapabilityDef {
+                    id: CapabilityName("Promote".into()),
+                    name: " ".into(),
+                    description: "Neither a namespace nor a name".into(),
+                }),
+                SchemaOp::GrantProductCapability(declared) => SchemaChange::DefineRolePermissions {
+                    role: role("editor"),
+                    permissions: vec![Permission::Capability(
+                        if *declared {
+                            "member_tiers__promote"
+                        } else {
+                            "other_product__thing"
+                        }
+                        .into(),
+                    )],
+                },
+                SchemaOp::Ledger(kind) => ledger_change(*kind),
+                SchemaOp::DefineLedgerTrigger => SchemaChange::DefineTrigger(TriggerDef {
+                    id: TriggerId::new("on_post").unwrap(),
+                    on: TriggerEvent::LedgerPosted {
+                        unit: LedgerUnit::new("credits").unwrap(),
+                    },
+                    condition: None,
+                    automation: WorkflowId::new("award").unwrap(),
+                    paused: None,
+                    defined_by: None,
+                    defined_at: None,
+                }),
                 // Placeholder: `ManyFields` is a hundred changes, built below.
                 SchemaOp::ManyFields => SchemaChange::RemoveField {
                     object: object("nothing"),
@@ -662,12 +767,47 @@ fn intent_of(op: &Op) -> Intent {
             principal: principal_id(&format!("{}:{}", WORLD_TENANTS[op.tenant], MEMBERS[*who])),
             role: role(ROLES[*r]),
         },
+        OpKind::WriteSetting {
+            setting,
+            level,
+            team,
+            value,
+            expected,
+        } => Intent::WriteSetting {
+            setting: SettingId::new(["theme", "mode", "nothing"][*setting as usize]).unwrap(),
+            level: [
+                SettingLevel::Tenant,
+                SettingLevel::Team,
+                SettingLevel::Person,
+                SettingLevel::Platform,
+            ][*level as usize],
+            team: [None, Some("desk"), Some("ghost")][*team as usize]
+                .map(|name| TeamId::new(name).unwrap()),
+            value: match value {
+                0 => Some(text("dark")),
+                1 => Some(text("light")),
+                2 => Some(Value::Int(1)),
+                3 => Some(Value::Null),
+                4 => None,
+                _ => Some(Value::Bool(true)),
+            },
+            expected_revision: *expected,
+        },
+        OpKind::DefineTeam => Intent::DefineTeam {
+            team: TeamId::new("desk").unwrap(),
+            label: "Desk".into(),
+        },
+        OpKind::AddToTeam { who } => Intent::AddTeamMember {
+            team: TeamId::new("desk").unwrap(),
+            principal: principal_id(&format!("{}:{}", WORLD_TENANTS[op.tenant], MEMBERS[*who])),
+        },
     }
 }
 
 /// An automation that creates a note, looks at it and ends; `broken`, it names a step it does
-/// not declare and leaves one unreachable. It acts with no role, so the comparison is of the
-/// definitions and not of the conferral of a run-as role (difference 7).
+/// not declare and leaves one unreachable. It acts as `editor`, so its definition is checked for the
+/// conferral of that role, its principal reads what an editor reads and it is suspended when its
+/// definer loses the authority to confer the role (WFL-1528, WFL-1529).
 fn award(broken: bool) -> AutomationDef {
     let name = |n: &str| StepName::new(n).unwrap();
     let step = |action: AutomationStep, next: Option<&str>| AutomationStepDef {
@@ -717,15 +857,60 @@ fn award(broken: bool) -> AutomationDef {
         id: WorkflowId::new("award").unwrap(),
         label: "Award".into(),
         run_as: RunAs {
-            roles: BTreeSet::new(),
+            roles: BTreeSet::from([role("editor")]),
         },
-        run_key: Some(Expr::Param("owner".into())),
+        run_key: None,
         start: name("make"),
         steps,
         defined_by: None,
         defined_at: None,
         suspended_for: None,
         state: None,
+    }
+}
+
+/// An automation that only ends, run as `writer`, with a run key that is the sequence of the event:
+/// a run it starts carries the hash of that value (difference 9 b). The powers of `writer` are
+/// given by policies, so defining it checks the conferral of a role whose powers come from
+/// policies (`may-confer`, `holds-policy-power`; WG-5102).
+fn keyed() -> AutomationDef {
+    let done = StepName::new("done").unwrap();
+    AutomationDef {
+        id: WorkflowId::new("keyed").unwrap(),
+        label: "Keyed".into(),
+        run_as: RunAs {
+            roles: BTreeSet::from([role("writer")]),
+        },
+        run_key: Some(Expr::Param("seq".into())),
+        start: done.clone(),
+        steps: BTreeMap::from([(
+            done,
+            AutomationStepDef {
+                action: AutomationStep::End,
+                next: None,
+                retry: None,
+                timeout: None,
+                compensate: None,
+            },
+        )]),
+        defined_by: None,
+        defined_at: None,
+        suspended_for: None,
+    }
+}
+
+/// A trigger on the creation of a note that starts `keyed`, with no condition.
+fn on_create() -> TriggerDef {
+    TriggerDef {
+        id: TriggerId::new("on_create").unwrap(),
+        on: TriggerEvent::RecordCreated {
+            object: object("note"),
+        },
+        condition: None,
+        automation: WorkflowId::new("keyed").unwrap(),
+        paused: None,
+        defined_by: None,
+        defined_at: None,
     }
 }
 
@@ -800,20 +985,168 @@ fn redeem() -> TenantOperationDef {
     }
 }
 
+/// A limit of a ledger unit (no owner) or of one account of it.
+fn ledger_limit(
+    unit: &str,
+    owner: Option<&str>,
+    scope: Option<&str>,
+    amounts: (Option<i64>, Option<i64>),
+    period: Option<(u64, LedgerPeriod)>,
+) -> LedgerLimit {
+    LedgerLimit {
+        unit: LedgerUnit::new(unit).unwrap(),
+        owner: owner.map(|principal| LedgerOwner::Principal {
+            principal: principal_id(principal),
+        }),
+        floor: amounts.0.map(LedgerAmount),
+        cap: amounts.1.map(LedgerAmount),
+        period_cap: period.map(|(cap, _)| cap),
+        period: period.map(|(_, period)| period),
+        scope: scope.map(|text| LedgerScope(text.to_string())),
+    }
+}
+
+/// A change of the ledger declarations: 0 and 1 the units `credits` and `points`, 2 the pool
+/// `promo`, 3 a limit of `credits` (a floor, a cap and a cap per day), 4 the limit of one account
+/// of `credits` in a scope, 5 to 7 limits that are problems (a unit that is not declared, a floor
+/// above the cap, a limit that sets nothing), 8 to 10 the removal of the unit, the pool and the
+/// limit of `credits`, 11 a period without its cap, 12 a limit of a unit that names a scope.
+fn ledger_change(kind: u8) -> SchemaChange {
+    let credits = || LedgerUnit::new("credits").unwrap();
+    match kind {
+        0 | 1 => {
+            let unit = if kind == 0 { "credits" } else { "points" };
+            SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+                unit: LedgerUnit::new(unit).unwrap(),
+                description: format!("The unit {unit}"),
+            })
+        }
+        2 => SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
+            pool: LedgerPoolName::new("promo").unwrap(),
+            description: "A promotion budget".into(),
+        }),
+        3 => SchemaChange::SetLedgerLimit(ledger_limit(
+            "credits",
+            None,
+            None,
+            (Some(0), Some(100)),
+            Some((10, LedgerPeriod::Day)),
+        )),
+        4 => SchemaChange::SetLedgerLimit(ledger_limit(
+            "credits",
+            Some("alpha:editor"),
+            Some("promo"),
+            (None, Some(5)),
+            None,
+        )),
+        5 => SchemaChange::SetLedgerLimit(ledger_limit("ghost", None, None, (None, Some(1)), None)),
+        6 => SchemaChange::SetLedgerLimit(ledger_limit(
+            "credits",
+            None,
+            None,
+            (Some(5), Some(2)),
+            None,
+        )),
+        7 => SchemaChange::SetLedgerLimit(ledger_limit("credits", None, None, (None, None), None)),
+        8 => SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Unit { unit: credits() }),
+        9 => SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Pool {
+            pool: LedgerPoolName::new("promo").unwrap(),
+        }),
+        10 => SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Limit {
+            unit: credits(),
+            owner: None,
+            scope: None,
+        }),
+        11 => {
+            let mut limit = ledger_limit("credits", None, None, (None, Some(9)), None);
+            limit.period = Some(LedgerPeriod::Week);
+            SchemaChange::SetLedgerLimit(limit)
+        }
+        _ => SchemaChange::SetLedgerLimit(ledger_limit(
+            "credits",
+            None,
+            Some("promo"),
+            (None, Some(3)),
+            None,
+        )),
+    }
+}
+
+/// A definition of a setting: 0 `theme`, a string every level may override; 1 `theme` as a bool (a
+/// change of its type); 2 `theme` as a string whose lock of the tenant closes the team and person
+/// levels; 3 `mode`, a string only the person level overrides.
+fn setting_def(kind: u8) -> SettingDef {
+    let (id, ty, default, levels, locked_by) = match kind {
+        0 => (
+            "theme",
+            "string",
+            text("light"),
+            vec![
+                SettingLevel::Tenant,
+                SettingLevel::Team,
+                SettingLevel::Person,
+            ],
+            None,
+        ),
+        1 => (
+            "theme",
+            "bool",
+            Value::Bool(false),
+            vec![SettingLevel::Tenant, SettingLevel::Person],
+            None,
+        ),
+        2 => (
+            "theme",
+            "string",
+            text("light"),
+            vec![
+                SettingLevel::Tenant,
+                SettingLevel::Team,
+                SettingLevel::Person,
+            ],
+            Some(SettingLevel::Tenant),
+        ),
+        _ => (
+            "mode",
+            "string",
+            text("plain"),
+            vec![SettingLevel::Person],
+            None,
+        ),
+    };
+    SettingDef {
+        id: SettingId::new(id).unwrap(),
+        label: id.into(),
+        r#type: SettingType::new(ty).unwrap(),
+        default,
+        levels: levels.into_iter().collect(),
+        locked_by,
+    }
+}
+
 fn principal_of(tenant: usize, actor: usize) -> Principal {
-    if actor == 6 {
-        Principal::System
-    } else {
-        principals(WORLD_TENANTS[tenant])[actor].clone()
+    match actor {
+        6 => Principal::System,
+        7 | 8 => Principal::User(strata_kernel::automation::automation_principal(
+            &WorkflowId::new("award").unwrap(),
+        )),
+        _ => principals(WORLD_TENANTS[tenant])[actor].clone(),
     }
 }
 
 fn context_of(op: &Op, now: i64) -> Context {
-    ctx(
+    let mut context = ctx(
         WORLD_TENANTS[op.tenant],
         principal_of(op.actor_tenant, op.actor),
         now,
-    )
+    );
+    if op.actor == 8 {
+        context.session = Some(SessionId::new("s-1").unwrap());
+    }
+    if op.past_hop_limit {
+        context.hop = Some(9);
+    }
+    context
 }
 
 // ---------------------------------------------------------------------------------------
@@ -955,7 +1288,38 @@ fn mentions_through(expr: &Expr) -> bool {
     }
 }
 
-/// Differences 2, 7, 8, 9, 10, 13 and 14 of the header: fail when a snapshot holds an input of a
+/// Whether an expression reads a field of a record scope whose name satisfies `named`.
+fn reads_a_field(expr: &Expr, named: &dyn Fn(&str) -> bool) -> bool {
+    match expr {
+        Expr::Var(_, name) => named(name),
+        Expr::Through(..)
+        | Expr::Lit(_)
+        | Expr::Param(_)
+        | Expr::Now
+        | Expr::Principal
+        | Expr::HasRole(_) => false,
+        Expr::Not(a)
+        | Expr::IsNull(a)
+        | Expr::Len(a)
+        | Expr::Lower(a)
+        | Expr::IsSlug(a)
+        | Expr::Duration(_, a)
+        | Expr::Text(a) => reads_a_field(a, named),
+        Expr::And(items) | Expr::Or(items) => items.iter().any(|item| reads_a_field(item, named)),
+        Expr::Cmp(_, a, b)
+        | Expr::In(a, b)
+        | Expr::Contains(a, b)
+        | Expr::StartsWith(a, b)
+        | Expr::Arith(_, a, b)
+        | Expr::MsBetween(a, b)
+        | Expr::Concat(a, b) => reads_a_field(a, named) || reads_a_field(b, named),
+        Expr::If(a, b, c) => {
+            reads_a_field(a, named) || reads_a_field(b, named) || reads_a_field(c, named)
+        }
+    }
+}
+
+/// Differences 2, 7, 8, 9, 11 and 12 of the header: fail when a snapshot holds an input of a
 /// rule the generated functions do not mirror, so the corpus cannot start to depend on one
 /// silently.
 fn assert_no_input_of_a_known_difference(state: &State) {
@@ -1005,14 +1369,8 @@ fn assert_no_input_of_a_known_difference(state: &State) {
         );
     }
     assert!(
-        tenant.schema.settings.is_none()
-            && tenant.schema.capabilities.is_none()
-            && tenant.setting_values.is_none(),
-        "the snapshot holds a setting, a capability or an override; the generated functions do not mirror them (difference 9)"
-    );
-    assert!(
-        tenant.ledger.is_none() && tenant.schema.ledger.is_none(),
-        "{} holds a ledger; the generated functions do not mirror it (difference 13)",
+        tenant.ledger.is_none(),
+        "{} holds ledger accounts or entries; the generated functions do not mirror them (difference 11)",
         tenant.id
     );
     assert!(
@@ -1029,7 +1387,7 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             && tenant.schema.notice_templates.is_none()
             && tenant.schema.tokens.is_none()
             && tenant.schema.products.is_none(),
-        "the schema holds a template, a token or a product record; the generated functions do not state their checks (difference 14)"
+        "the schema holds a template, a token or a product record; the generated functions do not state their checks (difference 12)"
     );
     for (object_id, def) in &tenant.schema.objects {
         assert!(
@@ -1039,12 +1397,31 @@ fn assert_no_input_of_a_known_difference(state: &State) {
                 && def.translation_group.is_none()
                 && def.searchable.is_none(),
             "{object_id} declares retention, publication, a language field, a translation group or searchable fields; the generated functions do not state their checks (difference 14)"
+            "{object_id} declares retention, publication, a language field or a translation group; the generated functions do not state their checks (difference 12)"
+        );
+    }
+    let protected: BTreeSet<&str> = tenant
+        .schema
+        .objects
+        .values()
+        .flat_map(|def| def.fields.values())
+        .filter(|field| field.read.is_some())
+        .map(|field| field.id.as_str())
+        .collect();
+    let unreadable = |expr: &Expr| {
+        mentions_through(expr) || reads_a_field(expr, &|name| protected.contains(name))
+    };
+    for trigger in tenant.schema.triggers.iter().flat_map(BTreeMap::values) {
+        assert!(
+            !trigger.condition.as_ref().is_some_and(unreadable),
+            "trigger {} has a condition that follows a reference or reads a protected field; the generated decide-run does not check what the automation may read (difference 9)",
+            trigger.id
         );
     }
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {
         assert!(
-            automation.run_as.roles.is_empty(),
-            "{} has a run-as role; the generated functions do not suspend an automation whose definer lost authority (difference 10)",
+            !automation.run_key.as_ref().is_some_and(unreadable),
+            "{} has a run key that follows a reference or reads a protected field; the generated decide-run does not check what the automation may read (difference 9)",
             automation.id
         );
         for (name, step) in &automation.steps {
@@ -1067,56 +1444,24 @@ fn assert_no_input_of_a_known_difference(state: &State) {
     }
 }
 
-/// Difference 10: a result without what `strata_kernel::triggers` adds and the generated
-/// functions do not state: the effects of triggers, the transitions a record-updated event names,
-/// and the definer and time written on a trigger or an automation.
-fn without_kernel_only(result: &mut Result<Transition, DomainError>) {
+/// Difference 9 (b) of the header: the generated `trigger-start` writes the canonical JSON of a
+/// run key where the kernel writes its SHA-256 in hexadecimal; hash it, so both sides carry the
+/// hash of the same text.
+fn hash_run_keys(result: &mut Result<Transition, DomainError>) {
     let Ok(outcome) = result else {
         return;
     };
-    outcome.effects.retain(|effect| {
-        !matches!(
-            effect,
-            Effect::StartAutomation(_) | Effect::DeclineAutomation(_)
-        )
-    });
-    for event in &mut outcome.events {
-        if let EventBody::RecordUpdated { transitions, .. } = &mut event.body {
-            *transitions = None;
-        }
-    }
-    for op in &mut outcome.delta.ops {
-        if let DeltaOp::PutSchema(schema) = op {
-            let mut plain = TenantSchema::clone(schema);
-            for def in plain
-                .automations
-                .iter_mut()
-                .flat_map(|all| all.values_mut())
-            {
-                def.defined_by = None;
-                def.defined_at = None;
-            }
-            for def in plain.triggers.iter_mut().flat_map(|all| all.values_mut()) {
-                def.defined_by = None;
-                def.defined_at = None;
-            }
-            *schema = std::sync::Arc::new(plain);
+    for effect in &mut outcome.effects {
+        if let Effect::StartAutomation(start) = effect {
+            start.run_key = start
+                .run_key
+                .take()
+                .map(|text| strata_kernel::canon::hash_bytes(text.as_bytes()));
         }
     }
 }
 
-/// Difference 11 of the header: fail when a decision or read is made as an automation principal,
-/// whose roles the generated functions do not mirror.
-fn assert_no_automation_principal(context: &Context) {
-    if let Principal::User(id) = &context.principal {
-        assert!(
-            strata_kernel::automation::automation_named(id).is_none(),
-            "{id} is an automation principal; the generated roles-of and reserved-principal do not mirror it (difference 11)"
-        );
-    }
-}
-
-/// Difference 15 of the header: a read of a query with an index plan is not compared, because the
+/// Difference 13 of the header: a read of a query with an index plan is not compared, because the
 /// generated `kernel-read` scans it and issues another cursor.
 fn assert_not_planned(state: &State, request: &ReadRequest) {
     let (Some(tenant), ReadRequest::Named { query, .. }) = (&state.tenant, request) else {
@@ -1128,12 +1473,12 @@ fn assert_not_planned(state: &State, request: &ReadRequest) {
                 strata_kernel::query_plan::plan_query(&tenant.schema, def),
                 strata_kernel::query_plan::QueryPlan::Index(_)
             ),
-            "query {query} has an index plan; the generated kernel-read scans it (difference 15)"
+            "query {query} has an index plan; the generated kernel-read scans it (difference 13)"
         );
     }
 }
 
-/// Difference 15 of the header: a schema change whose evidence holds a scan warning is not
+/// Difference 13 of the header: a schema change whose evidence holds a scan warning is not
 /// compared, because the generated `change-schema` writes no such warning.
 fn assert_no_scan_warning(state: &State, intent: &Intent, hand: &Result<Transition, DomainError>) {
     let (Intent::ChangeSchema { changes, .. }, Ok(accepted), Some(tenant)) =
@@ -1145,7 +1490,7 @@ fn assert_no_scan_warning(state: &State, intent: &Intent, hand: &Result<Transiti
         if let DeltaOp::PutSchema(after) = op {
             assert!(
                 strata_kernel::query_plan::scan_warnings(&tenant.schema, after, changes).is_empty(),
-                "the schema change warns of a scan; the generated change-schema does not (difference 15)"
+                "the schema change warns of a scan; the generated change-schema does not (difference 13)"
             );
         }
     }
@@ -1158,6 +1503,7 @@ struct Tally {
     rejected: usize,
     reads: usize,
     visibility: usize,
+    settings: usize,
     needs: usize,
     evaluation_failed_details: usize,
     /// Updates compared under `writers_edit_attributed` (`compare_attributed`).
@@ -1260,28 +1606,23 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
     assert_no_input_of_a_known_difference(state);
     assert!(
         !matches!(intent, Intent::InvokeOperation { .. }),
-        "{label}: the generated functions do not decide a tenant operation (difference 12)"
-    );
-    assert!(
-        !matches!(intent, Intent::WriteSetting { .. }),
-        "{label}: the generated functions do not decide a setting write (difference 9)"
+        "{label}: the generated functions do not decide a tenant operation (difference 10)"
     );
     assert!(
         !matches!(intent, Intent::PostLedger { .. } | Intent::ExpireLedger { .. }),
         "{label}: the generated functions do not decide a posting or an expiry (difference 13)"
+        "{label}: the generated functions do not decide a posting (difference 11)"
     );
     assert!(
         !matches!(intent, Intent::EraseSubject { .. }),
-        "{label}: the generated functions do not decide an erasure (difference 16)"
+        "{label}: the generated functions do not decide an erasure (difference 14)"
     );
     assert!(
         !matches!(intent, Intent::ExpireRecords { .. }),
         "{label}: the generated functions do not decide a retention deletion (difference 16)"
     );
-    assert_no_automation_principal(context);
     let mut hand = transition(state, intent, context);
     assert_no_scan_warning(state, intent, &hand);
-    without_kernel_only(&mut hand);
     let texts = texts_for(state, intent);
     let mut generated = match spec::kernel_transition(state, intent, context, &texts) {
         Ok(result) => Ok(result),
@@ -1291,7 +1632,7 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
             )
         })),
     };
-    without_kernel_only(&mut generated);
+    hash_run_keys(&mut generated);
     match (&hand, &mut generated) {
         (Ok(h), Ok(g)) => {
             tally.evaluation_failed_details +=
@@ -1327,7 +1668,6 @@ fn compare_read(state: &State, request: &ReadRequest, context: &Context, tally: 
         context.principal, context.tenant, state.tenant_id
     );
     assert_no_input_of_a_known_difference(state);
-    assert_no_automation_principal(context);
     assert_not_planned(state, request);
     let hand = read(state, request, context);
     // Only the query filters are printed by a read; the intent is none.
@@ -1395,7 +1735,7 @@ fn compare_reads_of(world: &World, now: i64, tally: &mut Tally) {
     ];
     for tenant in WORLD_TENANTS {
         for actor_tenant in 0..WORLD_TENANTS.len() {
-            for actor in 0..7 {
+            for actor in 0..8 {
                 let context = ctx(tenant, principal_of(actor_tenant, actor), now);
                 let state = world.state(&tenant_id(tenant));
                 for request in &requests {
@@ -1409,11 +1749,43 @@ fn compare_reads_of(world: &World, now: i64, tally: &mut Tally) {
     }
 }
 
+/// The resolution of every setting for every principal of every tenant (`settings::resolve` and the
+/// generated `resolve-setting`): a defined setting, one that is not, and a person in a team.
+fn compare_settings(world: &World, tally: &mut Tally) {
+    let settings: Vec<SettingId> = ["theme", "mode", "nothing"]
+        .into_iter()
+        .map(|name| SettingId::new(name).unwrap())
+        .collect();
+    for tenant in world.tenants.values() {
+        let mut principals: Vec<Principal> = (0..WORLD_TENANTS.len())
+            .flat_map(|index| (0..6).map(move |actor| principal_of(index, actor)))
+            .collect();
+        principals.push(Principal::System);
+        for principal in principals {
+            for setting in &settings {
+                let hand = strata_kernel::settings::resolve(tenant, &principal, setting);
+                let generated = spec::resolve_setting(tenant, &principal, setting);
+                let generated = generated.map_err(|failure| {
+                    domain_error(failure).unwrap_or_else(|fault| {
+                        panic!("resolve-setting of {setting} faulted: {fault}")
+                    })
+                });
+                assert_eq!(
+                    hand, generated,
+                    "the resolution of {setting} for {principal:?} in {} differs",
+                    tenant.id
+                );
+                tally.settings += 1;
+            }
+        }
+    }
+}
+
 /// `visible` on every stored record, for every principal.
 fn compare_visibility(world: &World, now: i64, tally: &mut Tally) {
     for tenant in world.tenants.values() {
         for actor_tenant in 0..WORLD_TENANTS.len() {
-            for actor in 0..7 {
+            for actor in 0..8 {
                 let principal = principal_of(actor_tenant, actor);
                 for record in tenant.records.values().flat_map(|by_id| by_id.values()) {
                     let hand = visible(tenant, &principal, record, Timestamp(now));
@@ -1469,6 +1841,7 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
                 let now = 99_000 + (index * SEQUENCES + sequence) as i64;
                 compare_reads_of(&world, now, &mut tally);
                 compare_visibility(&world, now, &mut tally);
+                compare_settings(&world, &mut tally);
             }
         }
     }
@@ -1500,6 +1873,11 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
         tally.attributed_insufficient > 0,
         "no update under a policy that follows a reference asked for the record it needs"
     );
+    assert!(
+        tally.settings > 500,
+        "only {} setting resolutions",
+        tally.settings
+    );
     eprintln!(
         "compared {} decisions ({} accepted, {} rejected), {} reads, {} visibility checks, {} plans; \
          {} policy-condition details matched under difference 1; {} updates under a policy that \
@@ -1514,6 +1892,112 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
         tally.attributed,
         tally.attributed_insufficient
     );
+}
+
+/// The calendar periods and the limits of an account (`ledger::period_start`, `ledger::limits_of`)
+/// against the generated `ledger-period-start` and `ledger-limits-of`, on fixed inputs: the
+/// posting that uses them is not mirrored (difference 11), these two are.
+#[test]
+fn the_ledger_periods_and_limits_agree_with_the_generated_functions() {
+    let mut instants: Vec<i64> = vec![
+        0,
+        5_000,
+        3_599_999,
+        3_600_000,
+        86_399_999,
+        86_400_000,
+        1_000_000_000_000,
+        1_735_689_599_999,
+        1_735_689_600_000,
+        1_709_164_800_000,
+        -1,
+        -3_600_001,
+        -86_400_001,
+        -604_800_000,
+        -2_678_400_000,
+    ];
+    instants.extend((-40..40).map(|i| i * 123_456_789_123));
+    for period in [
+        LedgerPeriod::Hour,
+        LedgerPeriod::Day,
+        LedgerPeriod::Week,
+        LedgerPeriod::Month,
+    ] {
+        for at in &instants {
+            let hand = strata_kernel::ledger::period_start(period, Timestamp(*at)).0;
+            let generated = spec::ledger_period_start(&period, *at)
+                .unwrap_or_else(|fault| panic!("ledger-period-start faulted: {fault}"));
+            assert_eq!(
+                hand, generated,
+                "the {period:?} that holds {at} starts differently"
+            );
+        }
+    }
+    let day = Some((10, LedgerPeriod::Day));
+    let week = Some((3, LedgerPeriod::Week));
+    let unit = ledger_limit("credits", None, None, (Some(0), Some(100)), day);
+    let account = ledger_limit(
+        "credits",
+        Some("alpha:editor"),
+        Some("promo"),
+        (None, Some(5)),
+        None,
+    );
+    let account_floor = ledger_limit(
+        "credits",
+        Some("alpha:editor"),
+        None,
+        (Some(-3), None),
+        week,
+    );
+    let account_period = ledger_limit("credits", Some("alpha:editor"), None, (None, None), week);
+    let mut half_period = ledger_limit("credits", Some("alpha:editor"), None, (None, None), None);
+    half_period.period = Some(LedgerPeriod::Week);
+    let other_unit = ledger_limit("points", None, None, (Some(1), None), None);
+    let sets: Vec<Vec<LedgerLimit>> = vec![
+        vec![],
+        vec![unit.clone()],
+        vec![unit.clone(), account.clone()],
+        vec![account.clone()],
+        vec![unit.clone(), account_floor.clone(), account.clone()],
+        vec![unit.clone(), account_period],
+        vec![unit.clone(), half_period],
+        vec![other_unit, unit],
+    ];
+    for limits in sets {
+        let mut schema = TenantSchema::genesis();
+        if !limits.is_empty() {
+            schema.ledger = Some(LedgerDeclarations {
+                units: BTreeMap::from([(
+                    LedgerUnit::new("credits").unwrap(),
+                    LedgerUnitDecl {
+                        unit: LedgerUnit::new("credits").unwrap(),
+                        description: "Store credit".into(),
+                    },
+                )]),
+                pools: BTreeMap::new(),
+                limits: limits.clone(),
+            });
+        }
+        for owner in ["alpha:editor", "alpha:owner"] {
+            for scope in ["", "promo", "other"] {
+                let owner = LedgerOwner::Principal {
+                    principal: principal_id(owner),
+                };
+                let credits = LedgerUnit::new("credits").unwrap();
+                let hand = strata_kernel::ledger::limits_of(&schema, &owner, &credits, scope);
+                let generated =
+                    spec::ledger_limits_of(&schema, &owner, &credits, &scope.to_string());
+                assert_eq!(hand.floor, generated.floor.map(|amount| amount.0));
+                assert_eq!(hand.cap, generated.cap.map(|amount| amount.0));
+                assert_eq!(
+                    hand.period_cap,
+                    generated.period_cap.map(|cap| (cap.cap, cap.period)),
+                    "the limits of {owner:?} in {scope:?} differ under {limits:?}"
+                );
+            }
+        }
+    }
 }
 
 /// The comparison can fail: the same inputs with a hand-written answer that has been altered are
