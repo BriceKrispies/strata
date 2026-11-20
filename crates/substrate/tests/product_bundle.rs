@@ -647,41 +647,124 @@ fn a_removal_names_every_segment_the_product_owns() {
         .any(|e| e.kind == "segment" && e.id == "tiers__gold"));
 }
 
-/// Every section of `bundle-sections` that the kernel has no intent for is refused when filled,
-/// and each by its own name.
+/// `tiers` with a capability, a setting and the three ledger sections in its namespace.
+fn tiers_with_catalogue() -> Json {
+    let mut doc = tiers();
+    let content = &mut doc["content"];
+    content["capabilities"] =
+        json!([{ "id": "tiers__promote", "name": "Promote", "description": "Promote a member." }]);
+    content["settings"] = json!([{
+        "id": "tiers__gold_threshold",
+        "label": "Points for gold",
+        "type": "i64",
+        "default": { "Int": 100 },
+        "levels": ["tenant", "team", "person"]
+    }]);
+    content["ledger-units"] =
+        json!([{ "unit": "tiers__points", "description": "Points a member earns." }]);
+    content["ledger-pools"] = json!([{ "pool": "tiers__pool", "description": "The pool." }]);
+    content["ledger-limits"] = json!([{
+        "unit": "tiers__points",
+        "owner": { "pool": { "pool": "tiers__pool" } },
+        "floor": 0
+    }]);
+    doc
+}
+
+fn owned(record: &InstalledRecord) -> Vec<(String, String)> {
+    record
+        .owns
+        .iter()
+        .map(|e| (e.kind.clone(), e.id.clone()))
+        .collect()
+}
+
+/// No section of `bundle-sections` is refused any more: capabilities, settings and the ledger
+/// sections install, and the record of the install owns each of them.
+// Verifies: INT-1921
 #[test]
-fn each_section_without_a_kernel_intent_is_refused_naming_it() {
-    let filled = [
-        (
-            "capabilities",
-            json!([{ "id": "tiers__promote", "name": "Promote", "description": "d" }]),
-        ),
-        ("settings", json!([{ "id": "tiers__limit" }])),
-        (
-            "ledger-units",
-            json!([{ "unit": "tiers__points", "description": "d" }]),
-        ),
-        (
-            "ledger-pools",
-            json!([{ "pool": "tiers__pool", "description": "d" }]),
-        ),
-        ("ledger-limits", json!([{ "unit": "tiers__points" }])),
-    ];
-    for (section, value) in filled {
-        let mut doc = tiers();
-        doc["content"][section] = value;
-        let bundle = read(&doc).unwrap();
-        let mut world = world();
-        let (result, calls) = install(&mut world, &bundle, None, "0.2");
-        let error = refusal(result);
-        assert_eq!(error.kind, BundleErrorKind::InvalidBundle, "{section}");
+fn capabilities_settings_and_the_ledger_sections_install_and_are_owned_by_the_product() {
+    let doc = tiers_with_catalogue();
+    let bundle = read(&doc).unwrap();
+    assert!(bundle.unbuilt.is_empty(), "no section is refused by name");
+    let mut world = world();
+    let (result, calls) = install(&mut world, &bundle, None, "0.2");
+    assert_eq!(calls, 1, "one schema change for the whole bundle");
+    let ProductInstall::Applied {
+        record: Some(record),
+        ..
+    } = result.unwrap_or_else(|e| panic!("{e}"))
+    else {
+        panic!("the install was not applied");
+    };
+    let owns = owned(&record);
+    for (kind, id) in [
+        ("capability", "tiers__promote"),
+        ("setting", "tiers__gold_threshold"),
+        ("ledger-unit", "tiers__points"),
+        ("ledger-pool", "tiers__pool"),
+        ("ledger-limit", "tiers__points#pool:tiers__pool#"),
+    ] {
         assert!(
-            error.message.contains(&format!("\"{section}\"")),
-            "{section}: {}",
-            error.message
+            owns.contains(&(kind.to_string(), id.to_string())),
+            "{kind} {id}: {owns:?}"
         );
-        assert_eq!(calls, 0, "{section}");
     }
+    // The schema holds what the record owns.
+    let schema = schema_of(&world);
+    assert!(schema
+        .capabilities
+        .as_ref()
+        .is_some_and(|c| c.contains_key(&CapabilityName("tiers__promote".into()))));
+    assert!(schema
+        .settings
+        .as_ref()
+        .is_some_and(|s| s.contains_key(&SettingId::new("tiers__gold_threshold").unwrap())));
+    let ledger = schema.ledger.as_ref().expect("the ledger is declared");
+    assert!(ledger
+        .units
+        .contains_key(&LedgerUnit::new("tiers__points").unwrap()));
+    assert!(ledger
+        .pools
+        .contains_key(&LedgerPoolName::new("tiers__pool").unwrap()));
+    assert_eq!(InstalledRecord::of(&schema, "tiers"), Some(record));
+}
+
+/// A removal finds the capability, the setting and the ledger declarations through the record.
+// Verifies: INT-1582
+#[test]
+fn a_removal_takes_out_the_capabilities_settings_and_ledger_declarations_a_product_owns() {
+    let mut world = world();
+    installed(&mut world, &tiers_with_catalogue());
+    let schema = schema_of(&world);
+    let owner = tenant();
+    let target = target_of(&owner, &schema, "0.2");
+    let Planned::Change(plan) = plan_remove("tiers", false, &target).unwrap() else {
+        panic!("the removal is a change")
+    };
+    let removed = entity_ids(&plan.removed);
+    for want in [
+        "capability:tiers__promote",
+        "setting:tiers__gold_threshold",
+        "ledger-unit:tiers__points",
+        "ledger-pool:tiers__pool",
+        "ledger-limit:tiers__points#pool:tiers__pool#",
+    ] {
+        assert!(removed.iter().any(|r| r == want), "{want}: {removed:?}");
+    }
+    let (result, calls) = with_target(&mut world, "0.2", |t, e| {
+        remove_product("tiers", false, t, e)
+    });
+    result.unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(calls, 1);
+    let schema = schema_of(&world);
+    assert!(schema.capabilities.as_ref().is_none_or(|c| c.is_empty()));
+    assert!(schema.settings.as_ref().is_none_or(|s| s.is_empty()));
+    assert!(schema
+        .ledger
+        .as_ref()
+        .is_none_or(|l| l.units.is_empty() && l.pools.is_empty()));
+    assert!(InstalledRecord::of(&schema, "tiers").is_none());
 }
 
 // The bundles specc writes from the fixture products (tests/bundle.rs of the spec-compiler).
@@ -1464,6 +1547,84 @@ fn a_tenant_bundle_declares_aggregates_and_a_view_section_that_names_one() {
         text.contains("points") && text.contains("is not a declared field"),
         "{text}"
     );
+}
+
+/// The ledger sections of the bundle specc writes for `promotions`: its units, its pool and its
+/// limit, without the record types and operations that post to them.
+fn promotions_ledger() -> Json {
+    let mut doc: Json = serde_json::from_str(PROMOTIONS).unwrap();
+    let content = doc["content"].as_object_mut().unwrap();
+    for section in ["objects", "operations", "roles", "role-permissions"] {
+        content.remove(section);
+    }
+    doc
+}
+
+// Verifies: INT-1921
+#[test]
+fn the_ledger_sections_of_promotions_install_and_the_record_lists_units_pools_and_limits() {
+    let mut world = world();
+    let record = installed(&mut world, &promotions_ledger());
+    let owns = owned(&record);
+    let of_kind = |kind: &str| -> Vec<String> {
+        owns.iter()
+            .filter(|(k, _)| k == kind)
+            .map(|(_, id)| id.clone())
+            .collect()
+    };
+    assert_eq!(
+        of_kind("ledger-unit"),
+        vec!["promotions__redemptions", "promotions__stock"]
+    );
+    assert_eq!(of_kind("ledger-pool"), vec!["promotions__pool"]);
+    assert_eq!(
+        of_kind("ledger-limit"),
+        vec!["promotions__stock#pool:promotions__pool#"]
+    );
+    let schema = schema_of(&world);
+    let ledger = schema.ledger.as_ref().expect("the ledger is declared");
+    assert_eq!(ledger.units.len(), 2);
+    assert_eq!(ledger.pools.len(), 1);
+    assert_eq!(InstalledRecord::of(&schema, "promotions"), Some(record));
+}
+
+// Verifies: CTK-005
+#[test]
+fn a_removal_deletes_the_templates_and_tokens_the_record_owns() {
+    let token =
+        json!([{ "name": "tiers__first_name", "expression": "record.name", "fallback": "friend" }]);
+    let mut doc = with_notice(PLACES_A_TOKEN, token);
+    doc["content"]["mail-templates"] = json!([{
+        "template": "tiers__welcome",
+        "subject": "Welcome",
+        "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Hello.\"}]}]"
+    }]);
+    let mut world = world();
+    let record = installed(&mut world, &doc);
+    let owns = owned(&record);
+    for (kind, id) in [
+        ("token", "tiers__first_name"),
+        ("notice-template", "tiers__promoted"),
+        ("mail-template", "tiers__welcome"),
+    ] {
+        assert!(
+            owns.contains(&(kind.to_string(), id.to_string())),
+            "{kind} {id}: {owns:?}"
+        );
+    }
+    let schema = schema_of(&world);
+    assert_eq!(strata_kernel::templates::tokens(&schema).len(), 1);
+    assert_eq!(strata_kernel::templates::list(&schema).len(), 2);
+
+    let (result, calls) = with_target(&mut world, "0.2", |t, e| {
+        remove_product("tiers", false, t, e)
+    });
+    result.unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(calls, 1);
+    let schema = schema_of(&world);
+    assert!(strata_kernel::templates::tokens(&schema).is_empty());
+    assert!(strata_kernel::templates::list(&schema).is_empty());
+    assert!(InstalledRecord::of(&schema, "tiers").is_none());
 }
 
 // ---- the blocks of a template (D-7900) --------------------------------------------------------
