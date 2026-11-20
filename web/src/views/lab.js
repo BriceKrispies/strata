@@ -4,6 +4,7 @@
 
 import { h } from '../components/dom.js';
 import { date } from '../components/parts.js';
+import { ruleDisagreement } from '../kernel/rules.js';
 
 const TABS = [
   ['projection', 'Projection'],
@@ -22,6 +23,12 @@ const CLASS_LABEL = {
 
 function badge(cls) {
   return h('span', { class: `evidence evidence--${cls}` }, CLASS_LABEL[cls] ?? cls);
+}
+
+/** A note under a rule the page does not read as the server printed it; nothing when it does. */
+function ruleNote(rule) {
+  const reason = ruleDisagreement(rule);
+  return reason === null ? null : h('span', { class: 'lab-note', role: 'status' }, ` This page does not read the rule as the server printed it: ${reason}.`);
 }
 
 function arg(value) {
@@ -393,7 +400,7 @@ function metadata(page) {
           ),
         ),
         object.constraints.length
-          ? h('ul', { class: 'checks' }, object.constraints.map((c) => h('li', { key: c.id }, h('code', null, `${c.id}: ${c.rule}`), ` ${c.message}`)))
+          ? h('ul', { class: 'checks' }, object.constraints.map((c) => h('li', { key: c.id }, h('code', null, `${c.id}: ${c.rule}`), ` ${c.message}`, ruleNote(c.rule))))
           : null,
       ),
     ),
@@ -406,7 +413,7 @@ function metadata(page) {
           'div',
           { key: w.id },
           h('p', null, h('code', null, `${w.object}.${w.field}`), ` starts in ${w.initial.join(' or ')}.`),
-          h('ul', { class: 'checks' }, w.transitions.map((t) => h('li', { key: t.name }, h('code', null, t.name), ` ${t.from} to ${t.to}`, t.guard ? ` when ${t.guard}` : '', t.sets.length ? `, setting ${t.sets.join('; ')}` : ''))),
+          h('ul', { class: 'checks' }, w.transitions.map((t) => h('li', { key: t.name }, h('code', null, t.name), ` ${t.from} to ${t.to}`, t.guard ? ` when ${t.guard}` : '', ruleNote(t.guard), t.sets.length ? `, setting ${t.sets.join('; ')}` : ''))),
         ),
       ),
     ),

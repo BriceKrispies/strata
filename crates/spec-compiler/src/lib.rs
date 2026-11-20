@@ -38,6 +38,7 @@ pub mod jsonc;
 pub mod layer_expr;
 pub mod layer_values;
 pub mod language;
+mod language_js_text;
 pub mod layers;
 pub mod load;
 pub mod model_core;
