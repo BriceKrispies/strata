@@ -22,6 +22,7 @@ pub mod provision;
 pub mod sealing;
 pub mod seed;
 pub mod service;
+pub mod settings;
 pub mod signin;
 pub mod ws;
 

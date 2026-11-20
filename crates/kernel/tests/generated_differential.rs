@@ -79,6 +79,14 @@
 //!      AGG-001 to AGG-023): the generated `schema-problems` states none of them, and the
 //!      aggregate itself is not a read of the generated `kernel-read`. The corpus defines no
 //!      query with an aggregate.
+//!   9. Not exercised, and not mirrored until the generated functions are wired: layered settings
+//!      and product capabilities (`settings.rs`, `capabilities.rs`). The generated `apply-change`,
+//!      `intent-decision`, `needs` and `apply-delta` have no arm for the schema changes
+//!      define-setting, remove-setting, define-capability and remove-capability, the intent
+//!      write-setting and the delta operations on overrides, and the generated `schema-problems`
+//!      has not the checks of setting definitions, of the grants of declared capabilities and of
+//!      the references of a trigger to a setting. The corpus holds no setting, no capability and
+//!      no override; `assert_no_input_of_a_known_difference` fails when a snapshot holds one.
 //!
 //! Difference 7 is guarded: `assert_no_input_of_a_known_difference` runs on every snapshot the
 //! test decides or reads, and fails when a snapshot has an automation step with a retry, a
@@ -872,6 +880,12 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             view.id
         );
     }
+    assert!(
+        tenant.schema.settings.is_none()
+            && tenant.schema.capabilities.is_none()
+            && tenant.setting_values.is_none(),
+        "the snapshot holds a setting, a capability or an override; the generated functions do not mirror them (difference 9)"
+    );
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {
         for (name, step) in &automation.steps {
             assert!(

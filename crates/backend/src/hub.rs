@@ -141,6 +141,7 @@ fn describe(event: &DomainEvent) -> Json {
             Some(before.object.as_str()),
             Some(before.id.0),
         ),
+        EventBody::SettingChanged { .. } => ("setting_changed", None, None),
     };
     json!({
         "tenant": event.tenant.as_str(),
@@ -259,6 +260,17 @@ fn log_published(event: &DomainEvent, tenant: &TenantState) {
                 revision,
                 object: before.object.as_str(),
                 record: before.id.0,
+            },
+        ),
+        EventBody::SettingChanged { setting, level, .. } => telemetry::setting_changed(
+            sink,
+            &telemetry::SettingChanged {
+                correlation,
+                tenant: name,
+                seq,
+                revision,
+                setting: setting.as_str(),
+                level: level.as_str(),
             },
         ),
     }

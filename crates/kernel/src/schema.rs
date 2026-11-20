@@ -156,6 +156,8 @@ impl TenantSchemaExt for TenantSchema {
             triggers: None,
             automations: None,
             operations: None,
+            settings: None,
+            capabilities: None,
         }
     }
 
@@ -350,7 +352,12 @@ impl TenantSchemaExt for TenantSchema {
                     Permission::Capability(name) if name.trim().is_empty() => {
                         problems.push(format!("{at}: a capability needs a name"))
                     }
-                    Permission::Capability(_) => {}
+                    Permission::Capability(name) => {
+                        if let Some(problem) = crate::capabilities::grant_problem(self, role, name)
+                        {
+                            problems.push(format!("{at}: {problem}"));
+                        }
+                    }
                     Permission::Object { object, actions } => {
                         if !self.objects.contains_key(object) {
                             problems
@@ -558,6 +565,8 @@ impl TenantSchemaExt for TenantSchema {
         crate::definitions::automation_problems(self, &roles, &mut problems);
         crate::definitions::operation_problems(self, &roles, &mut problems);
         crate::aggregates::problems(self, &mut problems);
+        crate::settings::definition_problems(self, &mut problems);
+        crate::capabilities::declaration_problems(self, &mut problems);
         problems
     }
 }

@@ -7,9 +7,14 @@
 //! ([`crate::schema::TenantSchemaExt::problems`]), so a definition that names something that does
 //! not exist is refused when it is defined, and a change that removes something a definition
 //! names is refused while the definition names it. What the kernel does not hold is not checked
-//! here: segments, ledger units and pools, settings, schedules, templates and webhook
+//! here: segments, ledger units and pools, schedules, templates and webhook
 //! subscriptions live in the tenant catalogue beside the schema (D-6581), whose checks belong to
-//! the change that installs them.
+//! the change that installs them. Settings and capabilities are held in the schema
+//! ([`crate::settings`], [`crate::capabilities`]), so a definition that names one is checked
+//! here. Each kind of reference that is not held yet has one function that answers
+//! [`ReferenceCheck::NotChecked`] and is called wherever a definition names the kind
+//! ([`segment_reference`], [`ledger_unit_reference`], [`template_reference`],
+//! [`schedule_reference`]); the engine that comes to hold the kind fills its function in.
 //!
 //! The authority checks that depend on the defining principal (the run-as roles of an automation
 //! under ADM-152, the powers the steps of an operation use under D-6547) are made by
@@ -20,7 +25,7 @@ use crate::limits;
 use crate::schema::{Action, FieldDef, FieldType, ObjectTypeDef, Resource, TenantSchema};
 use crate::types::{
     public_role, AutomationDef, AutomationStep, AutomationStepDef, FieldId, FieldTypeExt,
-    ObjectTypeId, RoleId, StepName, TenantOperationDef, TenantOperationPostingOwner,
+    ObjectTypeId, RoleId, SettingId, StepName, TenantOperationDef, TenantOperationPostingOwner,
     TenantOperationStep, TriggerDef, TriggerEvent, UniqueDef,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,6 +35,106 @@ pub const AUTOMATIONS_DEFINE: &str = "automations-define";
 
 /// The capability that a posting step of a tenant operation needs of its definer (D-6547).
 pub const LEDGER_POST: &str = "ledger-post";
+
+/// The answer of the check of one reference a definition makes to something the kernel may not
+/// hold.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReferenceCheck {
+    /// The kernel holds the kind and checked: the problem, or `None` when the reference is good.
+    Checked(Option<String>),
+    /// The kernel does not hold the kind yet, so the reference is not checked.
+    NotChecked,
+}
+
+/// Add the problem of a checked reference to `problems`, at `at`. A reference that is not checked
+/// adds nothing.
+fn report(check: ReferenceCheck, at: &str, problems: &mut Vec<String>) {
+    if let ReferenceCheck::Checked(Some(problem)) = check {
+        problems.push(format!("{at}: {problem}"));
+    }
+}
+
+/// The check of a segment a definition names (a trigger on entering or leaving a segment, a
+/// fan-out step). Not checked: segments are not held by the kernel yet.
+pub fn segment_reference<T: std::fmt::Debug>(
+    _schema: &TenantSchema,
+    _segment: &T,
+) -> ReferenceCheck {
+    ReferenceCheck::NotChecked
+}
+
+/// The check of a ledger unit a definition names (a trigger on a posting, a posting step of an
+/// automation or an operation). Not checked: ledger units are not held by the kernel yet.
+pub fn ledger_unit_reference<T: std::fmt::Debug>(
+    _schema: &TenantSchema,
+    _unit: &T,
+) -> ReferenceCheck {
+    ReferenceCheck::NotChecked
+}
+
+/// The check of a mail or notice template a definition names (a send-mail or create-notice step).
+/// Not checked: templates are not held by the kernel yet.
+pub fn template_reference<T: std::fmt::Debug>(
+    _schema: &TenantSchema,
+    _template: &T,
+) -> ReferenceCheck {
+    ReferenceCheck::NotChecked
+}
+
+/// The check of a schedule a definition names (a trigger on a schedule falling due). Not checked:
+/// schedules are not held by the kernel yet.
+pub fn schedule_reference<T: std::fmt::Debug>(
+    _schema: &TenantSchema,
+    _schedule: &T,
+) -> ReferenceCheck {
+    ReferenceCheck::NotChecked
+}
+
+/// The problem with a setting a definition names, or `None` when the schema defines it or the
+/// platform does (a trigger on a setting changing).
+pub fn setting_reference_problem(schema: &TenantSchema, setting: &SettingId) -> Option<String> {
+    let defined = crate::settings::definition(schema, setting).is_some()
+        || crate::settings::PLATFORM_SETTINGS.contains(&setting.as_str());
+    (!defined).then(|| format!("unknown setting {setting}"))
+}
+
+/// The problem with a capability a definition needs, or `None` when it is a platform capability or
+/// one the schema declares (the capability a posting step needs of the definer of an operation).
+pub fn capability_reference_problem(schema: &TenantSchema, capability: &str) -> Option<String> {
+    let known = !crate::capabilities::is_product_form(capability)
+        || crate::capabilities::is_declared(schema, capability);
+    (!known).then(|| format!("unknown capability {capability}"))
+}
+
+/// The references a trigger's event makes to the settings of the schema and to what the kernel
+/// does not hold yet.
+fn event_reference_problems(
+    schema: &TenantSchema,
+    event: &TriggerEvent,
+    at: &str,
+    problems: &mut Vec<String>,
+) {
+    match event {
+        TriggerEvent::SettingChanged { setting } => {
+            if let Some(problem) = setting_reference_problem(schema, setting) {
+                problems.push(format!("{at}: {problem}"));
+            }
+        }
+        TriggerEvent::SegmentEntered { segment } | TriggerEvent::SegmentExited { segment } => {
+            report(segment_reference(schema, segment), at, problems)
+        }
+        TriggerEvent::LedgerPosted { unit } => {
+            report(ledger_unit_reference(schema, unit), at, problems)
+        }
+        TriggerEvent::ScheduleDue { schedule } => {
+            report(schedule_reference(schema, schedule), at, problems)
+        }
+        TriggerEvent::RecordCreated { .. }
+        | TriggerEvent::RecordUpdated { .. }
+        | TriggerEvent::RecordDeleted { .. }
+        | TriggerEvent::InboundWebhook { .. } => {}
+    }
+}
 
 /// The parameters every event binds (D-6523).
 const COMMON_PARAMS: [&str; 3] = ["seq", "at", "hop"];
@@ -320,6 +425,7 @@ pub fn trigger_problems(
         if !named {
             problems.push(format!("{at}: unknown automation {}", trigger.automation));
         }
+        event_reference_problems(schema, &trigger.on, &at, problems);
         let fields = match &trigger.on {
             TriggerEvent::RecordCreated { object }
             | TriggerEvent::RecordUpdated { object, .. }
@@ -389,13 +495,27 @@ fn action_problems(
             written_problems(schema, at, object, &BTreeMap::new(), env, problems);
             check_expr(problems, at, "record", record, env, false);
         }
-        AutomationStep::PostLedger { owner, amount, .. } => {
+        AutomationStep::PostLedger {
+            owner,
+            amount,
+            unit,
+            ..
+        } => {
             check_expr(problems, at, "owner", owner, env, false);
             check_expr(problems, at, "amount", amount, env, false);
+            report(ledger_unit_reference(schema, unit), at, problems);
         }
-        AutomationStep::SendMail { to, .. } => check_expr(problems, at, "to", to, env, false),
-        AutomationStep::CreateNotice { to, record, .. } => {
+        AutomationStep::SendMail { to, template, .. } => {
             check_expr(problems, at, "to", to, env, false);
+            report(template_reference(schema, template), at, problems);
+        }
+        AutomationStep::CreateNotice {
+            to,
+            record,
+            template,
+        } => {
+            check_expr(problems, at, "to", to, env, false);
+            report(template_reference(schema, template), at, problems);
             if let Some(record) = record {
                 check_expr(problems, at, "record", record, env, false);
             }
@@ -443,7 +563,8 @@ fn action_problems(
             };
             check_expr(problems, at, "condition", condition, &branch_env, true);
         }
-        AutomationStep::FanOut { batch, .. } => {
+        AutomationStep::FanOut { batch, segment, .. } => {
+            report(segment_reference(schema, segment), at, problems);
             if *batch == 0 || *batch > limits::MAX_FAN_OUT_BATCH {
                 problems.push(format!("{at}: a fan-out batch is from 1 to 100"));
             }
@@ -710,8 +831,10 @@ pub fn operation_problems(
                     owner,
                     scope,
                     amount,
+                    unit,
                     ..
                 } => {
+                    report(ledger_unit_reference(schema, unit), &sat, problems);
                     if let TenantOperationPostingOwner::Principal { principal } = owner {
                         check_expr(problems, &sat, "owner", principal, &env, false);
                     }
@@ -728,6 +851,11 @@ pub fn operation_problems(
         }
         for id in repeated(op.steps.iter().map(step_id)) {
             problems.push(format!("{at}: step {id} is declared twice"));
+        }
+        for capability in operation_powers(op).1 {
+            if let Some(problem) = capability_reference_problem(schema, &capability) {
+                problems.push(format!("{at}: {problem}"));
+            }
         }
     }
 }

@@ -127,6 +127,27 @@ pub fn transition(
             resume_object.as_ref(),
             *resume_after,
         )?,
+        Intent::WriteSetting {
+            setting,
+            level,
+            team,
+            value,
+            expected_revision,
+        } => {
+            let decision = crate::settings::write_setting(
+                tenant,
+                ctx,
+                setting,
+                *level,
+                team.as_ref(),
+                value.as_ref(),
+                *expected_revision,
+            )?;
+            draft.ops.extend(decision.ops);
+            draft.events.extend(decision.events);
+            draft.evidence.extend(decision.evidence);
+            decision.output
+        }
     };
     Ok(draft.finish(output))
 }
@@ -188,7 +209,8 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         | Intent::RemoveTeamMember { .. }
         | Intent::CreateInvitation { .. }
         | Intent::RedeemInvitation { .. }
-        | Intent::RevokeInvitation { .. } => {}
+        | Intent::RevokeInvitation { .. }
+        | Intent::WriteSetting { .. } => {}
         Intent::CreateRecord { object, fields } => field_needs(schema, &mut out, object, fields),
         Intent::UpdateRecord {
             object, id, fields, ..
@@ -1647,6 +1669,10 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                 .ok_or_else(|| format!("no unique constraint {id}.{unique}"))?;
             format!("remove unique constraint {id}.{unique}")
         }
+        SchemaChange::DefineSetting(def) => crate::settings::apply_define(schema, def),
+        SchemaChange::RemoveSetting(id) => crate::settings::apply_remove(schema, id)?,
+        SchemaChange::DefineCapability(def) => crate::capabilities::apply_define(schema, def),
+        SchemaChange::RemoveCapability(id) => crate::capabilities::apply_remove(schema, id)?,
     })
 }
 
@@ -1867,6 +1893,10 @@ fn change_schema(
         e.evidence = evidence;
         e
     })?;
+    // The overrides and revisions that a change of setting definitions brings with it, or the
+    // refusal of a type that changes under overrides (SET-004).
+    let settings = crate::settings::schema_change_effects(draft.tenant, changes)
+        .map_err(|problem| draft.reject(ErrorKind::InvalidSchema, problem))?;
     draft.evidence.extend(
         migration
             .summary
@@ -1907,6 +1937,8 @@ fn change_schema(
         summary: migration.summary,
         grandfathered: affected.len() as u64,
     });
+    draft.ops.extend(settings.ops);
+    draft.events.extend(settings.events);
     for (before, after) in migration.rewritten {
         draft.ops.push(DeltaOp::PutRecord(after.clone()));
         draft
@@ -1936,6 +1968,9 @@ fn require_definition_authority(
     });
     if automation {
         require_capability(draft, AUTOMATIONS_DEFINE)?;
+    }
+    if changes.iter().any(crate::settings::is_setting_change) {
+        require_capability(draft, crate::settings::SETTING_DEFINE)?;
     }
     for change in changes {
         match change {
@@ -2047,6 +2082,7 @@ pub fn apply_delta(
                 schema: Arc::new(TenantSchema::genesis()),
                 members: BTreeMap::new(),
                 records: BTreeMap::new(),
+                setting_values: None,
             }
         }
         (Some(tenant), Some(base)) if tenant.revision == base && tenant.id == delta.tenant => {
@@ -2079,6 +2115,9 @@ pub fn apply_delta(
                     }
                 }
             }
+            DeltaOp::PutSettingOverride(_)
+            | DeltaOp::DeleteSettingOverride { .. }
+            | DeltaOp::PutSettingRevision { .. } => crate::settings::apply_op(&mut next, op),
         }
     }
     next.revision = delta.new_revision;

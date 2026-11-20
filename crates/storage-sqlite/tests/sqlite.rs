@@ -9,7 +9,9 @@ use strata_storage_api::{
     PasskeyChallenge, PasskeyRecord, SamlRequest, SessionRecord, Store, ThrottleRule,
     ThrottleSettle, ThrottleVerdict,
 };
-use strata_storage_sqlite::{default_tenants_dir, tenant_file_name, SqliteStore};
+use strata_storage_sqlite::{
+    default_tenants_dir, tenant_file_name, tenant_migration_steps, SqliteStore,
+};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -247,7 +249,7 @@ fn committed_data_survives_a_reopen() {
     let file = store.tenant_file(&alpha).unwrap().unwrap();
     assert_eq!(
         count(&file, "SELECT COUNT(*) FROM tenant_migrations"),
-        11,
+        tenant_migration_steps().len() as i64,
         "the tenant file's steps"
     );
     assert!(store.health().unwrap().ok);

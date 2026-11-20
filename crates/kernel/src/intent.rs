@@ -32,6 +32,7 @@ impl IntentExt for Intent {
             Intent::UpdateRecord { .. } => "update_record",
             Intent::DeleteRecord { .. } => "delete_record",
             Intent::EraseSubject { .. } => "erase_subject",
+            Intent::WriteSetting { .. } => "write_setting",
         }
     }
 }

@@ -45,6 +45,13 @@ pub use strata_model_core::types::{
     ValueMap,
 };
 
+/// The settings and product capabilities of [`crate::settings`] and [`crate::capabilities`]:
+/// definitions held in the tenant schema, overrides held in the tenant state.
+pub use strata_model_core::types::{
+    CapabilityDef, CapabilityName, SettingDef, SettingId, SettingLevel, SettingOverride,
+    SettingResolution, SettingSource, SettingType, SettingValues,
+};
+
 /// The result of an accepted transition (specification type `transition-result`).
 pub use strata_model_core::types::TransitionResult as Transition;
 

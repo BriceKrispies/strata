@@ -1495,6 +1495,72 @@ async fn members(
         .map(Json)
 }
 
+/// Read one setting for the signed-in person: `GET /api/settings/<setting>`. The backend's
+/// kernel resolves it; the recipient-side call (CT-816) has no route here, so no browser reaches it.
+async fn setting_resolve(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(setting): Path<String>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    backend(
+        &bff,
+        &visit,
+        "/internal/settings/resolve",
+        &json!({ "setting": setting }),
+    )
+    .await
+    .map(Json)
+}
+
+/// Every setting of the tenant for the signed-in person: `GET /api/settings`.
+async fn settings_resolve_all(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    backend(&bff, &visit, "/internal/settings/resolve-all", &json!({}))
+        .await
+        .map(Json)
+}
+
+/// Define or change a setting of the tenant: `POST /api/settings/save-definition`.
+async fn setting_save_definition(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/settings/save-definition", body).await
+}
+
+/// Set or remove the tenant level of a setting: `POST /api/settings/set-tenant`.
+async fn setting_set_tenant(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/settings/set-tenant", body).await
+}
+
+/// Set or remove the team level of a setting: `POST /api/settings/set-team`.
+async fn setting_set_team(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/settings/set-team", body).await
+}
+
+/// Set or remove the person level of a setting for the signed-in person:
+/// `POST /api/settings/set-person`. The body names no person.
+async fn setting_set_person(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/settings/set-person", body).await
+}
+
 #[derive(serde::Deserialize)]
 struct PreviewRequest {
     markdown: String,
@@ -2262,6 +2328,12 @@ pub fn router(bff: Shared) -> Router {
             "/subject-rights/erasure-receipts",
             post(subject_erasure_receipts),
         )
+        .route("/settings", get(settings_resolve_all))
+        .route("/settings/save-definition", post(setting_save_definition))
+        .route("/settings/set-tenant", post(setting_set_tenant))
+        .route("/settings/set-team", post(setting_set_team))
+        .route("/settings/set-person", post(setting_set_person))
+        .route("/settings/:setting", get(setting_resolve))
         .route("/preview", post(preview))
         .route("/lab/overview", get(lab_overview))
         .route("/lab/run", post(lab_run))

@@ -45,7 +45,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::ext::*;
 use strata_kernel::{
     canon, Coverage, DeltaOp, DomainEvent, Need, ObjectTypeId, PrincipalId, Record, RoleId,
-    SessionId, State, StateRevision, TenantId, TenantSchema, TenantState, Timestamp, Value,
+    SessionId, SettingId, SettingOverride, SettingValues, State, StateRevision, TenantId,
+    TenantSchema, TenantState, Timestamp, Value,
 };
 use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
@@ -390,6 +391,24 @@ const TENANT_MIGRATIONS: &[Migration] = &[
     CREATE INDEX audit_log_kind ON audit_log(kind, seq);
     ",
     },
+    Migration {
+        version: 12,
+        name: "setting overrides and revisions",
+        sql: "
+    CREATE TABLE setting_overrides (
+        setting  TEXT NOT NULL,
+        level    TEXT NOT NULL,
+        subject  TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        data     TEXT NOT NULL,
+        PRIMARY KEY (setting, level, subject)
+    );
+    CREATE TABLE setting_revisions (
+        setting  TEXT PRIMARY KEY,
+        revision INTEGER NOT NULL
+    );
+    ",
+    },
 ];
 
 /// The steps of a tenant file's layout, for tests that build a file at an older level.
@@ -549,7 +568,80 @@ fn header(tx: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantState>
         schema: Arc::new(schema),
         members,
         records: BTreeMap::new(),
+        setting_values: setting_values(tx)?,
     }))
+}
+
+/// The setting overrides and the setting revisions of the tenant in an open tenant file, none
+/// when there is neither (SET-051). They are loaded with the header: the kernel decides a write
+/// and resolves a read from the whole of them.
+fn setting_values(tx: &Connection) -> StoreResult<Option<Arc<SettingValues>>> {
+    let rows = select_strings(
+        tx,
+        "SELECT data FROM setting_overrides ORDER BY setting, level, subject",
+        &[],
+    )?;
+    let mut overrides = BTreeMap::new();
+    for data in rows {
+        let held: SettingOverride = decode(&data, "setting override")?;
+        overrides.insert(
+            strata_kernel::settings::override_key(&held.setting, held.level, &held.subject),
+            held,
+        );
+    }
+    let mut statement = tx
+        .prepare_cached("SELECT setting, revision FROM setting_revisions")
+        .map_err(db)?;
+    let stored = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(db)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db)?;
+    let mut revisions = BTreeMap::new();
+    for (setting, revision) in stored {
+        revisions.insert(
+            SettingId::new(setting).map_err(corrupt_id)?,
+            revision as u64,
+        );
+    }
+    Ok((!overrides.is_empty() || !revisions.is_empty()).then(|| {
+        Arc::new(SettingValues {
+            overrides,
+            revisions,
+        })
+    }))
+}
+
+/// Write one setting override, replacing the stored one of its setting, level and subject.
+fn write_setting_override(tx: &Connection, held: &SettingOverride) -> StoreResult<()> {
+    tx.execute(
+        "INSERT INTO setting_overrides (setting, level, subject, revision, data)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (setting, level, subject)
+         DO UPDATE SET revision = excluded.revision, data = excluded.data",
+        params![
+            held.setting.as_str(),
+            held.level.as_str(),
+            held.subject,
+            held.revision as i64,
+            encode(held)
+        ],
+    )
+    .map_err(db)?;
+    Ok(())
+}
+
+/// Write the revision of one setting, replacing the stored one.
+fn write_setting_revision(tx: &Connection, setting: &SettingId, revision: u64) -> StoreResult<()> {
+    tx.execute(
+        "INSERT INTO setting_revisions (setting, revision) VALUES (?1, ?2)
+         ON CONFLICT (setting) DO UPDATE SET revision = excluded.revision",
+        params![setting.as_str(), revision as i64],
+    )
+    .map_err(db)?;
+    Ok(())
 }
 
 fn put_records(state: &mut TenantState, rows: Vec<String>) -> StoreResult<()> {
@@ -1435,7 +1527,11 @@ impl SqliteStore {
                         members.insert(principal.clone(), roles.clone());
                     }
                 }
-                DeltaOp::PutRecord(_) | DeltaOp::DeleteRecord { .. } => {}
+                DeltaOp::PutRecord(_)
+                | DeltaOp::DeleteRecord { .. }
+                | DeltaOp::PutSettingOverride(_)
+                | DeltaOp::DeleteSettingOverride { .. }
+                | DeltaOp::PutSettingRevision { .. } => {}
             }
         }
         match (current.is_some(), created) {
@@ -1513,6 +1609,21 @@ impl SqliteStore {
                         params![object.as_str(), id.0 as i64],
                     )
                     .map_err(db)?;
+                }
+                DeltaOp::PutSettingOverride(held) => write_setting_override(tx, held)?,
+                DeltaOp::DeleteSettingOverride {
+                    setting,
+                    level,
+                    subject,
+                } => {
+                    tx.execute(
+                        "DELETE FROM setting_overrides WHERE setting = ?1 AND level = ?2 AND subject = ?3",
+                        params![setting.as_str(), level.as_str(), subject],
+                    )
+                    .map_err(db)?;
+                }
+                DeltaOp::PutSettingRevision { setting, revision } => {
+                    write_setting_revision(tx, setting, *revision)?
                 }
                 _ => {}
             }
@@ -3382,6 +3493,16 @@ impl Store for SqliteStore {
             .map_err(db)?;
             for record in state.records.values().flat_map(|records| records.values()) {
                 write_record(tx, record)?;
+            }
+            tx.execute("DELETE FROM setting_overrides", []).map_err(db)?;
+            tx.execute("DELETE FROM setting_revisions", []).map_err(db)?;
+            if let Some(values) = &state.setting_values {
+                for held in values.overrides.values() {
+                    write_setting_override(tx, held)?;
+                }
+                for (setting, revision) in &values.revisions {
+                    write_setting_revision(tx, setting, *revision)?;
+                }
             }
             // Events stay and the counter does not go back (`MAX` above): a subscriber that has
             // passed a sequence number must still see every later event.

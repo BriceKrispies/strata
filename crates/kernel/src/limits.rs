@@ -58,6 +58,13 @@ pub const MAX_AGGREGATES_PER_QUERY: usize = 20;
 pub const MAX_TOP_LEN: u32 = 100;
 /// The most groups an aggregate may answer with (D-7320, AGG-2323).
 pub const MAX_AGGREGATE_GROUPS: usize = 1_000;
+/// The most setting definitions a schema may hold (D-5046).
+pub const MAX_SETTINGS: usize = 500;
+/// The most capabilities a schema may declare (D-6590).
+pub const MAX_CAPABILITIES: usize = 200;
+/// The most setting overrides a tenant may hold at every level together. The overrides travel
+/// with the tenant's state, so the number is bounded.
+pub const MAX_SETTING_OVERRIDES: usize = 100_000;
 /// The fewest fields of one composite unique constraint (D-6558, CMS-1556).
 pub const MIN_UNIQUE_FIELDS: usize = 2;
 /// The most fields of one composite unique constraint (D-6558, CMS-1556).
