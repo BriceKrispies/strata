@@ -540,7 +540,7 @@ pub fn key_order(xs: &Vec<types::Key>) -> Vec<types::Key> {
 /// Specification function `mentions-field`.
 pub fn mentions_field(e: &types::Expr) -> bool {
     match e {
-        types::Expr::Var { name, .. } => !name.starts_with("$"),
+        types::Expr::Var { name, .. } => !name.as_str().starts_with("$"),
         types::Expr::Through { .. } => true,
         types::Expr::Lit(_) => false,
         types::Expr::Param(_) => false,
@@ -584,8 +584,8 @@ pub fn follow_reference(
     >,
 ) -> types::Value {
     match support::eval_lookup_rule_language_rule_env(c, env, lookup) {
-        Ok(v) => v,
-        Err(e) => types::Value::Str(format!("error: {}", e)),
+        Ok(v) => v.clone(),
+        Err(e) => types::Value::Str(format!("error: {e}")),
     }
 }
 
