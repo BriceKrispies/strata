@@ -4,16 +4,17 @@
 //! that the rest of the system does not depend on SQLite. It is not durable and says so.
 
 use crate::jobs::{
-    self, ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported,
-    RunRecord, RunState, Settled, StepRecord, WorkerWrites,
+    self, ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, JobWork, Lease, NewJob,
+    Reported, RunRecord, RunState, Settled, StepRecord, WorkerWrites,
 };
+use crate::schedules::{self, AutomationPurged, AutomationRetention, Schedule, ScheduleSet};
 use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, AuditEntry,
     Capabilities, Commit, FederatedIdentity, Health, IdempotencyEntry, IdempotentResult,
     JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge, PasskeyRecord, PendingSignIn,
     PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
     SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
-    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord, IDEMPOTENCY_RETENTION_MS,
+    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -59,8 +60,8 @@ struct Inner {
     idempotency: BTreeMap<(TenantId, String, String), (IdempotencyEntry, Receipt)>,
     /// The segment block of each tenant (SEG-001 to SEG-038).
     segments: BTreeMap<TenantId, seg::SegmentTables>,
-    /// Jobs of the automation worker per tenant, in creation order: a job's `seq` is its index
-    /// plus one.
+    /// Jobs of the automation worker per tenant, in creation order: a job's `seq` is one more
+    /// than the greatest before it (a purge removes ended jobs, so it is not the index).
     jobs: BTreeMap<TenantId, Vec<Job>>,
     /// Runs per tenant, in the order they were first written: a run's `seq` is its index plus one.
     runs: BTreeMap<TenantId, Vec<RunRecord>>,
@@ -68,6 +69,10 @@ struct Inner {
     steps: BTreeMap<(TenantId, String, u64), StepRecord>,
     /// Exception records per tenant, in the order they were written: `seq` is the index plus one.
     exceptions: BTreeMap<TenantId, Vec<ExceptionRecord>>,
+    /// Schedules by tenant and identifier.
+    schedules: BTreeMap<(TenantId, String), Schedule>,
+    /// The run that holds each run key, by tenant, automation and key hash.
+    run_keys: BTreeMap<(TenantId, String, String), String>,
 }
 
 impl Inner {
@@ -79,7 +84,7 @@ impl Inner {
                 let id = jobs::job_id(tenant, &wanted.key);
                 if !list.iter().any(|job| job.id == id) {
                     let mut job = jobs::new_job(tenant, wanted, now);
-                    job.seq = list.len() as u64 + 1;
+                    job.seq = list.iter().map(|held| held.seq).max().unwrap_or(0) + 1;
                     list.push(job);
                 }
                 id
@@ -93,7 +98,7 @@ impl Inner {
         for record in records {
             if !list.iter().any(|held| held.id == record.id) {
                 let mut record = record.clone();
-                record.seq = list.len() as u64 + 1;
+                record.seq = list.iter().map(|held| held.seq).max().unwrap_or(0) + 1;
                 list.push(record);
             }
         }
@@ -111,7 +116,7 @@ impl Inner {
                 }
                 None => {
                     let mut run = run.clone();
-                    run.seq = runs.len() as u64 + 1;
+                    run.seq = runs.iter().map(|held| held.seq).max().unwrap_or(0) + 1;
                     runs.push(run);
                 }
             }
@@ -124,6 +129,29 @@ impl Inner {
         }
         self.add_exceptions(tenant, &writes.exceptions);
         self.add_jobs(tenant, &writes.jobs, now);
+        for claim in &writes.run_keys {
+            self.run_keys
+                .entry((
+                    tenant.clone(),
+                    claim.automation.as_str().to_string(),
+                    claim.key.clone(),
+                ))
+                .or_insert_with(|| claim.run.clone());
+        }
+        for automation in &writes.run_keys_released {
+            self.run_keys
+                .retain(|(t, a, _), _| !(t == tenant && a == automation.as_str()));
+        }
+        if let Some(advance) = &writes.schedule_advance {
+            let key = (tenant.clone(), advance.schedule.clone());
+            if let Some(held) = self.schedules.get(&key) {
+                let (next, create) = schedules::apply_completion(held, advance);
+                self.schedules.insert(key, next);
+                if let Some(job) = create {
+                    self.add_jobs(tenant, &[job], now);
+                }
+            }
+        }
     }
 
     fn job_mut(&mut self, tenant: &TenantId, id: &str) -> Option<&mut Job> {
@@ -517,7 +545,7 @@ impl Store for MemoryStore {
             .lock()?
             .idempotency
             .get(&(tenant.clone(), principal.to_string(), key.to_string()))
-            .filter(|(held, _)| held.recorded_at.0 >= now.0 - IDEMPOTENCY_RETENTION_MS)
+            .filter(|(held, _)| held.recorded_at.0 >= now.0 - held.retention_ms)
             .map(|(held, receipt)| IdempotentResult {
                 request_hash: held.request_hash.clone(),
                 result: held.result.clone(),
@@ -1569,6 +1597,8 @@ impl Store for MemoryStore {
         inner.runs.remove(tenant);
         inner.steps.retain(|(t, _, _), _| t != tenant);
         inner.exceptions.remove(tenant);
+        inner.schedules.retain(|(t, _), _| t != tenant);
+        inner.run_keys.retain(|(t, _, _), _| t != tenant);
         inner.segments.remove(tenant);
         Ok(())
     }
@@ -1853,6 +1883,147 @@ impl Store for MemoryStore {
         }
         Ok(Settled::Done { job: released })
     }
+
+    fn schedule_set(
+        &self,
+        tenant: &TenantId,
+        set: &ScheduleSet,
+        now: Timestamp,
+    ) -> StoreResult<Schedule> {
+        let mut inner = self.lock()?;
+        if !inner.tenants.contains_key(tenant) {
+            return Err(StoreError::NotFound(format!("tenant {tenant}")));
+        }
+        let key = (tenant.clone(), set.id.clone());
+        let outcome = schedules::apply_set(inner.schedules.get(&key), set, now);
+        if let Some(job) = &outcome.create {
+            check_jobs(std::slice::from_ref(job))?;
+        }
+        if outcome.replace_open {
+            if let Some(list) = inner.jobs.get_mut(tenant) {
+                for job in list.iter_mut() {
+                    let ours = matches!(
+                        &job.work,
+                        JobWork::ScheduleDue { schedule, .. } if *schedule == set.id
+                    );
+                    if ours {
+                        if let JobChange::Changed(next) =
+                            jobs::apply_cancel(job, "the rule of the schedule was changed", now)
+                        {
+                            *job = next;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(job) = &outcome.create {
+            inner.add_jobs(tenant, std::slice::from_ref(job), now);
+        }
+        inner.schedules.insert(key, outcome.schedule.clone());
+        Ok(outcome.schedule)
+    }
+
+    fn schedule(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<Schedule>> {
+        Ok(self
+            .lock()?
+            .schedules
+            .get(&(tenant.clone(), id.to_string()))
+            .cloned())
+    }
+
+    fn schedules(&self, tenant: &TenantId) -> StoreResult<Vec<Schedule>> {
+        Ok(self
+            .lock()?
+            .schedules
+            .iter()
+            .filter(|((held, _), _)| held == tenant)
+            .map(|(_, schedule)| schedule.clone())
+            .collect())
+    }
+
+    fn run_key_holder(
+        &self,
+        tenant: &TenantId,
+        automation: &WorkflowId,
+        key: &str,
+    ) -> StoreResult<Option<String>> {
+        Ok(self
+            .lock()?
+            .run_keys
+            .get(&(
+                tenant.clone(),
+                automation.as_str().to_string(),
+                key.to_string(),
+            ))
+            .cloned())
+    }
+
+    fn open_run_key_starts(
+        &self,
+        tenant: &TenantId,
+        automation: &WorkflowId,
+        key: &str,
+    ) -> StoreResult<Vec<Job>> {
+        Ok(self
+            .lock()?
+            .jobs
+            .get(tenant)
+            .map(|list| {
+                list.iter()
+                    .filter(|job| !job.state.ended())
+                    .filter(|job| {
+                        matches!(
+                            &job.work,
+                            JobWork::StartRun {
+                                automation: held,
+                                run_key: Some(held_key),
+                                ..
+                            } if held == automation && held_key == key
+                        )
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn purge_automation(
+        &self,
+        now: Timestamp,
+        retention: &AutomationRetention,
+    ) -> StoreResult<AutomationPurged> {
+        let mut inner = self.lock()?;
+        let mut purged = AutomationPurged::default();
+        for list in inner.jobs.values_mut() {
+            let before = list.len();
+            list.retain(|job| !jobs::job_expired(job, now, retention));
+            purged.jobs += (before - list.len()) as u64;
+        }
+        let mut gone: Vec<(TenantId, String)> = Vec::new();
+        for (tenant, list) in inner.runs.iter_mut() {
+            list.retain(|run| {
+                let expired = jobs::run_expired(run, now, retention);
+                if expired {
+                    gone.push((tenant.clone(), run.run.clone()));
+                }
+                !expired
+            });
+        }
+        purged.runs = gone.len() as u64;
+        for (tenant, run) in &gone {
+            let before = inner.steps.len();
+            inner
+                .steps
+                .retain(|(t, r, _), _| !(t == tenant && r == run));
+            purged.steps += (before - inner.steps.len()) as u64;
+        }
+        for list in inner.exceptions.values_mut() {
+            let before = list.len();
+            list.retain(|record| !jobs::exception_expired(record, now, retention));
+            purged.exceptions += (before - list.len()) as u64;
+        }
+        Ok(purged)
+    }
 }
 
 /// Apply one commit, with the segment write its change decided when it has one, under the lock:
@@ -1872,13 +2043,13 @@ fn commit_in(
         });
     }
     check_event_sequence(commit, current.as_ref().map_or(0, |t| t.event_seq))?;
-    let recorded_before = commit.journal.context.now.0 - IDEMPOTENCY_RETENTION_MS;
+    let commit_now = commit.journal.context.now.0;
     if let Some(entry) = &commit.idempotency {
         let scope = (tenant.clone(), entry.principal.clone(), entry.key.clone());
         if inner
             .idempotency
             .get(&scope)
-            .is_some_and(|(held, _)| held.recorded_at.0 >= recorded_before)
+            .is_some_and(|(held, _)| held.recorded_at.0 >= commit_now - held.retention_ms)
         {
             return Err(StoreError::Invalid(
                 "the idempotency key is already recorded".into(),
@@ -1931,7 +2102,7 @@ fn commit_in(
     };
     inner
         .idempotency
-        .retain(|_, (held, _)| held.recorded_at.0 >= recorded_before);
+        .retain(|_, (held, _)| held.recorded_at.0 >= commit_now - held.retention_ms);
     if let Some(entry) = &commit.idempotency {
         inner.idempotency.insert(
             (tenant.clone(), entry.principal.clone(), entry.key.clone()),

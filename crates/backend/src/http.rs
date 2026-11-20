@@ -1192,6 +1192,26 @@ pub fn router(app: Shared) -> Router {
             "/internal/automation/exceptions/settle",
             post(crate::worker::routes::settle_route),
         )
+        .route(
+            "/internal/jobs/list",
+            post(crate::worker::routes::jobs_list_route),
+        )
+        .route(
+            "/internal/jobs/schedule",
+            post(crate::worker::routes::jobs_schedule_route),
+        )
+        .route(
+            "/internal/jobs/cancel",
+            post(crate::worker::routes::jobs_cancel_route),
+        )
+        .route(
+            "/internal/jobs/retry",
+            post(crate::worker::routes::jobs_retry_route),
+        )
+        .route(
+            "/internal/schedules/define",
+            post(crate::worker::schedules::define_route),
+        )
         .route("/internal/ws", get(socket));
     // The development routes are compiled only with the `development` feature, and mounted only
     // when the process was started in development mode.

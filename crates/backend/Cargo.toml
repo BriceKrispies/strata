@@ -41,6 +41,7 @@ bergshamra-keys.workspace = true
 uppsala.workspace = true
 flate2.workspace = true
 sha2.workspace = true
+jiff.workspace = true
 reqwest = { workspace = true, features = ["native-tls"] }
 # Pure-Rust cryptography (RustCrypto), as the SAML and RSA code uses: no C library to build.
 p256 = { version = "=0.13.2", features = ["pkcs8", "pem", "ecdsa"] }

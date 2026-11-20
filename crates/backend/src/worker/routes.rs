@@ -14,18 +14,24 @@ use strata_kernel::rules::{holds_any, roles_of};
 use strata_kernel::{owner_role, Grant, WorkflowId};
 use strata_protocol::api::ErrorCode;
 use strata_storage_api::jobs::{
-    ExceptionKind, ExceptionRecord, RunRecord, RunState, Settled, StepRecord,
+    self, ExceptionKind, ExceptionRecord, Job, JobChange, RunRecord, RunState, Settled, StepRecord,
 };
 
 /// The capability that reading runs, steps and exception records needs (WFL-1531).
 pub const AUTOMATIONS_READ: &str = "automations-read";
+/// The capability that listing jobs and schedules needs (CT-086).
+pub const JOBS_READ: &str = "jobs-read";
 
 /// The most entries one page holds, and how many when the request names no limit.
 const MAX_PAGE: u64 = 100;
 const DEFAULT_PAGE: u64 = 50;
 
 /// The caller is signed in and holds the capability `name`; the owner holds every capability.
-fn require_capability(app: &App, identity: &Identity, name: &str) -> Result<(), ApiError> {
+pub(super) fn require_capability(
+    app: &App,
+    identity: &Identity,
+    name: &str,
+) -> Result<(), ApiError> {
     if identity.anonymous() {
         return Err(ApiError::new(
             ErrorCode::Unauthenticated,
@@ -46,7 +52,7 @@ fn require_capability(app: &App, identity: &Identity, name: &str) -> Result<(), 
 
 /// A tenant named in the request must be the caller's: another is refused, recorded as an audit
 /// entry and raised as an alert (TEN-1140, THR-259).
-fn same_tenant(app: &App, identity: &Identity, body: &Json_) -> Result<(), ApiError> {
+pub(super) fn same_tenant(app: &App, identity: &Identity, body: &Json_) -> Result<(), ApiError> {
     match body.get("tenant").and_then(Json_::as_str) {
         Some(named) if named != identity.tenant.as_str() => {
             app.audit(
@@ -265,6 +271,278 @@ pub fn settle_exception(app: &App, identity: &Identity, body: &Json_) -> Result<
             Ok(json!({ "job": job }))
         }
     }
+}
+
+/// A job as list-jobs shows it (job-summary): its state, its attempts and the error of each
+/// (AGT-416), with what the owner needs to find it again.
+fn job_summary(job: &Job) -> Json_ {
+    json!({
+        "job": job.id,
+        "key": job.key,
+        "state": job.state.as_str(),
+        "due_at": job.due_at.0,
+        "attempts": job.attempt,
+        "errors": job.errors,
+        "reason": job.reason,
+        "created_at": job.created_at.0,
+        "ended_at": job.ended_at.map(|t| t.0),
+    })
+}
+
+/// The jobs of the caller's tenant, newest first, and on the first page its schedules
+/// (list-jobs).
+/// Implements: CT-086
+pub fn list_jobs(app: &App, identity: &Identity, body: &Json_) -> Result<Json_, ApiError> {
+    same_tenant(app, identity, body)?;
+    require_capability(app, identity, JOBS_READ)?;
+    let limit = limit_of(body);
+    let cursor = cursor_of(body)?;
+    let found = app.store.jobs_list(&identity.tenant, cursor, limit)?;
+    let next = (found.len() == limit)
+        .then(|| found.last().map(|job| job.seq.to_string()))
+        .flatten();
+    let schedules = match cursor {
+        None => app.store.schedules(&identity.tenant)?,
+        Some(_) => Vec::new(),
+    };
+    Ok(json!({
+        "jobs": found.iter().map(job_summary).collect::<Vec<_>>(),
+        "next": next,
+        "schedules": schedules.iter().map(super::schedules::schedule_json).collect::<Vec<_>>(),
+    }))
+}
+
+/// The scalar a plain JSON value stands for in a job's parameters.
+fn param_of(value: &Json_) -> Result<strata_kernel::Value, ApiError> {
+    match value {
+        Json_::Null => Ok(strata_kernel::Value::Null),
+        Json_::Bool(flag) => Ok(strata_kernel::Value::Bool(*flag)),
+        Json_::String(text) => Ok(strata_kernel::Value::Str(text.clone())),
+        Json_::Number(number) => number
+            .as_i64()
+            .map(strata_kernel::Value::Int)
+            .ok_or_else(|| ApiError::new(ErrorCode::Invalid, "A parameter is a whole number.")),
+        _ => Err(ApiError::new(
+            ErrorCode::Invalid,
+            "A parameter is a text, a whole number, true, false or null.",
+        )),
+    }
+}
+
+/// Schedule a job of the caller's tenant (schedule-job): the one kind of job a tenant may
+/// schedule is `start-run`, a run of one of its automations at a time, with parameters (the
+/// kinds of a job are the worker's, not free text: D-6520). The idempotency key makes the job:
+/// the same key with the same work names the same job, and with other work is a conflict
+/// (SCH-004). A time in the past makes the job due now.
+/// Implements: CT-081
+pub fn schedule_job(app: &App, identity: &Identity, body: &Json_) -> Result<Json_, ApiError> {
+    same_tenant(app, identity, body)?;
+    require_capability(app, identity, super::schedules::JOBS_MANAGE)?;
+    let invalid = |why: &str| ApiError::new(ErrorCode::Invalid, why.to_string());
+    if crate::service::text(body, "kind", 64)? != "start-run" {
+        return Err(invalid(
+            "A job of this kind is not known: schedule a start-run.",
+        ));
+    }
+    let key = crate::service::text(body, "idempotency_key", 255)?;
+    if !strata_storage_api::valid_idempotency_key(key) {
+        return Err(invalid(
+            "The idempotency key is 1 to 255 visible ASCII characters.",
+        ));
+    }
+    let due = body
+        .get("due_at")
+        .and_then(Json_::as_i64)
+        .ok_or_else(|| invalid("due_at is a time in milliseconds."))?;
+    // The payload is an object, or JSON text of one (the contract's value-map).
+    let payload = match body.get("payload") {
+        Some(Json_::String(text)) => {
+            serde_json::from_str::<Json_>(text).map_err(|_| invalid("The payload is not JSON."))?
+        }
+        Some(other) => other.clone(),
+        None => {
+            return Err(invalid(
+                "A start-run needs a payload naming its automation.",
+            ))
+        }
+    };
+    let automation = payload
+        .get("automation")
+        .and_then(Json_::as_str)
+        .and_then(|text| strata_kernel::WorkflowId::new(text).ok())
+        .ok_or_else(|| invalid("The payload names an automation."))?;
+    let mut params = std::collections::BTreeMap::new();
+    if let Some(given) = payload.get("params") {
+        let given = given
+            .as_object()
+            .ok_or_else(|| invalid("params is an object."))?;
+        for (name, value) in given {
+            params.insert(name.clone(), param_of(value)?);
+        }
+    }
+    let tenant = crate::ops::header(app, identity)?;
+    let def = tenant
+        .schema
+        .automations
+        .as_ref()
+        .and_then(|all| all.get(&automation))
+        .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "There is no such automation."))?;
+    if def.suspended_for.is_some() {
+        return Err(ApiError::new(
+            ErrorCode::Conflict,
+            "The automation is suspended.",
+        ));
+    }
+    let caused_by = match &identity.principal {
+        strata_kernel::Principal::User(id) => Some(id.clone()),
+        _ => None,
+    };
+    let job = super::schedules::start_job(
+        def,
+        None,
+        0,
+        params,
+        caused_by,
+        tenant.schema.version,
+        format!("api:{key}"),
+        strata_kernel::Timestamp(due),
+    )
+    .map_err(|why| ApiError::new(ErrorCode::Invalid, why))?;
+    let id = jobs::job_id(&identity.tenant, &job.key);
+    if let Some(existing) = app.store.job(&identity.tenant, &id)? {
+        if existing.work != job.work {
+            return Err(ApiError::new(
+                ErrorCode::Conflict,
+                "This idempotency key made a job with other work.",
+            ));
+        }
+        return Ok(json!({ "job": id }));
+    }
+    let ids = app.store.jobs_create(&identity.tenant, &[job], app.now())?;
+    app.audit(
+        "automation.job_scheduled",
+        &identity.correlation,
+        json!({ "tenant": identity.tenant.as_str(), "job": ids[0], "automation": automation.as_str() }),
+    );
+    Ok(json!({ "job": ids[0] }))
+}
+
+/// Who asked, as the text the record of a cancellation keeps.
+fn requester(identity: &Identity) -> String {
+    match &identity.principal {
+        strata_kernel::Principal::User(id) => id.as_str().to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+/// Cancel a job of the caller's tenant (cancel-job): no later attempt happens (SCH-006), and the
+/// requester and the reason are recorded on the job and in the audit trail (AGT-417). A job of
+/// another tenant is not found. A job that has ended is left as it is.
+/// Implements: CT-084
+pub fn cancel_job(app: &App, identity: &Identity, body: &Json_) -> Result<Json_, ApiError> {
+    same_tenant(app, identity, body)?;
+    require_capability(app, identity, super::schedules::JOBS_MANAGE)?;
+    let job = crate::service::text(body, "job", 64)?;
+    let reason = crate::service::text(body, "reason", 256)?;
+    let note = format!("cancelled by {}: {reason}", requester(identity));
+    match app
+        .store
+        .job_cancel(&identity.tenant, job, &note, app.now())?
+    {
+        JobChange::NotFound => Err(ApiError::new(ErrorCode::NotFound, "There is no such job.")),
+        JobChange::Unchanged(held) => Ok(json!({ "state": held.state.as_str() })),
+        JobChange::Changed(held) => {
+            app.audit(
+                "automation.job_cancelled",
+                &identity.correlation,
+                json!({
+                    "tenant": identity.tenant.as_str(),
+                    "job": held.id,
+                    "by": requester(identity),
+                    "reason": reason,
+                }),
+            );
+            Ok(json!({ "state": held.state.as_str() }))
+        }
+    }
+}
+
+/// Give a failed job of the caller's tenant one more attempt (retry-job): the outcomes of the
+/// earlier attempts and the step key are unchanged (AGT-418, SCH-1524). A job that has not failed
+/// is a conflict; a job of another tenant is not found. The requester is recorded in the audit
+/// trail.
+/// Implements: CT-085
+pub fn retry_job(app: &App, identity: &Identity, body: &Json_) -> Result<Json_, ApiError> {
+    same_tenant(app, identity, body)?;
+    require_capability(app, identity, super::schedules::JOBS_MANAGE)?;
+    let job = crate::service::text(body, "job", 64)?;
+    match app.store.job_retry(&identity.tenant, job, app.now())? {
+        JobChange::NotFound => Err(ApiError::new(ErrorCode::NotFound, "There is no such job.")),
+        JobChange::Unchanged(_) => Err(ApiError::new(
+            ErrorCode::Conflict,
+            "The job has not failed.",
+        )),
+        JobChange::Changed(held) => {
+            app.audit(
+                "automation.job_retried",
+                &identity.correlation,
+                json!({
+                    "tenant": identity.tenant.as_str(),
+                    "job": held.id,
+                    "by": requester(identity),
+                }),
+            );
+            Ok(json!({ "attempt": held.attempt.saturating_add(1) }))
+        }
+    }
+}
+
+/// `POST /internal/jobs/list`.
+pub async fn jobs_list_route(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        list_jobs(app, identity, &body)
+    })
+    .await
+}
+
+/// `POST /internal/jobs/schedule`.
+pub async fn jobs_schedule_route(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        schedule_job(app, identity, &body)
+    })
+    .await
+}
+
+/// `POST /internal/jobs/cancel`.
+pub async fn jobs_cancel_route(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        cancel_job(app, identity, &body)
+    })
+    .await
+}
+
+/// `POST /internal/jobs/retry`.
+pub async fn jobs_retry_route(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        retry_job(app, identity, &body)
+    })
+    .await
 }
 
 /// `POST /internal/automation/runs`.

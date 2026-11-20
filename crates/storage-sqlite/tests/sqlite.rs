@@ -78,6 +78,17 @@ fn sqlite_store_keeps_jobs() {
     conformance::jobs_conform(&store);
 }
 
+/// Schedules, run keys, the retention of idempotency entries and the purge of the worker's
+/// records, on database files.
+#[test]
+fn sqlite_store_keeps_schedules_run_keys_retention_and_purges() {
+    let open = |name: &str| SqliteStore::open(&fresh_path(name), Timestamp(1)).unwrap();
+    conformance::schedules_conform(&open("schedules"));
+    conformance::run_keys_conform(&open("run-keys"));
+    conformance::idempotency_retention_is_a_property_of_the_entry(&open("retention"));
+    conformance::automation_purge_conforms(&open("purge"));
+}
+
 /// A job created before a restart is still due, and still found through the wake index, after
 /// it (SCH-007).
 #[test]

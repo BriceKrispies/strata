@@ -3,10 +3,13 @@
 //! The inputs arrive as plain JSON and are coerced by the operation's input types; the kernel
 //! decides the invocation (`strata_kernel::operations`) and the store commits it in one
 //! transaction, as every intent is committed. The caller's idempotency key is required: it is the
-//! intent's key and the context's, so a repeat by the same person with the same key and the same
-//! input answers with the first result and changes nothing (the store's idempotency, see
-//! `strata_storage_api::execute_by`), and the same key with other input is refused with
-//! idempotency-mismatch. A dry run is decided against the same snapshot and not committed.
+//! intent's key and the context's, so a repeat by the same person of the same operation with the
+//! same key and the same input answers with the first result and changes nothing (the store's
+//! idempotency, see `strata_storage_api::execute_by`), and the same key with other input is refused
+//! with idempotency-mismatch, the error kind the store decides it with. The key is recorded under
+//! the person and the operation, for seven days (D-6548, `strata_storage_api::idempotency_scope_for`
+//! and `idempotency_retention`): that record is the run record of the invocation
+//! (rec-tenant-operation-run). A dry run is decided against the same snapshot and not committed.
 //! No domain rule is written here.
 
 use crate::app::{ApiError, App, Shared};
@@ -20,11 +23,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::ext::*;
 use strata_kernel::operations::{operation_of, result_of, valid_key, MAX_KEY_BYTES};
 use strata_kernel::{
-    canon, Check, Context, DomainError, ErrorKind, Intent, Need, TenantOperationId, Transition,
-    Value,
+    Check, Context, DomainError, ErrorKind, Intent, Need, TenantOperationId, Transition, Value,
 };
 use strata_protocol::api::{ErrorCode, OperationReply, OperationRequest, HEADER_IDEMPOTENCY};
-use strata_storage_api::idempotency_scope;
 use strata_substrate::plain::coerce;
 
 /// How many rounds a dry run may spend loading state the decision found missing, as many as a
@@ -117,8 +118,7 @@ pub fn invoke(
     let unexpected = || ApiError::hidden(ErrorCode::Internal, "an invocation without its result");
 
     if request.dry_run {
-        let transition =
-            decide(app, &ctx, &intent).map_err(|error| explain(app, &ctx, &intent, key, error))?;
+        let transition = decide(app, &ctx, &intent).map_err(explain)?;
         let result = result_of(&transition.output, transition.delta.new_revision, false)
             .ok_or_else(unexpected)?;
         return Ok(OperationReply {
@@ -128,8 +128,7 @@ pub fn invoke(
             dry_run: true,
         });
     }
-    let done = run_intent(app, &ctx, &intent, false)
-        .map_err(|error| explain(app, &ctx, &intent, key, error))?;
+    let done = run_intent(app, &ctx, &intent, false).map_err(explain)?;
     let result = result_of(
         &done.transition.output,
         done.receipt.revision,
@@ -145,9 +144,10 @@ pub fn invoke(
 }
 
 /// The contract's answer for a refusal: an operation the tenant does not have is not-found, and a
-/// key the caller used before with other input is idempotency-mismatch (OPR-1544). Every other
-/// refusal stands as the kernel or the store gave it.
-fn explain(app: &App, ctx: &Context, intent: &Intent, key: &str, mut error: ApiError) -> ApiError {
+/// key the caller used before, for this operation, with other input is idempotency-mismatch
+/// (OPR-1544, D-6548), which the store decides as the error kind of its refusal: nothing is read
+/// again here. Every other refusal stands as the kernel or the store gave it.
+fn explain(mut error: ApiError) -> ApiError {
     if error
         .0
         .failed
@@ -157,25 +157,17 @@ fn explain(app: &App, ctx: &Context, intent: &Intent, key: &str, mut error: ApiE
         error.0.code = ErrorCode::NotFound;
         return error;
     }
-    if error.0.kind.as_deref() == Some("InvalidIntent") {
-        let scope = idempotency_scope(&ctx.principal);
-        if let Ok(Some(first)) = app
-            .store
-            .idempotent_result(&ctx.tenant, &scope, key, ctx.now)
-        {
-            if first.request_hash != canon::hash_of(intent) {
-                let mut mismatch = ApiError::new(
-                    ErrorCode::Conflict,
-                    "This idempotency key was used for an invocation with other input.",
-                );
-                mismatch.0.kind = Some("IdempotencyMismatch".into());
-                mismatch.0.failed.push(Check::fail(
-                    "operation:idempotency_mismatch",
-                    "the key was used with other input",
-                ));
-                return mismatch;
-            }
-        }
+    if error.0.kind.as_deref() == Some("IdempotencyMismatch") {
+        let mut mismatch = ApiError::new(
+            ErrorCode::Conflict,
+            "This idempotency key was used for an invocation with other input.",
+        );
+        mismatch.0.kind = Some("IdempotencyMismatch".into());
+        mismatch.0.failed.push(Check::fail(
+            "operation:idempotency_mismatch",
+            "the key was used with other input",
+        ));
+        return mismatch;
     }
     error
 }

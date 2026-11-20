@@ -2521,6 +2521,70 @@ async fn automation_settle(
     Ok(uncached(reply))
 }
 
+/// The jobs and schedules of the site, newest first (list-jobs, CT-086).
+///
+/// Implements: CT-086
+async fn jobs_list(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let body = automation_query(&query, &["cursor"]);
+    let reply: Json_ = backend(&bff, &visit, "/internal/jobs/list", &body).await?;
+    Ok(uncached(reply))
+}
+
+/// What the owner may do to jobs and schedules, and where it is at the backend: schedule-job,
+/// cancel-job, retry-job and define-schedule (CT-081, CT-084, CT-085, CT-087). The backend checks
+/// the capability `jobs-manage`; the BFF adds only the write guard.
+const JOB_WRITES: &[(&str, &str)] = &[
+    ("schedule", "/internal/jobs/schedule"),
+    ("cancel", "/internal/jobs/cancel"),
+    ("retry", "/internal/jobs/retry"),
+];
+
+/// `POST /api/jobs/<schedule|cancel|retry>`: the contract's inputs as the JSON body. A write:
+/// the origin and the session's token are checked first.
+///
+/// Implements: CT-081, CT-084, CT-085
+async fn jobs_write(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(action): Path<String>,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    let Some((_, path)) = JOB_WRITES
+        .iter()
+        .find(|(name, _)| *name == action.trim_start_matches('/'))
+    else {
+        return Err(Failure::new(
+            ErrorCode::NotFound,
+            "No such endpoint.",
+            &visit.correlation,
+        ));
+    };
+    let reply: Json_ = backend(&bff, &visit, path, &body).await?;
+    Ok(uncached(reply))
+}
+
+/// `POST /api/schedules/define`: create, change, pause or resume a schedule
+/// (define-schedule, CT-087). A write.
+///
+/// Implements: CT-087
+async fn schedule_define(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    let reply: Json_ = backend(&bff, &visit, "/internal/schedules/define", &body).await?;
+    Ok(uncached(reply))
+}
+
 /// The segment endpoints (CT-290 to CT-293, CT-813 to CT-815), each relayed to the backend, which
 /// decides who may call it. A change (define, remove) and a test are writes and pass the write
 /// guard; the others are reads that carry their inputs as a body.
@@ -2678,6 +2742,9 @@ pub fn router(bff: Shared) -> Router {
         .route("/automation/runs/:run/steps", get(automation_steps))
         .route("/automation/exceptions", get(automation_exceptions))
         .route("/automation/exceptions/settle", post(automation_settle))
+        .route("/jobs", get(jobs_list))
+        .route("/jobs/:action", post(jobs_write))
+        .route("/schedules/define", post(schedule_define))
         .route("/products", get(products_list))
         .route("/products/:action", post(products_write))
         .fallback(api_not_found);

@@ -29,9 +29,10 @@
 //! - **Idempotency.** A commit that carries an [`IdempotencyEntry`] records it in the same
 //!   atomic step as the state it describes, under the scope tenant, principal and key.
 //!   [`Store::idempotent_result`] returns the first result for a scope, for
-//!   [`IDEMPOTENCY_RETENTION_MS`] after the commit that recorded it; a record older than that
-//!   is gone, and the key is new again. A commit that names a scope already recorded and not
-//!   past its retention changes nothing and fails.
+//!   the retention of the entry ([`IdempotencyEntry::retention_ms`], [`idempotency_retention`]:
+//!   [`IDEMPOTENCY_RETENTION_MS`] unless the request states another) after the commit that
+//!   recorded it; a record older than that is gone, and the key is new again. A commit that
+//!   names a scope already recorded and not past its retention changes nothing and fails.
 //!
 //! What adapters may differ in is stated by [`Capabilities`], not hidden.
 
@@ -42,6 +43,7 @@ pub mod memory;
 pub mod search;
 pub mod segment_jobs;
 pub mod segment_pump;
+pub mod schedules;
 pub mod segments;
 
 #[cfg(feature = "conformance")]
@@ -137,6 +139,44 @@ pub struct JournalEntry {
 /// after it is a new request.
 pub const IDEMPOTENCY_RETENTION_MS: i64 = 24 * 60 * 60 * 1000;
 
+/// How long the run record of an accepted invocation of a tenant operation is kept: seven days
+/// (D-6548, rec-tenant-operation-run, OPR-1544).
+pub const OPERATION_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+/// How long the key of an automation step's record change is kept: the longest a step can still
+/// retry, and then the retention of the run record, so that a retry that finds its run still
+/// finds the key (D-6528, SCH-1524, WG-5164). The longest retry span is D-6529's: at most ten
+/// attempts, a delay of at most one day before each attempt after the first, and an attempt of at
+/// most fifteen minutes; the run record is kept ninety days after the run ends
+/// ([`schedules::RUN_RETENTION_MS`]).
+pub const AUTOMATION_STEP_RETENTION_MS: i64 =
+    9 * 24 * 60 * 60 * 1000 + 10 * 15 * 60 * 1000 + schedules::RUN_RETENTION_MS;
+
+/// How long an idempotency entry is kept, from what the request is: an invocation of a tenant
+/// operation seven days ([`OPERATION_RETENTION_MS`]); a change made by an automation principal as
+/// one of its steps ([`AUTOMATION_STEP_RETENTION_MS`]); every other request twenty-four hours
+/// ([`IDEMPOTENCY_RETENTION_MS`]). The caller states how long by what it asks for, and the entry
+/// holds the answer.
+pub fn idempotency_retention(intent: &Intent, context: &Context) -> i64 {
+    if matches!(intent, Intent::InvokeOperation { .. }) {
+        return OPERATION_RETENTION_MS;
+    }
+    match &context.principal {
+        Principal::User(id)
+            if id
+                .as_str()
+                .starts_with(strata_kernel::automation::AUTOMATION_PREFIX) =>
+        {
+            AUTOMATION_STEP_RETENTION_MS
+        }
+        _ => IDEMPOTENCY_RETENTION_MS,
+    }
+}
+
+fn default_retention_ms() -> i64 {
+    IDEMPOTENCY_RETENTION_MS
+}
+
 /// The longest idempotency key a caller may choose, in bytes.
 pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
 
@@ -158,6 +198,9 @@ pub struct IdempotencyEntry {
     pub request_hash: String,
     /// When the key was recorded: the commit's `now`. Retention counts from here.
     pub recorded_at: Timestamp,
+    /// How long the entry is kept from `recorded_at`, as the request stated ([`idempotency_retention`]).
+    #[serde(default = "default_retention_ms")]
+    pub retention_ms: i64,
     /// The first result, kept without the delta's operations, the events and the effects: what
     /// a caller reads back (output, evidence, new revision and sequence), not what was written.
     pub result: Transition,
@@ -211,6 +254,17 @@ pub fn changed_objects(delta: &StateDelta) -> BTreeSet<strata_kernel::ObjectType
         .collect()
 }
 
+/// The scope an intent's key is recorded under: the principal, and for an invocation of a tenant
+/// operation also the operation, so that one person's key is a different key for another
+/// operation (D-6548, rec-tenant-operation-run).
+pub fn idempotency_scope_for(intent: &Intent, context: &Context) -> String {
+    let scope = idempotency_scope(&context.principal);
+    match intent {
+        Intent::InvokeOperation { operation, .. } => format!("{scope}|op:{operation}"),
+        _ => scope,
+    }
+}
+
 impl Commit {
     /// The commit for an accepted transition.
     /// Implements: CT-262
@@ -245,10 +299,11 @@ impl Commit {
                 .idempotency_key
                 .as_ref()
                 .map(|key| IdempotencyEntry {
-                    principal: idempotency_scope(&context.principal),
+                    principal: idempotency_scope_for(intent, context),
                     key: key.clone(),
                     request_hash: canon::hash_of(intent),
                     recorded_at: context.now,
+                    retention_ms: idempotency_retention(intent, context),
                     result: Transition {
                         delta: StateDelta {
                             ops: Vec::new(),
@@ -769,8 +824,9 @@ pub trait Store: Send + Sync {
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt>;
 
     /// The first result recorded under an idempotency key for this tenant and principal scope
-    /// (see [`idempotency_scope`]), when the record is younger than [`IDEMPOTENCY_RETENTION_MS`]
-    /// at `now`. `None` for an unknown key, a record past its retention, or an absent tenant.
+    /// (see [`idempotency_scope`]), when the record is younger than its own retention
+    /// ([`IdempotencyEntry::retention_ms`]) at `now`. `None` for an unknown key, a record past its
+    /// retention, or an absent tenant.
     fn idempotent_result(
         &self,
         tenant: &TenantId,
@@ -1288,6 +1344,53 @@ pub trait Store: Send + Sync {
         now: Timestamp,
     ) -> StoreResult<Settled>;
 
+    // ---- Schedules, run keys and the retention of the worker's records (crate::schedules) ----
+
+    /// Define a schedule of a tenant: create it, change its rule, pause it or resume it
+    /// ([`schedules::apply_set`]), and in the same transaction create the job it asks for and
+    /// cancel the open job of a replaced rule (SCH-003, SCH-005). Returns the schedule as it is now.
+    /// A tenant that does not exist is `NotFound`.
+    fn schedule_set(
+        &self,
+        tenant: &TenantId,
+        set: &schedules::ScheduleSet,
+        now: Timestamp,
+    ) -> StoreResult<schedules::Schedule>;
+
+    /// One schedule of a tenant.
+    fn schedule(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<schedules::Schedule>>;
+
+    /// Every schedule of a tenant, by identifier.
+    fn schedules(&self, tenant: &TenantId) -> StoreResult<Vec<schedules::Schedule>>;
+
+    /// The run that started for a run key of an automation, when one did (rec-automation-run-key,
+    /// D-6534). `key` is the hash of the value the automation's expression gave.
+    fn run_key_holder(
+        &self,
+        tenant: &TenantId,
+        automation: &WorkflowId,
+        key: &str,
+    ) -> StoreResult<Option<String>>;
+
+    /// The start jobs of one automation with one run key that have not ended, in no particular
+    /// order: what a run of that key has to wait for (SCH-1534).
+    fn open_run_key_starts(
+        &self,
+        tenant: &TenantId,
+        automation: &WorkflowId,
+        key: &str,
+    ) -> StoreResult<Vec<Job>>;
+
+    /// Remove the records of the automation worker that are past their retention at `now`: ended
+    /// jobs, ended runs with their steps, and declined, held and settled exception records. A
+    /// parked or dead-lettered record that is not settled is never removed (OPS-348). Reads every
+    /// tenant's file once; for the janitor only.
+    fn purge_automation(
+        &self,
+        now: Timestamp,
+        retention: &schedules::AutomationRetention,
+    ) -> StoreResult<schedules::AutomationPurged>;
+
     /// Mark a tenant as being installed: the directory lists it as `provisioning`, which no
     /// request reaches, until [`Store::finish_provisioning`]. Called after the install's first
     /// commit. An adapter whose state cannot outlive the process has nothing to mark.
@@ -1673,7 +1776,7 @@ pub fn execute(
 /// With an idempotency key in `ctx` the store is asked first: a key already recorded for this
 /// tenant and principal returns the first result without deciding or committing again
 /// ([`Executed::replayed`]), and the same key with another intent is refused with
-/// [`ErrorKind::InvalidIntent`]. The key is looked up again after every lost race, so two
+/// [`ErrorKind::IdempotencyMismatch`] (D-6548). The key is looked up again after every lost race, so two
 /// concurrent first requests commit once.
 pub fn execute_by(
     store: &dyn Store,
@@ -1714,11 +1817,11 @@ pub fn execute_admitting(
     let mut conflicts = 0;
     loop {
         if let Some(key) = &ctx.idempotency_key {
-            let scope = idempotency_scope(&ctx.principal);
+            let scope = idempotency_scope_for(intent, ctx);
             if let Some(first) = store.idempotent_result(&ctx.tenant, &scope, key, ctx.now)? {
                 if first.request_hash != canon::hash_of(intent) {
                     return Err(ExecuteError::Domain(DomainError::new(
-                        ErrorKind::InvalidIntent,
+                        ErrorKind::IdempotencyMismatch,
                         "the idempotency key was used with another request".to_string(),
                     )));
                 }

@@ -894,7 +894,7 @@ fn idempotency_keys_return_the_first_result(store: &dyn Store) {
         &new_note("Other", "other"),
         &keyed("alpha", writer.clone(), 5_600, "k-1"),
     ) {
-        Err(ExecuteError::Domain(error)) => assert_eq!(error.kind, ErrorKind::InvalidIntent),
+        Err(ExecuteError::Domain(error)) => assert_eq!(error.kind, ErrorKind::IdempotencyMismatch),
         other => panic!("a key used with another intent was not refused: {other:?}"),
     }
     assert_eq!(records_of(&alpha), (records_after, revision_after));
@@ -1965,6 +1965,7 @@ pub fn jobs_conform(store: &dyn Store) {
         steps: vec![step],
         exceptions: Vec::new(),
         jobs: vec![job("b", 6_000)],
+        ..WorkerWrites::default()
     };
     assert!(matches!(
         store
@@ -2347,4 +2348,647 @@ pub fn spec_cases(spec: &str) -> Vec<String> {
         .filter_map(|row| row.trim_matches('|').split('|').next())
         .map(|cell| cell.trim().to_string())
         .collect()
+}
+
+/// Schedules (`crate::schedules`, SCH-003, SCH-005): a defined schedule has its first job; the
+/// completion of a job creates the next one in its own transaction, once however often the
+/// completion is repeated; a paused schedule creates no job and resuming it creates one only when
+/// none is open; a changed rule replaces the open job; and a schedule belongs to its tenant.
+///
+/// Not a row of the conformance table: the adapters' tests call it by name, as they call
+/// [`jobs_conform`].
+// Verifies: SCH-003, SCH-005
+pub fn schedules_conform(store: &dyn Store) {
+    use crate::jobs::{JobReport, JobState, Reported, WorkerWrites};
+    use crate::schedules::{job_key, ScheduleAdvance, ScheduleSet};
+    Pair::new(store);
+    let alpha = tenant_id("alpha");
+    let beta = tenant_id("beta");
+    let id = "0b1f6c3e-52a4-4c55-9a77-0d9a4c7e6b10";
+    let set = |rule: &str, paused: bool, due: i64| ScheduleSet {
+        id: id.to_string(),
+        rule: rule.to_string(),
+        paused,
+        anchor: Timestamp(1_000),
+        due: Some(Timestamp(due)),
+    };
+    let job_keys = |tenant: &TenantId| -> Vec<(String, JobState)> {
+        let mut jobs = store.jobs_list(tenant, None, 50).unwrap();
+        jobs.sort_by_key(|job| job.seq);
+        jobs.into_iter().map(|job| (job.key, job.state)).collect()
+    };
+    // Lease the one job that is due at `due` and report it, with the next occurrence of the
+    // schedule at `next`.
+    let complete = |due: i64, next: Option<i64>| -> Reported {
+        let lease = store
+            .job_lease(&alpha, "w1", Timestamp(due))
+            .unwrap()
+            .expect("the job of the schedule is due");
+        let writes = WorkerWrites {
+            schedule_advance: Some(ScheduleAdvance {
+                schedule: id.to_string(),
+                next_due: next.map(Timestamp),
+            }),
+            ..WorkerWrites::default()
+        };
+        store
+            .job_report(
+                &alpha,
+                &lease.job.id,
+                lease.token,
+                &JobReport::Succeeded,
+                &writes,
+                Timestamp(due + 1),
+            )
+            .unwrap()
+    };
+
+    // A new schedule has its first job, once: defining it again changes nothing.
+    let made = store
+        .schedule_set(&alpha, &set("FREQ=DAILY", false, 5_000), Timestamp(2_000))
+        .unwrap();
+    assert_eq!((made.created, made.completions, made.paused), (1, 0, false));
+    store
+        .schedule_set(&alpha, &set("FREQ=DAILY", false, 5_000), Timestamp(2_001))
+        .unwrap();
+    assert_eq!(
+        job_keys(&alpha),
+        vec![(job_key(id, 1), JobState::Waiting)],
+        "one job"
+    );
+    assert!(store.schedule(&beta, id).unwrap().is_none());
+    assert!(job_keys(&beta).is_empty());
+    assert!(matches!(
+        store.schedule_set(
+            &tenant_id("gamma"),
+            &set("FREQ=DAILY", false, 5_000),
+            Timestamp(2_000)
+        ),
+        Err(StoreError::NotFound(_))
+    ));
+
+    // The completion creates the next job in its own transaction (SCH-003). A repeat of the
+    // report is refused and creates nothing more.
+    let lease = store
+        .job_lease(&alpha, "w1", Timestamp(5_000))
+        .unwrap()
+        .expect("due");
+    let writes = WorkerWrites {
+        schedule_advance: Some(ScheduleAdvance {
+            schedule: id.to_string(),
+            next_due: Some(Timestamp(6_000)),
+        }),
+        ..WorkerWrites::default()
+    };
+    let report = |token: u64, now: i64| {
+        store
+            .job_report(
+                &alpha,
+                &lease.job.id,
+                token,
+                &JobReport::Succeeded,
+                &writes,
+                Timestamp(now),
+            )
+            .unwrap()
+    };
+    assert!(matches!(report(lease.token, 5_001), Reported::Recorded(_)));
+    assert!(matches!(report(lease.token, 5_002), Reported::Refused(_)));
+    assert_eq!(
+        job_keys(&alpha),
+        vec![
+            (job_key(id, 1), JobState::Completed),
+            (job_key(id, 2), JobState::Waiting)
+        ]
+    );
+    let held = store.schedule(&alpha, id).unwrap().expect("the schedule");
+    assert_eq!(
+        (held.created, held.completions, held.next_due),
+        (2, 1, Timestamp(6_000))
+    );
+    assert_eq!(store.schedules(&alpha).unwrap().len(), 1);
+
+    // Paused: the open job completes and nothing follows (SCH-005).
+    let paused = store
+        .schedule_set(&alpha, &set("FREQ=DAILY", true, 6_000), Timestamp(6_000))
+        .unwrap();
+    assert!(paused.paused);
+    assert_eq!(paused.created_at_pause, 2);
+    assert_eq!(job_keys(&alpha).len(), 2, "pausing creates no job");
+    assert!(matches!(
+        complete(6_000, Some(7_000)),
+        Reported::Recorded(_)
+    ));
+    assert_eq!(
+        job_keys(&alpha).len(),
+        2,
+        "a paused schedule creates no job"
+    );
+    let after = store.schedule(&alpha, id).unwrap().expect("the schedule");
+    assert_eq!((after.created, after.completions), (2, 2));
+
+    // Resumed with no job open: the next job is created.
+    store
+        .schedule_set(&alpha, &set("FREQ=DAILY", false, 9_000), Timestamp(8_000))
+        .unwrap();
+    assert_eq!(
+        job_keys(&alpha).last().cloned(),
+        Some((job_key(id, 3), JobState::Waiting))
+    );
+    // Defined again with a job open: none is created.
+    store
+        .schedule_set(&alpha, &set("FREQ=DAILY", false, 9_000), Timestamp(8_001))
+        .unwrap();
+    assert_eq!(job_keys(&alpha).len(), 3);
+
+    // A changed rule replaces the open job.
+    store
+        .schedule_set(&alpha, &set("FREQ=HOURLY", false, 9_500), Timestamp(8_002))
+        .unwrap();
+    assert_eq!(
+        job_keys(&alpha)
+            .iter()
+            .rev()
+            .take(2)
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
+            (job_key(id, 4), JobState::Waiting),
+            (job_key(id, 3), JobState::Cancelled)
+        ]
+    );
+    let changed = store.schedule(&alpha, id).unwrap().expect("the schedule");
+    assert_eq!(changed.rule, "FREQ=HOURLY");
+    assert_eq!((changed.created, changed.completions), (4, 3));
+
+    // The last occurrence of a rule: the completion creates no job.
+    assert!(matches!(complete(9_500, None), Reported::Recorded(_)));
+    assert_eq!(job_keys(&alpha).len(), 4);
+}
+
+/// The retention of an idempotency entry is a property of the entry (WG-5164, WG-5145): an entry
+/// that states seven days is found for seven days and one that states nothing for twenty-four
+/// hours, a key is a different key under another scope (another operation of the same person),
+/// and the entry of an automation principal is kept for the span of a step's retries and the
+/// retention of its run.
+///
+/// Not a row of the conformance table: the adapters' tests call it by name.
+// Verifies: SCH-1524, SCH-2701, SCH-2702
+pub fn idempotency_retention_is_a_property_of_the_entry(store: &dyn Store) {
+    use crate::{
+        idempotency_retention, idempotency_scope_for, AUTOMATION_STEP_RETENTION_MS,
+        OPERATION_RETENTION_MS,
+    };
+    let _pair = Pair::new(store);
+    let alpha = tenant_id("alpha");
+    let writer = user("alpha:writer1");
+    let scope = idempotency_scope(&writer);
+    let day = 24 * 60 * 60 * 1_000_i64;
+    let t0 = 10_000_i64;
+
+    // The retention a request states: operations seven days, automation steps longer than the
+    // longest retry of a step, anything else a day.
+    let note = new_note("Stated", "stated");
+    assert_eq!(
+        idempotency_retention(&note, &ctx("alpha", writer.clone(), t0)),
+        IDEMPOTENCY_RETENTION_MS
+    );
+    assert_eq!(
+        idempotency_retention(&note, &ctx("alpha", user("automation:award"), t0)),
+        AUTOMATION_STEP_RETENTION_MS
+    );
+    assert!(AUTOMATION_STEP_RETENTION_MS > 9 * day + 90 * day);
+    assert_eq!(OPERATION_RETENTION_MS, 7 * day);
+    // An invocation of an operation states seven days, and its key belongs to the operation.
+    let invoke = |operation: &str| Intent::InvokeOperation {
+        operation: TenantOperationId::new(operation).expect("id"),
+        inputs: BTreeMap::new(),
+        idempotency_key: "k".into(),
+    };
+    let context = ctx("alpha", writer.clone(), t0);
+    assert_eq!(
+        idempotency_retention(&invoke("one"), &context),
+        OPERATION_RETENTION_MS
+    );
+    assert_ne!(
+        idempotency_scope_for(&invoke("one"), &context),
+        idempotency_scope_for(&invoke("two"), &context)
+    );
+    assert_eq!(idempotency_scope_for(&note, &context), scope);
+
+    // One entry of the default retention, one of seven days, and two of seven days under other
+    // scopes with one key, all recorded at about t0.
+    let mut keyed = ctx("alpha", writer.clone(), t0);
+    keyed.idempotency_key = Some("k-default".into());
+    execute(store, &new_note("Default", "default"), &keyed).expect("the first request commits");
+    let commit_with = |key: &str, scope: String, retention_ms: i64, slug: &str| {
+        let state = store.load_complete(&alpha).unwrap();
+        let intent = new_note(slug, slug);
+        let mut context = ctx("alpha", writer.clone(), t0 + 1);
+        context.idempotency_key = Some(key.to_string());
+        let transition = strata_kernel::transition(&state, &intent, &context).expect("accepted");
+        let mut commit = Commit::of(&intent, &context, &transition);
+        let entry = commit.idempotency.as_mut().expect("an entry");
+        entry.retention_ms = retention_ms;
+        entry.principal = scope;
+        store.commit(&commit).expect("the commit applies");
+    };
+    commit_with("k-week", scope.clone(), 7 * day, "week");
+    commit_with("k-same", format!("{scope}|op:one"), 7 * day, "one");
+    commit_with("k-same", format!("{scope}|op:two"), 7 * day, "two");
+
+    let found = |scope: &str, key: &str, at: i64| {
+        store
+            .idempotent_result(&alpha, scope, key, Timestamp(at))
+            .unwrap()
+            .is_some()
+    };
+    // A day and an hour later the default entry is gone and the week's is not.
+    assert!(found(&scope, "k-default", t0 + day));
+    assert!(!found(&scope, "k-default", t0 + day + 1));
+    assert!(found(&scope, "k-week", t0 + day + 3_600_000));
+    assert!(found(&scope, "k-week", t0 + 6 * day));
+    // A repeat of the request six days later answers the recorded result and changes nothing.
+    let mut repeat = ctx("alpha", writer.clone(), t0 + 6 * day);
+    repeat.idempotency_key = Some("k-week".into());
+    let before = store
+        .load_complete(&alpha)
+        .unwrap()
+        .tenant
+        .map(|t| t.revision);
+    let replayed = execute(store, &new_note("week", "week"), &repeat).expect("answered");
+    assert!(replayed.replayed, "the repeat was committed again");
+    assert_eq!(
+        store
+            .load_complete(&alpha)
+            .unwrap()
+            .tenant
+            .map(|t| t.revision),
+        before
+    );
+    // Seven days after its recording the entry is still found; one millisecond later it is not.
+    assert!(found(&scope, "k-week", t0 + 1 + 7 * day));
+    assert!(!found(&scope, "k-week", t0 + 2 + 7 * day));
+    // The same key under two scopes is two entries, and a third scope has none.
+    assert!(found(&format!("{scope}|op:one"), "k-same", t0 + 6 * day));
+    assert!(found(&format!("{scope}|op:two"), "k-same", t0 + 6 * day));
+    assert!(!found(&format!("{scope}|op:three"), "k-same", t0 + 6 * day));
+
+    // A commit that names a scope recorded and not past its retention fails; past it, it applies.
+    let state = store.load_complete(&alpha).unwrap();
+    let again = new_note("Again", "again");
+    let mut inside = ctx("alpha", writer.clone(), t0 + 3 * day);
+    inside.idempotency_key = Some("k-week".into());
+    let transition = strata_kernel::transition(&state, &again, &inside).expect("accepted");
+    assert!(store
+        .commit(&Commit::of(&again, &inside, &transition))
+        .is_err());
+    let mut late = ctx("alpha", writer, t0 + 8 * day);
+    late.idempotency_key = Some("k-week".into());
+    let transition = strata_kernel::transition(&state, &again, &late).expect("accepted");
+    store
+        .commit(&Commit::of(&again, &late, &transition))
+        .expect("a key past its retention is new");
+}
+
+/// The run keys of automations (rec-automation-run-key, D-6534, D-6539): a key is held by the run
+/// that claimed it first, whatever claims it later; the start jobs of one key that have not ended
+/// are listed with their event sequence numbers; releasing an automation's keys frees them.
+///
+/// Not a row of the conformance table: the adapters' tests call it by name.
+// Verifies: SCH-1536
+pub fn run_keys_conform(store: &dyn Store) {
+    use crate::jobs::{JobReport, JobWork, NewJob, RetryPolicy, RunKeyClaim, WorkerWrites};
+    Pair::new(store);
+    let alpha = tenant_id("alpha");
+    let beta = tenant_id("beta");
+    let award = WorkflowId::new("award").expect("id");
+    let other = WorkflowId::new("other").expect("id");
+    let start = |key: &str, seq: u64, run_key: &str| NewJob {
+        key: key.to_string(),
+        work: JobWork::StartRun {
+            trigger: None,
+            automation: award.clone(),
+            event_seq: Some(seq),
+            hop: 0,
+            params: BTreeMap::new(),
+            caused_by: None,
+            on_behalf_of: None,
+            definition_version: None,
+            run_key: Some(run_key.to_string()),
+        },
+        due_at: Timestamp(5_000 + seq as i64),
+        policy: RetryPolicy::default(),
+    };
+    let ids = store
+        .jobs_create(
+            &alpha,
+            &[
+                start("s1", 1, "h1"),
+                start("s2", 2, "h1"),
+                start("s3", 3, "h2"),
+            ],
+            Timestamp(4_000),
+        )
+        .unwrap();
+    let open_of = |tenant: &TenantId, automation: &WorkflowId| -> Vec<String> {
+        let mut open: Vec<(u64, String)> = store
+            .open_run_key_starts(tenant, automation, "h1")
+            .unwrap()
+            .into_iter()
+            .map(|job| match job.work {
+                JobWork::StartRun { event_seq, .. } => (event_seq.unwrap_or(0), job.id),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        open.sort();
+        open.into_iter().map(|(_, id)| id).collect()
+    };
+    assert_eq!(
+        open_of(&alpha, &award),
+        vec![ids[0].clone(), ids[1].clone()]
+    );
+    assert!(open_of(&alpha, &other).is_empty());
+    assert!(open_of(&beta, &award).is_empty());
+
+    // The first claim holds the key; a later claim of it, by another run, changes nothing.
+    assert_eq!(store.run_key_holder(&alpha, &award, "h1").unwrap(), None);
+    let claim = |run: &str, key: &str| WorkerWrites {
+        run_keys: vec![RunKeyClaim {
+            automation: award.clone(),
+            key: key.to_string(),
+            run: run.to_string(),
+        }],
+        ..WorkerWrites::default()
+    };
+    let lease = store
+        .job_lease(&alpha, "w1", Timestamp(5_001))
+        .unwrap()
+        .expect("the first start is due");
+    store
+        .job_report(
+            &alpha,
+            &lease.job.id,
+            lease.token,
+            &JobReport::Succeeded,
+            &claim("run-a", "h1"),
+            Timestamp(5_002),
+        )
+        .unwrap();
+    store
+        .automation_write(&alpha, &claim("run-b", "h1"), Timestamp(5_003))
+        .unwrap();
+    assert_eq!(
+        store
+            .run_key_holder(&alpha, &award, "h1")
+            .unwrap()
+            .as_deref(),
+        Some("run-a")
+    );
+    assert_eq!(store.run_key_holder(&alpha, &other, "h1").unwrap(), None);
+    assert_eq!(store.run_key_holder(&beta, &award, "h1").unwrap(), None);
+    // The ended start job is no longer open.
+    assert_eq!(open_of(&alpha, &award), vec![ids[1].clone()]);
+
+    // Removing the automation releases its keys.
+    store
+        .automation_write(
+            &alpha,
+            &WorkerWrites {
+                run_keys_released: vec![award.clone()],
+                ..WorkerWrites::default()
+            },
+            Timestamp(5_004),
+        )
+        .unwrap();
+    assert_eq!(store.run_key_holder(&alpha, &award, "h1").unwrap(), None);
+}
+
+/// The purge of the worker's records (`Store::purge_automation`, OPS-348, PRV-357): a job that
+/// ended thirty days ago goes and a younger one stays; a run that ended ninety days ago goes with
+/// its steps and a younger one stays; a declined record goes after ninety days; a parked or
+/// dead-lettered record that is not settled never goes, and a settled one goes after ninety days.
+///
+/// Not a row of the conformance table: the adapters' tests call it by name.
+// Verifies: OPS-348, SCH-2703
+pub fn automation_purge_conforms(store: &dyn Store) {
+    use crate::jobs::{
+        ExceptionKind, ExceptionRecord, JobReport, JobWork, NewJob, RetryPolicy, RunRecord,
+        RunState, StepRecord, StepState, WorkerWrites,
+    };
+    use crate::schedules::AutomationRetention;
+    Pair::new(store);
+    let alpha = tenant_id("alpha");
+    let beta = tenant_id("beta");
+    let day = 24 * 60 * 60 * 1_000_i64;
+    let automation = WorkflowId::new("award").expect("id");
+    let retention = AutomationRetention::default();
+    let job = |key: &str, due: i64| NewJob {
+        key: key.to_string(),
+        work: JobWork::Step {
+            run: "run-old".into(),
+            automation: automation.clone(),
+            step: StepName::new("first").expect("name"),
+            sequence: 1,
+        },
+        due_at: Timestamp(due),
+        policy: RetryPolicy {
+            attempts: 1,
+            first_delay_ms: 1,
+            max_delay_ms: 1,
+            lease_ms: 50,
+        },
+    };
+    // Two jobs that end: one at 5_010, one twenty days later.
+    let ids = store
+        .jobs_create(
+            &alpha,
+            &[job("old", 5_000), job("young", 5_000 + 20 * day)],
+            Timestamp(4_000),
+        )
+        .unwrap();
+    for (id, due) in [(&ids[0], 5_000), (&ids[1], 5_000 + 20 * day)] {
+        let lease = store
+            .job_lease(&alpha, "w1", Timestamp(due))
+            .unwrap()
+            .expect("due");
+        assert_eq!(&lease.job.id, id);
+        store
+            .job_report(
+                &alpha,
+                id,
+                lease.token,
+                &JobReport::Succeeded,
+                &WorkerWrites::default(),
+                Timestamp(due + 10),
+            )
+            .unwrap();
+    }
+    // A job that has not ended is never purged.
+    store
+        .jobs_create(&alpha, &[job("open", 5_000 + 100 * day)], Timestamp(4_000))
+        .unwrap();
+    // The same in another tenant, to see that the purge reads every tenant.
+    let beta_ids = store
+        .jobs_create(&beta, &[job("old", 5_000)], Timestamp(4_000))
+        .unwrap();
+    let lease = store
+        .job_lease(&beta, "w1", Timestamp(5_000))
+        .unwrap()
+        .expect("due");
+    store
+        .job_report(
+            &beta,
+            &beta_ids[0],
+            lease.token,
+            &JobReport::Succeeded,
+            &WorkerWrites::default(),
+            Timestamp(5_010),
+        )
+        .unwrap();
+
+    let run = |id: &str, ended: Option<i64>| RunRecord {
+        run: id.into(),
+        automation: automation.clone(),
+        trigger: None,
+        event_seq: None,
+        state: if ended.is_some() {
+            RunState::Completed
+        } else {
+            RunState::Running
+        },
+        step: None,
+        steps: 1,
+        hop: 0,
+        caused_by: principal_id("automation:award"),
+        on_behalf_of: None,
+        params: BTreeMap::new(),
+        started_at: Timestamp(50),
+        ended_at: ended.map(Timestamp),
+        error: None,
+        seq: 0,
+    };
+    let step = |run: &str| StepRecord {
+        run: run.into(),
+        sequence: 1,
+        step: StepName::new("first").expect("name"),
+        state: StepState::Completed,
+        attempts: 1,
+        job: None,
+        idempotency_key: "k".into(),
+        result: None,
+        errors: Vec::new(),
+        started_at: Timestamp(50),
+        ended_at: Some(Timestamp(60)),
+    };
+    let exception = |id: &str, kind: ExceptionKind, settled: bool, at: i64| ExceptionRecord {
+        id: id.into(),
+        kind,
+        reason: "attempts-exhausted".into(),
+        trigger: None,
+        automation: Some(automation.clone()),
+        run: None,
+        step: None,
+        event_seq: None,
+        job: None,
+        hop: None,
+        at: Timestamp(at),
+        detail: String::new(),
+        settled,
+        seq: 0,
+    };
+    store
+        .automation_write(
+            &alpha,
+            &WorkerWrites {
+                runs: vec![
+                    run("run-old", Some(100)),
+                    run("run-young", Some(80 * day)),
+                    run("run-open", None),
+                ],
+                steps: vec![step("run-old"), step("run-young"), step("run-open")],
+                exceptions: vec![
+                    exception("declined-old", ExceptionKind::Declined, true, 50),
+                    exception("declined-young", ExceptionKind::Declined, true, 85 * day),
+                    exception("dead-open", ExceptionKind::DeadLettered, false, 50),
+                    exception("parked-open", ExceptionKind::Parked, false, 50),
+                    exception("dead-settled", ExceptionKind::DeadLettered, true, 60),
+                ],
+                ..WorkerWrites::default()
+            },
+            Timestamp(70),
+        )
+        .unwrap();
+    let job_keys = |tenant: &TenantId| -> Vec<String> {
+        let mut keys: Vec<String> = store
+            .jobs_list(tenant, None, 50)
+            .unwrap()
+            .into_iter()
+            .map(|job| job.key)
+            .collect();
+        keys.sort();
+        keys
+    };
+    let exceptions_of = || -> Vec<String> {
+        let mut ids: Vec<String> = store
+            .automation_exceptions(&alpha, None, false, None, 50)
+            .unwrap()
+            .into_iter()
+            .map(|record| record.id)
+            .collect();
+        ids.sort();
+        ids
+    };
+    let runs_of = || -> Vec<String> {
+        let mut runs: Vec<String> = store
+            .automation_runs(&alpha, None, None, None, 50)
+            .unwrap()
+            .into_iter()
+            .map(|run| run.run)
+            .collect();
+        runs.sort();
+        runs
+    };
+
+    // Thirty days after the first job ended: it goes, in both tenants; the younger job and the
+    // open one stay; the runs and exception records, kept ninety days, all stay.
+    let at = Timestamp(5_010 + 30 * day);
+    let purged = store.purge_automation(at, &retention).unwrap();
+    assert_eq!((purged.jobs, purged.runs, purged.exceptions), (2, 0, 0));
+    assert_eq!(job_keys(&alpha), vec!["open", "young"]);
+    assert!(job_keys(&beta).is_empty(), "the purge reads every tenant");
+    assert_eq!(runs_of().len(), 3);
+    assert_eq!(exceptions_of().len(), 5);
+
+    // Ninety days after the oldest records: the old run goes with its step, the young and open
+    // runs stay; the old declined record and the settled dead-lettered one go; the unsettled
+    // ones never go. The job that ended twenty days after the first is past thirty days too.
+    let at = Timestamp(100 + 90 * day);
+    let purged = store.purge_automation(at, &retention).unwrap();
+    assert_eq!((purged.runs, purged.steps, purged.exceptions), (1, 1, 2));
+    assert_eq!(runs_of(), vec!["run-open", "run-young"]);
+    assert!(store
+        .automation_steps(&alpha, "run-old", None, 10)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        store
+            .automation_steps(&alpha, "run-young", None, 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        exceptions_of(),
+        vec!["dead-open", "declined-young", "parked-open"]
+    );
+    assert_eq!(job_keys(&alpha), vec!["open"]);
+
+    // Far in the future: everything that ended or was settled goes, and nothing that is open.
+    store
+        .purge_automation(Timestamp(1_000 * day), &retention)
+        .unwrap();
+    assert_eq!(runs_of(), vec!["run-open"]);
+    assert_eq!(exceptions_of(), vec!["dead-open", "parked-open"]);
+    assert_eq!(job_keys(&alpha), vec!["open"]);
 }
