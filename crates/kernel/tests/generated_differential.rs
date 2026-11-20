@@ -48,11 +48,12 @@
 //!      does not order a list element by element, as `Value`'s derived order does.
 //!      The corpus has no list-valued order key (it has a list-valued field, `tags`, which no
 //!      query orders by).
-//!   4. Not exercised: the intents of teams and invitations, and schema changes other than
-//!      `DefineField`, `DefineRelationship`, `DefineConstraint`, `DefineQuery`,
-//!      `DefineRolePermissions`, `RemoveField` and the definitions of triggers, automations, tenant
-//!      operations and composite unique constraints (and their removals), which the generator
-//!      below adds to the seven intents of `properties.rs`. `texts_for` reads defaults and
+//!   4. Not exercised: the intents of invitations and of the roles and removals of teams, and
+//!      schema changes other than `DefineField`, `DefineRelationship`, `DefineConstraint`,
+//!      `DefineQuery`, `DefineRolePermissions`, `RemoveField`, the definitions of triggers,
+//!      automations, tenant operations and composite unique constraints (and their removals), of
+//!      settings and of capabilities, which the generator below adds to the seven intents of
+//!      `properties.rs`, with the writes of settings, `DefineTeam` and `AddTeamMember`. `texts_for` reads defaults and
 //!      constraints only from `DefineField` and `DefineConstraint`; the definitions print no
 //!      expression. The functions of the other intents are mirrored all the same (the conferral
 //!      of a role, the owner that remains, the reserved `team:` prefix, the rewrite of records
@@ -78,17 +79,6 @@
 //!      AGG-001 to AGG-023): the generated `schema-problems` states none of them, and the
 //!      aggregate itself is not a read of the generated `kernel-read`. The corpus defines no
 //!      query with an aggregate.
-//!   9. Not exercised, and not mirrored in full: layered settings and product capabilities
-//!      (`settings.rs`, `capabilities.rs`). The generated `apply-change` applies define-setting,
-//!      remove-setting, define-capability and remove-capability as the hand-written one does, but
-//!      `intent-decision` refuses the intent write-setting (`setting:decided_by_the_kernel`),
-//!      `apply-delta` leaves the override operations out, the generated `change-schema` writes
-//!      none of the overrides, revisions and events a change of a definition brings
-//!      (`settings::schema_change_effects`), and `schema-problems` has not the checks of setting
-//!      definitions, of the grants of declared capabilities and of the references of a trigger to
-//!      a setting. The corpus holds no setting, no capability and no override:
-//!      `assert_no_input_of_a_known_difference` fails when a snapshot holds one, and
-//!      `compare_transition` fails on a write-setting intent.
 //!  10. Not mirrored, in the trigger decisions of `strata_kernel::triggers` (the rest of the module
 //!      is mirrored by `after-decision`): (a) the check that a condition or a run key reads nothing
 //!      the automation principal may not read (`unreadable`, which declines with `condition-failed`)
@@ -142,8 +132,8 @@
 //! Every difference that is not compared through an adjustment is guarded, so that a corpus that
 //! grows into one is told to mirror the rule or to count the difference here:
 //! `assert_no_input_of_a_known_difference` runs on every snapshot the test decides or reads and
-//! fails on an input of differences 2, 7, 8, 9, 10, 13 or 14; `compare_transition` fails on an
-//! intent of differences 9, 12, 13 or 16 and on a schema change that warns of a scan (difference
+//! fails on an input of differences 2, 7, 8, 10, 13 or 14; `compare_transition` fails on an
+//! intent of differences 12, 13 or 16 and on a schema change that warns of a scan (difference
 //! 15); `compare_read` fails on a read of a planned query (difference 15). Difference 1 is
 //! compared through an adjustment (the detail's prefix) and the run key of difference 10 through
 //! another (`hash_run_keys`). Differences 3 to 6 are guarded by the operation generator drawing
@@ -154,7 +144,11 @@
 //! `reserved-principal`, `automation-roles`; WG-5160), the trigger decisions at commit (the
 //! effects `StartAutomation` and `DeclineAutomation`, the `transitions` of a record-updated event,
 //! the definer and time stamped on a trigger or an automation, the suspension of an automation
-//! whose definer lost authority: `after-decision`, `stamp-definitions`; WG-5136), the size limits of `limits.rs` (the bytes of a record, the
+//! whose definer lost authority: `after-decision`, `stamp-definitions`; WG-5136), layered settings
+//! and product capabilities (the write of an override, the resolution, the effects of a change of
+//! definitions, the checks of definitions and of the grants of declared capabilities:
+//! `write-setting`, `resolve-setting`, `setting-change-effects`, `setting-problems`,
+//! `capability-problems`, `capability-grant-problem`; WG-5140), the size limits of `limits.rs` (the bytes of a record, the
 //! length of a string or a list, the encoded size of a value of a unique field: `record-limit-check`,
 //! `limit-step`; WG-5092), the field-level read conditions (`redact`, in `kernel-read` and
 //! `named-read`; WG-5093), the deletion of a record that two fields of one record refer to (one
@@ -251,6 +245,24 @@ enum OpKind {
         who: usize,
         role: usize,
     },
+    /// The write of an override of a setting (or its removal), at a level, with a revision the
+    /// caller claims to have read.
+    WriteSetting {
+        /// 0 `theme`, 1 `mode`, 2 a setting that is not defined.
+        setting: u8,
+        /// 0 tenant, 1 team, 2 person, 3 platform.
+        level: u8,
+        /// 0 none, 1 the team `desk`, 2 a team that does not exist.
+        team: u8,
+        /// 0 and 1 a string, 2 an integer, 3 the null, 4 no value (a removal), 5 a bool.
+        value: u8,
+        expected: u64,
+    },
+    /// The team `desk`, so that the team level of a setting has someone to resolve for.
+    DefineTeam,
+    AddToTeam {
+        who: usize,
+    },
 }
 
 /// What a `Big` operation writes, at or just over a limit of `limits.rs`.
@@ -311,6 +323,16 @@ enum SchemaOp {
     BadPermissions,
     /// A hundred more fields, which is over the most an object type may have.
     ManyFields,
+    /// A setting `theme` (0 a string that every level may override, 1 a bool, which changes the
+    /// type of the first, 2 a string a lock of the tenant closes below the tenant level) and the
+    /// setting `mode`, a string that only the person level overrides (3).
+    DefineSetting(u8),
+    RemoveSetting(u8),
+    /// A capability a product declares, one with an id of no product form, and a grant of a
+    /// capability of the product form to a role.
+    DefineCapability,
+    DefineBadCapability,
+    GrantProductCapability(bool),
 }
 
 const MEMBERS: [&str; 5] = ["owner", "editor", "writer1", "writer2", "stranger"];
@@ -342,6 +364,11 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         1 => prop_oneof![Just(0u32), Just(201u32)].prop_map(SchemaOp::BadQueryLimit),
         1 => Just(SchemaOp::BadPermissions),
         1 => Just(SchemaOp::ManyFields),
+        3 => (0u8..4).prop_map(SchemaOp::DefineSetting),
+        1 => (0u8..2).prop_map(SchemaOp::RemoveSetting),
+        1 => Just(SchemaOp::DefineCapability),
+        1 => Just(SchemaOp::DefineBadCapability),
+        1 => any::<bool>().prop_map(SchemaOp::GrantProductCapability),
     ];
     let big = prop_oneof![
         Just(BigShape::LongTitle),
@@ -365,6 +392,11 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         2 => (schema_op, any::<bool>()).prop_map(|(change, grandfather)| OpKind::ChangeSchema { change, grandfather }),
         2 => (0usize..5, 0usize..5).prop_map(|(who, role)| OpKind::Assign { who, role }),
         2 => (0usize..5, 0usize..5).prop_map(|(who, role)| OpKind::Revoke { who, role }),
+        4 => (0u8..3, 0u8..4, 0u8..3, 0u8..6, 0u64..4).prop_map(|(setting, level, team, value, expected)| {
+            OpKind::WriteSetting { setting, level, team, value, expected }
+        }),
+        1 => Just(OpKind::DefineTeam),
+        1 => (0usize..5).prop_map(|who| OpKind::AddToTeam { who }),
     ];
     (0usize..3, 0usize..3, 0usize..9, kind, 0u8..10, 0u8..8).prop_map(
         |(tenant, other, actor, kind, cross, hop)| Op {
@@ -605,6 +637,31 @@ fn intent_of(op: &Op) -> Intent {
                         },
                     ],
                 },
+                SchemaOp::DefineSetting(kind) => SchemaChange::DefineSetting(setting_def(*kind)),
+                SchemaOp::RemoveSetting(kind) => SchemaChange::RemoveSetting(
+                    SettingId::new(if *kind == 0 { "theme" } else { "mode" }).unwrap(),
+                ),
+                SchemaOp::DefineCapability => SchemaChange::DefineCapability(CapabilityDef {
+                    id: CapabilityName("member_tiers__promote".into()),
+                    name: "Promote".into(),
+                    description: "Promote a member of a tier".into(),
+                }),
+                SchemaOp::DefineBadCapability => SchemaChange::DefineCapability(CapabilityDef {
+                    id: CapabilityName("Promote".into()),
+                    name: " ".into(),
+                    description: "Neither a namespace nor a name".into(),
+                }),
+                SchemaOp::GrantProductCapability(declared) => SchemaChange::DefineRolePermissions {
+                    role: role("editor"),
+                    permissions: vec![Permission::Capability(
+                        if *declared {
+                            "member_tiers__promote"
+                        } else {
+                            "other_product__thing"
+                        }
+                        .into(),
+                    )],
+                },
                 // Placeholder: `ManyFields` is a hundred changes, built below.
                 SchemaOp::ManyFields => SchemaChange::RemoveField {
                     object: object("nothing"),
@@ -638,6 +695,40 @@ fn intent_of(op: &Op) -> Intent {
         OpKind::Revoke { who, role: r } => Intent::RevokeRole {
             principal: principal_id(&format!("{}:{}", WORLD_TENANTS[op.tenant], MEMBERS[*who])),
             role: role(ROLES[*r]),
+        },
+        OpKind::WriteSetting {
+            setting,
+            level,
+            team,
+            value,
+            expected,
+        } => Intent::WriteSetting {
+            setting: SettingId::new(["theme", "mode", "nothing"][*setting as usize]).unwrap(),
+            level: [
+                SettingLevel::Tenant,
+                SettingLevel::Team,
+                SettingLevel::Person,
+                SettingLevel::Platform,
+            ][*level as usize],
+            team: [None, Some("desk"), Some("ghost")][*team as usize]
+                .map(|name| TeamId::new(name).unwrap()),
+            value: match value {
+                0 => Some(text("dark")),
+                1 => Some(text("light")),
+                2 => Some(Value::Int(1)),
+                3 => Some(Value::Null),
+                4 => None,
+                _ => Some(Value::Bool(true)),
+            },
+            expected_revision: *expected,
+        },
+        OpKind::DefineTeam => Intent::DefineTeam {
+            team: TeamId::new("desk").unwrap(),
+            label: "Desk".into(),
+        },
+        OpKind::AddToTeam { who } => Intent::AddTeamMember {
+            team: TeamId::new("desk").unwrap(),
+            principal: principal_id(&format!("{}:{}", WORLD_TENANTS[op.tenant], MEMBERS[*who])),
         },
     }
 }
@@ -817,6 +908,58 @@ fn redeem() -> TenantOperationDef {
                 fields: BTreeMap::from([(field("rank"), Expr::Lit(Value::Int(1)))]),
             },
         ],
+    }
+}
+
+/// A definition of a setting: 0 `theme`, a string every level may override; 1 `theme` as a bool (a
+/// change of its type); 2 `theme` as a string whose lock of the tenant closes the team and person
+/// levels; 3 `mode`, a string only the person level overrides.
+fn setting_def(kind: u8) -> SettingDef {
+    let (id, ty, default, levels, locked_by) = match kind {
+        0 => (
+            "theme",
+            "string",
+            text("light"),
+            vec![
+                SettingLevel::Tenant,
+                SettingLevel::Team,
+                SettingLevel::Person,
+            ],
+            None,
+        ),
+        1 => (
+            "theme",
+            "bool",
+            Value::Bool(false),
+            vec![SettingLevel::Tenant, SettingLevel::Person],
+            None,
+        ),
+        2 => (
+            "theme",
+            "string",
+            text("light"),
+            vec![
+                SettingLevel::Tenant,
+                SettingLevel::Team,
+                SettingLevel::Person,
+            ],
+            Some(SettingLevel::Tenant),
+        ),
+        _ => (
+            "mode",
+            "string",
+            text("plain"),
+            vec![SettingLevel::Person],
+            None,
+        ),
+    };
+    SettingDef {
+        id: SettingId::new(id).unwrap(),
+        label: id.into(),
+        r#type: SettingType::new(ty).unwrap(),
+        default,
+        levels: levels.into_iter().collect(),
+        locked_by,
     }
 }
 
@@ -1015,7 +1158,7 @@ fn reads_a_field(expr: &Expr, named: &dyn Fn(&str) -> bool) -> bool {
     }
 }
 
-/// Differences 2, 7, 8, 9, 10, 13 and 14 of the header: fail when a snapshot holds an input of a
+/// Differences 2, 7, 8, 10, 13 and 14 of the header: fail when a snapshot holds an input of a
 /// rule the generated functions do not mirror, so the corpus cannot start to depend on one
 /// silently.
 fn assert_no_input_of_a_known_difference(state: &State) {
@@ -1046,12 +1189,6 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             view.id
         );
     }
-    assert!(
-        tenant.schema.settings.is_none()
-            && tenant.schema.capabilities.is_none()
-            && tenant.setting_values.is_none(),
-        "the snapshot holds a setting, a capability or an override; the generated functions do not mirror them (difference 9)"
-    );
     assert!(
         tenant.ledger.is_none() && tenant.schema.ledger.is_none(),
         "{} holds a ledger; the generated functions do not mirror it (difference 13)",
@@ -1171,6 +1308,7 @@ struct Tally {
     rejected: usize,
     reads: usize,
     visibility: usize,
+    settings: usize,
     needs: usize,
     evaluation_failed_details: usize,
 }
@@ -1187,10 +1325,6 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
     assert!(
         !matches!(intent, Intent::InvokeOperation { .. }),
         "{label}: the generated functions do not decide a tenant operation (difference 12)"
-    );
-    assert!(
-        !matches!(intent, Intent::WriteSetting { .. }),
-        "{label}: the generated functions do not decide a setting write (difference 9)"
     );
     assert!(
         !matches!(intent, Intent::PostLedger { .. }),
@@ -1328,6 +1462,38 @@ fn compare_reads_of(world: &World, now: i64, tally: &mut Tally) {
     }
 }
 
+/// The resolution of every setting for every principal of every tenant (`settings::resolve` and the
+/// generated `resolve-setting`): a defined setting, one that is not, and a person in a team.
+fn compare_settings(world: &World, tally: &mut Tally) {
+    let settings: Vec<SettingId> = ["theme", "mode", "nothing"]
+        .into_iter()
+        .map(|name| SettingId::new(name).unwrap())
+        .collect();
+    for tenant in world.tenants.values() {
+        let mut principals: Vec<Principal> = (0..WORLD_TENANTS.len())
+            .flat_map(|index| (0..6).map(move |actor| principal_of(index, actor)))
+            .collect();
+        principals.push(Principal::System);
+        for principal in principals {
+            for setting in &settings {
+                let hand = strata_kernel::settings::resolve(tenant, &principal, setting);
+                let generated = spec::resolve_setting(tenant, &principal, setting);
+                let generated = generated.map_err(|failure| {
+                    domain_error(failure).unwrap_or_else(|fault| {
+                        panic!("resolve-setting of {setting} faulted: {fault}")
+                    })
+                });
+                assert_eq!(
+                    hand, generated,
+                    "the resolution of {setting} for {principal:?} in {} differs",
+                    tenant.id
+                );
+                tally.settings += 1;
+            }
+        }
+    }
+}
+
 /// `visible` on every stored record, for every principal.
 fn compare_visibility(world: &World, now: i64, tally: &mut Tally) {
     for tenant in world.tenants.values() {
@@ -1387,6 +1553,7 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
                 let now = 99_000 + (index * SEQUENCES + sequence) as i64;
                 compare_reads_of(&world, now, &mut tally);
                 compare_visibility(&world, now, &mut tally);
+                compare_settings(&world, &mut tally);
             }
         }
     }
@@ -1406,6 +1573,11 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
         tally.visibility > 500,
         "only {} visibility checks",
         tally.visibility
+    );
+    assert!(
+        tally.settings > 500,
+        "only {} setting resolutions",
+        tally.settings
     );
     eprintln!(
         "compared {} decisions ({} accepted, {} rejected), {} reads, {} visibility checks, {} plans; \
