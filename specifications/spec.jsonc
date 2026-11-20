@@ -154626,7 +154626,7 @@
     },
     {
       "id": "plan-migration",
-      "description": "transition.rs plan_migration, the body of contract plan-schema-migration (CT-007) through kernel-plan-migration, which calls it with a complete snapshot: apply the changes in order to a working copy of the tenant's schema (a refused change is InvalidSchema with the schema:change checks so far and the failed one); a working copy with problems (schema-problems) is InvalidSchema with the first problem as message and one schema:consistency check per problem; otherwise the version is one higher and every record of each touched object type that already existed is re-validated as the system against the new schema, after its fields the new schema no longer declares are stripped (such a record is rewritten, its version unchanged). Each failed check of a record is a violation. texts.constraints holds the printed constraints of the new schema. Before the records are re-validated, a composite unique constraint that a change defines on an object type that already existed is refused with UniqueViolated when two of its records hold equal values in every field of it, naming the first such pair (CMS-1556, unique-duplicates), whether the change grandfathers other records or not.",
+      "description": "transition.rs plan_migration, the body of contract plan-schema-migration (CT-007) through kernel-plan-migration, which calls it with a complete snapshot: apply the changes in order to a working copy of the tenant's schema (a refused change is InvalidSchema with the schema:change checks so far and the failed one); a working copy with problems (schema-problems) is InvalidSchema with the first problem as message and one schema:consistency check per problem; otherwise the version is one higher. Then a composite unique constraint that a change defines on an object type that already existed is refused with UniqueViolated when two of its records hold equal values in every field of it, naming the first such pair (CMS-1556, unique-duplicates), whether the change grandfathers other records or not. Then every record of each touched object type that already existed is re-validated as the system against the new schema, after its fields the new schema no longer declares are stripped (such a record is rewritten, its version one higher and updated now). Each failed check of a record is a violation. texts.constraints holds the printed constraints of the new schema.",
       "params": [
         {
           "name": "tenant",
@@ -154669,7 +154669,7 @@
           "expr": "tenant-schema{version: current.version + 1, triggers: applied.schema.triggers, automations: applied.schema.automations, operations: applied.schema.operations, objects: applied.schema.objects, roles: applied.schema.roles, role-permissions: applied.schema.role-permissions, teams: applied.schema.teams, invitations: applied.schema.invitations, policies: applied.schema.policies, workflows: applied.schema.workflows, queries: applied.schema.queries, views: applied.schema.views}"
         }
       ],
-      "body": "match get(problems, 0) { Some(first) => fail(rejection.rejected(domain-error{kind: error-kind.invalid-schema, message: first, evidence: concat(applied.evidence, map(p in problems, check{rule: 'schema:consistency', passed: false, detail: p}))})), None => match get(try call unique-duplicates(tenant, coverage, current, schema, changes), 0) { Some(c) => fail(rejection.rejected(domain-error{kind: error-kind.unique-violated, message: format('{}: {}', c.rule, c.detail), evidence: concat(applied.evidence, [c])})), None => fold(o in call touched-objects(changes), acc = migration-plan{schema, summary: applied.summary, rewritten: [], violations: []}, match get(schema.objects, o) { None => acc, Some(def) => if get(current.objects, o) == null then acc else fold(r in try call lookup-all(tenant, coverage, o), a = acc, let stripped = fold(k in keys(r.fields), m = {}, if get(def.fields, k) == null then m else match get(r.fields, k) { Some(x) => insert(m, k, x), None => m }) in let same = keys(stripped) == keys(r.fields) in let candidate = if same then r else record{id: r.id, object: r.object, version: r.version, created-by: r.created-by, created-at: r.created-at, updated-at: r.updated-at, fields: stripped} in let outcome = try call validate-record(tenant, coverage, schema, def, candidate, null, principal.system, now, match get(texts.constraints, o) { Some(m) => m, None => {} }) in migration-plan{schema: a.schema, summary: a.summary, rewritten: if same then a.rewritten else concat(a.rewritten, [candidate]), violations: concat(a.violations, map(f in outcome.failed, violation{object: o, id: r.id, check: f.check, kind: f.kind}))}) }) } }",
+      "body": "match get(problems, 0) { Some(first) => fail(rejection.rejected(domain-error{kind: error-kind.invalid-schema, message: first, evidence: concat(applied.evidence, map(p in problems, check{rule: 'schema:consistency', passed: false, detail: p}))})), None => match get(try call unique-duplicates(tenant, coverage, current, schema, changes), 0) { Some(c) => fail(rejection.rejected(domain-error{kind: error-kind.unique-violated, message: format('{}: {}', c.rule, c.detail), evidence: concat(applied.evidence, [c])})), None => fold(o in call touched-objects(changes), acc = migration-plan{schema, summary: applied.summary, rewritten: [], violations: []}, match get(schema.objects, o) { None => acc, Some(def) => if get(current.objects, o) == null then acc else fold(r in try call lookup-all(tenant, coverage, o), a = acc, let stripped = fold(k in keys(r.fields), m = {}, if get(def.fields, k) == null then m else match get(r.fields, k) { Some(x) => insert(m, k, x), None => m }) in let same = keys(stripped) == keys(r.fields) in let candidate = if same then r else record{id: r.id, object: r.object, version: r.version + 1, created-by: r.created-by, created-at: r.created-at, updated-at: now, fields: stripped} in let outcome = try call validate-record(tenant, coverage, schema, def, candidate, null, principal.system, now, match get(texts.constraints, o) { Some(m) => m, None => {} }) in migration-plan{schema: a.schema, summary: a.summary, rewritten: if same then a.rewritten else concat(a.rewritten, [candidate]), violations: concat(a.violations, map(f in outcome.failed, violation{object: o, id: r.id, check: f.check, kind: f.kind}))}) }) } }",
       "examples": [
         {
           "description": "behaviour.rs a_strict_migration_is_rejected_when_existing_records_would_not_conform: a new required field, which neither note has.",
@@ -157240,12 +157240,458 @@
               }
             }
           }
+        },
+        {
+          "description": "transition.rs plan_migration, CMS-1556: a composite unique constraint is not declared over two records that already share its values; the change is refused with UniqueViolated naming the first pair, after the schema:change checks.",
+          "args": {
+            "tenant": {
+              "id": "alpha",
+              "name": "alpha",
+              "revision": 5,
+              "next-record": 4,
+              "event-seq": 5,
+              "schema": {
+                "version": 2,
+                "objects": {
+                  "note": {
+                    "id": "note",
+                    "label": "Note",
+                    "fields": {
+                      "rank": {
+                        "id": "rank",
+                        "label": "rank",
+                        "ty": "int",
+                        "required": false,
+                        "unique": false
+                      },
+                      "status": {
+                        "id": "status",
+                        "label": "status",
+                        "ty": "str",
+                        "required": true,
+                        "unique": false
+                      },
+                      "tags": {
+                        "id": "tags",
+                        "label": "tags",
+                        "ty": {
+                          "list": "str"
+                        },
+                        "required": false,
+                        "unique": false
+                      },
+                      "title": {
+                        "id": "title",
+                        "label": "title",
+                        "ty": "str",
+                        "required": true,
+                        "unique": false
+                      }
+                    },
+                    "constraints": {}
+                  }
+                },
+                "roles": {
+                  "editor": {
+                    "id": "editor",
+                    "label": "Editor"
+                  },
+                  "owner": {
+                    "id": "owner",
+                    "label": "Owner"
+                  },
+                  "public": {
+                    "id": "public",
+                    "label": "Everyone"
+                  },
+                  "writer": {
+                    "id": "writer",
+                    "label": "Writer"
+                  }
+                },
+                "policies": {},
+                "workflows": {
+                  "note_status": {
+                    "id": "note_status",
+                    "object": "note",
+                    "field": "status",
+                    "initial": [
+                      "draft"
+                    ],
+                    "transitions": [
+                      {
+                        "name": "publish",
+                        "from": "draft",
+                        "to": "published",
+                        "set": {}
+                      }
+                    ]
+                  }
+                },
+                "queries": {},
+                "views": {},
+                "role-permissions": {
+                  "editor": [
+                    {
+                      "object": {
+                        "object": "note",
+                        "actions": [
+                          "create",
+                          "read"
+                        ]
+                      }
+                    },
+                    {
+                      "capability": "automations-define"
+                    }
+                  ],
+                  "writer": [
+                    {
+                      "object": {
+                        "object": "note",
+                        "actions": [
+                          "read"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              "members": {
+                "alpha:editor": [
+                  "editor"
+                ],
+                "alpha:owner": [
+                  "owner"
+                ],
+                "alpha:writer1": [
+                  "writer"
+                ]
+              },
+              "records": {
+                "note": {
+                  "1": {
+                    "id": 1,
+                    "object": "note",
+                    "version": 1,
+                    "created-by": "alpha:writer1",
+                    "created-at": 5000,
+                    "updated-at": 5000,
+                    "fields": {
+                      "status": {
+                        "str": "draft"
+                      },
+                      "title": {
+                        "str": "First"
+                      }
+                    }
+                  },
+                  "2": {
+                    "id": 2,
+                    "object": "note",
+                    "version": 1,
+                    "created-by": "alpha:writer1",
+                    "created-at": 5000,
+                    "updated-at": 5000,
+                    "fields": {
+                      "status": {
+                        "str": "draft"
+                      },
+                      "title": {
+                        "str": "First"
+                      }
+                    }
+                  },
+                  "3": {
+                    "id": 3,
+                    "object": "note",
+                    "version": 1,
+                    "created-by": "alpha:writer1",
+                    "created-at": 5000,
+                    "updated-at": 5000,
+                    "fields": {
+                      "status": {
+                        "str": "draft"
+                      },
+                      "title": {
+                        "str": "Second"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "coverage": "complete",
+            "changes": [
+              {
+                "define-unique": {
+                  "object": "note",
+                  "unique": {
+                    "id": "title_status",
+                    "fields": [
+                      "title",
+                      "status"
+                    ],
+                    "message": "One note per title and status."
+                  }
+                }
+              }
+            ],
+            "now": 5002,
+            "texts": {
+              "defaults": {},
+              "constraints": {},
+              "conditions": {},
+              "blank-name": false
+            }
+          },
+          "error": {
+            "rejected": {
+              "kind": "unique-violated",
+              "message": "unique:note.title_status: records 1 and 2 have the same values in title, status",
+              "evidence": [
+                {
+                  "rule": "schema:change",
+                  "passed": true,
+                  "detail": "define unique constraint note.title_status"
+                },
+                {
+                  "rule": "unique:note.title_status",
+                  "passed": false,
+                  "detail": "records 1 and 2 have the same values in title, status"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "transition.rs plan_migration: checking a new composite unique constraint for duplicates needs every record of its object type; a snapshot without them is InsufficientState naming that need, before any record is re-validated.",
+          "args": {
+            "tenant": {
+              "id": "alpha",
+              "name": "alpha",
+              "revision": 5,
+              "next-record": 4,
+              "event-seq": 5,
+              "schema": {
+                "version": 2,
+                "objects": {
+                  "note": {
+                    "id": "note",
+                    "label": "Note",
+                    "fields": {
+                      "rank": {
+                        "id": "rank",
+                        "label": "rank",
+                        "ty": "int",
+                        "required": false,
+                        "unique": false
+                      },
+                      "status": {
+                        "id": "status",
+                        "label": "status",
+                        "ty": "str",
+                        "required": true,
+                        "unique": false
+                      },
+                      "tags": {
+                        "id": "tags",
+                        "label": "tags",
+                        "ty": {
+                          "list": "str"
+                        },
+                        "required": false,
+                        "unique": false
+                      },
+                      "title": {
+                        "id": "title",
+                        "label": "title",
+                        "ty": "str",
+                        "required": true,
+                        "unique": false
+                      }
+                    },
+                    "constraints": {}
+                  }
+                },
+                "roles": {
+                  "editor": {
+                    "id": "editor",
+                    "label": "Editor"
+                  },
+                  "owner": {
+                    "id": "owner",
+                    "label": "Owner"
+                  },
+                  "public": {
+                    "id": "public",
+                    "label": "Everyone"
+                  },
+                  "writer": {
+                    "id": "writer",
+                    "label": "Writer"
+                  }
+                },
+                "policies": {},
+                "workflows": {
+                  "note_status": {
+                    "id": "note_status",
+                    "object": "note",
+                    "field": "status",
+                    "initial": [
+                      "draft"
+                    ],
+                    "transitions": [
+                      {
+                        "name": "publish",
+                        "from": "draft",
+                        "to": "published",
+                        "set": {}
+                      }
+                    ]
+                  }
+                },
+                "queries": {},
+                "views": {},
+                "role-permissions": {
+                  "editor": [
+                    {
+                      "object": {
+                        "object": "note",
+                        "actions": [
+                          "create",
+                          "read"
+                        ]
+                      }
+                    },
+                    {
+                      "capability": "automations-define"
+                    }
+                  ],
+                  "writer": [
+                    {
+                      "object": {
+                        "object": "note",
+                        "actions": [
+                          "read"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              "members": {
+                "alpha:editor": [
+                  "editor"
+                ],
+                "alpha:owner": [
+                  "owner"
+                ],
+                "alpha:writer1": [
+                  "writer"
+                ]
+              },
+              "records": {
+                "note": {
+                  "1": {
+                    "id": 1,
+                    "object": "note",
+                    "version": 1,
+                    "created-by": "alpha:writer1",
+                    "created-at": 5000,
+                    "updated-at": 5000,
+                    "fields": {
+                      "status": {
+                        "str": "draft"
+                      },
+                      "title": {
+                        "str": "First"
+                      }
+                    }
+                  },
+                  "2": {
+                    "id": 2,
+                    "object": "note",
+                    "version": 1,
+                    "created-by": "alpha:writer1",
+                    "created-at": 5000,
+                    "updated-at": 5000,
+                    "fields": {
+                      "status": {
+                        "str": "draft"
+                      },
+                      "title": {
+                        "str": "First"
+                      }
+                    }
+                  },
+                  "3": {
+                    "id": 3,
+                    "object": "note",
+                    "version": 1,
+                    "created-by": "alpha:writer1",
+                    "created-at": 5000,
+                    "updated-at": 5000,
+                    "fields": {
+                      "status": {
+                        "str": "draft"
+                      },
+                      "title": {
+                        "str": "Second"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "coverage": {
+              "partial": []
+            },
+            "changes": [
+              {
+                "define-unique": {
+                  "object": "note",
+                  "unique": {
+                    "id": "title_status",
+                    "fields": [
+                      "title",
+                      "status"
+                    ],
+                    "message": "One note per title and status."
+                  }
+                }
+              }
+            ],
+            "now": 5002,
+            "texts": {
+              "defaults": {},
+              "constraints": {},
+              "conditions": {},
+              "blank-name": false
+            }
+          },
+          "error": {
+            "rejected": {
+              "kind": "insufficient-state",
+              "message": "the snapshot does not cover AllOf(ObjectTypeId(\"note\"))",
+              "evidence": [
+                {
+                  "rule": "coverage",
+                  "passed": false,
+                  "detail": "AllOf(ObjectTypeId(\"note\"))"
+                }
+              ],
+              "missing": {
+                "all-of": "note"
+              }
+            }
+          }
         }
       ]
     },
     {
       "id": "change-schema",
-      "description": "transition.rs change_schema: Manage on Schema is authorised; a stale expected version is SchemaConflict; no changes is InvalidIntent; then the authority a change of definitions asks (require-definition-authority: automations-define for triggers and automations, the run-as roles of an automation under ADM-152, the step powers of a tenant operation under D-6547); then plan-migration, whose refusal keeps its kind, message and missing need with the draft's evidence before its own. The change's lines pass as schema:change, and every violation is a failed check existing:<object>/<id>:<rule>; in Reject mode any record that would not conform refuses the change with MigrationRejected (\"<n> existing record(s) ...\"), in Grandfather mode it is accepted: the new schema, the rewritten records and a SchemaChanged event counting the records that do not conform.",
+      "description": "transition.rs change_schema: Manage on Schema is authorised; a stale expected version is SchemaConflict; no changes is InvalidIntent; more than 200 changes in one intent is LimitExceeded (KRN-1283); then the authority a change of definitions asks (require-definition-authority: automations-define for triggers and automations, the run-as roles of an automation under ADM-152, the step powers of a tenant operation under D-6547); then plan-migration, whose refusal keeps its kind, message and missing need with the draft's evidence before its own. The change's lines pass as schema:change, and every violation is a failed check existing:<object>/<id>:<rule>; in Reject mode any record that would not conform refuses the change with MigrationRejected (\"<n> existing record(s) ...\"), in Grandfather mode it is accepted: the new schema, the rewritten records (each with its RecordUpdated event after the SchemaChanged event, the record one version higher and updated now) and a SchemaChanged event counting the records that do not conform.",
       "params": [
         {
           "name": "d",
@@ -157284,7 +157730,7 @@
           "expr": "match expected-version { Some(e) => e != current, None => false }"
         }
       ],
-      "body": "if stale then fail(call draft-reject(d1.evidence, error-kind.schema-conflict, format('schema is at version {}, expected {}', current, match expected-version { Some(e) => e, None => 0 }))) else if changes == [] then fail(call draft-reject(d1.evidence, error-kind.invalid-intent, 'no changes given')) else let d2 = try call require-definition-authority(d1, changes) in let plan = match call plan-migration(d2.tenant, d2.coverage, changes, d2.ctx.now, texts) { Ok(m) => m, Err(e) => match e { rejected(err) => fail(rejection.rejected(domain-error{kind: err.kind, message: err.message, evidence: concat(d2.evidence, err.evidence), missing: err.missing})) } } in let affected = fold(a in fold(k in sortBy(k in map(x in plan.violations, format('{}/{}', x.object, x.id)), k), ks = [], if any(a in ks, a == k) then ks else concat(ks, [k])), n = 0, n + 1) in let evidence = concat(concat(d2.evidence, map(l in plan.summary, check{rule: 'schema:change', passed: true, detail: l})), map(x in plan.violations, check{rule: format('existing:{}/{}:{}', x.object, x.id, x.check.rule), passed: false, detail: x.check.detail})) in if existing == existing-data.reject && affected > 0 then fail(call draft-reject(evidence, error-kind.migration-rejected, format('{} existing record(s) would not conform to the new schema', affected))) else decided{draft: draft{tenant: d2.tenant, ctx: d2.ctx, coverage: d2.coverage, ops: concat(concat(d2.ops, [delta-op.put-schema(plan.schema)]), map(r in plan.rewritten, delta-op.put-record(r))), events: concat(d2.events, [event-body.schema-changed{version: plan.schema.version, summary: plan.summary, grandfathered: affected}]), effects: d2.effects, evidence: evidence, next-record: d2.next-record}, output: output.schema{version: plan.schema.version}}",
+      "body": "if stale then fail(call draft-reject(d1.evidence, error-kind.schema-conflict, format('schema is at version {}, expected {}', current, match expected-version { Some(e) => e, None => 0 }))) else if changes == [] then fail(call draft-reject(d1.evidence, error-kind.invalid-intent, 'no changes given')) else if length(changes) > 200 then fail(call draft-reject(d1.evidence, error-kind.limit-exceeded, format('{} changes in one schema change is more than the maximum of 200', length(changes)))) else let d2 = try call require-definition-authority(d1, changes) in let plan = match call plan-migration(d2.tenant, d2.coverage, changes, d2.ctx.now, texts) { Ok(m) => m, Err(e) => match e { rejected(err) => fail(rejection.rejected(domain-error{kind: err.kind, message: err.message, evidence: concat(d2.evidence, err.evidence), missing: err.missing})) } } in let affected = fold(a in fold(k in sortBy(k in map(x in plan.violations, format('{}/{}', x.object, x.id)), k), ks = [], if any(a in ks, a == k) then ks else concat(ks, [k])), n = 0, n + 1) in let evidence = concat(concat(d2.evidence, map(l in plan.summary, check{rule: 'schema:change', passed: true, detail: l})), map(x in plan.violations, check{rule: format('existing:{}/{}:{}', x.object, x.id, x.check.rule), passed: false, detail: x.check.detail})) in if existing == existing-data.reject && affected > 0 then fail(call draft-reject(evidence, error-kind.migration-rejected, format('{} existing record(s) would not conform to the new schema', affected))) else decided{draft: draft{tenant: d2.tenant, ctx: d2.ctx, coverage: d2.coverage, ops: concat(concat(d2.ops, [delta-op.put-schema(plan.schema)]), map(r in plan.rewritten, delta-op.put-record(r))), events: concat(concat(d2.events, [event-body.schema-changed{version: plan.schema.version, summary: plan.summary, grandfathered: affected}]), map(r in plan.rewritten, event-body.record-updated{before: fold(b in values(match get(d2.tenant.records, r.object) { Some(m) => m, None => {} }), acc = r, if b.id == r.id then b else acc), after: r})), effects: d2.effects, evidence: evidence, next-record: d2.next-record}, output: output.schema{version: plan.schema.version}}",
       "examples": [
         {
           "description": "behaviour.rs a_strict_migration_is_rejected_when_existing_records_would_not_conform.",
@@ -162992,6 +163438,425 @@
                 }
               ],
               "missing": null
+            }
+          }
+        },
+        {
+          "description": "transition.rs change_schema, WFL-1520: an editor a policy lets manage the schema, without automations-define, may not remove a trigger; the definition authority is asked after Manage on Schema and before the plan.",
+          "args": {
+            "d": {
+              "tenant": {
+                "id": "alpha",
+                "name": "alpha",
+                "revision": 7,
+                "next-record": 3,
+                "event-seq": 7,
+                "schema": {
+                  "version": 2,
+                  "objects": {
+                    "note": {
+                      "id": "note",
+                      "label": "Note",
+                      "fields": {
+                        "author": {
+                          "id": "author",
+                          "label": "Author",
+                          "ty": {
+                            "ref": {
+                              "target": "person",
+                              "on-delete": "set-null"
+                            }
+                          },
+                          "required": false,
+                          "unique": false
+                        },
+                        "body": {
+                          "id": "body",
+                          "label": "body",
+                          "ty": "str",
+                          "required": false,
+                          "unique": false
+                        },
+                        "published_at": {
+                          "id": "published_at",
+                          "label": "published_at",
+                          "ty": "time",
+                          "required": false,
+                          "unique": false
+                        },
+                        "rank": {
+                          "id": "rank",
+                          "label": "rank",
+                          "ty": "int",
+                          "required": false,
+                          "unique": false
+                        },
+                        "slug": {
+                          "id": "slug",
+                          "label": "slug",
+                          "ty": "str",
+                          "required": true,
+                          "unique": true
+                        },
+                        "status": {
+                          "id": "status",
+                          "label": "status",
+                          "ty": "str",
+                          "required": true,
+                          "unique": false,
+                          "default": {
+                            "lit": {
+                              "str": "draft"
+                            }
+                          }
+                        },
+                        "title": {
+                          "id": "title",
+                          "label": "title",
+                          "ty": "str",
+                          "required": true,
+                          "unique": false
+                        }
+                      },
+                      "constraints": {
+                        "title_length": {
+                          "id": "title_length",
+                          "expr": {
+                            "cmp": {
+                              "op": "le",
+                              "left": {
+                                "len": {
+                                  "var": {
+                                    "scope": "new",
+                                    "field": "title"
+                                  }
+                                }
+                              },
+                              "right": {
+                                "lit": {
+                                  "int": 24
+                                }
+                              }
+                            }
+                          },
+                          "message": "A title has at most 24 characters"
+                        }
+                      }
+                    },
+                    "person": {
+                      "id": "person",
+                      "label": "Person",
+                      "fields": {
+                        "name": {
+                          "id": "name",
+                          "label": "name",
+                          "ty": "str",
+                          "required": true,
+                          "unique": false
+                        }
+                      },
+                      "constraints": {}
+                    }
+                  },
+                  "roles": {
+                    "editor": {
+                      "id": "editor",
+                      "label": "Editor"
+                    },
+                    "owner": {
+                      "id": "owner",
+                      "label": "Owner"
+                    },
+                    "public": {
+                      "id": "public",
+                      "label": "Everyone"
+                    },
+                    "writer": {
+                      "id": "writer",
+                      "label": "Writer"
+                    }
+                  },
+                  "policies": {
+                    "editors_manage_notes": {
+                      "id": "editors_manage_notes",
+                      "role": "editor",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "read",
+                        "create",
+                        "update",
+                        "delete"
+                      ],
+                      "condition": null
+                    },
+                    "editors_manage_people": {
+                      "id": "editors_manage_people",
+                      "role": "editor",
+                      "resource": {
+                        "object": "person"
+                      },
+                      "actions": [
+                        "read",
+                        "create",
+                        "update",
+                        "delete"
+                      ],
+                      "condition": null
+                    },
+                    "public_reads_people": {
+                      "id": "public_reads_people",
+                      "role": "public",
+                      "resource": {
+                        "object": "person"
+                      },
+                      "actions": [
+                        "read"
+                      ],
+                      "condition": null
+                    },
+                    "public_reads_published": {
+                      "id": "public_reads_published",
+                      "role": "public",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "read"
+                      ],
+                      "condition": {
+                        "cmp": {
+                          "op": "eq",
+                          "left": {
+                            "var": {
+                              "scope": "record",
+                              "field": "status"
+                            }
+                          },
+                          "right": {
+                            "lit": {
+                              "str": "published"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "writers_add_people": {
+                      "id": "writers_add_people",
+                      "role": "writer",
+                      "resource": {
+                        "object": "person"
+                      },
+                      "actions": [
+                        "create"
+                      ],
+                      "condition": null
+                    },
+                    "writers_edit_own": {
+                      "id": "writers_edit_own",
+                      "role": "writer",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "update",
+                        "delete"
+                      ],
+                      "condition": {
+                        "cmp": {
+                          "op": "eq",
+                          "left": {
+                            "var": {
+                              "scope": "record",
+                              "field": "$created_by"
+                            }
+                          },
+                          "right": "principal"
+                        }
+                      }
+                    },
+                    "writers_read_notes": {
+                      "id": "writers_read_notes",
+                      "role": "writer",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "read",
+                        "create"
+                      ],
+                      "condition": null
+                    },
+                    "editors_manage_schema": {
+                      "id": "editors_manage_schema",
+                      "role": "editor",
+                      "resource": "schema",
+                      "actions": [
+                        "manage"
+                      ],
+                      "condition": null
+                    }
+                  },
+                  "workflows": {
+                    "note_status": {
+                      "id": "note_status",
+                      "object": "note",
+                      "field": "status",
+                      "initial": [
+                        "draft"
+                      ],
+                      "transitions": [
+                        {
+                          "name": "publish",
+                          "from": "draft",
+                          "to": "published",
+                          "guard": {
+                            "cmp": {
+                              "op": "eq",
+                              "left": "principal",
+                              "right": {
+                                "lit": {
+                                  "str": "alpha:editor"
+                                }
+                              }
+                            }
+                          },
+                          "set": {
+                            "published_at": "now"
+                          }
+                        },
+                        {
+                          "name": "unpublish",
+                          "from": "published",
+                          "to": "draft",
+                          "guard": null,
+                          "set": {
+                            "published_at": {
+                              "lit": "null"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "queries": {},
+                  "views": {}
+                },
+                "members": {
+                  "alpha:editor": [
+                    "editor"
+                  ],
+                  "alpha:owner": [
+                    "owner"
+                  ],
+                  "alpha:writer1": [
+                    "writer"
+                  ],
+                  "alpha:writer2": [
+                    "writer"
+                  ]
+                },
+                "records": {
+                  "note": {
+                    "1": {
+                      "id": 1,
+                      "object": "note",
+                      "version": 1,
+                      "created-by": "alpha:writer1",
+                      "created-at": 5000,
+                      "updated-at": 5000,
+                      "fields": {
+                        "slug": {
+                          "str": "first"
+                        },
+                        "status": {
+                          "str": "draft"
+                        },
+                        "title": {
+                          "str": "First"
+                        }
+                      }
+                    },
+                    "2": {
+                      "id": 2,
+                      "object": "note",
+                      "version": 1,
+                      "created-by": "alpha:writer1",
+                      "created-at": 5001,
+                      "updated-at": 5001,
+                      "fields": {
+                        "slug": {
+                          "str": "second"
+                        },
+                        "status": {
+                          "str": "draft"
+                        },
+                        "title": {
+                          "str": "Second"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "ctx": {
+                "tenant": "alpha",
+                "principal": {
+                  "user": "alpha:editor"
+                },
+                "session": null,
+                "now": 5002,
+                "correlation": "test-5002"
+              },
+              "coverage": "complete",
+              "ops": [],
+              "events": [],
+              "effects": [],
+              "evidence": [],
+              "next-record": 3
+            },
+            "changes": [
+              {
+                "remove-trigger": "on_points"
+              }
+            ],
+            "expected-version": null,
+            "existing": "reject",
+            "texts": {
+              "defaults": {
+                "note": {
+                  "status": "'draft'"
+                }
+              },
+              "constraints": {
+                "note": {
+                  "title_length": "(len(new.title) <= 24)"
+                }
+              },
+              "conditions": {
+                "policy:writers_edit_own": "(record.$created_by == principal)",
+                "policy:public_reads_published": "(record.status == 'published')"
+              },
+              "blank-name": false
+            }
+          },
+          "error": {
+            "rejected": {
+              "kind": "unauthorized",
+              "message": "the change needs the capability automations-define",
+              "evidence": [
+                {
+                  "rule": "policy:editors_manage_schema",
+                  "passed": true,
+                  "detail": "Manage on Schema"
+                },
+                {
+                  "rule": "permission:capability:automations-define",
+                  "passed": false,
+                  "detail": "does not hold automations-define"
+                }
+              ]
             }
           }
         }
@@ -222269,7 +223134,7 @@
     },
     {
       "id": "holds-power",
-      "description": "rules.rs holds_power (D-6547): whether a principal holds an action on a resource without a condition: the owner does, a role permission on the object type gives it, and so does a policy of one of its roles that names the action, reaches the resource and has no condition.",
+      "description": "rules.rs holds_power (D-6547): whether a principal holds an action on a resource without a condition, which is holds-policy-power with no condition: the owner does, a role permission on the object type gives it, and so does a policy of one of its roles that names the action, reaches the resource and has no condition.",
       "params": [
         {
           "name": "tenant",
@@ -222289,21 +223154,7 @@
         }
       ],
       "returns": "bool",
-      "let": [
-        {
-          "name": "roles",
-          "expr": "call roles-of(tenant, principal)"
-        },
-        {
-          "name": "held",
-          "expr": "call effective-permissions(tenant, principal)"
-        },
-        {
-          "name": "granted",
-          "expr": "match resource { object(o) => match action { read => any(g in held, g == grant.object{object: o, action: object-action.read}), create => any(g in held, g == grant.object{object: o, action: object-action.create}), update => any(g in held, g == grant.object{object: o, action: object-action.update}), delete => any(g in held, g == grant.object{object: o, action: object-action.delete}), manage => false }, _ => false }"
-        }
-      ],
-      "body": "any(r in roles, r == 'owner') || granted || any(p in values(tenant.schema.policies), call policy-applies(p, roles, action, resource) && p.condition == null)",
+      "body": "call holds-policy-power(tenant, principal, action, resource, null)",
       "examples": [
         {
           "args": {
