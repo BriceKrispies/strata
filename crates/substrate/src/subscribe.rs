@@ -894,4 +894,126 @@ mod tests {
             None
         );
     }
+
+    /// A segment of the notes of a tenant (SEG-033), and the entry of `person` into it.
+    fn segment_and_entry(person: &str) -> (Segment, SegmentEvent) {
+        let mut bytes = [0u8; 16];
+        bytes[15] = 1;
+        bytes[6] = 0x40;
+        bytes[8] = 0x80;
+        let id = seg::segment_id_of(bytes);
+        let segment = Segment {
+            id,
+            name: "Notes".to_string(),
+            subject: object("note"),
+            predicate: strata_kernel::Expr::Lit(strata_kernel::Value::Bool(true)),
+            version: 1,
+            time_dependent: false,
+            indexable: false,
+            refresh_seconds: None,
+            defined_by: Some(principal_id("alpha:owner")),
+            principal_field: field("slug"),
+            visible_to_members: false,
+            schema_version: strata_kernel::SchemaVersion(1),
+            member_count: 0,
+            refresh_skipped_at: None,
+        };
+        let logged = SegmentEvent {
+            tenant: tenant_id("alpha"),
+            at: strata_kernel::Timestamp(6_000),
+            principal: Principal::System,
+            correlation: "c-segment".to_string(),
+            event: seg::SegmentMembershipEvent {
+                segment: id,
+                person: principal_id(person),
+                direction: SegmentDirection::Entered,
+                reason: seg::SegmentReason::Change,
+                version: 1,
+                revision: strata_kernel::StateRevision(0),
+            },
+        };
+        (segment, logged)
+    }
+
+    // Verifies: SEG-033
+    #[test]
+    fn a_segment_selector_hears_the_entry_of_a_person_the_subscriber_may_read_and_nothing_else() {
+        let mut world = notes_world();
+        let mut run = |who: &str, now, intent| {
+            let (next, _) = world.step(&intent, &ctx("alpha", user(who), now)).unwrap();
+            world = next;
+        };
+        run("alpha:writer1", 5_000, new_note("Mine", "alpha:m1"));
+        let tenant = world.tenants[&tenant_id("alpha")].clone();
+        let state = State {
+            tenant_id: tenant.id.clone(),
+            tenant: Some(tenant),
+            coverage: strata_kernel::Coverage::Complete,
+        };
+        let (segment, logged) = segment_and_entry("alpha:m1");
+        let names = |list: Vec<String>| Selector::new(None, None, Some(list), None, None).unwrap();
+        let selector = names(vec![segment.id.to_string()]);
+        let hears = |who: &Principal, selector: &Selector, logged: &SegmentEvent| {
+            segment_notice(&state, who, selector, &segment, 7, logged)
+        };
+        // A subscriber who reads the members and the person's record is told, by position.
+        assert_eq!(
+            hears(&user("alpha:owner"), &selector, &logged),
+            Some(Notice::Segment {
+                segment: segment.id,
+                person: principal_id("alpha:m1"),
+                direction: SegmentDirection::Entered,
+                position: 7,
+            })
+        );
+        // One who holds no right to the members, and one who is not signed in, are told nothing.
+        assert_eq!(hears(&user("alpha:writer2"), &selector, &logged), None);
+        assert_eq!(hears(&Principal::Anonymous, &selector, &logged), None);
+        // A selector that does not name the segment never hears its events; one that names
+        // another segment, or other kinds of event as well, does not either.
+        assert_eq!(hears(&user("alpha:owner"), &Selector::all(), &logged), None);
+        let mut other = [0u8; 16];
+        other[15] = 2;
+        other[6] = 0x40;
+        other[8] = 0x80;
+        let elsewhere = names(vec![seg::segment_id_of(other).to_string()]);
+        assert_eq!(hears(&user("alpha:owner"), &elsewhere, &logged), None);
+        let with_kinds = Selector::new(
+            None,
+            Some(vec!["record-updated".to_string()]),
+            Some(vec![segment.id.to_string()]),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(hears(&user("alpha:owner"), &with_kinds, &logged), None);
+        // The selector names the object type of the people it wants to hear of.
+        let people = Selector::new(
+            Some(vec!["person".to_string()]),
+            None,
+            Some(vec![segment.id.to_string()]),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(hears(&user("alpha:owner"), &people, &logged), None);
+        // An erased person, whose record is gone, is announced to nobody.
+        let (_, erased) = segment_and_entry("alpha:gone");
+        assert_eq!(hears(&user("alpha:owner"), &selector, &erased), None);
+        // An event of another tenant is never told.
+        let mut foreign = logged.clone();
+        foreign.tenant = tenant_id("beta");
+        assert_eq!(hears(&user("alpha:owner"), &selector, &foreign), None);
+    }
+
+    // Verifies: SEG-033
+    #[test]
+    fn a_segment_selector_selects_no_event_of_the_kernels_sequence() {
+        let (_, events) = published_then_withdrawn();
+        let (segment, _) = segment_and_entry("alpha:m1");
+        let selector =
+            Selector::new(None, None, Some(vec![segment.id.to_string()]), None, None).unwrap();
+        assert!(events.iter().all(|event| !selector.admits(event)));
+        assert!(events.iter().all(|event| Selector::all().admits(event)));
+    }
 }
