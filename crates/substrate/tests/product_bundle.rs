@@ -7,8 +7,9 @@ use serde_json::{json, Value as Json};
 use strata_kernel::expr::parse;
 use strata_kernel::*;
 use strata_substrate::bundle::{
-    install_into, install_product, Bundle, BundleError, BundleErrorKind, InstalledRecord,
-    PlatformRange, ProductBundle, ProductInstall, ProductInstallError, ProductTarget,
+    install_into, install_product, plan_remove, plan_upgrade, remove_product, upgrade_product,
+    Bundle, BundleError, BundleErrorKind, InstalledRecord, Planned, PlatformRange, ProductBundle,
+    ProductInstall, ProductInstallError, ProductTarget,
 };
 
 fn tenant() -> TenantId {
@@ -123,6 +124,8 @@ fn install(
         release,
         schema: &schema,
         installed,
+        expected_version: None,
+        idempotency_key: None,
     };
     let mut calls = 0;
     let result = install_product(bundle, &target, &mut |ctx: Context,
@@ -460,8 +463,11 @@ fn another_version_of_an_installed_product_is_an_upgrade_and_not_an_install() {
 fn an_entity_that_exists_and_is_not_owned_by_the_product_blocks_the_install() {
     let bundle = read(&tiers()).unwrap();
     let mut world = world();
-    install(&mut world, &bundle, None, "0.2").0.unwrap();
-    // Without the catalogue record the entities that exist belong to nobody that installs here.
+    // The same entities installed by a bundle that names no product: they belong to the tenant.
+    let mut template = tiers();
+    template.as_object_mut().unwrap().remove("product");
+    let template = read(&template).unwrap();
+    install(&mut world, &template, None, "0.2").0.unwrap();
     let before = world.hash();
     let (result, calls) = install(&mut world, &bundle, None, "0.2");
     let error = refusal(result);
@@ -496,10 +502,9 @@ fn an_id_outside_the_namespace_of_the_product_is_refused() {
 fn a_section_the_kernel_cannot_take_yet_is_refused_by_name_and_never_dropped() {
     let mut doc = tiers();
     doc["content"]["segments"] = json!({ "tiers__gold": { "name": "Gold", "subject-type": "tiers__member", "predicate": "record.points >= 100" } });
-    doc["content"]["triggers"] = json!([{ "id": "tiers__on_points" }, { "id": "tiers__on_pause" }]);
+    doc["content"]["ledger-units"] =
+        json!([{ "unit": "tiers__points" }, { "unit": "tiers__stamps" }]);
     doc["content"]["settings"] = json!([]);
-    doc["content"]["objects"]["tiers__member"]["retention"] =
-        json!({ "days": 30, "from": "Created" });
     let bundle = read(&doc).unwrap();
     // An empty section is not a filled one.
     let names: Vec<(&str, usize)> = bundle
@@ -507,16 +512,13 @@ fn a_section_the_kernel_cannot_take_yet_is_refused_by_name_and_never_dropped() {
         .iter()
         .map(|u| (u.section.as_str(), u.entries))
         .collect();
-    assert_eq!(
-        names,
-        vec![("objects.retention", 1), ("segments", 1), ("triggers", 2)]
-    );
+    assert_eq!(names, vec![("ledger-units", 2), ("segments", 1)]);
     let mut world = world();
     let before = world.hash();
     let (result, calls) = install(&mut world, &bundle, None, "0.2");
     let error = refusal(result);
     assert_eq!(error.kind, BundleErrorKind::InvalidBundle);
-    for section in ["\"segments\"", "\"triggers\"", "\"objects.retention\""] {
+    for section in ["\"segments\"", "\"ledger-units\""] {
         assert!(error.message.contains(section), "{}", error.message);
     }
     assert!(!error.message.contains("\"settings\""), "{}", error.message);
@@ -544,12 +546,6 @@ fn each_section_without_a_kernel_intent_is_refused_naming_it() {
             json!([{ "pool": "tiers__pool", "description": "d" }]),
         ),
         ("ledger-limits", json!([{ "unit": "tiers__points" }])),
-        ("mail-templates", json!([{ "template": "tiers__mail" }])),
-        ("notice-templates", json!([{ "template": "tiers__notice" }])),
-        ("tokens", json!([{ "name": "tiers__token" }])),
-        ("triggers", json!([{ "id": "tiers__trigger" }])),
-        ("automations", json!([{ "id": "tiers__automation" }])),
-        ("operations", json!([{ "id": "tiers__operation" }])),
     ];
     for (section, value) in filled {
         let mut doc = tiers();
@@ -592,30 +588,625 @@ fn the_bundles_specc_writes_are_read_and_their_unbuilt_sections_are_named() {
         ]
     );
     let sections: Vec<&str> = tiers.unbuilt.iter().map(|u| u.section.as_str()).collect();
-    assert_eq!(
-        sections,
-        vec!["capabilities", "ledger-units", "mail-templates"]
-    );
+    assert_eq!(sections, vec!["capabilities", "ledger-units"]);
+    assert_eq!(tiers.mail_templates.len(), 1);
 
     let badges = ProductBundle::from_json(BADGE_MILESTONES).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(badges.objects.len(), 1);
     assert_eq!(badges.policies.len(), 2);
+    // The ledger is the one section of this product the kernel cannot take yet.
     let sections: Vec<&str> = badges.unbuilt.iter().map(|u| u.section.as_str()).collect();
-    assert_eq!(
-        sections,
-        vec![
-            "automations",
-            "ledger-units",
-            "mail-templates",
-            "notice-templates",
-            "objects.retention",
-            "triggers"
-        ]
-    );
+    assert_eq!(sections, vec!["ledger-units"]);
+    assert_eq!(badges.mail_templates.len(), 2);
+    assert_eq!(badges.notice_templates.len(), 1);
+    assert_eq!(badges.triggers.len(), 1);
+    assert_eq!(badges.automations.len(), 1);
+    let award = &badges.objects[&object_id("badge_milestones__award")];
+    // The retention and the personal declaration of the field survive the reading.
+    assert_eq!(award.retention.as_ref().map(|r| r.days), Some(730));
+    assert!(award.fields[&FieldId::new("person").unwrap()]
+        .personal
+        .is_some());
     let error = badges.check_installable().unwrap_err();
     assert_eq!(error.kind, BundleErrorKind::InvalidBundle);
 
     let promotions = ProductBundle::from_json(PROMOTIONS).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(promotions.objects.len(), 2);
-    assert!(promotions.unbuilt.iter().any(|u| u.section == "operations"));
+    assert_eq!(promotions.operations.len(), 2);
+    let sections: Vec<&str> = promotions
+        .unbuilt
+        .iter()
+        .map(|u| u.section.as_str())
+        .collect();
+    assert_eq!(
+        sections,
+        vec!["ledger-limits", "ledger-pools", "ledger-units"]
+    );
+}
+
+// ---- what a product holds beyond its record types (WG-5076, WG-5084, WG-5103) ----------------------
+
+fn schema_of(world: &World) -> std::sync::Arc<TenantSchema> {
+    world.tenants[&tenant()].schema.clone()
+}
+
+/// The hash of the schema of the tenant, whatever its version.
+fn schema_hash(world: &World) -> String {
+    strata_kernel::canon::hash_of(&TenantSchema {
+        version: SchemaVersion(0),
+        ..TenantSchema::clone(&schema_of(world))
+    })
+}
+
+fn context_at(now: i64, correlation: &str) -> Context {
+    Context {
+        tenant: tenant(),
+        principal: admin(),
+        session: None,
+        now: Timestamp(now),
+        correlation: correlation.into(),
+        verified_address: None,
+        idempotency_key: None,
+        language: None,
+    }
+}
+
+/// A tenant that exists and has the role `member`, which the policies of a product name.
+fn world_with_member() -> World {
+    let intent = Intent::ChangeSchema {
+        changes: vec![SchemaChange::DefineRole(RoleDef {
+            id: RoleId::new("member").unwrap(),
+            label: "Member".into(),
+        })],
+        expected_version: None,
+        existing: ExistingData::Reject,
+    };
+    world()
+        .step(&intent, &context_at(1_700_000_000_000, "fixture"))
+        .expect("accepted")
+        .0
+}
+
+type Executor<'a> = &'a mut dyn FnMut(Context, Intent) -> Result<Output, DomainError>;
+
+fn target_of<'a>(
+    tenant: &'a TenantId,
+    schema: &'a TenantSchema,
+    release: &'a str,
+) -> ProductTarget<'a> {
+    ProductTarget {
+        tenant,
+        principal: admin(),
+        now: 1_800_000_000_000,
+        release,
+        schema,
+        installed: None,
+        expected_version: None,
+        idempotency_key: None,
+    }
+}
+
+/// Runs `work` against the tenant of `world`, which takes each intent as it comes. Returns the
+/// answer and how many intents were run.
+fn with_target<R>(
+    world: &mut World,
+    release: &str,
+    work: impl FnOnce(&ProductTarget<'_>, Executor<'_>) -> R,
+) -> (R, usize) {
+    let tenant = tenant();
+    let schema = world.tenants[&tenant].schema.clone();
+    let target = target_of(&tenant, &schema, release);
+    let mut calls = 0;
+    let result = work(&target, &mut |ctx: Context,
+                                     intent: Intent|
+     -> Result<Output, DomainError> {
+        calls += 1;
+        let (next, outcome) = world.step(&intent, &ctx)?;
+        *world = next;
+        Ok(outcome.output)
+    });
+    (result, calls)
+}
+
+fn installed(world: &mut World, doc: &Json) -> InstalledRecord {
+    let bundle = read(doc).unwrap();
+    let (result, _) = with_target(world, "0.2", |t, e| install_product(&bundle, t, e));
+    match result.unwrap_or_else(|e| panic!("{e}")) {
+        ProductInstall::Applied {
+            record: Some(record),
+            ..
+        } => record,
+        other => panic!("the install was not applied: {other:?}"),
+    }
+}
+
+fn step_error(result: Installed) -> DomainError {
+    match result {
+        Err(ProductInstallError::Step { error, .. }) => error,
+        other => panic!("the kernel did not refuse the change: {other:?}"),
+    }
+}
+
+// Verifies: INT-2340
+#[test]
+fn an_object_type_with_a_personal_field_and_a_retention_installs_and_holds_both() {
+    let mut doc = tiers();
+    let member = &mut doc["content"]["objects"]["tiers__member"];
+    member["retention"] = json!({ "days": 30, "from": "Created" });
+    member["fields"]["name"]["personal"] =
+        json!({ "kind": "name", "subject": "Creator", "searchable": false });
+    // The names of the specification are read as the generated types write them.
+    member["fields"]["lang"] = json!({ "id": "lang", "label": "Language", "ty": "Language", "required": false, "unique": false });
+    member["language-field"] = json!("lang");
+    let mut world = world();
+    installed(&mut world, &doc);
+    let schema = schema_of(&world);
+    let member = &schema.objects[&object_id("tiers__member")];
+    assert_eq!(member.retention.as_ref().map(|r| r.days), Some(30));
+    assert_eq!(member.language_field, Some(FieldId::new("lang").unwrap()));
+    let name = member.fields[&FieldId::new("name").unwrap()]
+        .personal
+        .as_ref()
+        .expect("the declaration is stored with the field");
+    assert_eq!(name.kind, PersonalKind::Name);
+    assert!(!name.searchable);
+}
+
+// Verifies: INT-2340
+#[test]
+fn a_personal_field_without_a_retention_is_refused_by_the_kernel() {
+    let mut doc = tiers();
+    doc["content"]["objects"]["tiers__member"]["fields"]["name"]["personal"] =
+        json!({ "kind": "name", "subject": "Creator", "searchable": false });
+    let bundle = read(&doc).unwrap();
+    let mut world = world();
+    let before = world.hash();
+    let (result, calls) = install(&mut world, &bundle, None, "0.2");
+    let error = step_error(result);
+    assert_eq!(calls, 1);
+    assert!(
+        error
+            .message
+            .contains("a type with a personal field must declare retention (D-6584)"),
+        "{}",
+        error.message
+    );
+    assert_eq!(world.hash(), before);
+}
+
+/// The product that reacts to the ledger: its object type, templates, trigger and automation.
+fn badge_milestones() -> Json {
+    let mut doc: Json = serde_json::from_str(BADGE_MILESTONES).unwrap();
+    // The ledger declarations are the one section the kernel cannot take yet.
+    doc["content"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ledger-units");
+    doc
+}
+
+// Verifies: INT-1921
+#[test]
+fn badge_milestones_installs_with_its_templates_its_trigger_and_its_automation() {
+    let mut world = world_with_member();
+    let record = installed(&mut world, &badge_milestones());
+    let schema = schema_of(&world);
+    assert!(schema
+        .objects
+        .contains_key(&object_id("badge_milestones__award")));
+    assert_eq!(schema.triggers.as_ref().map(|t| t.len()), Some(1));
+    assert_eq!(schema.automations.as_ref().map(|t| t.len()), Some(1));
+    let templates: Vec<String> = strata_kernel::templates::list(&schema)
+        .into_iter()
+        .map(|t| t.id.to_string())
+        .collect();
+    assert_eq!(
+        templates,
+        vec![
+            "badge_milestones__silver_follow_up",
+            "badge_milestones__silver_mail",
+            "badge_milestones__silver_notice"
+        ]
+    );
+    // The record names what the product owns, templates included, and the schema holds it.
+    let kinds: Vec<&str> = record.owns.iter().map(|e| e.kind.as_str()).collect();
+    for kind in [
+        "role",
+        "object",
+        "policy",
+        "mail-template",
+        "notice-template",
+        "trigger",
+        "automation",
+    ] {
+        assert!(kinds.contains(&kind), "{kind}: {kinds:?}");
+    }
+    assert_eq!(
+        InstalledRecord::of(&schema, "badge-milestones"),
+        Some(record)
+    );
+}
+
+// Verifies: INT-2344
+#[test]
+fn an_automation_that_sends_a_template_nobody_declares_is_refused_before_it_runs() {
+    let mut doc = tiers();
+    doc["content"]["automations"] = json!([{
+        "id": "tiers__greet",
+        "label": "Greet",
+        "run-as": { "roles": [] },
+        "start": "send",
+        "steps": { "send": { "action": { "SendMail": { "template": "tiers__nothing", "to": "param.owner" } } } }
+    }]);
+    let bundle = read(&doc).unwrap();
+    let mut world = world();
+    let (result, calls) = install(&mut world, &bundle, None, "0.2");
+    let error = refusal(result);
+    assert_eq!(error.kind, BundleErrorKind::InvalidBundle);
+    assert!(
+        error.message.contains("tiers__nothing"),
+        "{}",
+        error.message
+    );
+    assert_eq!(calls, 0);
+}
+
+// Verifies: INT-2344
+#[test]
+fn an_automation_that_names_an_unknown_step_is_refused_with_the_kernels_problem_text() {
+    let mut doc = tiers();
+    doc["content"]["automations"] = json!([{
+        "id": "tiers__greet",
+        "label": "Greet",
+        "run-as": { "roles": [] },
+        "start": "send",
+        "steps": { "send": { "action": "End", "next": "ghost" } }
+    }]);
+    let bundle = read(&doc).unwrap();
+    let mut world = world();
+    let before = world.hash();
+    let (result, _) = install(&mut world, &bundle, None, "0.2");
+    let error = step_error(result);
+    assert_eq!(error.kind, ErrorKind::InvalidSchema);
+    assert!(
+        error.message.contains("unknown step ghost"),
+        "{}",
+        error.message
+    );
+    assert_eq!(world.hash(), before);
+}
+
+// Verifies: INT-1580
+#[test]
+fn a_trigger_an_automation_and_an_operation_in_the_authoring_syntax_are_installed() {
+    let mut doc = tiers();
+    doc["content"]["automations"] = json!([{
+        "id": "tiers__promote",
+        "label": "Promote",
+        "run-as": { "roles": [] },
+        "run-key": "param.record",
+        "start": "mark",
+        "steps": {
+            "mark": { "action": { "UpdateRecord": { "object": "tiers__member", "record": "param.record", "fields": { "status": "'gold'" } } } }
+        }
+    }]);
+    doc["content"]["triggers"] = json!([{
+        "id": "tiers__on_update",
+        "on": { "RecordUpdated": { "object": "tiers__member" } },
+        "condition": "new.points >= 100",
+        "automation": "tiers__promote"
+    }]);
+    doc["content"]["operations"] = json!([{
+        "id": "tiers__grant",
+        "label": "Grant points",
+        "inputs": [{ "name": "member", "ty": { "Ref": { "target": "tiers__member", "on-delete": "Restrict" } }, "required": true }],
+        "invokers": { "roles": [], "signed-in": true },
+        "subject": { "object": "tiers__member", "input": "member" },
+        "conditions": [{ "id": "has_name", "expr": "record.name != null", "error": "no-name", "message": "The member has a name." }],
+        "steps": [{ "UpdateRecord": { "id": "bump", "object": "tiers__member", "record": "param.member", "fields": { "points": "record.points + 1" } } }]
+    }]);
+    let bundle = read(&doc).unwrap();
+    assert_eq!(bundle.triggers.len(), 1);
+    assert_eq!(bundle.automations.len(), 1);
+    assert_eq!(bundle.operations.len(), 1);
+    let mut world = world();
+    let (result, calls) = install(&mut world, &bundle, None, "0.2");
+    result.unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(calls, 1);
+    let schema = schema_of(&world);
+    assert!(schema.triggers.as_ref().is_some_and(|t| t.len() == 1));
+    assert!(schema.automations.as_ref().is_some_and(|t| t.len() == 1));
+    assert!(schema.operations.as_ref().is_some_and(|t| t.len() == 1));
+}
+
+// ---- upgrade (INT-1581, INT-1583) --------------------------------------------------------------------
+
+/// Version 1.1.0 of the `tiers` product: a field more, the constraint and the workflow gone, a
+/// query more, and the policy condition changed.
+fn tiers_1_1() -> Json {
+    let mut doc = tiers();
+    doc["version"] = json!("1.1.0");
+    let content = &mut doc["content"];
+    content["objects"]["tiers__member"]["fields"]["tier"] =
+        json!({ "id": "tier", "label": "Tier", "ty": "Str", "required": false, "unique": false });
+    content["objects"]["tiers__member"]["constraints"] = json!({});
+    content.as_object_mut().unwrap().remove("workflows");
+    content["queries"]["tiers__all"] =
+        json!({ "id": "tiers__all", "object": "tiers__member", "params": [], "order": [] });
+    content["policies"]["tiers__editor_members"]["condition"] = json!("record.points >= 1");
+    doc
+}
+
+fn entity_ids(list: &[strata_substrate::bundle::OwnedEntity]) -> Vec<String> {
+    list.iter()
+        .map(|e| format!("{}:{}", e.kind, e.id))
+        .collect()
+}
+
+// Verifies: INT-1581
+#[test]
+fn an_upgrade_creates_changes_and_removes_what_differs_in_one_schema_change() {
+    let mut world = world();
+    let old = installed(&mut world, &tiers());
+    let newer = read(&tiers_1_1()).unwrap();
+    let before_version = schema_of(&world).version.0;
+
+    // The plan names each entity created, changed and removed, and runs nothing.
+    let schema = schema_of(&world);
+    let tenant = tenant();
+    let target = target_of(&tenant, &schema, "0.2");
+    let Planned::Change(plan) = plan_upgrade(&newer, &target).unwrap() else {
+        panic!("a later version is a change");
+    };
+    assert_eq!(entity_ids(&plan.created), vec!["query:tiers__all"]);
+    assert_eq!(
+        entity_ids(&plan.changed),
+        vec!["object:tiers__member", "policy:tiers__editor_members"]
+    );
+    assert_eq!(entity_ids(&plan.removed), vec!["workflow:tiers__promotion"]);
+
+    let (result, calls) = with_target(&mut world, "0.2", |t, e| upgrade_product(&newer, t, e));
+    let ProductInstall::Applied {
+        schema_version,
+        record: Some(record),
+    } = result.unwrap_or_else(|e| panic!("{e}"))
+    else {
+        panic!("the upgrade was not applied");
+    };
+    assert_eq!(calls, 1, "an upgrade is one schema change");
+    assert_eq!(schema_version, before_version + 1);
+    assert_eq!(record.version, "1.1.0");
+    let schema = schema_of(&world);
+    let member = &schema.objects[&object_id("tiers__member")];
+    assert!(member.fields.contains_key(&FieldId::new("tier").unwrap()));
+    assert!(member.constraints.is_empty());
+    assert!(schema.workflows.is_empty());
+    assert!(schema
+        .queries
+        .contains_key(&QueryId::new("tiers__all").unwrap()));
+    // The record in the schema is the one the upgrade returned, and the old one is replaced.
+    assert_eq!(InstalledRecord::of(&schema, "tiers"), Some(record.clone()));
+    assert_ne!(record.owns, old.owns);
+    assert!(record.owns.iter().all(|e| e.id != "tiers__promotion"));
+}
+
+// Verifies: INT-1583
+#[test]
+fn an_upgrade_to_a_version_that_is_not_greater_or_of_a_product_that_is_not_installed_is_refused() {
+    let mut world = world();
+    let bundle = read(&tiers()).unwrap();
+    let (result, calls) = with_target(&mut world, "0.2", |t, e| upgrade_product(&bundle, t, e));
+    let error = refusal(result);
+    assert_eq!(error.kind, BundleErrorKind::NotFound);
+    assert_eq!(calls, 0);
+
+    installed(&mut world, &tiers());
+    for version in ["1.0.0", "0.9.0"] {
+        let mut doc = tiers();
+        doc["version"] = json!(version);
+        let bundle = read(&doc).unwrap();
+        let before = world.hash();
+        let (result, calls) = with_target(&mut world, "0.2", |t, e| upgrade_product(&bundle, t, e));
+        let error = refusal(result);
+        assert_eq!(error.kind, BundleErrorKind::Invalid, "{version}");
+        assert!(error.message.contains("not greater"), "{}", error.message);
+        assert_eq!(calls, 0);
+        assert_eq!(world.hash(), before);
+    }
+}
+
+/// A record of the `tiers__member` type.
+fn a_member(world: &World) -> World {
+    let make = Intent::CreateRecord {
+        object: object_id("tiers__member"),
+        fields: std::collections::BTreeMap::from([
+            (FieldId::new("name").unwrap(), Value::Str("Ada".into())),
+            (FieldId::new("points").unwrap(), Value::Int(3)),
+        ]),
+    };
+    world
+        .step(&make, &context_at(1_800_000_000_001, "record"))
+        .expect("a record")
+        .0
+}
+
+// Verifies: INT-1581
+#[test]
+fn an_upgrade_that_drops_a_type_with_records_is_refused_and_changes_nothing() {
+    let mut world = world();
+    installed(&mut world, &tiers());
+    world = a_member(&world);
+    // Version 2.0.0 declares no object type at all.
+    let mut doc = tiers();
+    doc["version"] = json!("2.0.0");
+    for section in [
+        "objects",
+        "policies",
+        "queries",
+        "workflows",
+        "role-permissions",
+    ] {
+        doc["content"].as_object_mut().unwrap().remove(section);
+    }
+    let newer = read(&doc).unwrap();
+    let before = world.hash();
+    let (result, _) = with_target(&mut world, "0.2", |t, e| upgrade_product(&newer, t, e));
+    let error = step_error(result);
+    assert_eq!(error.kind, ErrorKind::MigrationRejected);
+    assert!(
+        error.message.contains("tiers__member has 1 record(s)"),
+        "{}",
+        error.message
+    );
+    assert_eq!(world.hash(), before);
+}
+
+// ---- removal (INT-1581, INT-1582, INT-1583) -------------------------------------------------------------
+
+// Verifies: INT-1582
+#[test]
+fn a_removal_deletes_exactly_what_the_product_owns_and_its_record() {
+    let mut world = world_with_member();
+    let before = schema_hash(&world);
+    installed(&mut world, &tiers());
+    assert_ne!(schema_hash(&world), before);
+    let (result, calls) = with_target(&mut world, "0.2", |t, e| {
+        remove_product("tiers", false, t, e)
+    });
+    let ProductInstall::Applied { record, .. } = result.unwrap_or_else(|e| panic!("{e}")) else {
+        panic!("the removal was not applied");
+    };
+    assert_eq!(calls, 1);
+    assert_eq!(record, None);
+    // The schema is the one the tenant had before the product: entities, permissions and record.
+    assert_eq!(schema_hash(&world), before);
+    assert!(InstalledRecord::of(&schema_of(&world), "tiers").is_none());
+}
+
+// Verifies: INT-1583
+#[test]
+fn removing_a_product_that_is_not_installed_changes_nothing() {
+    let mut world = world();
+    let version = schema_of(&world).version.0;
+    let before = world.hash();
+    let (result, calls) = with_target(&mut world, "0.2", |t, e| {
+        remove_product("tiers", false, t, e)
+    });
+    assert_eq!(
+        result.unwrap_or_else(|e| panic!("{e}")),
+        ProductInstall::Unchanged {
+            schema_version: version
+        }
+    );
+    assert_eq!(calls, 0);
+    assert_eq!(world.hash(), before);
+}
+
+// Verifies: INT-1581
+#[test]
+fn a_removal_is_refused_while_records_of_its_types_exist_unless_it_deletes_them() {
+    let mut world = world();
+    installed(&mut world, &tiers());
+    world = a_member(&world);
+    let before = world.hash();
+    let (result, _) = with_target(&mut world, "0.2", |t, e| {
+        remove_product("tiers", false, t, e)
+    });
+    let error = step_error(result);
+    assert_eq!(error.kind, ErrorKind::MigrationRejected);
+    assert_eq!(world.hash(), before);
+
+    // The plan of the removal that deletes the records lists what is removed.
+    let schema = schema_of(&world);
+    let tenant = tenant();
+    let target = target_of(&tenant, &schema, "0.2");
+    let Planned::Change(plan) = plan_remove("tiers", true, &target).unwrap() else {
+        panic!("an installed product is removed");
+    };
+    assert_eq!(plan.removed.len(), 5);
+
+    let (result, calls) = with_target(&mut world, "0.2", |t, e| {
+        remove_product("tiers", true, t, e)
+    });
+    result.unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(calls, 1);
+    assert!(schema_of(&world).objects.is_empty());
+    assert_eq!(
+        world.tenants[&tenant]
+            .records_of(&object_id("tiers__member"))
+            .count(),
+        0
+    );
+}
+
+// Verifies: INT-1582
+#[test]
+fn a_removal_does_not_touch_what_another_product_owns() {
+    let mut world = world();
+    installed(&mut world, &tiers());
+    let mut other = tiers();
+    other["product"] = json!("other");
+    other["name"] = json!("Other");
+    // The same entities under the namespace of the other product.
+    let text = other.to_string().replace("tiers__", "other__");
+    let other: Json = serde_json::from_str(&text).unwrap();
+    installed(&mut world, &other);
+    let (result, _) = with_target(&mut world, "0.2", |t, e| {
+        remove_product("tiers", false, t, e)
+    });
+    result.unwrap_or_else(|e| panic!("{e}"));
+    let schema = schema_of(&world);
+    assert!(schema.objects.contains_key(&object_id("other__member")));
+    assert!(!schema.objects.contains_key(&object_id("tiers__member")));
+    assert!(InstalledRecord::of(&schema, "other").is_some());
+    assert!(InstalledRecord::of(&schema, "tiers").is_none());
+}
+
+// ---- the whole-tenant bundle carries the same sections -----------------------------------------------------
+
+// Verifies: INT-1580
+#[test]
+fn a_tenant_bundle_with_a_trigger_an_automation_and_an_operation_installs_through_install_into() {
+    let doc = json!({
+        "id": "acme",
+        "name": "Acme",
+        "owner": "user:admin",
+        "created_at": "2026-01-01T00:00:00Z",
+        "objects": [{
+            "id": "member", "label": "Member",
+            "fields": [
+                { "id": "name", "label": "Name", "type": "string", "required": true,
+                  "personal": { "kind": "name", "subject": "Creator", "searchable": false } },
+                { "id": "points", "label": "Points", "type": "int" }
+            ],
+            "retention": { "days": 90, "from": "Created" }
+        }],
+        "automations": [{
+            "id": "welcome", "label": "Welcome",
+            "run-as": { "roles": [] }, "start": "done",
+            "steps": { "done": { "action": "End" } }
+        }],
+        "triggers": [{
+            "id": "on_member", "on": { "RecordCreated": { "object": "member" } },
+            "condition": "new.points >= 0", "automation": "welcome"
+        }],
+        "operations": [{
+            "id": "grant", "label": "Grant",
+            "inputs": [{ "name": "amount", "ty": "Int", "required": true }],
+            "invokers": { "roles": [], "signed-in": true },
+            "conditions": [{ "id": "positive", "expr": "param.amount > 0", "error": "not-positive", "message": "Positive." }],
+            "steps": []
+        }]
+    });
+    let bundle = Bundle::from_json(&doc.to_string()).unwrap();
+    let world = install_into(&World::default(), &bundle).unwrap_or_else(|e| panic!("{e}"));
+    let schema = schema_of(&world);
+    assert!(schema.triggers.as_ref().is_some_and(|t| t.len() == 1));
+    assert!(schema.automations.as_ref().is_some_and(|t| t.len() == 1));
+    assert!(schema.operations.as_ref().is_some_and(|t| t.len() == 1));
+    let member = &schema.objects[&object_id("member")];
+    assert_eq!(member.retention.as_ref().map(|r| r.days), Some(90));
+    assert!(member.fields[&FieldId::new("name").unwrap()]
+        .personal
+        .is_some());
 }
