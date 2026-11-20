@@ -39,6 +39,10 @@ pub const SUPPRESSIONS: &str = "mail-suppression";
 pub const ALLOWANCE: &str = "mail-allowance";
 /// The message categories.
 pub const CATEGORIES: &str = "mail-category";
+/// The kind under which the inbox once read categories. Nothing writes it now; a tenant that holds
+/// documents of it still has them read, as categories, when no document of [`CATEGORIES`] has the
+/// same id (the one definition of a category is [`Category`]).
+pub const LEGACY_CATEGORIES: &str = "message-category";
 /// The delivery reports seen.
 pub const REPORTS_SEEN: &str = "mail-report-seen";
 /// The complaint breaker.
@@ -135,10 +139,14 @@ pub struct Suppression {
 /// One category of the tenant (rec-message-category).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Category {
+    /// The id; a legacy document that does not hold it is given the key it is kept under.
+    #[serde(default)]
     pub category: String,
     pub purpose: Purpose,
+    #[serde(default)]
     pub name: String,
     /// Raised by each change.
+    #[serde(default)]
     pub version: u64,
 }
 
@@ -360,17 +368,39 @@ pub fn set_allowance_limit(app: &App, tenant: &TenantId, monthly: u32) -> StoreR
 
 // ---- Categories ----
 
+/// The category `id`, from the one store the dispatcher and the inbox share; a document of the
+/// legacy kind is read when there is none of [`CATEGORIES`] for the id.
 pub fn category(app: &App, tenant: &TenantId, id: &str) -> StoreResult<Option<Category>> {
-    read(app, tenant, CATEGORIES, id)
+    if let Some(found) = read::<Category>(app, tenant, CATEGORIES, id)? {
+        return Ok(Some(found));
+    }
+    Ok(
+        read::<Category>(app, tenant, LEGACY_CATEGORIES, id)?.map(|mut found| {
+            found.category = id.to_string();
+            found
+        }),
+    )
 }
 
+/// Every category of the tenant, each once: a legacy document is listed only when no document of
+/// [`CATEGORIES`] has its id.
 pub fn categories(app: &App, tenant: &TenantId) -> StoreResult<Vec<Category>> {
-    Ok(app
+    let mut all: Vec<Category> = app
         .store
         .doc_list(tenant, CATEGORIES)?
         .into_iter()
         .filter_map(|(_, text)| serde_json::from_str(&text).ok())
-        .collect())
+        .collect();
+    for (key, text) in app.store.doc_list(tenant, LEGACY_CATEGORIES)? {
+        if all.iter().any(|c| c.category == key) {
+            continue;
+        }
+        if let Ok(mut found) = serde_json::from_str::<Category>(&text) {
+            found.category = key;
+            all.push(found);
+        }
+    }
+    Ok(all)
 }
 
 pub fn put_category(app: &App, tenant: &TenantId, category: &Category) -> StoreResult<()> {

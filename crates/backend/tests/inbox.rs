@@ -185,7 +185,7 @@ impl Backend {
     }
 
     /// The notice template `welcome` and the categories `news` (transactional) and `security`
-    /// (required), as the owner and the dispatcher's declaration leave them.
+    /// (required), as the owner declares them through the dispatcher's route.
     async fn prepare(&self) {
         let admin = self.session_of("admin").await;
         let (status, body) = self
@@ -201,16 +201,16 @@ impl Backend {
             )
             .await;
         assert_eq!(status, 200, "{body}");
+        // Declared through the dispatcher's route, the one place categories are declared.
         for (category, purpose) in [("news", "transactional"), ("security", "required")] {
-            self.store
-                .doc_put(
-                    &fieldnotes(),
-                    inbox::CATEGORY_KIND,
-                    category,
-                    &json!({ "purpose": purpose }).to_string(),
-                    false,
+            let (status, body) = self
+                .call(
+                    Some(&admin),
+                    "/internal/mail/categories",
+                    json!({ "category": category, "purpose": purpose, "name": category }),
                 )
-                .unwrap();
+                .await;
+            assert_eq!(status, 200, "{body}");
         }
     }
 
@@ -1336,15 +1336,17 @@ fn person(name: &str) -> PrincipalId {
 fn digest_fixture(app: &App, mode: &str) {
     install(app);
     let tenant = tenant_id("alpha");
-    app.store
-        .doc_put(
-            &tenant,
-            inbox::CATEGORY_KIND,
-            "news",
-            &json!({ "purpose": "transactional" }).to_string(),
-            false,
-        )
-        .unwrap();
+    strata_backend::dispatch::store::put_category(
+        app,
+        &tenant,
+        &strata_backend::dispatch::store::Category {
+            category: "news".into(),
+            purpose: strata_backend::dispatch::Purpose::Transactional,
+            name: "news".into(),
+            version: 1,
+        },
+    )
+    .unwrap();
     set_mode(app, "reader", mode);
 }
 

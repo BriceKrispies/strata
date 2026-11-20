@@ -17,6 +17,7 @@ use strata_backend::dispatch::reports::{self, DeliveryReport, ReportKind, Report
 use strata_backend::dispatch::{
     self, policy, routes, store, AllowanceClass, MessageState, Recipient, SendInput,
 };
+use strata_backend::inbox;
 use strata_backend::mail::{DevSink, Mail, MailError, Mailer};
 use strata_backend::worker::{self, WorkerConfig};
 use strata_kernel::segments::{Definition, SegmentId};
@@ -1531,4 +1532,128 @@ fn a_digest_step_sends_one_message_to_each_person_with_notices_in_its_window() {
     assert_eq!(again, 2);
     drain(&app, T0 + 1);
     assert_eq!(app.cfg.mail.outbox().len(), 2);
+}
+
+// A category the dispatcher's route defines is the one category of the tenant: the inbox finds it
+// (a notice of it is stored and its digest preference holds the push), the mail send of it
+// respects the suppression of that same category, and it is listed once.
+#[test]
+fn a_category_defined_through_the_dispatcher_governs_mail_and_inbox_notices() {
+    let app = app();
+    install(&app, "alpha", "Hello {{name}}");
+    let tenant = tenant_id("alpha");
+    let owner = principal_id("alpha:owner");
+    let mut now = 500;
+    let mut run = |intent: Intent| {
+        now += 1;
+        execute(
+            app.store.as_ref(),
+            &intent,
+            &ctx("alpha", Principal::User(owner.clone()), now),
+        )
+        .expect("fixture intent");
+    };
+    run(Intent::ChangeSchema {
+        changes: vec![SchemaChange::DefineNoticeTemplate(NoticeTemplateDecl {
+            template: TemplateId("update".into()),
+            title: "An update".into(),
+            body: StructuredBlocks(
+                "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Changed.\"}]}]"
+                    .into(),
+            ),
+        })],
+        expected_version: None,
+        existing: ExistingData::Reject,
+    });
+
+    // The inbox reads the category the dispatcher's route defined, with its purpose.
+    assert_eq!(
+        inbox::category_purpose(&app, &tenant, "receipts").unwrap(),
+        Some(inbox::Purpose::Transactional)
+    );
+    assert_eq!(
+        inbox::category_purpose(&app, &tenant, "nothing").unwrap(),
+        None
+    );
+
+    // A category defined again is still one category in the listing.
+    routes::define_category(
+        &app,
+        &signed_in("alpha", "owner"),
+        &json!({ "category": "news", "purpose": "promotional", "name": "News again" }),
+    )
+    .unwrap();
+    let listed = store::categories(&app, &tenant).unwrap();
+    assert_eq!(listed.iter().filter(|c| c.category == "news").count(), 1);
+    assert_eq!(listed.len(), 3);
+
+    // A notice of the category is stored; a recipient's digest mode holds its push.
+    app.store
+        .doc_put(
+            &tenant,
+            "notice-preference",
+            "alpha:reader|news|inbox",
+            &json!({ "mode": "digest", "period": "daily" }).to_string(),
+            false,
+        )
+        .unwrap();
+    let tenant_state = app.store.load(&tenant, &[]).unwrap().tenant.unwrap();
+    let notice = |category: &str| inbox::Notice {
+        topic: "app.news".into(),
+        category: Some(category.into()),
+        template: "update".into(),
+        values: BTreeMap::new(),
+        reference: None,
+        record: None,
+        mail: false,
+    };
+    let delivered = inbox::deliver(
+        &app,
+        &tenant,
+        &tenant_state,
+        &principal_id("alpha:reader"),
+        "n-1",
+        &notice("news"),
+        Timestamp(T0),
+    )
+    .unwrap();
+    assert!(delivered.stored && delivered.created, "{delivered:?}");
+    assert_eq!(delivered.push, "held");
+    // A category nobody defined is refused by the inbox.
+    assert!(inbox::deliver(
+        &app,
+        &tenant,
+        &tenant_state,
+        &principal_id("alpha:reader"),
+        "n-2",
+        &notice("nothing"),
+        Timestamp(T0),
+    )
+    .is_err());
+
+    // The mail of the same category respects the suppression of that category.
+    routes::subscription(
+        &app,
+        &visitor("alpha"),
+        &link(&app, "alpha", "news", LinkAction::Unsubscribe),
+    )
+    .unwrap();
+    let news = send(&app, "alpha", address(ADA), Some("news"), "k-cat-news").unwrap();
+    let receipt = send(
+        &app,
+        "alpha",
+        address(ADA),
+        Some("receipts"),
+        "k-cat-receipt",
+    )
+    .unwrap();
+    drain(&app, T0);
+    assert_eq!(
+        state(&app, "alpha", &message_of(&news)),
+        MessageState::Suppressed
+    );
+    assert_eq!(
+        state(&app, "alpha", &message_of(&receipt)),
+        MessageState::Sent
+    );
 }

@@ -205,15 +205,8 @@ impl TopicFilter {
 // Categories and preferences (NTF-1571)
 // ---------------------------------------------------------------------------------------------
 
-/// What a message category is for (D-6562): a `required` category cannot be turned off, muted or
-/// deferred.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Purpose {
-    Required,
-    Transactional,
-    Promotional,
-}
+/// What a message category is for (D-6562): the one type the mail dispatcher keeps.
+pub use crate::dispatch::Purpose;
 
 /// The mode of a person for one category on one channel (NTF-1571).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -394,14 +387,6 @@ fn preference_key(recipient: &PrincipalId, category: &str, channel: &str) -> Str
     format!("{recipient}|{category}|{channel}")
 }
 
-/// The kind of the documents that hold a tenant's message categories, each under its name with
-/// `{"purpose": "required" | "transactional" | "promotional"}` (D-6562).
-///
-/// Wiring point: the categories are declared by `define-message-category` (CT-825), which the mail
-/// dispatcher owns. This reads the document that declaration is expected to leave; if the
-/// dispatcher keeps its categories elsewhere, [`category_purpose`] is the one function to change.
-pub const CATEGORY_KIND: &str = "message-category";
-
 /// The writes to items, one at a time within this process: a change of an item is read, changed
 /// and written, so two changes at once could otherwise bring back a removed item.
 static WRITES: Mutex<()> = Mutex::new(());
@@ -525,16 +510,7 @@ pub fn category_purpose(
     tenant: &TenantId,
     category: &str,
 ) -> Result<Option<Purpose>, ApiError> {
-    match app.store.doc_get(tenant, CATEGORY_KIND, category)? {
-        None => Ok(None),
-        Some(text) => {
-            let found: Json_ = decode(CATEGORY_KIND, category, &text)?;
-            Ok(found
-                .get("purpose")
-                .cloned()
-                .and_then(|purpose| serde_json::from_value(purpose).ok()))
-        }
-    }
+    Ok(crate::dispatch::store::category(app, tenant, category)?.map(|found| found.purpose))
 }
 
 // ---------------------------------------------------------------------------------------------
