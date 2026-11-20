@@ -35,6 +35,7 @@
 //!
 //! What adapters may differ in is stated by [`Capabilities`], not hidden.
 
+pub mod admission;
 pub mod covering;
 pub mod jobs;
 pub mod memory;
@@ -699,6 +700,24 @@ pub trait Store: Send + Sync {
 
     /// One tenant's summary, or `None` when it does not exist. Reads that tenant only.
     fn tenant_summary(&self, tenant: &TenantId) -> StoreResult<Option<TenantSummary>>;
+
+    /// The plan a tenant holds, from the control database's directory row (BIL-150): `None` when
+    /// the tenant does not exist. A tenant created without a choice holds `standard`. An adapter
+    /// that keeps no plans answers `None` and every tenant is then on the default plan.
+    fn tenant_plan(&self, _tenant: &TenantId) -> StoreResult<Option<String>> {
+        Ok(None)
+    }
+
+    /// Record the plan a tenant holds. A tenant that does not exist is `NotFound`.
+    fn set_tenant_plan(&self, _tenant: &TenantId, _plan: &str) -> StoreResult<()> {
+        Ok(())
+    }
+
+    /// The bytes a tenant's data takes in the store: the size of its database. An adapter that
+    /// cannot measure answers 0, which no storage allowance refuses.
+    fn stored_bytes(&self, _tenant: &TenantId) -> StoreResult<u64> {
+        Ok(0)
+    }
 
     /// A snapshot of one tenant holding at least the records that answer `needs`, with partial
     /// coverage stating exactly `needs`. The tenant's schema, members and counters are always
@@ -1586,6 +1605,18 @@ pub fn execute_by(
     ctx: &Context,
     deadline: Option<Instant>,
 ) -> Result<Executed, ExecuteError> {
+    execute_admitting(store, intent, ctx, deadline, None)
+}
+
+/// [`execute_by`] with the jobs the commit creates held to the tenant's allowance by `admission`
+/// (D-6533): the commit is never refused for them, only their due times move.
+pub fn execute_admitting(
+    store: &dyn Store,
+    intent: &Intent,
+    ctx: &Context,
+    deadline: Option<Instant>,
+    admission: Option<&dyn admission::JobAdmission>,
+) -> Result<Executed, ExecuteError> {
     let expired = || {
         deadline.is_some_and(|at| Instant::now() >= at).then(|| {
             ExecuteError::Store(StoreError::Unavailable(
@@ -1675,14 +1706,27 @@ pub fn execute_by(
         if let Some(error) = expired() {
             return Err(error);
         }
-        match store.commit_with_segments(&Commit::of(intent, ctx, &transition), &decided.write) {
+        let mut commit = Commit::of(intent, ctx, &transition);
+        let placements = match admission {
+            Some(admission) => admission.admit(
+                &ctx.tenant,
+                &mut commit.jobs,
+                &mut commit.exceptions,
+                ctx.now,
+            ),
+            None => Vec::new(),
+        };
+        match store.commit_with_segments(&commit, &decided.write) {
             Ok(receipt) => {
+                if let Some(admission) = admission {
+                    admission.committed(&ctx.tenant, &placements);
+                }
                 return Ok(Executed {
                     transition,
                     receipt,
                     conflicts,
                     replayed: false,
-                })
+                });
             }
             Err(StoreError::Conflict { .. }) if conflicts < MAX_CONFLICT_RETRIES => {
                 conflicts += 1;

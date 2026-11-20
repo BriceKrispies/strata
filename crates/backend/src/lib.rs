@@ -22,6 +22,7 @@ pub mod ops;
 pub mod outbox;
 pub mod products;
 pub mod provision;
+pub mod quota;
 pub mod sealing;
 pub mod seed;
 pub mod segments;
@@ -115,6 +116,7 @@ fn purge(app: &App) {
             app.store.purge_passkey_challenges(now),
         ),
         ("sign_in_links", app.store.purge_sign_in_links(now)),
+        ("quota_counters", quota::purge(app, now)),
         ("oidc_flows", app.store.purge_oidc_flows(now)),
         ("factor_challenges", app.store.purge_factor_challenges(now)),
         ("saml_requests", app.store.purge_saml_requests(now)),

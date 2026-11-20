@@ -60,7 +60,10 @@ impl Default for Limits {
             sockets_per_source: 32,
             diag_per_socket: 50,
             diag_per_source_per_minute: 200,
-            logins_per_source_per_minute: 30,
+            // The burst quota of the specification on password sign-in from one source
+            // (`q-sign-in-with-password-burst`): the generated model is the one source of it.
+            logins_per_source_per_minute: strata_model::quotas::Q_SIGN_IN_WITH_PASSWORD_BURST.limit
+                as usize,
             argon2_memory_mib: 64,
             argon2_wait_ms: 3_000,
             argon2_per_tenant: 2,

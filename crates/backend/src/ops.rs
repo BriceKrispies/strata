@@ -16,7 +16,7 @@ use strata_kernel::{
 use strata_protocol::api::{
     ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest, MAX_VIEW_LIMIT,
 };
-use strata_storage_api::{execute_by, ExecuteError, Executed};
+use strata_storage_api::{execute_admitting, ExecuteError, Executed};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
     aggregate_request, decode_cursor, encode_cursor, included_refs, match_route, section_order,
@@ -38,6 +38,8 @@ pub fn run_intent(
     intent: &Intent,
     anonymous: bool,
 ) -> Result<Executed, ApiError> {
+    // A write past the tenant's stored-bytes allowance is refused, naming the quota (BIL-151).
+    crate::quota::check_write(app, ctx, intent)?;
     // A change of someone's roles ends their sessions in the commit itself. The ones that are
     // live now are noted first, to be announced and to have their sockets closed.
     let affected = match intent {
@@ -53,11 +55,14 @@ pub fn run_intent(
     app.stats.in_flight.fetch_add(1, Ordering::Relaxed);
     // The request's deadline: a change that was not committed by the time the caller was told
     // "timed out" is not committed afterwards; a retry with the same key learns the outcome.
-    let result = execute_by(
+    // The jobs the commit creates are held to the tenant's allowance, never refusing the change
+    // (D-6533).
+    let result = execute_admitting(
         app.store.as_ref(),
         intent,
         ctx,
         strata_runtime::server::work_deadline(),
+        Some(&crate::quota::JobAdmitter { app }),
     );
     app.stats.in_flight.fetch_sub(1, Ordering::Relaxed);
     match &result {
