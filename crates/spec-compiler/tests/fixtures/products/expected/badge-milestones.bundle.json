@@ -17,7 +17,7 @@
               "CreateRecord": {
                 "fields": {
                   "awarded_at": "param.at",
-                  "badge": "\"silver\"",
+                  "badge": "'silver'",
                   "person": "param.owner"
                 },
                 "object": "badge_milestones__award"

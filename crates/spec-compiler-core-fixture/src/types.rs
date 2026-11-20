@@ -27,9 +27,9 @@ impl std::fmt::Display for TypeConstraintViolation {
 
 impl std::error::Error for TypeConstraintViolation {}
 
-/// The pattern of type `slug`.
+/// The pattern of type `slug`, matched against the whole value.
 static SLUG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9-]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9-]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
 /// Slug

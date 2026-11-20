@@ -162,7 +162,7 @@ async fn authorize_access<H: AuthHoles>(
     access: &strata_runtime::Access,
     request: &strata_runtime::Presented<'_>,
 ) -> Result<strata_runtime::Caller, strata_runtime::Refusal> {
-    use strata_runtime::{Exposure, FailureCode, Scheme, TenantScope};
+    use strata_runtime::{Exposure, FailureCode, Scheme};
     let refuse = |code: FailureCode, message: &str| strata_runtime::Refusal {
         code,
         message: message.to_string(),
@@ -337,23 +337,9 @@ async fn authorize_access<H: AuthHoles>(
             return Err(unauthenticated("prove who you are again to do this"));
         }
     }
-    if access.tenant_scope == Some(TenantScope::Request) {
-        let Some(site) = &site else {
-            return Err(refuse(
-                FailureCode::Forbidden,
-                "the request addresses no site",
-            ));
-        };
-        let own = principal
-            .as_ref()
-            .and_then(|principal| principal.tenant.as_deref());
-        if own.is_some_and(|tenant| tenant != site.tenant) {
-            return Err(refuse(
-                FailureCode::Forbidden,
-                "the caller belongs to another tenant",
-            ));
-        }
-    }
+    access
+        .check_tenant(principal.as_ref(), site.as_ref())
+        .map_err(|message| refuse(FailureCode::Forbidden, message))?;
     if !access.requires.is_empty() {
         let tenant = principal
             .as_ref()
@@ -411,7 +397,7 @@ async fn authorize_access<H: AuthHoles>(
         .as_ref()
         .and_then(|principal| principal.tenant.clone())
         .or_else(|| site.as_ref().map(|site| site.tenant.clone()));
-    if let Some(tenant) = tenant {
+    if let Some(tenant) = tenant.filter(|_| access.carries_tenant()) {
         attributes.insert("tenant".to_string(), tenant);
     }
     if let Some(role) = role {

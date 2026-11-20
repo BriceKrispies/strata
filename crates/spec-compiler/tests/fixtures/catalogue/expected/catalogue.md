@@ -9,7 +9,7 @@ What a product feature can build on: the public contracts, the domain events, th
 id: name | in name:type (? optional) | out | err | needs capabilities | auth scheme | idem | by component (status)
 
 - archive-post: Archive a post | in - | out - | err forbidden | needs - | auth service | idem no | by none
-- publish-post: Publish a post | in post:post-id, tags?:list<tag> | out state:post-state | err forbidden,not-found | needs post-write,post-publish | auth session | idem yes | by worker (NOT IMPLEMENTED)
+- publish-post: Publish a post | in post:post-id, tags?:list\<tag\> | out state:post-state | err forbidden,not-found | needs post-write,post-publish | auth session | idem yes | by worker (NOT IMPLEMENTED)
 - read-post: Read a post | in post:post-id | out post:post | err - | needs post-read | auth anonymous | idem yes | by gateway (manual)
 
 ## Domain events
@@ -40,7 +40,7 @@ id: limit per window, on exceed
 ## Types
 
 - change: none|retitle(string)|move{to:post-id}
-- post: {id:post-id, state:post-state, tags?:list<tag>}
+- post: {id:post-id, state:post-state, tags?:list\<tag\>}
 - post-id: id string
 - post-state: draft|published|archived
 - tag: scalar string

@@ -70,6 +70,62 @@ impl Scope {
     }
 }
 
+/// Arithmetic
+///
+/// Specification type `arith-op`: an enumeration, serialised as the specification's values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+pub enum ArithOp {
+    /// The value `Add`.
+    #[serde(rename = "Add")]
+    Add,
+    /// The value `Sub`.
+    #[serde(rename = "Sub")]
+    Sub,
+    /// The value `Mul`.
+    #[serde(rename = "Mul")]
+    Mul,
+}
+
+impl ArithOp {
+    /// The value as the specification writes it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Add => "Add",
+            Self::Sub => "Sub",
+            Self::Mul => "Mul",
+        }
+    }
+}
+
+/// Duration unit
+///
+/// Specification type `duration-unit`: an enumeration, serialised as the specification's values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+pub enum DurationUnit {
+    /// The value `Days`.
+    #[serde(rename = "Days")]
+    Days,
+    /// The value `Hours`.
+    #[serde(rename = "Hours")]
+    Hours,
+    /// The value `Minutes`.
+    #[serde(rename = "Minutes")]
+    Minutes,
+}
+
+impl DurationUnit {
+    /// The value as the specification writes it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Days => "Days",
+            Self::Hours => "Hours",
+            Self::Minutes => "Minutes",
+        }
+    }
+}
+
 /// Value
 ///
 /// Specification type `value`: a union, externally tagged.
@@ -175,4 +231,36 @@ pub enum Expr {
         /// Field `otherwise`.
         otherwise: Box<Expr>,
     },
+    /// The variant `Arith`.
+    Arith {
+        /// Field `op`.
+        op: ArithOp,
+        /// Field `left`.
+        left: Box<Expr>,
+        /// Field `right`.
+        right: Box<Expr>,
+    },
+    /// The variant `MsBetween`.
+    MsBetween {
+        /// Field `from`.
+        from: Box<Expr>,
+        /// Field `to`.
+        to: Box<Expr>,
+    },
+    /// The variant `Duration`.
+    Duration {
+        /// Field `unit`.
+        unit: DurationUnit,
+        /// Field `amount`.
+        amount: Box<Expr>,
+    },
+    /// The variant `Concat`.
+    Concat {
+        /// Field `left`.
+        left: Box<Expr>,
+        /// Field `right`.
+        right: Box<Expr>,
+    },
+    /// The variant `Text`.
+    Text(Box<Expr>),
 }

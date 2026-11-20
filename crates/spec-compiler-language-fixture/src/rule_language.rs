@@ -35,6 +35,15 @@
 //! - `starts-with`: call `starts_with(...)`; primitive `starts-with`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::StartsWith`.
 //! - `is-slug`: call `is_slug(...)`; primitive `is-slug`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::IsSlug -> is_slug`.
 //! - `if`: call `if(...)`; primitive `if`, nulls `null-is-false`; pinned to `crates/kernel/src/expr.rs: eval, Expr::If`.
+//! - `add`: infix `+`, precedence 5, left; primitive `add-checked`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Add) -> checked`.
+//! - `sub`: infix `-`, precedence 5, left; primitive `sub-checked`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Sub) -> checked`.
+//! - `mul`: infix `*`, precedence 6, left; primitive `mul-checked`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Mul) -> checked`.
+//! - `ms-between`: call `ms_between(...)`; primitive `time-difference`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::MsBetween -> checked`.
+//! - `days`: call `days(...)`; primitive `days-ms`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Duration(DurationUnit::Days) -> checked`.
+//! - `hours`: call `hours(...)`; primitive `hours-ms`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Duration(DurationUnit::Hours) -> checked`.
+//! - `minutes`: call `minutes(...)`; primitive `minutes-ms`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Duration(DurationUnit::Minutes) -> checked`.
+//! - `concat`: call `concat(...)`; primitive `concat-checked`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Concat`.
+//! - `text`: call `text(...)`; primitive `to-text`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Text`.
 use std::fmt;
 
 use crate::types;
@@ -128,9 +137,20 @@ enum Token {
     Sym(&'static str),
 }
 
+/// Whether a token ends an operand, so that a `-` after it is the binary operator rather than the sign of a literal.
+fn ends_operand(token: Option<&Token>) -> bool {
+    const WORD_OPERATORS: [&str; 4] = ["or", "and", "not", "in"];
+    match token {
+        Some(Token::Int(_) | Token::Str(_)) => true,
+        Some(Token::Sym(s)) => *s == ")" || *s == "]",
+        Some(Token::Ident(w)) => !WORD_OPERATORS.contains(&w.as_str()),
+        None => false,
+    }
+}
+
 fn tokenize(source: &str) -> Result<Vec<Token>, String> {
-    const SYMBOLS: [&str; 12] = [
-        "==", "!=", "<=", ">=", "<", ">", "(", ")", "[", "]", ",", ".",
+    const SYMBOLS: [&str; 15] = [
+        "==", "!=", "<=", ">=", "<", ">", "+", "-", "*", "(", ")", "[", "]", ",", ".",
     ];
     let chars: Vec<char> = source.chars().collect();
     let mut tokens = Vec::new();
@@ -148,7 +168,9 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
             }
             tokens.push(Token::Ident(chars[start..i].iter().collect()));
         } else if c.is_ascii_digit()
-            || (c == '-' && chars.get(i + 1).is_some_and(char::is_ascii_digit))
+            || (c == '-'
+                && chars.get(i + 1).is_some_and(char::is_ascii_digit)
+                && !ends_operand(tokens.last()))
         {
             let start = i;
             i += 1;
@@ -303,56 +325,96 @@ impl Parser {
 
     /// Precedence 4.
     fn level_3(&mut self) -> Result<types::Expr, String> {
-        let left = self.primary()?;
+        let left = self.level_4()?;
         if self.sym("==") {
             return Ok(types::Expr::Cmp {
                 op: types::CmpOp::Eq,
                 left: Box::new(left),
-                right: Box::new(self.primary()?),
+                right: Box::new(self.level_4()?),
             });
         }
         if self.sym("!=") {
             return Ok(types::Expr::Cmp {
                 op: types::CmpOp::Ne,
                 left: Box::new(left),
-                right: Box::new(self.primary()?),
+                right: Box::new(self.level_4()?),
             });
         }
         if self.sym("<") {
             return Ok(types::Expr::Cmp {
                 op: types::CmpOp::Lt,
                 left: Box::new(left),
-                right: Box::new(self.primary()?),
+                right: Box::new(self.level_4()?),
             });
         }
         if self.sym("<=") {
             return Ok(types::Expr::Cmp {
                 op: types::CmpOp::Le,
                 left: Box::new(left),
-                right: Box::new(self.primary()?),
+                right: Box::new(self.level_4()?),
             });
         }
         if self.sym(">") {
             return Ok(types::Expr::Cmp {
                 op: types::CmpOp::Gt,
                 left: Box::new(left),
-                right: Box::new(self.primary()?),
+                right: Box::new(self.level_4()?),
             });
         }
         if self.sym(">=") {
             return Ok(types::Expr::Cmp {
                 op: types::CmpOp::Ge,
                 left: Box::new(left),
-                right: Box::new(self.primary()?),
+                right: Box::new(self.level_4()?),
             });
         }
         if self.word("in") {
             return Ok(types::Expr::In {
                 item: Box::new(left),
-                list: Box::new(self.primary()?),
+                list: Box::new(self.level_4()?),
             });
         }
         Ok(left)
+    }
+
+    /// Precedence 5.
+    fn level_4(&mut self) -> Result<types::Expr, String> {
+        let mut left = self.level_5()?;
+        loop {
+            if self.sym("+") {
+                left = types::Expr::Arith {
+                    op: types::ArithOp::Add,
+                    left: Box::new(left),
+                    right: Box::new(self.level_5()?),
+                };
+                continue;
+            }
+            if self.sym("-") {
+                left = types::Expr::Arith {
+                    op: types::ArithOp::Sub,
+                    left: Box::new(left),
+                    right: Box::new(self.level_5()?),
+                };
+                continue;
+            }
+            return Ok(left);
+        }
+    }
+
+    /// Precedence 6.
+    fn level_5(&mut self) -> Result<types::Expr, String> {
+        let mut left = self.primary()?;
+        loop {
+            if self.sym("*") {
+                left = types::Expr::Arith {
+                    op: types::ArithOp::Mul,
+                    left: Box::new(left),
+                    right: Box::new(self.primary()?),
+                };
+                continue;
+            }
+            return Ok(left);
+        }
     }
 
     fn primary(&mut self) -> Result<types::Expr, String> {
@@ -458,6 +520,45 @@ impl Parser {
                         then: Box::new(a1),
                         otherwise: Box::new(a2),
                     })
+                }
+                "ms_between" => {
+                    let [a0, a1] = self.args::<2>()?;
+                    Ok(types::Expr::MsBetween {
+                        from: Box::new(a0),
+                        to: Box::new(a1),
+                    })
+                }
+                "days" => {
+                    let [a0] = self.args::<1>()?;
+                    Ok(types::Expr::Duration {
+                        unit: types::DurationUnit::Days,
+                        amount: Box::new(a0),
+                    })
+                }
+                "hours" => {
+                    let [a0] = self.args::<1>()?;
+                    Ok(types::Expr::Duration {
+                        unit: types::DurationUnit::Hours,
+                        amount: Box::new(a0),
+                    })
+                }
+                "minutes" => {
+                    let [a0] = self.args::<1>()?;
+                    Ok(types::Expr::Duration {
+                        unit: types::DurationUnit::Minutes,
+                        amount: Box::new(a0),
+                    })
+                }
+                "concat" => {
+                    let [a0, a1] = self.args::<2>()?;
+                    Ok(types::Expr::Concat {
+                        left: Box::new(a0),
+                        right: Box::new(a1),
+                    })
+                }
+                "text" => {
+                    let [a0] = self.args::<1>()?;
+                    Ok(types::Expr::Text(Box::new(a0)))
                 }
                 other => Err(format!("unknown name {other:?}")),
             },
@@ -601,6 +702,33 @@ impl fmt::Display for types::Expr {
             } => {
                 write!(f, "if({v0}, {v1}, {v2})")
             }
+            types::Expr::Arith {
+                op: v0,
+                left: v1,
+                right: v2,
+            } => match v0 {
+                types::ArithOp::Add => write!(f, "({v1} + {v2})"),
+                types::ArithOp::Sub => write!(f, "({v1} - {v2})"),
+                types::ArithOp::Mul => write!(f, "({v1} * {v2})"),
+            },
+            types::Expr::MsBetween { from: v0, to: v1 } => {
+                write!(f, "ms_between({v0}, {v1})")
+            }
+            types::Expr::Duration {
+                unit: v0,
+                amount: v1,
+            } => match v0 {
+                types::DurationUnit::Days => write!(f, "days({v1})"),
+                types::DurationUnit::Hours => write!(f, "hours({v1})"),
+                types::DurationUnit::Minutes => write!(f, "minutes({v1})"),
+            },
+            types::Expr::Concat {
+                left: v0,
+                right: v1,
+            } => {
+                write!(f, "concat({v0}, {v1})")
+            }
+            types::Expr::Text(v0) => write!(f, "text({v0})"),
         }
     }
 }
@@ -717,6 +845,29 @@ pub fn is_slug(s: &str) -> bool {
         })
 }
 
+/// The largest magnitude of an integer of checked arithmetic, 2^53-1: what Rust and JavaScript both hold exactly.
+const SAFE_INT: i64 = 9007199254740991;
+
+/// An operand of checked arithmetic: within ±(2^53-1), or the error `integer-overflow`.
+fn safe(value: i64) -> Result<i64, EvalError> {
+    if (-SAFE_INT..=SAFE_INT).contains(&value) {
+        Ok(value)
+    } else {
+        Err(EvalError("integer-overflow".to_string()))
+    }
+}
+
+/// The result of checked arithmetic: an `i64` operation that did not overflow and lies within ±(2^53-1), or the error `integer-overflow`. Never wrapped or saturated.
+fn checked(value: Option<i64>) -> Result<i64, EvalError> {
+    match value {
+        Some(value) => safe(value),
+        None => Err(EvalError("integer-overflow".to_string())),
+    }
+}
+
+/// The longest string `concat` builds, in bytes of UTF-8.
+const MAX_TEXT_BYTES: usize = 4096;
+
 /// Evaluates an expression. Total and deterministic; a type error is an error, never a silent `false`.
 pub fn eval(expr: &types::Expr, env: &dyn Env) -> Result<types::Value, EvalError> {
     Ok(match expr {
@@ -819,6 +970,104 @@ pub fn eval(expr: &types::Expr, env: &dyn Env) -> Result<types::Value, EvalError
             types::Value::Bool(true) => eval(v1, env)?,
             types::Value::Bool(false) | types::Value::Null => eval(v2, env)?,
             other => return Err(type_error("if", &other)),
+        },
+        types::Expr::Arith {
+            op: v0,
+            left: v1,
+            right: v2,
+        } => match v0 {
+            types::ArithOp::Add => match (eval(v1, env)?, eval(v2, env)?) {
+                (types::Value::Null, _) | (_, types::Value::Null) => types::Value::Null,
+                (types::Value::Int(a), types::Value::Int(b)) => {
+                    types::Value::Int(checked(safe(a)?.checked_add(safe(b)?))?)
+                }
+                (types::Value::Time(a), types::Value::Int(b)) => {
+                    types::Value::Time(checked(safe(a)?.checked_add(safe(b)?))?)
+                }
+                (types::Value::Int(_) | types::Value::Time(_), other) => {
+                    return Err(type_error("+", &other));
+                }
+                (other, _) => return Err(type_error("+", &other)),
+            },
+            types::ArithOp::Sub => match (eval(v1, env)?, eval(v2, env)?) {
+                (types::Value::Null, _) | (_, types::Value::Null) => types::Value::Null,
+                (types::Value::Int(a), types::Value::Int(b)) => {
+                    types::Value::Int(checked(safe(a)?.checked_sub(safe(b)?))?)
+                }
+                (types::Value::Time(a), types::Value::Int(b)) => {
+                    types::Value::Time(checked(safe(a)?.checked_sub(safe(b)?))?)
+                }
+                (types::Value::Int(_) | types::Value::Time(_), other) => {
+                    return Err(type_error("-", &other));
+                }
+                (other, _) => return Err(type_error("-", &other)),
+            },
+            types::ArithOp::Mul => match (eval(v1, env)?, eval(v2, env)?) {
+                (types::Value::Null, _) | (_, types::Value::Null) => types::Value::Null,
+                (types::Value::Int(a), types::Value::Int(b)) => {
+                    types::Value::Int(checked(safe(a)?.checked_mul(safe(b)?))?)
+                }
+                (types::Value::Int(_), other) => {
+                    return Err(type_error("*", &other));
+                }
+                (other, _) => return Err(type_error("*", &other)),
+            },
+        },
+        types::Expr::MsBetween { from: v0, to: v1 } => match (eval(v0, env)?, eval(v1, env)?) {
+            (types::Value::Null, _) | (_, types::Value::Null) => types::Value::Null,
+            (types::Value::Time(a), types::Value::Time(b)) => {
+                types::Value::Int(checked(safe(b)?.checked_sub(safe(a)?))?)
+            }
+            (types::Value::Time(_), other) => {
+                return Err(type_error("ms_between", &other));
+            }
+            (other, _) => return Err(type_error("ms_between", &other)),
+        },
+        types::Expr::Duration {
+            unit: v0,
+            amount: v1,
+        } => match v0 {
+            types::DurationUnit::Days => match eval(v1, env)? {
+                types::Value::Null => types::Value::Null,
+                types::Value::Int(n) => types::Value::Int(checked(safe(n)?.checked_mul(86400000))?),
+                other => return Err(type_error("days", &other)),
+            },
+            types::DurationUnit::Hours => match eval(v1, env)? {
+                types::Value::Null => types::Value::Null,
+                types::Value::Int(n) => types::Value::Int(checked(safe(n)?.checked_mul(3600000))?),
+                other => return Err(type_error("hours", &other)),
+            },
+            types::DurationUnit::Minutes => match eval(v1, env)? {
+                types::Value::Null => types::Value::Null,
+                types::Value::Int(n) => types::Value::Int(checked(safe(n)?.checked_mul(60000))?),
+                other => return Err(type_error("minutes", &other)),
+            },
+        },
+        types::Expr::Concat {
+            left: v0,
+            right: v1,
+        } => match (eval(v0, env)?, eval(v1, env)?) {
+            (types::Value::Null, _) | (_, types::Value::Null) => types::Value::Null,
+            (types::Value::Str(a), types::Value::Str(b)) => {
+                let joined = a + b.as_str();
+                if joined.len() > MAX_TEXT_BYTES {
+                    return Err(EvalError("string-too-long".to_string()));
+                }
+                types::Value::Str(joined)
+            }
+            (types::Value::Str(_), other) => {
+                return Err(type_error("concat", &other));
+            }
+            (other, _) => return Err(type_error("concat", &other)),
+        },
+        types::Expr::Text(v0) => match eval(v0, env)? {
+            types::Value::Null => types::Value::Null,
+            types::Value::Str(s) => types::Value::Str(s),
+            types::Value::Bool(x) => types::Value::Str(x.to_string()),
+            types::Value::Int(x) => types::Value::Str(x.to_string()),
+            types::Value::Time(x) => types::Value::Str(x.to_string()),
+            types::Value::Ref(x) => types::Value::Str(x.to_string()),
+            other => return Err(type_error("text", &other)),
         },
     })
 }
@@ -1037,6 +1286,69 @@ pub fn check(expr: &types::Expr, env: &dyn TypeEnv) -> Result<Shape, String> {
             } else {
                 then
             }
+        }
+        types::Expr::Arith {
+            op: v0,
+            left: v1,
+            right: v2,
+        } => match v0 {
+            types::ArithOp::Add => {
+                let s0 = check(v1, env)?;
+                expect(s0, &[Shape::Int, Shape::Time], "+")?;
+                let s1 = check(v2, env)?;
+                expect(s1, &[Shape::Int], "+")?;
+                s0
+            }
+            types::ArithOp::Sub => {
+                let s0 = check(v1, env)?;
+                expect(s0, &[Shape::Int, Shape::Time], "-")?;
+                let s1 = check(v2, env)?;
+                expect(s1, &[Shape::Int], "-")?;
+                s0
+            }
+            types::ArithOp::Mul => {
+                expect(check(v1, env)?, &[Shape::Int], "*")?;
+                expect(check(v2, env)?, &[Shape::Int], "*")?;
+                Shape::Int
+            }
+        },
+        types::Expr::MsBetween { from: v0, to: v1 } => {
+            expect(check(v0, env)?, &[Shape::Time], "ms_between")?;
+            expect(check(v1, env)?, &[Shape::Time], "ms_between")?;
+            Shape::Int
+        }
+        types::Expr::Duration {
+            unit: v0,
+            amount: v1,
+        } => match v0 {
+            types::DurationUnit::Days => {
+                expect(check(v1, env)?, &[Shape::Int], "days")?;
+                Shape::Int
+            }
+            types::DurationUnit::Hours => {
+                expect(check(v1, env)?, &[Shape::Int], "hours")?;
+                Shape::Int
+            }
+            types::DurationUnit::Minutes => {
+                expect(check(v1, env)?, &[Shape::Int], "minutes")?;
+                Shape::Int
+            }
+        },
+        types::Expr::Concat {
+            left: v0,
+            right: v1,
+        } => {
+            expect(check(v0, env)?, &[Shape::Str], "concat")?;
+            expect(check(v1, env)?, &[Shape::Str], "concat")?;
+            Shape::Str
+        }
+        types::Expr::Text(v0) => {
+            expect(
+                check(v0, env)?,
+                &[Shape::Int, Shape::Time, Shape::Ref, Shape::Bool, Shape::Str],
+                "text",
+            )?;
+            Shape::Str
         }
     })
 }

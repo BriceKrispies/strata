@@ -435,9 +435,9 @@ pub enum Num {
     Float(f64),
 }
 
-/// The pattern of type `role`.
+/// The pattern of type `role`, matched against the whole value.
 static ROLE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
 /// Role
