@@ -454,6 +454,8 @@ async fn the_seeded_blog_is_served_from_tenant_metadata() {
             descending: false,
         }],
         limit: Some(2),
+        aggregates: None,
+        declared_fields: None,
     };
     let section = |query: &str| ViewSection {
         query: QueryId::new(query).unwrap(),
@@ -461,6 +463,7 @@ async fn the_seeded_blog_is_served_from_tenant_metadata() {
         include: vec![],
         markdown: vec![],
         single: false,
+        aggregate: None,
     };
     let oldest_view = ViewDef {
         id: ViewId::new("oldest").unwrap(),

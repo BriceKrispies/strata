@@ -11,8 +11,9 @@ use strata_kernel::expr::attribute;
 use strata_kernel::ext::*;
 use strata_kernel::refs_in;
 use strata_kernel::{
-    ArgSource, FieldId, ObjectTypeId, ReadRequest, Record, RecordId, SchemaVersion, StateRevision,
-    TenantSchema, Value, ViewDef, ViewId, ViewSection,
+    AggregateId, AggregateRequest, AggregateResult, ArgSource, FieldId, ObjectTypeId, ReadRequest,
+    Record, RecordId, SchemaVersion, StateRevision, TenantSchema, Value, ViewDef, ViewId,
+    ViewSection,
 };
 
 /// Find the view whose route pattern matches a path, with the values of its `:name` segments.
@@ -58,6 +59,9 @@ pub struct SectionData {
     /// Referenced records the principal may read, by referencing field.
     pub included: BTreeMap<FieldId, BTreeMap<RecordId, Arc<Record>>>,
     pub markdown: Vec<FieldId>,
+    /// The result of the aggregate the section names, in place of rows (D-5067, AGG-041).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregate: Option<AggregateResult>,
 }
 
 /// The raw result of a view: what the backend hands the BFF.
@@ -127,6 +131,57 @@ pub fn section_request(
         page_size: None,
         cursor: None,
     }
+}
+
+/// The request for the aggregate a section names: the arguments of the section, as
+/// [`section_request`] reads them, and no filter (D-5067).
+pub fn aggregate_request(
+    section: &ViewSection,
+    aggregate: &AggregateId,
+    route: &BTreeMap<String, String>,
+    request: &BTreeMap<String, String>,
+    done: &BTreeMap<String, Option<Arc<Record>>>,
+) -> AggregateRequest {
+    let params = match section_request(section, route, request, done) {
+        ReadRequest::Named { params, .. } => params,
+        ReadRequest::Records { .. } => BTreeMap::new(),
+    };
+    AggregateRequest {
+        query: section.query.clone(),
+        aggregate: aggregate.clone(),
+        params,
+        filter: BTreeMap::new(),
+    }
+}
+
+/// An aggregate result as the browser's view model holds it: each group with its key (null for
+/// the records that have none), its value and, for a top list, its rows, and the object types the
+/// result depends on (AGG-042).
+pub fn project_aggregate(result: &AggregateResult) -> Json {
+    let groups: Vec<Json> = result
+        .groups
+        .iter()
+        .map(|group| {
+            json!({
+                "key": group.key.as_ref().map(to_plain),
+                "value": group.value.as_ref().map(to_plain),
+                "rows": group
+                    .rows
+                    .iter()
+                    .map(|row| serde_json::from_str::<Json>(row.as_str()).unwrap_or(Json::Null))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    json!({
+        "query": result.query.as_str(),
+        "aggregate": result.aggregate.as_str(),
+        "scanned": result.scanned,
+        "groups": groups,
+        "depends_on": result.depends_on.iter().map(|o| o.as_str()).collect::<Vec<_>>(),
+        "revision": result.revision.0,
+        "schema_version": result.schema_version.0,
+    })
 }
 
 /// The record ids a section's rows refer to through its included fields, by target object.
@@ -224,7 +279,9 @@ pub fn project(data: &ViewData) -> Json {
         .sections
         .iter()
         .map(|(name, section)| {
-            let value = if section.single {
+            let value = if let Some(aggregate) = &section.aggregate {
+                project_aggregate(aggregate)
+            } else if section.single {
                 section
                     .rows
                     .first()

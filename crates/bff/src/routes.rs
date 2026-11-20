@@ -1297,6 +1297,47 @@ async fn view(
     view_model(&bff, &visit, &path, query).await.map(Json)
 }
 
+/// Run one aggregate of a named query: `GET /api/aggregate?query=&aggregate=&filter=`, the filter
+/// being a JSON object of field values. The backend's kernel decides what the reader may count.
+///
+/// Implements: CT-310
+async fn aggregate_run(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Query(mut query): Query<BTreeMap<String, String>>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let invalid = |why: &str| Failure::new(ErrorCode::Invalid, why, &visit.correlation);
+    let name = |query: &mut BTreeMap<String, String>, key: &str| {
+        query
+            .remove(key)
+            .filter(|value| !value.is_empty() && value.len() <= 64)
+    };
+    let (Some(wanted), Some(aggregate)) =
+        (name(&mut query, "query"), name(&mut query, "aggregate"))
+    else {
+        return Err(invalid(
+            "An aggregate request names a query and an aggregate.",
+        ));
+    };
+    let filter = match query.remove("filter") {
+        None => serde_json::Map::new(),
+        Some(text) if text.len() <= 2_000 => match serde_json::from_str::<Json_>(&text) {
+            Ok(Json_::Object(map)) => map,
+            _ => return Err(invalid("The filter is a JSON object of field values.")),
+        },
+        Some(_) => return Err(invalid("The filter is too long.")),
+    };
+    let request = strata_protocol::api::AggregateRunRequest {
+        query: wanted,
+        aggregate,
+        filter,
+    };
+    backend(&bff, &visit, "/internal/aggregate", &json!(request))
+        .await
+        .map(Json)
+}
+
 async fn records(
     State(bff): State<Shared>,
     headers: HeaderMap,
@@ -2124,6 +2165,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/sessions/revoke-others", post(sessions_revoke_others))
         .route("/logout", post(logout))
         .route("/view", get(view))
+        .route("/aggregate", get(aggregate_run))
         .route("/records", post(records))
         .route("/members/:op", post(members))
         .route("/preview", post(preview))

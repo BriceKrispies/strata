@@ -220,6 +220,8 @@ fn neutral_changes(schema: &TenantSchema) -> Vec<(&'static str, Vec<SchemaChange
         params: Default::default(),
         order: vec![],
         limit: Some(5),
+        aggregates: None,
+        declared_fields: None,
     };
     vec![
         ("a query restated", vec![SchemaChange::DefineQuery(query)]),
@@ -263,6 +265,7 @@ fn neutral_changes(schema: &TenantSchema) -> Vec<(&'static str, Vec<SchemaChange
                             include: vec![],
                             markdown: vec![],
                             single: false,
+                            aggregate: None,
                         },
                     )]
                     .into(),

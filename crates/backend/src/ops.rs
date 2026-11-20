@@ -19,7 +19,8 @@ use strata_protocol::api::{
 use strata_storage_api::{execute_by, ExecuteError, Executed};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
-    included_refs, match_route, section_order, section_request, SectionData, ViewData,
+    aggregate_request, included_refs, match_route, section_order, section_request, SectionData,
+    ViewData,
 };
 
 /// The tenant's schema, members and counters, without records.
@@ -358,6 +359,24 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
     let mut revision = tenant.revision;
     for name in section_order(def) {
         let section = &def.sections[name];
+        // A section that names an aggregate delivers its result in place of rows (D-5067); the
+        // kernel decides it for this reader like any other read of the same snapshot.
+        if let Some(aggregate) = &section.aggregate {
+            let ask = aggregate_request(section, aggregate, &route, &request.request, &done);
+            let result = strata_kernel::aggregates::run(&state, &ask, &ctx).map_err(fail)?;
+            revision = result.revision;
+            sections.insert(
+                name.clone(),
+                SectionData {
+                    single: false,
+                    rows: Vec::new(),
+                    included: BTreeMap::new(),
+                    markdown: Vec::new(),
+                    aggregate: Some(result),
+                },
+            );
+            continue;
+        }
         let result = read(
             &state,
             &section_request(section, &route, &request.request, &done),
@@ -407,6 +426,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                     .collect(),
                 included,
                 markdown: section.markdown.clone(),
+                aggregate: None,
             },
         );
     }

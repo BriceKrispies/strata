@@ -213,6 +213,8 @@ fn a_query_filter_that_follows_a_reference_is_decided_on_a_partial_snapshot() {
                 params: BTreeSet::new(),
                 order: vec![],
                 limit: None,
+                aggregates: None,
+                declared_fields: None,
             }),
         ],
     );
