@@ -108,6 +108,7 @@ fn award(run_as: &[&str]) -> AutomationDef {
         defined_by: None,
         defined_at: None,
         suspended_for: None,
+        state: None,
     }
 }
 

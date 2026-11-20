@@ -117,6 +117,7 @@ fn run_summary(run: &RunRecord) -> Json_ {
         "hop": run.hop,
         "caused_by": run.caused_by.as_str(),
         "on_behalf_of": run.on_behalf_of.as_ref().map(|p| p.as_str()),
+        "started_by": run.started_by.as_ref().map(|p| p.as_str()),
         "started_at": run.started_at.0,
         "ended_at": run.ended_at.map(|t| t.0),
         "error": run.error,
@@ -132,6 +133,7 @@ fn step_summary(step: &StepRecord) -> Json_ {
         "attempts": step.attempts,
         "result": step.result,
         "errors": step.errors,
+        "approval": step.approval,
         "started_at": step.started_at.0,
         "ended_at": step.ended_at.map(|t| t.0),
     })

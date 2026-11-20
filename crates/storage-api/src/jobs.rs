@@ -177,6 +177,27 @@ pub enum JobWork {
         /// The occurrence this job is for: the due time it was created with.
         due: Timestamp,
     },
+    /// The deadline of an approval step that is waiting: when it is due and the step still waits,
+    /// the run takes the step's refused branch (WFL-006, WFL-2682).
+    ApprovalTimeout {
+        run: String,
+        automation: WorkflowId,
+        /// The request-approval step.
+        step: StepName,
+        /// The position of that step in its run.
+        sequence: u64,
+    },
+    /// Undo one completed step of a run that failed: run the compensating step it declares
+    /// (WFL-005, SCH-1525). Compensations are chained from the last completed step to the first,
+    /// one job each, so they run in reverse order.
+    Compensate {
+        run: String,
+        automation: WorkflowId,
+        /// The compensating step.
+        step: StepName,
+        /// The position in the run of the completed step it undoes.
+        of_sequence: u64,
+    },
 }
 
 /// A job to create: its key, what it does, when it is due and how it is retried.
@@ -279,6 +300,11 @@ pub enum RunState {
     Running,
     /// Waiting for the time of a wait step (WFL-1537).
     Waiting,
+    /// Stopped at an approval step until a principal the step's policy names decides (WFL-006).
+    AwaitingApproval,
+    /// A step failed for good and the compensations of the completed steps are running, or one of
+    /// them failed and waits for the owner (WFL-005, SCH-1525).
+    Compensating,
     Completed,
     Failed,
     Cancelled,
@@ -289,6 +315,8 @@ impl RunState {
         match self {
             RunState::Running => "running",
             RunState::Waiting => "waiting",
+            RunState::AwaitingApproval => "awaiting-approval",
+            RunState::Compensating => "compensating",
             RunState::Completed => "completed",
             RunState::Failed => "failed",
             RunState::Cancelled => "cancelled",
@@ -299,6 +327,8 @@ impl RunState {
         Some(match text {
             "running" => RunState::Running,
             "waiting" => RunState::Waiting,
+            "awaiting-approval" => RunState::AwaitingApproval,
+            "compensating" => RunState::Compensating,
             "completed" => RunState::Completed,
             "failed" => RunState::Failed,
             "cancelled" => RunState::Cancelled,
@@ -337,6 +367,11 @@ pub struct RunRecord {
     /// record who defined an automation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_behalf_of: Option<PrincipalId>,
+    /// The person whose action started the run: the principal of the event a trigger matched, or
+    /// the person who started it directly. An approval step refuses this person's approval
+    /// (WFL-2681). `None` when the starter is not known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<PrincipalId>,
     /// The parameters of the starting event and the outputs of the completed steps (D-6523).
     #[serde(default)]
     pub params: BTreeMap<String, Value>,
@@ -360,7 +395,41 @@ pub enum StepState {
     Waiting,
     Completed,
     Failed,
+    /// Completed and then undone by its compensating step (WFL-005).
+    Compensated,
     Cancelled,
+}
+
+/// The approval a waiting request-approval step asks for, and the decision that ends the wait
+/// (approval-flow, WFL-006). Kept in the step record, so it is recorded once: a step whose
+/// `decision` is set takes no second one (WFL-2683).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalRecord {
+    /// The policy of the step.
+    pub policy: String,
+    /// The roles the policy names: who may approve, besides holding workflow-approve.
+    pub roles: Vec<String>,
+    pub requested_at: Timestamp,
+    /// When the step takes its refused branch if nobody has decided.
+    pub deadline: Timestamp,
+    /// The person whose action started the run, who may not decide where separation applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<PrincipalId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<ApprovalDecision>,
+}
+
+/// One decision on an approval.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalDecision {
+    pub approved: bool,
+    /// Who decided; `None` when the deadline passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<PrincipalId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    pub at: Timestamp,
+    pub timed_out: bool,
 }
 
 /// One step of a run (rec-workflow-step-run, automation-step-summary, WFL-1531).
@@ -383,6 +452,9 @@ pub struct StepRecord {
     /// The error of each failed attempt, in order.
     #[serde(default)]
     pub errors: Vec<String>,
+    /// The approval a request-approval step waits for or was given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<ApprovalRecord>,
     pub started_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<Timestamp>,

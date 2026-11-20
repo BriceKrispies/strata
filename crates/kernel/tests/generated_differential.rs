@@ -155,6 +155,11 @@
 //!      `crates/kernel/src/erasure.rs`, D-7460). The generated `intent-decision` refuses it with
 //!      `erasure:decided_by_the_kernel` and the generated `needs` plans nothing for it. The
 //!      operation generator draws no erasure, and `compare_transition` fails on one.
+//!  17. Not mirrored: the checks of an invoke-operation step (`definitions::invoke_operation_problems`,
+//!      WG-5154): the operation exists, the run-as roles may invoke it, and its inputs are declared,
+//!      present when required and of the shape of their type. The generated
+//!      `automation-step-problems` checks only the expressions of its inputs. Guarded:
+//!      `assert_no_input_of_a_known_difference` fails on an automation that holds such a step.
 //!
 //! Every difference that is not compared through an adjustment is guarded, so that a corpus that
 //! grows into one is told to mirror the rule or to count the difference here:
@@ -700,6 +705,7 @@ fn award(broken: bool) -> AutomationDef {
         defined_by: None,
         defined_at: None,
         suspended_for: None,
+        state: None,
     }
 }
 
@@ -1012,6 +1018,11 @@ fn assert_no_input_of_a_known_difference(state: &State) {
                         AutomationStep::WaitFor { .. } | AutomationStep::RequestApproval { .. }
                     ),
                 "{}.{name} has a retry, a timeout or a wait; the generated functions do not bound durations (difference 7)",
+                automation.id
+            );
+            assert!(
+                !matches!(step.action, AutomationStep::InvokeOperation { .. }),
+                "{}.{name} invokes an operation; the generated functions do not check the operation, its invokers or its inputs (difference 17)",
                 automation.id
             );
         }

@@ -1941,6 +1941,7 @@ pub fn jobs_conform(store: &dyn Store) {
         hop: 0,
         caused_by: principal_id("automation:award"),
         on_behalf_of: None,
+        started_by: None,
         params: BTreeMap::new(),
         started_at: Timestamp(5_000),
         ended_at: None,
@@ -1957,6 +1958,7 @@ pub fn jobs_conform(store: &dyn Store) {
         idempotency_key: "k".into(),
         result: None,
         errors: Vec::new(),
+        approval: None,
         started_at: Timestamp(5_000),
         ended_at: Some(Timestamp(5_060)),
     };

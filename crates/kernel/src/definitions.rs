@@ -183,8 +183,8 @@ pub fn event_params(event: &TriggerEvent) -> BTreeSet<String> {
 }
 
 /// Every parameter any event binds (D-6523): what an automation, which any trigger may start,
-/// can read of its starting event.
-fn any_event_params() -> BTreeSet<String> {
+/// can read of its starting event. A person who starts a run directly binds the same names.
+pub fn any_event_params() -> BTreeSet<String> {
     [
         "seq",
         "at",
@@ -227,6 +227,7 @@ pub fn step_outputs(action: &AutomationStep) -> &'static [&'static str] {
         AutomationStep::Branch { .. } => &["taken"],
         AutomationStep::FanOut { .. } => &["members", "batches"],
         AutomationStep::RequestApproval { .. } => &["approved", "by"],
+        AutomationStep::InvokeOperation { .. } => &["created", "changed", "deleted"],
         AutomationStep::End => &[],
     }
 }
@@ -588,7 +589,80 @@ fn action_problems(
                 problems.push(format!("{at}: unknown policy {policy}"));
             }
         }
+        // Checked by [`invoke_operation_problems`], which needs the automation's run-as.
+        AutomationStep::InvokeOperation { .. } => {}
         AutomationStep::End => {}
+    }
+}
+
+/// The problems of an invoke-operation step at `at` (WFL-2685, D-7682): the operation exists, the
+/// run-as roles of the automation may invoke it (its invokers name a role of the run-as or every
+/// signed-in person), every input it gives is one the operation declares and its expression checks
+/// and has the shape of the input's type, and every required input is given. The operation's own
+/// definition bounds what the step can do: the kernel decides the invocation as the automation
+/// principal, whose powers are its run-as roles and never more than the operation's steps use.
+fn invoke_operation_problems(
+    schema: &TenantSchema,
+    automation: &AutomationDef,
+    at: &str,
+    action: &AutomationStep,
+    env: &TypeEnv<'_>,
+    problems: &mut Vec<String>,
+) {
+    let AutomationStep::InvokeOperation { operation, inputs } = action else {
+        return;
+    };
+    let Some(op) = schema
+        .operations
+        .as_ref()
+        .and_then(|all| all.get(operation))
+    else {
+        problems.push(format!("{at}: unknown operation {operation}"));
+        return;
+    };
+    if !op.invokers.signed_in && op.invokers.roles.is_disjoint(&automation.run_as.roles) {
+        problems.push(format!(
+            "{at}: no run-as role of automation {} may invoke operation {operation}",
+            automation.id
+        ));
+    }
+    for (name, value) in inputs {
+        let Some(input) = op.inputs.iter().find(|input| &input.name == name) else {
+            problems.push(format!("{at}: operation {operation} has no input {name}"));
+            continue;
+        };
+        match expr::check(value, env) {
+            Ok(shape) if !shape_fits(shape, &input.ty) => problems.push(format!(
+                "{at}: input {name} is {shape:?}, but operation {operation} expects {}",
+                input.ty.name()
+            )),
+            Ok(_) => {}
+            Err(e) => problems.push(format!("{at}: input {name}: {e}")),
+        }
+    }
+    for input in &op.inputs {
+        if input.required && !inputs.contains_key(&input.name) {
+            problems.push(format!(
+                "{at}: operation {operation} needs the input {}",
+                input.name
+            ));
+        }
+    }
+}
+
+/// Whether an expression of this shape can give a value of `ty`: a shape the check cannot pin
+/// down fits any type, a whole number fits a time and a reference (as a record id does), and a
+/// file or a language is text.
+fn shape_fits(shape: Shape, ty: &FieldType) -> bool {
+    match (shape, ty) {
+        (Shape::Any, _) => true,
+        (Shape::Str, FieldType::Str | FieldType::File { .. } | FieldType::Language) => true,
+        (Shape::Int, FieldType::Int | FieldType::Time | FieldType::Ref { .. }) => true,
+        (Shape::Bool, FieldType::Bool) => true,
+        (Shape::Time, FieldType::Time) => true,
+        (Shape::Ref, FieldType::Ref { .. }) => true,
+        (Shape::List, FieldType::List(_)) => true,
+        _ => false,
     }
 }
 
@@ -680,6 +754,7 @@ pub fn automation_problems(
                 }
             }
             action_problems(schema, &sat, &step.action, &env, problems);
+            invoke_operation_problems(schema, automation, &sat, &step.action, &env, problems);
         }
         if has_start {
             let reached = reachable(automation);

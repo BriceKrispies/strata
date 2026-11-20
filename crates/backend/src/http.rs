@@ -1212,6 +1212,18 @@ pub fn router(app: Shared) -> Router {
             "/internal/schedules/define",
             post(crate::worker::schedules::define_route),
         )
+        .route(
+            "/internal/automation/start",
+            post(crate::worker::commands::start_route),
+        )
+        .route(
+            "/internal/automation/approve",
+            post(crate::worker::commands::approve_route),
+        )
+        .route(
+            "/internal/automation/activate",
+            post(crate::worker::commands::activate_route),
+        )
         .route("/internal/ws", get(socket));
     // The development routes are compiled only with the `development` feature, and mounted only
     // when the process was started in development mode.
