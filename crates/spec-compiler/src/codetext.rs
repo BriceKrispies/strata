@@ -30,6 +30,9 @@ use crate::diagnostic::Diagnostic;
 /// becomes one the generated file already uses.
 pub const IDENTIFIER_COLLISION: &str = "specc.identifier-collision";
 
+/// Two entities of one kind in one generated file share an id.
+pub const DUPLICATE_ID: &str = "specc.duplicate-id";
+
 /// True for a character that ends a line in Rust, JavaScript or an editor.
 fn is_line_break(c: char) -> bool {
     matches!(
@@ -66,6 +69,24 @@ fn one_line(text: &str) -> String {
 /// breaks become spaces, other control and bidirectional characters `<U+XXXX>`.
 pub fn line_text(text: &str) -> String {
     one_line(text)
+}
+
+/// The text on one line, safe in a Markdown table cell, list item or HTML comment: as
+/// [`line_text`], with a backslash before each character that Markdown reads as syntax (`\`,
+/// `` ` ``, `*`, `[`, `]`, `<`, `>`, `|`, `&`, `~`), so a description cannot forge a column, a
+/// link or a tag. Ids and names made of letters, digits, `-`, `_` and `.` are unchanged.
+pub fn markdown_text(text: &str) -> String {
+    let mut out = String::new();
+    for c in one_line(text).chars() {
+        if matches!(
+            c,
+            '\\' | '`' | '*' | '[' | ']' | '<' | '>' | '|' | '&' | '~'
+        ) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// The lines of a text, split at every line terminator (`\r\n` is one) and made safe for a
@@ -125,6 +146,23 @@ impl Claims {
             reserved: reserved.iter().map(|r| (*r).to_string()).collect(),
             taken: BTreeMap::new(),
         }
+    }
+
+    /// Claims `ident` for the specification name `source`, which must be the only entity with
+    /// that name: a second claim of the same identifier by the same source means two entities
+    /// share an id, and is a diagnostic as well.
+    pub fn claim_unique(&mut self, source: &str, ident: &str) -> Result<(), Diagnostic> {
+        if self.taken.get(ident).is_some_and(|other| other == source) {
+            return Err(Diagnostic::new(
+                DUPLICATE_ID,
+                source,
+                format!(
+                    "\"{source}\" is declared more than once and would become the identifier `{ident}` twice in {}; every id must be unique.",
+                    self.file
+                ),
+            ));
+        }
+        self.claim(source, ident)
     }
 
     /// Claims `ident` for the specification name `source`. Claiming one name twice for the same
@@ -607,6 +645,27 @@ mod tests {
         assert_eq!(rust::ident("1x"), "_1x");
         assert_eq!(rust::ident("a-b"), "a_b");
         assert_eq!(rust::fn_name("scenario", "a.b"), "scenario_a_b");
+    }
+
+    #[test]
+    fn markdown_syntax_is_escaped() {
+        assert_eq!(markdown_text("a | b"), "a \\| b");
+        assert_eq!(
+            markdown_text("[x](http://y) *z* `c`"),
+            "\\[x\\](http://y) \\*z\\* \\`c\\`"
+        );
+        assert_eq!(markdown_text("<b>-->"), "\\<b\\>--\\>");
+        assert_eq!(markdown_text("order-id_2.x"), "order-id_2.x");
+        assert_eq!(markdown_text("a\nb"), "a b");
+    }
+
+    #[test]
+    fn a_unique_claim_refuses_the_same_source_twice() {
+        let mut claims = Claims::new("forms.js", &[]);
+        assert!(claims.claim_unique("a-b", "aB").is_ok());
+        let d = claims.claim_unique("a-b", "aB").unwrap_err();
+        assert_eq!(d.code, DUPLICATE_ID);
+        assert!(claims.claim_unique("a_b", "aB").is_err());
     }
 
     #[test]

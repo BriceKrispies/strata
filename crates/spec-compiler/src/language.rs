@@ -828,7 +828,12 @@ pub fn check(spec: &Spec) -> Vec<Diagnostic> {
     for lang in &spec.languages {
         match naming::snake(&lang.id) {
             Ok(module) => {
-                if ["prelude", "types", "lib"].contains(&module.as_str()) {
+                let reserved = ["prelude", "lib", crate::function::MODULE]
+                    .contains(&module.as_str())
+                    || crate::backend::BACKENDS
+                        .iter()
+                        .any(|b| b.module() == module.as_str());
+                if reserved {
                     out.push(Diagnostic::new(
                         LANGUAGE_UNSUPPORTED,
                         &lang.id,

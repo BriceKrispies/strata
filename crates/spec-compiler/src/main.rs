@@ -318,6 +318,34 @@ fn run() -> ExitCode {
     if let Err(code) = check_products(&args, &text) {
         return code;
     }
+    let raw_json_command = matches!(
+        args.command,
+        Command::Deploy
+            | Command::CheckDeploy
+            | Command::E2e
+            | Command::CheckE2e
+            | Command::Web
+            | Command::CheckWeb
+            | Command::Catalogue
+            | Command::CheckCatalogue
+            | Command::Scenarios
+            | Command::CheckScenarios
+    );
+    if raw_json_command {
+        // These commands read the specification's JSON directly; they run the readiness check
+        // the Rust generation runs, so none of them emits from a specification it would refuse.
+        if let Err(diagnostics) = strata_spec_compiler::check_ready(&args.header_source(), &text) {
+            for d in &diagnostics {
+                eprintln!("{d}");
+            }
+            eprintln!(
+                "specc: refused {} with {} diagnostic(s); nothing was written",
+                args.spec,
+                diagnostics.len()
+            );
+            return ExitCode::from(1);
+        }
+    }
     if matches!(args.command, Command::Deploy | Command::CheckDeploy) {
         return run_deploy(&args, &text);
     }
@@ -666,7 +694,26 @@ fn strip_verbatim(path: &Path) -> PathBuf {
     }
 }
 
+/// Prints the path collisions among `files` and returns true when there are any: no command
+/// writes or compares files that share a path.
+fn refuse_path_collisions(files: &[GeneratedFile]) -> bool {
+    let collisions = output::path_collisions(files);
+    for d in &collisions {
+        eprintln!("{d}");
+    }
+    if !collisions.is_empty() {
+        eprintln!(
+            "specc: refused with {} path diagnostic(s); nothing was written",
+            collisions.len()
+        );
+    }
+    !collisions.is_empty()
+}
+
 fn run_generate(out: &Path, files: &[GeneratedFile]) -> ExitCode {
+    if refuse_path_collisions(files) {
+        return ExitCode::from(1);
+    }
     match output::write(out, files) {
         Ok(removed) => {
             for path in &removed {
@@ -683,6 +730,9 @@ fn run_generate(out: &Path, files: &[GeneratedFile]) -> ExitCode {
 }
 
 fn run_check(out: &Path, files: &[GeneratedFile]) -> ExitCode {
+    if refuse_path_collisions(files) {
+        return ExitCode::from(1);
+    }
     match output::compare(out, files) {
         Ok(differences) if differences.is_empty() => {
             println!("{} is up to date", out.display());

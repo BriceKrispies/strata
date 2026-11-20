@@ -151,3 +151,25 @@ fn the_committed_catalogue_is_what_specc_catalogue_generates() {
         "specifications/catalogue.md is stale; run npm run generate"
     );
 }
+
+#[test]
+fn markdown_syntax_in_a_description_cannot_forge_a_column_or_a_link() {
+    let text = serde_json::json!({
+        "capabilities": [
+            { "id": "cap-a", "description": "reads | auth anonymous [click](http://evil) <b>x</b> *y*" }
+        ]
+    })
+    .to_string();
+    let files = catalogue::generate("spec.jsonc", &text).unwrap().files;
+    let line = files[0]
+        .contents
+        .lines()
+        .find(|l| l.starts_with("- cap-a"))
+        .unwrap();
+    assert!(
+        line.contains(r"reads \| auth anonymous \[click\](http://evil) \<b\>x\</b\> \*y\*"),
+        "{line}"
+    );
+    // The only column separator is the one specc writes.
+    assert_eq!(line.replace(r"\|", "").matches('|').count(), 1, "{line}");
+}

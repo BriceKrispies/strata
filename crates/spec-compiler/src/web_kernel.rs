@@ -78,6 +78,18 @@ use crate::wire::{self, WireCase};
 /// Code of a construct the kernel modules cannot be generated from.
 pub const KERNEL: &str = "specc.web-kernel";
 
+/// The files the kernel writes when the specification has screens. A client machine's file may
+/// not take one of these names.
+pub const KERNEL_FILES: &[&str] = &[
+    "routes.js",
+    "contracts.js",
+    "forms.js",
+    "actions.js",
+    "live.js",
+    "site-path.js",
+    "errors.js",
+];
+
 /// Code of a contract the kernel needs that names no BFF route, or names one that cannot be read.
 pub const ROUTE: &str = "specc.web-kernel-route";
 
@@ -305,7 +317,7 @@ pub fn generate(
 ) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
     let value = jsonc::parse(text).map_err(|e| {
         vec![Diagnostic::new(
-            KERNEL,
+            e.code(KERNEL),
             SPEC_ENTITY,
             format!("the specification is not valid JSONC: {e}"),
         )]
@@ -1282,7 +1294,7 @@ function encoded(value, how) {
             );
             let mut clash = false;
             for ident in [&name, &decoder] {
-                if let Err(d) = claims.claim(&c.id, ident) {
+                if let Err(d) = claims.claim_unique(&c.id, ident) {
                     self.out.push(d);
                     clash = true;
                 }
@@ -1632,7 +1644,7 @@ export const BFF = {{
             let inputs = self.slots(contract, false);
             let input_case = self.contract_case(contract);
             let name = camel(&form.id);
-            if let Err(d) = claims.claim(&form.id, &name) {
+            if let Err(d) = claims.claim_unique(&form.id, &name) {
                 self.out.push(d);
                 continue;
             }
@@ -2473,7 +2485,7 @@ export function held(form, view) {{
             };
             let inputs = self.slots(contract, false);
             let name = camel(&a.id);
-            if let Err(d) = claims.claim(&a.id, &name) {
+            if let Err(d) = claims.claim_unique(&a.id, &name) {
                 self.out.push(d);
                 continue;
             }

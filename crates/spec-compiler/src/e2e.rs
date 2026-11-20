@@ -641,7 +641,7 @@ fn scalar_text(v: &Value) -> Option<String> {
 pub fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
     let value = jsonc::parse(text).map_err(|e| {
         vec![Diagnostic::new(
-            SYNTAX,
+            e.code(SYNTAX),
             SPEC_ENTITY,
             format!("the specification is not valid JSONC: {e}"),
         )]
@@ -865,8 +865,12 @@ pub fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
                 "a journey id names a file, so it must be letters, digits, '.', '_' and '-' and not start with '.'.",
             ));
         }
-        if !seen.insert(id.to_string()) {
-            d.push(Diagnostic::new(DUPLICATE, id, "two journeys have this id."));
+        if !seen.insert(id.to_lowercase()) {
+            d.push(Diagnostic::new(
+                DUPLICATE,
+                id,
+                "two journeys have this id, or ids that differ only in letter case; each names a file, and a case-insensitive file system would keep one.",
+            ));
             continue;
         }
         let Some(steps) = o.get("steps").and_then(Value::as_array) else {

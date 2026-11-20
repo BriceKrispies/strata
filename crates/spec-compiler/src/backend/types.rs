@@ -483,7 +483,7 @@ fn check_constraints(out: &mut Vec<Diagnostic>, t: &TypeDecl) {
                 format!("Type \"{id}\" has a pattern, which needs a string representation."),
             );
         }
-        if let Err(e) = regex::Regex::new(p) {
+        if let Err(e) = regex::Regex::new(&crate::rules::anchored(p)) {
             let reason = e
                 .to_string()
                 .split_whitespace()
@@ -1377,11 +1377,12 @@ fn constrained_item(
             "{}_PATTERN",
             naming::upper_snake(&t.id).unwrap_or_default()
         ));
-        let pdoc = format!(" The pattern of type `{id}`.");
+        let pdoc = format!(" The pattern of type `{id}`, matched against the whole value.");
+        let anchored = crate::rules::anchored(p);
         statics.extend(quote! {
             #[doc = #pdoc]
             static #pattern: LazyLock<Regex> =
-                LazyLock::new(|| Regex::new(#p).expect("specc checked that the pattern compiles"));
+                LazyLock::new(|| Regex::new(#anchored).expect("specc checked that the pattern compiles"));
         });
         let fail = fail("pattern");
         checks.extend(quote! { if !#pattern.is_match(&self.0) { #fail } });

@@ -102,6 +102,20 @@ pub fn generate(
     emit::crate_files(&spec, options)
 }
 
+/// The shared readiness check alone: loads the specification and runs every backend's check, as
+/// [`generate`] does before it emits, and emits nothing. The commands that generate from the raw
+/// specification (`web`, `e2e`, `catalogue`, `deploy`, `scenarios`) run it first, so a
+/// specification the Rust backends would refuse is refused for them as well.
+pub fn check_ready(spec_path: &str, text: &str) -> Result<(), Vec<Diagnostic>> {
+    let spec = load::load(spec_path, text)?;
+    let diagnostics = readiness::check(&spec);
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(diagnostics)
+    }
+}
+
 /// The files of a generation split into two crates: the model crate (`options`), and the pure
 /// crate `core` names ([`model_core`]), which the model crate depends on. Returns the model crate's
 /// files, then the pure crate's, or refuses with every diagnostic.
