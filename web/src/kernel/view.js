@@ -3,6 +3,8 @@
 // @ts-check
 
 import * as actions from '../generated/actions.js';
+import { hrefFor } from '../generated/routes.js';
+import { SIGN_IN_PATH, SIGN_IN_SCREEN, guardedView, navigation, pageTitle as statedTitle, rowActionsOn } from '../generated/screens.js';
 import { labView } from './lab.js';
 import { hrefOf } from './update.js';
 
@@ -64,19 +66,21 @@ function entry(row, optimistic = {}) {
 }
 
 /**
- * The names the generated actions give a desk row's buttons: the row of the view model the
- * action runs on, filled into the action's label (and, for delete, its confirmation).
+ * The names the generated actions give a row's buttons: for each row action of the view's screen
+ * (`ROW_ACTIONS`), the row of the view model the action runs on, filled into the action's label
+ * under its label key and, for a confirmed action, its confirmation under `confirm` and the key
+ * capitalised.
  * @param {any} model @param {any} row
  */
-function deskLabels(model, row) {
-  const item = (/** @type {string} */ action) =>
-    actions.rows(action, model).find((/** @type {any} */ r) => r.article_id === row.id) ?? { title: row.fields.title };
-  return {
-    publish: actions.label('act-desk-publish', item('act-desk-publish')),
-    unpublish: actions.label('act-desk-unpublish', item('act-desk-unpublish')),
-    remove: actions.label('act-desk-delete', item('act-desk-delete')),
-    confirmRemove: actions.confirmText('act-desk-delete', item('act-desk-delete')) ?? '',
-  };
+function rowLabels(model, row) {
+  /** @type {Record<string, string>} */
+  const labels = {};
+  for (const button of rowActionsOn(model.view)) {
+    const item = actions.rows(button.action, model).find((/** @type {any} */ r) => r[button.rowKey] === row.id) ?? { title: row.fields.title };
+    labels[button.labelKey] = actions.label(button.action, item);
+    if (button.confirm) labels[`confirm${button.labelKey.charAt(0).toUpperCase()}${button.labelKey.slice(1)}`] = actions.confirmText(button.action, item) ?? '';
+  }
+  return labels;
 }
 
 function field(form, name) {
@@ -92,7 +96,7 @@ function page(state) {
   const d = model.data;
   const signedIn = session?.authenticated === true;
   const canWrite = signedIn && (session.may?.post ?? []).includes('create');
-  const guarded = ['desk', 'desk_new', 'desk_edit', 'desk_settings', 'lab'].includes(model.view);
+  const guarded = guardedView(model.view);
   // While the next page is on its way, a guarded page the visitor just left is not shown again.
   if (guarded && !signedIn) return view.status === 'loading' ? { kind: 'loading' } : { kind: 'signin_required', next: hrefOf(state.route) };
 
@@ -167,7 +171,7 @@ function page(state) {
         passkeys: state.passkeys,
         factors: state.factors,
         posts: d.posts
-          .map((r) => ({ ...entry(r, state.optimistic), confirming: state.confirmDelete === r.id, labels: deskLabels(model, r) }))
+          .map((r) => ({ ...entry(r, state.optimistic), confirming: state.confirmDelete === r.id, labels: rowLabels(model, r) }))
           .filter((p) => p.status !== 'deleted'),
       };
     case 'desk_new':
@@ -177,6 +181,8 @@ function page(state) {
       if (!canWrite) return { kind: 'forbidden' };
       return {
         kind: 'editor',
+        // The title follows what is typed, so it is the page's own and not the screen's stated one.
+        pageTitle: editor.id == null ? 'New article' : `Editing: ${editor.values.title || 'Untitled'}`,
         isNew: editor.id == null,
         status: editor.status,
         dirty: editor.dirty,
@@ -217,36 +223,24 @@ function page(state) {
   }
 }
 
-const PAGE_TITLES = {
+/** The titles of the states the page frame shows itself, which no screen states. */
+const FRAME_TITLES = {
   loading: '',
   missing: 'Page not found',
   error: 'Something went wrong',
   forbidden: 'Not allowed',
   signin_required: 'Sign in',
-  home: '',
-  topics: 'Topics',
-  authors: 'Authors',
-  search: 'Search',
-  about: 'About',
-  login: 'Sign in',
-  desk: 'Writing desk',
-  settings: 'Publication settings',
-  lab: 'Impact Lab',
 };
 
-function titleOf(p) {
-  switch (p.kind) {
-    case 'post':
-      return p.title;
-    case 'topic':
-      return p.topic.name;
-    case 'author':
-      return p.author.name;
-    case 'editor':
-      return p.isNew ? 'New article' : `Editing: ${p.fields.title.value || 'Untitled'}`;
-    default:
-      return PAGE_TITLES[p.kind] ?? '';
-  }
+/**
+ * The title of the page: a frame state's, else the page's own (`pageTitle`), else the one the
+ * screen of the view states (generated).
+ * @param {any} p @param {any} model
+ */
+function titleOf(p, model) {
+  if (p.kind in FRAME_TITLES) return FRAME_TITLES[/** @type {keyof typeof FRAME_TITLES} */ (p.kind)];
+  if (typeof p.pageTitle === 'string') return p.pageTitle;
+  return statedTitle(model?.view, model) ?? '';
 }
 
 /**
@@ -254,17 +248,16 @@ function titleOf(p) {
  * @param {ReturnType<typeof import('./update.js').initialState>} state
  */
 export function view(state) {
-  const p = page(state);
+  const built = page(state);
+  const { pageTitle: _own, ...p } = built;
   const session = state.session;
   const signedIn = session?.authenticated === true;
   const path = state.route.path;
-  const pageTitle = titleOf(p);
-  const nav = [
-    { href: '/', label: 'Essays', current: path === '/' || path.startsWith('/posts/') },
-    { href: '/topics', label: 'Topics', current: path.startsWith('/topics') },
-    { href: '/authors', label: 'Authors', current: path.startsWith('/authors') },
-    { href: '/about', label: 'About', current: path === '/about' },
-  ];
+  const pageTitle = titleOf(built, state.view.model);
+  // The generated navigation: the entries this visitor may see, in the generated order.
+  const entries = navigation(path, signedIn).map(({ href, label, area, current }) => ({ href, label, area, current }));
+  const nav = entries.filter((e) => e.area === 'menu');
+  const tools = entries.filter((e) => e.area === 'tools');
   return {
     title: pageTitle ? `${pageTitle} — ${state.site.name}` : state.site.name || 'Strata',
     pageTitle,
@@ -278,12 +271,12 @@ export function view(state) {
       siteName: state.site.name,
       tagline: state.site.tagline,
       nav,
+      tools,
       menuOpen: state.menuOpen,
       searchQ: path === '/search' ? state.route.query.q ?? '' : '',
       signedIn,
       userName: signedIn ? session.display_name : '',
-      deskCurrent: path.startsWith('/desk') || path === '/lab',
-      loginHref: path === '/login' ? '/login' : `/login?next=${encodeURIComponent(hrefOf(state.route))}`,
+      loginHref: SIGN_IN_SCREEN === null ? null : hrefFor(SIGN_IN_SCREEN, path === SIGN_IN_PATH ? {} : { next: hrefOf(state.route) }),
       connection: state.wsStopped ? 'stopped' : state.ws.status,
       refreshing: state.view.status === 'loading' && !!state.view.model,
     },

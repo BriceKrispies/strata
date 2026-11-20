@@ -13,6 +13,8 @@
 // body of `/api/sign-in/saml`.
 // @ts-check
 
+import { SIGN_IN_PATH } from '../generated/screens.js';
+
 export function oidcInit() {
   return {
     /** The providers the site offers, or `null` until they have been asked for. */
@@ -59,7 +61,7 @@ export function oidcFromHash(hash) {
  * @returns {{ state: any, effects: any[] }}
  */
 export function oidcOpened(state, hash, href) {
-  const opened = state.route.path === '/login' ? oidcFromHash(hash) : null;
+  const opened = state.route.path === SIGN_IN_PATH ? oidcFromHash(hash) : null;
   if (!opened) return { state, effects: [] };
   const replace = [{ type: 'push_url', href, replace: true }];
   if ('failed' in opened) {
@@ -94,7 +96,7 @@ export function oidcLand(state, msg, { request }) {
  * @returns {{ state: any, effects: any[] }}
  */
 export function oidcEnter(state, msg, { request }) {
-  if (state.route.path !== '/login' || state.oidc.asked) return { state, effects: [] };
+  if (state.route.path !== SIGN_IN_PATH || state.oidc.asked) return { state, effects: [] };
   const [next, effect] = request(withOidc(state, { asked: true }), 'oidc.providers', { path: '/api/sign-in/providers' }, msg);
   return { state: next, effects: [effect] };
 }

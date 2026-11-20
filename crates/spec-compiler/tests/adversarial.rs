@@ -143,7 +143,8 @@ fn generated_javascript_parses_and_holds_no_raw_hazard() {
     fs::create_dir_all(&dir).unwrap();
     output::write(&dir, &files).unwrap();
     fs::write(dir.join("package.json"), "{ \"type\": \"module\" }\n").unwrap();
-    for f in &files {
+    // screens.rs is Rust, which the backend-for-frontend includes.
+    for f in files.iter().filter(|f| f.path.ends_with(".js")) {
         let run = Command::new("node")
             .arg("--check")
             .arg(dir.join(&f.path))

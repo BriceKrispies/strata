@@ -12,6 +12,7 @@ import * as refusals from '../generated/errors.js';
 import * as forms from '../generated/forms.js';
 import * as live from '../generated/live.js';
 import { matchRoute, route as routeOf } from '../generated/routes.js';
+import { enterSections, rowAction as rowButton, rowActionAsked as rowButtonAsked } from '../generated/screens.js';
 import { factorsEnter, factorsInit, factorsInput, factorsRequireStepUp, factorsUpdate, factorsWaiting, isStepUp } from './factors.js';
 import { labEnter, labInit, labUpdate } from './lab.js';
 import { linksInit, linksInput, linksLand, linksOpened, linksUpdate } from './links.js';
@@ -465,12 +466,53 @@ function onSocket(state, frame, msg) {
   }
 }
 
-/** What the desk asks for when it is shown: the person's sessions and passkeys. @returns {Result} */
-function deskEnter(state, msg) {
-  const sessions = sessionsEnter(state, msg, { request });
-  const passkeys = passkeysEnter(sessions.state, msg, { request });
-  const factors = factorsEnter(passkeys.state, msg, { request });
-  return { state: factors.state, effects: [...sessions.effects, ...passkeys.effects, ...factors.effects] };
+/**
+ * The hooks a screen's `onEnter` names: what each section asks for when its screen is shown.
+ * `afterSession` hooks also run when the session reply arrives after the page.
+ * @type {Map<string, { enter: (state: any, msg: any, io: { request: typeof request }) => Result, afterSession: boolean }>}
+ */
+const ENTER_HOOKS = new Map([
+  ['sessions', { enter: sessionsEnter, afterSession: false }],
+  ['passkeys', { enter: passkeysEnter, afterSession: false }],
+  ['factors', { enter: factorsEnter, afterSession: false }],
+  ['lab', { enter: labEnter, afterSession: true }],
+]);
+
+/**
+ * Register the hook of a section name a screen's `onEnter` may use, so a product asks for what its
+ * screen shows without editing this file.
+ * @param {string} name
+ * @param {(state: any, msg: any, io: { request: typeof request }) => Result} enter
+ * @param {{ afterSession?: boolean }} [options]
+ */
+export function registerEnterHook(name, enter, options = {}) {
+  ENTER_HOOKS.set(name, { enter, afterSession: options.afterSession === true });
+}
+
+/** The names of the registered entry hooks, sorted: for a test that every `onEnter` name has one. */
+export function enterHookNames() {
+  return [...ENTER_HOOKS.keys()].sort();
+}
+
+/**
+ * What a view's screen asks for when it is shown: its `onEnter` sections, in order, each hook
+ * seeing the state the one before left.
+ * @param {any} state @param {any} msg @param {string | null | undefined} view
+ * @param {{ afterSession?: boolean }} [options]
+ * @returns {Result}
+ */
+function enterScreen(state, msg, view, options = {}) {
+  /** @type {Effect[]} */
+  const effects = [];
+  let next = state;
+  for (const name of enterSections(view)) {
+    const hook = ENTER_HOOKS.get(name);
+    if (!hook || (options.afterSession && !hook.afterSession)) continue;
+    const entered = hook.enter(next, msg, { request });
+    next = entered.state;
+    effects.push(...entered.effects);
+  }
+  return { state: next, effects };
 }
 
 /** A passkey was accepted: the same as a password being accepted, from the session on. @returns {Result} */
@@ -554,18 +596,14 @@ function onHttp(state, msg) {
       // A link the page was opened with waits for the request token that this reply brings.
       const linked = linksLand(known, msg, { request });
       const landed = oidcLand(linked.state, msg, { request });
-      if (state.view.model?.view === 'lab') {
-        const entered = labEnter(landed.state, msg, { request });
-        return { state: entered.state, effects: [...open, ...linked.effects, ...landed.effects, ...entered.effects] };
-      }
-      return { state: landed.state, effects: [...open, ...linked.effects, ...landed.effects] };
+      const entered = enterScreen(landed.state, msg, state.view.model?.view, { afterSession: true });
+      return { state: entered.state, effects: [...open, ...linked.effects, ...landed.effects, ...entered.effects] };
     }
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
       if (msg.ok) {
         const accepted = acceptView(state, decodeView(state, msg.body));
-        if (msg.body.view === 'desk') return deskEnter(accepted, msg);
-        return msg.body.view === 'lab' ? labEnter(accepted, msg, { request }) : { state: accepted, effects: [] };
+        return enterScreen(accepted, msg, msg.body.view);
       }
       const status = msg.status === 404 ? 'missing' : 'error';
       return {
@@ -722,16 +760,15 @@ function requestPreview(state, msg) {
   return { state: { ...next, forms: { ...next.forms, editor: { ...editor, tab: 'preview', preview } } }, effects: [effect] };
 }
 
-/** The action a desk row's button presses. */
-const ROW_ACTIONS = { 'post.publish': 'act-desk-publish', 'post.unpublish': 'act-desk-unpublish', 'post.delete': 'act-desk-delete' };
-
 /**
- * Press a per-row action of the desk on the row of this article.
+ * Press a per-row action button (generated `ROW_ACTIONS`: its action, the status the row shows at
+ * once, and the output of the row that holds the record id) on the row of this record.
  * @returns {Result}
  */
-function rowAction(state, msg, action, arg, marker) {
+function rowAction(state, msg, button, arg) {
+  const { action, marker, rowKey } = button;
   const model = state.view.model;
-  const item = actions.rows(action, model).find((row) => row.article_id === arg.id) ?? { article_id: arg.id, version: arg.version };
+  const item = actions.rows(action, model).find((row) => row[rowKey] === arg.id) ?? { [rowKey]: arg.id, version: arg.version };
   const scope = scopeOf(state, { item });
   const inputs = actions.args(action, scope);
   if (!actions.visible(action, scope, inputs)) return { state, effects: [] };
@@ -744,7 +781,16 @@ function rowAction(state, msg, action, arg, marker) {
 /** @returns {Result} */
 function onAction(state, msg) {
   const arg = msg.arg;
-  if (state.confirmDelete !== null && msg.name !== 'post.delete') state = { ...state, confirmDelete: null };
+  const pressed = rowButton(msg.name);
+  // A confirmation is armed for one press: any other action disarms it.
+  if (state.confirmDelete !== null && !pressed?.confirm) state = { ...state, confirmDelete: null };
+  const asked = rowButtonAsked(msg.name);
+  // A confirmed row action takes two presses on the same row: the first asks, the second does.
+  if (asked) return { state: { ...state, confirmDelete: arg.id, announce: actions.ACTIONS[asked.action].confirmAnnounce ?? '' }, effects: [] };
+  if (pressed) {
+    if (pressed.confirm && state.confirmDelete !== arg.id) return { state, effects: [] };
+    return rowAction({ ...state, confirmDelete: null }, msg, pressed, arg);
+  }
   switch (msg.name) {
     case 'theme': {
       const mode = THEME_MODES[(THEME_MODES.indexOf(state.theme.mode) + 1) % THEME_MODES.length];
@@ -774,19 +820,8 @@ function onAction(state, msg) {
       const cleared = { ...state, forms: { ...state.forms, editor: null } };
       return fetchView(cleared, msg, true);
     }
-    case 'post.publish':
-      return rowAction(state, msg, ROW_ACTIONS[msg.name], arg, 'published');
-    case 'post.unpublish':
-      return rowAction(state, msg, ROW_ACTIONS[msg.name], arg, 'draft');
-    case 'post.ask_delete':
-      // Deleting takes two presses on the same row; any other action disarms it.
-      return { state: { ...state, confirmDelete: arg.id, announce: actions.ACTIONS[ROW_ACTIONS['post.delete']].confirmAnnounce ?? '' }, effects: [] };
     case 'reload':
       return fetchView(state, msg, false);
-    case 'post.delete': {
-      if (!actions.ACTIONS[ROW_ACTIONS[msg.name]].confirm || state.confirmDelete !== arg.id) return { state, effects: [] };
-      return rowAction({ ...state, confirmDelete: null }, msg, ROW_ACTIONS[msg.name], arg, 'deleted');
-    }
     case 'dev.expire': {
       const [next, effect] = request(state, 'dev', { method: 'POST', path: '/api/dev/expire-session', write: true, body: {} }, msg);
       return { state: next, effects: [effect] };
@@ -893,16 +928,9 @@ function step(state, msg) {
       }
       if (boot?.view && boot.path === route.path) {
         next = acceptView(next, decodeView(next, boot.view));
-        if (boot.view.view === 'lab') {
-          const entered = labEnter(next, msg, { request });
-          next = entered.state;
-          effects.push(...entered.effects);
-        }
-        if (boot.view.view === 'desk') {
-          const entered = deskEnter(next, msg);
-          next = entered.state;
-          effects.push(...entered.effects);
-        }
+        const entered = enterScreen(next, msg, boot.view.view);
+        next = entered.state;
+        effects.push(...entered.effects);
       } else {
         const fetched = fetchView(next, msg, false);
         next = fetched.state;

@@ -7,6 +7,8 @@
 // read, so it is not in anything here.
 // @ts-check
 
+import { SIGN_IN_PATH } from '../generated/screens.js';
+
 export function linksInit() {
   return {
     /** What was typed in the request form. */
@@ -46,7 +48,7 @@ export function linkFromHash(hash) {
  * @returns {{ state: any, effects: any[] }}
  */
 export function linksOpened(state, hash, href) {
-  const landing = state.route.path === '/login' ? linkFromHash(hash) : null;
+  const landing = state.route.path === SIGN_IN_PATH ? linkFromHash(hash) : null;
   if (!landing) return { state, effects: [] };
   return {
     state: withLinks(state, { landing, landingStatus: 'working', landingError: '' }),
