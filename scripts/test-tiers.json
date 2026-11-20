@@ -48,6 +48,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "ledger_more",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "expiry jobs with a retried lease, batches of a hundred accounts, verification of a tampered header and a ledger per tenant"
+    },
+    {
+      "package": "strata-backend",
       "target": "oidc",
       "tier": "routine",
       "seconds": 3.94
@@ -182,6 +190,14 @@
       "tier": "routine",
       "seconds": null,
       "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
+      "target": "ledger_policies",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "random credits, debits and expiries from a fixed seed, and a tenant of ten thousand account limits"
     },
     {
       "package": "strata-kernel",
@@ -589,6 +605,14 @@
       "tier": "full",
       "seconds": 9.19,
       "reason": "SQLite crash, upgrade and many-tenant cases; scoped runs include it when a storage crate changed"
+    },
+    {
+      "package": "strata-storage-sqlite",
+      "target": "ledger_limits",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "upgrades a tenant file whose schema held the limits of accounts, which needs the older layout rebuilt"
     },
     {
       "package": "strata-storage-sqlite",

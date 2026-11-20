@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use strata_kernel::ext::*;
 use strata_kernel::{
-    owner_role, visible, DomainEvent, EventBody, ObjectTypeId, Principal, RecordId, SettingId,
-    SettingLevel, TeamId, TenantState,
+    owner_role, visible, DomainEvent, EventBody, LedgerAccountId, LedgerScope, LedgerUnit,
+    ObjectTypeId, Principal, RecordId, SettingId, SettingLevel, TeamId, TenantState,
 };
 
 /// The kinds of event the kernel emits today, named as the specification names the variants of
 /// `event-body`. A selector may name these and no other kind until another kind is emitted.
-pub const EVENT_KINDS: [&str; 8] = [
+pub const EVENT_KINDS: [&str; 9] = [
     "tenant-created",
     "schema-changed",
     "member-changed",
@@ -19,6 +19,7 @@ pub const EVENT_KINDS: [&str; 8] = [
     "record-deleted",
     "setting-changed",
     "automation-suspended",
+    "ledger-entry-posted",
 ];
 
 /// The kind of an event: the name of its body's variant in the specification (`event-kind`).
@@ -41,8 +42,8 @@ pub fn kind_of(body: &EventBody) -> &'static str {
 /// of one member as OR. A selector narrows what a subscriber is told and never widens it: what
 /// remains is still decided by the kernel's read decision for that subscriber.
 ///
-/// `segments` and `units` are not members here: the kernel emits no segment or ledger event yet,
-/// and [`Selector::new`] refuses a request that names one rather than match nothing silently.
+/// `segments` is not a member here: the kernel emits no segment event yet, and [`Selector::new`]
+/// refuses a request that names one rather than match nothing silently.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selector {
     /// Limit record changes to these object types. `None` means every object type.
@@ -57,6 +58,10 @@ pub struct Selector {
     /// guard let the update through.
     #[serde(default)]
     pub transitions: Option<BTreeSet<String>>,
+    /// Limit to the ledger events of these units (SCH-1575): a selector that names units hears of
+    /// postings to the accounts of those units and of nothing else. `None` means every unit.
+    #[serde(default)]
+    pub units: Option<BTreeSet<LedgerUnit>>,
 }
 
 impl Selector {
@@ -66,8 +71,8 @@ impl Selector {
     }
 
     /// A selector from the members of a subscription request, or the reason it is refused: a
-    /// name that is not valid, a kind the kernel does not emit, or a member (`segments`, `units`)
-    /// whose events the kernel does not emit yet.
+    /// name that is not valid, a kind the kernel does not emit, or a member (`segments`) whose
+    /// events the kernel does not emit yet.
     pub fn new(
         objects: Option<Vec<String>>,
         kinds: Option<Vec<String>>,
@@ -80,11 +85,15 @@ impl Selector {
                 "segments cannot be selected: no segment entry or exit event is emitted yet".into(),
             );
         }
-        if units.is_some() {
-            return Err(
-                "units cannot be selected: no ledger event of a unit is emitted yet".into(),
-            );
-        }
+        let units = units
+            .map(|names| {
+                names
+                    .into_iter()
+                    .map(LedgerUnit::new)
+                    .collect::<Result<BTreeSet<_>, _>>()
+                    .map_err(|e| e.to_string())
+            })
+            .transpose()?;
         let objects = objects
             .map(|names| {
                 names
@@ -129,6 +138,7 @@ impl Selector {
             objects,
             kinds,
             transitions,
+            units,
         })
     }
 
@@ -148,6 +158,14 @@ impl Selector {
                 .iter()
                 .flat_map(|by_workflow| by_workflow.values());
             if !fired.any(|name| wanted.contains(name)) {
+                return false;
+            }
+        }
+        if let Some(wanted) = &self.units {
+            let EventBody::LedgerEntryPosted { unit, .. } = &event.body else {
+                return false;
+            };
+            if !wanted.contains(unit) {
                 return false;
             }
         }
@@ -177,6 +195,16 @@ pub enum Notice {
     Setting {
         setting: SettingId,
         level: SettingLevel,
+    },
+    /// An entry was posted to a ledger account the subscriber may read (D-6550, WG-5172). It names
+    /// the account by its derived id, the unit, the scope and the number of the entry, and never
+    /// the owner, the amount or the balance: the subscriber reads again through the ordinary path.
+    Ledger {
+        account: LedgerAccountId,
+        unit: LedgerUnit,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<LedgerScope>,
+        sequence: u64,
     },
 }
 
@@ -275,9 +303,29 @@ pub fn notice(
         // A suspension changes a definition the tenant's owner manages, not a record anyone
         // reads; it is listed with the automation, not pushed to subscribers.
         EventBody::AutomationSuspended { .. } => None,
-        // A posting names its owner, who is personal; no socket notice carries it until the
-        // ledger has a subscription of its own (units of the selector are refused above).
-        EventBody::LedgerEntryPosted { .. } => None,
+        // A posting names its owner, who is personal: the notice does not. Whether the subscriber
+        // hears of it is the kernel's read decision for the account (`ledger::may_hear`).
+        EventBody::LedgerEntryPosted {
+            account,
+            owner,
+            unit,
+            scope,
+            entry_sequence,
+            ..
+        } => strata_kernel::ledger::may_hear(
+            tenant,
+            principal,
+            event.at,
+            owner,
+            unit,
+            scope.as_str(),
+        )
+        .then(|| Notice::Ledger {
+            account: *account,
+            unit: unit.clone(),
+            scope: (!scope.as_str().is_empty()).then(|| scope.clone()),
+            sequence: *entry_sequence,
+        }),
     }
 }
 

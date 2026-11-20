@@ -118,7 +118,14 @@
 //!      `schema-problems` does not check ledger declarations; the functions that rebuild a tenant
 //!      schema or state carry its `ledger` member unchanged. The generator draws no ledger intent
 //!      or change: `assert_no_input_of_a_known_difference` fails on a snapshot that holds a
-//!      ledger, and `compare_transition` on a posting.
+//!      ledger, and `compare_transition` on a posting. Also not mirrored, for the same reason
+//!      (WG-5168, WG-5169, WG-5172): a policy over the ledger resource (the generated
+//!      `policy-problems` checks its condition against no fields and has no arm for the fields of
+//!      an account), the buckets of credit of an account header and the expiry of a unit, the
+//!      limits of single accounts that live in the ledger's state and not in the schema, and the
+//!      intent `ExpireLedger`, which the generated `intent-decision` refuses with
+//!      `ledger:decided_by_the_ledger_module`. Guarded by the same assertion, which also fails on
+//!      a policy that names the ledger, and by `compare_transition` on that intent.
 //!  14. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
 //!      templates, tokens and product records of the tenant schema that the hand-written `schema.problems` makes through
 //!      `object_meta::problems`, `templates::problems` and `products::problems` (retention from a
@@ -960,6 +967,15 @@ fn assert_no_input_of_a_known_difference(state: &State) {
         tenant.id
     );
     assert!(
+        tenant
+            .schema
+            .policies
+            .values()
+            .all(|policy| !matches!(policy.resource, Resource::Ledger { .. })),
+        "{} has a policy over the ledger; the generated functions do not mirror it (difference 13)",
+        tenant.id
+    );
+    assert!(
         tenant.schema.mail_templates.is_none()
             && tenant.schema.notice_templates.is_none()
             && tenant.schema.tokens.is_none()
@@ -1109,8 +1125,8 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         "{label}: the generated functions do not decide a setting write (difference 9)"
     );
     assert!(
-        !matches!(intent, Intent::PostLedger { .. }),
-        "{label}: the generated functions do not decide a posting (difference 13)"
+        !matches!(intent, Intent::PostLedger { .. } | Intent::ExpireLedger { .. }),
+        "{label}: the generated functions do not decide a posting or an expiry (difference 13)"
     );
     assert!(
         !matches!(intent, Intent::EraseSubject { .. }),

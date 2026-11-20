@@ -1373,6 +1373,7 @@ fn the_ledger_is_kept_with_its_commit_and_never_rewritten(store: &dyn Store) {
                 SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
                     unit: unit.clone(),
                     description: "Points".into(),
+                    expiry: None,
                 }),
                 SchemaChange::SetLedgerLimit(LedgerLimit {
                     unit: unit.clone(),

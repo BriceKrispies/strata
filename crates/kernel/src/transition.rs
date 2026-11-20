@@ -171,6 +171,13 @@ pub fn transition(
             draft.evidence.extend(decided.evidence);
             decided.output
         }
+        Intent::ExpireLedger { unit, cutoff } => {
+            let decided = crate::ledger_expiry::decide(state, unit, *cutoff, ctx)?;
+            draft.ops.extend(decided.ops);
+            draft.events.extend(decided.events);
+            draft.evidence.extend(decided.evidence);
+            decided.output
+        }
     };
     crate::triggers::after_decision(lookup, ctx, draft.finish(output))
 }
@@ -245,6 +252,9 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         | Intent::WriteSetting { .. }
         // The accounts a posting needs are named by `refine_needs`, which knows the tenant.
         | Intent::PostLedger { .. } => {}
+        Intent::ExpireLedger { unit, cutoff } => {
+            out.extend(crate::ledger_expiry::needs(unit, *cutoff));
+        }
         Intent::CreateRecord { object, fields } => field_needs(schema, &mut out, object, fields),
         Intent::UpdateRecord {
             object, id, fields, ..
@@ -369,6 +379,9 @@ pub fn refine_needs(state: &State, intent: &Intent) -> Vec<Need> {
     }
     if let Intent::PostLedger { postings } = intent {
         return crate::ledger::intent_needs(&tenant.id, postings);
+    }
+    if let Intent::ExpireLedger { unit, cutoff } = intent {
+        return crate::ledger_expiry::needs(unit, *cutoff);
     }
     let Intent::UpdateRecord {
         object, id, fields, ..
@@ -2036,6 +2049,8 @@ fn change_schema(
     });
     draft.ops.extend(settings.ops);
     draft.events.extend(settings.events);
+    // The limits of single accounts are written to the ledger's storage, not to the schema.
+    draft.ops.extend(crate::ledger::limit_ops(changes));
     for (before, after) in migration.rewritten {
         draft.ops.push(DeltaOp::PutRecord(after.clone()));
         draft.events.push(EventBody::RecordUpdated {

@@ -204,6 +204,7 @@ fn world() -> World {
                 SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
                     unit: LedgerUnit::new("points").unwrap(),
                     description: "Points".into(),
+                    expiry: None,
                 }),
                 SchemaChange::DefineOperation(count()),
             ],

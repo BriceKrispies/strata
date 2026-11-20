@@ -414,8 +414,11 @@ impl TenantSchemaExt for TenantSchema {
                         None
                     }
                 },
+                // D-6550: a policy over the ledger reads the fields of an account and an entry.
+                Resource::Ledger { .. } => Some(crate::ledger_policy::fields()),
                 _ => None,
             };
+            crate::ledger_policy::policy_problems(self, policy, &at, &mut problems);
             let manage = matches!(policy.resource, Resource::Schema | Resource::Members);
             for action in &policy.actions {
                 if manage != (*action == Action::Manage) {

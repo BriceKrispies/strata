@@ -190,7 +190,7 @@ pub struct TransitionSpec {
 pub struct PolicySpec {
     pub id: PolicyId,
     pub role: RoleId,
-    /// An object type id, `*` for every object type, `$schema` or `$members`.
+    /// An object type id, `*` for every object type, `$schema`, `$members`, `$ledger` or `$ledger:<unit>`.
     pub on: String,
     pub actions: Vec<String>,
     #[serde(default)]
@@ -475,6 +475,14 @@ impl Bundle {
                 "*" => Resource::AnyObject,
                 "$schema" => Resource::Schema,
                 "$members" => Resource::Members,
+                // D-6550: `$ledger` is the ledger of every unit, `$ledger:<unit>` that of one.
+                "$ledger" => Resource::Ledger { unit: None },
+                unit if unit.starts_with("$ledger:") => Resource::Ledger {
+                    unit: Some(
+                        strata_kernel::LedgerUnit::new(&unit["$ledger:".len()..])
+                            .map_err(|e| format!("{at}: {e}"))?,
+                    ),
+                },
                 object => {
                     Resource::Object(ObjectTypeId::new(object).map_err(|e| format!("{at}: {e}"))?)
                 }
