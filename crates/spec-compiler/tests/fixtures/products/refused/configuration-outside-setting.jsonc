@@ -1,29 +1,32 @@
 {
-  // Refused: object types that hold configuration as records instead of declared settings
-  // (layer.configuration-outside-setting, WG-5000). The first is named for configuration, the second
-  // is a store of named values; the third is a record type of the product and needs no setting.
+  // Refused: a product that keeps its configuration as the one fixed record, named by a literal id in
+  // its expressions (layer.configuration-outside-setting, WG-5000). The first step updates ref(1), the
+  // singleton that holds the threshold; the second step updates the record the caller passes, which is
+  // domain data and is not refused. The record type is named for what it is, so no name gives it away.
   "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
   "objects": [
-    {
-      "id": "member_tiers__tier_settings",
-      "label": "Tier settings",
-      "fields": { "gold_at": { "id": "gold_at", "label": "Gold at", "ty": "Int", "required": true, "unique": false } },
-      "constraints": {}
-    },
-    {
-      "id": "member_tiers__entry",
-      "label": "Entry",
-      "fields": {
-        "key": { "id": "key", "label": "Key", "ty": "Str", "required": true, "unique": true },
-        "value": { "id": "value", "label": "Value", "ty": "Str", "required": true, "unique": false }
-      },
-      "constraints": {}
-    },
     {
       "id": "member_tiers__member",
       "label": "Member",
       "fields": { "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false } },
       "constraints": {}
+    }
+  ],
+  "operations": [
+    {
+      "id": "member_tiers__rename",
+      "label": "Rename a member",
+      "inputs": [
+        { "name": "member", "ty": { "Ref": { "target": "member_tiers__member", "on-delete": "Restrict" } }, "required": true },
+        { "name": "name", "ty": "Str", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "subject": { "object": "member_tiers__member", "input": "member" },
+      "conditions": [],
+      "steps": [
+        { "UpdateRecord": { "id": "threshold", "object": "member_tiers__member", "record": "ref(1)", "fields": { "name": "param.name" } } },
+        { "UpdateRecord": { "id": "rename", "object": "member_tiers__member", "record": "param.member", "fields": { "name": "param.name" } } }
+      ]
     }
   ]
 }

@@ -1332,6 +1332,42 @@ fn print(node: &Node) -> String {
     }
 }
 
+/// The ids of the records a text names by a literal, `ref(3)`, in the order they appear. A record id
+/// is minted by a tenant when its record is created, so a product written before any tenant exists
+/// names a record only by assuming one is there: the singleton record of a configuration. A text that
+/// does not parse has none (it is refused by [`check_text`]).
+pub fn literal_record_ids(text: &str) -> Vec<u64> {
+    fn lit(l: &Lit, out: &mut Vec<u64>) {
+        match l {
+            Lit::Ref(id) => out.push(*id),
+            Lit::List(items) => items.iter().for_each(|i| lit(i, out)),
+            _ => {}
+        }
+    }
+    fn walk(node: &Node, out: &mut Vec<u64>) {
+        match &node.kind {
+            NodeKind::Lit(l) => lit(l, out),
+            NodeKind::Not(inner) => walk(inner, out),
+            NodeKind::Junction { items, .. } => items.iter().for_each(|i| walk(i, out)),
+            NodeKind::Cmp { left, right, .. } | NodeKind::Arith { left, right, .. } => {
+                walk(left, out);
+                walk(right, out);
+            }
+            NodeKind::In(left, right) => {
+                walk(left, out);
+                walk(right, out);
+            }
+            NodeKind::Call(_, args) => args.iter().for_each(|a| walk(a, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(tree) = parse(text) {
+        walk(&tree, &mut out);
+    }
+    out
+}
+
 /// Parses and checks one text. Returns the first problem as a diagnostic, or `None` when the text
 /// parses and checks. `entity` is the product entity that holds the text, `at` where in it.
 pub fn check_text(

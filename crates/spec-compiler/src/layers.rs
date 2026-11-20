@@ -46,8 +46,8 @@
 //! - `layer.retention-missing`: an object type with a personal field and no retention (D-6584);
 //! - `layer.balance-outside-ledger`: a step or transition that writes a record field from its own
 //!   current value, a mutable balance outside the ledger (WG-4998);
-//! - `layer.configuration-outside-setting`: an object type that holds configuration as records
-//!   (named for configuration, or a key and value store) instead of a declared setting (WG-5000);
+//! - `layer.configuration-outside-setting`: an expression that names a record by a literal id,
+//!   `ref(3)`, the singleton record of a configuration kept outside a declared setting (WG-5000);
 //! - `layer.reference-unknown`, `layer.cross-product-reference`: a name in a typed section, or a
 //!   product capability in a `capabilities` or `requires` list, that no entity of the product
 //!   declares, or that another product file declares.
@@ -164,7 +164,8 @@ pub const PLATFORM_REFERENCES_PRODUCT: &str = "layer.platform-references-product
 /// An entity that keeps a mutable balance outside the ledger: a step or transition that writes a
 /// field of a record from that field's own value (WG-4998, LDG-001).
 pub const BALANCE_OUTSIDE_LEDGER: &str = "layer.balance-outside-ledger";
-/// An object type that keeps configuration as records instead of declared settings (WG-5000).
+/// An expression of a product that names a record by a literal id: the singleton record of a
+/// configuration kept outside a declared setting (WG-5000, SET-001).
 pub const CONFIGURATION_OUTSIDE_SETTING: &str = "layer.configuration-outside-setting";
 
 /// Stands for "any section": a key listing it accepts any platform entity.
@@ -667,13 +668,13 @@ fn check_product(
                         );
                         let scope = context.scope_of(section, item);
                         for text in &exprs {
+                            check_fixed_record(&file, id, &text.at, &text.text, out);
                             out.extend(layer_expr::check_text(
                                 &file, id, &text.at, &text.text, &scope, &context,
                             ));
                         }
                         if *section == "objects" {
                             check_retention(&file, id, item, out);
-                            check_configuration(&file, namespace.as_deref(), id, item, out);
                         }
                         if matches!(*section, "operations" | "automations" | "workflows") {
                             check_balance(&file, id, item, out);
@@ -1220,59 +1221,28 @@ fn collect_self_writes(value: &Value, out: &mut Vec<(String, String)>) {
     }
 }
 
-/// Words in the local name of an object type that say its records are configuration.
-const CONFIGURATION_WORDS: &[&str] = &[
-    "config",
-    "configs",
-    "configuration",
-    "configurations",
-    "setting",
-    "settings",
-    "preference",
-    "preferences",
-    "flag",
-    "flags",
-    "option",
-    "options",
-    "parameter",
-    "parameters",
-];
-
-/// An object type whose records are configuration: its local name is made of a configuration word,
-/// or it has a `key` field and a `value` field, a store of named values (WG-5000). Configuration of a
-/// product is a declared setting (a `settings` entry with a type, a default and the levels that may
-/// override it), which the platform layers over platform, tenant, team and person, validates, and
-/// announces when it changes.
-fn check_configuration(
-    file: &str,
-    namespace: Option<&str>,
-    id: &str,
-    item: &Value,
-    out: &mut Vec<Diagnostic>,
-) {
-    let local = namespace
-        .and_then(|n| id.strip_prefix(n))
-        .unwrap_or(id)
-        .to_string();
-    let named = local
-        .split(['_', '-'])
-        .find(|word| CONFIGURATION_WORDS.contains(word))
-        .map(|word| format!("its name has the word \"{word}\""));
-    let has = |name: &str| {
-        item.get("fields")
-            .and_then(Value::as_object)
-            .is_some_and(|f| f.contains_key(name))
+/// An expression that names a record by a literal id (WG-5000). A record id is minted by a tenant when
+/// its record is created, so a product written before any tenant exists can name one only by assuming
+/// it is there: the one fixed record that holds a configuration, read in a condition or written by a
+/// step. What a product's expressions read of other records is what they reach from the record in
+/// scope, by a reference field, so a literal id is never domain data. Configuration of a product is a
+/// declared setting (a `settings` entry with a type, a default and the levels that may override it),
+/// which the platform layers over platform, tenant, team and person, validates, and announces when it
+/// changes. The check judges what the expression does, not what any record type is called.
+fn check_fixed_record(file: &str, id: &str, at: &str, text: &str, out: &mut Vec<Diagnostic>) {
+    let Some(record) = layer_expr::literal_record_ids(text).first().copied() else {
+        return;
     };
-    let reason = named.or_else(|| {
-        (has("key") && has("value"))
-            .then(|| "it has a \"key\" field and a \"value\" field".to_string())
-    });
-    let Some(reason) = reason else { return };
+    let place = if at.is_empty() {
+        "its value".to_string()
+    } else {
+        format!("\"{at}\"")
+    };
     out.push(Diagnostic::new(
         CONFIGURATION_OUTSIDE_SETTING,
         id,
         format!(
-            "The object type \"{id}\" in {file} holds configuration as records ({reason}). Configuration is a declared setting: add an entry to \"settings\" with a type, a default and the levels that may override it (\"tenant\", \"team\", \"person\"), and read it as the setting, so it is typed, layered, refused when a level may not override it, and announced when it changes (SET-001). Remove the object type, or rename it if its records are not configuration."
+            "\"{id}\" in {file}: the expression at {place}, `{text}`, names the record ref({record}) by a literal id. A fixed record is a singleton, which is how configuration is kept outside a declared setting. Configuration is a declared setting: add an entry to \"settings\" with a type, a default and the levels that may override it (\"tenant\", \"team\", \"person\"), and read it as the setting, so it is typed, layered, refused when a level may not override it, and announced when it changes (SET-001). Reach other records from the record in scope by a reference field, or take the record as a parameter."
         ),
     ));
 }
