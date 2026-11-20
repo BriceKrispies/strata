@@ -20,6 +20,7 @@
 pub mod canon;
 pub mod expr;
 pub mod intent;
+pub mod limits;
 pub mod read;
 pub mod rules;
 pub mod schema;

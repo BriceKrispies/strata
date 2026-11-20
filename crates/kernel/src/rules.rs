@@ -3,6 +3,7 @@
 
 use crate::expr::{self, Env};
 use crate::intent::{Check, CheckExt, DomainError, DomainErrorExt, ErrorKind};
+use crate::limits;
 use crate::schema::{
     Action, Grant, ObjectAction, ObjectActionExt, ObjectTypeDef, Resource, TenantSchema,
     TenantSchemaExt, WorkflowDefExt,
@@ -77,6 +78,29 @@ impl<'a> Lookup<'a> {
                 Value::List(items) => items.contains(value),
                 other => other == value,
             })
+            .collect())
+    }
+
+    /// At most `limit` records of `object` with an id above `after`, in id order.
+    pub fn page_of(
+        &self,
+        object: &ObjectTypeId,
+        after: Option<RecordId>,
+        limit: u32,
+    ) -> Result<Vec<&'a Arc<Record>>, DomainError> {
+        let need = Need::PageOf {
+            object: object.clone(),
+            after,
+            limit,
+        };
+        if !self.coverage.covers(&need) {
+            return Err(insufficient(need));
+        }
+        Ok(self
+            .tenant
+            .records_of(object)
+            .filter(|record| after.is_none_or(|a| record.id > a))
+            .take(limit as usize)
             .collect())
     }
 
@@ -406,6 +430,18 @@ pub fn validate_record(
     let mut out = Validation::default();
     let name = &object.id;
 
+    let record_bytes = serde_json::to_vec(candidate).map_or(usize::MAX, |bytes| bytes.len());
+    if record_bytes > limits::MAX_RECORD_BYTES {
+        out.fail(
+            ErrorKind::LimitExceeded,
+            format!("limit:record:{name}"),
+            format!(
+                "a record of {record_bytes} bytes is larger than the maximum of {}",
+                limits::MAX_RECORD_BYTES
+            ),
+        );
+    }
+
     for field in candidate.fields.keys() {
         if !object.fields.contains_key(field) {
             out.fail(
@@ -431,6 +467,21 @@ pub fn validate_record(
         }
         if field.required {
             out.pass(format!("required:{at}"), "present");
+        }
+        if let Some(problem) = limits::value_problem(value) {
+            out.fail(ErrorKind::LimitExceeded, format!("limit:{at}"), problem);
+            continue;
+        }
+        if field.unique && limits::encoded_len(value) > limits::MAX_UNIQUE_BYTES {
+            out.fail(
+                ErrorKind::LimitExceeded,
+                format!("limit:unique:{at}"),
+                format!(
+                    "a value in a unique field is at most {} bytes encoded",
+                    limits::MAX_UNIQUE_BYTES
+                ),
+            );
+            continue;
         }
         if !field.ty.admits(value) {
             out.fail(

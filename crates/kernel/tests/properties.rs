@@ -237,6 +237,16 @@ fn partial(tenant: &Arc<TenantState>, wanted: &BTreeSet<Need>) -> State {
                 tenant.record(object, *id).into_iter().cloned().collect()
             }
             Need::AllOf(object) => tenant.records_of(object).cloned().collect(),
+            Need::PageOf {
+                object,
+                after,
+                limit,
+            } => tenant
+                .records_of(object)
+                .filter(|r| after.is_none_or(|a| r.id > a))
+                .take(*limit as usize)
+                .cloned()
+                .collect(),
             Need::ByField {
                 object,
                 field,
@@ -490,7 +500,7 @@ proptest! {
         } else {
             principals(WORLD_TENANTS[reader_tenant])[reader].clone()
         };
-        let by_rank = ReadRequest::Named { query: QueryId::new("notes_by_rank").unwrap(), params: BTreeMap::new() };
+        let by_rank = ReadRequest::Named { query: QueryId::new("notes_by_rank").unwrap(), params: BTreeMap::new(), page_size: None, cursor: None };
         let ids: Vec<RecordId> = (1..9).map(RecordId).collect();
         for tenant in WORLD_TENANTS {
             let context = ctx(tenant, principal.clone(), 99_000);

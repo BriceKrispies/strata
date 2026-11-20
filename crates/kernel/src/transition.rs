@@ -1371,6 +1371,16 @@ fn change_schema(
     if changes.is_empty() {
         return Err(draft.reject(ErrorKind::InvalidIntent, "no changes given"));
     }
+    if changes.len() > crate::limits::MAX_SCHEMA_CHANGES {
+        return Err(draft.reject(
+            ErrorKind::LimitExceeded,
+            format!(
+                "{} changes in one schema change is more than the maximum of {}",
+                changes.len(),
+                crate::limits::MAX_SCHEMA_CHANGES
+            ),
+        ));
+    }
     let migration = plan_migration(lookup, changes, draft.ctx.now).map_err(|mut e| {
         let mut evidence = draft.evidence.clone();
         evidence.append(&mut e.evidence);

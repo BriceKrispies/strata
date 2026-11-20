@@ -1304,6 +1304,19 @@ impl Store for SqliteStore {
                         &[&object.as_str(), &(id.0 as i64)],
                     )?,
                     Need::AllOf(object) => all_of(tx, object)?,
+                    Need::PageOf {
+                        object,
+                        after,
+                        limit,
+                    } => select_strings(
+                        tx,
+                        "SELECT data FROM records WHERE object = ?1 AND id > ?2 ORDER BY id LIMIT ?3",
+                        &[
+                            &object.as_str(),
+                            &after.map_or(-1_i64, |a| a.0 as i64),
+                            &(*limit as i64),
+                        ],
+                    )?,
                     Need::ByField {
                         object,
                         field,

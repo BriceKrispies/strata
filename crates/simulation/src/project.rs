@@ -273,6 +273,8 @@ fn diff_queries(
             let request = ReadRequest::Named {
                 query: query.id.clone(),
                 params: BTreeMap::new(),
+                page_size: None,
+                cursor: None,
             };
             let ids = |world: &World| -> Vec<u64> {
                 world

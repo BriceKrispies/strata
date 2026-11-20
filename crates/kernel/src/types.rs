@@ -13,11 +13,11 @@ pub use strata_model_core::types::{
     Action, ArgSource, Check, CmpOp, ConstraintDef, ConstraintId, Context, Coverage, DeltaOp,
     DomainError, DomainEvent, Effect, ErrorKind, EventBody, ExistingData, Expr, FieldDef, FieldId,
     FieldType, Grant, Intent, InvitationDef, InvitationId, Need, ObjectAction, ObjectTypeDef,
-    ObjectTypeId, OnDelete, OrderKey, Output, Permission, PolicyDef, PolicyId, Principal,
-    PrincipalId, QueryDef, QueryId, ReadRequest, ReadResult, Record, RecordId, Resource, RoleDef,
-    RoleId, SchemaChange, SchemaVersion, Scope, SessionId, State, StateDelta, StateRevision,
-    TeamDef, TeamId, TenantId, TenantSchema, TenantState, Value, ViewDef, ViewId, ViewSection,
-    WorkflowDef, WorkflowId, WorkflowTransition,
+    ObjectTypeId, OnDelete, OrderKey, Output, PageCursor, Permission, PolicyDef, PolicyId,
+    Principal, PrincipalId, QueryDef, QueryId, ReadRequest, ReadResult, Record, RecordId, Resource,
+    RoleDef, RoleId, SchemaChange, SchemaVersion, Scope, SessionId, State, StateDelta,
+    StateRevision, TeamDef, TeamId, TenantId, TenantSchema, TenantState, Value, ViewDef, ViewId,
+    ViewSection, WorkflowDef, WorkflowId, WorkflowTransition,
 };
 
 /// The result of an accepted transition (specification type `transition-result`).

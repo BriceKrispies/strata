@@ -6,6 +6,7 @@
 //! teams and invitations a schema holds.
 
 use crate::expr::{self, Expr, TypeEnv};
+use crate::limits;
 use crate::types::{
     owner_role, public_role, FieldTypeExt, InvitationId, ObjectTypeId, RoleId, SchemaVersion,
     TeamId,
@@ -237,7 +238,39 @@ impl TenantSchemaExt for TenantSchema {
         let no_params = BTreeSet::new();
         let no_fields = BTreeMap::new();
 
+        for (what, count, max) in [
+            ("object types", self.objects.len(), limits::MAX_OBJECTS),
+            ("policies", self.policies.len(), limits::MAX_POLICIES),
+            ("queries", self.queries.len(), limits::MAX_QUERIES),
+        ] {
+            if count > max {
+                problems.push(format!(
+                    "limit: {count} {what} is more than the maximum of {max}"
+                ));
+            }
+        }
+        for query in self.queries.values() {
+            if query
+                .limit
+                .is_some_and(|n| n == 0 || n > limits::MAX_PAGE_SIZE)
+            {
+                problems.push(format!(
+                    "limit: query {} declares a limit outside 1 to {}",
+                    query.id,
+                    limits::MAX_PAGE_SIZE
+                ));
+            }
+        }
+
         for object in self.objects.values() {
+            if object.fields.len() > limits::MAX_FIELDS_PER_OBJECT {
+                problems.push(format!(
+                    "limit: {} has {} fields, more than the maximum of {}",
+                    object.id,
+                    object.fields.len(),
+                    limits::MAX_FIELDS_PER_OBJECT
+                ));
+            }
             let env = TypeEnv {
                 fields: &object.fields,
                 params: &no_params,
