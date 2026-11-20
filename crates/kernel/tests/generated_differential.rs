@@ -33,56 +33,61 @@
 //!      generated `policy-check-text` writes `<condition>: evaluation failed`, because
 //!      `policy-check` does not carry the error (a gap of WG-4938). Compared as: the generated
 //!      detail minus its suffix is a prefix of the hand-written detail.
-//!   2. Not exercised, so not compared: a policy condition or query filter that follows a
-//!      reference (`through`). The generated `authorize` has no lookup and fails such a
-//!      condition (WG-4938, WG-4957); the hand-written one has a lookup. The corpus has no
-//!      such condition.
+//!   2. Not exercised, so not compared: a policy condition, a query filter or a field read
+//!      condition that follows a reference (`through`), and the `InsufficientState` the
+//!      hand-written kernel answers when the snapshot lacks the record it would follow
+//!      (`expr::missing`, `authorize_needing`, WG-5096). Two things are missing in the toolchain,
+//!      neither in Exegra: specc compiles `eval` of three arguments only (the lookup argument of
+//!      the fourth, which Exegra evaluates, has no generated counterpart: the generated
+//!      `follow` of the bridge always fails), and the need a condition names is found by
+//!      walking the expression tree, a structural recursion that specc refuses (Exegra checks
+//!      and evaluates it). The generated `authorize`, filters and `redact` therefore fail such
+//!      a condition. The corpus has no such condition, and `assert_no_input_of_a_known_difference`
+//!      fails on a field read condition that follows a reference.
 //!   3. Not exercised: a query order key over a list-valued attribute. The generated order
 //!      does not order a list element by element, as `Value`'s derived order does.
-//!      The corpus has no list-valued field.
+//!      The corpus has no list-valued order key (it has a list-valued field, `tags`, which no
+//!      query orders by).
 //!   4. Not exercised: the intents of teams and invitations, and schema changes other than
-//!      `DefineField`, `DefineConstraint`, `RemoveField` and the definitions of triggers,
-//!      automations, tenant operations and composite unique constraints (and their removals),
-//!      which the generator below adds to the seven intents of `properties.rs`. `texts_for`
-//!      reads defaults and constraints only from `DefineField` and `DefineConstraint`; the
-//!      definitions print no expression. The functions of the other intents are mirrored all
-//!      the same (the conferral of a role, the owner that remains, the reserved `team:` prefix,
-//!      the rewrite of records by a schema change), each with examples in the specification.
-//!   5. Not exercised, and not mirrored: size limits (`limits.rs`: the bytes of a record, the
-//!      length of a string or a list, the encoded size of a value of a unique field). The
-//!      generated `validate-record` has no such check, because the function language cannot
-//!      measure the encoding of a value. The corpus writes titles of at most thirty characters.
-//!   6. Not exercised, and not mirrored: field-level read conditions (`FieldDef::read`). The
-//!      hand-written `read` trims a record to the fields whose condition holds for the reader;
-//!      the generated `kernel-read` returns whole records. No field of the corpus has one.
-//!   7. Not exercised, and not mirrored: deleting a record that refers to the deleted one in two
-//!      fields. The hand-written `delete_record` clears both in one rewrite; the generated
-//!      `delete-record` clears one field per rewrite, so the second rewrite starts from the
-//!      stored record and keeps the first field. No object of the corpus has two reference
-//!      fields.
-//!   8. Not exercised, and not mirrored: the problems of a schema the generated `schema-problems`
-//!      does not state: the counts of objects, policies and queries, a query limit outside 1 to
-//!      200, a field read condition that is not a truth value, the permissions of roles, teams
-//!      and invitations. The corpus changes the schema only by a field, a constraint, an
-//!      unknown object type and the definitions of difference 4.
-//!   9. Not exercised, and not mirrored: the bounds the kernel checks on a definition that the
+//!      `DefineField`, `DefineRelationship`, `DefineConstraint`, `DefineQuery`,
+//!      `DefineRolePermissions`, `RemoveField` and the definitions of triggers, automations, tenant
+//!      operations and composite unique constraints (and their removals), which the generator
+//!      below adds to the seven intents of `properties.rs`. `texts_for` reads defaults and
+//!      constraints only from `DefineField` and `DefineConstraint`; the definitions print no
+//!      expression. The functions of the other intents are mirrored all the same (the conferral
+//!      of a role, the owner that remains, the reserved `team:` prefix, the rewrite of records
+//!      by a schema change), each with examples in the specification.
+//!   5. Not exercised: a list nested three deep in a stored value. The generated limit and
+//!      size functions (`value-limit-problem`, `value-json-bytes`) look two levels into a list
+//!      where `limits.rs` looks as deep as there are lists, because specc compiles no
+//!      recursion; a field admits a list of scalars only, so such a value is a type mismatch
+//!      whose only other effect is the order of two refusals on a record over the size limit.
+//!      The corpus draws no nested list.
+//!   6. Not exercised: a policy on every object whose condition reads a field is found by
+//!      `policy-problems` as a condition that does not check against no fields, where the
+//!      hand-written `mentions_field` walks the expression (a recursion specc refuses). The two
+//!      differ for a condition that fails to check for another reason, or that reads a field in
+//!      a branch that never runs. The corpus defines no policy on every object.
+//!   7. Not exercised, and not mirrored: the bounds the kernel checks on a definition that the
 //!      function language cannot state, because it compiles neither durations nor recursion:
 //!      retry delays, attempt timeouts and waits of an automation step, and the two hundred
 //!      nodes of an operation condition. The generator draws no definition that breaks one, nor
 //!      a hundred and one triggers. Its automation acts with no run-as role, so the conferral of
 //!      a run-as role is compared only through the specification's examples.
-//!  10. Not exercised, and not mirrored: conditions that follow a reference are
-//!      `InsufficientState` in the hand-written kernel when the snapshot lacks the record
-//!      (difference 2 states the rest).
 //!
-//! Differences 5 to 9 are guarded: `assert_no_input_of_a_known_difference` runs on every
-//! snapshot the test decides or reads, and fails when a snapshot has a field read condition, an
-//! object with two reference fields to one object type, or an automation step with a retry, a
-//! timeout or a wait, so that a corpus that grows into them is told to mirror the rule or to
-//! count the difference here. The others are guarded by the operation generator drawing
-//! nothing that reaches them.
+//! Difference 7 is guarded: `assert_no_input_of_a_known_difference` runs on every snapshot the
+//! test decides or reads, and fails when a snapshot has an automation step with a retry, a
+//! timeout or a wait, or a field read condition that follows a reference (difference 2), so that
+//! a corpus that grows into them is told to mirror the rule or to count the difference here. The
+//! others are guarded by the operation generator drawing nothing that reaches them.
 //!
-//! Mirrored in this pass, so no longer differences: authorisation before the lookup of an object
+//! Mirrored, so no longer differences: the size limits of `limits.rs` (the bytes of a record, the
+//! length of a string or a list, the encoded size of a value of a unique field: `record-limit-check`,
+//! `limit-step`; WG-5092), the field-level read conditions (`redact`, in `kernel-read` and
+//! `named-read`; WG-5093), the deletion of a record that two fields of one record refer to (one
+//! rewrite per record; WG-5094), the problems of a schema that `schema-problems` did not state:
+//! counts and limits, field read conditions, the permissions of roles, teams and invitations
+//! (WG-5095, WG-5077); and in an earlier pass: authorisation before the lookup of an object
 //! type or a record (`object-def`, `stored`), the conferral of a role counting policies
 //! (`may-confer`, `holds-policy-power`), a revocation asking for the authority to confer, the
 //! owner that remains counting teams (`owner-lost`), the second authorisation of an update after
@@ -132,6 +137,16 @@ enum OpKind {
         slug: u8,
         rank: Option<i64>,
         author: Option<u64>,
+        /// A second reference field to a person (once `SchemaOp::SecondReference` defines it).
+        editor: Option<u64>,
+        /// A value in `secret`, a field with a read condition (once `SchemaOp::DefineSecret`
+        /// defines it).
+        secret: bool,
+    },
+    /// A note, created or updated, with a value at or over one of the size limits.
+    Big {
+        id: Option<u64>,
+        shape: BigShape,
     },
     Person {
         name: String,
@@ -160,6 +175,28 @@ enum OpKind {
     },
 }
 
+/// What a `Big` operation writes, at or just over a limit of `limits.rs`.
+#[derive(Clone, Copy, Debug)]
+enum BigShape {
+    /// A title of 65537 bytes: one over the longest string.
+    LongTitle,
+    /// A title of 32769 characters of two bytes: 65538 bytes, which only a count of bytes finds.
+    WideTitle,
+    /// A title of 65536 bytes: the longest string.
+    LimitTitle,
+    /// A slug of 191 characters: 201 bytes encoded, one over a unique value.
+    LongSlug,
+    /// A slug of 190 characters: 200 bytes encoded, the longest unique value.
+    LimitSlug,
+    /// Five strings of 65536 bytes (the last three in fields `SchemaOp::DefineExtra` defines):
+    /// no string is too long and the record is over 262144 bytes.
+    FatRecord,
+    /// A list of 1001 items in `tags` (once `SchemaOp::DefineTags` defines it).
+    LongList,
+    /// A list of 1000 items.
+    LimitList,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum SchemaOp {
     RequireRank,
@@ -174,6 +211,24 @@ enum SchemaOp {
     RemoveOperation,
     DefineUnique,
     RemoveUnique,
+    /// A field with a read condition: only an editor reads `secret`.
+    DefineSecret,
+    /// A second reference field to person, so a note can refer to one person twice.
+    SecondReference,
+    /// A list field, the only one of the corpus.
+    DefineTags,
+    /// One of three more string fields, so that a record can be over its size limit.
+    DefineExtra(u8),
+    /// A field whose read condition is an integer, not a truth value.
+    BadReadInt,
+    /// A field whose read condition names a field the type does not have.
+    BadReadUnknown,
+    /// A query whose limit is 0 or over 200.
+    BadQueryLimit(u32),
+    /// Permissions with a blank capability, an unknown object type and no action.
+    BadPermissions,
+    /// A hundred more fields, which is over the most an object type may have.
+    ManyFields,
 }
 
 const MEMBERS: [&str; 5] = ["owner", "editor", "writer1", "writer2", "stranger"];
@@ -194,11 +249,31 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         1 => Just(SchemaOp::RemoveOperation),
         2 => Just(SchemaOp::DefineUnique),
         1 => Just(SchemaOp::RemoveUnique),
+        2 => Just(SchemaOp::DefineSecret),
+        2 => Just(SchemaOp::SecondReference),
+        1 => Just(SchemaOp::DefineTags),
+        1 => (1u8..4).prop_map(SchemaOp::DefineExtra),
+        1 => Just(SchemaOp::BadReadInt),
+        1 => Just(SchemaOp::BadReadUnknown),
+        1 => prop_oneof![Just(0u32), Just(201u32)].prop_map(SchemaOp::BadQueryLimit),
+        1 => Just(SchemaOp::BadPermissions),
+        1 => Just(SchemaOp::ManyFields),
+    ];
+    let big = prop_oneof![
+        Just(BigShape::LongTitle),
+        Just(BigShape::WideTitle),
+        Just(BigShape::LimitTitle),
+        Just(BigShape::LongSlug),
+        Just(BigShape::LimitSlug),
+        Just(BigShape::FatRecord),
+        Just(BigShape::LongList),
+        Just(BigShape::LimitList),
     ];
     let kind = prop_oneof![
         1 => ("[a-z ]{0,4}", 0usize..2).prop_map(|(name, owner)| OpKind::CreateTenant { name, owner }),
-        4 => ("[a-zA-Z ]{0,30}", 0u8..6, proptest::option::of(0i64..5), proptest::option::of(1u64..6))
-            .prop_map(|(title, slug, rank, author)| OpKind::Create { title, slug, rank, author }),
+        4 => ("[a-zA-Z ]{0,30}", 0u8..6, proptest::option::of(0i64..5), proptest::option::of(1u64..6), proptest::option::of(1u64..6), any::<bool>())
+            .prop_map(|(title, slug, rank, author, editor, secret)| OpKind::Create { title, slug, rank, author, editor, secret }),
+        2 => (proptest::option::of(1u64..8), big).prop_map(|(id, shape)| OpKind::Big { id, shape }),
         1 => "[a-z]{1,6}".prop_map(|name| OpKind::Person { name }),
         4 => (1u64..8, proptest::option::of("[a-z]{0,30}"), proptest::option::of(status), proptest::option::of(0i64..5))
             .prop_map(|(id, title, status, rank)| OpKind::Update { id, title, status, rank }),
@@ -228,11 +303,19 @@ fn intent_of(op: &Op) -> Intent {
             slug,
             rank,
             author,
+            editor,
+            secret,
         } => {
             let mut fields = BTreeMap::from([
                 (field("title"), text(title)),
                 (field("slug"), text(&format!("s{slug}"))),
             ]);
+            if let Some(editor) = editor {
+                fields.insert(field("editor"), Value::Ref(RecordId(*editor)));
+            }
+            if *secret {
+                fields.insert(field("secret"), text("for editors"));
+            }
             if let Some(rank) = rank {
                 fields.insert(field("rank"), Value::Int(*rank));
             }
@@ -242,6 +325,54 @@ fn intent_of(op: &Op) -> Intent {
             Intent::CreateRecord {
                 object: object("note"),
                 fields,
+            }
+        }
+        OpKind::Big { id, shape } => {
+            let long = |unit: &str, count: usize| text(&unit.repeat(count));
+            let mut fields = BTreeMap::new();
+            match shape {
+                BigShape::LongTitle => {
+                    fields.insert(field("title"), long("a", 65_537));
+                }
+                BigShape::WideTitle => {
+                    fields.insert(field("title"), long("\u{e9}", 32_769));
+                }
+                BigShape::LimitTitle => {
+                    fields.insert(field("title"), long("a", 65_536));
+                }
+                BigShape::LongSlug => {
+                    fields.insert(field("slug"), long("a", 191));
+                }
+                BigShape::LimitSlug => {
+                    fields.insert(field("slug"), long("a", 190));
+                }
+                BigShape::FatRecord => {
+                    for name in ["title", "body", "e1", "e2", "e3"] {
+                        fields.insert(field(name), long("a", 65_536));
+                    }
+                }
+                BigShape::LongList => {
+                    fields.insert(field("tags"), Value::List(vec![text("x"); 1001]));
+                }
+                BigShape::LimitList => {
+                    fields.insert(field("tags"), Value::List(vec![text("x"); 1000]));
+                }
+            }
+            match id {
+                Some(id) => Intent::UpdateRecord {
+                    object: object("note"),
+                    id: RecordId(*id),
+                    fields,
+                    expected_version: None,
+                },
+                None => {
+                    fields.entry(field("title")).or_insert_with(|| text("Big"));
+                    fields.entry(field("slug")).or_insert_with(|| text("big"));
+                    Intent::CreateRecord {
+                        object: object("note"),
+                        fields,
+                    }
+                }
             }
         }
         OpKind::Person { name } => Intent::CreateRecord {
@@ -280,7 +411,7 @@ fn intent_of(op: &Op) -> Intent {
             change,
             grandfather,
         } => {
-            let change = match change {
+            let single = match change {
                 SchemaOp::RequireRank => SchemaChange::DefineField {
                     object: object("note"),
                     field: field_def("rank", FieldType::Int, true),
@@ -326,9 +457,83 @@ fn intent_of(op: &Op) -> Intent {
                     object: object("note"),
                     unique: ConstraintId::new("title_rank").unwrap(),
                 },
+                SchemaOp::DefineSecret => SchemaChange::DefineField {
+                    object: object("note"),
+                    field: FieldDef {
+                        read: Some(Expr::HasRole(role("editor"))),
+                        ..field_def("secret", FieldType::Str, false)
+                    },
+                },
+                SchemaOp::SecondReference => SchemaChange::DefineRelationship {
+                    object: object("note"),
+                    field: field("editor"),
+                    label: "Editor".into(),
+                    target: object("person"),
+                    on_delete: OnDelete::SetNull,
+                    required: false,
+                },
+                SchemaOp::DefineTags => SchemaChange::DefineField {
+                    object: object("note"),
+                    field: field_def("tags", FieldType::List(Box::new(FieldType::Str)), false),
+                },
+                SchemaOp::DefineExtra(n) => SchemaChange::DefineField {
+                    object: object("note"),
+                    field: field_def(&format!("e{n}"), FieldType::Str, false),
+                },
+                SchemaOp::BadReadInt => SchemaChange::DefineField {
+                    object: object("note"),
+                    field: FieldDef {
+                        read: Some(Expr::Len(Box::new(var(Scope::Record, "title")))),
+                        ..field_def("peek", FieldType::Str, false)
+                    },
+                },
+                SchemaOp::BadReadUnknown => SchemaChange::DefineField {
+                    object: object("note"),
+                    field: FieldDef {
+                        read: Some(var(Scope::Record, "nope")),
+                        ..field_def("peek", FieldType::Str, false)
+                    },
+                },
+                SchemaOp::BadQueryLimit(limit) => SchemaChange::DefineQuery(QueryDef {
+                    id: QueryId::new("bad_limit").unwrap(),
+                    object: object("note"),
+                    filter: None,
+                    params: BTreeSet::new(),
+                    order: vec![],
+                    limit: Some(*limit),
+                }),
+                SchemaOp::BadPermissions => SchemaChange::DefineRolePermissions {
+                    role: role("editor"),
+                    permissions: vec![
+                        Permission::Capability("  ".into()),
+                        Permission::Object {
+                            object: object("nowhere"),
+                            actions: BTreeSet::from([ObjectAction::Read]),
+                        },
+                        Permission::Object {
+                            object: object("note"),
+                            actions: BTreeSet::new(),
+                        },
+                    ],
+                },
+                // Placeholder: `ManyFields` is a hundred changes, built below.
+                SchemaOp::ManyFields => SchemaChange::RemoveField {
+                    object: object("nothing"),
+                    field: field("nothing"),
+                },
+            };
+            let changes = if matches!(change, SchemaOp::ManyFields) {
+                (0..100)
+                    .map(|i| SchemaChange::DefineField {
+                        object: object("note"),
+                        field: field_def(&format!("x{i:03}"), FieldType::Str, false),
+                    })
+                    .collect()
+            } else {
+                vec![single]
             };
             Intent::ChangeSchema {
-                changes: vec![change],
+                changes,
                 expected_version: None,
                 existing: if *grandfather {
                     ExistingData::Grandfather
@@ -350,7 +555,7 @@ fn intent_of(op: &Op) -> Intent {
 
 /// An automation that creates a note, looks at it and ends; `broken`, it names a step it does
 /// not declare and leaves one unreachable. It acts with no role, so the comparison is of the
-/// definitions and not of the conferral of a run-as role (difference 9).
+/// definitions and not of the conferral of a run-as role (difference 7).
 fn award(broken: bool) -> AutomationDef {
     let name = |n: &str| StepName::new(n).unwrap();
     let step = |action: AutomationStep, next: Option<&str>| AutomationStepDef {
@@ -602,29 +807,51 @@ fn reconcile_evaluation_failed(hand: &[Check], generated: &mut [Check]) -> usize
     matched
 }
 
-/// Differences 5 to 8 of the header: fail when a snapshot holds an input of a rule the generated
+/// Whether an expression follows a reference (`through`): what the generated functions cannot
+/// (difference 2).
+fn mentions_through(expr: &Expr) -> bool {
+    match expr {
+        Expr::Through(..) => true,
+        Expr::Var(..)
+        | Expr::Lit(_)
+        | Expr::Param(_)
+        | Expr::Now
+        | Expr::Principal
+        | Expr::HasRole(_) => false,
+        Expr::Not(a)
+        | Expr::IsNull(a)
+        | Expr::Len(a)
+        | Expr::Lower(a)
+        | Expr::IsSlug(a)
+        | Expr::Duration(_, a)
+        | Expr::Text(a) => mentions_through(a),
+        Expr::And(items) | Expr::Or(items) => items.iter().any(mentions_through),
+        Expr::Cmp(_, a, b)
+        | Expr::In(a, b)
+        | Expr::Contains(a, b)
+        | Expr::StartsWith(a, b)
+        | Expr::Arith(_, a, b)
+        | Expr::MsBetween(a, b)
+        | Expr::Concat(a, b) => mentions_through(a) || mentions_through(b),
+        Expr::If(a, b, c) => mentions_through(a) || mentions_through(b) || mentions_through(c),
+    }
+}
+
+/// Differences 2 and 7 of the header: fail when a snapshot holds an input of a rule the generated
 /// functions do not mirror, so the corpus cannot start to depend on one silently.
 fn assert_no_input_of_a_known_difference(state: &State) {
     let Some(tenant) = &state.tenant else {
         return;
     };
     for (object_id, def) in &tenant.schema.objects {
-        let mut targets = Vec::new();
         for (field_id, field) in &def.fields {
-            assert!(
-                field.read.is_none(),
-                "{object_id}.{field_id} has a read condition; the generated kernel-read does not trim fields (difference 6)"
-            );
-            if let Some((target, _, _)) = field.ty.ref_target() {
-                targets.push(target);
+            if let Some(read) = &field.read {
+                assert!(
+                    !mentions_through(read),
+                    "{object_id}.{field_id} has a read condition that follows a reference; the generated redact has no lookup (difference 2)"
+                );
             }
         }
-        let distinct: std::collections::BTreeSet<_> = targets.iter().collect();
-        assert_eq!(
-            targets.len(),
-            distinct.len(),
-            "{object_id} has two reference fields to one object type; the generated delete-record clears one per rewrite (difference 7)"
-        );
     }
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {
         for (name, step) in &automation.steps {
@@ -635,7 +862,7 @@ fn assert_no_input_of_a_known_difference(state: &State) {
                         step.action,
                         AutomationStep::WaitFor { .. } | AutomationStep::RequestApproval { .. }
                     ),
-                "{}.{name} has a retry, a timeout or a wait; the generated functions do not bound durations (difference 9)",
+                "{}.{name} has a retry, a timeout or a wait; the generated functions do not bound durations (difference 7)",
                 automation.id
             );
         }
