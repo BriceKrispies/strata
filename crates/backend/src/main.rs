@@ -7,6 +7,7 @@
 //! | `STRATA_STORE` | `sqlite` | `sqlite` or `memory`. |
 //! | `STRATA_DB` | `var/strata.db` | SQLite control database (the tenant directory). |
 //! | `STRATA_TENANT_FILES` | `<STRATA_DB stem>-tenants` beside it | Directory of the per-tenant SQLite files. |
+//! | `STRATA_FILES` | `var/strata-files` | Directory of the bytes of uploaded files, one directory per tenant. Never inside the served frontend. |
 //! | `STRATA_TENANTS` | `tenants` | Directory of tenant bundles to install. |
 //! | `STRATA_DEV` | unset | `1` enables development logins and fixture endpoints. Refused unless built with `--features development`. |
 //! | `STRATA_LEAN_DIR` | `lean` | The Lean project, for verification runs. |

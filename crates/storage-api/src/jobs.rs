@@ -161,6 +161,10 @@ pub enum JobWork {
         /// The position of the step in its run, from one.
         sequence: u64,
     },
+    /// Scan a stored file of the tenant (CMS-260): one job per file, named by its content hash.
+    ScanFile { file: String },
+    /// Produce one declared rendition of a clean file (CMS-009).
+    Rendition { file: String, rendition: String },
 }
 
 /// A job to create: its key, what it does, when it is due and how it is retried.

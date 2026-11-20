@@ -5,7 +5,7 @@ use crate::signin;
 use crate::token::same;
 use crate::{relay, Bff, Shared, COOKIE, LOG};
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{ConnectInfo, Extension, Path, Query, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, Request, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE as COOKIE_HEADER, HOST, LOCATION,
     ORIGIN, SET_COOKIE,
@@ -375,7 +375,7 @@ async fn guard_request(bff: &Bff, visit: &Visit, headers: &HeaderMap) -> Result<
 }
 
 /// Require a state-changing request to come from our own pages with the session's CSRF token.
-async fn guard_write(
+pub(crate) async fn guard_write(
     bff: &Bff,
     visit: &Visit,
     headers: &HeaderMap,
@@ -2120,7 +2120,8 @@ async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -
             HeaderValue::from_static("max-age=31536000; includeSubDomains"),
         );
     }
-    if let Ok(policy) = HeaderValue::from_str(&policy) {
+    // A delivered file keeps the policy the backend gave it, which runs nothing.
+    if let (Ok(policy), false) = (HeaderValue::from_str(&policy), path.starts_with("/files/")) {
         headers.insert(CONTENT_SECURITY_POLICY, policy);
     }
     headers.insert(
@@ -2607,6 +2608,17 @@ pub fn router(bff: Shared) -> Router {
         .route("/automation/exceptions/settle", post(automation_settle))
         .route("/products", get(products_list))
         .route("/products/:action", post(products_write))
+        .route(
+            "/files/upload",
+            post(crate::files::upload).layer(DefaultBodyLimit::max(crate::files::UPLOAD_LIMIT)),
+        )
+        .route("/files/uploads/start", post(crate::files::start))
+        .route(
+            "/files/uploads/:upload/chunks/:index",
+            post(crate::files::put_chunk).layer(DefaultBodyLimit::max(crate::files::CHUNK_LIMIT)),
+        )
+        .route("/files/uploads/:upload/finish", post(crate::files::finish))
+        .route("/files/sign", post(crate::files::sign))
         .fallback(api_not_found);
     Router::new()
         .nest("/api", api)
@@ -2619,6 +2631,10 @@ pub fn router(bff: Shared) -> Router {
         .route("/keys", get(signing_keys))
         .route("/.well-known/jwks.json", get(signing_keys))
         .route("/scim/v2/*rest", any(scim))
+        .route(
+            "/files/:file/:expires/:scope/:signature",
+            get(crate::files::deliver),
+        )
         .nest_service("/assets", ServeDir::new(bff.cfg.dist.join("assets")))
         .nest_service("/media", ServeDir::new(bff.cfg.dist.join("media")))
         .fallback(get(page))

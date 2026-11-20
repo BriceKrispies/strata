@@ -21,6 +21,13 @@
     },
     {
       "package": "strata-backend",
+      "target": "files",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
       "target": "factors",
       "tier": "routine",
       "seconds": 3.93
