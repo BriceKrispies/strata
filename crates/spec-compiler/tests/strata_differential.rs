@@ -1,17 +1,15 @@
 //! Differential test of Strata's own implementation machines: every scenario of
 //! `specifications/spec.jsonc` that drives only implementation-level machines is run by Exegra
-//! (`node $EXEGRA_HOME/cli/exegra.js trace <scenario>`), and the generated machines are stepped
+//! (`scripts/exegra-traces.mjs`: `runScenario` of `$EXEGRA_HOME`, as `exegra trace <scenario>` runs it), and the generated machines are stepped
 //! through the same trace:
 //!
 //! - the server machines, as Rust: `strata-model`'s `machines` (`crates/model`);
 //! - the client machines, as JavaScript, run by `node` through
 //!   `tests/strata-differential-node.mjs`: `web/src/generated/client-*-flow-impl.js`.
 //!
-//! The specification under test is that of the checkout the test runs in. Exegra reads a project
-//! named by a `project.jsonc` link, so the test writes a link to this checkout's
-//! `specifications/spec.jsonc` into `var/specc-differential/specs/checkout` (the repository's
-//! ignored `var` directory) and runs Exegra with `--specs` on it, never `--project strata`
-//! (which would read whatever checkout the Exegra `strata` project points at).
+//! The specification under test is that of the checkout the test runs in: the script reads
+//! `specifications/spec.jsonc` of this checkout and writes the traces to
+//! `var/specc-differential/traces` (the repository's ignored `var` directory).
 //!
 //! The trace names the machines each event is delivered to (the step's `fired` and `ignored`
 //! lists, one entry per machine instance); only those are stepped, with the event at the step's
@@ -46,8 +44,6 @@ use std::io::{BufRead, BufReader, Write};
 use std::marker::PhantomData;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -604,37 +600,84 @@ fn clean(path: &Path) -> PathBuf {
     out
 }
 
-/// The `--specs` directory whose project `checkout` is the specification of this checkout.
-fn specs_for(root: &Path) -> PathBuf {
-    let specs = root.join("var").join("specc-differential").join("specs");
-    let project = specs.join("checkout");
-    std::fs::create_dir_all(&project).unwrap();
-    let link = project.join("project.jsonc");
-    // From var/specc-differential/specs/checkout to the root: four directories up.
-    let text = "// Written by tests/strata_differential.rs: the specification of the checkout the test runs in.\n{ \"spec\": \"../../../../specifications/spec.jsonc\" }\n";
-    if std::fs::read_to_string(&link).ok().as_deref() != Some(text) {
-        std::fs::write(&link, text).unwrap();
+/// Exegra's trace of every scenario in `ids`, by id. One Exegra process per job
+/// (`scripts/exegra-traces.mjs`) builds the specification once and runs its share of the
+/// scenarios; `exegra trace` once per scenario built the 5.6 MB specification once per scenario.
+/// The traces go to `var/specc-differential/traces`, one file per scenario, the same stable JSON
+/// `exegra trace --out` writes.
+fn exegra_traces(
+    cli: &Path,
+    root: &Path,
+    ids: &[&str],
+    jobs: usize,
+) -> BTreeMap<String, Result<Value, String>> {
+    let home = cli.parent().and_then(Path::parent).unwrap();
+    let out = root.join("var").join("specc-differential").join("traces");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let list = out.join("scenarios.json");
+    std::fs::write(&list, json!(ids).to_string()).unwrap();
+    let script = root.join("scripts").join("exegra-traces.mjs");
+    let children: Vec<_> = (0..jobs)
+        .map(|i| {
+            Command::new("node")
+                .arg(&script)
+                .arg("--exegra")
+                .arg(home)
+                .arg("--spec")
+                .arg(root.join("specifications").join("spec.jsonc"))
+                .arg("--out")
+                .arg(&out)
+                .arg("--ids")
+                .arg(&list)
+                .arg("--shard")
+                .arg(format!("{i}/{jobs}"))
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap_or_else(|e| panic!("node could not be run ({e})"))
+        })
+        .collect();
+    let mut refused: BTreeMap<String, String> = BTreeMap::new();
+    let mut broken = None;
+    for child in children {
+        let output = child
+            .wait_with_output()
+            .unwrap_or_else(|e| panic!("node could not be waited for ({e})"));
+        match serde_json::from_slice::<Value>(&output.stdout) {
+            Ok(envelope) => {
+                if let Some(error) = envelope["error"].as_str() {
+                    broken = Some(error.to_string());
+                }
+                for f in envelope["failed"].as_array().into_iter().flatten() {
+                    refused.insert(
+                        f["id"].as_str().unwrap_or_default().to_string(),
+                        f["error"].as_str().unwrap_or_default().to_string(),
+                    );
+                }
+            }
+            Err(e) => {
+                broken = Some(format!(
+                    "scripts/exegra-traces.mjs did not print JSON ({e}): {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ))
+            }
+        }
     }
-    specs
-}
-
-fn exegra_trace(cli: &Path, specs: &Path, scenario: &str) -> Result<Value, String> {
-    let output = Command::new("node")
-        .arg(cli)
-        .args(["trace", scenario, "--project", "checkout", "--specs"])
-        .arg(specs)
-        .output()
-        .map_err(|e| format!("node could not be run ({e})"))?;
-    let envelope: Value = serde_json::from_slice(&output.stdout).map_err(|e| {
-        format!(
-            "the Exegra CLI did not print JSON ({e}): {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })?;
-    if envelope["ok"] != json!(true) {
-        return Err(format!("Exegra refused: {}", envelope["error"]));
-    }
-    Ok(envelope["result"].clone())
+    ids.iter()
+        .map(|id| {
+            let trace = if let Some(why) = refused.get(*id) {
+                Err(format!("Exegra refused: {why}"))
+            } else if let Some(why) = &broken {
+                Err(why.clone())
+            } else {
+                std::fs::read_to_string(out.join(format!("{id}.trace.json")))
+                    .map_err(|e| format!("no trace was written ({e})"))
+                    .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
+            };
+            (id.to_string(), trace)
+        })
+        .collect()
 }
 
 // ---- comparing ----------------------------------------------------------------------------
@@ -1156,28 +1199,14 @@ fn the_generated_machines_step_as_exegra_runs_the_specification() {
         "the specification has no scenario that runs implementation machines"
     );
 
-    // Exegra's traces, a few at a time.
-    let specs = specs_for(&root);
+    // Exegra's traces: one process per job, each building the specification once.
     let jobs = std::env::var("STRATA_DIFFERENTIAL_JOBS")
         .ok()
         .and_then(|j| j.parse::<usize>().ok())
         .filter(|j| *j > 0)
         .unwrap_or(2);
-    let next = AtomicUsize::new(0);
-    let traces: Mutex<BTreeMap<String, Result<Value, String>>> = Mutex::new(BTreeMap::new());
-    std::thread::scope(|scope| {
-        for _ in 0..jobs {
-            scope.spawn(|| loop {
-                let i = next.fetch_add(1, Ordering::SeqCst);
-                let Some(scenario) = drivable.get(i) else {
-                    break;
-                };
-                let trace = exegra_trace(&cli, &specs, &scenario.id);
-                traces.lock().unwrap().insert(scenario.id.clone(), trace);
-            });
-        }
-    });
-    let traces = traces.into_inner().unwrap();
+    let ids: Vec<&str> = drivable.iter().map(|s| s.id.as_str()).collect();
+    let traces = exegra_traces(&cli, &root, &ids, jobs);
 
     let mut failures = Vec::new();
     let mut total = Stats::default();

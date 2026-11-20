@@ -14,6 +14,7 @@
 //      specifications in specifications/products go with --product to every check of the platform
 //      specification, which refuses a product that does not pass (WG-4989).
 //      check-catalogue does the same for specifications/catalogue.md.
+//   0b. The test tiers (scripts/test-tiers.json): a test binary in neither tier fails. Runs with --no-test too.
 //   1. cargo test --workspace, lake build, node --test (web kernel and client tests), the generated
 //      share tests (scripts/generated-share.test.mjs), tsc, cargo fmt --check, cargo clippy with
 //      warnings denied on the hand-written crates, cargo audit and npm audit, recorded under
@@ -48,6 +49,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { auditChecks } from './gate-audit-checks.mjs';
+import { readWorkspace } from './test-select.mjs';
+import { readTiers, routineSeconds, tierProblems } from './test-tiers.mjs';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
 import { envelopeProblems, productArgs, savedTraces, semanticHashDetail, traceFreshness } from './spec-hash.mjs';
 
@@ -343,6 +346,18 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
 }
 
 // ---------------------------------------------------------------------------------------------
+// 0b. Test tiers: every Rust test binary is in the routine or the full tier (scripts/test-tiers.json),
+//     and the routine tier fits its budget. Reads manifests; nothing is compiled.
+// ---------------------------------------------------------------------------------------------
+{
+  const tiers = readTiers();
+  const problems = tierProblems(readWorkspace(root), tiers);
+  check('every test binary is in a tier and the routine tier fits its budget (scripts/test-tiers.json)', problems.length === 0,
+    problems.length ? `${problems.length} problem(s)` : `routine tier ${routineSeconds(tiers).toFixed(1)} s of ${tiers.budgetSeconds} s`);
+  detail(problems);
+}
+
+// ---------------------------------------------------------------------------------------------
 // 1. Tests
 // ---------------------------------------------------------------------------------------------
 const specSha = sha256(specPath);
@@ -358,7 +373,7 @@ const cargoEnv = { CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2', CARGO_TARGET_D
 const nodeTestFiles = ['web/test/kernel.test.js', 'web/test/client.test.js'];
 const shareTestFile = 'scripts/generated-share.test.mjs';
 // The tests of the scripts: the share tests and the tests of the audit checks (gate-*.test.mjs).
-const scriptTestFiles = [shareTestFile, ...readdirSync(resolve(root, 'scripts')).filter((f) => /^gate-.*\.test\.mjs$/.test(f)).sort().map((f) => `scripts/${f}`)];
+const scriptTestFiles = [shareTestFile, ...readdirSync(resolve(root, 'scripts')).filter((f) => /^(gate|test)-.*\.test\.mjs$/.test(f)).sort().map((f) => `scripts/${f}`)];
 const tscCli = join(root, 'node_modules', 'typescript', 'bin', 'tsc');
 
 if (!noTest) {

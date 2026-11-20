@@ -1054,13 +1054,23 @@ fn exegra_validate(cli: &Path, specs: &Path, project: &str) -> Value {
     })
 }
 
+/// Exegra's validation of the platform alone, run once for every test that compares a layered
+/// project with it (the platform's analysis is the largest cost of a validation).
+fn platform_validation(cli: &Path) -> &'static Value {
+    static ALONE: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    ALONE.get_or_init(|| {
+        let specs = exegra_specs("exegra-platform", &[]);
+        exegra_validate(cli, &specs, "platform")
+    })
+}
+
 #[test]
 fn exegra_accepts_the_product_and_reports_the_platform_hash_unchanged() {
     let Some(cli) = support::exegra_cli("the layered validation") else {
         return;
     };
     let specs = exegra_specs("exegra-accepted", &["badges.jsonc"]);
-    let alone = exegra_validate(&cli, &specs, "platform");
+    let alone = platform_validation(&cli);
     let layered = exegra_validate(&cli, &specs, "layered");
     assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
     assert_eq!(layered["result"]["errors"], Value::from(0), "{layered}");
@@ -1084,7 +1094,7 @@ fn exegra_accepts_the_complete_products_and_reports_the_platform_hash_unchanged(
         "exegra-complete",
         &["badge-milestones.jsonc", "promotions.jsonc"],
     );
-    let alone = exegra_validate(&cli, &specs, "platform");
+    let alone = platform_validation(&cli);
     let layered = exegra_validate(&cli, &specs, "layered");
     assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
     assert_eq!(layered["result"]["errors"], Value::from(0), "{layered}");

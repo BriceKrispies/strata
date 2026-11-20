@@ -90,8 +90,49 @@ unsafe_code = "forbid"
 [profile.dev]
 debug = "line-tables-only"
 
+# Dependencies are optimised in dev builds (the line came in with the first kernel commit and gave no
+# reason). The tests need it: they run Argon2id (19 MiB, many logins in the backend tests), the SAML
+# signature checks in pure-Rust bignum code, SQLite (bundled C, built at the dependency's level),
+# serde_json over the 5.6 MB specification and proptest, and at opt-level 0 those are many times
+# slower. What they do not need is optimising code no test ever calls. The XML-signature crates pull in
+# algorithms the SAML tests never run (post-quantum signatures and KEMs, Ed448, Brainpool curves,
+# time-stamp and PKCS#12 readers); they are reached only through bergshamra-keys and kryptering, and
+# they are built at the default level below, which shortens a cold compile.
 [profile.dev.package."*"]
 opt-level = 2
+
+[profile.dev.package.ml-dsa]
+opt-level = 0
+
+[profile.dev.package.ml-kem]
+opt-level = 0
+
+[profile.dev.package.slh-dsa]
+opt-level = 0
+
+[profile.dev.package.module-lattice]
+opt-level = 0
+
+[profile.dev.package.ed448-goldilocks]
+opt-level = 0
+
+[profile.dev.package.ed448]
+opt-level = 0
+
+[profile.dev.package.x448]
+opt-level = 0
+
+[profile.dev.package.bp256]
+opt-level = 0
+
+[profile.dev.package.bp384]
+opt-level = 0
+
+[profile.dev.package.tsp-ltv]
+opt-level = 0
+
+[profile.dev.package.bergshamra-pkcs12]
+opt-level = 0
 
 # Generated crates (specc output): no debug info. Nobody steps through generated code, and the
 # largest of them (strata-model, about 80,000 lines) is the build's peak of memory.
