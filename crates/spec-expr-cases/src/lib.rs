@@ -13,6 +13,21 @@ use serde::{Deserialize, Serialize};
 /// The case table, as shipped.
 pub const TABLE: &str = include_str!("../cases.json");
 
+/// The cases the Strata targets run after those of [`TABLE`] and Exegra does not: the equality of
+/// an option of a list, an option of a struct and a list of lists.
+pub const EXTRA_TABLE: &str = include_str!("../cases-strata.json");
+
+/// Every case in the order the generated code numbers them: the shared table, then the extra one.
+pub fn cases() -> Vec<serde_json::Value> {
+    [TABLE, EXTRA_TABLE]
+        .iter()
+        .flat_map(|text| {
+            let table: serde_json::Value = serde_json::from_str(text).expect("a case table");
+            table["cases"].as_array().cloned().expect("cases")
+        })
+        .collect()
+}
+
 /// The node script that runs every case's generated JavaScript and prints the outcomes as JSON,
 /// `[{value} | {error}]` in table order.
 pub const JS_SCRIPT: &str = include_str!(concat!(env!("OUT_DIR"), "/cases.mjs"));
