@@ -101,6 +101,9 @@ pub const ATTRIBUTE: &str = "e2e.attribute";
 pub const HOST: &str = "e2e.host";
 /// Code of a path that is not an absolute path.
 pub const PATH: &str = "e2e.path";
+/// Code of a `gotoPath` fragment that is empty or holds a character other than letters, digits
+/// and `= & _ - . ~ %`.
+pub const FRAGMENT: &str = "e2e.fragment";
 /// Code of a heading level on another role, or out of 1 to 6.
 pub const LEVEL: &str = "e2e.level";
 /// Code of a timeout that is not a positive integer.
@@ -209,7 +212,7 @@ const TARGET: &[&str] = &["role", "name", "namePattern", "level", "within"];
 /// as Exegra's `STEP_KINDS`.
 pub const STEP_KINDS: &[(&str, Option<&[&str]>)] = &[
     ("goto", Some(&["screen", "params", "host"])),
-    ("gotoPath", Some(&["path", "host"])),
+    ("gotoPath", Some(&["path", "host", "fragment"])),
     ("reload", Some(&[])),
     ("back", Some(&[])),
     ("click", Some(TARGET)),
@@ -310,6 +313,11 @@ pub const STEP_KINDS: &[(&str, Option<&[&str]>)] = &[
         "capture",
         Some(&["name", "from", "cookie", "header", "element", "attribute"]),
     ),
+    (
+        "captureMail",
+        Some(&["to", "pattern", "name", "as", "timeoutMs"]),
+    ),
+    ("expectUrl", Some(&["pattern", "absent", "timeoutMs"])),
     (
         "emulate",
         Some(&["colorScheme", "reducedMotion", "touch", "mobile"]),
@@ -1035,6 +1043,16 @@ fn valid_path(path: &str) -> bool {
     path.starts_with('/') && !path.contains(|c: char| c.is_whitespace() || c == '#')
 }
 
+/// The fragment of an address, without the `#`: letters, digits and `= & _ - . ~ %`
+/// (`${name}` references count as letters).
+fn valid_fragment(fragment: &str) -> bool {
+    let fragment = replace_refs(fragment, "x");
+    !fragment.is_empty()
+        && fragment.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'=' | b'&' | b'_' | b'-' | b'.' | b'~' | b'%')
+        })
+}
+
 fn replace_refs(text: &str, with: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
@@ -1470,7 +1488,7 @@ fn check_path(cx: &Cx, p: Option<&Value>) -> Result<String, Vec<Diagnostic>> {
 ///
 /// | step | Playwright |
 /// |---|---|
-/// | `goto`, `gotoPath`, `reload`, `back` | navigate, then wait for the application's page marker (failing on timeout) |
+/// | `goto`, `gotoPath`, `reload`, `back` | navigate, then wait for the application's page marker (failing on timeout); `gotoPath` may add a `fragment` (the part after `#`, which may hold `${name}` captured values) |
 /// | `click`, `focus` | `getByRole(role, { name, exact: true, level })` within its `within`, then `click`/`focus` |
 /// | `clickAction` | the action's button by its label with `${item.<field>}` filled in, then the confirmation |
 /// | `fill` by form field | `getByLabel(label, { exact: true })` and `fill`, `setChecked`, `selectOption` or a radio |
@@ -1479,6 +1497,7 @@ fn check_path(cx: &Cx, p: Option<&Value>) -> Result<String, Vec<Diagnostic>> {
 /// | `press` | `page.keyboard.press(key)` |
 /// | `expectText`, `expectNoText` | a visible element matching the text (case-sensitive) or pattern, or none |
 /// | `expectTitle` | `toHaveTitle` |
+/// | `expectUrl` | the browser's address, fragment included, matches a pattern (or, with `absent`, no longer does) |
 /// | `expectScreen` | the screen the address belongs to; with params, the address itself |
 /// | `expectRole` | `toBeVisible`, `toBeEnabled`, ...; `hidden` needs the element to exist |
 /// | `expectCount` | `toHaveCount` |
@@ -1488,6 +1507,7 @@ fn check_path(cx: &Cx, p: Option<&Value>) -> Result<String, Vec<Diagnostic>> {
 /// | `recordRequests`, `expectRequests`, `expectNoRequest` | the browser's requests and WebSockets since the log started |
 /// | `apiCall` | a request with the browser's cookies (or none), its status, reply and captures |
 /// | `expectCookie`, `setCookie`, `capture` | the browser context's cookies, the last response, the page |
+/// | `captureMail` | the latest message to an address in the development mail outbox (`POST /api/dev/mail-outbox`, answered only by a stack started with `STRATA_DEV`, to a browser signed in as the site's owner), a part of its text bound to a name by a pattern |
 /// | `emulate`, `setViewport`, `goOffline`, `goOnline` | media, device, viewport and network emulation |
 /// | `expectNoOverflow`, `expectBeside` | layout measured on the page |
 /// | `switchBrowser` | another context and page, kept by name |
@@ -1616,12 +1636,31 @@ fn lower_step(plan: &Plan, st: &mut State, scenario: &str, index: usize, step: &
         }
         "gotoPath" => {
             let path = check_path(&cx, o.get("path"))?;
+            let fragment = match o.get("fragment") {
+                None => None,
+                Some(f) => match f.as_str().filter(|f| valid_fragment(f)) {
+                    Some(f) => Some(f.to_string()),
+                    None => {
+                        return Err(cx.err(
+                            FRAGMENT,
+                            "\"fragment\" is what follows the # of an address: letters, digits and = & _ - . ~ % (a ${name} captured value may stand in it)",
+                        ))
+                    }
+                },
+            };
             let host = host_of(&cx, o)?;
             st.navigated[cur] = true;
             st.screen[cur] = None;
+            let address = match &fragment {
+                None => jstext(&path),
+                Some(f) if refs(f).is_empty() => {
+                    format!("{} + {}", jstext(&path), js(&format!("#{f}")))
+                }
+                Some(f) => format!("{} + \"#\" + j.subFragment({})", jstext(&path), js(f)),
+            };
             Ok(vec![match host {
-                None => format!("await j.goto({});", jstext(&path)),
-                Some(h) => format!("await j.goto({}, {});", jstext(&path), jstext(&h)),
+                None => format!("await j.goto({address});"),
+                Some(h) => format!("await j.goto({address}, {});", jstext(&h)),
             }])
         }
         "reload" => {
@@ -2043,6 +2082,67 @@ fn lower_step(plan: &Plan, st: &mut State, scenario: &str, index: usize, step: &
                 }
             };
             Ok(vec![line])
+        }
+        "expectUrl" => {
+            let timeout = timeout_of(&cx, o, "timeoutMs")?;
+            let Some(pattern) = string(o, "pattern").filter(|p| !p.is_empty()) else {
+                return Err(cx.err(
+                    STEP,
+                    "it needs a non-empty \"pattern\": a regular expression over the whole address, fragment included",
+                ));
+            };
+            let absent = match o.get("absent") {
+                None => false,
+                Some(Value::Bool(b)) => *b,
+                Some(_) => return Err(cx.err(STEP, "\"absent\" is a boolean")),
+            };
+            Ok(vec![format!(
+                "await j.expectUrl(j.urlRe({}), {absent}, {});",
+                js(pattern),
+                timeout_param(timeout)
+            )])
+        }
+        "captureMail" => {
+            let timeout = timeout_of(&cx, o, "timeoutMs")?;
+            let Some(to) = string(o, "to").filter(|t| !t.trim().is_empty()) else {
+                return Err(cx.err(STEP, "it needs the address the mail was sent \"to\""));
+            };
+            let Some(pattern) = string(o, "pattern").filter(|p| !p.is_empty()) else {
+                return Err(cx.err(
+                    STEP,
+                    "it needs a non-empty \"pattern\": a regular expression whose first group, or else whole match, is bound",
+                ));
+            };
+            let as_ = match o.get("as") {
+                None => None,
+                Some(b) => match b
+                    .as_str()
+                    .filter(|b| !b.is_empty() && st.browsers.iter().any(|x| x == b))
+                {
+                    Some(b) => Some(b.to_string()),
+                    None => {
+                        return Err(cx.err(
+                            REFERENCE,
+                            format!("{b} is not one of the journey's browsers"),
+                        ))
+                    }
+                },
+            };
+            let name = define(&cx, st, o.get("name").unwrap_or(&Value::Null))?;
+            let mut call = Map::new();
+            call.insert("to".into(), Value::String(to.to_string()));
+            call.insert("pattern".into(), Value::String(pattern.to_string()));
+            call.insert("name".into(), Value::String(name));
+            if let Some(b) = as_ {
+                call.insert("as".into(), Value::String(b));
+            }
+            if let Some(t) = timeout {
+                call.insert("timeout".into(), Value::from(t));
+            }
+            Ok(vec![format!(
+                "await j.captureMail({});",
+                Value::Object(call)
+            )])
         }
         "emulate" => {
             if o.is_empty() {
@@ -2880,6 +2980,8 @@ export class Journey {
     this.lastResponse = null;
     this.seq = 0;
     this.calls = 0;
+    // The mail captureMail took, so that a later capture for the same address reads a newer message.
+    this.mailTaken = new Set();
   }
 
   /** A journey over the named browsers (the first is the test's own page). */
@@ -2977,6 +3079,13 @@ export class Journey {
     return text.replace(CAPTURE_REF, (whole) => encodeURIComponent(this.sub(whole)));
   }
 
+  /** A fragment: captured values stand for their own text, which may hold only what a fragment may. */
+  subFragment(text) {
+    const fragment = this.sub(text);
+    if (!/^[A-Za-z0-9=&_.~%-]+$/.test(fragment)) throw new Error('a captured value put into a fragment holds a character a fragment may not');
+    return fragment;
+  }
+
   subDeep(value) {
     if (typeof value === 'string') return this.sub(value);
     if (Array.isArray(value)) return value.map((v) => this.subDeep(v));
@@ -3046,6 +3155,11 @@ export class Journey {
       return { path: decodeURIComponent(url.pathname), query: Object.fromEntries(declared.filter((k) => url.searchParams.has(k)).map((k) => [k, url.searchParams.get(k)])) };
     };
     await expect.poll(address, { message: 'the address', timeout }).toEqual({ path: decodeURIComponent(path), query });
+  }
+
+  /** The address the page is at (fragment included) matches a pattern, or no longer does. The address is never printed: it may hold a secret. */
+  async expectUrl(pattern, absent, timeout) {
+    await expect.poll(() => pattern.test(this.page.url()), { message: `the address ${absent ? 'does not match' : 'matches'} ${pattern}`, timeout }).toBe(!absent);
   }
 
   // ---- what the page shows ----
@@ -3274,6 +3388,41 @@ export class Journey {
     await expect(locator).toBeVisible();
     const value = attribute === 'value' ? await locator.inputValue() : await locator.getAttribute(attribute);
     expect(value, `attribute ${attribute} to capture`).not.toBeNull();
+    this.captures.set(name, value);
+  }
+
+  /**
+   * The latest message to an address in the development mail outbox that no earlier captureMail of
+   * this journey took, bound by a pattern to a name.
+   * Only a stack started for development answers (STRATA_DEV), and only to the site's owner, so the
+   * browser that reads it (`as`, or the current one) is signed in as the owner. The text of the
+   * message is never printed: it holds links that sign people in.
+   */
+  async captureMail({ to, pattern, name, as, timeout = 8_000 }) {
+    const t = as === undefined ? this.current : this.sessions.get(as);
+    const origin = new URL(this.baseURL).origin;
+    const address = this.sub(to).trim().toLowerCase();
+    const re = this.re(pattern);
+    const send = async (method, path, extra = {}) => {
+      const options = { method, headers: { origin, ...extra.headers }, failOnStatusCode: false, maxRedirects: 0, ...(extra.data === undefined ? {} : { data: extra.data }) };
+      return t.context.request.fetch(...(await this.loopback(path, options, t.context)));
+    };
+    const session = await send('GET', '/api/session');
+    expect(session.status(), 'GET /api/session').toBe(200);
+    const csrf = (await session.json()).session?.csrf_token;
+    expect(csrf, 'the request token of the browser that reads the mail outbox').toBeTruthy();
+    let value;
+    const read = async () => {
+      const reply = await send('POST', '/api/dev/mail-outbox', { headers: { 'x-csrf-token': csrf, 'content-type': 'application/json' }, data: {} });
+      expect(reply.status(), 'POST /api/dev/mail-outbox (the stack must run with STRATA_DEV and the browser must be signed in as the site owner)').toBe(200);
+      const mine = ((await reply.json()).messages ?? []).filter((mail) => String(mail.to).trim().toLowerCase() === address && !this.mailTaken.has(String(mail.text)));
+      const text = mine.length ? String(mine[mine.length - 1].text) : '';
+      const hit = mine.length ? re.exec(text) : null;
+      value = hit ? (hit[1] ?? hit[0]) : undefined;
+      if (value !== undefined) this.mailTaken.add(text);
+      return value !== undefined;
+    };
+    await expect.poll(read, { message: `the latest mail to ${address} in the development mail outbox, not taken before, holds what the pattern matches`, timeout }).toBe(true);
     this.captures.set(name, value);
   }
 
@@ -3536,8 +3685,16 @@ mod tests {
     #[test]
     fn every_step_kind_of_exegra_is_known() {
         let kinds: Vec<&str> = STEP_KINDS.iter().map(|(k, _)| *k).collect();
-        assert_eq!(kinds.len(), 39);
-        for k in ["goto", "expectLog", "expectNoEvent", "apiCall", "capture"] {
+        assert_eq!(kinds.len(), 41);
+        for k in [
+            "goto",
+            "expectLog",
+            "expectNoEvent",
+            "apiCall",
+            "capture",
+            "captureMail",
+            "expectUrl",
+        ] {
             assert!(kinds.contains(&k));
         }
     }
@@ -3590,6 +3747,157 @@ mod tests {
         assert_eq!(one(json!({"reload": true})), "await j.reload();");
         assert_eq!(one(json!({"back": {}})), "await j.back();");
         assert_eq!(code(json!({"back": {"x": 1}})), STEP);
+    }
+
+    #[test]
+    fn goto_path_opens_an_address_with_a_fragment() {
+        assert_eq!(
+            one(json!({"gotoPath": {"path": "/login", "fragment": "i=ab&t=cd"}})),
+            r##"await j.goto("/login" + "#i=ab&t=cd");"##
+        );
+        assert_eq!(
+            one(
+                json!({"gotoPath": {"path": "/login", "fragment": "i=a_b-c.d~e%20f", "host": "tide.localhost:4200"}})
+            ),
+            r##"await j.goto("/login" + "#i=a_b-c.d~e%20f", "tide.localhost:4200");"##
+        );
+        // A captured value in the fragment is put in as it is, not percent-encoded.
+        assert_eq!(
+            lower_all(&[
+                json!({"capture": {"name": "s", "from": "cookie", "cookie": "sid"}}),
+                json!({"gotoPath": {"path": "/login", "fragment": "c=${s}"}}),
+            ])
+            .unwrap(),
+            [r##"await j.goto("/login" + "#" + j.subFragment("c=${s}"));"##]
+        );
+        // Without a fragment the step lowers as before.
+        assert_eq!(
+            one(json!({"gotoPath": {"path": "/login"}})),
+            r#"await j.goto("/login");"#
+        );
+    }
+
+    #[test]
+    fn a_fragment_that_is_empty_or_holds_other_characters_is_refused() {
+        for bad in ["", "a b", "#a", "a#b", "a/b", "a?b", "a+b", "é"] {
+            assert_eq!(
+                code(json!({"gotoPath": {"path": "/login", "fragment": bad}})),
+                FRAGMENT,
+                "fragment {bad:?}"
+            );
+        }
+        assert_eq!(
+            code(json!({"gotoPath": {"path": "/login", "fragment": 3}})),
+            FRAGMENT
+        );
+        // The path still takes no fragment of its own.
+        assert_eq!(code(json!({"gotoPath": {"path": "/login#i=1"}})), PATH);
+        // A fragment may use only what an earlier step captured.
+        assert_eq!(
+            code(json!({"gotoPath": {"path": "/login", "fragment": "c=${nothing}"}})),
+            CAPTURE
+        );
+    }
+
+    #[test]
+    fn expect_url_matches_the_whole_address_or_shows_it_is_gone() {
+        assert_eq!(
+            one(json!({"expectUrl": {"pattern": "/login$"}})),
+            r#"await j.expectUrl(j.urlRe("/login$"), false, undefined);"#
+        );
+        assert_eq!(
+            one(json!({"expectUrl": {"pattern": "#|t=", "absent": true, "timeoutMs": 1500}})),
+            r##"await j.expectUrl(j.urlRe("#|t="), true, 1500);"##
+        );
+        assert_eq!(code(json!({"expectUrl": {}})), STEP);
+        assert_eq!(code(json!({"expectUrl": {"pattern": ""}})), STEP);
+        assert_eq!(
+            code(json!({"expectUrl": {"pattern": "x", "absent": "yes"}})),
+            STEP
+        );
+        assert_eq!(
+            code(json!({"expectUrl": {"pattern": "x", "timeoutMs": 0}})),
+            TIMEOUT
+        );
+        assert_eq!(
+            code(json!({"expectUrl": {"pattern": "x", "text": "y"}})),
+            STEP
+        );
+    }
+
+    #[test]
+    fn capture_mail_binds_a_part_of_the_latest_message_to_a_name() {
+        assert_eq!(
+            one(
+                json!({"captureMail": {"to": "mirela@fieldnotes.example", "pattern": "#(c=[0-9a-f]+&t=[0-9a-f]+)", "name": "link"}})
+            ),
+            r##"await j.captureMail({"name":"link","pattern":"#(c=[0-9a-f]+&t=[0-9a-f]+)","to":"mirela@fieldnotes.example"});"##
+        );
+        assert_eq!(
+            one(
+                json!({"captureMail": {"to": "a@b.example", "pattern": "x", "name": "k", "as": "b", "timeoutMs": 1500}})
+            ),
+            r#"await j.captureMail({"as":"b","name":"k","pattern":"x","timeout":1500,"to":"a@b.example"});"#
+        );
+        // The bound value is usable by a later step, and only once defined.
+        assert_eq!(
+            lower_all(&[
+                json!({"captureMail": {"to": "a@b.example", "pattern": "(c=[0-9a-f]+)", "name": "link"}}),
+                json!({"gotoPath": {"path": "/login", "fragment": "${link}"}}),
+            ])
+            .unwrap(),
+            [r##"await j.goto("/login" + "#" + j.subFragment("${link}"));"##]
+        );
+    }
+
+    #[test]
+    fn a_capture_mail_that_is_incomplete_or_repeats_a_name_is_refused() {
+        let ok = json!({"to": "a@b.example", "pattern": "x", "name": "k"});
+        let without = |key: &str| {
+            let mut o = ok.as_object().unwrap().clone();
+            o.remove(key);
+            json!({ "captureMail": o })
+        };
+        assert_eq!(code(without("to")), STEP);
+        assert_eq!(code(without("pattern")), STEP);
+        assert_eq!(code(without("name")), STEP);
+        assert_eq!(
+            code(json!({"captureMail": {"to": " ", "pattern": "x", "name": "k"}})),
+            STEP
+        );
+        assert_eq!(
+            code(json!({"captureMail": {"to": "a@b.example", "pattern": "", "name": "k"}})),
+            STEP
+        );
+        assert_eq!(
+            code(json!({"captureMail": {"to": "a@b.example", "pattern": "x", "name": "1k"}})),
+            STEP
+        );
+        assert_eq!(
+            code(
+                json!({"captureMail": {"to": "a@b.example", "pattern": "x", "name": "k", "as": "c"}})
+            ),
+            REFERENCE
+        );
+        assert_eq!(
+            code(
+                json!({"captureMail": {"to": "a@b.example", "pattern": "x", "name": "k", "timeoutMs": 0}})
+            ),
+            TIMEOUT
+        );
+        assert_eq!(
+            code(
+                json!({"captureMail": {"to": "a@b.example", "pattern": "x", "name": "k", "css": "#m"}})
+            ),
+            STEP
+        );
+        assert_eq!(
+            codes(&[
+                json!({"captureMail": {"to": "a@b.example", "pattern": "x", "name": "k"}}),
+                json!({"captureMail": {"to": "a@b.example", "pattern": "y", "name": "k"}}),
+            ]),
+            CAPTURE
+        );
     }
 
     #[test]

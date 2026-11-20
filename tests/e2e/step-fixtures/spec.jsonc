@@ -58,12 +58,18 @@
     { "id": "violates-goto", "name": "goto fails on a page that is never drawn", "steps": [
       { "goto": { "screen": "page", "params": { "name": "noready" } } }
     ] },
-    { "id": "pass-gotoPath", "name": "gotoPath opens an address", "steps": [
+    { "id": "pass-gotoPath", "name": "gotoPath opens an address, with a fragment if it has one", "steps": [
       { "gotoPath": { "path": "/p/basic" } },
-      { "expectStatus": 200 }
+      { "expectStatus": 200 },
+      { "gotoPath": { "path": "/p/fragment", "fragment": "i=abc&t=def" } },
+      { "expectText": { "text": "Fragment #i=abc&t=def" } }
     ] },
     { "id": "violates-gotoPath", "name": "gotoPath fails on a page that is never drawn", "steps": [
       { "gotoPath": { "path": "/p/noready" } }
+    ] },
+    { "id": "violates-gotoPath-fragment", "name": "the fragment the page sees is the one gotoPath was given", "steps": [
+      { "gotoPath": { "path": "/p/fragment", "fragment": "i=abc&t=def" } },
+      { "expectText": { "text": "Fragment #i=zzz&t=def", "timeoutMs": 1500 } }
     ] },
     { "id": "pass-reload", "name": "reload draws the page again", "steps": [
       { "goto": { "screen": "page", "params": { "name": "basic" } } },
@@ -347,6 +353,44 @@
     { "id": "violates-capture", "name": "nothing to capture", "steps": [
       { "goto": { "screen": "page", "params": { "name": "basic" } } },
       { "capture": { "name": "snap", "from": "text", "element": { "role": "region", "name": "Absent" } } }
+    ] },
+    { "id": "pass-captureMail", "name": "values bound from the latest mail to an address, used in a fragment", "browsers": ["a", "b"], "steps": [
+      { "captureMail": { "to": "ines@fieldnotes.example", "pattern": "#(c=[0-9a-f]+&t=[0-9a-f]+)", "name": "link" } },
+      { "gotoPath": { "path": "/p/fragment", "fragment": "${link}" } },
+      { "expectText": { "text": "Fragment #c=ab12&t=cd34" } },
+      { "captureMail": { "to": "tomasz@fieldnotes.example", "pattern": "c=[0-9a-f]+&t=[0-9a-f]+", "name": "whole", "as": "b" } },
+      { "gotoPath": { "path": "/p/fragment", "fragment": "${whole}" } },
+      { "expectText": { "text": "Fragment #c=ffff&t=eeee" } },
+      { "captureMail": { "to": "ines@fieldnotes.example", "pattern": "#(c=[0-9a-f]+&t=[0-9a-f]+)", "name": "older" } },
+      { "gotoPath": { "path": "/p/fragment", "fragment": "${older}" } },
+      { "expectText": { "text": "Fragment #c=0a0a&t=0b0b" } }
+    ] },
+    { "id": "violates-captureMail-taken", "name": "a message already taken is not taken again", "steps": [
+      { "captureMail": { "to": "ines@fieldnotes.example", "pattern": "#(c=[0-9a-f]+)", "name": "one" } },
+      { "captureMail": { "to": "ines@fieldnotes.example", "pattern": "#(c=[0-9a-f]+)", "name": "two" } },
+      { "captureMail": { "to": "ines@fieldnotes.example", "pattern": "#(c=[0-9a-f]+)", "name": "three", "timeoutMs": 1500 } }
+    ] },
+    { "id": "violates-captureMail-address", "name": "no mail was sent to the address", "steps": [
+      { "captureMail": { "to": "nobody@fieldnotes.example", "pattern": "#(c=[0-9a-f]+)", "name": "link", "timeoutMs": 1500 } }
+    ] },
+    { "id": "violates-captureMail-pattern", "name": "the latest mail holds nothing the pattern matches", "steps": [
+      { "captureMail": { "to": "ines@fieldnotes.example", "pattern": "#(q=[0-9]+)", "name": "link", "timeoutMs": 1500 } }
+    ] },
+    { "id": "pass-expectUrl", "name": "the address, and a fragment that is taken out of it", "steps": [
+      { "gotoPath": { "path": "/p/fragment", "fragment": "i=abc&t=def" } },
+      { "expectUrl": { "pattern": "/p/fragment#i=abc&t=def$" } },
+      { "gotoPath": { "path": "/p/cleaned", "fragment": "i=abc&t=def" } },
+      { "expectText": { "text": "Cleaned i=abc&t=def" } },
+      { "expectUrl": { "pattern": "[#?]|t=", "absent": true } },
+      { "expectUrl": { "pattern": "/p/cleaned$" } }
+    ] },
+    { "id": "violates-expectUrl", "name": "an address that still holds the fragment", "steps": [
+      { "gotoPath": { "path": "/p/fragment", "fragment": "i=abc&t=def" } },
+      { "expectUrl": { "pattern": "#", "absent": true, "timeoutMs": 1500 } }
+    ] },
+    { "id": "violates-expectUrl-present", "name": "an address that is not the one the pattern names", "steps": [
+      { "gotoPath": { "path": "/p/fragment", "fragment": "i=abc&t=def" } },
+      { "expectUrl": { "pattern": "/p/cleaned$", "timeoutMs": 1500 } }
     ] },
     { "id": "pass-expectCookie", "name": "a cookie and its attributes", "steps": [
       { "goto": { "screen": "page", "params": { "name": "basic" } } },

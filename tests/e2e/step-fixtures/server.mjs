@@ -6,7 +6,7 @@
 // Pages are drawn at /p/<name>, /other and /live, each with the application's page marker
 // (main[data-page]) except /p/noready. Any other address answers 404 with a drawn page, as the
 // application's catch-all screen does. The endpoints stand in for a stack's: /api/view (the
-// view fetch), /api/notify (sends a live notice to every open WebSocket on /ws), /api/act
+// view fetch), /api/session and /api/dev/mail-outbox (the development mail outbox), /api/notify (sends a live notice to every open WebSocket on /ws), /api/act
 // (writes a backend and a BFF log line under var/step-fixtures, with variants that break one
 // property each), /api/json, /api/echo and /api/login (cookies).
 import { createHash } from 'node:crypto';
@@ -84,6 +84,10 @@ const confirmButton = document.getElementById('confirm');
 document.getElementById('delete').onclick = () => { confirmButton.hidden = false; };
 confirmButton.onclick = () => { msg.textContent = 'Deleted.'; };
 document.getElementById('out').onclick = () => { msg.textContent = 'Signed out.'; };`),
+  fragment: page('fragment', 'Fragment', '<h1>Fragment</h1><p id="h"></p>', `document.getElementById('h').textContent = 'Fragment ' + location.hash;`),
+  cleaned: page('cleaned', 'Cleaned', '<h1>Cleaned</h1><p id="h"></p>', `const held = location.hash.slice(1);
+history.replaceState(null, '', location.pathname);
+document.getElementById('h').textContent = 'Cleaned ' + held;`),
   cookies: page('cookies', 'Cookies', '<h1>Cookies</h1><p id="c"></p>', `document.getElementById('c').textContent = document.cookie;`),
   scheme: page('scheme', 'Scheme', '<h1>Scheme</h1>', `document.documentElement.dataset.scheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 document.documentElement.dataset.touch = navigator.maxTouchPoints > 0 ? 'yes' : 'no';`),
@@ -138,6 +142,15 @@ const WORKER = `fetch('/api/view?path=/p/worker').then(() => {
 });
 `;
 
+// The development mail outbox, oldest message first, as the application's answers it to a signed-in
+// owner: POST /api/dev/mail-outbox with an allowed origin and the request token of /api/session.
+const MAIL_CSRF = 'tok-mail';
+const MAIL = [
+  { to: 'ines@fieldnotes.example', subject: 'Your sign-in link', text: 'Open https://site.example/login#c=0a0a&t=0b0b to sign in.' },
+  { to: 'tomasz@fieldnotes.example', subject: 'Your sign-in link', text: 'Open https://site.example/login#c=ffff&t=eeee to sign in.' },
+  { to: 'Ines@Fieldnotes.example', subject: 'Your sign-in link', text: 'Open https://site.example/login#c=ab12&t=cd34 to sign in.' },
+];
+
 // The WebSockets of /ws, each sent a notice by /api/notify.
 const sockets = new Set();
 
@@ -181,6 +194,11 @@ const server = createServer((req, res) => {
     if (p === '/api/act') {
       act([...url.searchParams.keys()][0] ?? '', String(req.headers['x-correlation-id'] ?? ''));
       return json(res, 200, { ok: true });
+    }
+    if (p === '/api/session') return json(res, 200, { session: { authenticated: true, csrf_token: MAIL_CSRF } });
+    if (p === '/api/dev/mail-outbox') {
+      if (req.method !== 'POST' || !req.headers.origin || req.headers['x-csrf-token'] !== MAIL_CSRF) return json(res, 403, { code: 'forbidden' });
+      return json(res, 200, { messages: MAIL });
     }
     if (p === '/api/json') return json(res, 200, { session: { csrf_token: 'tok-123' }, list: [{ name: 'a' }] });
     if (p === '/api/echo') {
