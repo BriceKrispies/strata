@@ -21,6 +21,7 @@ pub mod sealing;
 pub mod seed;
 pub mod service;
 pub mod signin;
+pub mod worker;
 pub mod ws;
 
 use app::{App, Config, Shared, LOG};
@@ -78,7 +79,17 @@ pub async fn run(
         .await
     });
 
-    server::serve(listener, http::router(app), shutdown).await
+    // The automation worker stops taking leases when the stop is asked for, and the process waits
+    // (within the drain deadline) for the jobs it is running to finish and report.
+    let (stop_worker, stopping) = tokio::sync::watch::channel(false);
+    let automation = worker::spawn(&app, stopping);
+    let served = server::serve(listener, http::router(app), async move {
+        shutdown.await;
+        let _ = stop_worker.send(true);
+    })
+    .await;
+    let _ = tokio::time::timeout(server::drain_deadline(), automation).await;
+    served
 }
 
 /// One pass of the janitor: counters of failed sign-ins that have run out, challenges, links and

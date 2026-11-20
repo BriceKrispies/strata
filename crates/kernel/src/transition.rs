@@ -147,6 +147,15 @@ fn refuse_reserved_principals(intent: &Intent, ctx: &Context) -> Result<(), Doma
             ));
         }
     }
+    if let Some(problem) =
+        crate::automation::reserved_problem(named, &ctx.principal, ctx.session.is_some())
+    {
+        return Err(refuse(
+            ErrorKind::InvalidIntent,
+            "principal:id_is_not_reserved",
+            problem,
+        ));
+    }
     Ok(())
 }
 

@@ -2094,6 +2094,86 @@ async fn identity_write(
     Ok(uncached(reply))
 }
 
+/// The inputs of an automation listing from its query string: the text ones named, a whole-number
+/// `limit` and a true-or-false `unsettled`. Anything else is left out.
+fn automation_query(query: &BTreeMap<String, String>, texts: &[&str]) -> Json_ {
+    let mut body = serde_json::Map::new();
+    for name in texts {
+        if let Some(value) = query.get(*name).filter(|v| !v.is_empty() && v.len() <= 100) {
+            body.insert((*name).to_string(), json!(value));
+        }
+    }
+    if let Some(limit) = query.get("limit").and_then(|v| v.parse::<u64>().ok()) {
+        body.insert("limit".into(), json!(limit));
+    }
+    if let Some(unsettled) = query.get("unsettled") {
+        body.insert("unsettled".into(), json!(unsettled == "true"));
+    }
+    Json_::Object(body)
+}
+
+/// The automation runs of the site, newest first (list-automation-runs).
+async fn automation_runs(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let body = automation_query(&query, &["automation", "state", "cursor"]);
+    let reply: Json_ = backend(&bff, &visit, "/internal/automation/runs", &body).await?;
+    Ok(uncached(reply))
+}
+
+/// The steps of one automation run (list-automation-steps).
+async fn automation_steps(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(run): Path<String>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let mut body = automation_query(&query, &["cursor"]);
+    body["run"] = json!(run);
+    let reply: Json_ = backend(&bff, &visit, "/internal/automation/steps", &body).await?;
+    Ok(uncached(reply))
+}
+
+/// The declined, held, parked and dead-lettered automation work of the site
+/// (list-automation-exceptions).
+async fn automation_exceptions(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let body = automation_query(&query, &["kind", "cursor"]);
+    let reply: Json_ = backend(&bff, &visit, "/internal/automation/exceptions", &body).await?;
+    Ok(uncached(reply))
+}
+
+/// Release or drop a parked or dead-lettered exception (settle-automation-exception). A write:
+/// the origin and the session's token are checked first.
+async fn automation_settle(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    let request = json!({
+        "exception": body.get("exception").cloned().unwrap_or(Json_::Null),
+        "action": body.get("action").cloned().unwrap_or(Json_::Null),
+    });
+    let reply: Json_ = backend(
+        &bff,
+        &visit,
+        "/internal/automation/exceptions/settle",
+        &request,
+    )
+    .await?;
+    Ok(uncached(reply))
+}
+
 pub fn router(bff: Shared) -> Router {
     let api = Router::new()
         .route("/session", get(session))
@@ -2135,6 +2215,10 @@ pub fn router(bff: Shared) -> Router {
         .route("/diagnostics", get(diagnostics))
         .route("/dev/:action", post(dev))
         .route("/identity/*action", get(identity_read).post(identity_write))
+        .route("/automation/runs", get(automation_runs))
+        .route("/automation/runs/:run/steps", get(automation_steps))
+        .route("/automation/exceptions", get(automation_exceptions))
+        .route("/automation/exceptions/settle", post(automation_settle))
         .fallback(api_not_found);
     Router::new()
         .nest("/api", api)

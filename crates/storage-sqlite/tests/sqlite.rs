@@ -60,6 +60,62 @@ fn sqlite_store_keeps_documents() {
     conformance::documents_are_scoped_to_their_tenant_and_kind(&store);
 }
 
+/// The jobs of the automation worker, its wake index in the control database and its run, step
+/// and exception records, on database files.
+#[test]
+fn sqlite_store_keeps_jobs() {
+    let store = SqliteStore::open(&fresh_path("jobs"), Timestamp(1)).unwrap();
+    conformance::jobs_conform(&store);
+}
+
+/// A job created before a restart is still due, and still found through the wake index, after
+/// it (SCH-007).
+#[test]
+fn a_due_job_survives_a_restart() {
+    use strata_storage_api::jobs::{JobWork, NewJob, RetryPolicy};
+    let path = fresh_path("jobs-restart");
+    let alpha = tenant_id("alpha");
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        execute(
+            &store,
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: principal_id("alpha:owner"),
+            },
+            &ctx("alpha", Principal::System, 2),
+        )
+        .unwrap();
+        store
+            .jobs_create(
+                &alpha,
+                &[NewJob {
+                    key: "k".into(),
+                    work: JobWork::StartRun {
+                        trigger: None,
+                        automation: WorkflowId::new("award").unwrap(),
+                        event_seq: None,
+                        hop: 0,
+                        params: Default::default(),
+                    },
+                    due_at: Timestamp(100),
+                    policy: RetryPolicy::default(),
+                }],
+                Timestamp(3),
+            )
+            .unwrap();
+    }
+    let store = SqliteStore::open(&path, Timestamp(4)).unwrap();
+    assert_eq!(
+        store.jobs_due(Timestamp(100), 10).unwrap(),
+        vec![alpha.clone()]
+    );
+    assert!(store
+        .job_lease(&alpha, "w", Timestamp(100))
+        .unwrap()
+        .is_some());
+}
+
 /// Verifies: OPS-318
 ///
 /// A retried create after the process restarted: the key was recorded in the tenant's file by the
@@ -238,7 +294,7 @@ fn committed_data_survives_a_reopen() {
     assert_eq!(store.snapshots(&alpha).unwrap(), vec![snapshot]);
     assert_eq!(store.journal_after(&alpha, 0, 10).unwrap().len(), 3);
     let migrations = store.migrations().unwrap();
-    assert_eq!(migrations.len(), 2, "the control database's steps");
+    assert_eq!(migrations.len(), 3, "the control database's steps");
     assert_eq!(
         migrations[0].applied_at,
         Timestamp(1),
@@ -247,7 +303,7 @@ fn committed_data_survives_a_reopen() {
     let file = store.tenant_file(&alpha).unwrap().unwrap();
     assert_eq!(
         count(&file, "SELECT COUNT(*) FROM tenant_migrations"),
-        11,
+        strata_storage_sqlite::tenant_migration_steps().len() as i64,
         "the tenant file's steps"
     );
     assert!(store.health().unwrap().ok);

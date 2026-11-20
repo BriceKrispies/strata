@@ -74,6 +74,12 @@
 //!  10. Not exercised, and not mirrored: conditions that follow a reference are
 //!      `InsufficientState` in the hand-written kernel when the snapshot lacks the record
 //!      (difference 2 states the rest).
+//!  11. Not exercised, and not mirrored: the automation principal (`strata_kernel::automation`,
+//!      WFL-1527). The hand-written `roles_of` gives a principal `automation:<id>` exactly the
+//!      run-as roles of its automation, and `refuse_reserved_principals` refuses the prefix for
+//!      a named person and for a caller with a session; the generated `roles-of` and
+//!      `reserved-principal` do not yet. Guarded: `assert_no_automation_principal` fails on a
+//!      context whose principal has the prefix.
 //!
 //! Differences 5 to 9 are guarded: `assert_no_input_of_a_known_difference` runs on every
 //! snapshot the test decides or reads, and fails when a snapshot has a field read condition, an
@@ -642,6 +648,17 @@ fn assert_no_input_of_a_known_difference(state: &State) {
     }
 }
 
+/// Difference 11 of the header: fail when a decision or read is made as an automation principal,
+/// whose roles the generated functions do not mirror.
+fn assert_no_automation_principal(context: &Context) {
+    if let Principal::User(id) = &context.principal {
+        assert!(
+            strata_kernel::automation::automation_named(id).is_none(),
+            "{id} is an automation principal; the generated roles-of and reserved-principal do not mirror it (difference 11)"
+        );
+    }
+}
+
 #[derive(Default)]
 struct Tally {
     compared: usize,
@@ -662,6 +679,7 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         state.tenant_id
     );
     assert_no_input_of_a_known_difference(state);
+    assert_no_automation_principal(context);
     let hand = transition(state, intent, context);
     let texts = texts_for(state, intent);
     let mut generated = match spec::kernel_transition(state, intent, context, &texts) {
@@ -707,6 +725,7 @@ fn compare_read(state: &State, request: &ReadRequest, context: &Context, tally: 
         context.principal, context.tenant, state.tenant_id
     );
     assert_no_input_of_a_known_difference(state);
+    assert_no_automation_principal(context);
     let hand = read(state, request, context);
     // Only the query filters are printed by a read; the intent is none.
     let texts = texts_for(

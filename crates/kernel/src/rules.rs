@@ -162,12 +162,17 @@ pub fn assigned_roles(
 }
 
 /// The roles a principal holds in a tenant, directly or through a team. Everyone but the
-/// system holds `public`.
+/// system holds `public`, except an automation principal, which holds the run-as roles of its
+/// automation and no other ([`crate::automation`]).
 pub fn roles_of(tenant: &TenantState, principal: &Principal) -> BTreeSet<RoleId> {
     match principal {
         Principal::System => BTreeSet::new(),
         Principal::Anonymous => BTreeSet::from([public_role()]),
         Principal::User(id) => {
+            // An automation principal holds its run-as roles and nothing else (WFL-1527).
+            if let Some(roles) = crate::automation::automation_roles(&tenant.schema, id) {
+                return roles;
+            }
             let mut roles = assigned_roles(&tenant.members, &tenant.schema, id);
             roles.insert(public_role());
             roles

@@ -1084,6 +1084,22 @@ pub fn router(app: Shared) -> Router {
             post(provisioning_group_remove),
         )
         .route("/internal/scim", post(scim_request))
+        .route(
+            "/internal/automation/runs",
+            post(crate::worker::routes::runs_route),
+        )
+        .route(
+            "/internal/automation/steps",
+            post(crate::worker::routes::steps_route),
+        )
+        .route(
+            "/internal/automation/exceptions",
+            post(crate::worker::routes::exceptions_route),
+        )
+        .route(
+            "/internal/automation/exceptions/settle",
+            post(crate::worker::routes::settle_route),
+        )
         .route("/internal/ws", get(socket));
     // The development routes are compiled only with the `development` feature, and mounted only
     // when the process was started in development mode.
