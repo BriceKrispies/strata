@@ -478,13 +478,16 @@ pub trait Authorizer: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Caller, Refusal>> + Send;
 }
 
-/// Compare two secrets without stopping at the first difference.
+/// Compare two secrets without stopping at the first difference and without revealing their
+/// lengths: each is reduced to its SHA-256 digest, and the two fixed-length digests are compared
+/// byte for byte with no early exit.
 pub fn same_secret(a: &str, b: &str) -> bool {
-    a.len() == b.len()
-        && a.bytes()
-            .zip(b.bytes())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0
+    let (a, b) = (Sha256::digest(a.as_bytes()), Sha256::digest(b.as_bytes()));
+    a.as_slice()
+        .iter()
+        .zip(b.as_slice())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {

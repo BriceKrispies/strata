@@ -3,14 +3,14 @@
 //!
 //! The limits are configuration ([`Limits`], from the environment in `main.rs`) and the state
 //! that enforces them ([`Admission`]) lives in the [`App`](crate::app::App). A "source" is the
-//! address the BFF states in `x-strata-source`; a call without one (the operator's own tools)
-//! is not limited per source.
+//! address the BFF states in `x-strata-source`, with an IPv6 address counted as its /64; calls
+//! without one share a single source, so leaving the header out is not a way round a limit.
 
 use crate::app::ApiError;
 use std::sync::Arc;
 use std::time::Duration;
 use strata_protocol::api::ErrorCode;
-use strata_runtime::limits::{Cap, Permit, Rate};
+use strata_runtime::limits::{source_key, Cap, Permit, Rate};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// The memory one Argon2 verification takes with the default parameters (m = 19456 KiB).
@@ -34,6 +34,15 @@ pub struct Limits {
     /// How long a sign-in waits for a place to hash before it is refused
     /// (`STRATA_ARGON2_WAIT_MS`).
     pub argon2_wait_ms: u64,
+    /// Argon2 verifications one tenant may hold at once, out of the pool
+    /// (`STRATA_ARGON2_PER_TENANT`). A tenant over its share is refused at once, not queued.
+    pub argon2_per_tenant: usize,
+    /// Blocking store calls one tenant may have running or waiting
+    /// (`STRATA_BLOCKING_PER_TENANT`); over it, a request is refused with 429.
+    pub blocking_per_tenant: usize,
+    /// Blocking store calls, all tenants together, that may be running or waiting
+    /// (`STRATA_BLOCKING_QUEUE`); over it, a request is refused with 429.
+    pub blocking_queue: usize,
     /// Threads that run Impact Lab projections (`STRATA_LAB_WORKERS`).
     pub lab_workers: usize,
     /// Projections that may wait for a thread (`STRATA_LAB_QUEUE`).
@@ -54,6 +63,9 @@ impl Default for Limits {
             logins_per_source_per_minute: 30,
             argon2_memory_mib: 64,
             argon2_wait_ms: 3_000,
+            argon2_per_tenant: 2,
+            blocking_per_tenant: 16,
+            blocking_queue: 256,
             lab_workers: 2,
             lab_queue: 4,
             lab_runs_per_tenant: 2,
@@ -83,7 +95,26 @@ pub struct Admission {
     logins: Rate,
     argon2: Arc<Semaphore>,
     argon2_wait: Duration,
+    argon2_by_tenant: Cap,
+    work_by_tenant: Cap,
+    work: Arc<Semaphore>,
 }
+
+/// A place to run Argon2 verifications: one of the global pool and one of the tenant's share.
+/// Dropping it frees both.
+pub struct HashingPlace {
+    _pool: OwnedSemaphorePermit,
+    _tenant: Permit,
+}
+
+/// A place in the blocking queue: one of the tenant's and one of the global queue.
+pub struct WorkPlace {
+    _global: OwnedSemaphorePermit,
+    _tenant: Permit,
+}
+
+/// The one source every call without a source address counts under.
+const NO_SOURCE: &str = "unknown";
 
 fn throttled(message: &str) -> ApiError {
     ApiError::new(ErrorCode::Throttled, message)
@@ -98,6 +129,9 @@ impl Admission {
             logins: Rate::new(limits.logins_per_source_per_minute, 60_000),
             argon2: Arc::new(Semaphore::new(limits.argon2_permits())),
             argon2_wait: Duration::from_millis(limits.argon2_wait_ms),
+            argon2_by_tenant: Cap::new(limits.argon2_per_tenant.max(1)),
+            work_by_tenant: Cap::new(limits.blocking_per_tenant.max(1)),
+            work: Arc::new(Semaphore::new(limits.blocking_queue.max(1))),
         }
     }
 
@@ -113,13 +147,14 @@ impl Admission {
             })?),
             None => None,
         };
-        let by_source =
-            match source {
-                Some(source) => Some(self.sockets_by_source.acquire(source).ok_or_else(|| {
-                    throttled("Too many connections are open from this address.")
-                })?),
-                None => None,
-            };
+        let by_source = match source {
+            Some(source) => Some(
+                self.sockets_by_source
+                    .acquire(&source_key(source))
+                    .ok_or_else(|| throttled("Too many connections are open from this address."))?,
+            ),
+            None => None,
+        };
         Ok(SocketPlaces {
             source: source.map(str::to_string),
             _session: by_session,
@@ -127,14 +162,36 @@ impl Admission {
         })
     }
 
+    /// A place in the blocking queue for `tenant`, or a 429. Hold it until the work is done,
+    /// including when the request that asked for it has gone away.
+    pub fn work(&self, tenant: &str) -> Result<WorkPlace, ApiError> {
+        let by_tenant = self.work_by_tenant.acquire(tenant).ok_or_else(|| {
+            throttled("This site has too many requests in progress. Try again shortly.")
+        })?;
+        let global = self
+            .work
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| throttled("The service is busy. Try again shortly."))?;
+        Ok(WorkPlace {
+            _global: global,
+            _tenant: by_tenant,
+        })
+    }
+
     /// Whether `source` may write another browser log line now.
     pub fn diag_allowed(&self, source: Option<&str>, now_ms: i64) -> bool {
-        source.is_none_or(|source| self.diag.allow(source, now_ms))
+        self.diag
+            .allow(&source_key(source.unwrap_or(NO_SOURCE)), now_ms)
     }
 
     /// Count a sign-in attempt from `source`; refused when it has made too many this minute.
+    /// Calls with no source count together as one.
     pub fn login_attempt(&self, source: Option<&str>, now_ms: i64) -> Result<(), ApiError> {
-        if source.is_none_or(|source| self.logins.allow(source, now_ms)) {
+        if self
+            .logins
+            .allow(&source_key(source.unwrap_or(NO_SOURCE)), now_ms)
+        {
             Ok(())
         } else {
             Err(throttled(
@@ -143,13 +200,18 @@ impl Admission {
         }
     }
 
-    /// A place to run one Argon2 verification. Waits briefly for one; refused when none frees.
-    pub async fn hashing(&self) -> Result<OwnedSemaphorePermit, ApiError> {
+    /// A place to run Argon2 verifications for `tenant`. A tenant already holding its share is
+    /// refused at once; otherwise this waits briefly for the pool, and is refused when no place
+    /// frees. Hold it only around the hashing, never across a network call.
+    pub async fn hashing(&self, tenant: &str) -> Result<HashingPlace, ApiError> {
+        let busy = || throttled("Sign-in is busy right now. Wait a moment and try again.");
+        let by_tenant = self.argon2_by_tenant.acquire(tenant).ok_or_else(busy)?;
         match tokio::time::timeout(self.argon2_wait, self.argon2.clone().acquire_owned()).await {
-            Ok(Ok(permit)) => Ok(permit),
-            _ => Err(throttled(
-                "Sign-in is busy right now. Wait a moment and try again.",
-            )),
+            Ok(Ok(pool)) => Ok(HashingPlace {
+                _pool: pool,
+                _tenant: by_tenant,
+            }),
+            _ => Err(busy()),
         }
     }
 
@@ -203,12 +265,53 @@ mod tests {
             argon2_wait_ms: 30,
             ..Limits::default()
         });
-        let held = admission.hashing().await.expect("the one place");
+        let held = admission.hashing("t").await.expect("the one place");
         assert_eq!(admission.hashing_available(), 0);
-        let refused = admission.hashing().await.expect_err("no second place");
+        let refused = admission.hashing("u").await.err().expect("no second place");
         assert_eq!(refused.0.code, ErrorCode::Throttled);
         drop(held);
-        assert!(admission.hashing().await.is_ok(), "the place was freed");
+        assert!(admission.hashing("t").await.is_ok(), "the place was freed");
+    }
+
+    #[tokio::test]
+    async fn one_tenant_cannot_take_the_whole_hashing_pool() {
+        let admission = Admission::new(&Limits {
+            argon2_memory_mib: 38,
+            argon2_per_tenant: 1,
+            argon2_wait_ms: 30,
+            ..Limits::default()
+        });
+        let _first = admission.hashing("a").await.ok().expect("a's share");
+        assert!(admission.hashing("a").await.is_err(), "a's second place");
+        assert!(admission.hashing("b").await.is_ok(), "b has the other");
+    }
+
+    #[test]
+    fn blocking_work_is_capped_per_tenant_and_in_total() {
+        let admission = Admission::new(&Limits {
+            blocking_per_tenant: 2,
+            blocking_queue: 3,
+            ..Limits::default()
+        });
+        let a1 = admission.work("a").ok().expect("a1");
+        let _a2 = admission.work("a").ok().expect("a2");
+        assert!(admission.work("a").is_err(), "a's third");
+        let _b1 = admission.work("b").ok().expect("b1");
+        assert!(admission.work("c").is_err(), "the global queue is full");
+        drop(a1);
+        assert!(admission.work("c").is_ok(), "a place freed");
+    }
+
+    #[test]
+    fn calls_without_a_source_share_one_login_rate() {
+        let admission = Admission::new(&Limits {
+            logins_per_source_per_minute: 2,
+            ..Limits::default()
+        });
+        assert!(admission.login_attempt(None, 0).is_ok());
+        assert!(admission.login_attempt(None, 1).is_ok());
+        assert!(admission.login_attempt(None, 2).is_err());
+        assert!(admission.login_attempt(Some("1.1.1.1"), 2).is_ok());
     }
 
     #[test]

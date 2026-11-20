@@ -30,6 +30,9 @@
 //! | `STRATA_LOGINS_PER_SOURCE` | 30 | Sign-in attempts one source may make per minute. |
 //! | `STRATA_ARGON2_MEMORY_MIB` | 64 | Memory for concurrent password verifications (19 MiB each, at least one). |
 //! | `STRATA_ARGON2_WAIT_MS` | 3000 | How long a sign-in waits for a place to hash. |
+//! | `STRATA_ARGON2_PER_TENANT` | 2 | Verifications one tenant may run at once, out of that pool. |
+//! | `STRATA_BLOCKING_PER_TENANT` | 16 | Store calls one tenant may have running or waiting; over it, 429. |
+//! | `STRATA_BLOCKING_QUEUE` | 256 | Store calls all tenants may have running or waiting; over it, 429. |
 //! | `STRATA_LAB_WORKERS` | 2 | Threads running Impact Lab projections. |
 //! | `STRATA_LAB_QUEUE` | 4 | Projections that may wait for a thread. |
 //! | `STRATA_LAB_RUNS_PER_TENANT` | 2 | Projections one tenant may have running or waiting. |
@@ -37,6 +40,7 @@
 //! | `STRATA_HEADER_TIMEOUT_SECS` | 10 | Time a client has to send its request headers. |
 //! | `STRATA_REQUEST_TIMEOUT_SECS` | 30 | Time a request may take before it is answered `408`. |
 //! | `STRATA_MAX_CONNECTIONS` | 2048 | Open connections. |
+//! | `STRATA_MAX_CONNECTIONS_PER_SOURCE` | 512 | Open connections from one peer address. |
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -147,6 +151,15 @@ fn limits() -> Result<Limits, String> {
             i64::from(defaults.argon2_memory_mib),
         )? as u32,
         argon2_wait_ms: limit("STRATA_ARGON2_WAIT_MS", defaults.argon2_wait_ms as i64)? as u64,
+        argon2_per_tenant: limit(
+            "STRATA_ARGON2_PER_TENANT",
+            defaults.argon2_per_tenant as i64,
+        )? as usize,
+        blocking_per_tenant: limit(
+            "STRATA_BLOCKING_PER_TENANT",
+            defaults.blocking_per_tenant as i64,
+        )? as usize,
+        blocking_queue: limit("STRATA_BLOCKING_QUEUE", defaults.blocking_queue as i64)? as usize,
         lab_workers: limit("STRATA_LAB_WORKERS", defaults.lab_workers as i64)? as usize,
         lab_queue: limit("STRATA_LAB_QUEUE", defaults.lab_queue as i64)? as usize,
         lab_runs_per_tenant: limit(
