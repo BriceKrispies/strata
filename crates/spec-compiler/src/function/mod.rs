@@ -32,6 +32,16 @@
 //!   `parseTime` (substrate's `parse_time`) are `support` helpers written as Exegra defines them.
 //! - `eval` and `check` of a language call its generated module ([`crate::language`]) through an
 //!   adapter that implements the module's environment traits over the environment struct.
+//!   `eval(L, e, env, lookup)`, with a lookup (`map<string, map<string, map<string, V>>>`,
+//!   Exegra WG-4968), calls an adapter whose `follow` reads the lookup as Exegra does: a field it
+//!   does not hold is the error `the lookup does not cover <field>`, a target it does not hold is
+//!   null, a target it holds is read as a record scope. With three arguments following a
+//!   reference is an error, as before.
+//! - A function calls itself by structural recursion only ([`recursion`], Exegra WG-4957): every
+//!   call of itself passes, at one union parameter, a strict sub-value of it. It is ordinary
+//!   recursive Rust; Exegra bounds neither depth nor steps, and every such recursion ends on a
+//!   finite value, so the generated code counts neither. A cycle through two or more functions,
+//!   and a call of itself on anything else, are refused (`specc.function-invalid`).
 //!
 //! # Timestamps, sets, tuple variants, shared and boxed values, f64
 //!
@@ -41,6 +51,10 @@
 //!   arithmetic on it is checked `i64` arithmetic wrapped back into `Timestamp`. An example writes
 //!   it as its integer. Dividing a timestamp is refused, since Exegra's division of it can give a
 //!   fraction.
+//! - `duration` is `prelude::DurationMs(u64)` and compiles as `timestamp` does, over `u64`: an
+//!   example writes it as its integer of milliseconds, arithmetic on it is checked `u64`
+//!   arithmetic (a difference below zero is a `Fault`, where Exegra goes on with a negative
+//!   number), dividing it and `{:?}` of it are refused.
 //! - `set<T>` is a `BTreeSet<T>`. Exegra has no set operations: a set is a list to it, and every
 //!   list operation takes one, iterating it in order (`iter()` of the `BTreeSet`); `get(s, i)`
 //!   is its `i`-th item. What the operations give is a list (`Vec`), concatenation too. A list
@@ -122,14 +136,16 @@
 //!
 //! # Not compiled (refused)
 //!
-//! `duration`, `bytes`, `uuid` and `json`; `print`, the unit value `()` and structural
-//! recursion; dividing a timestamp; `{:?}` of a value holding a timestamp; an f64 sort key or
+//! `bytes`, `uuid` and `json`; `print` and the unit value `()`; a call of itself that is not
+//! structural, and mutual recursion; dividing a timestamp or a duration; `{:?}` of a value
+//! holding a timestamp or a duration; an f64 sort key or
 //! set item; `==` between a set and a list other than `[]`, or a shared and a plain value; an
 //! example set not written in order or with an item twice; an optional boxed field; an
 //! optional field of an option type; a string literal built as a constrained id whose
 //! constraints it breaks; names that become the same Rust name, or the name of a function.
 
 mod examples;
+mod recursion;
 mod rust;
 mod syntax;
 mod typing;
@@ -579,10 +595,20 @@ fn analyse(spec: &Spec) -> Result<Analysis, Vec<Diagnostic>> {
             Err(r) => diags.push(diag(&f.id, r)),
         }
     }
-    for id in cycles(&calls, &order) {
+    // A call of itself is no edge of the graph that must be acyclic when it is structural
+    // (checked once the bodies are typed, below); a cycle through two or more functions is
+    // refused, as Exegra refuses it.
+    let others: BTreeMap<String, Vec<String>> = calls
+        .iter()
+        .map(|(id, called)| {
+            let called = called.iter().filter(|c| *c != id).cloned().collect();
+            (id.clone(), called)
+        })
+        .collect();
+    for id in cycles(&others, &order) {
         diags.push(diag(
             &id,
-            typing::invalid("it calls itself, directly or through other functions; the call graph must be acyclic"),
+            typing::invalid("it calls itself through other functions; the call graph must be acyclic, but for a function that calls itself on a strict sub-value of a union parameter, so that every function is total"),
         ));
     }
     if !diags.is_empty() {
@@ -602,6 +628,25 @@ fn analyse(spec: &Spec) -> Result<Analysis, Vec<Diagnostic>> {
                 }
             }
             Err(r) => diags.push(diag(&f.id, r)),
+        }
+    }
+    if !diags.is_empty() {
+        return Err(diags);
+    }
+    // Calls of itself must be structural recursion; the typed bodies say what each match is on.
+    for f in &spec.functions {
+        let t = &typed[&f.id];
+        if !t.calls.contains(&f.id) {
+            continue;
+        }
+        let r = recursion::self_recursion(&sigs[&f.id], &t.lets, &t.body);
+        if let Some(problem) = r.problem {
+            diags.push(diag(
+                &f.id,
+                typing::invalid(format!(
+                    "it calls itself; a function may call itself only on a strict sub-value of a union parameter (structural recursion), but {problem}"
+                )),
+            ));
         }
     }
     if !diags.is_empty() {
@@ -794,10 +839,10 @@ fn assemble(
         if records_done.insert(b.language.clone()) {
             support_items.push(bridge.record_impl());
         }
-        let name = rust::bridge_name(b.eval, &b.language, &b.env);
+        let name = rust::bridge_name(b.eval, b.lookup, &b.language, &b.env);
         let env = rust::type_path(&b.env);
         support_items.push(if b.eval {
-            bridge.eval_fn(&name, &env)
+            bridge.eval_fn(&name, &env, b.lookup)
         } else {
             bridge.check_fn(&name, &env)
         });
@@ -1444,6 +1489,174 @@ mod tests {
         assert!(
             d.iter()
                 .any(|d| d.code == FUNCTION_INVALID && d.message.contains("stands here")),
+            "{d:?}"
+        );
+    }
+
+    const TREE: &str = r#"{ "id": "tree", "name": "Tree", "kind": "union", "variants": [
+        { "name": "leaf", "newtype": true, "fields": [{ "name": "value", "type": "i64" }] },
+        { "name": "in", "fields": [{ "name": "items", "type": "list<tree>" }] },
+        { "name": "if", "fields": [{ "name": "yes", "type": "tree" }, { "name": "no", "type": "tree" }] } ] }"#;
+
+    fn has_leaf(body: &str) -> String {
+        spec(
+            &format!(
+                r#"{{ "id": "has-leaf", "params": [{{ "name": "t", "type": "tree" }}, {{ "name": "n", "type": "i64" }}],
+                     "returns": "bool", "body": "{body}",
+                     "examples": [{{ "args": {{ "t": {{ "leaf": 3 }}, "n": 3 }}, "result": true }},
+                                  {{ "args": {{ "t": {{ "in": {{ "items": [{{ "if": {{ "yes": {{ "leaf": 1 }}, "no": {{ "in": {{ "items": [{{ "leaf": 3 }}] }} }} }} }}] }} }}, "n": 3 }}, "result": true }},
+                                  {{ "args": {{ "t": {{ "in": {{ "items": [] }} }}, "n": 3 }}, "result": false }}] }}"#
+            ),
+            TREE,
+        )
+    }
+
+    // WG-5133: a function that calls itself on a strict sub-value of a union parameter (a field
+    // of a matched variant, an item of a list such a field holds) is ordinary recursive Rust;
+    // variants named by keywords (`in`, `if`) are matched as Exegra matches them.
+    #[test]
+    fn structural_recursion_is_recursive_rust() {
+        let out = module(&has_leaf(
+            "match t { leaf(v) => v == n, in{items} => any(i in items, call has-leaf(i, n)), if{yes: a, no: b} => call has-leaf(a, n) || call has-leaf(b, n) }",
+        ));
+        assert!(
+            out.contains("pub fn has_leaf (t : & types :: Tree , n : i64) -> bool"),
+            "{out}"
+        );
+        assert!(out.contains("types :: Tree :: In"), "{out}");
+        assert!(out.contains("types :: Tree :: If"), "{out}");
+        // The body calls itself.
+        assert!(out.matches("has_leaf (").count() >= 4, "{out}");
+        assert!(out.contains("fn has_leaf_example_2"), "{out}");
+    }
+
+    #[test]
+    fn a_call_of_itself_that_is_not_on_a_strict_sub_value_is_refused() {
+        // On the parameter itself: it would never end.
+        let d = refusals(&has_leaf(
+            "match t { leaf(v) => v == n, in{items} => call has-leaf(t, n), if{yes: a, no: b} => false }",
+        ));
+        assert!(
+            d.iter().any(|d| d.code == FUNCTION_INVALID
+                && d.message.contains("strict sub-value")
+                && d.message.contains("(t)")),
+            "{d:?}"
+        );
+        // On a value the body builds.
+        let d = refusals(&has_leaf(
+            "match t { leaf(v) => v == n, in{items} => call has-leaf(tree.leaf(n), n), if{yes: a, no: b} => false }",
+        ));
+        assert!(
+            d.iter()
+                .any(|d| d.code == FUNCTION_INVALID && d.message.contains("strict sub-value")),
+            "{d:?}"
+        );
+        // Mutual recursion, even on sub-values: Exegra refuses every cycle through two functions.
+        let text = spec(
+            r#"{ "id": "even", "params": [{ "name": "t", "type": "tree" }], "returns": "bool",
+                 "body": "match t { leaf(v) => true, in{items} => any(i in items, call odd(i)), if{yes: a} => call odd(a) }",
+                 "examples": [{ "args": { "t": { "leaf": 1 } }, "result": true }] },
+               { "id": "odd", "params": [{ "name": "t", "type": "tree" }], "returns": "bool",
+                 "body": "match t { leaf(v) => false, in{items} => any(i in items, call even(i)), if{yes: a} => call even(a) }",
+                 "examples": [{ "args": { "t": { "leaf": 1 } }, "result": false }] }"#,
+            TREE,
+        );
+        let d = refusals(&text);
+        assert!(
+            d.iter().any(
+                |d| d.code == FUNCTION_INVALID && d.message.contains("through other functions")
+            ),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn a_duration_is_the_prelude_duration_and_computes_as_its_u64() {
+        let text = spec(
+            r#"{ "id": "later", "params": [{ "name": "d", "type": "duration" }, { "name": "by", "type": "u64" }],
+                 "returns": "duration", "body": "d + by",
+                 "examples": [{ "args": { "d": 1000, "by": 5 }, "result": 1005 }] }"#,
+            "",
+        );
+        let out = module(&text);
+        assert!(
+            out.contains("d : crate :: prelude :: DurationMs , by : u64"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Result < crate :: prelude :: DurationMs , Fault >"),
+            "{out}"
+        );
+        assert!(
+            out.contains("crate :: prelude :: DurationMs (1000"),
+            "{out}"
+        );
+        let halved = spec(
+            r#"{ "id": "half", "params": [{ "name": "d", "type": "duration" }], "returns": "duration", "body": "d / 2",
+                 "examples": [{ "args": { "d": 1000 }, "result": 500 }] }"#,
+            "",
+        );
+        let d = refusals(&halved);
+        assert!(
+            d.iter().any(|d| d.code == FUNCTION_UNSUPPORTED
+                && d.message.contains("divides a duration")),
+            "{d:?}"
+        );
+    }
+
+    /// The functions fixture, which declares the rule language and `follow-reference`.
+    const FIXTURE: &str = include_str!("../../tests/fixtures/functions/spec.jsonc");
+
+    // WG-5132: eval with a lookup calls a bridge of its own, whose follow reads the lookup; eval
+    // with three arguments keeps the bridge it had.
+    #[test]
+    fn eval_with_a_lookup_follows_a_reference_through_it() {
+        let out = module(FIXTURE);
+        assert!(
+            out.contains("support :: eval_lookup_rule_language_rule_env (c , env , lookup)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("fn eval_lookup_rule_language_rule_env (expr : & types :: Expr , env : & types :: RuleEnv , lookup : & std :: collections :: BTreeMap"),
+            "{out}"
+        );
+        assert!(out.contains("the lookup does not cover {field}"), "{out}");
+        assert!(
+            out.contains("covered . get (& target . to_string ())"),
+            "{out}"
+        );
+        // The three-argument bridge is unchanged.
+        assert!(
+            out.contains("support :: eval_rule_language_rule_env (c , env)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("following a reference needs a lookup, and none is available"),
+            "{out}"
+        );
+        // A lookup of another type is refused, as Exegra refuses it.
+        let wrong = FIXTURE.replacen(
+            "eval(rule-language, c, env, lookup)",
+            "eval(rule-language, c, env, c)",
+            1,
+        );
+        assert_ne!(wrong, FIXTURE);
+        let d = refusals(&wrong);
+        assert!(
+            d.iter()
+                .any(|d| d.code == FUNCTION_INVALID && d.message.contains("the lookup of eval")),
+            "{d:?}"
+        );
+        // check takes no lookup.
+        let check = FIXTURE.replacen(
+            "eval(rule-language, c, env, lookup)",
+            "check(rule-language, c, env, lookup)",
+            1,
+        );
+        let d = refusals(&check);
+        assert!(
+            d.iter()
+                .any(|d| d.code == FUNCTION_INVALID && d.message.contains("takes 3 arguments")),
             "{d:?}"
         );
     }

@@ -21,7 +21,7 @@ use quote::{format_ident, quote};
 use super::syntax::{uses, Arm, BinOp, Expr, Kind, Op, Pattern, Res, UnOp};
 use super::typing::{
     cases, class, format_parts, int_kind, is_number, json_writable, match_on, struct_fields,
-    unshared, unsupported, variants, Class, Hole, MatchOn, Refusal, Sig, Ty, TIMESTAMP,
+    unshared, unsupported, variants, Class, Hole, MatchOn, Refusal, Sig, Ty, DURATION, TIMESTAMP,
 };
 use crate::ir::Spec;
 use crate::naming;
@@ -129,8 +129,8 @@ struct Binding {
 pub(crate) fn is_copy(t: &Ty) -> bool {
     match t {
         Ty::Bool | Ty::Int(_) | Ty::Number | Ty::Float | Ty::Wide => true,
-        // prelude::Timestamp is Copy.
-        Ty::Alias(..) if t.is_timestamp() => true,
+        // prelude::Timestamp and prelude::DurationMs are Copy.
+        Ty::Alias(..) if t.is_prelude_number() => true,
         Ty::Option(of) => is_copy(of),
         _ => false,
     }
@@ -145,6 +145,9 @@ pub(crate) fn by_ref(t: &Ty) -> bool {
 pub(crate) fn type_path(id: &str) -> TokenStream {
     if id == TIMESTAMP {
         return quote! { crate::prelude::Timestamp };
+    }
+    if id == DURATION {
+        return quote! { crate::prelude::DurationMs };
     }
     let name = naming::ident(&naming::pascal(id).unwrap_or_default());
     quote! { types::#name }
@@ -404,6 +407,7 @@ fn literal_meets(spec: &Spec, s: &str, want: &Ty) -> Option<Code> {
 fn debug_differs(spec: &Spec, t: &Ty, seen: &mut BTreeSet<String>) -> Option<String> {
     match t {
         _ if t.is_timestamp() => Some("a timestamp".to_string()),
+        _ if t.is_prelude_number() => Some("a duration".to_string()),
         Ty::List(of) | Ty::Set(of) | Ty::Option(of) | Ty::Shared(of) => {
             debug_differs(spec, of, seen)
         }
@@ -2303,10 +2307,21 @@ impl<'a> Gen<'a> {
                 let Ty::Struct(env) = &env_ty else {
                     return Err(unsupported("an environment that is not a struct"));
                 };
-                let name = bridge_name(op.name == "eval", lang, env);
+                let lookup = op.name == "eval" && op.args.len() == 4;
+                let name = bridge_name(op.name == "eval", lookup, lang, env);
                 let e = self.borrow(&op.args[1], &ast)?;
                 let en = self.borrow(&op.args[2], &env_ty)?;
                 let (et, ent) = (&e.t, &en.t);
+                if lookup {
+                    // The fourth argument: the lookup a reference is followed through.
+                    let want = super::typing::lookup_ty(&Ty::Union(bridge.values_id().to_string()));
+                    let l = self.borrow(&op.args[3], &want)?;
+                    let lt = &l.t;
+                    return Ok(
+                        Code::new(quote! { support::#name(#et, #ent, #lt) }, Prec::Postfix)
+                            .exits(e.exits || en.exits || l.exits),
+                    );
+                }
                 Ok(
                     Code::new(quote! { support::#name(#et, #ent) }, Prec::Postfix)
                         .exits(e.exits || en.exits),
@@ -2806,9 +2821,13 @@ impl<'a> Gen<'a> {
 }
 
 /// The name of the `support` function that evaluates or checks a language on an environment
-/// struct.
-pub(crate) fn bridge_name(eval: bool, language: &str, env: &str) -> Ident {
-    let what = if eval { "eval" } else { "check" };
+/// struct; `eval_lookup_..` for an `eval` given a lookup.
+pub(crate) fn bridge_name(eval: bool, lookup: bool, language: &str, env: &str) -> Ident {
+    let what = match (eval, lookup) {
+        (true, true) => "eval_lookup",
+        (true, false) => "eval",
+        (false, _) => "check",
+    };
     format_ident!(
         "{what}_{}_{}",
         naming::snake(language).unwrap_or_default(),

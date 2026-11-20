@@ -570,8 +570,9 @@ pub fn module_name(lang: &Language) -> String {
 /// module: its environment traits implemented over the environment structs the function passes,
 /// read as Exegra reads them (`src/core/language-eval.js`). For `eval`, a record scope is an
 /// `option<map<string, V>>` field, a param scope a `map<string, V>`, a constant a `V` and a role
-/// test a `list<string>`, each named as its scope; no lookup is available, so following a
-/// reference is an evaluation error. For `check`, the struct has `fields: map<string, string>`
+/// test a `list<string>`, each named as its scope. Following a reference reads the lookup of a
+/// four-argument `eval` ([`Bridge::eval_fn`]); with three arguments there is none, and following
+/// a reference is an evaluation error. For `check`, the struct has `fields: map<string, string>`
 /// (a shape name per field), `params: list<string>` and `roles: list<string>`, and a field read
 /// through a reference has the any shape.
 pub(crate) struct Bridge<'a> {
@@ -668,7 +669,14 @@ impl Bridge<'_> {
     /// environment struct whose fields are named as the scopes. A constant scope the evaluator
     /// reads as a time (`now`) or a principal must hold a value of that kind (a time; a string or
     /// null): anything else is an `Err`, where Exegra would hand the value back unchanged.
-    pub(crate) fn eval_fn(&self, name: &Ident, env: &TokenStream) -> TokenStream {
+    ///
+    /// With `lookup`, the function takes a third argument, `lookup: &BTreeMap<String,
+    /// BTreeMap<String, BTreeMap<String, V>>>`, and following a reference reads it as Exegra's
+    /// `evalLanguage` reads its lookup (`src/core/language-eval.js`, WG-4968): a field the lookup
+    /// does not hold is the error `the lookup does not cover <field>`; a target it covers but does
+    /// not hold (by the decimal text of its id) is no record, so the hop is null; a target it
+    /// holds is read as a record scope is. Without, following a reference is an error.
+    pub(crate) fn eval_fn(&self, name: &Ident, env: &TokenStream, lookup: bool) -> TokenStream {
         let module = self.module();
         let ast = self.plan.ast_ty();
         let value = self.plan.value_ty();
@@ -682,6 +690,18 @@ impl Bridge<'_> {
         if needs_env {
             fields.push(quote! { env: &'a #env });
             inits.push(quote! { env });
+        }
+        let lookup_ty = quote! {
+            std::collections::BTreeMap<
+                String,
+                std::collections::BTreeMap<String, std::collections::BTreeMap<String, #value>>,
+            >
+        };
+        // The lookup is held only when a hop can read it.
+        let follows = lookup && self.plan.uses(Prim::Through);
+        if follows {
+            fields.push(quote! { lookup: &'a #lookup_ty });
+            inits.push(quote! { lookup });
         }
         if self.reads_records() {
             let scope = self.plan.scope_enum_path();
@@ -704,7 +724,34 @@ impl Bridge<'_> {
                 }
             });
         }
-        if self.plan.uses(Prim::Through) {
+        if follows {
+            let scope = self.plan.scope_enum_path();
+            let target = self.plan.payload_ty("ref");
+            // Exegra keys the records of a covered field by `String(payload)`: the decimal text
+            // of a numeric id, the text of a string one.
+            let key = if self.plan.payload_decl("ref").is_some() {
+                quote! { target.0.to_string() }
+            } else {
+                quote! { target.to_string() }
+            };
+            methods.push(quote! {
+                fn follow(
+                    &self,
+                    _scope: &#scope,
+                    field: &str,
+                    target: &#target,
+                ) -> Result<Option<Box<dyn #module::Record + '_>>, #module::EvalError> {
+                    let Some(covered) = self.lookup.get(field) else {
+                        return Err(#module::EvalError(format!(
+                            "the lookup does not cover {field}"
+                        )));
+                    };
+                    Ok(covered
+                        .get(&#key)
+                        .map(|found| Box::new(found.clone()) as Box<dyn #module::Record + '_>))
+                }
+            });
+        } else if self.plan.uses(Prim::Through) {
             let scope = self.plan.scope_enum_path();
             let target = self.plan.payload_ty("ref");
             methods.push(quote! {
@@ -780,7 +827,7 @@ impl Bridge<'_> {
                 }
             });
         }
-        let (decl, header, build) = match (fields.is_empty(), needs_env) {
+        let (decl, header, build) = match (fields.is_empty(), needs_env || follows) {
             (true, _) => (
                 quote! { struct Scopes; },
                 quote! { Scopes },
@@ -802,9 +849,15 @@ impl Bridge<'_> {
         } else {
             quote! { let _ = env; }
         };
+        let (lookup_param, lookup_unused) = match (lookup, follows) {
+            (false, _) => (TokenStream::new(), TokenStream::new()),
+            (true, true) => (quote! { , lookup: &#lookup_ty }, TokenStream::new()),
+            (true, false) => (quote! { , lookup: &#lookup_ty }, quote! { let _ = lookup; }),
+        };
         quote! {
-            pub(super) fn #name(expr: &#ast, env: &#env) -> Result<#value, String> {
+            pub(super) fn #name(expr: &#ast, env: &#env #lookup_param) -> Result<#value, String> {
                 #unused
+                #lookup_unused
                 #(#extracts)*
                 #decl
 

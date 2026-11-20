@@ -489,7 +489,9 @@ impl Parser {
     }
 
     fn pattern(&mut self) -> Parsed<Pattern> {
-        let n = self.name("a pattern")?;
+        // A pattern names a variant, which may be a word the language keeps (`If`, `in`), as
+        // Exegra's grammar reads a word there.
+        let n = self.field_name("a pattern")?;
         if n == "_" {
             return Ok(Pattern::Wild);
         }
@@ -512,6 +514,11 @@ impl Parser {
                 if self.is_op(":") {
                     self.p += 1;
                     bind = self.name("a name or _")?;
+                } else if KEYWORDS.contains(&field.as_str()) {
+                    // A word the language keeps names a field, never a binding (`then: t`).
+                    return Err(self.error(format!(
+                        "the field {field} is a word the language keeps; bind it to a name, as {field}: x"
+                    )));
                 }
                 fields.push((field, bind));
                 if !self.is_op(",") {

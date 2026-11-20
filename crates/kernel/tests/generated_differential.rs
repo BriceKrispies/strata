@@ -33,17 +33,19 @@
 //!      generated `policy-check-text` writes `<condition>: evaluation failed`, because
 //!      `policy-check` does not carry the error (a gap of WG-4938). Compared as: the generated
 //!      detail minus its suffix is a prefix of the hand-written detail.
-//!   2. Not exercised, so not compared: a policy condition, a query filter or a field read
-//!      condition that follows a reference (`through`), and the `InsufficientState` the
-//!      hand-written kernel answers when the snapshot lacks the record it would follow
-//!      (`expr::missing`, `authorize_needing`, WG-5096). Two things are missing in the toolchain,
-//!      neither in Exegra: specc compiles `eval` of three arguments only (the lookup argument of
-//!      the fourth, which Exegra evaluates, has no generated counterpart: the generated
-//!      `follow` of the bridge always fails), and the need a condition names is found by
-//!      walking the expression tree, a structural recursion that specc refuses (Exegra checks
-//!      and evaluates it). The generated `authorize`, filters and `redact` therefore fail such
-//!      a condition. The corpus has no such condition, and `assert_no_input_of_a_known_difference`
-//!      fails on a field read condition that follows a reference.
+//!   2. Not mirrored: a query filter, a field read condition or a Read policy condition that
+//!      follows a reference (`through`), and the `InsufficientState` the hand-written kernel
+//!      answers when the snapshot lacks the record it would follow (`expr::missing`,
+//!      `visible_in`, WG-5096). The generated `kernel-read`, filters, `redact` and `visible`
+//!      evaluate without a lookup, so they fail such a condition. Guarded:
+//!      `assert_no_input_of_a_known_difference` fails on a filter or a field read condition that
+//!      follows a reference and on a policy that follows one and applies to Read. A policy
+//!      condition of a transition is mirrored (`authorize-needing`, `rule-lookup`,
+//!      `rule-missing`, WG-5132, WG-5133), with one difference kept: the generated lookup leaves
+//!      out a reference field when the snapshot does not cover the field's target in the old or
+//!      in the new record, so a condition that follows the covered one of two different targets
+//!      fails where the kernel follows it. An update of the corpus never changes a reference, and
+//!      `compare_attributed` fails on an intent that does.
 //!   3. Not exercised: a query order key over a list-valued attribute. The generated order
 //!      does not order a list element by element, as `Value`'s derived order does.
 //!      The corpus has no list-valued order key (it has a list-valued field, `tags`, which no
@@ -59,18 +61,21 @@
 //!      by a schema change), each with examples in the specification.
 //!   5. Not exercised: a list nested three deep in a stored value. The generated limit and
 //!      size functions (`value-limit-problem`, `value-json-bytes`) look two levels into a list
-//!      where `limits.rs` looks as deep as there are lists, because specc compiles no
-//!      recursion; a field admits a list of scalars only, so such a value is a type mismatch
+//!      where `limits.rs` looks as deep as there are lists: they were written before specc
+//!      compiled structural recursion (WG-5133) and are not restated yet; a field admits a list
+//!      of scalars only, so such a value is a type mismatch
 //!      whose only other effect is the order of two refusals on a record over the size limit.
 //!      The corpus draws no nested list.
 //!   6. Not exercised: a policy on every object whose condition reads a field is found by
 //!      `policy-problems` as a condition that does not check against no fields, where the
-//!      hand-written `mentions_field` walks the expression (a recursion specc refuses). The two
+//!      hand-written `mentions_field` walks the expression (a recursion `policy-problems` does
+//!      not use yet, though specc compiles it since WG-5133). The two
 //!      differ for a condition that fails to check for another reason, or that reads a field in
 //!      a branch that never runs. The corpus defines no policy on every object.
 //!   7. Not exercised, and not mirrored: the bounds the kernel checks on a definition that the
-//!      function language cannot state, because it compiles neither durations nor recursion:
-//!      retry delays, attempt timeouts and waits of an automation step, and the two hundred
+//!      specification does not state yet (specc compiles durations and structural recursion
+//!      since WG-5132 and WG-5133, but the functions are not written): retry delays, attempt
+//!      timeouts and waits of an automation step, and the two hundred
 //!      nodes of an operation condition. The generator draws no definition that breaks one, nor
 //!      a hundred and one triggers. Its automation acts with no run-as role, so the conferral of
 //!      a run-as role is compared only through the specification's examples.
@@ -154,9 +159,14 @@
 //! compared through an adjustment (the detail's prefix, `without_kernel_only`). Differences 3 to
 //! 6 are guarded by the operation generator drawing nothing that reaches them.
 //!
-//! Mirrored, so no longer differences: the size limits of `limits.rs` (the bytes of a record, the
-//! length of a string or a list, the encoded size of a value of a unique field: `record-limit-check`,
-//! `limit-step`; WG-5092), the field-level read conditions (`redact`, in `kernel-read` and
+//! Mirrored, so no longer differences: a policy condition of a transition that follows a
+//! reference, through the lookup the snapshot gives, and the `InsufficientState` naming the record
+//! it needs when the snapshot does not cover it (`authorize-needing`, `require`; WG-5132,
+//! WG-5133), compared by `compare_attributed` on a policy that reads `record.author.name`, over
+//! the complete snapshot and over one that covers only what the intent plans to load; the size
+//! limits of `limits.rs` (the bytes of a record, the length of a string or a list, the encoded
+//! size of a value of a unique field: `record-limit-check`, `limit-step`; WG-5092), the
+//! field-level read conditions (`redact`, in `kernel-read` and
 //! `named-read`; WG-5093), the deletion of a record that two fields of one record refer to (one
 //! rewrite per record; WG-5094), the problems of a schema that `schema-problems` did not state:
 //! counts and limits, field read conditions, the permissions of roles, teams and invitations
@@ -935,6 +945,24 @@ fn assert_no_input_of_a_known_difference(state: &State) {
         }
     }
     for query in tenant.schema.queries.values() {
+        if let Some(filter) = &query.filter {
+            assert!(
+                !mentions_through(filter),
+                "{} has a filter that follows a reference; the generated kernel-read has no lookup (difference 2)",
+                query.id
+            );
+        }
+    }
+    for policy in tenant.schema.policies.values() {
+        if let Some(condition) = &policy.condition {
+            assert!(
+                !(mentions_through(condition) && policy.actions.contains(&Action::Read)),
+                "{} follows a reference and applies to Read; the generated visible and kernel-read have no lookup (difference 2)",
+                policy.id.0
+            );
+        }
+    }
+    for query in tenant.schema.queries.values() {
         assert!(
             query.aggregates.is_none() && query.declared_fields.is_none(),
             "{} declares aggregates or fields; the generated schema-problems does not check them (difference 8)",
@@ -1089,6 +1117,93 @@ struct Tally {
     visibility: usize,
     needs: usize,
     evaluation_failed_details: usize,
+    /// Updates compared under `writers_edit_attributed` (`compare_attributed`).
+    attributed: usize,
+    /// Of those on a partial snapshot, the ones the kernel answered with `InsufficientState`.
+    attributed_insufficient: usize,
+}
+
+/// A writer may update a note whose author record has a name: a policy that follows a
+/// reference (`record.author.name`), which the generated `require` decides through
+/// `authorize-needing` with the snapshot's lookup (WG-5132, WG-5133). It applies to Update only,
+/// since the generated reads have no lookup (difference 2). Its id sorts before
+/// `writers_edit_own`, so it is tried first.
+fn writers_edit_attributed() -> PolicyDef {
+    PolicyDef {
+        id: PolicyId::new("writers_edit_attributed").unwrap(),
+        role: role("writer"),
+        resource: Resource::Object(object("note")),
+        actions: BTreeSet::from([Action::Update]),
+        condition: Some(Expr::Not(Box::new(Expr::IsNull(Box::new(Expr::Through(
+            Scope::Record,
+            "author".into(),
+            "name".into(),
+        )))))),
+    }
+}
+
+/// The policy condition of a transition that follows a reference, compared on an update of a
+/// note: the snapshot with `writers_edit_attributed` added, once complete and once covering only
+/// what the intent plans to load (`needs`), which leaves out the person the note refers to. On
+/// the second the kernel answers `InsufficientState` naming that person when no other policy
+/// grants, and the generated `require` must answer the same.
+fn compare_attributed(state: &State, intent: &Intent, context: &Context, tally: &mut Tally) {
+    let (
+        Some(tenant),
+        Intent::UpdateRecord {
+            object: o, fields, ..
+        },
+    ) = (&state.tenant, intent)
+    else {
+        return;
+    };
+    let note = object("note");
+    if o != &note
+        || !tenant
+            .schema
+            .objects
+            .get(&note)
+            .is_some_and(|def| def.fields.contains_key(&field("author")))
+    {
+        return;
+    }
+    // Difference 2: the generated lookup leaves out a field whose old and new targets differ in
+    // coverage, so the comparison holds for an update that keeps every reference.
+    let holds_reference = |value: &Value| match value {
+        Value::Ref(_) => true,
+        Value::List(items) => items.iter().any(|item| matches!(item, Value::Ref(_))),
+        _ => false,
+    };
+    assert!(
+        !fields.values().any(holds_reference),
+        "an update of the corpus changes a reference; the generated lookup does not follow the covered one of two targets (difference 2)"
+    );
+    let mut schema = TenantSchema::clone(&tenant.schema);
+    let policy = writers_edit_attributed();
+    schema.policies.insert(policy.id.clone(), policy);
+    let mut attributed = TenantState::clone(tenant);
+    attributed.schema = std::sync::Arc::new(schema);
+    let planned: BTreeSet<Need> = needs(Some(attributed.schema.as_ref()), intent)
+        .into_iter()
+        .collect();
+    let complete = State {
+        tenant_id: state.tenant_id.clone(),
+        tenant: Some(std::sync::Arc::new(attributed)),
+        coverage: Coverage::Complete,
+    };
+    compare_transition(&complete, intent, context, tally);
+    let partial = State {
+        coverage: Coverage::Partial(planned),
+        ..complete
+    };
+    compare_transition(&partial, intent, context, tally);
+    if matches!(
+        transition(&partial, intent, context),
+        Err(e) if e.kind == ErrorKind::InsufficientState
+    ) {
+        tally.attributed_insufficient += 1;
+    }
+    tally.attributed += 1;
 }
 
 fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: &mut Tally) {
@@ -1295,6 +1410,7 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
                 );
                 let state = world.state(&context.tenant);
                 compare_transition(&state, &intent, &context, &mut tally);
+                compare_attributed(&state, &intent, &context, &mut tally);
                 // A snapshot of another tenant than the context names.
                 let elsewhere = world.state(&tenant_id(WORLD_TENANTS[(op.tenant + 1) % 3]));
                 compare_transition(&elsewhere, &intent, &context, &mut tally);
@@ -1326,16 +1442,30 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
         "only {} visibility checks",
         tally.visibility
     );
+    // A policy that follows a reference is decided on complete and partial snapshots, and the
+    // partial ones reach the InsufficientState that names the record it needs.
+    assert!(
+        tally.attributed > 50,
+        "only {} updates under a policy that follows a reference",
+        tally.attributed
+    );
+    assert!(
+        tally.attributed_insufficient > 0,
+        "no update under a policy that follows a reference asked for the record it needs"
+    );
     eprintln!(
         "compared {} decisions ({} accepted, {} rejected), {} reads, {} visibility checks, {} plans; \
-         {} policy-condition details matched under difference 1",
+         {} policy-condition details matched under difference 1; {} updates under a policy that \
+         follows a reference, {} of them InsufficientState on a partial snapshot",
         tally.compared,
         tally.accepted,
         tally.rejected,
         tally.reads,
         tally.visibility,
         tally.needs,
-        tally.evaluation_failed_details
+        tally.evaluation_failed_details,
+        tally.attributed,
+        tally.attributed_insufficient
     );
 }
 

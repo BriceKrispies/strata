@@ -535,6 +535,69 @@ pub fn key_order(xs: &Vec<types::Key>) -> Vec<types::Key> {
     })
 }
 
+/// schema.rs mentions_field: whether an expression reads a field of a record (a name that is not a system attribute, or any hop through a reference), at any depth. Structural recursion (Exegra WG-4957): every call of itself is on a field of a variant matched from e, or an item of a list such a field holds (WG-5133).
+///
+/// Specification function `mentions-field`.
+pub fn mentions_field(e: &types::Expr) -> bool {
+    match e {
+        types::Expr::Var { name, .. } => !name.starts_with("$"),
+        types::Expr::Through { .. } => true,
+        types::Expr::Lit(_) => false,
+        types::Expr::Param(_) => false,
+        types::Expr::Now => false,
+        types::Expr::Principal => false,
+        types::Expr::HasRole(_) => false,
+        types::Expr::Not(a) => mentions_field(&(**a)),
+        types::Expr::IsNull(a) => mentions_field(&(**a)),
+        types::Expr::Len(a) => mentions_field(&(**a)),
+        types::Expr::Lower(a) => mentions_field(&(**a)),
+        types::Expr::IsSlug(a) => mentions_field(&(**a)),
+        types::Expr::And(items) => items.iter().any(|i| mentions_field(i)),
+        types::Expr::Or(items) => items.iter().any(|i| mentions_field(i)),
+        types::Expr::Cmp { left, right, .. } => {
+            mentions_field(&(**left)) || mentions_field(&(**right))
+        }
+        types::Expr::In { item, list: l } => mentions_field(&(**item)) || mentions_field(&(**l)),
+        types::Expr::Contains { haystack, needle } => {
+            mentions_field(&(**haystack)) || mentions_field(&(**needle))
+        }
+        types::Expr::StartsWith { text, prefix } => {
+            mentions_field(&(**text)) || mentions_field(&(**prefix))
+        }
+        types::Expr::If {
+            cond,
+            then: t,
+            otherwise,
+        } => mentions_field(&(**cond)) || mentions_field(&(**t)) || mentions_field(&(**otherwise)),
+    }
+}
+
+/// eval of the rule language with a lookup, its fourth argument (Exegra WG-4968, WG-5132): a hop through a reference reads the lookup; a target the lookup covers but does not hold is null, a field it does not cover is an evaluation error, written here as an error string.
+///
+/// Specification function `follow-reference`.
+pub fn follow_reference(
+    c: &types::Expr,
+    env: &types::RuleEnv,
+    lookup: &std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, types::Value>>,
+    >,
+) -> types::Value {
+    match support::eval_lookup_rule_language_rule_env(c, env, lookup) {
+        Ok(v) => v,
+        Err(e) => types::Value::Str(format!("error: {}", e)),
+    }
+}
+
+/// A duration plus milliseconds: prelude::DurationMs, computed as its u64 (WG-5132).
+///
+/// Specification function `later`; an integer overflow, a division by zero or a failed conversion is a `Fault`.
+pub fn later(d: crate::prelude::DurationMs, by: u64) -> Result<crate::prelude::DurationMs, Fault> {
+    Ok(crate::prelude::DurationMs(
+        d.0.checked_add(by).ok_or(Fault { op: "+" })?,
+    ))
+}
+
 /// What the functions share: list helpers and the bridges to the languages.
 mod support {
     use crate::types;
@@ -705,6 +768,99 @@ mod support {
             expr,
             &Scopes {
                 env,
+                now,
+                principal,
+            },
+        )
+        .map_err(|e| e.0)
+    }
+    pub(super) fn eval_lookup_rule_language_rule_env(
+        expr: &types::Expr,
+        env: &types::RuleEnv,
+        lookup: &std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, std::collections::BTreeMap<String, types::Value>>,
+        >,
+    ) -> Result<types::Value, String> {
+        let now = match &env.now {
+            types::Value::Time(t) => *t,
+            other => return Err(format!("the scope now holds {other:?}, not a time")),
+        };
+        let principal = match &env.principal {
+            types::Value::Str(id) => Some(id.clone()),
+            types::Value::Null => None,
+            other => {
+                return Err(format!(
+                    "the scope principal holds {other:?}, not a principal's id or null"
+                ));
+            }
+        };
+
+        struct Scopes<'a> {
+            env: &'a types::RuleEnv,
+            lookup: &'a std::collections::BTreeMap<
+                String,
+                std::collections::BTreeMap<
+                    String,
+                    std::collections::BTreeMap<String, types::Value>,
+                >,
+            >,
+            now: i64,
+            principal: Option<String>,
+        }
+
+        impl crate::rule_language::Env for Scopes<'_> {
+            fn record(&self, scope: &types::Scope) -> Option<&dyn crate::rule_language::Record> {
+                let record = match scope {
+                    types::Scope::Record => &self.env.record,
+                    types::Scope::Old => &self.env.old,
+                    types::Scope::New => &self.env.new,
+                };
+                record
+                    .as_ref()
+                    .map(|r| r as &dyn crate::rule_language::Record)
+            }
+
+            fn follow(
+                &self,
+                _scope: &types::Scope,
+                field: &str,
+                target: &u64,
+            ) -> Result<
+                Option<Box<dyn crate::rule_language::Record + '_>>,
+                crate::rule_language::EvalError,
+            > {
+                let Some(covered) = self.lookup.get(field) else {
+                    return Err(crate::rule_language::EvalError(format!(
+                        "the lookup does not cover {field}"
+                    )));
+                };
+                Ok(covered.get(&target.to_string()).map(|found| {
+                    Box::new(found.clone()) as Box<dyn crate::rule_language::Record + '_>
+                }))
+            }
+
+            fn param(&self, name: &str) -> Option<types::Value> {
+                self.env.param.get(name).cloned()
+            }
+
+            fn now(&self) -> i64 {
+                self.now
+            }
+
+            fn principal(&self) -> Option<String> {
+                self.principal.clone()
+            }
+
+            fn has_role(&self, role: &str) -> bool {
+                self.env.has_role.iter().any(|held| held == role)
+            }
+        }
+        crate::rule_language::eval(
+            expr,
+            &Scopes {
+                env,
+                lookup,
                 now,
                 principal,
             },
@@ -3526,5 +3682,201 @@ mod tests {
             types::Key::Rec(types::Rid(5)),
         ];
         assert_eq!(key_order(&xs), want_);
+    }
+
+    /// Example 1 of `mentions-field`.
+    #[test]
+    fn mentions_field_example_1() {
+        let e: types::Expr = types::Expr::Var {
+            scope: types::Scope::Record,
+            name: "title".to_string(),
+        };
+        assert!(mentions_field(&e));
+    }
+
+    /// Example 2 of `mentions-field`.
+    #[test]
+    fn mentions_field_example_2() {
+        let e: types::Expr = types::Expr::Var {
+            scope: types::Scope::Record,
+            name: "$id".to_string(),
+        };
+        assert!(!mentions_field(&e));
+    }
+
+    /// Three levels down: a hop inside a comparison inside an and.
+    #[test]
+    fn mentions_field_example_3() {
+        let e: types::Expr = types::Expr::And(vec![
+            types::Expr::Not(Box::new(types::Expr::IsNull(Box::new(types::Expr::Var {
+                scope: types::Scope::New,
+                name: "$version".to_string(),
+            })))),
+            types::Expr::Cmp {
+                op: types::CmpOp::Eq,
+                left: Box::new(types::Expr::Now),
+                right: Box::new(types::Expr::Through {
+                    scope: types::Scope::New,
+                    field: "author".to_string(),
+                    target: "name".to_string(),
+                }),
+            },
+        ]);
+        assert!(mentions_field(&e));
+    }
+
+    /// Example 4 of `mentions-field`.
+    #[test]
+    fn mentions_field_example_4() {
+        let e: types::Expr = types::Expr::If {
+            cond: Box::new(types::Expr::Now),
+            then: Box::new(types::Expr::Lit(types::Value::Null)),
+            otherwise: Box::new(types::Expr::Len(Box::new(types::Expr::Var {
+                scope: types::Scope::Old,
+                name: "slug".to_string(),
+            }))),
+        };
+        assert!(mentions_field(&e));
+    }
+
+    /// Example 5 of `mentions-field`.
+    #[test]
+    fn mentions_field_example_5() {
+        let e: types::Expr = types::Expr::Or(vec![
+            types::Expr::HasRole("editor".to_string()),
+            types::Expr::Not(Box::new(types::Expr::Lit(types::Value::Bool(true)))),
+        ]);
+        assert!(!mentions_field(&e));
+    }
+
+    /// The target is in the lookup: its attribute.
+    #[test]
+    fn follow_reference_example_1() {
+        let c: types::Expr = types::Expr::Through {
+            scope: types::Scope::New,
+            field: "author".to_string(),
+            target: "name".to_string(),
+        };
+        let env: types::RuleEnv = types::RuleEnv {
+            record: None,
+            old: None,
+            new: Some(std::collections::BTreeMap::from([(
+                "author".to_string(),
+                types::Value::Ref(2),
+            )])),
+            param: std::collections::BTreeMap::new(),
+            now: types::Value::Time(0),
+            principal: types::Value::Null,
+            has_role: Vec::new(),
+        };
+        let lookup: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, std::collections::BTreeMap<String, types::Value>>,
+        > = std::collections::BTreeMap::from([(
+            "author".to_string(),
+            std::collections::BTreeMap::from([(
+                "2".to_string(),
+                std::collections::BTreeMap::from([(
+                    "name".to_string(),
+                    types::Value::Str("Ada".to_string()),
+                )]),
+            )]),
+        )]);
+        let want_: types::Value = types::Value::Str("Ada".to_string());
+        assert_eq!(follow_reference(&c, &env, &lookup), want_);
+    }
+
+    /// The lookup covers the field but holds no such record: null.
+    #[test]
+    fn follow_reference_example_2() {
+        let c: types::Expr = types::Expr::Through {
+            scope: types::Scope::New,
+            field: "author".to_string(),
+            target: "name".to_string(),
+        };
+        let env: types::RuleEnv = types::RuleEnv {
+            record: None,
+            old: None,
+            new: Some(std::collections::BTreeMap::from([(
+                "author".to_string(),
+                types::Value::Ref(2),
+            )])),
+            param: std::collections::BTreeMap::new(),
+            now: types::Value::Time(0),
+            principal: types::Value::Null,
+            has_role: Vec::new(),
+        };
+        let lookup: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, std::collections::BTreeMap<String, types::Value>>,
+        > = std::collections::BTreeMap::from([(
+            "author".to_string(),
+            std::collections::BTreeMap::new(),
+        )]);
+        let want_: types::Value = types::Value::Null;
+        assert_eq!(follow_reference(&c, &env, &lookup), want_);
+    }
+
+    /// The lookup does not cover the field: an evaluation error.
+    #[test]
+    fn follow_reference_example_3() {
+        let c: types::Expr = types::Expr::Through {
+            scope: types::Scope::New,
+            field: "author".to_string(),
+            target: "name".to_string(),
+        };
+        let env: types::RuleEnv = types::RuleEnv {
+            record: None,
+            old: None,
+            new: Some(std::collections::BTreeMap::from([(
+                "author".to_string(),
+                types::Value::Ref(2),
+            )])),
+            param: std::collections::BTreeMap::new(),
+            now: types::Value::Time(0),
+            principal: types::Value::Null,
+            has_role: Vec::new(),
+        };
+        let lookup: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, std::collections::BTreeMap<String, types::Value>>,
+        > = std::collections::BTreeMap::new();
+        let want_: types::Value =
+            types::Value::Str("error: the lookup does not cover author".to_string());
+        assert_eq!(follow_reference(&c, &env, &lookup), want_);
+    }
+
+    /// An empty reference field is null before the lookup is read.
+    #[test]
+    fn follow_reference_example_4() {
+        let c: types::Expr = types::Expr::Through {
+            scope: types::Scope::New,
+            field: "author".to_string(),
+            target: "name".to_string(),
+        };
+        let env: types::RuleEnv = types::RuleEnv {
+            record: None,
+            old: None,
+            new: Some(std::collections::BTreeMap::new()),
+            param: std::collections::BTreeMap::new(),
+            now: types::Value::Time(0),
+            principal: types::Value::Null,
+            has_role: Vec::new(),
+        };
+        let lookup: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, std::collections::BTreeMap<String, types::Value>>,
+        > = std::collections::BTreeMap::new();
+        let want_: types::Value = types::Value::Null;
+        assert_eq!(follow_reference(&c, &env, &lookup), want_);
+    }
+
+    /// Example 1 of `later`.
+    #[test]
+    fn later_example_1() {
+        let d: crate::prelude::DurationMs = crate::prelude::DurationMs(1000);
+        let by: u64 = 5;
+        let want_: crate::prelude::DurationMs = crate::prelude::DurationMs(1005);
+        assert_eq!(later(d, by), Ok(want_));
     }
 }
