@@ -914,3 +914,258 @@ fn another_tenants_templates_suppressions_and_log_are_invisible() {
         ErrorCode::Forbidden
     );
 }
+
+/// Define `automation` in `alpha`, as its owner.
+fn define(app: &App, automation: AutomationDef) {
+    execute(
+        app.store.as_ref(),
+        &Intent::ChangeSchema {
+            changes: vec![SchemaChange::DefineAutomation(automation)],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+        &ctx("alpha", Principal::User(principal_id("alpha:owner")), 900),
+    )
+    .expect("the automation is defined");
+}
+
+/// `notify` with its one step replaced by `action`, under the id `id`.
+fn one_step(id: &str, action: AutomationStep) -> AutomationDef {
+    let mut automation = notify();
+    automation.id = WorkflowId::new(id).unwrap();
+    automation
+        .steps
+        .get_mut(&StepName::new("send").unwrap())
+        .unwrap()
+        .action = action;
+    automation
+}
+
+/// A person of `alpha` with an account whose verified address is `<name>@example.org`.
+fn person(app: &App, name: &str) -> PrincipalId {
+    let principal = principal_id(&format!("alpha:{name}"));
+    app.store
+        .put_account(&Account {
+            tenant: tenant_id("alpha"),
+            login: format!("{name}@example.org"),
+            principal: principal.clone(),
+            display_name: name.to_string(),
+            password_hash: "unused".into(),
+            verified_email: Some(format!("{name}@example.org")),
+        })
+        .unwrap();
+    principal
+}
+
+// Verifies: NTF-3200
+#[test]
+fn a_send_mail_step_reaches_an_address_and_a_segment_with_the_key_of_the_step() {
+    let app = app();
+    install(&app, "alpha", "Hello {{name}}");
+    let tenant = tenant_id("alpha");
+    let owner = Principal::User(principal_id("alpha:owner"));
+    let segment: SegmentId = serde_json::from_value(json!(GOLD)).unwrap();
+    kept::define(
+        app.store.as_ref(),
+        &ctx("alpha", owner.clone(), 1_000),
+        &Definition {
+            id: segment,
+            name: "Gold".into(),
+            subject: object("member"),
+            predicate: expr::parse("record.tier == 'gold'").unwrap(),
+            refresh_seconds: None,
+            principal_field: field("principal"),
+            visible_to_members: false,
+        },
+    )
+    .expect("the segment is defined");
+    for name in ["p1", "p2", "p3"] {
+        let person = person(&app, name);
+        execute(
+            app.store.as_ref(),
+            &Intent::CreateRecord {
+                object: object("member"),
+                fields: BTreeMap::from([
+                    (field("principal"), text(person.as_str())),
+                    (field("tier"), text("gold")),
+                ]),
+            },
+            &ctx("alpha", owner.clone(), 2_000),
+        )
+        .expect("the member is created");
+    }
+    let mail = |to, address, segment| AutomationStep::SendMail {
+        template: TemplateId("welcome".into()),
+        to,
+        address,
+        segment,
+        category: Some("receipts".into()),
+    };
+    define(
+        &app,
+        one_step(
+            "to_address",
+            mail(None, Some(lit("grace@example.org")), None),
+        ),
+    );
+    define(
+        &app,
+        one_step("to_segment", mail(None, None, Some(segment))),
+    );
+
+    for automation in ["to_address", "to_segment"] {
+        let run = start(&app, "alpha", automation, T0);
+        drain(&app, T0);
+        let record = app.store.automation_run(&tenant, &run).unwrap().unwrap();
+        assert_eq!(record.state, RunState::Completed, "{automation}");
+    }
+    let mut sent = outbox_to(&app);
+    sent.sort();
+    assert_eq!(
+        sent,
+        [
+            "grace@example.org",
+            "p1@example.org",
+            "p2@example.org",
+            "p3@example.org"
+        ]
+    );
+}
+
+// Verifies: NTF-1572, NTF-3200
+#[test]
+fn a_digest_step_sends_one_message_to_each_person_with_notices_in_its_window() {
+    let app = app();
+    install(&app, "alpha", "Hello {{name}}");
+    let tenant = tenant_id("alpha");
+    let store_ = app.store.as_ref();
+    store_
+        .doc_put(
+            &tenant,
+            "message-category",
+            "receipts",
+            r#"{"purpose":"transactional"}"#,
+            false,
+        )
+        .unwrap();
+    execute(
+        store_,
+        &Intent::ChangeSchema {
+            changes: vec![
+                SchemaChange::DefineMailTemplate(MailTemplateDecl {
+                    template: TemplateId("daily".into()),
+                    subject: "{{count}} new orders".into(),
+                    body: StructuredBlocks(r#"[{"type":"paragraph","text":"{{notices}}"}]"#.into()),
+                }),
+                SchemaChange::DefineNoticeTemplate(NoticeTemplateDecl {
+                    template: TemplateId("order".into()),
+                    title: "Order {{order}}".into(),
+                    body: StructuredBlocks(r#"[{"text":"An order."}]"#.into()),
+                }),
+            ],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+        &ctx("alpha", Principal::User(principal_id("alpha:owner")), 800),
+    )
+    .expect("the templates are defined");
+    let (p1, p2, p3) = (person(&app, "p1"), person(&app, "p2"), person(&app, "p3"));
+    let found = store_.load(&tenant, &[]).unwrap().tenant.unwrap();
+    let notice = |order: &str| strata_backend::inbox::Notice {
+        topic: "app.orders".into(),
+        category: Some("receipts".into()),
+        template: "order".into(),
+        values: BTreeMap::from([("order".to_string(), order.to_string())]),
+        reference: None,
+        record: None,
+        mail: false,
+    };
+    let day = 86_400_000;
+    // Two notices of p1 and one of p2 in the window, one of p3 before it and one of p1 after it.
+    for (who, order, at) in [
+        (&p1, "A1", T0 - 3_000),
+        (&p1, "A2", T0 - 2_000),
+        (&p2, "B1", T0 - 1_000),
+        (&p3, "C1", T0 - day - 1),
+        (&p1, "A3", T0),
+    ] {
+        strata_backend::inbox::deliver(
+            &app,
+            &tenant,
+            &found,
+            who,
+            order,
+            &notice(order),
+            Timestamp(at),
+        )
+        .unwrap();
+    }
+    define(
+        &app,
+        one_step(
+            "digest",
+            AutomationStep::SendDigest {
+                category: strata_model::types::MessageCategoryId("receipts".into()),
+                template: TemplateId("daily".into()),
+                since: strata_model::prelude::Timestamp(T0 - day),
+                until: strata_model::prelude::Timestamp(T0),
+                recipient: None,
+                reference: Some(strata_model::types::SendReference("daily".into())),
+                idempotency_key: None,
+            },
+        ),
+    );
+    let run = start(&app, "alpha", "digest", T0);
+    drain(&app, T0);
+    let record = app.store.automation_run(&tenant, &run).unwrap().unwrap();
+    assert_eq!(record.state, RunState::Completed);
+    let steps = app.store.automation_steps(&tenant, &run, None, 10).unwrap();
+    assert_eq!(
+        steps[0].result.clone().unwrap(),
+        json!({ "SendDigest": { "messages": 2 } })
+    );
+    let mut sent = app.cfg.mail.outbox();
+    sent.sort_by(|a, b| a.to.cmp(&b.to));
+    assert_eq!(
+        sent.iter().map(|m| m.to.as_str()).collect::<Vec<_>>(),
+        ["p1@example.org", "p2@example.org"],
+        "p3 has no notice in the window and gets no message"
+    );
+    assert_eq!(sent[0].subject, "2 new orders");
+    assert!(sent[0].text.contains("Order A1") && sent[0].text.contains("Order A2"));
+    assert!(
+        !sent[0].text.contains("Order A3"),
+        "a notice after the window is not in it"
+    );
+    assert_eq!(sent[1].subject, "1 new orders");
+
+    // The step run again sends nothing more: each message is keyed by the step and the person.
+    let key = worker::steps::step_key(
+        &tenant,
+        &WorkflowId::new("digest").unwrap(),
+        &run,
+        &StepName::new("send").unwrap(),
+        steps[0].sequence,
+    );
+    let template = TemplateId("daily".into());
+    let digest = strata_backend::digest::Digest {
+        category: "receipts",
+        template: &template,
+        since: T0 - day,
+        until: T0,
+        recipient: None,
+        reference: Some("daily"),
+    };
+    let again = strata_backend::digest::run(
+        &app,
+        &tenant,
+        &WorkflowId::new("digest").unwrap(),
+        &digest,
+        &key,
+        Timestamp(T0 + 1),
+    )
+    .unwrap();
+    assert_eq!(again, 2);
+    drain(&app, T0 + 1);
+    assert_eq!(app.cfg.mail.outbox().len(), 2);
+}
