@@ -53,6 +53,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { join, relative, resolve } from 'node:path';
 import { auditChecks } from './gate-audit-checks.mjs';
 import { GENERATED as CONFORMANCE_SUITE, conformanceCoverage, conformanceVerdict } from './gate-conformance.mjs';
+import { evidenceSources, realisationReport, realisationVerdict } from './gate-realisation.mjs';
 import { readWorkspace } from './test-select.mjs';
 import { readTiers, routineSeconds, tierProblems } from './test-tiers.mjs';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
@@ -680,6 +681,11 @@ if (previous?.counts) {
       detail(verdict.lines.slice(0, 40));
     }
   }
+  // Realisation labels derived from the evidence (scripts/gate-realisation.mjs): a label the evidence
+  // contradicts fails; the disagreements and the property claims without a generator are listed.
+  const realisation = realisationVerdict(realisationReport({ claims: spec.claims ?? [], uiScenarios: spec.uiScenarios ?? [], sources: evidenceSources(root) }));
+  check(realisation.name, realisation.ok, realisation.detail);
+  detail(realisation.lines.slice(0, 40));
   // The conformance suite: every skipped check is printed, however many there are.
   const suitePath = resolve(root, CONFORMANCE_SUITE);
   const suite = conformanceVerdict(conformanceCoverage({ contracts: spec.contracts, generated: existsSync(suitePath) ? readFileSync(suitePath, 'utf8') : null }));
