@@ -679,14 +679,11 @@ fn owned(record: &InstalledRecord) -> Vec<(String, String)> {
         .collect()
 }
 
-/// No section of `bundle-sections` is refused any more: capabilities, settings and the ledger
-/// sections install, and the record of the install owns each of them.
+/// Capabilities, settings and the ledger sections install, and the record of the install owns
+/// each of them. The one section still named as not installed is `event-kinds`
+/// (`the_event_kinds_of_a_bundle_are_read_and_checked`).
 // Verifies: INT-1921
 #[test]
-        (
-            "event-kinds",
-            json!([{ "kind": "app.order-placed", "fields": [], "readers": [] }]),
-        ),
 fn capabilities_settings_and_the_ledger_sections_install_and_are_owned_by_the_product() {
     let doc = tiers_with_catalogue();
     let bundle = read(&doc).unwrap();
