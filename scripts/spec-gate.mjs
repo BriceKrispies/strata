@@ -13,7 +13,8 @@
 //      tests/e2e/generated (the journeys) and tests/e2e/step-checks (the step fixtures). The product
 //      specifications in specifications/products go with --product to every check of the platform
 //      specification, which refuses a product that does not pass (WG-4989).
-//      check-catalogue does the same for specifications/catalogue.md.
+//      check-catalogue does the same for specifications/catalogue.md, and check-conformance for the
+//      contract conformance suite (crates/bff/tests/conformance/generated) and its fixtures.
 //   0b. The test tiers (scripts/test-tiers.json): a test binary in neither tier fails. Runs with --no-test too.
 //   1. cargo test --workspace, lake build, node --test (web kernel and client tests), the generated
 //      share tests (scripts/generated-share.test.mjs), tsc, cargo fmt --check, cargo clippy with
@@ -26,7 +27,9 @@
 //   4b. The specification and the code agree (scripts/gate-audit-checks.mjs, nothing compiled): every
 //      shipped contract has a handler, every table the SQLite adapters create has a shipped record,
 //      every environment variable the backend and BFF read is declared, every route the BFF mounts
-//      has a contract with a bffRoute, every file path the specification cites exists. Each reports
+//      has a contract with a bffRoute, every file path the specification cites exists, every shipped
+//      contract with a bffRoute has a generated conformance test (the checks the suite cannot make are
+//      counted and printed; scripts/gate-conformance.mjs). Each reports
 //      a count and fails on a miss; the exemptions, a reason per group, are in
 //      scripts/gate-exemptions.json, and an exemption that matches no miss fails too.
 //   5. With --browser: the browser suites (npm run e2e, e2e:generated, e2e:steps), which build the
@@ -49,6 +52,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { auditChecks } from './gate-audit-checks.mjs';
+import { GENERATED as CONFORMANCE_SUITE, conformanceCoverage, conformanceVerdict } from './gate-conformance.mjs';
 import { readWorkspace } from './test-select.mjs';
 import { readTiers, routineSeconds, tierProblems } from './test-tiers.mjs';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
@@ -343,6 +347,20 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
   });
   check('specc check-catalogue (specifications/catalogue.md is generated from the specification at its semantic hash)', catalogue.ok,
     catalogue.ok ? 'up to date' : `${exitText(catalogue)}: ${lastLine(catalogue.out)}; run npm run generate and commit`);
+
+  const conformance = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check-conformance', '--spec', 'specifications/spec.jsonc', '--out', 'crates/bff/tests/conformance/generated', ...products], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check-conformance (crates/bff/tests/conformance/generated is generated from the specification)', conformance.ok,
+    conformance.ok ? 'up to date' : `${exitText(conformance)}: ${lastLine(conformance.out)}; run npm run generate and commit`);
+
+  const conformanceFixtures = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check-conformance', '--spec', 'crates/bff/tests/conformance/fixtures/spec.jsonc', '--out', 'crates/bff/tests/conformance/fixtures/generated', '--expect-fail-prefix', 'violates-'], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check-conformance (crates/bff/tests/conformance/fixtures/generated is generated from the conformance fixtures)', conformanceFixtures.ok,
+    conformanceFixtures.ok ? 'up to date' : `${exitText(conformanceFixtures)}: ${lastLine(conformanceFixtures.out)}; run npm run generate and commit`);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -662,6 +680,11 @@ if (previous?.counts) {
       detail(verdict.lines.slice(0, 40));
     }
   }
+  // The conformance suite: every skipped check is printed, however many there are.
+  const suitePath = resolve(root, CONFORMANCE_SUITE);
+  const suite = conformanceVerdict(conformanceCoverage({ contracts: spec.contracts, generated: existsSync(suitePath) ? readFileSync(suitePath, 'utf8') : null }));
+  check(suite.name, suite.ok, suite.detail);
+  detail(suite.lines);
 }
 
 // ---------------------------------------------------------------------------------------------

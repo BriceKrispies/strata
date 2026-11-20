@@ -26,6 +26,7 @@ pub mod budget;
 pub mod bundle;
 pub mod catalogue;
 pub mod codetext;
+pub mod conformance;
 pub mod constructs;
 pub mod contract_rules;
 pub mod deploy;

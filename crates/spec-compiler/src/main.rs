@@ -13,6 +13,8 @@
 //! specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]
 //! specc catalogue    --spec <file> --out <dir> [--spec-hash <hash>]
 //! specc check-catalogue --spec <file> --out <dir> [--spec-hash <hash>]
+//! specc conformance  --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
+//! specc check-conformance --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
 //! specc bundle       --spec <file> --product <file> --out <dir>
 //! ```
 //!
@@ -55,6 +57,17 @@
 //! compact capability catalogue of the platform, conventionally into `specifications`; the header
 //! carries the semantic hash like every other generated file.
 //!
+//! `conformance` and `check-conformance` write `contracts.rs`
+//! (`strata_spec_compiler::conformance`), the contract conformance suite: one Rust test per contract
+//! that is shipped and names a `bffRoute`, run by `crates/bff/tests/contract_conformance.rs` against
+//! the real BFF and backend, conventionally into `crates/bff/tests/conformance/generated`. Contracts
+//! whose id starts with `--expect-fail-prefix` are generated as tests that must fail (the fixtures
+//! of `crates/bff/tests/conformance/fixtures`). The command reads only the contracts, types, roles,
+//! quotas and screens and refuses what it cannot build a request or a check from; it does not run
+//! the readiness check of the Rust generation, so that its small fixture specification needs none of
+//! what the backends ask for. The platform specification passes that check in `specc check` of the
+//! same gate step.
+//!
 //! `deploy` and `check-deploy` do for the deployment files (a compose stack, Kubernetes
 //! manifests and Prometheus alert rules; see `strata_spec_compiler::deploy`) what `generate`
 //! and `check` do for the crate; their warnings go to standard error and do not change the exit
@@ -81,8 +94,8 @@ use std::process::ExitCode;
 use strata_spec_compiler::emit::relative_path;
 use strata_spec_compiler::layers::{self, ProductFile};
 use strata_spec_compiler::{
-    bundle, catalogue, deploy, e2e, generate, generate_with_core, model_core, output, scenarios,
-    web, GeneratedFile, Options, RuntimeDependency,
+    bundle, catalogue, conformance, deploy, e2e, generate, generate_with_core, model_core, output,
+    scenarios, web, GeneratedFile, Options, RuntimeDependency,
 };
 
 const USAGE: &str = "usage:
@@ -98,6 +111,8 @@ const USAGE: &str = "usage:
   specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]
   specc catalogue    --spec <file> --out <dir> [--spec-hash <hash>]
   specc check-catalogue --spec <file> --out <dir> [--spec-hash <hash>]
+  specc conformance  --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
+  specc check-conformance --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
   specc bundle       --spec <file> --product <file> --out <dir>
 every command also takes --product <file>, repeatable: a product file layered on the specification (bundle takes exactly one)";
 
@@ -118,6 +133,8 @@ enum Command {
     CheckWeb,
     Catalogue,
     CheckCatalogue,
+    Conformance,
+    CheckConformance,
     Bundle,
 }
 
@@ -132,6 +149,7 @@ struct Args {
     exegra_project: Option<String>,
     exegra_specs: Option<PathBuf>,
     e2e: e2e::Options,
+    conformance: conformance::Options,
     /// The pure crate's directory and package name, when the generation is split.
     core: Option<(PathBuf, String)>,
     /// The product files layered on the specification (`--product`, in order).
@@ -152,6 +170,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         Some((c, rest)) if c == "check-web" => (Command::CheckWeb, rest),
         Some((c, rest)) if c == "catalogue" => (Command::Catalogue, rest),
         Some((c, rest)) if c == "check-catalogue" => (Command::CheckCatalogue, rest),
+        Some((c, rest)) if c == "conformance" => (Command::Conformance, rest),
+        Some((c, rest)) if c == "check-conformance" => (Command::CheckConformance, rest),
         Some((c, rest)) if c == "bundle" => (Command::Bundle, rest),
         Some((c, _)) => return Err(format!("unknown command \"{c}\"")),
         None => return Err("no command given".to_string()),
@@ -217,16 +237,23 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             | Command::CheckWeb
             | Command::Catalogue
             | Command::CheckCatalogue
+            | Command::Conformance
+            | Command::CheckConformance
             | Command::Bundle
     );
     if deploys && crate_name.is_some() {
         return Err(
-            "--crate-name does not apply to deploy, e2e, web, catalogue or bundle".to_string(),
+            "--crate-name does not apply to deploy, e2e, web, catalogue, conformance or bundle"
+                .to_string(),
         );
     }
     let end_to_end = matches!(command, Command::E2e | Command::CheckE2e);
-    if !end_to_end && (origin.is_some() || expect_fail_prefix.is_some()) {
-        return Err("--origin and --expect-fail-prefix apply only to e2e".to_string());
+    let conforming = matches!(command, Command::Conformance | Command::CheckConformance);
+    if !end_to_end && origin.is_some() {
+        return Err("--origin applies only to e2e".to_string());
+    }
+    if !end_to_end && !conforming && expect_fail_prefix.is_some() {
+        return Err("--expect-fail-prefix applies only to e2e and conformance".to_string());
     }
     let scenario = matches!(command, Command::Scenarios | Command::CheckScenarios);
     if !scenario && (exegra_project.is_some() || exegra_specs.is_some()) {
@@ -279,6 +306,13 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         spec_hash,
         exegra_project,
         exegra_specs: exegra_specs.map(PathBuf::from),
+        conformance: conformance::Options {
+            expect_fail_prefix: if conforming {
+                expect_fail_prefix.clone()
+            } else {
+                None
+            },
+        },
         e2e: e2e::Options {
             origin,
             expect_fail_prefix,
@@ -336,6 +370,12 @@ fn run() -> ExitCode {
     }
     if let Err(code) = check_products(&args, &text) {
         return code;
+    }
+    if matches!(
+        args.command,
+        Command::Conformance | Command::CheckConformance
+    ) {
+        return run_conformance(&args, &text);
     }
     let raw_json_command = matches!(
         args.command,
@@ -422,6 +462,8 @@ fn run() -> ExitCode {
         | Command::CheckWeb
         | Command::Catalogue
         | Command::CheckCatalogue
+        | Command::Conformance
+        | Command::CheckConformance
         | Command::Bundle => ExitCode::from(2),
     }
 }
@@ -640,6 +682,50 @@ fn run_catalogue(args: &Args, text: &str) -> ExitCode {
     };
     match args.command {
         Command::CheckCatalogue => run_check(&args.out, &output.files),
+        _ => run_generate(&args.out, &output.files),
+    }
+}
+
+/// `conformance` or `check-conformance`: the contract conformance suite, and on standard error what
+/// it covers and the checks it cannot make, counted by check.
+fn run_conformance(args: &Args, text: &str) -> ExitCode {
+    let output = match conformance::generate(&args.header_source(), text, &args.conformance) {
+        Ok(output) => output,
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprintln!("{d}");
+            }
+            eprintln!(
+                "specc: refused {} with {} diagnostic(s); nothing was written",
+                args.spec,
+                diagnostics.len()
+            );
+            return ExitCode::from(1);
+        }
+    };
+    let mut by_check: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for skip in &output.skipped {
+        *by_check.entry(skip.check.as_str()).or_default() += 1;
+    }
+    eprintln!(
+        "specc: conformance covers {} contract(s); {} check(s) not made{}",
+        output.covered.len(),
+        output.skipped.len(),
+        if by_check.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " ({})",
+                by_check
+                    .iter()
+                    .map(|(check, n)| format!("{check} {n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    );
+    match args.command {
+        Command::CheckConformance => run_check(&args.out, &output.files),
         _ => run_generate(&args.out, &output.files),
     }
 }
@@ -936,6 +1022,45 @@ mod tests {
             "o",
             "--crate-name",
             "c"
+        ]))
+        .is_err());
+    }
+
+    #[test]
+    fn conformance_takes_an_expect_fail_prefix_and_no_origin() {
+        let parsed = parse_args(&args(&[
+            "conformance",
+            "--spec",
+            "s.jsonc",
+            "--out",
+            "o",
+            "--expect-fail-prefix",
+            "violates-",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.command, Command::Conformance);
+        assert_eq!(
+            parsed.conformance.expect_fail_prefix.as_deref(),
+            Some("violates-")
+        );
+        assert!(parse_args(&args(&[
+            "check-conformance",
+            "--spec",
+            "s",
+            "--out",
+            "o",
+            "--origin",
+            "http://127.0.0.1:1"
+        ]))
+        .is_err());
+        assert!(parse_args(&args(&[
+            "web",
+            "--spec",
+            "s",
+            "--out",
+            "o",
+            "--expect-fail-prefix",
+            "v"
         ]))
         .is_err());
     }
