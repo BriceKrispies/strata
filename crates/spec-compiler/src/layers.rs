@@ -40,6 +40,10 @@
 //! - `layer.value-invalid`, `layer.outside-catalogue`: a value in a typed section (see
 //!   [`crate::layer_values`]) that does not conform to its platform type, or a union value whose
 //!   variant the platform's union lacks (INT-153, INT-1522, D-6536);
+//! - `layer.expr-syntax`, `layer.expr-unknown-field`, `layer.expr-unknown-role`,
+//!   `layer.expr-unknown-param`, `layer.expr-type`: an expression text of a typed section that does
+//!   not parse or does not check in its scope ([`crate::layer_expr`], WG-5060);
+//! - `layer.retention-missing`: an object type with a personal field and no retention (D-6584);
 //! - `layer.reference-unknown`, `layer.cross-product-reference`: a name in a typed section, or a
 //!   product capability in a `capabilities` or `requires` list, that no entity of the product
 //!   declares, or that another product file declares.
@@ -57,6 +61,7 @@ use serde_json::{Map, Value};
 
 use crate::diagnostic::Diagnostic;
 use crate::ir::Spec;
+use crate::layer_expr::{self, ProductContext};
 use crate::layer_values::{self, RefUse, Types, NAMESPACE_SEPARATOR};
 use crate::{jsonc, load};
 
@@ -144,6 +149,8 @@ pub const ENTITY_ID_INVALID: &str = "layer.entity-id-invalid";
 pub const ENTITY_ID_MISSING: &str = "layer.entity-id-missing";
 /// A product entity that claims what only the platform may have.
 pub const PLATFORM_POWER: &str = "layer.platform-power";
+/// An object type with a personal field and no retention rule (D-6584).
+pub const RETENTION_MISSING: &str = "layer.retention-missing";
 /// A platform entity that names a product entity.
 pub const PLATFORM_REFERENCES_PRODUCT: &str = "layer.platform-references-product";
 
@@ -562,6 +569,9 @@ fn check_product(
             format!("{file} declares \"{key}\", which a product file may not declare. A product adds only tenant metadata with no change to the kernel (ARC-113), in these sections: {allowed}. {why}"),
         ));
     }
+    // What the expressions of the typed sections may name: the object types and roles of the file and
+    // the platform's roles.
+    let context = ProductContext::of(platform_ids, top);
     let own: BTreeSet<String> = sections
         .iter()
         .filter_map(|(s, _)| top.get(*s).and_then(Value::as_array))
@@ -638,7 +648,19 @@ fn check_product(
             if parsed.is_some() {
                 match layer_values::typed_section(section) {
                     Some(typed) => {
-                        layer_values::check_item(types, &file, typed, id, item, out, refs)
+                        let mut exprs = Vec::new();
+                        layer_values::check_item_exprs(
+                            types, &file, typed, id, item, out, refs, &mut exprs,
+                        );
+                        let scope = context.scope_of(section, item);
+                        for text in &exprs {
+                            out.extend(layer_expr::check_text(
+                                &file, id, &text.at, &text.text, &scope, &context,
+                            ));
+                        }
+                        if *section == "objects" {
+                            check_retention(&file, id, item, out);
+                        }
                     }
                     None => named_uses(&file, id, item, platform_ids, &imports, &own, out, refs),
                 }
@@ -1007,6 +1029,39 @@ fn check_platform_independent(
 
 /// Refuses what a product entity claims that only the platform may have: the product adds tenant
 /// metadata (ARC-113) and may not widen who can reach it or add code behind it.
+/// An object type with a field that declares personal data and no retention rule (D-6584): a type
+/// with a personal field must say how long its records are kept; any other type takes the default of
+/// the tenant policy.
+fn check_retention(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic>) {
+    if item.get("retention").is_some_and(|r| !r.is_null()) {
+        return;
+    }
+    let personal: Vec<&str> = item
+        .get("fields")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(_, field)| field.get("personal").is_some_and(|p| !p.is_null()))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    if personal.is_empty() {
+        return;
+    }
+    let names = personal
+        .iter()
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    out.push(Diagnostic::new(
+        RETENTION_MISSING,
+        id,
+        format!(
+            "The object type \"{id}\" in {file} has the personal field{} {names} and no retention (D-6584). A type with a personal field must say how long its records are kept; add \"retention\": {{ \"days\": <days>, \"from\": \"Created\" }} (or \"LastChanged\", or {{ \"Field\": {{ \"field\": <a time field> }} }}) to the object type.",
+            if personal.len() == 1 { "" } else { "s" }
+        ),
+    ));
+}
+
 fn check_power(
     file: &str,
     section: &str,

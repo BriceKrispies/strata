@@ -18,8 +18,9 @@
 //!   [`crate::layers::load_layered`] once every product file is read).
 //!
 //! Expressions are written in the authoring syntax of the tenant rule language, as text, wherever
-//! the platform type is the AST `expr` ([`AUTHORING_TEXT_TYPES`]); the text itself is not parsed
-//! here.
+//! the platform type is the AST `expr` or the text type `expression` ([`AUTHORING_TEXT_TYPES`]). The
+//! check here collects each such text with its place ([`ExprUse`]); [`crate::layer_expr`] parses and
+//! checks it against the scope it is written in (WG-5060).
 
 use std::collections::BTreeMap;
 
@@ -27,6 +28,7 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use crate::diagnostic::Diagnostic;
+use crate::layer_expr::ExprUse;
 use crate::layers::{variant_tag, OUTSIDE_CATALOGUE, VALUE_INVALID};
 
 /// One typed section of a product file.
@@ -150,7 +152,7 @@ pub const REFERENCE_TYPES: &[(&str, &[&str])] = &[
 
 /// Platform types whose value may be written as text in the authoring syntax of the tenant rule
 /// language instead of as the AST (D-6546: "expressions in the authoring syntax").
-pub const AUTHORING_TEXT_TYPES: &[&str] = &["expr"];
+pub const AUTHORING_TEXT_TYPES: &[&str] = &["expr", "expression"];
 
 /// The separator between the namespace of a product and the local name (D-6582).
 pub const NAMESPACE_SEPARATOR: &str = "__";
@@ -209,6 +211,20 @@ pub fn check_item(
     out: &mut Vec<Diagnostic>,
     refs: &mut Vec<RefUse>,
 ) {
+    check_item_exprs(types, file, section, id, item, out, refs, &mut Vec::new());
+}
+
+/// [`check_item`], also collecting each expression written as text, with its place in the item.
+pub fn check_item_exprs(
+    types: &Types<'_>,
+    file: &str,
+    section: &TypedSection,
+    id: &str,
+    item: &Value,
+    out: &mut Vec<Diagnostic>,
+    refs: &mut Vec<RefUse>,
+    exprs: &mut Vec<ExprUse>,
+) {
     let Some(map) = item.as_object() else {
         return;
     };
@@ -220,6 +236,7 @@ pub fn check_item(
         root: section.ty,
         out,
         refs,
+        exprs,
     };
     if section.id_field != Some("id") {
         value.remove("id");
@@ -258,6 +275,7 @@ struct Check<'a, 'b> {
     root: &'a str,
     out: &'b mut Vec<Diagnostic>,
     refs: &'b mut Vec<RefUse>,
+    exprs: &'b mut Vec<ExprUse>,
 }
 
 /// A type text split into its wrapper and what it wraps.
@@ -416,8 +434,14 @@ impl Check<'_, '_> {
         at: &str,
         decl_field: Option<&str>,
     ) {
-        if AUTHORING_TEXT_TYPES.contains(&name) && value.is_string() {
-            return;
+        if AUTHORING_TEXT_TYPES.contains(&name) {
+            if let Some(text) = value.as_str() {
+                self.exprs.push(ExprUse {
+                    at: at.to_string(),
+                    text: text.to_string(),
+                });
+                return;
+            }
         }
         match ty.get("kind").and_then(Value::as_str).unwrap_or("") {
             "struct" => {

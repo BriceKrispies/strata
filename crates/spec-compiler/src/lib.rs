@@ -34,6 +34,7 @@ pub mod emit;
 pub mod function;
 pub mod ir;
 pub mod jsonc;
+pub mod layer_expr;
 pub mod layer_values;
 pub mod language;
 pub mod layers;

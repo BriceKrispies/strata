@@ -119,7 +119,7 @@
       "start": "award",
       "steps": {
         "award": {
-          "action": { "CreateRecord": { "object": "badge_milestones__award", "fields": { "person": "param.owner", "badge": "\"silver\"", "awarded_at": "param.at" } } },
+          "action": { "CreateRecord": { "object": "badge_milestones__award", "fields": { "person": "param.owner", "badge": "'silver'", "awarded_at": "param.at" } } },
           "next": "notify",
           "retry": { "attempts": 5 }
         },
