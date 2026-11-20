@@ -378,7 +378,10 @@ pub fn run(app: &App, tenant: &TenantId, lease: &Lease, step: u64, now: Timestam
                 let due = Timestamp((now.0.div_euclid(INTERVAL_MS) + 1) * INTERVAL_MS);
                 writes.jobs.push(chain_job(step + 1, due));
             }
-            Outcome::done(writes)
+            Outcome {
+                report: JobReport::Succeeded,
+                writes,
+            }
         }
         Err(error) => Outcome {
             report: JobReport::Failed {
