@@ -3876,3 +3876,130 @@ async fn projections_are_limited_per_tenant() {
         "the burst was bounded: {statuses:?}"
     );
 }
+
+/// A tenants directory of its own under the build directory, holding the given `tenant.json`
+/// files by directory name.
+fn tenants_dir_with(name: &str, bundles: &[(&str, String)]) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("tenants-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for (directory, text) in bundles {
+        std::fs::create_dir_all(dir.join(directory)).unwrap();
+        std::fs::write(dir.join(directory).join("tenant.json"), text).unwrap();
+    }
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// A small tenant bundle: an owner and one object type.
+fn small_bundle(id: &str, owner: &str) -> Json {
+    json!({
+        "id": id,
+        "name": format!("Site {id}"),
+        "owner": owner,
+        "created_at": "2026-09-01T09:00:00Z",
+        "objects": [{
+            "id": "note",
+            "label": "Note",
+            "fields": [{ "id": "title", "label": "Title", "type": "string", "required": true }]
+        }]
+    })
+}
+
+/// A bundle that cannot be installed, or cannot even be read, does not stop the backend from
+/// starting: it is logged and skipped, and the other tenants are installed and served.
+#[tokio::test]
+async fn one_bundle_that_will_not_install_does_not_stop_the_others() {
+    let mut unreadable = small_bundle("unreadable", "user:o");
+    unreadable["surprise"] = json!(true);
+    let mut bad_time = small_bundle("badtime", "user:o");
+    bad_time["created_at"] = json!("not a time");
+    let dir = tenants_dir_with(
+        "one-bad",
+        &[
+            ("a-unreadable", unreadable.to_string()),
+            ("b-badtime", bad_time.to_string()),
+            ("c-not-json", "{".to_string()),
+            ("z-good", small_bundle("goodsite", "user:g").to_string()),
+        ],
+    );
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |cfg| cfg.tenants_dir = dir).await;
+    let (status, _) = backend
+        .call("goodsite", None, "/internal/session", json!({}))
+        .await;
+    assert_eq!(status, 200, "the backend serves");
+    let exists = |id: &str| {
+        store
+            .load(&TenantId::new(id).unwrap(), &[])
+            .unwrap()
+            .tenant
+            .is_some()
+    };
+    assert!(exists("goodsite"), "the good tenant was installed");
+    assert!(!exists("badtime") && !exists("unreadable"));
+}
+
+/// A tenant is created while the process runs, behind the service token, and its owner is told
+/// where to sign in. The owner asks for a link at that site with the address and signs in with it.
+#[tokio::test]
+async fn a_tenant_is_created_while_running_and_its_owner_signs_in_by_link() {
+    let dir = tenants_dir_with("runtime", &[]);
+    let (backend, sink) = linking(|cfg| cfg.tenants_dir = dir).await;
+    let origin = "https://newsite.example";
+    let request = json!({
+        "bundle": small_bundle("newsite", "user:newowner"),
+        "owner_email": "New.Owner@example.org",
+        "origin": origin,
+    });
+    let unauthenticated = backend
+        .http
+        .post(format!("{}/internal/platform/tenants", backend.base))
+        .json(&request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status().as_u16(), 401);
+
+    let (status, reply) = backend
+        .call("-", None, "/internal/platform/tenants", request.clone())
+        .await;
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["notified"], true);
+    assert_eq!(reply["owner_login"], "new.owner@example.org");
+    let welcome = sink.outbox();
+    assert_eq!(welcome.len(), 1);
+    assert_eq!(welcome[0].to, "new.owner@example.org");
+    assert!(welcome[0].text.contains("https://newsite.example/login"));
+
+    let (status, _) = backend
+        .call("-", None, "/internal/platform/tenants", request)
+        .await;
+    assert_eq!(status, 409, "a tenant that exists is not made again");
+
+    let (status, asked) = backend
+        .call_at(
+            Some(origin),
+            SOURCE,
+            "newsite",
+            None,
+            "/internal/sign-in/link/request",
+            json!({ "email": "new.owner@example.org" }),
+        )
+        .await;
+    assert_eq!(status, 200, "{asked}");
+    let binding = asked["binding"].as_str().unwrap().to_string();
+    let link = link_in(&sink, 1);
+    let (status, signed_in) = backend
+        .call_at(
+            Some(origin),
+            SOURCE,
+            "newsite",
+            None,
+            "/internal/session/sign-in/link",
+            json!({ "challenge": link.challenge, "token": link.token, "binding": binding }),
+        )
+        .await;
+    assert_eq!(status, 200, "{signed_in}");
+    assert_eq!(signed_in["session"]["authenticated"], true);
+}

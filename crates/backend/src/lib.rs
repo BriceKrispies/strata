@@ -13,6 +13,7 @@ pub mod limits;
 pub mod mail;
 pub mod ops;
 pub mod outbox;
+pub mod provision;
 pub mod seed;
 pub mod service;
 pub mod signin;
@@ -35,6 +36,10 @@ pub async fn run(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), String> {
     let app: Shared = App::new(cfg, store);
+    // The listener is bound but is not served until seeding is done: a connection made before
+    // that waits in the socket's backlog and gets no answer, health included. So nothing is
+    // answered by a store that is still being filled, and a tenant that failed to install is
+    // already logged and skipped by the time the first request is read.
     let created = app
         .blocking(seed::seed)
         .await

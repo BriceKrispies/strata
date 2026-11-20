@@ -841,6 +841,24 @@ pub trait Store: Send + Sync {
     /// Remove one tenant and everything that belongs to it: its state, events, journal,
     /// sessions, logins and snapshots. Other tenants are untouched. For development fixtures.
     fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()>;
+
+    /// Mark a tenant as being installed: the directory lists it as `provisioning`, which no
+    /// request reaches, until [`Store::finish_provisioning`]. Called after the install's first
+    /// commit. An adapter whose state cannot outlive the process has nothing to mark.
+    fn begin_provisioning(&self, _tenant: &TenantId) -> StoreResult<()> {
+        Ok(())
+    }
+
+    /// Mark the install of a tenant as complete: the directory lists it as `active` again.
+    fn finish_provisioning(&self, _tenant: &TenantId) -> StoreResult<()> {
+        Ok(())
+    }
+
+    /// Remove every tenant the directory still lists as `provisioning`, which are installs a
+    /// previous process did not finish, and return their ids. Called on start, before seeding.
+    fn rollback_provisioning(&self) -> StoreResult<Vec<TenantId>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Check that a commit's events continue a tenant's sequence. Shared by adapters.

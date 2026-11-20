@@ -107,9 +107,7 @@ pub fn load_tenant(dir: &Path) -> Result<LoadedTenant, String> {
     })
 }
 
-/// Load every tenant directory under `root`, in name order. Directories whose name starts with
-/// `_` hold shared material such as templates and are skipped.
-pub fn load_all(root: &Path) -> Result<Vec<LoadedTenant>, String> {
+fn tenant_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut dirs: Vec<PathBuf> = fs::read_dir(root)
         .map_err(|e| format!("{}: {e}", root.display()))?
         .filter_map(Result::ok)
@@ -122,5 +120,27 @@ pub fn load_all(root: &Path) -> Result<Vec<LoadedTenant>, String> {
         })
         .collect();
     dirs.sort();
-    dirs.iter().map(|dir| load_tenant(dir)).collect()
+    Ok(dirs)
+}
+
+/// Load every tenant directory under `root`, in name order, stopping at the first that does not
+/// load. Directories whose name starts with `_` hold shared material such as templates and are
+/// skipped.
+pub fn load_all(root: &Path) -> Result<Vec<LoadedTenant>, String> {
+    tenant_dirs(root)?
+        .iter()
+        .map(|dir| load_tenant(dir))
+        .collect()
+}
+
+/// Load every tenant directory under `root`, in name order, each on its own: a directory that
+/// does not load is returned as its path with the reason, and the others are still loaded.
+pub fn load_each(root: &Path) -> Result<Vec<(PathBuf, Result<LoadedTenant, String>)>, String> {
+    Ok(tenant_dirs(root)?
+        .into_iter()
+        .map(|dir| {
+            let loaded = load_tenant(&dir);
+            (dir, loaded)
+        })
+        .collect())
 }
