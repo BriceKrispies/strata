@@ -129,6 +129,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "startup",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Runs the real backend binary with a bare environment and checks each refused start names its variable; not yet measured"
+    },
+    {
+      "package": "strata-backend",
       "target": "products",
       "tier": "routine",
       "seconds": null,
@@ -259,6 +267,14 @@
       "target": "edge",
       "tier": "routine",
       "seconds": 5.28
+    },
+    {
+      "package": "strata-bff",
+      "target": "process",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Runs the real gateway binary: refused starts, and on Unix SIGTERM draining it within its deadline; not yet measured"
     },
     {
       "package": "strata-kernel",

@@ -187,6 +187,22 @@ fn seal_keys(
     Ok(())
 }
 
+/// The operator credential, when one is configured: at least 24 characters and not the service
+/// credential the gateway holds, or the platform diagnostics would be open to the gateway.
+fn operator_token(service_token: &str) -> Result<(), String> {
+    let token = var("STRATA_OPERATOR_TOKEN", "");
+    if token.is_empty() {
+        return Ok(());
+    }
+    if token.len() < 24 {
+        return Err("STRATA_OPERATOR_TOKEN must be at least 24 characters".into());
+    }
+    if token == service_token {
+        return Err("STRATA_OPERATOR_TOKEN must not be the service token".into());
+    }
+    Ok(())
+}
+
 /// A limit from the environment: a whole number, at least one.
 fn limit(name: &str, default: i64) -> Result<i64, String> {
     let value = number(name, default)?;
@@ -274,6 +290,7 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
         other => return Err(format!("STRATA_STORE: unknown adapter {other:?}")),
     };
     let dev = development()?;
+    operator_token(&service_token)?;
     let policy = factors(&service_token, dev)?;
     let cfg = Config {
         addr,

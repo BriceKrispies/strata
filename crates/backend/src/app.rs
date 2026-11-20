@@ -286,6 +286,10 @@ pub struct App {
     /// The counters of the request quotas of the specification (see [`crate::quota`]).
     pub quota: crate::quota::Quotas,
     pub started_at: i64,
+    /// The credential of the platform operator, from `STRATA_OPERATOR_TOKEN`, which is not the
+    /// service credential the gateway holds. `None` when none is configured: the platform
+    /// diagnostics are then answered "not found", except in development.
+    pub operator_token: Option<String>,
     /// Recent security-relevant events, newest last: a cache for the development diagnostics.
     /// The record is the tenant's audit trail in the store; this ring is lost on restart.
     pub audit: Recent<serde_json::Value>,
@@ -329,6 +333,8 @@ impl App {
             hub: Hub::new(),
             stats: Stats::new(),
             started_at: now_ms(),
+            operator_token: Some(strata_runtime::server::env_var("STRATA_OPERATOR_TOKEN", ""))
+                .filter(|token| !token.is_empty()),
             audit: Recent::new(1000),
             decisions: Recent::new(1000),
             clock_skew_ms: AtomicI64::new(0),

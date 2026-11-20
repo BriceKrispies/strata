@@ -691,8 +691,6 @@ fn a_killed_writer_child() {
     }
 }
 
-/// Verifies: TEN-007
-///
 /// A process killed while it is committing, with no chance to clean up, leaves only whole
 /// commits: this test starts itself as a child that commits notes in a loop, kills the child
 /// once a number of commits have been acknowledged, and opens the file again. The file passes its

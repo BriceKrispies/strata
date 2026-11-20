@@ -19,7 +19,7 @@ use serde_json::{json, Value as Json_};
 use std::time::Instant;
 use strata_protocol::api::{
     AggregateRunRequest, Empty, ErrorCode, IdRequest, MembersRequest, Mutation, SessionReply,
-    ViewRequest, HEADER_CORRELATION,
+    ViewRequest, HEADER_CORRELATION, HEADER_OPERATOR,
 };
 use strata_protocol::ws::MAX_FRAME;
 
@@ -630,20 +630,38 @@ async fn diagnostics(
     .await
 }
 
-/// Every tenant's diagnostics and the audit entries. The backend has no operator identity to hold
-/// a caller to, and the service credential is shared with the BFF, so the route exists only in
-/// development; outside it the answer is "not found". Each call is an audit entry.
+/// Every tenant's diagnostics and the audit entries, for the platform operator. The service
+/// credential is shared with the gateway, so it is not an operator identity: the caller must
+/// present the operator credential (`STRATA_OPERATOR_TOKEN`) in `x-strata-operator`. With none
+/// configured the answer is "not found", except in development, where the service credential
+/// stands for the operator. Each call, refused or served, is an audit entry.
 async fn platform_diagnostics(
     State(app): State<Shared>,
     headers: HeaderMap,
 ) -> Result<Json<Json_>, ApiError> {
-    if !app.cfg.dev {
-        return Err(ApiError::new(ErrorCode::NotFound, "not available"));
-    }
     let correlation = headers
         .get(HEADER_CORRELATION)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
+    let presented = headers
+        .get(HEADER_OPERATOR)
+        .and_then(|value| value.to_str().ok());
+    match (&app.operator_token, presented) {
+        (Some(expected), Some(given)) if auth::same_secret(given, expected) => {}
+        (Some(_), _) => {
+            app.audit(
+                "platform.diagnostics_refused",
+                correlation,
+                json!({ "scope": "every tenant" }),
+            );
+            return Err(ApiError::new(
+                ErrorCode::Unauthenticated,
+                "operator credential required",
+            ));
+        }
+        (None, _) if app.cfg.dev => {}
+        (None, _) => return Err(ApiError::new(ErrorCode::NotFound, "not available")),
+    }
     app.audit(
         "platform.diagnostics_read",
         correlation,
