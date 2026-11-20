@@ -394,6 +394,18 @@ impl Parser {
         }
     }
 
+    /// A field's name. A field may be called by a word the language keeps (`then`, `else`): the
+    /// place of a field name (after `.`, or before `:` in braces) is never the place of a keyword.
+    fn field_name(&mut self, what: &str) -> Parsed<String> {
+        match self.peek().clone() {
+            Tok::Id(w) => {
+                self.p += 1;
+                Ok(w)
+            }
+            _ => Err(self.error(format!("Expected {what}, found {}", self.show()))),
+        }
+    }
+
     fn bind_name(&mut self, what: &str) -> Parsed<String> {
         let pos = self.pos();
         let n = self.name(what)?;
@@ -470,7 +482,7 @@ impl Parser {
         while self.is_op(".") {
             self.p += 1;
             let pos = self.pos();
-            let name = self.name("a field name after \".\"")?;
+            let name = self.field_name("a field name after \".\"")?;
             e = Expr::new(Kind::Field(Box::new(e), name), pos);
         }
         Ok(e)
@@ -495,7 +507,7 @@ impl Parser {
             self.p += 1;
             let mut fields = Vec::new();
             while !self.is_op("}") {
-                let field = self.name("a field name")?;
+                let field = self.field_name("a field name")?;
                 let mut bind = field.clone();
                 if self.is_op(":") {
                     self.p += 1;
@@ -696,7 +708,7 @@ impl Parser {
                 let mut fields = Vec::new();
                 while !p.is_op("}") {
                     let fpos = p.pos();
-                    let f = p.name("a field name")?;
+                    let f = p.field_name("a field name")?;
                     if p.is_op(":") {
                         p.p += 1;
                         let e = p.expr()?;
