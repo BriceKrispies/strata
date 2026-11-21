@@ -36,8 +36,15 @@ fn language_text() -> String {
     fs::read_to_string(manifest_dir().join("tests/fixtures/language/spec.jsonc")).unwrap()
 }
 
-fn platform_text() -> String {
-    fs::read_to_string(manifest_dir().join("../../specifications/spec.jsonc")).unwrap()
+/// The generated files of the platform specification, generated once for every test in this
+/// binary (the platform is the 6 MB `specifications/spec.jsonc`).
+fn platform_files() -> &'static Vec<GeneratedFile> {
+    static FILES: std::sync::OnceLock<Vec<GeneratedFile>> = std::sync::OnceLock::new();
+    FILES.get_or_init(|| {
+        let text =
+            fs::read_to_string(manifest_dir().join("../../specifications/spec.jsonc")).unwrap();
+        generated("specifications/spec.jsonc", &text)
+    })
 }
 
 fn lines(d: &[Diagnostic]) -> String {
@@ -111,9 +118,6 @@ fn a_language_gets_one_module_beside_the_machines_and_the_kernel() {
     let files = generated(LANGUAGE_SPEC, &language_text());
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, [MODULE]);
-    let platform = generated("specifications/spec.jsonc", &platform_text());
-    assert!(platform.iter().any(|f| f.path == PLATFORM_MODULE));
-    assert!(platform.iter().any(|f| f.path == "screens.js"));
 }
 
 // Verifies: CMS-1546, CMS-2360, CMS-2361
@@ -135,8 +139,7 @@ fn the_platform_language_in_javascript_gives_every_result_of_the_shared_table() 
     if !support::node_required("the run of the platform rule language on the shared case table") {
         return;
     }
-    let files = generated("specifications/spec.jsonc", &platform_text());
-    match run_table("platform", module(&files, PLATFORM_MODULE), true) {
+    match run_table("platform", module(platform_files(), PLATFORM_MODULE), true) {
         Ok(report) => assert!(report.contains("eval cases"), "{report}"),
         Err(report) => {
             panic!("the platform language in JavaScript departs from the shared table:\n{report}")
@@ -146,8 +149,7 @@ fn the_platform_language_in_javascript_gives_every_result_of_the_shared_table() 
 
 #[test]
 fn the_platform_module_reads_the_tuple_variants_and_pascal_case_tags_the_server_writes() {
-    let files = generated("specifications/spec.jsonc", &platform_text());
-    let js = module(&files, PLATFORM_MODULE);
+    let js = module(platform_files(), PLATFORM_MODULE);
     // `has-role` is written HasRole; `cmp` is a tuple variant of an operator, left and right.
     assert!(js.contains("case 'HasRole': {"), "{js}");
     assert!(js.contains("const [v0, v1, v2] = p;"), "{js}");

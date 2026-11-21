@@ -26,19 +26,30 @@ fn fixture_text() -> String {
     fs::read_to_string(manifest_dir().join("tests/fixtures/full/spec.jsonc")).unwrap()
 }
 
-fn fixture_files() -> Vec<GeneratedFile> {
-    generated(FIXTURE_SPEC, &fixture_text(), FIXTURE_CRATE)
+fn machines_text() -> String {
+    fs::read_to_string(manifest_dir().join("tests/fixtures/machines/spec.jsonc")).unwrap()
 }
 
-fn machines_files() -> Vec<GeneratedFile> {
-    let text =
-        fs::read_to_string(manifest_dir().join("tests/fixtures/machines/spec.jsonc")).unwrap();
-    generated(MACHINES_SPEC, &text, MACHINES_CRATE)
+fn wiring_text() -> String {
+    fs::read_to_string(manifest_dir().join("tests/fixtures/wiring/spec.jsonc")).unwrap()
 }
 
-fn wiring_files() -> Vec<GeneratedFile> {
-    let text = fs::read_to_string(manifest_dir().join("tests/fixtures/wiring/spec.jsonc")).unwrap();
-    generated(WIRING_SPEC, &text, WIRING_CRATE)
+// The fixtures are generated once for every test in this binary; a test that needs a fresh
+// generation calls `generated` itself.
+
+fn fixture_files() -> &'static [GeneratedFile] {
+    static FILES: std::sync::OnceLock<Vec<GeneratedFile>> = std::sync::OnceLock::new();
+    FILES.get_or_init(|| generated(FIXTURE_SPEC, &fixture_text(), FIXTURE_CRATE))
+}
+
+fn machines_files() -> &'static [GeneratedFile] {
+    static FILES: std::sync::OnceLock<Vec<GeneratedFile>> = std::sync::OnceLock::new();
+    FILES.get_or_init(|| generated(MACHINES_SPEC, &machines_text(), MACHINES_CRATE))
+}
+
+fn wiring_files() -> &'static [GeneratedFile] {
+    static FILES: std::sync::OnceLock<Vec<GeneratedFile>> = std::sync::OnceLock::new();
+    FILES.get_or_init(|| generated(WIRING_SPEC, &wiring_text(), WIRING_CRATE))
 }
 
 fn generated(spec: &str, text: &str, crate_name: &str) -> Vec<GeneratedFile> {
@@ -441,9 +452,19 @@ fn the_crate_has_the_expected_files_each_with_a_header() {
 
 #[test]
 fn generation_is_deterministic() {
-    assert_eq!(fixture_files(), fixture_files());
-    assert_eq!(machines_files(), machines_files());
-    assert_eq!(wiring_files(), wiring_files());
+    // A fresh generation against the one the other tests share.
+    assert_eq!(
+        generated(FIXTURE_SPEC, &fixture_text(), FIXTURE_CRATE),
+        fixture_files()
+    );
+    assert_eq!(
+        generated(MACHINES_SPEC, &machines_text(), MACHINES_CRATE),
+        machines_files()
+    );
+    assert_eq!(
+        generated(WIRING_SPEC, &wiring_text(), WIRING_CRATE),
+        wiring_files()
+    );
 }
 
 #[test]

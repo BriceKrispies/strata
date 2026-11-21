@@ -903,7 +903,8 @@ async fn a_provider_that_hangs_does_not_block_password_sign_in() {
     let mock = Mock::start().await;
     let backend = start(federation(vec![provider(&mock, |_| {})], Some(0))).await;
     let mut rounds = Vec::new();
-    for _ in 0..6 {
+    // More callbacks than the per-tenant hashing cap (two) is the smallest count that shows it.
+    for _ in 0..3 {
         rounds.push(backend.begin(None, json!({})).await);
     }
     mock.hang();
@@ -913,7 +914,7 @@ async fn a_provider_that_hangs_does_not_block_password_sign_in() {
             .map(|round| backend.finish(round, Some(SITE), None)),
     );
     let password = async {
-        for _ in 0..5 {
+        for _ in 0..2 {
             assert_eq!(backend.password("ines", "strata-dev-ines").await.0, 200);
         }
     };
@@ -927,7 +928,7 @@ async fn a_provider_that_hangs_does_not_block_password_sign_in() {
     assert_eq!(
         outcome,
         Ok(true),
-        "password sign-in answered while six callbacks waited on a provider that never does"
+        "password sign-in answered while three callbacks waited on a provider that never does"
     );
 }
 

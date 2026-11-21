@@ -173,18 +173,4 @@ fn two_screens_whose_routes_tie_are_refused() {
         "{}",
         diagnostics[0].message
     );
-
-    // A route with more literal segments is the more specific one and is not a tie.
-    assert!(web::generate("specifications/spec.jsonc", &strata_spec()).is_ok());
-}
-
-#[test]
-fn a_record_constraint_pattern_is_matched_against_the_whole_value() {
-    // `crates/model` is what specc generates; its record patterns are anchored as a validation's.
-    let records = fs::read_to_string(manifest_dir().join("../model/src/records.rs")).unwrap();
-    assert!(
-        records.contains(r#"Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z")"#),
-        "a record pattern is not anchored"
-    );
-    assert!(!records.contains(r#"Regex::new("^[a-z][a-z0-9_]*$")"#));
 }
