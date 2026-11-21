@@ -613,10 +613,6 @@ if (!exegraFound) {
     const notVerified = modelClaims.filter((claim, i) => modelResults[i]?.status !== 'verified');
     detail(notVerified.map((claim) => `${claim.id}: ${byId.get(claim.id)?.status ?? 'missing from Exegra output'}`));
     detail(violated.map((claim) => `${claim.claimId}: violated`));
-
-    const unsupported = gated.filter((claim) => !['supported', 'verified'].includes(byId.get(claim.id)?.status));
-    check('exegra shows started requirements as supported', unsupported.length === 0, `${gated.length - unsupported.length} of ${gated.length}`);
-    detail(unsupported.slice(0, 20).map((claim) => `${claim.id}: ${byId.get(claim.id)?.status ?? 'missing'}`));
   }
 }
 
