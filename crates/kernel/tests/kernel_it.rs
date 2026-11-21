@@ -16,6 +16,9 @@ mod dependencies;
 #[path = "erasure.rs"]
 mod erasure;
 
+#[path = "field_read.rs"]
+mod field_read;
+
 #[path = "evolution.rs"]
 mod evolution;
 
