@@ -1,0 +1,62 @@
+# The local AWS profile: overrides layered on deploy/compose.yaml by
+# `STRATA_AWS=1 node scripts/containers.mjs up`. Written by hand, not generated.
+#
+# - postgres stands in for managed PostgreSQL (RDS). The runtime uses the PostgreSQL store, with each
+#   tenant a schema in the `strata` database. A plain container is used rather than MiniStack's RDS,
+#   which starts its database containers through the container socket.
+# - ministack emulates the AWS APIs (S3, KMS, SES, SQS, Secrets Manager and others) on one port, 4566.
+#   The runtime gets the standard AWS SDK variables pointing at it. Adapters that use AWS APIs read
+#   those variables; the store is the only cloud seam built so far.
+#
+# PostgreSQL publishes no port. MiniStack is published on loopback only, at STRATA_MINISTACK_PORT
+# (default 4566), so the aws CLI on the host can reach it:
+#   aws --endpoint-url http://127.0.0.1:4566 s3 ls
+# Relative paths resolve against deploy/.
+services:
+  postgres:
+    image: "docker.io/library/postgres:17.12-alpine"
+    container_name: "strata-postgres"
+    environment:
+      POSTGRES_USER: "strata"
+      POSTGRES_PASSWORD: "strata"
+      POSTGRES_DB: "strata"
+    volumes:
+      - "strata-postgres:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "strata", "-d", "strata"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - zone-tenant
+  ministack:
+    image: "docker.io/ministackorg/ministack:1.5.38"
+    container_name: "strata-ministack"
+    environment:
+      MINISTACK_REGION: "eu-west-1"
+      PERSIST_STATE: "1"
+      S3_PERSIST: "1"
+      STATE_DIR: "/data/state"
+      S3_DATA_DIR: "/data/s3"
+    ports:
+      - "127.0.0.1:${STRATA_MINISTACK_PORT:-4566}:4566"
+    volumes:
+      - "strata-ministack:/data"
+    networks:
+      - zone-tenant
+  runtime:
+    environment:
+      STRATA_STORE: "postgres"
+      STRATA_PG_URL: "postgres://strata:strata@postgres:5432/strata"
+      AWS_ENDPOINT_URL: "http://ministack:4566"
+      AWS_REGION: "eu-west-1"
+      AWS_ACCESS_KEY_ID: "test"
+      AWS_SECRET_ACCESS_KEY: "test"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ministack:
+        condition: service_started
+volumes:
+  strata-postgres: {}
+  strata-ministack: {}
