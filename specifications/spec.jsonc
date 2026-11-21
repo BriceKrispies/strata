@@ -1115,6 +1115,20 @@
         "type": "string",
         "label": "Conformance example",
         "doc": "A JSON object, written as text, of inputs with which a call of the contract through its bffRoute succeeds on the development stack (the tenants under tenants/): each member is an input named as the contract writes it, with a value of its type, and every required input is given. The generated conformance suite (specc conformance, crates/bff/tests/contract_conformance.rs) makes its success call with them. A contract without one is still checked for its auth refusals; only its success check is skipped and counted."
+      },
+      {
+        "entity": "contract",
+        "name": "conformanceProbe",
+        "type": "string",
+        "label": "Conformance probe",
+        "doc": "A JSON object, written as text, of inputs that the refusal probes of the generated conformance suite send instead of the conformanceExample: each member is an input named as the contract writes it, with a value of its type; a required input may be left out. A contract whose route needs a real operation, object or field before its kernel reaches its own refusal (forbidden for a person the tenant's policies do not let write) gives them here, where the example is what makes a success call succeed. Without one the probes send the example."
+      },
+      {
+        "entity": "contract",
+        "name": "conformanceSetup",
+        "type": "string",
+        "label": "Conformance setup",
+        "doc": "A JSON list, written as text, of the steps the generated conformance suite takes as the caller before its success call, in order. A step is {\"read\": \"/api/path\", \"set\": {\"<input>\": \"<member.path>\"}}: a GET of the path whose reply's member (a dotted path) is copied into the named input of the call (the revision the tenant is at); or {\"step\": \"<name>\"}, a step the harness implements by name (enrol-authenticator: the caller sets up a time-based authenticator)."
       }
     ],
     "relationshipKinds": {
