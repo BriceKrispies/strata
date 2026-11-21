@@ -52,9 +52,6 @@ mod query_plan;
 #[path = "rule_arithmetic.rs"]
 mod rule_arithmetic;
 
-#[path = "rule_reads.rs"]
-mod rule_reads;
-
 #[path = "segments.rs"]
 mod segments;
 

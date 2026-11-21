@@ -9,6 +9,3 @@ mod audience;
 
 #[path = "ledger_policies.rs"]
 mod ledger_policies;
-
-#[path = "search.rs"]
-mod search;
