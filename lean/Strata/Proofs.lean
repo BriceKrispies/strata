@@ -9,12 +9,14 @@ A2. A world is a total function from tenant ids to optional tenants; a step is a
     exactly one tenant through its context.
 A3. Authorization is the model's: the owner, editors, and writers on their own records.
 A4. `step_preserves_wf` excludes the non-strict schema change (`Intent.strict`), which is
-    allowed to leave non-conforming records by design.
+    allowed to leave non-conforming records by design. Referential integrity, the third part of
+    the invariant, needs no such exclusion (`step_preserves_refs` in `Strata/References.lean`).
 
 No `sorry`, no added axioms. `Audit.lean` prints the axioms each theorem depends on.
 -/
 
 import Strata.Model
+import Strata.References
 
 namespace Strata
 
@@ -148,25 +150,26 @@ theorem unauthorized_cannot_mutate (w : World) (i : Intent) (c : Ctx) (t : Tenan
 /-- A strict, accepted step on one well-formed tenant yields a well-formed tenant. -/
 theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
     (hwf : t.WF) (hstrict : i.strict = true) (h : stepTenant t p i = .ok t') : t'.WF := by
-  obtain ⟨hconf, hids⟩ := hwf
+  obtain ⟨hconf, hids, hrefs⟩ := hwf
+  have hrefs' := stepTenant_preserves_refs t t' p i hrefs h
   cases i with
   | create fs =>
     simp only [stepTenant] at h
     split at h
     · cases h
     · split at h
-      · rename_i hc
+      · cases h
+      · rename_i hp
         cases h
-        constructor
+        refine ⟨?_, ?_, hrefs'⟩
         · intro q hq
           cases hq with
-          | head => exact hc
+          | head => exact (problem_none hp).1
           | tail _ hq' => exact hconf q hq'
         · intro q hq
           cases hq with
           | head => exact Nat.lt_succ_self _
           | tail _ hq' => exact Nat.lt_succ_of_lt (hids q hq')
-      · cases h
   | update id fs =>
     simp only [stepTenant] at h
     split at h
@@ -174,32 +177,39 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
     · split at h
       · cases h
       · split at h
-        · rename_i hc
+        · cases h
+        · rename_i hp
           cases h
-          constructor
+          refine ⟨?_, ?_, hrefs'⟩
           · intro q hq
             obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
             by_cases hid : (q₀.1 == id) = true
-            · simpa [hid] using hc
+            · simpa [hid] using (problem_none hp).1
             · simpa [hid] using hconf q₀ hq₀
           · intro q hq
             obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
             by_cases hid : (q₀.1 == id) = true
             · simpa [hid] using hids q₀ hq₀
             · simpa [hid] using hids q₀ hq₀
-        · cases h
   | delete id =>
     simp only [stepTenant] at h
     split at h
     · cases h
     · split at h
       · cases h
-      · cases h
-        constructor
-        · intro q hq
-          exact hconf q (List.mem_filter.mp hq).1
-        · intro q hq
-          exact hids q (List.mem_filter.mp hq).1
+      · split at h
+        · cases h
+        · rename_i hnb
+          have hnb : t.records.any (blocks t.schema id) = false := by simpa using hnb
+          cases h
+          refine ⟨?_, ?_, hrefs'⟩
+          · intro q hq
+            obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
+            obtain ⟨hmem, hne⟩ := List.mem_filter.mp hq₀
+            exact conforms_afterDelete t id q₀ hmem (by simpa using hne) hnb (hconf q₀ hmem)
+          · intro q hq
+            obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
+            exact hids q₀ (List.mem_filter.mp hq₀).1
   | setRequired f strict =>
     simp only [Intent.strict] at hstrict
     subst hstrict
@@ -210,12 +220,11 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
       · cases h
       · rename_i hall
         cases h
-        constructor
-        · intro q hq
-          have hall' : (t.records.all fun q => conforms (makeRequired t.schema f) q.2) = true := by
-            simpa using hall
-          exact List.all_eq_true.mp hall' q hq
-        · exact hids
+        refine ⟨?_, hids, hrefs'⟩
+        intro q hq
+        have hall' : (t.records.all fun q => conforms (makeRequired t.schema f) q.2) = true := by
+          simpa using hall
+        exact List.all_eq_true.mp hall' q hq
 
 /-- Property 1 for the world: a strict, accepted step from a well-formed world leads to a
     well-formed world.
@@ -252,7 +261,11 @@ theorem lax_change_can_break_wf :
           { schema := [(1, { ty := .int, required := true })], owner := 0, editors := [],
             writers := [], records := [(0, { owner := 0, fields := [] })], nextId := 1 },
           0, 1, ?_, ?_, ?_⟩
-  · constructor
+  · refine ⟨?_, ?_, ?_⟩
+    · intro q hq
+      simp at hq
+      subst hq
+      decide
     · intro q hq
       simp at hq
       subst hq
