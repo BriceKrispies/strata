@@ -9,7 +9,7 @@
 //      regenerate itself.
 //   2. The backend model, from specifications/spec.jsonc: the pure crate crates/model-core (the
 //      declared types that reach no runtime type, which the kernel can depend on, with the function
-//      examples as its tests/function_examples_<n>.rs) and crates/model, a facade that re-exports
+//      bodies and no example tests: Exegra evaluates every example) and crates/model, a facade that re-exports
 //      the crates by area in crates/model/<area>, which depend on the pure crate.
 //   3. The web modules: web/src/generated, from the same specification.
 //   4. The browser journeys: tests/e2e/generated, from the same specification's uiScenarios,
