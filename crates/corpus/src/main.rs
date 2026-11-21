@@ -300,9 +300,10 @@ fn report_load(
         .map(|(kind, n)| format!("{kind} {n}"))
         .collect();
     println!(
-        "verified {} owned entities present ({} missing): {}",
+        "verified {} owned entities present ({} missing, {} not checkable): {}",
         verification.owned,
         verification.missing.len(),
+        verification.unchecked,
         kinds.join(", ")
     );
 }

@@ -510,6 +510,8 @@ pub struct Verification {
     pub owned: usize,
     /// The owned entities by kind.
     pub by_kind: std::collections::BTreeMap<String, usize>,
+    /// Owned entities the kernel cannot look up in the schema (limits of a pool or an account).
+    pub unchecked: usize,
     /// Owned entities the tenant does not hold, as `kind:id`.
     pub missing: Vec<String>,
 }
@@ -539,9 +541,16 @@ pub fn verify_loaded(
                 Ok(entity) => match strata_kernel::products::exists(schema, &entity) {
                     Some(found) => found,
                     // A segment: the schema does not hold it, the segment store does.
-                    None => {
+                    None if owned.kind == "segment" => {
                         let id = derive_segment_id(tenant, &SegmentKey(owned.id.clone()));
                         catalogue.iter().any(|segment| segment.id == id)
+                    }
+                    // The limit of one account or pool lives in the ledger's own storage,
+                    // which the schema cannot see (`products::exists` answers none): not
+                    // checkable here, so it is counted, not missed.
+                    None => {
+                        out.unchecked += 1;
+                        true
                     }
                 },
                 Err(_) => false,
