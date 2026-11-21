@@ -1266,6 +1266,23 @@ fn a_digest_step_sends_one_message_to_each_person_with_notices_in_its_window() {
     )
     .expect("the templates are defined");
     let (p1, p2, p3) = (person(&app, "p1"), person(&app, "p2"), person(&app, "p3"));
+    // A digest without a recipient reaches every member of the tenant (D-8200), so the three
+    // persons are members.
+    for (n, who) in [&p1, &p2, &p3].into_iter().enumerate() {
+        execute(
+            store_,
+            &Intent::AssignRole {
+                principal: who.clone(),
+                role: role("writer"),
+            },
+            &ctx(
+                "alpha",
+                Principal::User(principal_id("alpha:owner")),
+                810 + n as i64,
+            ),
+        )
+        .expect("the person becomes a member");
+    }
     let found = store_.load(&tenant, &[]).unwrap().tenant.unwrap();
     let notice = |order: &str| strata_backend::inbox::Notice {
         topic: "app.orders".into(),
