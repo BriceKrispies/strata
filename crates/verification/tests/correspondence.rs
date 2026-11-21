@@ -12,6 +12,7 @@ use strata_verification::lean::{
     compare_outputs, kernel_output, model_output, parse_audit, scenarios, verify, FIXTURE_COUNT,
     FIXTURE_SEED,
 };
+use strata_verification::lean_diff;
 use strata_verification::obligations;
 
 fn lean_dir() -> PathBuf {
@@ -246,4 +247,53 @@ fn an_audit_line_with_a_placeholder_is_not_clean() {
         [true, false, true]
     );
     assert_eq!(parsed[2].axioms, Vec::<String>::new());
+}
+
+/// The default is sized to run in a few seconds of the Lean process; a larger run:
+/// `STRATA_LEAN_DIFF_CASES=20000` (and `STRATA_LEAN_DIFF_SEED=<n>` to vary or reproduce).
+const DEFAULT_DIFF_CASES: usize = 400;
+const DEFAULT_DIFF_SEED: u64 = 20_261_121;
+
+fn env_number<T: std::str::FromStr>(name: &str, default: T) -> T {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Verifies: KRN-016
+#[test]
+fn random_sequences_run_the_same_on_the_lean_model_and_the_kernel() {
+    let _lake = require_lake();
+    let cases = env_number("STRATA_LEAN_DIFF_CASES", DEFAULT_DIFF_CASES);
+    let seed = env_number("STRATA_LEAN_DIFF_SEED", DEFAULT_DIFF_SEED);
+    if let Err(report) = lean_diff::run(&lean_dir(), seed, cases) {
+        panic!("{report}");
+    }
+}
+
+/// A new intent in `Main.lean` must come with generator support, or it would run unexercised.
+#[test]
+fn the_generator_produces_every_intent_the_lean_model_executes() {
+    let source = std::fs::read_to_string(lean_dir().join("Main.lean")).unwrap();
+    let executed = lean_diff::lean_intents(&source).expect("Main.lean's intents can be read");
+    let missing: Vec<&String> = executed
+        .iter()
+        .filter(|kind| !lean_diff::GENERATED_INTENTS.contains(&kind.as_str()))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "Main.lean executes intents the differential generator never produces: {missing:?}; \
+         add them to generate() and GENERATED_INTENTS in crates/verification/src/lean_diff.rs"
+    );
+    // The generator really does produce each kind it claims.
+    let produced: String = (0..200)
+        .map(|i| lean_diff::render("g", &[lean_diff::generate(lean_diff::case_seed(1, i))]))
+        .collect();
+    for kind in lean_diff::GENERATED_INTENTS {
+        assert!(
+            produced.lines().any(|l| l.split(' ').nth(3) == Some(kind)),
+            "the generator never produces `{kind}`"
+        );
+    }
 }

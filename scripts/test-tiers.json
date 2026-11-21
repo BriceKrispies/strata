@@ -193,7 +193,7 @@
       "tier": "full",
       "seconds": 24.12,
       "unmeasured": true,
-      "reason": "correspondence: Runs the Lean build and compares it with the kernel (needs lake); the gate also runs lake build"
+      "reason": "correspondence: Runs the Lean build and compares it with the kernel, including 400 seeded random sequences through one Lean process (needs lake); the gate also runs lake build"
     },
     {
       "package": "strata-spec-compiler-language-fixture",

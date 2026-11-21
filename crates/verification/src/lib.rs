@@ -11,4 +11,5 @@
 pub mod evidence;
 pub mod invariants;
 pub mod lean;
+pub mod lean_diff;
 pub mod obligations;

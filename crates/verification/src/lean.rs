@@ -20,6 +20,24 @@
 //! | `setRequired f strict` | `ChangeSchema [DefineField f required]` with `Reject` or `Grandfather` |
 //! | `Err.invalid` | `TypeMismatch`, `MissingRequired`, `UnknownField` |
 //!
+//! # The Main.lean protocol
+//!
+//! `lean/Main.lean` takes one argument, the path of a scenario file, and prints one result text
+//! for all of it. A file holds any number of scenarios, so one process runs a whole batch:
+//!
+//! ```text
+//! scenario <name>              starts a scenario from the initial world
+//! op <tenant> <principal> <intent> [args]
+//!                              one intent, as `create f=v ..`, `update <id> f=v ..`,
+//!                              `delete <id>`, `require <field> strict|lax`
+//! end                          prints the final state and returns to the initial world
+//! ```
+//!
+//! Output: `scenario <name>`, then `ok` or `err <kind>` per op (`unparsed <line>` for a line it
+//! cannot read), then `state`, the state lines and `end`. A new intent is a new `op` arm in
+//! `parseOp`; `crate::lean_diff` generates every such intent (and a test fails if one is missing).
+//! The differential harness is `crate::lean_diff`.
+//!
 //! Agreement on these scenarios is evidence of correspondence on the modelled fragment. It is
 //! not a proof, and it says nothing about what the model leaves out: constraints, workflows,
 //! references, uniqueness, queries, events.
@@ -473,21 +491,40 @@ fn lake(lean_dir: &Path, args: &[&str]) -> Result<(bool, String), String> {
     Ok((output.status.success(), text.replace("\r\n", "\n")))
 }
 
-/// Run the Lean model on a scenario file inside `lean_dir` and return what it prints.
-pub fn model_output(lean_dir: &Path, relative_fixture: &str) -> Result<String, String> {
-    // Build first, on its own: on a cold build `lake exe` prints Lake's progress lines
-    // ("✔ [2/8] Built Strata.Model") into the same output as the program, and those lines would
-    // be compared with the kernel's output as if the model had written them.
+/// Build the Lean model executable on its own (see `model_output` for why).
+pub fn build_model(lean_dir: &Path) -> Result<(), String> {
     let (built, log) = lake(lean_dir, &["build", "strata_model"])?;
-    if !built {
-        return Err(format!("the Lean model failed to build:\n{log}"));
+    if built {
+        Ok(())
+    } else {
+        Err(format!(
+            "the Lean model failed to build:
+{log}"
+        ))
     }
-    let (ok, text) = lake(lean_dir, &["exe", "strata_model", relative_fixture])?;
+}
+
+/// Run the already built model on a scenario file (a path `lake exe` can open from `lean_dir`:
+/// relative to it, or absolute) and return what it prints.
+pub fn run_model(lean_dir: &Path, fixture: &str) -> Result<String, String> {
+    let (ok, text) = lake(lean_dir, &["exe", "strata_model", fixture])?;
     if ok {
         Ok(text)
     } else {
-        Err(format!("the Lean model failed to run:\n{text}"))
+        Err(format!(
+            "the Lean model failed to run:
+{text}"
+        ))
     }
+}
+
+/// Run the Lean model on a scenario file inside `lean_dir` and return what it prints.
+pub fn model_output(lean_dir: &Path, relative_fixture: &str) -> Result<String, String> {
+    // Build first, on its own: on a cold build `lake exe` prints Lake's progress lines
+    // ("Built Strata.Model") into the same output as the program, and those lines would
+    // be compared with the kernel's output as if the model had written them.
+    build_model(lean_dir)?;
+    run_model(lean_dir, relative_fixture)
 }
 
 /// One theorem as the audit found it.
