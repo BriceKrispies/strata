@@ -77,7 +77,7 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
       by_cases hc : canCreate t c.principal = true
       · simpa [authorized] using hc
       · simp [hc] at hs
-    | update id fs =>
+    | update id fs ev =>
       simp only [stepTenant] at hs
       cases hl : t.records.lookup id with
       | none => rw [hl] at hs; cases hs
@@ -86,7 +86,7 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
         by_cases he : canEdit t c.principal old = true
         · simp [authorized, hl, he]
         · simp [he] at hs
-    | delete id =>
+    | delete id ev =>
       simp only [stepTenant] at hs
       cases hl : t.records.lookup id with
       | none => rw [hl] at hs; cases hs
@@ -104,17 +104,17 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
 /-- A principal who may not edit a record cannot change it: the step is refused, so no new
     world exists in which the record differs. -/
 theorem unauthorized_cannot_update (w : World) (c : Ctx) (t : Tenant) (id : RecordId)
-    (old : Record) (fs : Fields)
+    (old : Record) (fs : Fields) (ev : Option Nat)
     (ht : w c.tenant = some t) (hl : t.records.lookup id = some old)
     (hno : canEdit t c.principal old = false) :
-    step w (.update id fs) c = .error .unauthorized := by
+    step w (.update id fs ev) c = .error .unauthorized := by
   simp [step, ht, stepTenant, hl, hno]
 
 theorem unauthorized_cannot_delete (w : World) (c : Ctx) (t : Tenant) (id : RecordId)
-    (old : Record)
+    (old : Record) (ev : Option Nat)
     (ht : w c.tenant = some t) (hl : t.records.lookup id = some old)
     (hno : canEdit t c.principal old = false) :
-    step w (.delete id) c = .error .unauthorized := by
+    step w (.delete id ev) c = .error .unauthorized := by
   simp [step, ht, stepTenant, hl, hno]
 
 /-- The refusal does not reveal whether a record exists: a principal who could act on no record
@@ -122,16 +122,17 @@ theorem unauthorized_cannot_delete (w : World) (c : Ctx) (t : Tenant) (id : Reco
     not exist with `unauthorized`, the refusal it gets for an existing record it may not edit, so
     it cannot probe which ids exist (the kernel's KRN-1080). -/
 theorem missing_record_hidden_on_update (w : World) (c : Ctx) (t : Tenant) (id : RecordId)
-    (fs : Fields)
+    (fs : Fields) (ev : Option Nat)
     (ht : w c.tenant = some t) (hl : t.records.lookup id = none)
     (hno : canEditAny t c.principal = false) :
-    step w (.update id fs) c = .error .unauthorized := by
+    step w (.update id fs ev) c = .error .unauthorized := by
   simp [step, ht, stepTenant, hl, missingRecord, hno]
 
 theorem missing_record_hidden_on_delete (w : World) (c : Ctx) (t : Tenant) (id : RecordId)
+    (ev : Option Nat)
     (ht : w c.tenant = some t) (hl : t.records.lookup id = none)
     (hno : canEditAny t c.principal = false) :
-    step w (.delete id) c = .error .unauthorized := by
+    step w (.delete id ev) c = .error .unauthorized := by
   simp [step, ht, stepTenant, hl, missingRecord, hno]
 
 /-- Stated in terms of the outcome: an unauthorized principal's intent is never accepted.
@@ -170,7 +171,7 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
           cases hq with
           | head => exact Nat.lt_succ_self _
           | tail _ hq' => exact Nat.lt_succ_of_lt (hids q hq')
-  | update id fs =>
+  | update id fs ev =>
     simp only [stepTenant] at h
     split at h
     · cases h
@@ -178,20 +179,22 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
       · cases h
       · split at h
         · cases h
-        · rename_i hp
-          cases h
-          refine ⟨?_, ?_, hrefs'⟩
-          · intro q hq
-            obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
-            by_cases hid : (q₀.1 == id) = true
-            · simpa [hid] using (problem_none hp).1
-            · simpa [hid] using hconf q₀ hq₀
-          · intro q hq
-            obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
-            by_cases hid : (q₀.1 == id) = true
-            · simpa [hid] using hids q₀ hq₀
-            · simpa [hid] using hids q₀ hq₀
-  | delete id =>
+        · split at h
+          · cases h
+          · rename_i hp
+            cases h
+            refine ⟨?_, ?_, hrefs'⟩
+            · intro q hq
+              obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
+              by_cases hid : (q₀.1 == id) = true
+              · simpa [hid] using (problem_none hp).1
+              · simpa [hid] using hconf q₀ hq₀
+            · intro q hq
+              obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
+              by_cases hid : (q₀.1 == id) = true
+              · simpa [hid] using hids q₀ hq₀
+              · simpa [hid] using hids q₀ hq₀
+  | delete id ev =>
     simp only [stepTenant] at h
     split at h
     · cases h
@@ -199,7 +202,9 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
       · cases h
       · split at h
         · cases h
-        · rename_i hnb
+        · split at h
+          · cases h
+          rename_i hnb
           have hnb : t.records.any (blocks t.schema id) = false := by simpa using hnb
           cases h
           refine ⟨?_, ?_, hrefs'⟩
@@ -257,9 +262,11 @@ theorem lax_change_can_break_wf :
     ∃ (t t' : Tenant) (p : PrincipalId) (f : FieldId),
       t.WF ∧ stepTenant t p (.setRequired f false) = .ok t' ∧ ¬ t'.WF := by
   refine ⟨{ schema := [(1, { ty := .int, required := false })], owner := 0, editors := [],
-            writers := [], records := [(0, { owner := 0, fields := [] })], nextId := 1 },
+            writers := [], records := [(0, { owner := 0, version := 1, fields := [] })],
+            nextId := 1 },
           { schema := [(1, { ty := .int, required := true })], owner := 0, editors := [],
-            writers := [], records := [(0, { owner := 0, fields := [] })], nextId := 1 },
+            writers := [], records := [(0, { owner := 0, version := 1, fields := [] })],
+            nextId := 1 },
           0, 1, ?_, ?_, ?_⟩
   · refine ⟨?_, ?_, ?_⟩
     · intro q hq
@@ -276,7 +283,7 @@ theorem lax_change_can_break_wf :
       decide
   · simp [stepTenant, makeRequired]
   · intro hwf
-    have := hwf.1 (0, { owner := 0, fields := [] }) (by simp)
+    have := hwf.1 (0, { owner := 0, version := 1, fields := [] }) (by simp)
     revert this
     decide
 

@@ -1,10 +1,12 @@
 /-
 The abstract model of the Strata kernel.
 
-This is a deliberately small model: one object type per tenant, three scalar value kinds and
-references between its records, ownership-based authorization and one kind of schema change. It is not the Rust kernel and
-proving things about it proves nothing about the Rust kernel by itself. What connects the two
-is stated in `docs/verification.md` and exercised by the correspondence fixtures.
+This is a deliberately small model: one object type per tenant, three scalar value kinds,
+references between its records, lists of either, versions, patch updates, constant defaults, the
+size limits as an abstract bound, ownership-based authorization and one kind of schema change. It
+is not the Rust kernel and proving things about it proves nothing about the Rust kernel by itself.
+What connects the two is stated in `docs/verification.md` and exercised by the correspondence
+fixtures.
 
 Everything here is a total, computable function, so the model can also be run (`Main.lean`).
 -/
@@ -16,6 +18,16 @@ abbrev PrincipalId := Nat
 abbrev RecordId := Nat
 abbrev FieldId := Nat
 
+/-- An element of a list value: a scalar or a reference. The kernel's lists never hold lists.
+    (`null` is expressible, as in the kernel, and has no type.) -/
+inductive Elem where
+  | null
+  | int (i : Int)
+  | str (s : String)
+  | bool (b : Bool)
+  | ref (id : RecordId)
+  deriving DecidableEq, Repr
+
 /-- A value. `null` is the absence of a value. -/
 inductive Val where
   | null
@@ -24,10 +36,13 @@ inductive Val where
   | bool (b : Bool)
   /-- A reference to the record with this id. -/
   | ref (id : RecordId)
+  /-- A list of scalars or of references. -/
+  | list (vs : List Elem)
   deriving DecidableEq, Repr
 
 /-- What deleting a record does to a record that refers to it through a field of this kind:
-    `restrict` refuses the delete, `setNull` clears the field. -/
+    `restrict` refuses the delete, `setNull` clears the field (or, in a list, removes the
+    element). -/
 inductive OnDelete where
   | restrict
   | setNull
@@ -39,20 +54,93 @@ inductive Ty where
   | bool
   /-- A reference to a record of the tenant's (single) object type. -/
   | ref (onDelete : OnDelete)
+  /-- A list whose elements have type `elem`. The kernel's schema check refuses nested lists, and
+      no element value has a list type. -/
+  | list (elem : Ty)
   deriving DecidableEq, Repr
 
 structure FieldDef where
   ty : Ty
   required : Bool
+  /-- Whether the field is declared unique. Slice 2 models only what the flag does to the size
+      limits (a unique value has a bound of its own); uniqueness itself is slice 3. -/
+  unique : Bool := false
+  /-- The constant a create fills the field with when the intent does not name it; `null` for no
+      default. -/
+  default : Val := .null
   deriving DecidableEq, Repr
 
-/-- Whether a value has a type. `null` has none: absence is handled by `required`. -/
-def Val.hasType : Val → Ty → Bool
+/-- Whether a list element has a type. `null` has none. -/
+def Elem.hasType : Elem → Ty → Bool
   | .int _, .int => true
   | .str _, .str => true
   | .bool _, .bool => true
   | .ref _, .ref _ => true
   | _, _ => false
+
+/-- Whether a value has a type. `null` has none: absence is handled by `required`. A list has a
+    list type when every element has the element type. -/
+def Val.hasType : Val → Ty → Bool
+  | .int _, .int => true
+  | .str _, .str => true
+  | .bool _, .bool => true
+  | .ref _, .ref _ => true
+  | .list vs, .list e => vs.all (fun v => v.hasType e)
+  | _, _ => false
+
+def Val.isList : Val → Bool
+  | .list _ => true
+  | _ => false
+
+/-- A field of this type refuses the delete of a record it names. -/
+def Ty.restricts : Ty → Bool
+  | .ref .restrict => true
+  | .list (.ref .restrict) => true
+  | _ => false
+
+/-! ## Size limits
+
+The kernel bounds a string's bytes, a list's length, a unique value's encoded bytes and a record's
+encoded bytes (`limits.rs`, `rules::validate_record`). The model keeps the bounds as numbers of the
+tenant and the first two measures exactly, and replaces the two encodings by an abstract measure,
+`Val.size`: a string counts its UTF-8 bytes, any other scalar one, a list the sum of its elements.
+Every JSON encoding is at least that long, so a value or record the model finds too large the
+kernel finds too large as well; the converse holds away from the bound (`docs/verification.md`,
+slice 2's review note). -/
+
+structure Limits where
+  maxString : Nat
+  maxList : Nat
+  maxUnique : Nat
+  maxRecord : Nat
+  deriving DecidableEq, Repr
+
+/-- The kernel's numbers: `MAX_STRING_BYTES`, `MAX_LIST_LEN`, `MAX_UNIQUE_BYTES`,
+    `MAX_RECORD_BYTES`. -/
+def Limits.kernel : Limits :=
+  { maxString := 65536, maxList := 1000, maxUnique := 200, maxRecord := 262144 }
+
+def Elem.size : Elem → Nat
+  | .str s => s.utf8ByteSize
+  | _ => 1
+
+/-- The abstract size of a value: a stand-in for its encoded length, never more than it. -/
+def Val.size : Val → Nat
+  | .str s => s.utf8ByteSize
+  | .list vs => (vs.map Elem.size).sum
+  | _ => 1
+
+/-- A string element over the string bound. -/
+def Elem.overLimit (L : Limits) : Elem → Bool
+  | .str s => decide (L.maxString < s.utf8ByteSize)
+  | _ => false
+
+/-- A value breaks the string or list bound: a string too long, or a list too long or holding a
+    string too long (the kernel's `limits::value_problem`). -/
+def Val.overLimit (L : Limits) : Val → Bool
+  | .str s => decide (L.maxString < s.utf8ByteSize)
+  | .list vs => decide (L.maxList < vs.length) || vs.any (Elem.overLimit L)
+  | _ => false
 
 abbrev Fields := List (FieldId × Val)
 abbrev Schema := List (FieldId × FieldDef)
@@ -60,8 +148,15 @@ abbrev Schema := List (FieldId × FieldDef)
 structure Record where
   /-- The principal who created the record. -/
   owner : PrincipalId
+  /-- 1 when created, raised by one by every accepted update of the record and by every delete
+      that clears a reference it holds. -/
+  version : Nat
   fields : Fields
   deriving DecidableEq, Repr
+
+/-- The abstract size of a record: the sum of its values' sizes. -/
+def Record.size (r : Record) : Nat :=
+  (r.fields.map (fun fv => fv.2.size)).sum
 
 /-- The value of a field in a record; `null` when the record does not mention it. -/
 def Fields.get (fs : Fields) (f : FieldId) : Val :=
@@ -93,6 +188,10 @@ inductive Err where
   | danglingReference
   /-- A deleted record is still referred to through a field that forbids it. -/
   | stillReferenced
+  /-- The intent named a version and the record is at another. -/
+  | versionConflict
+  /-- A written value or record is over a size bound. -/
+  | limitExceeded
   deriving DecidableEq, Repr
 
 /-! ## References
@@ -100,7 +199,8 @@ inductive Err where
 A record is a set of facts about one object; a reference is a fact that names another record.
 The model states two outcomes: a record is written only if every record it names exists, and a
 delete never leaves a record naming the deleted one (it is refused, or the naming field is
-cleared). Which records name which is not indexed; the statements quantify over all records. -/
+cleared, or the naming list element removed). Which records name which is not indexed; the
+statements quantify over all records. -/
 
 abbrev Records := List (RecordId × Record)
 
@@ -108,9 +208,15 @@ abbrev Records := List (RecordId × Record)
 def Records.has (rs : Records) (id : RecordId) : Bool :=
   (rs.lookup id).isSome
 
-/-- A value names no record, or names one that exists. -/
+/-- A list element names no record, or names one that exists. -/
+def Elem.resolves (rs : Records) : Elem → Bool
+  | .ref id => rs.has id
+  | _ => true
+
+/-- A value names only records that exist: as a reference, or through the elements of a list. -/
 def Val.resolves (rs : Records) : Val → Bool
   | .ref id => rs.has id
+  | .list vs => vs.all (Elem.resolves rs)
   | _ => true
 
 /-- Every reference a record holds names an existing record. -/
@@ -122,41 +228,71 @@ def refsOk (rs : Records) (r : Record) : Bool :=
 def Fields.valuesOf (fs : Fields) (f : FieldId) : List Val :=
   (fs.filter (fun fv => fv.1 == f)).map Prod.snd
 
-/-- What is wrong with one value of a field of type `ty`, if anything: the wrong type, or a
-    reference to no record. -/
-def valueProblem (rs : Records) (ty : Ty) (v : Val) : Option Err :=
-  if !v.hasType ty then some .invalid
+/-- What is wrong with one value of a field defined by `d`, if anything, in the kernel's order:
+    over the string or list bound, a unique value over its bound, the wrong type (for a list, any
+    element of the wrong type), a reference or a reference element naming no record. -/
+def valueProblem (L : Limits) (rs : Records) (d : FieldDef) (v : Val) : Option Err :=
+  if v.overLimit L then some .limitExceeded
+  else if d.unique && decide (L.maxUnique < v.size) then some .limitExceeded
+  else if !v.hasType d.ty then some .invalid
   else if !v.resolves rs then some .danglingReference
   else none
 
 /-- What is wrong with a record's values of one field of the schema, if anything. -/
-def fieldProblem (rs : Records) (fs : Fields) (fd : FieldId × FieldDef) : Option Err :=
+def fieldProblem (L : Limits) (rs : Records) (fs : Fields) (fd : FieldId × FieldDef) :
+    Option Err :=
   if fd.2.required && (fs.valuesOf fd.1).isEmpty then some .invalid
-  else (fs.valuesOf fd.1).findSome? (valueProblem rs fd.2.ty)
+  else (fs.valuesOf fd.1).findSome? (valueProblem L rs fd.2)
 
 /-- The refusal for writing record `r` among records `rs`, or `none` if it may be written.
 
-    When several things are wrong, which refusal is given is part of the outcome: a field the
-    schema does not know comes first, then the fields of the schema in schema order, each
-    refused for being missing, of the wrong type or naming no record. (The kernel's schema is
-    ordered by field id, and the correspondence fixtures declare it in that order.) -/
-def problem (schema : Schema) (rs : Records) (r : Record) : Option Err :=
-  if r.fields.all (fun fv => (schema.lookup fv.1).isSome) then
-    schema.findSome? (fieldProblem rs r.fields)
+    When several things are wrong, which refusal is given is part of the outcome: a record over
+    the record bound comes first, then a field the schema does not know, then the fields of the
+    schema in schema order, each refused for being missing, over a bound, of the wrong type or
+    naming no record. (The kernel's schema is ordered by field id, and the correspondence
+    fixtures declare it in that order.) -/
+def problem (L : Limits) (schema : Schema) (rs : Records) (r : Record) : Option Err :=
+  if decide (L.maxRecord < r.size) then some .limitExceeded
+  else if r.fields.all (fun fv => (schema.lookup fv.1).isSome) then
+    schema.findSome? (fieldProblem L rs r.fields)
   else some .invalid
 
-/-- A reference through field `f` forbids deleting its target: some definition of `f` is
-    required or restricts deletion. -/
-def forbidsDelete (schema : Schema) (f : FieldId) : Bool :=
-  schema.any (fun fd => fd.1 == f && (fd.2.required || fd.2.ty == .ref .restrict))
+/-- Whether a value names record `id`: it is a reference to it, or a list holding one. -/
+def Val.refersTo (id : RecordId) : Val → Bool
+  | .ref x => x == id
+  | .list vs => vs.contains (Elem.ref id)
+  | _ => false
+
+def Record.refersTo (id : RecordId) (r : Record) : Bool :=
+  r.fields.any (fun fv => fv.2.refersTo id)
+
+/-- A reference to a deleted record through field `f`, held in value `v`, forbids the delete:
+    some definition of `f` restricts deletion, or is required while `v` is a single reference. A
+    required list never forbids it: the element is removed and the list stays. (The kernel asks
+    whether the field's type is a list; on a record of the declared types that is whether the
+    value is one.) -/
+def forbidsDelete (schema : Schema) (f : FieldId) (v : Val) : Bool :=
+  schema.any (fun fd => fd.1 == f && ((fd.2.required && !v.isList) || fd.2.ty.restricts))
 
 /-- Record `q`, other than `id` itself, refers to `id` through a field that forbids its deletion. -/
 def blocks (schema : Schema) (id : RecordId) (q : RecordId × Record) : Bool :=
-  q.1 != id && q.2.fields.any (fun fv => fv.2 == .ref id && forbidsDelete schema fv.1)
+  q.1 != id && q.2.fields.any (fun fv => fv.2.refersTo id && forbidsDelete schema fv.1 fv.2)
 
-/-- The record with every reference to `id` cleared. -/
+/-- A value with the references to `id` taken out: a single reference to it is gone (`none`), a
+    list loses those elements and stays, possibly empty. -/
+def Val.dropRef (id : RecordId) : Val → Option Val
+  | .ref x => if x = id then none else some (.ref x)
+  | .list vs => some (.list (vs.filter (fun v => v != Elem.ref id)))
+  | v => some v
+
+def clearFields (id : RecordId) (fs : Fields) : Fields :=
+  fs.filterMap (fun fv => (fv.2.dropRef id).map (fun v => (fv.1, v)))
+
+/-- A record that refers to `id`, with every reference to it cleared and its version raised; any
+    other record as it is. -/
 def clearRef (id : RecordId) (r : Record) : Record :=
-  { r with fields := r.fields.filter (fun fv => fv.2 != .ref id) }
+  if r.refersTo id then { r with fields := clearFields id r.fields, version := r.version + 1 }
+  else r
 
 /-- Everything one tenant owns. -/
 structure Tenant where
@@ -170,17 +306,21 @@ structure Tenant where
   records : Records
   /-- The id the next created record receives. -/
   nextId : Nat
+  /-- The size bounds. The kernel's are constants (`Limits.kernel`). -/
+  limits : Limits := Limits.kernel
   deriving Repr
 
 /-- The whole state: each tenant id has a tenant or does not. -/
 abbrev World := TenantId → Option Tenant
 
 inductive Intent where
+  /-- Create a record. A field of the schema the intent does not name is filled from its default. -/
   | create (fields : Fields)
-  /-- Replace a record's fields. (The Rust kernel patches; a patch that names every field is a
-      replacement, and that is how the correspondence fixtures use it.) -/
-  | update (id : RecordId) (fields : Fields)
-  | delete (id : RecordId)
+  /-- Patch a record: each named field takes the given value, a named `null` removes the field,
+      fields not named are kept. `expected`, when given, must be the record's version. -/
+  | update (id : RecordId) (fields : Fields) (expected : Option Nat)
+  /-- Delete a record. `expected`, when given, must be the record's version. -/
+  | delete (id : RecordId) (expected : Option Nat)
   /-- Make a field required. `strict` rejects the change if an existing record would not
       conform; otherwise existing records are left as they are. -/
   | setRequired (f : FieldId) (strict : Bool)
@@ -215,34 +355,67 @@ def missingRecord (t : Tenant) (p : PrincipalId) : Err :=
 def normalise (fs : Fields) : Fields :=
   fs.filter (fun fv => fv.2 != .null)
 
+/-- The fields a create writes: the named ones that are not `null`, then the default of every field
+    of the schema that the intent does not name at all and whose default is not `null`. (The
+    kernel's rule: a field named as `null` gets no default.) -/
+def withDefaults (schema : Schema) (fs : Fields) : Fields :=
+  normalise fs ++ schema.filterMap (fun fd =>
+    if fs.any (fun fv => fv.1 == fd.1) || fd.2.default == .null then none
+    else some (fd.1, fd.2.default))
+
+/-- The record a create by `p` writes, at version 1. -/
+def newRecord (schema : Schema) (p : PrincipalId) (fs : Fields) : Record :=
+  { owner := p, version := 1, fields := withDefaults schema fs }
+
+/-- One entry of a patch: field `fv.1` takes value `fv.2`, or is removed if that is `null`. -/
+def Fields.set (fs : Fields) (fv : FieldId × Val) : Fields :=
+  if fv.2 == .null then fs.filter (fun g => g.1 != fv.1)
+  else fv :: fs.filter (fun g => g.1 != fv.1)
+
+/-- A patch applied to fields, entry by entry. -/
+def Fields.patch (fs ps : Fields) : Fields :=
+  ps.foldl Fields.set fs
+
+/-- The record an accepted update writes: patched, one version on. -/
+def patched (old : Record) (ps : Fields) : Record :=
+  { owner := old.owner, version := old.version + 1, fields := old.fields.patch ps }
+
+/-- The intent names a version and the record is at another. -/
+def versionClash : Option Nat → Record → Bool
+  | some v, r => v != r.version
+  | none, _ => false
+
 def makeRequired (schema : Schema) (f : FieldId) : Schema :=
   schema.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with required := true }) else fd)
 
-/-- One intent against one tenant. -/
+/-- One intent against one tenant. An expected version is checked after the permission, so only
+    one who may act on the record learns that it is at another version. -/
 def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
   | .create fs =>
     if !canCreate t p then .error .unauthorized
     else
-      let r : Record := { owner := p, fields := normalise fs }
-      match problem t.schema t.records r with
+      let r := newRecord t.schema p fs
+      match problem t.limits t.schema t.records r with
       | some e => .error e
       | none => .ok { t with records := (t.nextId, r) :: t.records, nextId := t.nextId + 1 }
-  | .update id fs =>
+  | .update id fs ev =>
     match t.records.lookup id with
     | none => .error (missingRecord t p)
     | some old =>
       if !canEdit t p old then .error .unauthorized
+      else if versionClash ev old then .error .versionConflict
       else
-        let r : Record := { owner := old.owner, fields := normalise fs }
-        match problem t.schema t.records r with
+        let r := patched old fs
+        match problem t.limits t.schema t.records r with
         | some e => .error e
         | none =>
           .ok { t with records := t.records.map (fun q => if q.1 == id then (q.1, r) else q) }
-  | .delete id =>
+  | .delete id ev =>
     match t.records.lookup id with
     | none => .error (missingRecord t p)
     | some old =>
       if !canEdit t p old then .error .unauthorized
+      else if versionClash ev old then .error .versionConflict
       else if t.records.any (blocks t.schema id) then .error .stillReferenced
       else .ok { t with records :=
         (t.records.filter (fun q => q.1 != id)).map (fun q => (q.1, clearRef id q.2)) }
@@ -265,10 +438,10 @@ def step (w : World) (i : Intent) (c : Ctx) : Except Err World :=
 /-- Whether the acting principal is allowed to make this intent at all. -/
 def authorized (t : Tenant) (p : PrincipalId) : Intent → Bool
   | .create _ => canCreate t p
-  | .update id _ => match t.records.lookup id with
+  | .update id _ _ => match t.records.lookup id with
     | some old => canEdit t p old
     | none => false
-  | .delete id => match t.records.lookup id with
+  | .delete id _ => match t.records.lookup id with
     | some old => canEdit t p old
     | none => false
   | .setRequired _ _ => p == t.owner
@@ -279,8 +452,8 @@ def Intent.strict : Intent → Bool
   | .setRequired _ s => s
   | _ => true
 
-/-- Referential integrity: every reference held by a record of the tenant names an existing
-    record. -/
+/-- Referential integrity: every reference held by a record of the tenant, single or in a list,
+    names an existing record. -/
 def Tenant.RefsOk (t : Tenant) : Prop :=
   ∀ q ∈ t.records, refsOk t.records q.2 = true
 
