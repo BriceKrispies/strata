@@ -176,8 +176,30 @@ fn the_pure_crate_names_no_impure_crate_or_std_io_in_its_sources() {
     let mut found = Vec::new();
     for file in files {
         let text = std::fs::read_to_string(&file).unwrap();
+        // A `#[cfg(test)]` item is not shipped: it is skipped to its closing brace, as the
+        // kernel's purity scan does (crates/verification/tests/purity.rs).
+        let mut skipping: Option<i64> = None;
+        let mut marked = false;
         for (number, line) in text.lines().enumerate() {
             if line.trim_start().starts_with("//") {
+                continue;
+            }
+            let depth_change =
+                line.matches('{').count() as i64 - line.matches('}').count() as i64;
+            if let Some(depth) = skipping {
+                let depth = depth + depth_change;
+                skipping = (depth > 0).then_some(depth);
+                continue;
+            }
+            if line.trim() == "#[cfg(test)]" {
+                marked = true;
+                continue;
+            }
+            if marked {
+                marked = false;
+                if depth_change > 0 {
+                    skipping = Some(depth_change);
+                }
                 continue;
             }
             for pattern in &patterns {
