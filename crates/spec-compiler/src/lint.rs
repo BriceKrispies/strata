@@ -1,4 +1,4 @@
-//! The requirement wording lint: `specc lint --spec <file> [--exemptions <file>]`.
+//! The requirement wording lint: `specc lint --spec <file>`.
 //!
 //! The lint reads the structured specification (`claims[]` entities of kind `requirement`, plus
 //! `goals`, `constraints`, `boundaries` and the budget measurement case table) and reports, one
@@ -21,9 +21,7 @@
 //! | `lint.untraced` | a goal or constraint that no active requirement traces |
 //! | `lint.milestone` | a milestone that is not a positive integer, or a seam that is not one or is later than the milestone |
 //!
-//! Findings are keyed `<rule>:<entity id>`. An exemptions file (`--exemptions`, the `lint` list of
-//! `scripts/gate-exemptions.json`: groups of `{ reason, items }`) accepts known findings; an exemption
-//! that matches no finding is stale and fails the lint like a finding does.
+//! Findings are keyed `<rule>:<entity id>`. Any finding fails the lint.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -50,11 +48,6 @@ pub const BUDGET_ROW: &str = "lint.budget-row";
 pub const UNTRACED: &str = "lint.untraced";
 /// The rule of a missing or inconsistent milestone.
 pub const MILESTONE: &str = "lint.milestone";
-/// The code of an exemption that matches no finding.
-pub const STALE: &str = "lint.stale-exemption";
-/// The code of a problem in the exemption list itself.
-pub const EXEMPTIONS: &str = "lint.exemptions";
-
 /// Every rule, in the order they are documented.
 pub const RULES: [&str; 8] = [
     ONE_SHALL,
@@ -108,13 +101,6 @@ pub struct Finding {
     pub line: usize,
     /// What is wrong and what to change.
     pub message: String,
-}
-
-impl Finding {
-    /// The key an exemption names: `<rule>:<entity id>`.
-    pub fn key(&self) -> String {
-        format!("{}:{}", self.rule, self.entity)
-    }
 }
 
 impl fmt::Display for Finding {
@@ -474,67 +460,6 @@ pub fn lint(path: &str, text: &str) -> Result<Vec<Finding>, Vec<Diagnostic>> {
     Ok(sink.out)
 }
 
-/// What is left of the findings after the exemptions.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Outcome {
-    /// The findings no exemption covers.
-    pub remaining: Vec<Finding>,
-    /// How many findings an exemption covers.
-    pub exempt: usize,
-    /// The exemptions no finding matches.
-    pub stale: Vec<String>,
-    /// What is wrong with the exemption list itself.
-    pub problems: Vec<String>,
-}
-
-/// Splits `findings` by the `lint` list of an exemptions file (`{ "lint": [ { "reason", "items" } ] }`,
-/// the shape of `scripts/gate-exemptions.json`), where an item is a finding key `<rule>:<entity id>`.
-pub fn apply_exemptions(findings: Vec<Finding>, exemptions: &Value) -> Outcome {
-    let mut outcome = Outcome::default();
-    let mut owner: HashSet<String> = HashSet::new();
-    for (i, group) in array(exemptions, "lint").iter().enumerate() {
-        if str_of(group, "reason").is_none_or(|r| r.trim().is_empty()) {
-            outcome
-                .problems
-                .push(format!("exemption group {i} has no reason"));
-        }
-        let Some(items) = group.get("items").and_then(Value::as_array) else {
-            outcome
-                .problems
-                .push(format!("exemption group {i} has no items"));
-            continue;
-        };
-        for item in items {
-            match item.as_str().filter(|s| !s.is_empty()) {
-                None => outcome.problems.push(format!(
-                    "exemption group {i} has an item that is not a string"
-                )),
-                Some(s) => {
-                    if !owner.insert(s.to_string()) {
-                        outcome
-                            .problems
-                            .push(format!("exemption {s} is listed twice"));
-                    }
-                }
-            }
-        }
-    }
-    let mut matched: HashSet<String> = HashSet::new();
-    for finding in findings {
-        let key = finding.key();
-        if owner.contains(&key) {
-            outcome.exempt += 1;
-            matched.insert(key);
-        } else {
-            outcome.remaining.push(finding);
-        }
-    }
-    let mut stale: Vec<String> = owner.difference(&matched).cloned().collect();
-    stale.sort();
-    outcome.stale = stale;
-    outcome
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,19 +481,6 @@ mod tests {
             finding(ONE_SHALL, "a-1").to_string(),
             "error[lint.one-shall] a-1: m (s.jsonc:3)"
         );
-    }
-
-    #[test]
-    fn an_exemption_that_matches_nothing_is_stale() {
-        let exemptions = json!({ "lint": [ { "reason": "r", "items": ["lint.one-shall:a-1", "lint.one-shall:gone"] } ] });
-        let outcome = apply_exemptions(
-            vec![finding(ONE_SHALL, "a-1"), finding(BOUNDARY, "a-2")],
-            &exemptions,
-        );
-        assert_eq!(outcome.exempt, 1);
-        assert_eq!(outcome.remaining, vec![finding(BOUNDARY, "a-2")]);
-        assert_eq!(outcome.stale, vec!["lint.one-shall:gone".to_string()]);
-        assert!(outcome.problems.is_empty());
     }
 
     #[test]

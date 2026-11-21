@@ -8,15 +8,12 @@
 //   environment variables are declared     gate-env.mjs
 //   BFF routes have a contract             gate-bff-routes.mjs
 //   cited file paths exist                 gate-cited-paths.mjs
-//
-// The exemptions, with a reason per group, are in scripts/gate-exemptions.json.
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { mountedRoutes, routesWithoutContract } from './gate-bff-routes.mjs';
 import { citedPaths, missingPaths } from './gate-cited-paths.mjs';
 import { envVarsRead, undeclaredEnvVars } from './gate-env.mjs';
-import { auditVerdict } from './gate-exemptions.mjs';
 import { shippedWithoutHandler } from './gate-handlers.mjs';
 import { createdTables, tablesWithoutRecord } from './gate-tables.mjs';
 
@@ -64,15 +61,24 @@ function readNamed(root, paths) {
   return { sources, unreadable };
 }
 
+// The verdict of one audit check: it passes only with zero misses, and lists each miss. `total` is
+// how many things the check looked at.
+export function auditVerdict(name, total, misses) {
+  return {
+    name,
+    ok: misses.length === 0,
+    detail: `${total - misses.length} of ${total} ok, ${misses.length} missing`,
+    lines: misses.map((miss) => `missing: ${miss}`),
+  };
+}
+
 // A check that cannot look at what it checks fails, so a moved file is not a silent pass.
 function unreadableVerdict(name, unreadable) {
   return { name, ok: false, detail: `cannot read ${unreadable.join(', ')}`, lines: [] };
 }
 
-// Runs the five checks on a checkout at `root`, with `spec` (the parsed specification) and the
-// exemption lists `exemptions` ({ handlers, tables, env, bffRoutes, paths }, each a list of
-// { reason, items }). Returns [{ name, ok, detail, lines }].
-export function auditChecks({ root, spec, exemptions }) {
+// Runs the five checks on a checkout at `root`, with `spec` (the parsed specification). Returns [{ name, ok, detail, lines }].
+export function auditChecks({ root, spec }) {
   const verdicts = [];
   const router = readNamed(root, [BFF_ROUTER]);
   const mounted = router.sources.length ? mountedRoutes(router.sources[0].text) : [];
@@ -82,7 +88,7 @@ export function auditChecks({ root, spec, exemptions }) {
     verdicts.push(unreadableVerdict(handlerName, router.unreadable));
   } else {
     const found = shippedWithoutHandler({ contracts: spec.contracts ?? [], functions: spec.functions ?? [], sources: handWrittenSources(root), mounted });
-    verdicts.push(auditVerdict(handlerName, found.shipped, found.missing, exemptions.handlers));
+    verdicts.push(auditVerdict(handlerName, found.shipped, found.missing));
   }
 
   const tableName = 'every table the SQLite adapters create has a shipped spec record';
@@ -91,7 +97,7 @@ export function auditChecks({ root, spec, exemptions }) {
     verdicts.push(unreadableVerdict(tableName, tableFiles.unreadable));
   } else {
     const found = tablesWithoutRecord(createdTables(tableFiles.sources), spec.records ?? []);
-    verdicts.push(auditVerdict(tableName, found.total, found.missing, exemptions.tables));
+    verdicts.push(auditVerdict(tableName, found.total, found.missing));
   }
 
   const envName = 'every environment variable the backend and BFF read is declared in the specification';
@@ -100,7 +106,7 @@ export function auditChecks({ root, spec, exemptions }) {
     verdicts.push(unreadableVerdict(envName, envFiles.unreadable));
   } else {
     const read = envVarsRead(envFiles.sources);
-    verdicts.push(auditVerdict(envName, read.length, undeclaredEnvVars(read, JSON.stringify(spec)), exemptions.env));
+    verdicts.push(auditVerdict(envName, read.length, undeclaredEnvVars(read, JSON.stringify(spec))));
   }
 
   const routeName = 'every route the BFF mounts has a contract with a matching bffRoute';
@@ -109,12 +115,12 @@ export function auditChecks({ root, spec, exemptions }) {
   } else if (mounted.length === 0) {
     verdicts.push({ name: routeName, ok: false, detail: `found no route in \`fn router\` of ${BFF_ROUTER}`, lines: [] });
   } else {
-    verdicts.push(auditVerdict(routeName, mounted.length, routesWithoutContract(mounted, spec.contracts ?? []), exemptions.bffRoutes));
+    verdicts.push(auditVerdict(routeName, mounted.length, routesWithoutContract(mounted, spec.contracts ?? [])));
   }
 
   const cited = citedPaths(spec);
   verdicts.push(
-    auditVerdict('every file path the specification cites exists', cited.length, missingPaths(cited, (path) => existsSync(join(root, path))), exemptions.paths),
+    auditVerdict('every file path the specification cites exists', cited.length, missingPaths(cited, (path) => existsSync(join(root, path)))),
   );
   return verdicts;
 }

@@ -15,7 +15,7 @@
 //! specc check-catalogue --spec <file> --out <dir> [--spec-hash <hash>]
 //! specc conformance  --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
 //! specc check-conformance --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
-//! specc lint         --spec <file> [--exemptions <file>]
+//! specc lint         --spec <file>
 //! specc bundle       --spec <file> --product <file> --out <dir>
 //! ```
 //!
@@ -69,9 +69,9 @@
 //! what the backends ask for. The platform specification passes that check in `specc check` of the
 //! same gate step.
 //!
-//! `lint` is the requirement wording lint (`strata_spec_compiler::lint`): `specc lint --spec <file>
-//! [--exemptions <file>]` prints one `error[lint.<rule>] <entity>: <what to change> (<file>:<line>)` line
-//! per finding and exits 1 when a finding is not exempt or an exemption is stale.
+//! `lint` is the requirement wording lint (`strata_spec_compiler::lint`): `specc lint --spec <file>`
+//! prints one `error[lint.<rule>] <entity>: <what to change> (<file>:<line>)` line per finding and
+//! exits 1 when there is any finding.
 //!
 //! `deploy` and `check-deploy` do for the deployment files (a compose stack, Kubernetes
 //! manifests and Prometheus alert rules; see `strata_spec_compiler::deploy`) what `generate`
@@ -119,7 +119,7 @@ const USAGE: &str = "usage:
   specc conformance  --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
   specc check-conformance --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
   specc bundle       --spec <file> --product <file> --out <dir>
-  specc lint         --spec <file> [--exemptions <file>]
+  specc lint         --spec <file>
 every command also takes --product <file>, repeatable: a product file layered on the specification (bundle takes exactly one)";
 
 /// The runtime crate of the checkout specc was built from.
@@ -500,16 +500,13 @@ fn run() -> ExitCode {
 }
 
 /// `lint`: the requirement wording lint (`strata_spec_compiler::lint`). Findings go to standard
-/// output, one line each; the summary goes to standard error. Exit code 1 when a finding no
-/// exemption covers, a stale exemption or a problem of the exemption list remains.
+/// output, one line each; the summary goes to standard error. Exit code 1 when there is any finding.
 fn run_lint(rest: &[String]) -> ExitCode {
     let mut spec = None;
-    let mut exemptions = None;
     let mut iter = rest.iter();
     while let Some(flag) = iter.next() {
         let slot = match flag.as_str() {
             "--spec" => &mut spec,
-            "--exemptions" => &mut exemptions,
             other => {
                 eprintln!(
                     "specc: unknown argument \"{other}\"
@@ -547,19 +544,6 @@ fn run_lint(rest: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let exemption_list = match exemptions {
-        None => serde_json::Value::Null,
-        Some(path) => match std::fs::read_to_string(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
-        {
-            Ok(value) => value,
-            Err(e) => {
-                eprintln!("specc: cannot read the exemptions {path}: {e}");
-                return ExitCode::from(1);
-            }
-        },
-    };
     let findings = match lint::lint(&spec, &text) {
         Ok(findings) => findings,
         Err(diagnostics) => {
@@ -569,32 +553,11 @@ fn run_lint(rest: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let total = findings.len();
-    let outcome = lint::apply_exemptions(findings, &exemption_list);
-    for finding in &outcome.remaining {
+    for finding in &findings {
         println!("{finding}");
     }
-    for item in &outcome.stale {
-        println!(
-            "error[{}] {item}: no finding matches this exemption; delete it from the exemptions",
-            lint::STALE
-        );
-    }
-    for problem in &outcome.problems {
-        println!(
-            "error[{}] {}: {problem}",
-            lint::EXEMPTIONS,
-            strata_spec_compiler::diagnostic::SPEC_ENTITY
-        );
-    }
-    eprintln!(
-        "specc: lint {spec}: {total} finding(s), {} exempt, {} not exempt, {} stale exemption(s), {} problem(s) in the exemptions",
-        outcome.exempt,
-        outcome.remaining.len(),
-        outcome.stale.len(),
-        outcome.problems.len()
-    );
-    if outcome.remaining.is_empty() && outcome.stale.is_empty() && outcome.problems.is_empty() {
+    eprintln!("specc: lint {spec}: {} finding(s)", findings.len());
+    if findings.is_empty() {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)

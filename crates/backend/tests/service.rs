@@ -332,7 +332,7 @@ async fn requests_without_the_service_token_are_refused() {
         .unwrap();
     assert_eq!(shorter.status().as_u16(), 401, "a prefix of the token");
 
-    // Every route is behind the gate. The health check is the one deliberate exemption, and it
+    // Every route is behind the gate. The health check is the one route outside the gate, and it
     // answers without the credential; everything else, whichever method it takes and whatever
     // else the request carries, is refused. Paths that are no route at all are refused as well.
     let routes = routes();

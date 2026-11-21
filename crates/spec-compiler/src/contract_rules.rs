@@ -6,10 +6,7 @@
 //! - `contract.tenant-mismatch-missing`: a public contract with an input of type `tenant-id` has no
 //!   `tenant-mismatch` error (claim TEN-1140).
 //! - `contract.convention-concurrency`, `-pagination`, `-idempotency`, `-error-kind`: a public
-//!   contract breaks the contract conventions of decision D-6595 (claim ARC-1599), unless the
-//!   checked-in list `contract_conventions_exempt.json` names it for that rule. An entry of that
-//!   list that no longer matches a violation is refused as `contract.convention-exemption-stale`,
-//!   so the list can only shrink.
+//!   contract breaks the contract conventions of decision D-6595 (claim ARC-1599).
 //!
 //! Each rule is in force once the specification holds the entity that states it: the decision
 //! `d-6201`, the claim `TEN-1140`, the claim `ARC-1599`. A specification without it is not
@@ -45,8 +42,6 @@ pub const CONVENTION_PAGINATION: &str = "contract.convention-pagination";
 pub const CONVENTION_IDEMPOTENCY: &str = "contract.convention-idempotency";
 /// Code of a public contract with an error outside the platform vocabulary.
 pub const CONVENTION_ERROR_KIND: &str = "contract.convention-error-kind";
-/// Code of an exemption that names a contract or rule that no longer breaks the convention.
-pub const CONVENTION_EXEMPTION_STALE: &str = "contract.convention-exemption-stale";
 
 /// Code of a missing bound in the claim that limits a Markdown source.
 pub const MARKDOWN_BOUND_MISSING: &str = "contract.markdown-bound-missing";
@@ -121,73 +116,8 @@ const PLATFORM_KINDS: &[&str] = &[
 /// Error names D-6595 retires: each becomes `invalid` or `forbidden`.
 const RETIRED_ERROR_NAMES: &[&str] = &["rejected", "too-many", "field-not-readable"];
 
-/// The rules of the conventions, as they are named in the exemption list.
-pub const CONVENTION_RULES: &[&str] = &["concurrency", "pagination", "idempotency", "error-kind"];
-
-/// A contract exempt from one convention rule, with the reason.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Exemption {
-    /// The contract id.
-    pub contract: String,
-    /// One of [`CONVENTION_RULES`].
-    pub rule: String,
-    /// Why the contract is exempt, naming the task that removes the entry.
-    pub reason: String,
-}
-
-/// The exemptions checked in beside this file.
-pub fn exemptions() -> Result<Vec<Exemption>, String> {
-    parse_exemptions(include_str!("contract_conventions_exempt.json"))
-}
-
-/// Reads an exemption list: `{ "exemptions": [ { "contract", "rule", "reason" } ] }`.
-pub fn parse_exemptions(text: &str) -> Result<Vec<Exemption>, String> {
-    let value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    let list = value
-        .get("exemptions")
-        .and_then(Value::as_array)
-        .ok_or("the list has no \"exemptions\" array")?;
-    let mut out = Vec::new();
-    for (i, entry) in list.iter().enumerate() {
-        let field = |key: &str| {
-            entry
-                .get(key)
-                .and_then(Value::as_str)
-                .filter(|s| !s.trim().is_empty())
-                .map(str::to_string)
-                .ok_or(format!("exemption {i} has no \"{key}\""))
-        };
-        let exemption = Exemption {
-            contract: field("contract")?,
-            rule: field("rule")?,
-            reason: field("reason")?,
-        };
-        if !CONVENTION_RULES.contains(&exemption.rule.as_str()) {
-            return Err(format!(
-                "exemption {i} names the rule \"{}\"; the rules are {}",
-                exemption.rule,
-                CONVENTION_RULES.join(", ")
-            ));
-        }
-        out.push(exemption);
-    }
-    Ok(out)
-}
-
-/// Every refusal of these rules in the specification `top`, with the checked-in exemptions.
+/// Every refusal of these rules in the specification `top`.
 pub(crate) fn check(top: &Obj) -> Vec<Diagnostic> {
-    match exemptions() {
-        Ok(list) => check_with(top, &list),
-        Err(why) => vec![Diagnostic::new(
-            CONVENTION_EXEMPTION_STALE,
-            "contract_conventions_exempt.json",
-            format!("the exemption list of the contract conventions cannot be read: {why}"),
-        )],
-    }
-}
-
-/// Like [`check`], with the exemptions given.
-pub(crate) fn check_with(top: &Obj, exempt: &[Exemption]) -> Vec<Diagnostic> {
     let contracts: Vec<&Obj> = top
         .get("contracts")
         .and_then(Value::as_array)
@@ -205,7 +135,7 @@ pub(crate) fn check_with(top: &Obj, exempt: &[Exemption]) -> Vec<Diagnostic> {
         out.extend(tenant_mismatch(&contracts));
     }
     if has_claim(top, CONVENTIONS_CLAIM) {
-        out.extend(conventions(&contracts, exempt));
+        out.extend(conventions(&contracts));
     }
     if has_claim(top, MARKDOWN_CLAIM) {
         out.extend(markdown_bounds_stated(top));
@@ -613,7 +543,7 @@ fn broken_conventions(contract: &Obj) -> Vec<(&'static str, String)> {
     out
 }
 
-fn conventions(contracts: &[&Obj], exempt: &[Exemption]) -> Vec<Diagnostic> {
+fn conventions(contracts: &[&Obj]) -> Vec<Diagnostic> {
     let code_of = |rule: &str| match rule {
         "concurrency" => CONVENTION_CONCURRENCY,
         "pagination" => CONVENTION_PAGINATION,
@@ -621,33 +551,13 @@ fn conventions(contracts: &[&Obj], exempt: &[Exemption]) -> Vec<Diagnostic> {
         _ => CONVENTION_ERROR_KIND,
     };
     let mut out = Vec::new();
-    let mut used = vec![false; exempt.len()];
     for contract in contracts.iter().filter(|c| is_public(c)) {
         let id = id_of(contract);
         for (rule, message) in broken_conventions(contract) {
-            let hit = exempt
-                .iter()
-                .position(|e| e.contract == id && e.rule == rule);
-            if let Some(i) = hit {
-                used[i] = true;
-                continue;
-            }
             out.push(Diagnostic::new(
                 code_of(rule),
                 id,
                 format!("Public contract \"{id}\" {message} (D-6595, ARC-1599)."),
-            ));
-        }
-    }
-    for (e, used) in exempt.iter().zip(used) {
-        if !used {
-            out.push(Diagnostic::new(
-                CONVENTION_EXEMPTION_STALE,
-                &e.contract,
-                format!(
-                    "The exemption of \"{}\" from the {} convention is stale: no public contract with that id breaks it. Remove the entry from contract_conventions_exempt.json.",
-                    e.contract, e.rule
-                ),
             ));
         }
     }
@@ -687,31 +597,6 @@ mod tests {
     }
 
     #[test]
-    fn the_embedded_exemption_list_is_well_formed() {
-        let list = exemptions().expect("the list parses");
-        for e in &list {
-            assert!(CONVENTION_RULES.contains(&e.rule.as_str()), "{e:?}");
-        }
-        let mut keys: Vec<_> = list.iter().map(|e| (&e.contract, &e.rule)).collect();
-        keys.sort();
-        let before = keys.len();
-        keys.dedup();
-        assert_eq!(before, keys.len(), "an exemption is listed twice");
-    }
-
-    #[test]
-    fn a_malformed_exemption_list_is_an_error() {
-        assert!(parse_exemptions("{}").is_err());
-        assert!(parse_exemptions(
-            r#"{"exemptions":[{"contract":"a","rule":"nope","reason":"r"}]}"#
-        )
-        .is_err());
-        assert!(
-            parse_exemptions(r#"{"exemptions":[{"contract":"a","rule":"pagination"}]}"#).is_err()
-        );
-    }
-
-    #[test]
     fn references_of_the_step_up_list_skip_ranges() {
         let statement = "passkeys (CT-055, H-033), a realm (CT-065) and the key service (CT-151..155) but not XCT-9 or CT-";
         assert_eq!(listed_references(statement), ["CT-055", "H-033", "CT-065"]);
@@ -722,7 +607,7 @@ mod tests {
         let t = top(json!({ "contracts": [
             public("a", json!([{ "name": "tenant", "type": "tenant-id" }, { "name": "based-on-version" }]), json!([]))
         ] }));
-        assert!(check_with(&t, &[]).is_empty());
+        assert!(check(&t).is_empty());
     }
 
     #[test]
@@ -739,7 +624,7 @@ mod tests {
             ]
         }));
         assert_eq!(
-            codes(&check_with(&t, &[])),
+            codes(&check(&t)),
             [
                 pair(STEP_UP_MISSING, "no-age"),
                 pair(STEP_UP_MISSING, "no-error"),
@@ -761,14 +646,11 @@ mod tests {
                 public("no-tenant", json!([{ "name": "host", "type": "host" }]), json!([]))
             ]
         }));
-        assert_eq!(
-            codes(&check_with(&t, &[])),
-            [pair(TENANT_MISMATCH_MISSING, "bare")]
-        );
+        assert_eq!(codes(&check(&t)), [pair(TENANT_MISMATCH_MISSING, "bare")]);
     }
 
     #[test]
-    fn a_public_contract_that_breaks_a_convention_is_refused_unless_exempt() {
+    fn a_public_contract_that_breaks_a_convention_is_refused() {
         let t = top(json!({ "claims": convention_claim(), "contracts": [
             public("old-concurrency", json!([{ "name": "expected-revision" }]), json!([])),
             public("good-concurrency", json!([{ "name": "expected-version" }]), json!([])),
@@ -784,7 +666,7 @@ mod tests {
             { "id": "local-one", "exposure": "local", "inputs": [{ "name": "based-on-version" }] }
         ] }));
         assert_eq!(
-            codes(&check_with(&t, &[])),
+            codes(&check(&t)),
             [
                 pair(CONVENTION_CONCURRENCY, "old-concurrency"),
                 pair(CONVENTION_PAGINATION, "old-page"),
@@ -794,20 +676,6 @@ mod tests {
                 pair(CONVENTION_ERROR_KIND, "kinds"),
             ]
         );
-        let exempt = |contract: &str, rule: &str| Exemption {
-            contract: contract.to_string(),
-            rule: rule.to_string(),
-            reason: "test".to_string(),
-        };
-        let list = [
-            exempt("old-concurrency", "concurrency"),
-            exempt("old-page", "pagination"),
-            exempt("short-page", "pagination"),
-            exempt("alias", "idempotency"),
-            exempt("mismatch", "idempotency"),
-            exempt("kinds", "error-kind"),
-        ];
-        assert!(check_with(&t, &list).is_empty());
     }
 
     #[test]
@@ -832,7 +700,7 @@ mod tests {
             )
         };
         let full = "read at most 200000 bytes, nest quotes at most 8 deep and inline markup at most 8 deep";
-        assert!(check_with(&claim(full), &[]).is_empty());
+        assert!(check(&claim(full)).is_empty());
         for partial in [
             "nest quotes at most 8 deep and inline markup at most 8 deep",
             "read at most 200000 bytes and inline markup at most 8 deep",
@@ -840,7 +708,7 @@ mod tests {
             "read a source",
         ] {
             assert_eq!(
-                codes(&check_with(&claim(partial), &[])),
+                codes(&check(&claim(partial))),
                 [pair(MARKDOWN_BOUND_MISSING, "cms-1020")],
                 "{partial}"
             );
@@ -860,7 +728,7 @@ mod tests {
             ]
         }));
         assert_eq!(
-            codes(&check_with(&t, &[])),
+            codes(&check(&t)),
             [
                 pair(REVOCATION_AUTHORITY_MISSING, "revoke-role"),
                 pair(REVOCATION_AUTHORITY_MISSING, "withdraw-invitation"),
@@ -883,13 +751,13 @@ mod tests {
             "claims": [claim.clone(), model(json!([{ "scenario": "s", "faults": ["f"] }]))],
             "contracts": [contract("Lacks a capability of the contract (AGT-1209).")]
         }));
-        assert!(check_with(&whole, &[]).is_empty());
+        assert!(check(&whole).is_empty());
         let no_cite = top(json!({
             "claims": [claim.clone(), model(json!([{ "scenario": "s", "faults": ["f"] }]))],
             "contracts": [contract("The caller holds no permission.")]
         }));
         assert_eq!(
-            codes(&check_with(&no_cite, &[])),
+            codes(&check(&no_cite)),
             [pair(CATALOGUE_NEGATIVE_MISSING, "AGT-1209")]
         );
         let empty = top(json!({
@@ -902,35 +770,9 @@ mod tests {
         }));
         for t in [empty, none] {
             assert_eq!(
-                codes(&check_with(&t, &[])),
+                codes(&check(&t)),
                 [pair(CATALOGUE_NEGATIVE_MISSING, "AGT-1209")]
             );
         }
-    }
-
-    #[test]
-    fn an_exemption_that_matches_no_violation_is_stale() {
-        let t = top(json!({ "claims": convention_claim(), "contracts": [
-            public("fixed", json!([{ "name": "expected-version" }]), json!([]))
-        ] }));
-        let list = [
-            Exemption {
-                contract: "fixed".into(),
-                rule: "concurrency".into(),
-                reason: "r".into(),
-            },
-            Exemption {
-                contract: "gone".into(),
-                rule: "pagination".into(),
-                reason: "r".into(),
-            },
-        ];
-        assert_eq!(
-            codes(&check_with(&t, &list)),
-            [
-                pair(CONVENTION_EXEMPTION_STALE, "fixed"),
-                pair(CONVENTION_EXEMPTION_STALE, "gone"),
-            ]
-        );
     }
 }

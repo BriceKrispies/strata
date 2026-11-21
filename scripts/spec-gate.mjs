@@ -15,8 +15,7 @@
 //      specification, which refuses a product that does not pass (WG-4989).
 //      check-catalogue does the same for specifications/catalogue.md, check-deploy for deploy/, and check-conformance for the
 //      contract conformance suite (crates/bff/tests/conformance/generated) and its fixtures.
-//      specc lint applies the requirement wording rules to every requirement; the violations that exist
-//      are the `lint` exemptions of scripts/gate-exemptions.json, and a stale exemption fails the step.
+//      specc lint applies the requirement wording rules to every requirement; any finding fails the step.
 //   0b. The test tiers (scripts/test-tiers.json): a test binary in neither tier fails. Runs with --no-test too.
 //   1. cargo test --workspace, lake build, node --test (web kernel and client tests), the generated
 //      share tests (scripts/generated-share.test.mjs), tsc, cargo fmt --check, cargo clippy with
@@ -35,8 +34,7 @@
 //      has a contract with a bffRoute, every file path the specification cites exists, every shipped
 //      contract with a bffRoute has a generated conformance test (the checks the suite cannot make are
 //      counted and printed; scripts/gate-conformance.mjs). Each reports
-//      a count and fails on a miss; the exemptions, a reason per group, are in
-//      scripts/gate-exemptions.json, and an exemption that matches no miss fails too.
+//      a count and fails on a miss.
 //   5. With --browser: the browser suites (npm run e2e, e2e:generated, e2e:steps), which build the
 //      binaries and the frontend they run against. A skipped browser test fails the check.
 //
@@ -357,13 +355,12 @@ if (started.size === 0) check('gate.json names started milestones', false, 'star
   check('specc check-conformance (crates/bff/tests/conformance/fixtures/generated is generated from the conformance fixtures)', conformanceFixtures.ok,
     conformanceFixtures.ok ? 'up to date' : `${exitText(conformanceFixtures)}: ${lastLine(conformanceFixtures.out)}; run npm run generate and commit`);
 
-  // The requirement wording lint. Known violations are the `lint` list of scripts/gate-exemptions.json
-  // (WG-5369 clears them); specc fails on a finding no exemption covers and on an exemption no finding matches.
+  // The requirement wording lint: any finding fails.
   const lint = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'lint', '--spec', 'specifications/spec.jsonc', '--exemptions', 'scripts/gate-exemptions.json'], {
+    'lint', '--spec', 'specifications/spec.jsonc'], {
     env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
   });
-  check('specc lint (requirements follow the wording rules; known violations are exempt in scripts/gate-exemptions.json)', lint.ok,
+  check('specc lint (requirements follow the wording rules)', lint.ok,
     lint.ok ? lastLine(lint.out) : `${exitText(lint)}: ${lastLine(lint.out)}`);
   if (!lint.ok) detail(lint.stdout.split(/\r?\n/).filter(Boolean).slice(0, 40));
 }
@@ -644,21 +641,12 @@ if (previous?.counts) {
 
 // ---------------------------------------------------------------------------------------------
 // 4b. The specification and the code agree. Nothing is compiled: the checks read the specification
-//     and the source text (scripts/gate-audit-checks.mjs). A miss no exemption covers fails, and so
-//     does an exemption that matches no miss.
+//     and the source text (scripts/gate-audit-checks.mjs). A miss fails.
 // ---------------------------------------------------------------------------------------------
 {
-  let exemptions = null;
-  try {
-    exemptions = JSON.parse(readFileSync(resolve(root, 'scripts/gate-exemptions.json'), 'utf8'));
-  } catch (error) {
-    check('audit check exemptions (scripts/gate-exemptions.json)', false, `unreadable: ${error.message}`);
-  }
-  if (exemptions) {
-    for (const verdict of auditChecks({ root, spec, exemptions })) {
-      check(verdict.name, verdict.ok, verdict.detail);
-      detail(verdict.lines.slice(0, 40));
-    }
+  for (const verdict of auditChecks({ root, spec })) {
+    check(verdict.name, verdict.ok, verdict.detail);
+    detail(verdict.lines.slice(0, 40));
   }
   // Realisation labels derived from the evidence (scripts/gate-realisation.mjs): a label the evidence
   // contradicts fails; the disagreements and the property claims without a generator are listed.

@@ -86,17 +86,12 @@ fn a_public_tenant_input_without_the_tenant_mismatch_error_is_refused() {
 #[test]
 fn a_public_contract_that_breaks_the_conventions_is_refused() {
     use strata_spec_compiler::contract_rules::{
-        CONVENTION_CONCURRENCY, CONVENTION_ERROR_KIND, CONVENTION_EXEMPTION_STALE,
-        CONVENTION_IDEMPOTENCY, CONVENTION_PAGINATION,
+        CONVENTION_CONCURRENCY, CONVENTION_ERROR_KIND, CONVENTION_IDEMPOTENCY,
+        CONVENTION_PAGINATION,
     };
     let diagnostics = refuse(&fixture("convention-breaks.jsonc"));
     // Verifies: ARC-1599
-    // Every entry of the checked-in exemption list names a contract this fixture lacks, so each is
-    // stale here; the refusals of the fixture's own contracts come first.
-    let own: Vec<(&str, &str)> = codes_of(&diagnostics)
-        .into_iter()
-        .filter(|(code, _)| *code != CONVENTION_EXEMPTION_STALE)
-        .collect();
+    let own = codes_of(&diagnostics);
     assert_eq!(
         own,
         [

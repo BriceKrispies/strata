@@ -1,9 +1,9 @@
 // Tests for scripts/gate-audit-checks.mjs: the five checks on a small checkout that fails each one.
 // Run with: node --test scripts/gate-audit-checks.test.mjs
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { auditChecks } from './gate-audit-checks.mjs';
 
@@ -48,16 +48,14 @@ const SPEC = {
   claims: [{ statement: 'Reads STRATA_BFF_ADDR and STRATA_DB. See specifications/real.md and specifications/gone.md.' }],
 };
 
-const NONE = { handlers: [], tables: [], env: [], bffRoutes: [], paths: [] };
-
-function run(files, spec, exemptions) {
-  const verdicts = auditChecks({ root: checkout(files), spec, exemptions });
+function run(files, spec) {
+  const verdicts = auditChecks({ root: checkout(files), spec });
   assert.equal(verdicts.length, 5);
   return Object.fromEntries(verdicts.map((v, i) => [['handlers', 'tables', 'env', 'bffRoutes', 'paths'][i], v]));
 }
 
 test('each check fails on its own miss and reports a count', () => {
-  const v = run(FILES, SPEC, NONE);
+  const v = run(FILES, SPEC);
   assert.deepEqual(v.handlers.lines, ['missing: orphan']);
   assert.match(v.handlers.detail, /^2 of 3 ok/);
   assert.deepEqual(v.tables.lines, ['missing: secrets']);
@@ -67,36 +65,21 @@ test('each check fails on its own miss and reports a count', () => {
   for (const verdict of Object.values(v)) assert.equal(verdict.ok, false);
 });
 
-test('an exemption with a reason accepts the miss, and one that matches nothing fails', () => {
-  const exempt = (item) => [{ reason: 'Known (WG-1).', items: [item] }];
-  const v = run(FILES, SPEC, {
-    handlers: exempt('orphan'),
-    tables: exempt('secrets'),
-    env: exempt('STRATA_HIDDEN'),
-    bffRoutes: exempt('GET /api/secret'),
-    paths: exempt('specifications/gone.md'),
-  });
-  for (const verdict of Object.values(v)) assert.equal(verdict.ok, true, verdict.name);
-  const stale = run(FILES, SPEC, { ...NONE, handlers: exempt('issue-token').concat(exempt('orphan')) });
-  assert.deepEqual(stale.handlers.lines, ['stale exemption (it matches nothing; delete it): issue-token']);
+test('a check with no miss passes', () => {
+  const files = { ...FILES, 'crates/bff/src/main.rs': 'let a = var("STRATA_BFF_ADDR", "");', 'crates/storage-sqlite/src/lib.rs': 'CREATE TABLE sessions (id TEXT);' };
+  const spec = {
+    ...SPEC,
+    contracts: [{ id: 'issue-token', ref: 'H-003', deployment: 'shipped' }, { id: 'sign-in', deployment: 'shipped', bffRoute: 'POST /api/login' }, { id: 'secret', deployment: 'shipped', bffRoute: 'GET /api/secret', ref: 'H-003' }],
+    claims: [{ statement: 'Reads STRATA_BFF_ADDR and STRATA_DB. See specifications/real.md.' }],
+  };
+  for (const verdict of Object.values(run(files, spec))) assert.deepEqual(verdict.lines, [], verdict.name);
 });
 
 test('a checkout without the files a check reads fails the check', () => {
-  const v = run({ 'specifications/real.md': '' }, SPEC, NONE);
+  const v = run({ 'specifications/real.md': '' }, SPEC);
   assert.equal(v.handlers.ok, false);
   assert.match(v.handlers.detail, /cannot read crates\/bff\/src\/routes\.rs/);
   assert.equal(v.tables.ok, false);
   assert.equal(v.env.ok, false);
   assert.equal(v.bffRoutes.ok, false);
-});
-
-test('the exemption file of the gate is well formed', () => {
-  const file = JSON.parse(readFileSync(resolve(import.meta.dirname, 'gate-exemptions.json'), 'utf8'));
-  assert.deepEqual(Object.keys(file).sort(), ['bffRoutes', 'env', 'handlers', 'lint', 'paths', 'tables']);
-  for (const groups of Object.values(file)) {
-    for (const group of groups) {
-      assert.match(group.reason, /\S/);
-      assert.ok(group.items.length > 0);
-    }
-  }
 });
