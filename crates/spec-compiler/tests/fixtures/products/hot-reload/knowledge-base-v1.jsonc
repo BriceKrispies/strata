@@ -1,0 +1,88 @@
+{
+  // knowledge-base v1: articles and a list screen at /kb, installed beside service-desk; it is never
+  // changed, so each service-desk upgrade must leave it untouched.
+  "product": {
+    "id": "knowledge-base",
+    "name": "Knowledge base",
+    "version": "1.0.0",
+    "platform": {
+      "min": "0.2"
+    },
+    "imports": {
+      "spec": "../../../../../../specifications/spec.jsonc",
+      "entities": []
+    }
+  },
+  "objects": [
+    {
+      "id": "knowledge_base__article",
+      "label": "Article",
+      "fields": {
+        "title": {
+          "id": "title",
+          "label": "Title",
+          "ty": "Str",
+          "required": true,
+          "unique": false
+        },
+        "body": {
+          "id": "body",
+          "label": "Body",
+          "ty": "Str",
+          "required": true,
+          "unique": false
+        },
+        "status": {
+          "id": "status",
+          "label": "Status",
+          "ty": "Str",
+          "required": true,
+          "unique": false
+        }
+      },
+      "constraints": {}
+    }
+  ],
+  "queries": [
+    {
+      "id": "knowledge_base__published",
+      "object": "knowledge_base__article",
+      "filter": "record.status == 'published'",
+      "params": [],
+      "order": [
+        {
+          "field": "title",
+          "descending": false
+        }
+      ],
+      "limit": 100
+    }
+  ],
+  "views": [
+    {
+      "id": "knowledge_base__articles",
+      "route": "/kb",
+      "title": "Articles",
+      "sections": {
+        "published": {
+          "query": "knowledge_base__published",
+          "args": {},
+          "include": [],
+          "markdown": [],
+          "single": false
+        }
+      }
+    }
+  ],
+  "screens": [
+    {
+      "id": "knowledge_base__articles_screen",
+      "name": "Articles",
+      "route": "/kb",
+      "viewModel": "knowledge_base__articles",
+      "kind": "articles.list",
+      "auth": "none",
+      "title": "Articles"
+    }
+  ]
+}

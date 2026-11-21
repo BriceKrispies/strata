@@ -131,7 +131,7 @@ test('a tenant screen is drawn by the interpreter from its part and the view mod
     { name: 'open', single: false, more: false, rows: [{ id: 3, fields: [{ name: 'status', value: 'open' }, { name: 'title', value: 'Leak' }] }] },
   ]);
   assert.deepEqual(page.forms, [
-    { id: 'ticket_desk__open_form', submitLabel: 'Open the ticket', busy: false, error: '', fields: [{ name: 'title', label: 'Title', control: 'text', options: [], value: '', error: '' }] },
+    { id: 'ticket_desk__open_form', submitLabel: 'Open the ticket', busy: false, error: '', notice: '', fields: [{ name: 'title', label: 'Title', control: 'text', options: [], value: '', error: '' }] },
   ]);
   assert.deepEqual(page.actions, [{ id: 'ticket_desk__open_again', label: 'Open it again', confirm: null, armed: false }]);
 });

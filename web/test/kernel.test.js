@@ -84,7 +84,7 @@ test('a cold start asks for the session and the view, each with its own correlat
 test('navigating pushes the address, scrolls up and fetches; a stale reply is ignored', () => {
   const start = boot({ path: '/', session: { session: anonymous }, view: homeModel() }).state;
   const first = update(start, { type: 'navigate', href: '/topics', ...stamp });
-  assert.deepEqual(first.effects.map((e) => e.type), ['push_url', 'scroll_top', 'http']);
+  assert.deepEqual(first.effects.map((e) => e.type), ['push_url', 'scroll_top', 'http', 'timer']);
   const second = update(first.state, { type: 'navigate', href: '/about', ...stamp });
   const staleId = first.effects[2].id;
   const afterStale = update(second.state, { type: 'http_result', id: staleId, ok: true, status: 200, body: homeModel({ view: 'topics' }), ...stamp });
@@ -101,7 +101,7 @@ test('on welcome the kernel subscribes and starts the heartbeat', () => {
   assert.equal(state.ws.status, 'open');
   assert.equal(state.ws.lastSeq, 40);
   // The first subscription starts at the server head, so the page that was read before it is read again.
-  assert.deepEqual(effects.map((e) => e.type), ['ws_send', 'timer', 'http']);
+  assert.deepEqual(effects.map((e) => e.type), ['ws_send', 'timer', 'http', 'timer']);
   assert.equal(effects[0].message.type, 'subscribe');
   assert.equal('after' in effects[0].message, false, 'nothing to resume on a first connection');
 });
@@ -110,7 +110,7 @@ test('an event about something on the page refetches it quietly and is acknowled
   const { state } = connected();
   const event = { type: 'event', sub: 'site', n: 1, seq: 41, correlation: 'c-9', notice: { kind: 'upsert', object: 'post', id: 7, version: 2 } };
   const result = update(state, { type: 'ws_message', message: event, ...stamp });
-  assert.deepEqual(result.effects.map((e) => e.type), ['ws_send', 'http']);
+  assert.deepEqual(result.effects.map((e) => e.type), ['ws_send', 'http', 'timer']);
   assert.deepEqual(result.effects[0].message, { type: 'ack', n: 1 });
   assert.equal(result.state.view.status, 'ready', 'the page stays on screen while it refreshes');
   assert.equal(result.state.ws.lastSeq, 41);
@@ -126,7 +126,7 @@ test('a gap in the connection counter drops the socket instead of carrying on st
   const { state } = connected();
   const skipped = { type: 'event', sub: 'site', n: 2, seq: 42, correlation: '', notice: { kind: 'upsert', object: 'post', id: 7, version: 2 } };
   const result = update(state, { type: 'ws_message', message: skipped, ...stamp });
-  assert.deepEqual(result.effects.map((e) => e.type), ['ws_close', 'http'], 'what was missed is read again at once');
+  assert.deepEqual(result.effects.map((e) => e.type), ['ws_close', 'http', 'timer'], 'what was missed is read again at once');
   assert.equal(result.state.view.status, 'ready', 'the page stays on screen while it refreshes');
   assert.equal(result.state.ws.lastSeq, null, 'the next connection starts from scratch');
 });
@@ -187,7 +187,7 @@ test('a resync makes the page read again from the server head', () => {
   const { state } = connected();
   const result = update(state, { type: 'ws_message', message: { type: 'resync', reason: 'too far behind', head: 90 }, ...stamp });
   assert.equal(result.state.ws.lastSeq, 90);
-  assert.deepEqual(result.effects.map((e) => e.type), ['http']);
+  assert.deepEqual(result.effects.map((e) => e.type), ['http', 'timer']);
 });
 
 test('writes carry the session CSRF token; reads do not', () => {
