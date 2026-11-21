@@ -51,6 +51,7 @@ strata-runtime = { path = "crates/runtime" }
 strata-machine-store = { path = "crates/machine-store" }
 strata-protocol = { path = "crates/protocol" }
 strata-simulation = { path = "crates/simulation" }
+strata-backend = { path = "crates/backend" }
 strata-verification = { path = "crates/verification" }
 strata-spec-expr = { path = "crates/spec-expr" }
 strata-spec-parts = { path = "crates/spec-parts" }

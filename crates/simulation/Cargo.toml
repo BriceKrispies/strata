@@ -1,7 +1,7 @@
 [package]
 autotests = false
 name = "strata-simulation"
-description = "Deterministic discrete-event simulation over the real kernel: traces, replay, counterfactual branching, comparison, minimisation."
+description = "Deterministic discrete-event simulation of Strata: the deployment's own shell code over the store contract with logical time and seeded faults, kernel-level counterfactual branching, traces, replay."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 strata-kernel.workspace = true
+strata-storage-api.workspace = true
 strata-verification.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -18,6 +19,9 @@ serde_json.workspace = true
 strata-kernel = { workspace = true, features = ["testkit"] }
 strata-substrate.workspace = true
 strata-protocol.workspace = true
+# The deployment the shell path runs: the backend implements `shell::Deploy`. A dev-dependency
+# only, since the backend depends on this crate's library (its Impact Lab).
+strata-backend.workspace = true
 
 [[test]]
 name = "simulation_slow"

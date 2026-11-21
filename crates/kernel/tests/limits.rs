@@ -1,9 +1,8 @@
 //! The stated maximums (KRN-1280 to KRN-1288): what a tenant cannot make large, and the paging and
-//! bounded loads of a named query read.
+//! bounded loads of a named query read. Every number in a test is the one its requirement states.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use strata_kernel::limits;
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 
@@ -162,7 +161,7 @@ fn a_query_with_a_limit_over_a_table_of_a_thousand_records_loads_a_bounded_windo
         vec![Need::PageOf {
             object: object("note"),
             after: None,
-            limit: limits::MAX_PAGE_SIZE
+            limit: 200
         }]
     );
     let state = thin(&full, &needs);
@@ -174,7 +173,7 @@ fn a_query_with_a_limit_over_a_table_of_a_thousand_records_loads_a_bounded_windo
         .values()
         .map(BTreeMap::len)
         .sum();
-    assert!(loaded <= limits::MAX_PAGE_SIZE as usize, "loaded {loaded}");
+    assert!(loaded <= 200usize, "loaded {loaded}");
 
     let page = read(&state, &request, &ctx("alpha", owner(), 7_000)).unwrap();
     assert_eq!(ids(&page), (1_001..=1_020).collect::<Vec<_>>());
@@ -260,10 +259,10 @@ fn only_a_query_without_a_filter_ordered_by_nothing_or_the_id_is_a_window() {
         [Need::PageOf { limit, .. }] => *limit,
         other => panic!("{other:?}"),
     };
-    assert_eq!(limit_of("plain"), limits::MAX_PAGE_SIZE);
-    assert_eq!(limit_of("by_id"), limits::MAX_PAGE_SIZE);
+    assert_eq!(limit_of("plain"), 200);
+    assert_eq!(limit_of("by_id"), 200);
     for scan in ["by_id_down", "by_rank"] {
-        assert_eq!(limit_of(scan), limits::MAX_SCAN_RECORDS + 1, "{scan}");
+        assert_eq!(limit_of(scan), 10_001, "{scan}");
     }
     // KRN-2520: an equality on a field is served by that field's index, a page at a time.
     match read_needs(&schema, &named("filtered", None, None)).as_slice() {
@@ -271,7 +270,7 @@ fn only_a_query_without_a_filter_ordered_by_nothing_or_the_id_is_a_window() {
             field: f, limit, ..
         }] => {
             assert_eq!(f, &field("status"));
-            assert_eq!(*limit, limits::MAX_PAGE_SIZE);
+            assert_eq!(*limit, 200);
         }
         other => panic!("{other:?}"),
     }
@@ -298,13 +297,13 @@ fn a_scan_over_more_than_the_scan_bound_is_refused_after_loading_one_record_past
     let request = named("by_rank", None, None);
     let context = ctx("alpha", owner(), 7_000);
 
-    let at_bound = crowded(&world, limits::MAX_SCAN_RECORDS as u64);
+    let at_bound = crowded(&world, 10_000);
     let state = thin(&at_bound, &read_needs(&schema, &request));
     let page = read(&state, &request, &context).unwrap();
     assert_eq!(page.rows.len(), 5);
     assert_eq!(page.next, Some(PageCursor::Offset(5)));
 
-    let over = crowded(&world, limits::MAX_SCAN_RECORDS as u64 + 1);
+    let over = crowded(&world, 10_001);
     let state = thin(&over, &read_needs(&schema, &request));
     let loaded: usize = state
         .tenant
@@ -314,37 +313,79 @@ fn a_scan_over_more_than_the_scan_bound_is_refused_after_loading_one_record_past
         .values()
         .map(BTreeMap::len)
         .sum();
-    assert_eq!(loaded, limits::MAX_SCAN_RECORDS as usize + 1);
+    assert_eq!(loaded, 10_001);
     assert_eq!(
         read(&state, &request, &context).unwrap_err().kind,
         ErrorKind::LimitExceeded
     );
 }
 
-// Verifies: KRN-1284
-#[test]
-fn a_records_read_naming_more_than_the_maximum_ids_is_refused() {
-    let world = notes_world();
-    let state = world.state(&tenant_id("alpha"));
-    let request = |n: u64| ReadRequest::Records {
-        object: object("note"),
-        ids: (1..=n).map(RecordId).collect(),
-    };
-    let context = ctx("alpha", owner(), 7_000);
-    let max = limits::MAX_READ_IDS as u64;
-    assert!(read(&state, &request(max), &context).is_ok());
-    assert_eq!(
-        read(&state, &request(max + 1), &context).unwrap_err().kind,
-        ErrorKind::LimitExceeded
-    );
-    let schema = &state.tenant.as_ref().unwrap().schema;
-    assert!(read_needs(schema, &request(max + 1)).is_empty());
+// The tests below take every number from the wording of the requirement they carry (the
+// specification), never from `strata_kernel::limits`: a test that read the constant would move
+// with it, and a changed limit would pass unseen.
+
+/// The schema of alpha.
+fn schema_of(world: &World) -> Arc<TenantSchema> {
+    world
+        .state(&tenant_id("alpha"))
+        .tenant
+        .unwrap()
+        .schema
+        .clone()
 }
 
-// Verifies: KRN-1280
-#[test]
-fn a_string_a_list_and_a_record_over_their_maximum_are_refused() {
-    let world = change(
+/// Add `count` definitions made by `define` (called with 0, 1, 2, ...), in intents of at most 200
+/// changes (KRN-1283). The first refusal is returned.
+fn grow(
+    world: &World,
+    count: usize,
+    define: impl Fn(usize) -> SchemaChange,
+) -> Result<World, DomainError> {
+    let mut world = world.clone();
+    let mut next = 0;
+    while next < count {
+        let end = (next + 200).min(count);
+        world = change(
+            &world,
+            3_000 + next as i64,
+            (next..end).map(&define).collect(),
+        )?;
+        next = end;
+    }
+    Ok(world)
+}
+
+fn define_object(i: usize) -> SchemaChange {
+    SchemaChange::DefineObject {
+        id: object(&format!("obj_{i}")),
+        label: "O".into(),
+    }
+}
+
+fn define_policy(i: usize) -> SchemaChange {
+    SchemaChange::DefinePolicy(PolicyDef {
+        id: PolicyId::new(&format!("pol_{i}")).unwrap(),
+        role: role("editor"),
+        resource: Resource::Object(object("note")),
+        actions: BTreeSet::from([Action::Read]),
+        condition: None,
+    })
+}
+
+fn define_query(i: usize) -> SchemaChange {
+    SchemaChange::DefineQuery(query(&format!("qry_{i}"), vec![], None, None))
+}
+
+fn define_field(i: usize) -> SchemaChange {
+    SchemaChange::DefineField {
+        object: object("person"),
+        field: field_def(&format!("f_{i}"), FieldType::Str, false),
+    }
+}
+
+/// The notes world with a list field `tags` on a note.
+fn tagged_world() -> World {
+    change(
         &notes_world(),
         3_000,
         vec![SchemaChange::DefineField {
@@ -352,46 +393,149 @@ fn a_string_a_list_and_a_record_over_their_maximum_are_refused() {
             field: field_def("tags", FieldType::List(Box::new(FieldType::Str)), false),
         }],
     )
-    .unwrap();
-    let refused = |fields: &[(&str, Value)]| create_note(&world, fields).unwrap_err().kind;
-
-    let long = "x".repeat(limits::MAX_STRING_BYTES + 1);
-    assert_eq!(refused(&[("body", text(&long))]), ErrorKind::LimitExceeded);
-    assert!(create_note(&world, &[("body", text(&long[1..]))]).is_ok());
-
-    let many = Value::List((0..=limits::MAX_LIST_LEN).map(|_| text("t")).collect());
-    assert_eq!(refused(&[("tags", many)]), ErrorKind::LimitExceeded);
-
-    // Each item and the list are within their maximums; the record is not.
-    let item = "y".repeat(limits::MAX_RECORD_BYTES / limits::MAX_LIST_LEN + 10);
-    let heavy = Value::List((0..limits::MAX_LIST_LEN).map(|_| text(&item)).collect());
-    assert_eq!(refused(&[("tags", heavy)]), ErrorKind::LimitExceeded);
+    .unwrap()
 }
 
-// Verifies: KRN-1281
+// Verifies: KRN-1280
 #[test]
-fn a_value_in_a_unique_field_over_its_maximum_is_refused() {
-    let world = notes_world();
-    let long = "u".repeat(limits::MAX_UNIQUE_BYTES);
+fn a_string_of_65536_bytes_is_stored_and_one_of_65537_is_refused() {
+    let world = tagged_world();
+    let at_most = "x".repeat(65_536);
+    assert!(create_note(&world, &[("body", text(&at_most))]).is_ok());
+    let over = "x".repeat(65_537);
     assert_eq!(
-        create_note(&world, &[("slug", text(&long))])
+        create_note(&world, &[("body", text(&over))])
             .unwrap_err()
             .kind,
         ErrorKind::LimitExceeded
     );
-    // The limit is on the encoded value, which wraps the text in its tag and quotes.
-    let overhead = limits::encoded_len(&text(""));
-    let fits = "u".repeat(limits::MAX_UNIQUE_BYTES - overhead);
-    assert_eq!(limits::encoded_len(&text(&fits)), limits::MAX_UNIQUE_BYTES);
+}
+
+// Verifies: KRN-1280
+#[test]
+fn a_list_of_1000_items_is_stored_and_one_of_1001_is_refused() {
+    let world = tagged_world();
+    let list = |n: usize| Value::List((0..n).map(|_| text("t")).collect());
+    assert!(create_note(&world, &[("tags", list(1_000))]).is_ok());
+    assert_eq!(
+        create_note(&world, &[("tags", list(1_001))])
+            .unwrap_err()
+            .kind,
+        ErrorKind::LimitExceeded
+    );
+}
+
+/// The bytes of the JSON encoding of the one note of `world`.
+fn stored_bytes(world: &World) -> usize {
+    let state = world.state(&tenant_id("alpha"));
+    let tenant = state.tenant.as_ref().unwrap();
+    let record = tenant.records_of(&object("note")).next().unwrap();
+    serde_json::to_vec(&**record).unwrap().len()
+}
+
+// Verifies: KRN-1280
+#[test]
+fn a_record_of_262144_bytes_is_stored_and_one_of_262145_is_refused() {
+    let world = tagged_world();
+    // Four strings in a list: none is near its own maximum of 65536 bytes, so only the size of
+    // the record is in question. The padding is ASCII, so each byte of it is one byte of JSON.
+    let padded = |pad: usize| {
+        let items = (0..4)
+            .map(|i| text(&"y".repeat(pad / 4 + usize::from(i < pad % 4))))
+            .collect();
+        create_note(&world, &[("tags", Value::List(items))])
+    };
+    // The size of a record with 4000 bytes of padding, measured, fixes how much padding makes the
+    // record exactly the size the requirement names.
+    let base = stored_bytes(&padded(4_000).unwrap());
+    let pad = 4_000 + 262_144 - base;
+    let at_most = padded(pad).unwrap();
+    assert_eq!(stored_bytes(&at_most), 262_144);
+    assert_eq!(padded(pad + 1).unwrap_err().kind, ErrorKind::LimitExceeded);
+}
+
+// Verifies: KRN-1281
+#[test]
+fn a_unique_value_encoding_to_200_bytes_is_stored_and_one_of_201_is_refused() {
+    let world = notes_world();
+    // The JSON encoding of a text wraps it in its tag and quotes; the length that counts is the
+    // length of that encoding.
+    let overhead = serde_json::to_string(&text("")).unwrap().len();
+    let encoded = |slug: &str| serde_json::to_string(&text(slug)).unwrap().len();
+    let fits = "u".repeat(200 - overhead);
+    assert_eq!(encoded(&fits), 200);
     assert!(create_note(&world, &[("slug", text(&fits))]).is_ok());
+    let over = "u".repeat(201 - overhead);
+    assert_eq!(encoded(&over), 201);
+    assert_eq!(
+        create_note(&world, &[("slug", text(&over))])
+            .unwrap_err()
+            .kind,
+        ErrorKind::LimitExceeded
+    );
 }
 
 // Verifies: KRN-1282
 #[test]
-fn a_query_that_declares_a_limit_above_the_maximum_page_size_is_refused() {
+fn a_schema_of_200_object_types_is_accepted_and_one_of_201_is_refused() {
     let world = notes_world();
-    for limit in [0, limits::MAX_PAGE_SIZE + 1] {
-        let error = change(
+    let have = schema_of(&world).objects.len();
+    let full = grow(&world, 200 - have, define_object).unwrap();
+    assert_eq!(schema_of(&full).objects.len(), 200);
+    assert_eq!(
+        grow(&world, 201 - have, define_object).unwrap_err().kind,
+        ErrorKind::InvalidSchema
+    );
+}
+
+// Verifies: KRN-1282
+#[test]
+fn an_object_type_of_100_fields_is_accepted_and_one_of_101_is_refused() {
+    let world = notes_world();
+    let have = schema_of(&world).objects[&object("person")].fields.len();
+    let full = grow(&world, 100 - have, define_field).unwrap();
+    assert_eq!(
+        schema_of(&full).objects[&object("person")].fields.len(),
+        100
+    );
+    assert_eq!(
+        grow(&world, 101 - have, define_field).unwrap_err().kind,
+        ErrorKind::InvalidSchema
+    );
+}
+
+// Verifies: KRN-1282
+#[test]
+fn a_schema_of_500_policies_is_accepted_and_one_of_501_is_refused() {
+    let world = notes_world();
+    let have = schema_of(&world).policies.len();
+    let full = grow(&world, 500 - have, define_policy).unwrap();
+    assert_eq!(schema_of(&full).policies.len(), 500);
+    assert_eq!(
+        grow(&world, 501 - have, define_policy).unwrap_err().kind,
+        ErrorKind::InvalidSchema
+    );
+}
+
+// Verifies: KRN-1282
+#[test]
+fn a_schema_of_500_named_queries_is_accepted_and_one_of_501_is_refused() {
+    let world = notes_world();
+    let have = schema_of(&world).queries.len();
+    let full = grow(&world, 500 - have, define_query).unwrap();
+    assert_eq!(schema_of(&full).queries.len(), 500);
+    assert_eq!(
+        grow(&world, 501 - have, define_query).unwrap_err().kind,
+        ErrorKind::InvalidSchema
+    );
+}
+
+// Verifies: KRN-1282
+#[test]
+fn a_named_query_limit_is_accepted_from_1_to_200_and_refused_outside_it() {
+    let world = notes_world();
+    let defined = |limit: u32| {
+        change(
             &world,
             3_000,
             vec![SchemaChange::DefineQuery(query(
@@ -401,36 +545,84 @@ fn a_query_that_declares_a_limit_above_the_maximum_page_size_is_refused() {
                 Some(limit),
             ))],
         )
-        .unwrap_err();
-        assert_eq!(error.kind, ErrorKind::InvalidSchema);
+    };
+    for limit in [1, 200] {
+        assert!(defined(limit).is_ok(), "a limit of {limit}");
     }
-    assert!(change(
-        &world,
-        3_000,
-        vec![SchemaChange::DefineQuery(query(
-            "q",
-            vec![],
-            None,
-            Some(limits::MAX_PAGE_SIZE)
-        ))],
-    )
-    .is_ok());
+    for limit in [0, 201] {
+        assert_eq!(
+            defined(limit).unwrap_err().kind,
+            ErrorKind::InvalidSchema,
+            "a limit of {limit}"
+        );
+    }
 }
 
 // Verifies: KRN-1283
 #[test]
-fn a_schema_change_with_more_than_the_maximum_changes_is_refused() {
+fn a_schema_change_of_200_changes_is_accepted_and_one_of_201_is_refused() {
     let world = notes_world();
     // Queries, not objects: the schema may hold 200 object types, so that many new ones would
     // trip the object limit before the count of changes is the question.
-    let defines = |n: usize| -> Vec<SchemaChange> {
-        (0..n)
-            .map(|i| SchemaChange::DefineQuery(query(&format!("c_{i}"), vec![], None, None)))
-            .collect()
-    };
-    assert!(change(&world, 3_000, defines(limits::MAX_SCHEMA_CHANGES)).is_ok());
+    let defines = |n: usize| -> Vec<SchemaChange> { (0..n).map(define_query).collect() };
+    assert!(change(&world, 3_000, defines(200)).is_ok());
     assert_eq!(
-        change(&world, 3_000, defines(limits::MAX_SCHEMA_CHANGES + 1))
+        change(&world, 3_000, defines(201)).unwrap_err().kind,
+        ErrorKind::LimitExceeded
+    );
+}
+
+// Verifies: KRN-1284
+#[test]
+fn a_records_read_naming_200_ids_is_answered_and_one_naming_201_is_refused() {
+    let world = notes_world();
+    let state = world.state(&tenant_id("alpha"));
+    let request = |n: u64| ReadRequest::Records {
+        object: object("note"),
+        ids: (1..=n).map(RecordId).collect(),
+    };
+    let context = ctx("alpha", owner(), 7_000);
+    assert!(read(&state, &request(200), &context).is_ok());
+    assert_eq!(
+        read(&state, &request(201), &context).unwrap_err().kind,
+        ErrorKind::LimitExceeded
+    );
+    let schema = &state.tenant.as_ref().unwrap().schema;
+    assert_eq!(read_needs(schema, &request(200)).len(), 200);
+    assert!(read_needs(schema, &request(201)).is_empty());
+}
+
+// Verifies: KRN-1285
+#[test]
+fn a_page_is_the_size_the_read_names_else_the_limit_the_query_declares_else_50() {
+    let world = with_queries(vec![
+        query("no_limit", vec![], None, None),
+        query("limit_20", vec![], None, Some(20)),
+    ]);
+    let full = crowded(&world, 300);
+    let schema = &full.tenant.as_ref().unwrap().schema;
+    let rows = |name: &str, page_size: Option<u32>| {
+        let request = named(name, page_size, None);
+        let state = thin(&full, &read_needs(schema, &request));
+        read(&state, &request, &ctx("alpha", owner(), 7_000)).unwrap()
+    };
+    let default = rows("no_limit", None);
+    assert_eq!(default.rows.len(), 50);
+    assert_eq!(default.next, Some(PageCursor::After(RecordId(1_050))));
+    assert_eq!(rows("no_limit", Some(7)).rows.len(), 7);
+    assert_eq!(rows("no_limit", Some(200)).rows.len(), 200);
+    assert_eq!(rows("limit_20", None).rows.len(), 20);
+    assert_eq!(rows("limit_20", Some(7)).rows.len(), 7);
+}
+
+// Verifies: KRN-1285
+#[test]
+fn a_page_size_of_201_is_refused() {
+    let world = with_queries(vec![query("no_limit", vec![], None, None)]);
+    let state = crowded(&world, 3);
+    let request = named("no_limit", Some(201), None);
+    assert_eq!(
+        read(&state, &request, &ctx("alpha", owner(), 7_000))
             .unwrap_err()
             .kind,
         ErrorKind::LimitExceeded

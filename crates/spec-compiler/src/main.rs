@@ -15,7 +15,7 @@
 //! specc check-catalogue --spec <file> --out <dir> [--spec-hash <hash>]
 //! specc conformance  --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
 //! specc check-conformance --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
-//! specc lint         --spec <file>
+//! specc lint         --spec <file> [--gate <gate.json>]
 //! specc bundle       --spec <file> --product <file> --out <dir>
 //! ```
 //!
@@ -71,7 +71,8 @@
 //!
 //! `lint` is the requirement wording lint (`strata_spec_compiler::lint`): `specc lint --spec <file>`
 //! prints one `error[lint.<rule>] <entity>: <what to change> (<file>:<line>)` line per finding and
-//! exits 1 when there is any finding.
+//! exits 1 when there is any finding. It reads `startedMilestones` from the `gate.json` beside the
+//! specification or above it (or `--gate`), for `lint.no-check`.
 //!
 //! `deploy` and `check-deploy` do for the deployment files (a compose stack, Kubernetes
 //! manifests and Prometheus alert rules; see `strata_spec_compiler::deploy`) what `generate`
@@ -86,8 +87,8 @@
 //! crate, written into the `--core-out` directory and named `--core-crate-name` (by default that
 //! directory's last component), holds the representation types and every declared type (uuid ids
 //! through the uuid crate without its v4 feature); the crate in `--out` depends on it by relative
-//! path and re-exports them. The examples of the specification's functions are integration test
-//! files of the pure crate (`tests/function_examples_<n>.rs`), not a test module of its library.
+//! path and re-exports them. The examples of the specification's functions are not generated as
+//! tests (Exegra evaluates every example).
 //! `check` then compares both directories.
 //!
 //! A crate with implementation-level machines depends on `strata-runtime` by path: `--runtime`
@@ -120,7 +121,7 @@ const USAGE: &str = "usage:
   specc conformance  --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
   specc check-conformance --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
   specc bundle       --spec <file> --product <file> --out <dir>
-  specc lint         --spec <file>
+  specc lint         --spec <file> [--gate <gate.json>]
 every command also takes --product <file>, repeatable: a product file layered on the specification (bundle takes exactly one)";
 
 /// The runtime crate of the checkout specc was built from.
@@ -510,10 +511,12 @@ fn run() -> ExitCode {
 /// output, one line each; the summary goes to standard error. Exit code 1 when there is any finding.
 fn run_lint(rest: &[String]) -> ExitCode {
     let mut spec = None;
+    let mut gate = None;
     let mut iter = rest.iter();
     while let Some(flag) = iter.next() {
         let slot = match flag.as_str() {
             "--spec" => &mut spec,
+            "--gate" => &mut gate,
             other => {
                 eprintln!(
                     "specc: unknown argument \"{other}\"
@@ -551,7 +554,14 @@ fn run_lint(rest: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let findings = match lint::lint(&spec, &text) {
+    let started = match started_milestones(&spec, gate.as_deref()) {
+        Ok(started) => started,
+        Err(message) => {
+            eprintln!("specc: {message}");
+            return ExitCode::from(1);
+        }
+    };
+    let findings = match lint::lint_started(&spec, &text, &started) {
         Ok(findings) => findings,
         Err(diagnostics) => {
             for d in &diagnostics {
@@ -569,6 +579,52 @@ fn run_lint(rest: &[String]) -> ExitCode {
     } else {
         ExitCode::from(1)
     }
+}
+
+/// The `startedMilestones` of the gate configuration: the file `--gate` names, else the
+/// `gate.json` beside the specification or in the directory above it. None found: no milestone is
+/// started, and `lint.no-check` applies to nothing (said on standard error).
+fn started_milestones(
+    spec: &str,
+    gate: Option<&str>,
+) -> Result<std::collections::BTreeSet<u64>, String> {
+    let beside = std::path::Path::new(spec)
+        .parent()
+        .map(std::path::Path::to_path_buf);
+    let found = match gate {
+        Some(path) => Some(std::path::PathBuf::from(path)),
+        None => beside
+            .iter()
+            .flat_map(|dir| [dir.join("gate.json"), dir.join("../gate.json")])
+            .find(|p| p.is_file()),
+    };
+    let Some(path) = found else {
+        eprintln!("specc: no gate.json found beside {spec}; lint.no-check is not applied (--gate <file> names one)");
+        return Ok(std::collections::BTreeSet::new());
+    };
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let top = strata_spec_compiler::jsonc::parse(&text)
+        .map_err(|e| format!("{} is not valid JSON: {e}", path.display()))?;
+    let list = top
+        .get("startedMilestones")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            format!(
+                "{}: startedMilestones must be a list of milestone numbers",
+                path.display()
+            )
+        })?;
+    list.iter()
+        .map(|m| {
+            m.as_u64().ok_or_else(|| {
+                format!(
+                    "{}: startedMilestones holds {m}, not a milestone number",
+                    path.display()
+                )
+            })
+        })
+        .collect()
 }
 
 /// `bundle`: the product file as a tenant bundle, `<product id>.bundle.json` in `--out`.

@@ -12,6 +12,7 @@ use strata_verification::lean::{
     compare_outputs, kernel_output, model_output, parse_audit, scenarios, verify, FIXTURE_COUNT,
     FIXTURE_SEED,
 };
+use strata_verification::lean_diff;
 use strata_verification::obligations;
 
 fn lean_dir() -> PathBuf {
@@ -214,8 +215,24 @@ fn every_cited_rust_test_exists() {
 
 #[test]
 fn the_lean_sources_contain_no_placeholder_proofs() {
-    for file in ["Strata/Model.lean", "Strata/Proofs.lean"] {
-        let source = std::fs::read_to_string(lean_dir().join(file)).unwrap();
+    // Every file under lean/Strata (recursively), so a new slice is covered without editing this list.
+    fn lean_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                lean_files(&path, out);
+            } else if path.extension().is_some_and(|x| x == "lean") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    lean_files(&lean_dir().join("Strata"), &mut files);
+    files.sort();
+    assert!(files.len() >= 2, "lean/Strata holds {files:?}");
+    for path in files {
+        let file = path.display().to_string();
+        let source = std::fs::read_to_string(&path).unwrap();
         // Strip comments, where the words may legitimately appear.
         let mut code = String::new();
         let mut rest = source.as_str();
@@ -246,4 +263,53 @@ fn an_audit_line_with_a_placeholder_is_not_clean() {
         [true, false, true]
     );
     assert_eq!(parsed[2].axioms, Vec::<String>::new());
+}
+
+/// The default is sized to run in a few seconds of the Lean process; a larger run:
+/// `STRATA_LEAN_DIFF_CASES=20000` (and `STRATA_LEAN_DIFF_SEED=<n>` to vary or reproduce).
+const DEFAULT_DIFF_CASES: usize = 3000;
+const DEFAULT_DIFF_SEED: u64 = 20_261_121;
+
+fn env_number<T: std::str::FromStr>(name: &str, default: T) -> T {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Verifies: KRN-016
+#[test]
+fn random_sequences_run_the_same_on_the_lean_model_and_the_kernel() {
+    let _lake = require_lake();
+    let cases = env_number("STRATA_LEAN_DIFF_CASES", DEFAULT_DIFF_CASES);
+    let seed = env_number("STRATA_LEAN_DIFF_SEED", DEFAULT_DIFF_SEED);
+    if let Err(report) = lean_diff::run(&lean_dir(), seed, cases) {
+        panic!("{report}");
+    }
+}
+
+/// A new intent in `Main.lean` must come with generator support, or it would run unexercised.
+#[test]
+fn the_generator_produces_every_intent_the_lean_model_executes() {
+    let source = std::fs::read_to_string(lean_dir().join("Main.lean")).unwrap();
+    let executed = lean_diff::lean_intents(&source).expect("Main.lean's intents can be read");
+    let missing: Vec<&String> = executed
+        .iter()
+        .filter(|kind| !lean_diff::GENERATED_INTENTS.contains(&kind.as_str()))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "Main.lean executes intents the differential generator never produces: {missing:?}; \
+         add them to generate() and GENERATED_INTENTS in crates/verification/src/lean_diff.rs"
+    );
+    // The generator really does produce each kind it claims.
+    let produced: String = (0..200)
+        .map(|i| lean_diff::render("g", &[lean_diff::generate(lean_diff::case_seed(1, i))]))
+        .collect();
+    for kind in lean_diff::GENERATED_INTENTS {
+        assert!(
+            produced.lines().any(|l| l.split(' ').nth(3) == Some(kind)),
+            "the generator never produces `{kind}`"
+        );
+    }
 }

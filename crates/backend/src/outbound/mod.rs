@@ -53,7 +53,7 @@ pub fn install(app: &App, gate: Gate) -> Result<(), String> {
 /// A random UUID (version 4) in its text form.
 pub(crate) fn random_uuid() -> Result<String, crate::app::ApiError> {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).map_err(|e| {
+    strata_runtime::entropy::fill(&mut bytes).map_err(|e| {
         crate::app::ApiError::new(
             strata_protocol::api::ErrorCode::Unavailable,
             format!("no randomness: {e}"),

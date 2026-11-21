@@ -103,7 +103,7 @@ pub fn has_service_token(app: &App, headers: &HeaderMap) -> bool {
 /// Implements: H-003
 pub fn random_hex(bytes: usize) -> Result<String, ApiError> {
     let mut buffer = vec![0u8; bytes];
-    getrandom::getrandom(&mut buffer)
+    strata_runtime::entropy::fill(&mut buffer)
         .map_err(|e| ApiError::new(ErrorCode::Unavailable, format!("no randomness: {e}")))?;
     Ok(buffer.iter().map(|byte| format!("{byte:02x}")).collect())
 }

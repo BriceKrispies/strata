@@ -232,12 +232,62 @@ reported as planned. Starting a milestone means adding its number there. From th
 requires every requirement of that milestone to have a passing proof, and fails on any that does
 not.
 
+## What holds a requirement
+
+A requirement of a started milestone names the mechanical check that holds it, or is documentation
+(docs/assurance.md, principles 2 to 4). The declaration is two properties of the claim, declared in
+the vocabulary of this specification so that Exegra accepts them:
+
+```jsonc
+{"id":"krn-1283","kind":"requirement", ... "evaluate":{"method":"example"},
+ "check":"test",
+ "checkedBy":["crates/kernel/tests/limits.rs::a_schema_change_of_200_changes_is_accepted_and_one_of_201_is_refused"]}
+```
+
+| `check` | `checkedBy` names | What the gate reads |
+|---|---|---|
+| `test` | Rust tests, each `<path from the repository root>::<test function>` | Each must exist and carry a `Verifies:` line for this requirement (`scripts/gate-evidence.mjs`); the recorded result of each must be a pass |
+| `conformance` | a contract ref (`CT-004`) whose conformance suite holds it | The contract must exist |
+| `differential` | the tests that run the kernel and the Lean model on the same operations, named like tests | As `test` |
+| `model-claim` | `m-` claims whose `models` is this requirement | Each must exist, model this requirement, and be verified by Exegra |
+| `budget` | the ref of its row in the budget measurement table | `lint.budget-row` |
+| `documentation` | nothing | See below |
+
+A check is only as good as the numbers its tests use. A test states the values of the requirement
+(65536, 200, 10000) as literals, taken from its wording, and never reads them from the code it
+checks: a test that reads `limits::MAX_READ_IDS` moves with a changed limit and passes unseen. For
+a limit, a pair of cases at the boundary (the most that is accepted, and one more that is refused)
+holds it from both sides; `crates/kernel/tests/limits.rs` is the pilot.
+
+**Documentation.** A statement that no check can hold (a rationale, a stated direction, a claim
+about people) is marked `"check": "documentation"`, with no `checkedBy`. It stays in the file for
+readers, and it is outside the gate's counts: `scripts/spec-gate.mjs` does not count it among the
+requirements, the evidence check (`scripts/gate-evidence.mjs`) does not require a proof of it, and
+the realisation check (`scripts/gate-realisation.mjs`) does not label it. Marking a requirement
+documentation lowers the requirement count, which the gate refuses without `--accept-fewer`.
+
+**The lint.** `specc lint` enforces the declaration (`crates/spec-compiler/src/lint.rs`):
+
+- `lint.no-check`: a requirement of a started milestone (`startedMilestones` of `gate.json`, which
+  the lint reads from beside the specification, or from `--gate <file>`) declares no `check`. Only
+  started milestones are held to it, so the requirements of milestones that are not started are not
+  refused today. When a milestone is started, or an area is rewritten, its requirements are brought
+  under the rule: each area of the specification is rewritten to the pilot's approach (state the
+  requirement at its boundary, name the check, write the check from the requirement) as its own task.
+- `lint.check-declaration`: a `check` that is not in the table, a `checkedBy` that does not fit
+  its check or is given without one, or a `documentation` statement that names a check. This rule
+  applies to every requirement.
+
+Currently the requirements KRN-1280 to KRN-1288 (the kernel's limits and paging) declare their
+checks; no started requirement is documentation yet.
+
 ## Changing it
 
 Change the specification first, then the code. Edit the parts through Exegra (`apply`), or by
 hand, and then run the gate. The rules for wording a requirement that come up most:
 
 - one SHALL per requirement, stated at a boundary, with no implementation detail
+- every requirement of a started milestone names the check that holds it, or is documentation (see "What holds a requirement")
 - "for every", "never" and "always" need a property, a proof or a conformance table
 - a performance bound (a percentile, a time an operation takes in seconds or less, a rate) needs the method `budget` and a row in the budget measurement table; an enforced limit, a retention period or an expiry is shown by an example at the bound
 - every goal and every constraint is traced by at least one requirement

@@ -44,13 +44,21 @@ pub fn all() -> Vec<Obligation> {
         obligation(
             "invariant_preservation",
             "Accepted transitions preserve the state invariant",
-            "If every record of every tenant conforms to its schema and has an id below the counter, then after any accepted strict step the same is true.",
-            &["step_preserves_wf", "stepTenant_preserves_wf", "lax_change_can_break_wf"],
+            "If every record of every tenant conforms to its schema, has an id below the counter and refers only to existing records, then after any accepted strict step the same is true. Referential integrity holds after every accepted step, strict or not, and a delete leaves no record naming the deleted one.",
+            &[
+                "step_preserves_wf",
+                "stepTenant_preserves_wf",
+                "lax_change_can_break_wf",
+                "step_preserves_refs",
+                "stepTenant_preserves_refs",
+                "delete_refused_while_referenced",
+                "delete_leaves_no_reference",
+            ],
             &[
                 "strata-verification::state_machine::every_accepted_state_satisfies_every_invariant",
                 "strata-kernel::behaviour::a_strict_migration_is_rejected_when_existing_records_would_not_conform",
             ],
-            "The model's invariant is conformance to field types and required fields. Constraints, uniqueness, references and workflow states are part of the Rust invariant and are covered only by the Rust property test. A grandfathered schema change is excluded on purpose, and `lax_change_can_break_wf` shows the exclusion is necessary.",
+            "The model's invariant is conformance to field types and required fields, an id below the counter, and single references within the one object type. Constraints, uniqueness, lists of references, references between types and workflow states are part of the Rust invariant and are covered only by the Rust property test. A grandfathered schema change is excluded on purpose, and `lax_change_can_break_wf` shows the exclusion is necessary.",
         ),
         obligation(
             "authorization",

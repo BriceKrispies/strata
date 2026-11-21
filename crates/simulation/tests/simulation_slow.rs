@@ -3,3 +3,6 @@
 
 #[path = "simulation.rs"]
 mod simulation;
+
+#[path = "shell.rs"]
+mod shell;
