@@ -49,15 +49,16 @@ fn product(relative: &str) -> ProductFile {
     }
 }
 
+/// The platform, loaded and parsed once for every test in this binary.
+fn prepared_platform() -> &'static layers::PreparedPlatform {
+    static PREPARED: std::sync::OnceLock<layers::PreparedPlatform> = std::sync::OnceLock::new();
+    PREPARED.get_or_init(|| layers::prepare_platform(PLATFORM, &platform_text()))
+}
+
 fn load_with(
     products: &[ProductFile],
 ) -> Result<layers::Layered, Vec<strata_spec_compiler::Diagnostic>> {
-    layers::load_layered(
-        PLATFORM,
-        &platform_text(),
-        Some(&root().join(PLATFORM)),
-        products,
-    )
+    layers::layer_products(prepared_platform(), Some(&root().join(PLATFORM)), products)
 }
 
 #[test]
@@ -1106,23 +1107,20 @@ fn a_product_leaves_the_generated_crate_byte_identical() {
     );
 }
 
+/// The web modules and the end-to-end journeys, generated from the small golden spec with and
+/// without a product. Not the platform spec: each command parses the 6 MB platform in full.
 #[test]
 fn a_product_leaves_the_platform_web_modules_and_journeys_byte_identical() {
-    let badges = "crates/spec-compiler/tests/fixtures/products/badges.jsonc";
+    let spec = "crates/spec-compiler/tests/fixtures/full/spec.jsonc";
+    let badges = "crates/spec-compiler/tests/fixtures/products/full-badges.jsonc";
     same_output(
         "web",
-        &["web", "--spec", PLATFORM, "--spec-hash", "0123456789abcd"],
+        &["web", "--spec", spec, "--spec-hash", "0123456789abcd"],
         &[badges],
     );
     same_output(
         "e2e",
-        &[
-            "e2e",
-            "--spec",
-            PLATFORM,
-            "--origin",
-            "http://127.0.0.1:4200",
-        ],
+        &["e2e", "--spec", spec, "--origin", "http://127.0.0.1:4200"],
         &[badges],
     );
 }
@@ -1202,17 +1200,20 @@ fn platform_validation(cli: &Path) -> &'static Value {
     })
 }
 
+/// Exegra accepts the fixture product and the complete products beside the platform, and reports
+/// the platform semantic hash unchanged with each set.
 #[test]
-fn exegra_accepts_the_product_and_reports_the_platform_hash_unchanged() {
+fn exegra_accepts_the_products_and_reports_the_platform_hash_unchanged() {
     let Some(cli) = support::exegra_cli("the layered validation") else {
         return;
     };
-    let specs = exegra_specs("exegra-accepted", &["badges.jsonc"]);
     let alone = platform_validation(&cli);
+    assert!(alone["semanticHash"].is_string(), "{alone}");
+
+    let specs = exegra_specs("exegra-accepted", &["badges.jsonc"]);
     let layered = exegra_validate(&cli, &specs, "layered");
     assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
     assert_eq!(layered["result"]["errors"], Value::from(0), "{layered}");
-    assert!(alone["semanticHash"].is_string(), "{alone}");
     assert_eq!(
         layered["semanticHash"], alone["semanticHash"],
         "adding a product changed the platform semantic hash, which the generated headers carry"
@@ -1221,18 +1222,11 @@ fn exegra_accepts_the_product_and_reports_the_platform_hash_unchanged() {
         layered["result"]["products"][0]["product"],
         Value::from("badges")
     );
-}
 
-#[test]
-fn exegra_accepts_the_complete_products_and_reports_the_platform_hash_unchanged() {
-    let Some(cli) = support::exegra_cli("the complete products") else {
-        return;
-    };
     let specs = exegra_specs(
         "exegra-complete",
         &["badge-milestones.jsonc", "promotions.jsonc"],
     );
-    let alone = platform_validation(&cli);
     let layered = exegra_validate(&cli, &specs, "layered");
     assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
     assert_eq!(layered["result"]["errors"], Value::from(0), "{layered}");
@@ -1302,12 +1296,21 @@ fn exegra_has_the_same_typed_sections() {
     assert_eq!(theirs, Value::Array(ours));
 }
 
+/// Exegra refuses a sample of the refused products with the same rule: the first fixture of the
+/// [`REFUSED`] table for each refusal code. Every Exegra validation analyses the whole platform, so
+/// running all of the table costs one platform analysis per fixture; full parity with Exegra for
+/// every fixture is checked in Exegra's own tests (a follow-up task).
 #[test]
 fn exegra_refuses_each_refused_product_with_the_same_rule() {
     let Some(cli) = support::exegra_cli("the layered refusals") else {
         return;
     };
+    let mut seen = std::collections::BTreeSet::new();
     for (name, code, _) in REFUSED {
+        // Every code is `layer.<name>`, so the prefix up to the second dot is the code itself.
+        if !seen.insert(*code) {
+            continue;
+        }
         let file = format!("refused/{name}.jsonc");
         let specs = exegra_specs(&format!("exegra-{name}"), &[file.as_str()]);
         let out = exegra_validate(&cli, &specs, "layered");

@@ -377,6 +377,31 @@ pub struct Layered {
     pub products: Vec<ProductLayer>,
 }
 
+/// The platform specification, loaded and parsed once, to layer any number of product sets on it
+/// with [`layer_products`]. Holds exactly what the layering reads from the platform.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedPlatform {
+    /// The platform as [`load::load`] loads it, or its refusals.
+    loaded: Result<Spec, Vec<Diagnostic>>,
+    /// The platform's parsed value, when it parses.
+    value: Option<Value>,
+    /// Every entity id the platform declares, with its section ([`declared_ids`]).
+    ids: BTreeMap<String, String>,
+}
+
+/// Loads and parses the platform specification once. `platform_path` is the path to print in
+/// headers and diagnostics.
+pub fn prepare_platform(platform_path: &str, platform_text: &str) -> PreparedPlatform {
+    let loaded = load::load(platform_path, platform_text);
+    let value = jsonc::parse(platform_text).ok();
+    let ids = match &value {
+        Some(value) => declared_ids(value),
+        // load::load has reported the syntax error.
+        None => BTreeMap::new(),
+    };
+    PreparedPlatform { loaded, value, ids }
+}
+
 /// Loads the platform specification and checks the product files layered on it. `platform_path`
 /// is the path to print in headers and diagnostics; `platform_file` where the platform file is,
 /// to check each product's `imports.spec` against (not checked when `None`). Refuses with every
@@ -387,14 +412,23 @@ pub fn load_layered(
     platform_file: Option<&Path>,
     products: &[ProductFile],
 ) -> Result<Layered, Vec<Diagnostic>> {
-    let loaded = load::load(platform_path, platform_text);
+    layer_products(
+        &prepare_platform(platform_path, platform_text),
+        platform_file,
+        products,
+    )
+}
+
+/// Checks the product files layered on a [`PreparedPlatform`]. The same diagnostics, in the same
+/// order, as [`load_layered`] gives for the platform text the platform was prepared from.
+pub fn layer_products(
+    prepared: &PreparedPlatform,
+    platform_file: Option<&Path>,
+    products: &[ProductFile],
+) -> Result<Layered, Vec<Diagnostic>> {
+    let platform_value = &prepared.value;
+    let platform_ids = &prepared.ids;
     let mut diagnostics = Vec::new();
-    let platform_value = jsonc::parse(platform_text).ok();
-    let platform_ids = match &platform_value {
-        Some(value) => declared_ids(value),
-        // load::load has reported the syntax error.
-        None => BTreeMap::new(),
-    };
     let none = Value::Null;
     let types = Types::of(platform_value.as_ref().unwrap_or(&none));
     let mut layers = Vec::new();
@@ -410,7 +444,7 @@ pub fn load_layered(
     for product in products {
         if let Some(layer) = check_product(
             product,
-            &platform_ids,
+            platform_ids,
             &types,
             platform_file,
             &mut product_ids,
@@ -424,7 +458,7 @@ pub fn load_layered(
     }
     resolve_refs(
         &refs,
-        &platform_ids,
+        platform_ids,
         &product_ids,
         &namespaces,
         &mut diagnostics,
@@ -432,15 +466,16 @@ pub fn load_layered(
     if let Some(value) = &platform_value {
         check_platform_independent(value, &product_ids, &mut diagnostics);
     }
-    match loaded {
+    match &prepared.loaded {
         Ok(platform) if diagnostics.is_empty() => Ok(Layered {
-            platform,
+            platform: platform.clone(),
             products: layers,
         }),
         Ok(_) => Err(diagnostics),
-        Err(mut platform_diagnostics) => {
-            platform_diagnostics.extend(diagnostics);
-            Err(platform_diagnostics)
+        Err(platform_diagnostics) => {
+            let mut all = platform_diagnostics.clone();
+            all.extend(diagnostics);
+            Err(all)
         }
     }
 }
@@ -965,7 +1000,7 @@ fn check_header(
 pub(crate) fn variant_tag(name: &str, case: &str) -> String {
     match case {
         "PascalCase" => name
-            .split(|c: char| c == '-' || c == '_')
+            .split(['-', '_'])
             .map(|word| {
                 let mut chars = word.chars();
                 match chars.next() {
@@ -1019,7 +1054,7 @@ fn named_uses(
             .get(&name)
             .is_some_and(|s| sections.is_empty() || sections.contains(&s.as_str()));
         if !declared_in_section
-            || imports.iter().any(|i| *i == name)
+            || imports.contains(&name)
             || own.contains(&name)
             || !seen.insert(name.clone())
         {
