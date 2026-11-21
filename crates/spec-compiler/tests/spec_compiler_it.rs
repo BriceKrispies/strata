@@ -28,6 +28,9 @@ mod language;
 #[path = "language_js.rs"]
 mod language_js;
 
+#[path = "lint.rs"]
+mod lint;
+
 #[path = "layer_expr_drift.rs"]
 mod layer_expr_drift;
 

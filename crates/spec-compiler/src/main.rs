@@ -15,6 +15,7 @@
 //! specc check-catalogue --spec <file> --out <dir> [--spec-hash <hash>]
 //! specc conformance  --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
 //! specc check-conformance --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
+//! specc lint         --spec <file> [--exemptions <file>]
 //! specc bundle       --spec <file> --product <file> --out <dir>
 //! ```
 //!
@@ -68,6 +69,10 @@
 //! what the backends ask for. The platform specification passes that check in `specc check` of the
 //! same gate step.
 //!
+//! `lint` is the requirement wording lint (`strata_spec_compiler::lint`): `specc lint --spec <file>
+//! [--exemptions <file>]` prints one `error[lint.<rule>] <entity>: <what to change> (<file>:<line>)` line
+//! per finding and exits 1 when a finding is not exempt or an exemption is stale.
+//!
 //! `deploy` and `check-deploy` do for the deployment files (a compose stack, Kubernetes
 //! manifests and Prometheus alert rules; see `strata_spec_compiler::deploy`) what `generate`
 //! and `check` do for the crate; their warnings go to standard error and do not change the exit
@@ -94,8 +99,8 @@ use std::process::ExitCode;
 use strata_spec_compiler::emit::relative_path;
 use strata_spec_compiler::layers::{self, ProductFile};
 use strata_spec_compiler::{
-    bundle, catalogue, conformance, deploy, e2e, generate, generate_with_core, model_core, output,
-    scenarios, web, GeneratedFile, Options, RuntimeDependency,
+    bundle, catalogue, conformance, deploy, e2e, generate, generate_with_core, lint, model_core,
+    output, scenarios, web, GeneratedFile, Options, RuntimeDependency,
 };
 
 const USAGE: &str = "usage:
@@ -114,6 +119,7 @@ const USAGE: &str = "usage:
   specc conformance  --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
   specc check-conformance --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
   specc bundle       --spec <file> --product <file> --out <dir>
+  specc lint         --spec <file> [--exemptions <file>]
 every command also takes --product <file>, repeatable: a product file layered on the specification (bundle takes exactly one)";
 
 /// The runtime crate of the checkout specc was built from.
@@ -374,6 +380,9 @@ fn refuse_unready(args: &Args, text: &str) -> Option<ExitCode> {
 
 fn run() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.first().map(String::as_str) == Some("lint") {
+        return run_lint(&raw[1..]);
+    }
     let args = match parse_args(&raw) {
         Ok(args) => args,
         Err(message) => {
@@ -487,6 +496,108 @@ fn run() -> ExitCode {
         | Command::Conformance
         | Command::CheckConformance
         | Command::Bundle => ExitCode::from(2),
+    }
+}
+
+/// `lint`: the requirement wording lint (`strata_spec_compiler::lint`). Findings go to standard
+/// output, one line each; the summary goes to standard error. Exit code 1 when a finding no
+/// exemption covers, a stale exemption or a problem of the exemption list remains.
+fn run_lint(rest: &[String]) -> ExitCode {
+    let mut spec = None;
+    let mut exemptions = None;
+    let mut iter = rest.iter();
+    while let Some(flag) = iter.next() {
+        let slot = match flag.as_str() {
+            "--spec" => &mut spec,
+            "--exemptions" => &mut exemptions,
+            other => {
+                eprintln!(
+                    "specc: unknown argument \"{other}\"
+{USAGE}"
+                );
+                return ExitCode::from(2);
+            }
+        };
+        let Some(value) = iter.next() else {
+            eprintln!(
+                "specc: {flag} needs a value
+{USAGE}"
+            );
+            return ExitCode::from(2);
+        };
+        if slot.replace(value.clone()).is_some() {
+            eprintln!(
+                "specc: {flag} is given twice
+{USAGE}"
+            );
+            return ExitCode::from(2);
+        }
+    }
+    let Some(spec) = spec else {
+        eprintln!(
+            "specc: --spec is required
+{USAGE}"
+        );
+        return ExitCode::from(2);
+    };
+    let text = match std::fs::read_to_string(&spec) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("specc: cannot read {spec}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let exemption_list = match exemptions {
+        None => serde_json::Value::Null,
+        Some(path) => match std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+        {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("specc: cannot read the exemptions {path}: {e}");
+                return ExitCode::from(1);
+            }
+        },
+    };
+    let findings = match lint::lint(&spec, &text) {
+        Ok(findings) => findings,
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprintln!("{d}");
+            }
+            return ExitCode::from(1);
+        }
+    };
+    let total = findings.len();
+    let outcome = lint::apply_exemptions(findings, &exemption_list);
+    for finding in &outcome.remaining {
+        println!("{finding}");
+    }
+    for item in &outcome.stale {
+        println!(
+            "error[{}] {item}: no finding matches this exemption; delete it from the exemptions",
+            lint::STALE
+        );
+    }
+    for problem in &outcome.problems {
+        println!(
+            "error[{}] {}: {problem}",
+            lint::EXEMPTIONS,
+            strata_spec_compiler::diagnostic::SPEC_ENTITY
+        );
+    }
+    eprintln!(
+        "specc: lint {spec}: {total} finding(s), {} exempt, {} not exempt, {} stale exemption(s), {} problem(s) in the exemptions",
+        outcome.exempt,
+        outcome.remaining.len(),
+        outcome.stale.len(),
+        outcome.problems.len()
+    );
+    if outcome.remaining.is_empty() && outcome.stale.is_empty() && outcome.problems.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }
 
@@ -658,20 +769,21 @@ fn run_deploy(args: &Args, text: &str) -> ExitCode {
         },
         None => None,
     };
-    let output = match deploy::generate_with_profile(&args.header_source(), text, profile.as_deref()) {
-        Ok(output) => output,
-        Err(diagnostics) => {
-            for d in &diagnostics {
-                eprintln!("{d}");
+    let output =
+        match deploy::generate_with_profile(&args.header_source(), text, profile.as_deref()) {
+            Ok(output) => output,
+            Err(diagnostics) => {
+                for d in &diagnostics {
+                    eprintln!("{d}");
+                }
+                eprintln!(
+                    "specc: refused {} with {} diagnostic(s); nothing was written",
+                    args.spec,
+                    diagnostics.len()
+                );
+                return ExitCode::from(1);
             }
-            eprintln!(
-                "specc: refused {} with {} diagnostic(s); nothing was written",
-                args.spec,
-                diagnostics.len()
-            );
-            return ExitCode::from(1);
-        }
-    };
+        };
     for warning in &output.warnings {
         eprintln!("{warning}");
     }
