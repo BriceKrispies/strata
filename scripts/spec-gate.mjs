@@ -105,13 +105,18 @@ function detail(lines) {
 // Runs a command with an argument array and no shell (`options.shell` is for `npm` on Windows only,
 // with constant arguments). `ok` is true only when it started, was not killed, did not time out and
 // exited with 0. A timeout kills it and is reported as `timedOut`.
+// Every command's wall time, printed at the end so a slow step is visible (WG-5411).
+const timings = [];
 function run(command, commandArgs, options = {}) {
-  return runCommand(command, commandArgs, {
+  const started = Date.now();
+  const result = runCommand(command, commandArgs, {
     cwd: options.cwd ?? root,
     env: { ...process.env, ...options.env },
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     shell: options.shell === true,
   });
+  timings.push({ what: [command, ...commandArgs].join(' ').slice(0, 110), seconds: (Date.now() - started) / 1000 });
+  return result;
 }
 
 // Whether a tool is installed: its version command starts and exits 0.
@@ -653,6 +658,9 @@ else console.log(`generated tests: ${genTests.passed} of ${genTests.total} passe
 if (noTest) console.log('RECORDED TEST RESULTS, NOT A RUN OF THE TESTS ON THIS CODE. Accepted only because --allow-recorded was given.');
 for (const note of notes) console.log(`note: ${note}`);
 if (notRun.length) console.log(`NOT RUN: ${notRun.length} check${notRun.length === 1 ? '' : 's'} did not run (${notRun.join('; ')}). A pass below does not cover them.`);
+const timed = [...timings].sort((a, b) => b.seconds - a.seconds).filter((t) => t.seconds >= 1);
+console.log(`time: ${process.uptime().toFixed(0)} s in all; commands of a second or more:`);
+for (const t of timed) console.log(`  ${t.seconds.toFixed(1).padStart(7)} s  ${t.what}`);
 console.log(passed ? (notRun.length ? `GATE PASSED, with ${notRun.length} not run` : 'GATE PASSED') : `GATE FAILED: ${failures.join('; ') || 'recorded test results not accepted'}`);
 
 if (passed && !noTest) {
