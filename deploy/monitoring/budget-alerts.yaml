@@ -587,16 +587,52 @@ groups:
           threshold: "unparsed"
       # PLACEHOLDER metric strata_b_3_tenant_restore: derived from the boundary detail, not yet an instrument that exists.
       - alert: Budget_OPS_1213
-        expr: "strata_b_3_tenant_restore_seconds > 300"
+        expr: "strata_b_3_tenant_restore_seconds < 1209600"
         for: 5m
         labels:
           requirement: "OPS-1213"
           boundary: "b-3"
           severity: warning
         annotations:
-          summary: "The restorable window of a tenant database SHALL be 30 days unless the tenant chooses another and SHALL NOT be shorter than 14 days, and a restore inside the window SHALL lose at most 5 minutes of committed changes."
+          summary: "The restorable window of a tenant database SHALL be 30 days unless the tenant chooses another period of at least 14 days."
+          metric_placeholder: "true"
+          threshold: "seconds < 1209600"
+      # PLACEHOLDER metric strata_b_3_tenant_restore: derived from the boundary detail, not yet an instrument that exists.
+      - alert: Budget_OPS_1214
+        expr: "strata_b_3_tenant_restore_seconds > 300"
+        for: 5m
+        labels:
+          requirement: "OPS-1214"
+          boundary: "b-3"
+          severity: warning
+        annotations:
+          summary: "A restore inside the restorable window SHALL lose at most 5 minutes of committed changes."
           metric_placeholder: "true"
           threshold: "seconds > 300"
+      # PLACEHOLDER metric strata_b_6_token_verification: derived from the boundary detail, not yet an instrument that exists.
+      - alert: Budget_TOK_1219
+        expr: "histogram_quantile(1, sum by (le) (rate(strata_b_6_token_verification_duration_seconds_bucket[5m]))) > 5"
+        for: 5m
+        labels:
+          requirement: "TOK-1219"
+          boundary: "b-6"
+          severity: warning
+        annotations:
+          summary: "A verifier SHALL check the signature, the expiry and the revocation notices of an access token and apply a notice of a revoked grant, a revoked session or a retired signing key within 5 seconds."
+          metric_placeholder: "true"
+          threshold: "p100 latency above 5 s"
+      # PLACEHOLDER metric strata_b_3_background_work: derived from the boundary detail, not yet an instrument that exists.
+      - alert: Budget_TEN_1241
+        expr: "histogram_quantile(1, sum by (le) (rate(strata_b_3_background_work_duration_seconds_bucket[5m]))) > 60"
+        for: 5m
+        labels:
+          requirement: "TEN-1241"
+          boundary: "b-3"
+          severity: warning
+        annotations:
+          summary: "A run in flight of a tenant that leaves active SHALL be stopped within 60 seconds."
+          metric_placeholder: "true"
+          threshold: "p100 latency above 60 s"
       # PLACEHOLDER metric strata_b_3_takedown_bound: derived from the boundary detail, not yet an instrument that exists.
       # The statement's target was not read: this expression has no threshold and never fires.
       - alert: Budget_ARC_1228
@@ -607,7 +643,7 @@ groups:
           boundary: "b-3"
           severity: warning
         annotations:
-          summary: "After a suspension with a takedown reason, a takedown of a host, or a deletion is recorded in the directory, no gateway SHALL serve published content of that tenant or host later than 60 seconds after the record when it can reach the control plane, and none SHALL serve it later than 15 minutes after it last reached the control plane when it cannot (ARC-500). The control plane SHALL push the change to every gateway and SHALL repeat it until each acknowledges. A takedown requested while the control plane cannot record it SHALL be refused with unavailable and change nothing."
+          summary: "After a suspension with a takedown reason, a takedown of a host, or a deletion is recorded in the directory, a gateway SHALL NOT serve published content of that tenant or host later than 60 seconds after the record when it can reach the control plane, or later than 15 minutes after it last reached the control plane when it cannot (ARC-500)."
           metric_placeholder: "true"
           threshold: "unparsed"
       # PLACEHOLDER metric strata_b_3_directory_entry: derived from the boundary detail, not yet an instrument that exists.
@@ -619,6 +655,31 @@ groups:
           boundary: "b-3"
           severity: warning
         annotations:
-          summary: "A gateway SHALL hold a directory entry whose state is not active, and a host binding marked taken down, for at most 60 seconds before it asks the control plane again. While the control plane cannot be reached it SHALL keep treating such an entry as it was, SHALL NOT serve the tenant or host, and SHALL NOT let its age make it active."
+          summary: "A gateway SHALL hold a directory entry whose state is not active, and a host binding marked taken down, for at most 60 seconds before it asks the control plane again."
           metric_placeholder: "true"
           threshold: "seconds > 60"
+      # PLACEHOLDER metric strata_b_3_tenant_directory: derived from the boundary detail, not yet an instrument that exists.
+      - alert: Budget_TEN_1255
+        expr: "histogram_quantile(1, sum by (le) (rate(strata_b_3_tenant_directory_duration_seconds_bucket[5m]))) > 60"
+        for: 5m
+        labels:
+          requirement: "TEN-1255"
+          boundary: "b-3"
+          severity: warning
+        annotations:
+          summary: "A tenant SHALL serve its first request within 60 seconds of becoming active."
+          metric_placeholder: "true"
+          threshold: "p100 latency above 60 s"
+      # PLACEHOLDER metric strata_b_4_post_sign_in_invite_accept: derived from the boundary detail, not yet an instrument that exists.
+      # The statement's target was not read: this expression has no threshold and never fires.
+      - alert: Budget_IDN_1680
+        expr: "strata_b_4_post_sign_in_invite_accept"
+        for: 5m
+        labels:
+          requirement: "IDN-1680"
+          boundary: "b-4"
+          severity: warning
+        annotations:
+          summary: "The message that tells the owner of a new tenant that the site is ready SHALL carry an invitation link that is accepted once, in whatever browser opens it, within seven days of its making and not after."
+          metric_placeholder: "true"
+          threshold: "unparsed"
