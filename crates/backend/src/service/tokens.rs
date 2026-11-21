@@ -586,7 +586,8 @@ pub fn introspect(
     identity: &Identity,
     body: &Json,
 ) -> Result<Json, ApiError> {
-    let token = text(body, "token", 4096)?;
+    // Who asks is decided before the token is looked at: a caller with no credential is told it
+    // is unauthenticated, not that its token is missing (contract introspect-token-over-http).
     let asker = if body.get("client_id").is_some() {
         let id = text(body, "client_id", 96)?;
         let secret = text(body, "client_secret", 256)?;
@@ -598,6 +599,7 @@ pub fn introspect(
         require_owner(app, identity)?;
         None
     };
+    let token = text(body, "token", 4096)?;
     Ok(match verify(app, &caller.site, token, None)? {
         Ok(verified)
             if asker
