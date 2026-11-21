@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readSpec } from './spec-parts.mjs';
 
 /** The ids this shard takes: positions congruent to `index` modulo `count`. */
 export function shardOf(ids, index, count) {
@@ -52,7 +53,7 @@ async function main() {
   const ids = shardOf(JSON.parse(fs.readFileSync(a.ids, 'utf8')), index, count);
   const project = new Project({
     name: null,
-    specText: fs.readFileSync(a.spec, 'utf8'),
+    specText: readSpec(a.spec).text,
     layoutText: null,
     layers: [],
   });

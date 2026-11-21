@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readSpec } from './spec-parts.mjs';
 
 /** The ids that fail: a result whose status is `violated`, or an id that is not a claim. */
 export function problemsOf(results) {
@@ -32,7 +33,7 @@ async function main() {
   const { Project } = await load('src/core/project.js');
   const { evaluateClaim } = await load('src/core/claims.js');
   const ids = JSON.parse(fs.readFileSync(a.claims, 'utf8'));
-  const project = new Project({ name: null, specText: fs.readFileSync(a.spec, 'utf8'), layoutText: null, layers: [] });
+  const project = new Project({ name: null, specText: readSpec(a.spec).text, layoutText: null, layers: [] });
   if (!project.model) throw new Error('the specification has syntax errors');
   const errors = project.diagnostics.filter((d) => d.severity === 'error');
   if (errors.length) throw new Error(`the specification has ${errors.length} validation error(s): ${errors[0].code} ${errors[0].entityId ?? ''}`);
