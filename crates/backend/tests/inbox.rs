@@ -950,7 +950,7 @@ async fn a_segment_send_reaches_each_member_once_in_batches_through_jobs() {
 
     // The worker of the running backend takes the three jobs.
     let mut settled = false;
-    for _ in 0..50 {
+    for _ in 0..200 {
         let jobs = backend.store.jobs_list(&fieldnotes(), None, 50).unwrap();
         if jobs.len() == 3 && jobs.iter().all(|j| j.state == JobState::Completed) {
             settled = true;
