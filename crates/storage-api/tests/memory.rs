@@ -115,3 +115,77 @@ fn resident_store_over_memory_conforms() {
     let inner = fresh();
     conformance::a_foreign_commit_refreshes_the_resident_header(inner.clone(), inner.as_ref());
 }
+
+/// Record residency over the memory adapter (WG-5391): the conformance suite passes through a
+/// `ResidentStore` that holds records under a budget, present and absent records are served at the
+/// current generation, a commit drops what it writes, a delete that clears references drops the
+/// referrers, a foreign commit is seen, a generated schedule of interleaved commits returns one
+/// generation every time, and the budget holds.
+// Verifies: STO-001
+#[test]
+fn resident_store_over_memory_serves_records_at_one_generation() {
+    use std::sync::Arc;
+    use strata_storage_api::ResidentStore;
+    let resident =
+        || Box::new(ResidentStore::new(Arc::new(MemoryStore::new()), 1 << 22)) as Box<dyn Store>;
+    let ran = conformance::run(&resident);
+    let (mut ran, mut rows) = (ran, table());
+    ran.sort();
+    rows.sort();
+    assert_eq!(
+        ran, rows,
+        "the checks that ran are not the rows of the table"
+    );
+    conformance::generation_follows_every_store_method(&resident);
+    let fresh = || Arc::new(MemoryStore::new()) as Arc<dyn Store>;
+    conformance::resident_records_are_served_at_the_current_generation(&fresh);
+    conformance::a_commit_carries_the_resident_records_and_invalidates_what_it_writes(&fresh);
+    conformance::a_delete_that_clears_references_invalidates_the_referrers(&fresh);
+    let inner = fresh();
+    conformance::a_foreign_commit_refreshes_the_resident_records(inner.clone(), inner.as_ref());
+    conformance::interleaved_commits_between_loads_return_one_generation(&fresh, 25);
+    conformance::resident_bytes_never_exceed_the_budget(&fresh, 12);
+}
+
+/// Simultaneous misses on one record are coalesced (CPY-012): the tenant's lock is held across the
+/// load, so one thread reads the record and the others find its entry.
+// Verifies: STO-001
+#[test]
+fn simultaneous_misses_on_one_record_are_one_load() {
+    use std::sync::{Arc, Barrier};
+    use strata_kernel::{Intent, Need, Principal, RecordId};
+    use strata_storage_api::{execute, ResidentStore};
+    let inner: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    let resident = Arc::new(ResidentStore::new(inner, 1 << 22));
+    let alpha = tenant_id("alpha");
+    execute(
+        resident.as_ref(),
+        &Intent::CreateTenant {
+            name: "alpha".into(),
+            owner: principal_id("alpha:owner"),
+        },
+        &ctx("alpha", Principal::System, 1),
+    )
+    .unwrap();
+    let before = resident.stats();
+    let threads = 8;
+    let barrier = Arc::new(Barrier::new(threads));
+    let workers: Vec<_> = (0..threads)
+        .map(|_| {
+            let (resident, barrier, alpha) = (resident.clone(), barrier.clone(), alpha.clone());
+            std::thread::spawn(move || {
+                barrier.wait();
+                let needs = [Need::Record {
+                    object: object("note"),
+                    id: RecordId(900),
+                }];
+                resident.load_at(&alpha, &needs).unwrap()
+            })
+        })
+        .collect();
+    let loaded: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+    assert!(loaded.windows(2).all(|pair| pair[0] == pair[1]));
+    let after = resident.stats();
+    assert_eq!(after.record_misses - before.record_misses, 1);
+    assert_eq!(after.record_hits - before.record_hits, threads as u64 - 1);
+}

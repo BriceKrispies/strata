@@ -67,7 +67,9 @@ use jobs::{
     ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported, RunRecord,
     RunState, Settled, StepRecord, WorkerWrites,
 };
-pub use resident::{HeldHeader, HeldLoad, ResidentStats, ResidentStore};
+pub use resident::{
+    invalidated_by, HeldHeader, HeldLoad, Invalidated, ResidentStats, ResidentStore,
+};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;

@@ -22,8 +22,14 @@ pub use generation::{
     interleaved_commits_and_loads_keep_each_revision_with_one_generation,
 };
 pub use resident::{
-    a_commit_leaves_the_resident_header_current, a_foreign_commit_refreshes_the_resident_header,
-    resident_header_is_decoded_once_per_generation,
+    a_commit_carries_the_resident_records_and_invalidates_what_it_writes,
+    a_commit_leaves_the_resident_header_current,
+    a_delete_that_clears_references_invalidates_the_referrers,
+    a_foreign_commit_refreshes_the_resident_header,
+    a_foreign_commit_refreshes_the_resident_records,
+    interleaved_commits_between_loads_return_one_generation,
+    resident_bytes_never_exceed_the_budget, resident_header_is_decoded_once_per_generation,
+    resident_records_are_served_at_the_current_generation,
 };
 
 /// A store and a world that have received exactly the same accepted intents.

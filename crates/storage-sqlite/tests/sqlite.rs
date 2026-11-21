@@ -706,3 +706,32 @@ fn resident_store_over_sqlite_keeps_the_header_current() {
     let second = SqliteStore::open(&path, Timestamp(2)).unwrap();
     conformance::a_foreign_commit_refreshes_the_resident_header(first, &second);
 }
+
+/// Record residency over SQLite (WG-5391): the conformance suite passes through a `ResidentStore`
+/// that holds records under a budget, records are served at the current generation, a commit drops
+/// what it writes, a delete that clears references drops the referrers, a commit from a second
+/// handle on the same files is seen, a generated schedule returns one generation every time, and
+/// the budget holds.
+// Verifies: STO-001
+#[test]
+fn resident_store_over_sqlite_serves_records_at_one_generation() {
+    use std::sync::Arc;
+    use strata_storage_api::ResidentStore;
+    let resident = || {
+        let inner = Arc::new(SqliteStore::open_in_memory(Timestamp(1)).unwrap());
+        Box::new(ResidentStore::new(inner, 1 << 22)) as Box<dyn Store>
+    };
+    let ran = conformance::run(&resident);
+    assert!(ran.len() >= 13, "the suite ran: {ran:?}");
+    let fresh = || Arc::new(SqliteStore::open_in_memory(Timestamp(1)).unwrap()) as Arc<dyn Store>;
+    conformance::resident_records_are_served_at_the_current_generation(&fresh);
+    conformance::a_commit_carries_the_resident_records_and_invalidates_what_it_writes(&fresh);
+    conformance::a_delete_that_clears_references_invalidates_the_referrers(&fresh);
+    conformance::interleaved_commits_between_loads_return_one_generation(&fresh, 6);
+    conformance::resident_bytes_never_exceed_the_budget(&fresh, 3);
+
+    let path = fresh_path("resident-records-foreign");
+    let first = Arc::new(SqliteStore::open(&path, Timestamp(1)).unwrap());
+    let second = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    conformance::a_foreign_commit_refreshes_the_resident_records(first, &second);
+}

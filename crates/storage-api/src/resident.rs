@@ -1,11 +1,11 @@
-//! Header residency (CPY-014, `docs/working-set.md`, follow-up item 2): the first piece of the
-//! per-tenant working set.
+//! The per-tenant working set (CPY-014, `docs/working-set.md`, follow-up items 2 to 4): the header
+//! and the single records of each tenant, held below sealing.
 //!
-//! [`ResidentStore`] wraps a [`Store`] and keeps, per tenant, the decoded header: the schema, the
-//! members, the name and the setting values, stamped with the [`Generation`] they were read at
-//! and keyed by the schema version and the hash of the schema. The compiled form of the schema
-//! hangs off the same entry: the schema is held as one shared `Arc`, so every state served from a
-//! hit shares it.
+//! [`ResidentStore`] wraps a [`Store`] and keeps, per tenant, the decoded header (the schema, the
+//! members, the name and the setting values) and a set of record entries, each stamped with the
+//! [`Generation`] it was read at. The header is keyed by the schema version and the hash of the
+//! schema, and the compiled form of the schema hangs off it: the schema is held as one shared
+//! `Arc`, so every state served from a hit shares it.
 //!
 //! # What is served
 //!
@@ -18,31 +18,67 @@
 //!   and skips decoding the header's documents only when they are equal. A generation changes with
 //!   every change to what a load returns, so equal generations mean an equal header, and a
 //!   foreign write, a restore, a nonce rotation or a removal makes the next load decode again.
+//! - **Records, present or absent.** A [`Need::Record`] is answered from an entry when the entry's
+//!   stamp is the generation the load reads in its own transaction. The seam is the same
+//!   `load_at_held`: the wrapper asks the adapter only for the needs it holds no entry for (with no
+//!   needs at all, a load reads the header and the counters), and compares the generation that
+//!   load returns with the entries' stamp. If they are equal, the entries are served beside what
+//!   was read. If they differ, no entry is served: all are dropped and the whole request is read
+//!   again at the generation that read finds, which is a snapshot by itself (the request round
+//!   that compares its load's generation and rereads on a change). The state returned is the one
+//!   an unwrapped store returns at that generation, with the coverage the caller asked for.
+//! - **Answers are not resident.** `ByField`, `ByFields`, `AllOf`, `PageOf`, `IndexPage`,
+//!   `PairPage` and `Ledger` always go to the store (follow-up item 5 adds them), and so does a
+//!   complete load. No key is made of a value of a field, so the plaintext exclusion for the
+//!   lookups of a personal field holds trivially: a resident key is a tenant, an object type and
+//!   a record id.
 //!
 //! # A commit
 //!
-//! After an accepted commit the header is carried forward to the receipt's generation when the
-//! entry was current at the commit's expected generation, the receipt's generation is that one
-//! raised by one, and the delta wrote no schema, member, setting or tenant-creation operation.
-//! It is dropped otherwise, and so on any error (an unknown outcome assumes no generation). The
-//! next load then decodes the header once and holds it again.
+//! The store guards the commit with the expected generation and the base revision in its write
+//! transaction. After an accepted commit the wrapper checks the receipt: entries are confirmed
+//! only when they were current at the commit's expected generation and the receipt's generation
+//! is that one raised by one (a replayed result, whose receipt carries the expected generation
+//! itself, wrote nothing and leaves everything). They are then carried forward to the receipt's
+//! generation, minus the invalidation map of the delta: the key of every record the delta writes
+//! (the records of a delete's clearing are named in the delta as writes, like any other), and
+//! everything when the delta creates the tenant or writes a schema, which is not proved untouched
+//! by a record key. The header is carried when the delta wrote no schema, member, setting or
+//! tenant-creation operation. On any error, a lost or ambiguous outcome, the tenant is dropped and
+//! no generation is assumed.
 //!
-//! # Lock scope
+//! # Lock scope and coalescing
 //!
-//! One lock per tenant runtime, held across the store I/O of a load and of a commit, as the
-//! design's lock-scope rule says. Different tenants never share it.
+//! One lock per tenant runtime, held across the store I/O of a load (the miss load and a reread
+//! included) and of a commit with its carry-forward, as the design's lock-scope rule says. Different
+//! tenants never share it. Simultaneous misses on one key (CPY-012) wait for the lock and then
+//! find the entry the first one admitted: one load per key per generation.
+//!
+//! # Placement
+//!
+//! Below [`crate::sealed::SealedStore`]: the entries are the stored form, with sealed tokens. The
+//! sealed store opens every token on every load, so a destroyed subject key (a document write that
+//! raises no generation) makes the next read return the erased token. Key documents are reached
+//! through `doc_*` calls, which are never served from here, and the cipher session caches nothing.
 //!
 //! # Accounting
 //!
-//! Resident bytes are an estimate: the length of the canonical JSON of the header's documents
-//! plus a fixed overhead per entry. They are not an allocator measurement.
+//! Resident bytes are an estimate: the length of the canonical JSON of what is held plus a fixed
+//! overhead per entry. They are not an allocator measurement. A byte budget bounds the header and
+//! record entries of all tenants together and is never exceeded: an entry is admitted only after
+//! its bytes are reserved, and room is made by CLOCK eviction of record entries (the header is
+//! pinned), first from the tenant being served and then from the other tenants whose lock is free.
+//! An entry that does not fit is not admitted.
 
 use crate::*;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Bound;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::segments as seg;
-use strata_kernel::{DeltaOp, RoleId, SettingValues, StateRevision, TenantSchema};
+use strata_kernel::{
+    DeltaOp, ObjectTypeId, RecordId, RoleId, SettingValues, StateRevision, TenantSchema,
+};
 
 /// A header an adapter may serve from instead of decoding the tenant's documents: what a caller
 /// holds for a tenant, with the generation it was read at.
@@ -110,14 +146,35 @@ pub struct ResidentStats {
     pub misses: u64,
     /// Times an adapter decoded a header's documents for a load through this wrapper.
     pub decodes: u64,
-    /// Estimated bytes of the headers held now.
+    /// Estimated bytes held now: headers and records.
     pub resident_bytes: u64,
     /// Tenants with a header held now.
     pub resident_tenants: u64,
+    /// Record needs answered from an entry (a present record or a held absence).
+    pub record_hits: u64,
+    /// Record needs that went to the store, or whose entry could not be served because the load
+    /// found another generation.
+    pub record_misses: u64,
+    /// An estimate of what the record hits saved: the estimated bytes of the entries served.
+    pub hit_saved_bytes: u64,
+    /// What the record hits saved, in records (an absence counts one row too).
+    pub hit_saved_rows: u64,
+    /// Record entries held now.
+    pub resident_records: u64,
+    /// Record entries removed to make room.
+    pub evictions: u64,
+    /// Record entries dropped because a commit wrote them, or because the tenant was dropped or
+    /// found at another generation.
+    pub invalidations: u64,
+    /// Requests that were read again because an entry's stamp was not the generation the load found.
+    pub rereads: u64,
 }
 
-/// The fixed charge per entry, over the canonical length of its documents.
+/// The fixed charge per header entry, over the canonical length of its documents.
 const ENTRY_OVERHEAD: u64 = 128;
+
+/// The fixed charge per record entry, over the canonical length of the record.
+const RECORD_OVERHEAD: u64 = 64;
 
 struct Resident {
     held: HeldHeader,
@@ -144,33 +201,63 @@ impl Resident {
             held,
         }
     }
-
-    /// The same documents at the generation a commit produced.
-    fn carried(&self, generation: Generation) -> Resident {
-        Resident {
-            held: HeldHeader {
-                generation,
-                ..self.held.clone()
-            },
-            schema_version: self.schema_version,
-            schema_hash: self.schema_hash.clone(),
-            bytes: self.bytes,
-        }
-    }
 }
 
-/// One tenant runtime's slot: its lock, and the header it guards.
-type Slot = Arc<Mutex<Option<Resident>>>;
+/// The key of a record entry within a tenant.
+pub type RecordKey = (ObjectTypeId, RecordId);
 
-/// A [`Store`] that keeps each tenant's header resident. See the module documentation.
+/// A record entry: the record, or `None` for a held absence. Valid at the tenant's stamp.
+struct RecordEntry {
+    record: Option<Arc<Record>>,
+    bytes: u64,
+    /// The CLOCK bit: set on admission and on every hit, cleared as the hand passes.
+    referenced: bool,
+}
+
+fn entry_bytes(key: &RecordKey, record: Option<&Record>) -> u64 {
+    let size = match record {
+        Some(record) => canon::canonical_json(record).len(),
+        None => key.0.as_str().len() + 8,
+    };
+    size as u64 + RECORD_OVERHEAD
+}
+
+/// Everything held for one tenant, behind the tenant runtime's lock.
+#[derive(Default)]
+struct Tenant {
+    header: Option<Resident>,
+    /// The generation every record entry is valid at. `None` only while `records` is empty.
+    stamp: Option<Generation>,
+    records: BTreeMap<RecordKey, RecordEntry>,
+    /// The CLOCK hand: the key last examined.
+    hand: Option<RecordKey>,
+}
+
+/// One tenant runtime's slot: its lock, and what it guards.
+type Slot = Arc<Mutex<Tenant>>;
+
+/// A [`Store`] that keeps each tenant's header and single records resident. See the module
+/// documentation.
 pub struct ResidentStore {
     inner: Arc<dyn Store>,
     slots: Mutex<BTreeMap<TenantId, Slot>>,
+    /// Whether records are held at all (not in [`ResidentStore::header_only`]).
+    records: bool,
+    /// The most accounted bytes the store holds, headers and records together.
+    budget: u64,
     hits: AtomicU64,
     misses: AtomicU64,
     decodes: AtomicU64,
     bytes: AtomicU64,
     tenants: AtomicU64,
+    record_hits: AtomicU64,
+    record_misses: AtomicU64,
+    saved_bytes: AtomicU64,
+    saved_rows: AtomicU64,
+    resident_records: AtomicU64,
+    evictions: AtomicU64,
+    invalidations: AtomicU64,
+    rereads: AtomicU64,
 }
 
 fn unpoisoned<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -192,17 +279,78 @@ fn writes_header(delta: &StateDelta) -> bool {
     })
 }
 
+/// The record entries a delta invalidates: the invalidation map of the working set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Invalidated {
+    /// Every record entry of the tenant: the delta creates the tenant or writes the schema.
+    All,
+    /// These keys, and no other: every record the delta writes or deletes. A delete's clearing of
+    /// references writes the referrers, and the delta names each of them as a write.
+    Keys(BTreeSet<RecordKey>),
+}
+
+/// The invalidation map. The match is exhaustive, so a new kind of operation must be placed here.
+pub fn invalidated_by(delta: &StateDelta) -> Invalidated {
+    let mut keys = BTreeSet::new();
+    for op in &delta.ops {
+        match op {
+            DeltaOp::CreateTenant { .. } | DeltaOp::PutSchema(_) => return Invalidated::All,
+            DeltaOp::PutRecord(record) => {
+                keys.insert((record.object.clone(), record.id));
+            }
+            DeltaOp::DeleteRecord { object, id } => {
+                keys.insert((object.clone(), *id));
+            }
+            // Members, settings and the ledger are not records and are not read through a record
+            // need.
+            DeltaOp::PutMember { .. }
+            | DeltaOp::PutSettingOverride(_)
+            | DeltaOp::DeleteSettingOverride { .. }
+            | DeltaOp::PutSettingRevision { .. }
+            | DeltaOp::Ledger(_) => {}
+        }
+    }
+    Invalidated::Keys(keys)
+}
+
+/// What a read asks for.
+#[derive(Clone, Copy)]
+enum Read<'a> {
+    Needs(&'a [Need]),
+    Complete,
+}
+
 impl ResidentStore {
-    /// Header residency over `inner`: the first stage of the working set.
+    /// The working set over `inner` with a byte budget: the header and the single records of every
+    /// tenant, together at most `budget_bytes` (estimated bytes).
+    pub fn new(inner: Arc<dyn Store>, budget_bytes: u64) -> ResidentStore {
+        ResidentStore::build(inner, budget_bytes, true)
+    }
+
+    /// Header residency over `inner`, unbounded: the first stage of the working set.
     pub fn header_only(inner: Arc<dyn Store>) -> ResidentStore {
+        ResidentStore::build(inner, u64::MAX, false)
+    }
+
+    fn build(inner: Arc<dyn Store>, budget: u64, records: bool) -> ResidentStore {
         ResidentStore {
             inner,
             slots: Mutex::new(BTreeMap::new()),
+            records,
+            budget,
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             decodes: AtomicU64::new(0),
             bytes: AtomicU64::new(0),
             tenants: AtomicU64::new(0),
+            record_hits: AtomicU64::new(0),
+            record_misses: AtomicU64::new(0),
+            saved_bytes: AtomicU64::new(0),
+            saved_rows: AtomicU64::new(0),
+            resident_records: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
+            invalidations: AtomicU64::new(0),
+            rereads: AtomicU64::new(0),
         }
     }
 
@@ -211,14 +359,28 @@ impl ResidentStore {
         &self.inner
     }
 
+    /// The byte budget.
+    pub fn budget(&self) -> u64 {
+        self.budget
+    }
+
     /// The counters and the resident bytes now.
     pub fn stats(&self) -> ResidentStats {
+        let get = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         ResidentStats {
-            hits: self.hits.load(Ordering::Relaxed),
-            misses: self.misses.load(Ordering::Relaxed),
-            decodes: self.decodes.load(Ordering::Relaxed),
-            resident_bytes: self.bytes.load(Ordering::Relaxed),
-            resident_tenants: self.tenants.load(Ordering::Relaxed),
+            hits: get(&self.hits),
+            misses: get(&self.misses),
+            decodes: get(&self.decodes),
+            resident_bytes: get(&self.bytes),
+            resident_tenants: get(&self.tenants),
+            record_hits: get(&self.record_hits),
+            record_misses: get(&self.record_misses),
+            hit_saved_bytes: get(&self.saved_bytes),
+            hit_saved_rows: get(&self.saved_rows),
+            resident_records: get(&self.resident_records),
+            evictions: get(&self.evictions),
+            invalidations: get(&self.invalidations),
+            rereads: get(&self.rereads),
         }
     }
 
@@ -228,8 +390,53 @@ impl ResidentStore {
         let slot = unpoisoned(&self.slots).get(tenant).cloned()?;
         let entry = unpoisoned(&slot);
         entry
+            .header
             .as_ref()
             .map(|r| (r.held.generation, r.schema_version, r.schema_hash.clone()))
+    }
+
+    /// The generation the record entries of a tenant are stamped with, none when it holds none.
+    pub fn record_stamp(&self, tenant: &TenantId) -> Option<Generation> {
+        let slot = unpoisoned(&self.slots).get(tenant).cloned()?;
+        let held = unpoisoned(&slot);
+        held.stamp
+    }
+
+    /// What the entry of a record holds: `None` when there is no entry, `Some(None)` for a held
+    /// absence, `Some(Some(record))` for a record.
+    pub fn held_record(
+        &self,
+        tenant: &TenantId,
+        object: &ObjectTypeId,
+        id: RecordId,
+    ) -> Option<Option<Arc<Record>>> {
+        let slot = unpoisoned(&self.slots).get(tenant).cloned()?;
+        let held = unpoisoned(&slot);
+        held.records
+            .get(&(object.clone(), id))
+            .map(|entry| entry.record.clone())
+    }
+
+    /// The keys of everything resident, as text: `tenant/object/id` for a record entry. A key is
+    /// made of a tenant, an object type and a record id, never of a value of a field.
+    pub fn resident_keys(&self) -> Vec<String> {
+        let slots: Vec<(TenantId, Slot)> = unpoisoned(&self.slots)
+            .iter()
+            .map(|(tenant, slot)| (tenant.clone(), slot.clone()))
+            .collect();
+        let mut keys = Vec::new();
+        for (tenant, slot) in slots {
+            let held = unpoisoned(&slot);
+            if held.header.is_some() {
+                keys.push(format!("{tenant}/header"));
+            }
+            keys.extend(
+                held.records
+                    .keys()
+                    .map(|(object, id)| format!("{tenant}/{object}/{}", id.0)),
+            );
+        }
+        keys
     }
 
     fn slot(&self, tenant: &TenantId) -> Slot {
@@ -239,55 +446,302 @@ impl ResidentStore {
             .clone()
     }
 
-    /// Replace what a slot holds, keeping the totals.
-    fn set(&self, entry: &mut Option<Resident>, next: Option<Resident>) {
-        if let Some(old) = entry.take() {
-            self.bytes.fetch_sub(old.bytes, Ordering::Relaxed);
-            self.tenants.fetch_sub(1, Ordering::Relaxed);
-        }
-        if let Some(new) = next {
-            self.bytes.fetch_add(new.bytes, Ordering::Relaxed);
-            self.tenants.fetch_add(1, Ordering::Relaxed);
-            *entry = Some(new);
+    fn bump(counter: &AtomicU64, by: u64) {
+        counter.fetch_add(by, Ordering::Relaxed);
+    }
+
+    /// Reserve `n` accounted bytes if they fit in the budget.
+    fn try_reserve(&self, n: u64) -> bool {
+        let mut current = self.bytes.load(Ordering::Relaxed);
+        loop {
+            if current.saturating_add(n) > self.budget {
+                return false;
+            }
+            match self.bytes.compare_exchange_weak(
+                current,
+                current + n,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(now) => current = now,
+            }
         }
     }
 
-    /// A load under the tenant's lock, held across the store I/O.
-    fn load_held(
+    fn release(&self, n: u64) {
+        self.bytes.fetch_sub(n, Ordering::Relaxed);
+    }
+
+    /// Remove one record entry by CLOCK from a tenant. `false` when it holds none.
+    fn evict_one(&self, held: &mut Tenant) -> bool {
+        let steps = held.records.len().saturating_mul(2).saturating_add(1);
+        for _ in 0..steps {
+            let after = held.hand.clone().and_then(|hand| {
+                held.records
+                    .range((Bound::Excluded(hand), Bound::Unbounded))
+                    .next()
+                    .map(|(key, _)| key.clone())
+            });
+            let Some(key) = after.or_else(|| held.records.keys().next().cloned()) else {
+                return false;
+            };
+            let Some(entry) = held.records.get_mut(&key) else {
+                return false;
+            };
+            held.hand = Some(key.clone());
+            if entry.referenced {
+                entry.referenced = false;
+                continue;
+            }
+            let bytes = entry.bytes;
+            held.records.remove(&key);
+            self.release(bytes);
+            Self::bump(&self.evictions, 1);
+            self.resident_records.fetch_sub(1, Ordering::Relaxed);
+            return true;
+        }
+        false
+    }
+
+    /// Reserve `n` bytes, evicting record entries (the header is pinned) to make room: first the
+    /// served tenant's own, then those of other tenants whose lock is free. `false` when they do
+    /// not fit.
+    fn make_room(&self, own: &mut Tenant, own_slot: &Slot, n: u64) -> bool {
+        if n > self.budget {
+            return false;
+        }
+        loop {
+            if self.try_reserve(n) {
+                return true;
+            }
+            if !self.evict_one(own) {
+                break;
+            }
+        }
+        let others: Vec<Slot> = unpoisoned(&self.slots)
+            .values()
+            .filter(|slot| !Arc::ptr_eq(slot, own_slot))
+            .cloned()
+            .collect();
+        for slot in others {
+            // Never wait for another tenant's lock while holding one.
+            let Ok(mut other) = slot.try_lock() else {
+                continue;
+            };
+            while self.evict_one(&mut other) {
+                if self.try_reserve(n) {
+                    return true;
+                }
+            }
+        }
+        self.try_reserve(n)
+    }
+
+    /// Replace the header a tenant holds, keeping the totals. Not admitted when it does not fit.
+    fn set_header(&self, held: &mut Tenant, slot: &Slot, next: Option<Resident>) {
+        if let Some(old) = held.header.take() {
+            self.release(old.bytes);
+            self.tenants.fetch_sub(1, Ordering::Relaxed);
+        }
+        if let Some(new) = next {
+            if self.make_room(held, slot, new.bytes) {
+                self.tenants.fetch_add(1, Ordering::Relaxed);
+                held.header = Some(new);
+            }
+        }
+    }
+
+    /// Drop every record entry of a tenant and its stamp.
+    fn drop_records(&self, held: &mut Tenant) {
+        let count = held.records.len() as u64;
+        let bytes: u64 = held.records.values().map(|entry| entry.bytes).sum();
+        held.records.clear();
+        held.hand = None;
+        held.stamp = None;
+        self.release(bytes);
+        self.resident_records.fetch_sub(count, Ordering::Relaxed);
+        Self::bump(&self.invalidations, count);
+    }
+
+    /// Drop everything a tenant holds.
+    fn drop_tenant(&self, held: &mut Tenant, slot: &Slot) {
+        self.set_header(held, slot, None);
+        self.drop_records(held);
+    }
+
+    /// Admit the record entry of `key`, valid at the tenant's stamp, if it fits.
+    fn admit_record(
         &self,
-        tenant: &TenantId,
-        run: impl FnOnce(Option<&HeldHeader>) -> StoreResult<HeldLoad>,
-    ) -> StoreResult<Loaded> {
+        held: &mut Tenant,
+        slot: &Slot,
+        key: RecordKey,
+        record: Option<Arc<Record>>,
+    ) {
+        if held.records.contains_key(&key) {
+            return;
+        }
+        let bytes = entry_bytes(&key, record.as_deref());
+        if !self.make_room(held, slot, bytes) {
+            return;
+        }
+        self.resident_records.fetch_add(1, Ordering::Relaxed);
+        held.records.insert(
+            key,
+            RecordEntry {
+                record,
+                bytes,
+                referenced: true,
+            },
+        );
+    }
+
+    /// A load under the tenant's lock, held across the store I/O.
+    fn read(&self, tenant: &TenantId, what: Read<'_>) -> StoreResult<Loaded> {
         let slot = self.slot(tenant);
-        let mut entry = unpoisoned(&slot);
-        let held = entry.as_ref().map(|r| r.held.clone());
-        let answered = match run(held.as_ref()) {
+        let mut guard = unpoisoned(&slot);
+        let held = &mut *guard;
+        let header = held.header.as_ref().map(|r| r.held.clone());
+        let run = |needs: &[Need]| match what {
+            Read::Needs(_) => self.inner.load_at_held(tenant, needs, header.as_ref()),
+            Read::Complete => self.inner.load_complete_at_held(tenant, header.as_ref()),
+        };
+        let wanted: &[Need] = match what {
+            Read::Needs(needs) => needs,
+            Read::Complete => &[],
+        };
+
+        // What the entries answer, and what is left for the store.
+        let mut hits: Vec<(RecordKey, Option<Arc<Record>>, u64)> = Vec::new();
+        let mut rest: Vec<Need> = Vec::new();
+        let mut probes: Vec<RecordKey> = Vec::new();
+        for need in wanted {
+            match need {
+                Need::Record { object, id } if self.records => {
+                    let key = (object.clone(), *id);
+                    if let Some(entry) = held.records.get_mut(&key) {
+                        entry.referenced = true;
+                        hits.push((key, entry.record.clone(), entry.bytes));
+                    } else {
+                        probes.push(key);
+                        rest.push(need.clone());
+                    }
+                }
+                other => rest.push(other.clone()),
+            }
+        }
+
+        let first: &[Need] = if hits.is_empty() { wanted } else { &rest };
+        let mut answered = match run(first) {
             Ok(answered) => answered,
             Err(error) => {
-                self.set(&mut entry, None);
+                self.drop_tenant(held, &slot);
                 return Err(error);
             }
         };
         if answered.header_decoded {
-            self.decodes.fetch_add(1, Ordering::Relaxed);
+            Self::bump(&self.decodes, 1);
         }
-        let loaded = answered.loaded;
-        let matched = held
-            .as_ref()
-            .is_some_and(|h| Some(h.generation) == loaded.generation);
-        if matched && !answered.header_decoded {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            return Ok(loaded);
-        }
-        self.misses.fetch_add(1, Ordering::Relaxed);
-        let next = match (&loaded.state.tenant, loaded.generation) {
-            (Some(tenant), Some(generation)) => {
-                Some(Resident::admit(HeldHeader::of(generation, tenant)))
+        if !hits.is_empty()
+            && (answered.loaded.generation.is_none() || answered.loaded.generation != held.stamp)
+        {
+            // An entry is not at the generation this load found: serve none of them. Drop them
+            // and read the whole request again, which is one snapshot by itself.
+            self.drop_records(held);
+            Self::bump(&self.record_misses, hits.len() as u64);
+            Self::bump(&self.rereads, 1);
+            hits.clear();
+            answered = match run(wanted) {
+                Ok(answered) => answered,
+                Err(error) => {
+                    self.drop_tenant(held, &slot);
+                    return Err(error);
+                }
+            };
+            if answered.header_decoded {
+                Self::bump(&self.decodes, 1);
             }
-            _ => None,
-        };
-        self.set(&mut entry, next);
+        }
+
+        // Stamp the entries with the generation of the load, and admit what it read.
+        match answered.loaded.generation {
+            None => self.drop_records(held),
+            Some(generation) => {
+                if held.stamp != Some(generation) {
+                    self.drop_records(held);
+                    held.stamp = Some(generation);
+                }
+                if let Some(state) = answered.loaded.state.tenant.as_deref() {
+                    for key in probes.iter() {
+                        let record = state
+                            .records
+                            .get(&key.0)
+                            .and_then(|records| records.get(&key.1))
+                            .cloned();
+                        self.admit_record(held, &slot, key.clone(), record);
+                    }
+                }
+            }
+        }
+        Self::bump(&self.record_misses, probes.len() as u64);
+
+        // The header.
+        let matched = header
+            .as_ref()
+            .is_some_and(|h| Some(h.generation) == answered.loaded.generation);
+        if matched && !answered.header_decoded {
+            Self::bump(&self.hits, 1);
+        } else {
+            Self::bump(&self.misses, 1);
+            let next = match (&answered.loaded.state.tenant, answered.loaded.generation) {
+                (Some(state), Some(generation)) => {
+                    Some(Resident::admit(HeldHeader::of(generation, state)))
+                }
+                _ => None,
+            };
+            self.set_header(held, &slot, next);
+        }
+
+        // The state: what the store read, and the entries beside it.
+        let mut loaded = answered.loaded;
+        if !hits.is_empty() {
+            if let Some(shared) = loaded.state.tenant.as_mut() {
+                let state = Arc::make_mut(shared);
+                for (key, record, _) in &hits {
+                    if let Some(record) = record {
+                        state
+                            .records
+                            .entry(key.0.clone())
+                            .or_default()
+                            .insert(key.1, record.clone());
+                    }
+                }
+            }
+            if matches!(loaded.state.coverage, Coverage::Partial(_)) {
+                loaded.state.coverage = Coverage::Partial(wanted.iter().cloned().collect());
+            }
+            Self::bump(&self.record_hits, hits.len() as u64);
+            Self::bump(&self.saved_rows, hits.len() as u64);
+            Self::bump(
+                &self.saved_bytes,
+                hits.iter().map(|(_, _, bytes)| *bytes).sum(),
+            );
+        }
         Ok(loaded)
+    }
+
+    /// Run a write that is not a commit, under the tenant's lock, and drop what the tenant holds
+    /// whatever the outcome: its next load finds what the write left.
+    fn exclusive<T>(
+        &self,
+        tenant: &TenantId,
+        run: impl FnOnce() -> StoreResult<T>,
+    ) -> StoreResult<T> {
+        let slot = self.slot(tenant);
+        let mut guard = unpoisoned(&slot);
+        let done = run();
+        self.drop_tenant(&mut guard, &slot);
+        done
     }
 
     /// A commit under the tenant's lock, held across the store write and the carry-forward.
@@ -297,40 +751,67 @@ impl ResidentStore {
         run: impl FnOnce() -> StoreResult<Receipt>,
     ) -> StoreResult<Receipt> {
         let slot = self.slot(&commit.delta.tenant);
-        let mut entry = unpoisoned(&slot);
-        match run() {
-            Ok(receipt) => {
-                let next = match (entry.as_ref(), commit.expected_generation) {
-                    (Some(held), Some(expected)) if held.held.generation == expected => {
-                        if receipt.generation == expected {
-                            // A replayed result: nothing was written.
-                            return Ok(receipt);
-                        }
-                        (receipt.generation == expected.raised() && !writes_header(&commit.delta))
-                            .then(|| held.carried(receipt.generation))
-                    }
-                    _ => None,
-                };
-                self.set(&mut entry, next);
-                Ok(receipt)
-            }
+        let mut guard = unpoisoned(&slot);
+        let held = &mut *guard;
+        let receipt = match run() {
+            Ok(receipt) => receipt,
             Err(error) => {
-                self.set(&mut entry, None);
-                Err(error)
+                // A refusal, a lost or an ambiguous outcome: no generation is assumed.
+                self.drop_tenant(held, &slot);
+                return Err(error);
             }
+        };
+        let expected = commit.expected_generation;
+        let confirmed = |at: Option<Generation>| match (at, expected) {
+            (Some(at), Some(expected)) if at == expected => Some(expected),
+            _ => None,
+        };
+
+        // The header.
+        match confirmed(held.header.as_ref().map(|r| r.held.generation)) {
+            Some(expected) if receipt.generation == expected => {}
+            Some(expected)
+                if receipt.generation == expected.raised() && !writes_header(&commit.delta) =>
+            {
+                if let Some(header) = held.header.as_mut() {
+                    header.held.generation = receipt.generation;
+                }
+            }
+            _ => self.set_header(held, &slot, None),
         }
+
+        // The records.
+        match confirmed(held.stamp) {
+            // A replayed result: nothing was written.
+            Some(expected) if receipt.generation == expected => {}
+            Some(expected) if receipt.generation == expected.raised() => {
+                match invalidated_by(&commit.delta) {
+                    Invalidated::All => self.drop_records(held),
+                    Invalidated::Keys(keys) => {
+                        for key in keys {
+                            if let Some(entry) = held.records.remove(&key) {
+                                self.release(entry.bytes);
+                                self.resident_records.fetch_sub(1, Ordering::Relaxed);
+                                Self::bump(&self.invalidations, 1);
+                            }
+                        }
+                        held.stamp = Some(receipt.generation);
+                    }
+                }
+            }
+            _ => self.drop_records(held),
+        }
+        Ok(receipt)
     }
 }
 
 impl Store for ResidentStore {
     fn load_at(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<Loaded> {
-        self.load_held(tenant, |held| self.inner.load_at_held(tenant, needs, held))
+        self.read(tenant, Read::Needs(needs))
     }
 
     fn load_complete_at(&self, tenant: &TenantId) -> StoreResult<Loaded> {
-        self.load_held(tenant, |held| {
-            self.inner.load_complete_at_held(tenant, held)
-        })
+        self.read(tenant, Read::Complete)
     }
 
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
@@ -535,7 +1016,7 @@ impl Store for ResidentStore {
         tenant: &TenantId,
         principal: &PrincipalId,
     ) -> StoreResult<PrincipalRemoval> {
-        self.inner.remove_principal(tenant, principal)
+        self.exclusive(tenant, || self.inner.remove_principal(tenant, principal))
     }
 
     fn anonymise_ledger_principal(
@@ -544,8 +1025,10 @@ impl Store for ResidentStore {
         principal: &PrincipalId,
         expected: Option<&Generation>,
     ) -> StoreResult<strata_kernel::ledger::Anonymised> {
-        self.inner
-            .anonymise_ledger_principal(tenant, principal, expected)
+        self.exclusive(tenant, || {
+            self.inner
+                .anonymise_ledger_principal(tenant, principal, expected)
+        })
     }
 
     fn account_of(
@@ -862,15 +1345,21 @@ impl Store for ResidentStore {
         id: u64,
         expected: Option<&Generation>,
     ) -> StoreResult<()> {
-        self.inner.restore_snapshot(tenant, id, expected)
+        self.exclusive(tenant, || self.inner.restore_snapshot(tenant, id, expected))
     }
 
     fn reset(&self) -> StoreResult<()> {
-        self.inner.reset()
+        let done = self.inner.reset();
+        let slots: Vec<Slot> = unpoisoned(&self.slots).values().cloned().collect();
+        for slot in slots {
+            let mut guard = unpoisoned(&slot);
+            self.drop_tenant(&mut guard, &slot);
+        }
+        done
     }
 
     fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()> {
-        self.inner.reset_tenant(tenant)
+        self.exclusive(tenant, || self.inner.reset_tenant(tenant))
     }
 
     fn jobs_create(
