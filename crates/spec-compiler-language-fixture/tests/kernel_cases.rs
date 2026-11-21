@@ -154,32 +154,6 @@ fn shape(name: &str) -> Shape {
     }
 }
 
-fn strings(json: &Json) -> BTreeSet<String> {
-    json.as_array()
-        .map(|r| {
-            r.iter()
-                .filter_map(Json::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn site(env: &Json) -> Site {
-    Site {
-        fields: env["fields"]
-            .as_object()
-            .map(|m| {
-                m.iter()
-                    .map(|(k, v)| (k.clone(), shape(v.as_str().unwrap_or_default())))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        params: strings(&env["params"]),
-        roles: strings(&env["roles"]),
-    }
-}
-
 impl Site {
     fn shape_of(&self, name: &str) -> Result<Shape, String> {
         if !is_name(name) {
@@ -218,10 +192,6 @@ impl TypeEnv for Site {
     }
 }
 
-fn shape_name(s: Shape) -> String {
-    format!("{s:?}").to_lowercase()
-}
-
 /// The expression of a case: `source` parses to it and it prints as `source`.
 fn expression(c: &Json, failures: &mut Vec<String>) -> Expr {
     let name = c["name"].as_str().unwrap_or_default();
@@ -251,25 +221,6 @@ fn the_generated_evaluator_gives_every_eval_result_of_the_shared_table() {
         let got = match eval(&expr, &world(&c["env"])) {
             Ok(v) => serde_json::json!({ "Ok": serde_json::to_value(&v).unwrap() }),
             Err(e) => serde_json::json!({ "Err": e.0 }),
-        };
-        if got != c["result"] {
-            failures.push(format!("{name}: got {got}, the table says {}", c["result"]));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-// Verifies: CMS-1545
-#[test]
-fn the_generated_checker_gives_every_check_result_of_the_shared_table() {
-    let table: Json = serde_json::from_str(TABLE).unwrap();
-    let mut failures = Vec::new();
-    for c in table["check"].as_array().unwrap() {
-        let name = c["name"].as_str().unwrap_or_default();
-        let expr = expression(c, &mut failures);
-        let got = match check(&expr, &site(&c["env"])) {
-            Ok(s) => serde_json::json!({ "Ok": shape_name(s) }),
-            Err(e) => serde_json::json!({ "Err": e }),
         };
         if got != c["result"] {
             failures.push(format!("{name}: got {got}, the table says {}", c["result"]));

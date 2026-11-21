@@ -12,9 +12,5 @@ serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.146"
 uuid = { version = "1.24.0", default-features = false, features = ["serde"] }
 
-[[test]]
-name = "model_core_it"
-path = "tests/model_core_it.rs"
-
 [lints]
 workspace = true

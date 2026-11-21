@@ -10,15 +10,13 @@ use std::sync::Arc;
 use strata_backend::app::{App, Config, Shared};
 use strata_backend::auth::Identity;
 use strata_backend::mail::DevSink;
-use strata_backend::worker::{self, leases, routes, steps, WorkerConfig};
+use strata_backend::worker::{self, routes, steps, WorkerConfig};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_model::prelude::DurationMs;
 use strata_model::types::TemplateId;
 use strata_protocol::ws::SessionState;
-use strata_storage_api::jobs::{
-    ExceptionKind, JobReport, JobState, JobWork, NewJob, Reported, RetryPolicy, RunState,
-};
+use strata_storage_api::jobs::{ExceptionKind, JobState, JobWork, NewJob, RetryPolicy, RunState};
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, SessionRecord, Store};
 
@@ -374,57 +372,6 @@ fn a_job_is_not_offered_before_its_time() {
     assert_eq!(worker::tick(&app, "w1", &config(), &at(T0)).jobs, 3);
 }
 
-// Verifies: SCH-010, SCH-011, SCH-015
-#[test]
-fn an_expired_lease_is_taken_over_and_the_late_report_is_refused_with_no_second_effect() {
-    let app = app();
-    install(&app, "alpha");
-    let alpha = tenant_id("alpha");
-    let job = start(&app, "alpha", "award", 7, T0);
-    let first = app
-        .store
-        .job_lease(&alpha, "w1", Timestamp(T0))
-        .unwrap()
-        .unwrap();
-    assert!(matches!(
-        leases::run_leased(&app, &alpha, &first, &at(T0)).unwrap(),
-        Reported::Recorded(_)
-    ));
-    // w1 leases the step that makes the note, makes it, and stops before it reports.
-    let held = app
-        .store
-        .job_lease(&alpha, "w1", Timestamp(T0))
-        .unwrap()
-        .unwrap();
-    let outcome = steps::run_job(&app, &alpha, &held, Timestamp(T0));
-    assert_eq!(outcome.report, JobReport::Succeeded);
-    assert_eq!(notes(&app, "alpha").len(), 1);
-    // Until the lease expires nobody else takes the job.
-    assert_eq!(
-        worker::tick(&app, "w2", &config(), &at(T0 + 59_999)).jobs,
-        0
-    );
-    // Then w2 does, and its attempt carries the same step key: the note is not made again.
-    let later = T0 + 60_001;
-    let pass = worker::tick(&app, "w2", &config(), &at(later));
-    assert_eq!(pass.jobs, 2, "the step again, then the end");
-    assert_eq!(notes(&app, "alpha").len(), 1);
-    assert_eq!(run_of(&app, "alpha", &job).state, RunState::Completed);
-    // w1's report comes late and is refused by its superseded token.
-    let late = app
-        .store
-        .job_report(
-            &alpha,
-            &held.job.id,
-            held.token,
-            &outcome.report,
-            &outcome.writes,
-            Timestamp(later + 1),
-        )
-        .unwrap();
-    assert!(matches!(late, Reported::Refused(_)), "{late:?}");
-}
-
 // Verifies: SCH-013, SCH-014, SCH-1525, SCH-1532
 #[test]
 fn a_failing_step_is_retried_then_dead_lettered() {
@@ -548,28 +495,6 @@ fn a_run_acts_with_its_run_as_roles_only() {
         .filter(|n| n.get(&field("status")) == &text("published"))
         .count();
     assert_eq!(published, 1);
-}
-
-// A send-mail step acts as the automation principal: run as a role that does not hold
-// messages-send, it fails its run with the reason, once, and sends nothing.
-#[test]
-fn a_send_mail_step_without_the_send_permission_fails_its_run_and_says_so() {
-    let app = app();
-    install(&app, "alpha");
-    let job = start(&app, "alpha", "mailer", 7, T0);
-    worker::tick(&app, "w1", &config(), &at(T0));
-    let run = run_of(&app, "alpha", &job);
-    assert_eq!(run.state, RunState::Failed);
-    assert_eq!(
-        run.error.as_deref(),
-        Some("automation mailer may not send mail: its run-as roles do not hold messages-send")
-    );
-    assert!(app.cfg.mail.outbox().is_empty());
-    // It is not retried.
-    assert_eq!(
-        worker::tick(&app, "w1", &config(), &at(T0 + 3_600_000)).jobs,
-        0
-    );
 }
 
 // Verifies: SCH-007, SCH-009

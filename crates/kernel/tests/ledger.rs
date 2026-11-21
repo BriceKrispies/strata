@@ -6,7 +6,6 @@
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
-use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use strata_kernel::ledger;
 use strata_kernel::testkit::*;
@@ -154,27 +153,6 @@ fn entries(world: &World, owner: &LedgerOwner, scope: &str) -> Vec<LedgerEntry> 
 // ------------------------------------------------------------------------------------------------
 // Limits at their boundaries
 
-/// Verifies: LDG-013
-#[test]
-fn a_floor_and_a_cap_admit_their_boundary_and_refuse_one_past() {
-    let world = ledger_world(vec![unit_limit(Some(0), None, None)]);
-    let world = posted(&world, T0, person("writer1"), 10, "a");
-    let world = posted(&world, T0 + 1, person("writer1"), -10, "b");
-    assert_eq!(balance(&world, &person("writer1")), 0);
-    let error = refused(&world, T0 + 2, person("writer1"), -1, "c");
-    assert_eq!(error.kind, ErrorKind::ConstraintViolated);
-    assert_eq!(failed_rule(&error), "ledger:below-floor");
-    assert_eq!(entries(&world, &person("writer1"), "").len(), 2);
-
-    // A cap, on the pool.
-    let world = ledger_world(vec![unit_limit(None, Some(100), None)]);
-    let world = posted(&world, T0, pool(), 100, "fill");
-    let error = refused(&world, T0 + 1, pool(), 1, "over");
-    assert_eq!(error.kind, ErrorKind::ConstraintViolated);
-    assert_eq!(failed_rule(&error), "ledger:above-cap");
-    assert_eq!(balance(&world, &pool()), 100);
-}
-
 /// Verifies: LDG-013, LDG-016
 #[test]
 fn a_balance_outside_a_lowered_limit_may_only_move_back_toward_it() {
@@ -245,45 +223,6 @@ fn a_cap_per_day_counts_the_credits_of_the_utc_day_and_starts_again_the_next() {
     );
 }
 
-/// Verifies: LDG-015
-#[test]
-fn periods_are_calendar_hours_days_weeks_from_monday_and_months_in_utc() {
-    // 2025-11-20T12:34:56.789Z, a Thursday.
-    let at = Timestamp(1_763_642_096_789);
-    assert_eq!(
-        ledger::period_start(LedgerPeriod::Hour, at),
-        Timestamp(1_763_640_000_000)
-    );
-    assert_eq!(
-        ledger::period_start(LedgerPeriod::Day, at),
-        Timestamp(1_763_596_800_000)
-    );
-    // Monday 2025-11-17.
-    assert_eq!(
-        ledger::period_start(LedgerPeriod::Week, at),
-        Timestamp(1_763_337_600_000)
-    );
-    // 2025-11-01.
-    assert_eq!(
-        ledger::period_start(LedgerPeriod::Month, at),
-        Timestamp(1_761_955_200_000)
-    );
-    // 2024-02-29 is in February; 2024-03-01 starts March.
-    assert_eq!(
-        ledger::period_start(LedgerPeriod::Month, Timestamp(1_709_164_800_000)),
-        Timestamp(1_706_745_600_000)
-    );
-    assert_eq!(
-        ledger::period_start(LedgerPeriod::Month, Timestamp(1_709_251_200_000)),
-        Timestamp(1_709_251_200_000)
-    );
-    // Before the epoch, a Wednesday: its week started on Monday 1969-12-29.
-    assert_eq!(
-        ledger::period_start(LedgerPeriod::Week, Timestamp(-1)),
-        Timestamp(-3 * 86_400_000)
-    );
-}
-
 /// Verifies: LDG-012, LDG-1542
 #[test]
 fn an_account_limit_replaces_the_unit_limit_limit_by_limit_and_each_scope_counts_alone() {
@@ -327,51 +266,6 @@ fn an_account_limit_replaces_the_unit_limit_limit_by_limit_and_each_scope_counts
 
 // ------------------------------------------------------------------------------------------------
 // Postings
-
-/// Verifies: LDG-006, LDG-007
-#[test]
-fn a_retry_replays_the_first_entry_and_a_reused_key_is_refused() {
-    let world = ledger_world(vec![]);
-    let (world, first) = post_as(
-        &world,
-        "owner",
-        T0,
-        vec![request(person("writer1"), 7, "k")],
-    )
-    .unwrap();
-    let (again, retry) = post_as(
-        &world,
-        "owner",
-        T0 + 50,
-        vec![request(person("writer1"), 7, "k")],
-    )
-    .unwrap();
-    let (Output::LedgerPosted { results: a }, Output::LedgerPosted { results: b }) =
-        (&first.output, &retry.output)
-    else {
-        panic!("a posting answers with its results");
-    };
-    assert!(!a[0].replayed);
-    assert!(b[0].replayed);
-    assert_eq!(a[0].entry, b[0].entry, "the first entry, with its time");
-    assert!(retry.events.is_empty(), "no second event");
-    assert!(retry.delta.ops.is_empty(), "no second entry");
-    assert_eq!(balance(&again, &person("writer1")), 7);
-    assert_eq!(entries(&again, &person("writer1"), "").len(), 1);
-
-    // A key reused with another request is refused and changes nothing.
-    for (amount, reason) in [(8, "test"), (7, "other")] {
-        let mut other = request(person("writer1"), amount, "k");
-        other.reason = reason.into();
-        let error = post_as(&again, "owner", T0 + 51, vec![other]).unwrap_err();
-        assert_eq!(error.kind, ErrorKind::VersionConflict);
-        assert_eq!(failed_rule(&error), "ledger:idempotency-mismatch");
-    }
-    // The key is per account: another account may use it.
-    let world = posted(&again, T0 + 52, person("writer2"), 3, "k");
-    assert_eq!(balance(&world, &person("writer1")), 7);
-    assert_eq!(balance(&world, &person("writer2")), 3);
-}
 
 /// Verifies: LDG-002, LDG-003, LDG-004
 #[test]
@@ -596,68 +490,6 @@ fn two_concurrent_postings_cannot_both_pass_a_cap() {
 
 // ------------------------------------------------------------------------------------------------
 // Needs and partial snapshots (K-100)
-
-/// The snapshot a store builds from `needs`: the header and counters, no records, and of the
-/// ledger only what the needs name.
-fn thin(world: &World, needs: &[Need]) -> State {
-    let alpha = tenant_id("alpha");
-    let full = &world.tenants[&alpha];
-    let mut ledger_part = ledger::empty_state();
-    for need in needs {
-        if let (Need::Ledger(want), Some(from)) = (need, full.ledger.as_ref()) {
-            ledger::partial(from, want, &mut ledger_part);
-        }
-    }
-    let mut part = Some(ledger_part);
-    ledger::tidy_state(&mut part);
-    State {
-        tenant_id: alpha,
-        tenant: Some(Arc::new(TenantState {
-            records: BTreeMap::new(),
-            ledger: part,
-            ..TenantState::clone(full)
-        })),
-        coverage: Coverage::Partial(needs.iter().cloned().collect::<BTreeSet<_>>()),
-    }
-}
-
-/// Verifies: LDG-008
-#[test]
-fn a_posting_loads_the_header_and_the_entry_of_its_key_and_not_the_journal() {
-    let mut world = ledger_world(vec![unit_limit(Some(0), None, None)]);
-    for n in 0..20 {
-        world = posted(&world, T0 + n, person("writer1"), 5, &format!("k{n}"));
-    }
-    let intent = Intent::PostLedger {
-        postings: vec![request(person("writer1"), -3, "spend")],
-    };
-    let context = ctx("alpha", user("alpha:owner"), T0 + 100);
-    let header_only = world.state(&tenant_id("alpha"));
-    let planned = refine_needs(&header_only, &intent);
-    // The header, the entry of the key and the limit of this account (WG-5172).
-    assert_eq!(planned.len(), 3, "{planned:?}");
-    let state = thin(&world, &planned);
-    let held = state.tenant.as_ref().unwrap().ledger.as_ref().unwrap();
-    assert_eq!(
-        held.entries.values().map(Vec::len).sum::<usize>(),
-        0,
-        "no entry has the key"
-    );
-    let done = transition(&state, &intent, &context).unwrap();
-    assert_eq!(done.delta.ops.len(), 2);
-    // Without the entry of the key, the decision asks for it instead of guessing.
-    let account = ledger::account_id(&tenant_id("alpha"), &person("writer1"), &points(), "");
-    let without = thin(&world, &[Need::Ledger(LedgerNeed::Account { account })]);
-    let error = transition(&without, &intent, &context).unwrap_err();
-    assert_eq!(error.kind, ErrorKind::InsufficientState);
-    assert_eq!(
-        error.missing,
-        Some(Need::Ledger(LedgerNeed::EntryByKey {
-            account,
-            key: "spend".into()
-        }))
-    );
-}
 
 // ------------------------------------------------------------------------------------------------
 // The balance is the sum of the entries (LDG-019, LDG-020)

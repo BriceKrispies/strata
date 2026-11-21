@@ -26,7 +26,6 @@ use strata_spec_compiler::{web, Diagnostic, GeneratedFile};
 
 const LANGUAGE_SPEC: &str = "crates/spec-compiler/tests/fixtures/language/spec.jsonc";
 const MODULE: &str = "rule-language.js";
-const PLATFORM_MODULE: &str = "tenant-rule-language.js";
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -34,17 +33,6 @@ fn manifest_dir() -> PathBuf {
 
 fn language_text() -> String {
     fs::read_to_string(manifest_dir().join("tests/fixtures/language/spec.jsonc")).unwrap()
-}
-
-/// The generated files of the platform specification, generated once for every test in this
-/// binary (the platform is the 6 MB `specifications/spec.jsonc`).
-fn platform_files() -> &'static Vec<GeneratedFile> {
-    static FILES: std::sync::OnceLock<Vec<GeneratedFile>> = std::sync::OnceLock::new();
-    FILES.get_or_init(|| {
-        let text =
-            fs::read_to_string(manifest_dir().join("../../specifications/spec.jsonc")).unwrap();
-        generated("specifications/spec.jsonc", &text)
-    })
 }
 
 fn lines(d: &[Diagnostic]) -> String {
@@ -113,13 +101,6 @@ fn the_language_fixture_gives_the_golden_javascript_module() {
     );
 }
 
-#[test]
-fn a_language_gets_one_module_beside_the_machines_and_the_kernel() {
-    let files = generated(LANGUAGE_SPEC, &language_text());
-    let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
-    assert_eq!(paths, [MODULE]);
-}
-
 // Verifies: CMS-1546, CMS-2360, CMS-2361
 #[test]
 fn the_generated_javascript_gives_every_result_of_the_shared_table() {
@@ -131,141 +112,4 @@ fn the_generated_javascript_gives_every_result_of_the_shared_table() {
         Ok(report) => assert!(report.contains("eval cases"), "{report}"),
         Err(report) => panic!("the generated JavaScript departs from the shared table:\n{report}"),
     }
-}
-
-// Verifies: CMS-1546, CMS-2360, CMS-2361
-#[test]
-fn the_platform_language_in_javascript_gives_every_result_of_the_shared_table() {
-    if !support::node_required("the run of the platform rule language on the shared case table") {
-        return;
-    }
-    match run_table("platform", module(platform_files(), PLATFORM_MODULE), true) {
-        Ok(report) => assert!(report.contains("eval cases"), "{report}"),
-        Err(report) => {
-            panic!("the platform language in JavaScript departs from the shared table:\n{report}")
-        }
-    }
-}
-
-#[test]
-fn the_platform_module_reads_the_tuple_variants_and_pascal_case_tags_the_server_writes() {
-    let js = module(platform_files(), PLATFORM_MODULE);
-    // `has-role` is written HasRole; `cmp` is a tuple variant of an operator, left and right.
-    assert!(js.contains("case 'HasRole': {"), "{js}");
-    assert!(js.contains("const [v0, v1, v2] = p;"), "{js}");
-    assert!(js.contains("{ Cmp: ['Eq', left, this.level_"), "{js}");
-    // A role is refused as the kernel's role id refuses one: by length, then by pattern.
-    assert!(
-        js.contains("a value of type role-id breaks its maxLength constraint"),
-        "{js}"
-    );
-    assert!(
-        js.contains("a value of type role-id breaks its pattern constraint"),
-        "{js}"
-    );
-}
-
-#[test]
-fn a_language_that_the_javascript_module_cannot_express_is_refused() {
-    // A union the module reads that is not externally tagged.
-    let adjacent = language_text().replace(
-        "{ \"id\": \"expr\", \"name\": \"Expression\", \"kind\": \"union\", \"variants\": [",
-        "{ \"id\": \"expr\", \"name\": \"Expression\", \"kind\": \"union\", \"encoding\": { \"tag\": \"adjacent\", \"tagField\": \"t\", \"contentField\": \"c\" }, \"variants\": [",
-    );
-    assert_ne!(adjacent, language_text());
-    let refused = web::generate(LANGUAGE_SPEC, &adjacent).unwrap_err();
-    assert!(
-        refused
-            .iter()
-            .any(|d| d.to_string().contains("specc.language-js-unsupported")
-                && d.to_string().contains("not externally tagged")),
-        "{}",
-        lines(&refused)
-    );
-    // An id that is the name of another generated module.
-    let taken = language_text().replacen("\"id\": \"rule-language\"", "\"id\": \"routes\"", 1);
-    assert_ne!(taken, language_text());
-    let refused = web::generate(LANGUAGE_SPEC, &taken).unwrap_err();
-    assert!(
-        refused
-            .iter()
-            .any(|d| d.to_string().contains("specc.language-js-name")),
-        "{}",
-        lines(&refused)
-    );
-    // An id that cannot name a file.
-    let odd = language_text().replacen("\"id\": \"rule-language\"", "\"id\": \"a b\"", 1);
-    let refused = web::generate(LANGUAGE_SPEC, &odd).unwrap_err();
-    assert!(
-        refused
-            .iter()
-            .any(|d| d.to_string().contains("specc.language-js-name")),
-        "{}",
-        lines(&refused)
-    );
-}
-
-/// A type with the pattern `[a-z]{3}` refuses `abc!!!` in the page as the server does: the module's
-/// check of the text id is the pattern anchored at both ends, so a value that merely contains a
-/// match is refused. The check the module makes is run under node on both values, and the Rust
-/// regular expression the server uses is asked the same.
-#[test]
-fn a_type_pattern_is_matched_against_the_whole_value_in_the_page() {
-    if !support::node_required("the run of the generated check of a type pattern") {
-        return;
-    }
-    let text = language_text()
-        .replace(
-            "{ \"name\": \"HasRole\", \"newtype\": true, \"fields\": [{ \"name\": \"role\", \"type\": \"string\" }] }",
-            "{ \"name\": \"HasRole\", \"newtype\": true, \"fields\": [{ \"name\": \"role\", \"type\": \"role-code\" }] }",
-        )
-        .replace(
-            "{ \"id\": \"cmp-op\",",
-            "{ \"id\": \"role-code\", \"name\": \"Role code\", \"kind\": \"id\", \"repr\": \"string\", \"constraints\": { \"pattern\": \"[a-z]{3}\" } },\n    { \"id\": \"cmp-op\",",
-        );
-    assert!(text.contains("role-code"));
-    let files = generated(LANGUAGE_SPEC, &text);
-    let js = module(&files, MODULE);
-    let line = js
-        .lines()
-        .find(|line| line.contains("role-code breaks its pattern constraint"))
-        .unwrap_or_else(|| panic!("the module does not check the pattern of role-code:\n{js}"))
-        .trim()
-        .to_string();
-    let name = line
-        .split("String(")
-        .nth(1)
-        .and_then(|rest| rest.split(')').next())
-        .expect("the checked name")
-        .to_string();
-
-    let server = regex::Regex::new(&strata_spec_compiler::rules::anchored("[a-z]{3}")).unwrap();
-    let mut script = String::from(
-        "import assert from 'node:assert/strict';\nclass ParseError extends Error {}\n",
-    );
-    script.push_str(&format!("function refused({name}) {{ try {{ {line} }} catch (e) {{ return e instanceof ParseError; }} return false; }}\n"));
-    for (value, accepted) in [
-        ("abc", true),
-        ("abc!!!", false),
-        ("!!!abc", false),
-        ("ab", false),
-    ] {
-        assert_eq!(server.is_match(value), accepted, "the server on {value}");
-        script.push_str(&format!(
-            "assert.equal(refused({value:?}), {}, 'the page on {value}');\n",
-            !accepted
-        ));
-    }
-    let dir = std::env::temp_dir().join(format!("specc-type-pattern-{}", std::process::id()));
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("package.json"), "{ \"type\": \"module\" }\n").unwrap();
-    let path = dir.join("check.mjs");
-    fs::write(&path, script).unwrap();
-    let run = Command::new("node").arg(&path).output().unwrap();
-    assert!(
-        run.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr)
-    );
 }

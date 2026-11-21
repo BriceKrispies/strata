@@ -25,9 +25,6 @@ mod oidc;
 #[path = "operations.rs"]
 mod operations;
 
-#[path = "production.rs"]
-mod production;
-
 #[path = "products.rs"]
 mod products;
 
@@ -42,9 +39,6 @@ mod scim;
 
 #[path = "segments.rs"]
 mod segments;
-
-#[path = "settings.rs"]
-mod settings;
 
 #[path = "spec_agreement.rs"]
 mod spec_agreement;

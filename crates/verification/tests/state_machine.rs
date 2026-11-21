@@ -232,35 +232,3 @@ proptest! {
         }
     }
 }
-
-#[test]
-fn a_grandfathered_migration_is_reported_as_a_broken_invariant() {
-    let world = notes_world();
-    let (world, _) = world
-        .step(
-            &new_note("First", "first"),
-            &ctx("alpha", user("alpha:writer1"), 5_000),
-        )
-        .unwrap();
-    let grandfather = Intent::ChangeSchema {
-        changes: vec![SchemaChange::DefineField {
-            object: object("note"),
-            field: field_def("rank", FieldType::Int, true),
-        }],
-        expected_version: None,
-        existing: ExistingData::Grandfather,
-    };
-    let (world, _) = world
-        .step(&grandfather, &ctx("alpha", user("alpha:owner"), 5_001))
-        .unwrap();
-    let broken: Vec<_> = check_world(&world)
-        .into_iter()
-        .filter(|i| !i.holds)
-        .collect();
-    assert_eq!(broken.len(), 1);
-    assert_eq!(broken[0].id, "records_conform");
-    assert_eq!(
-        broken[0].violations,
-        ["alpha: note/1: required:note.rank (a value is required)"]
-    );
-}

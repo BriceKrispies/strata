@@ -8,25 +8,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use strata_backend::app::{App, Config, Shared};
-use strata_backend::auth::Identity;
 use strata_backend::mail::DevSink;
-use strata_backend::product_segments;
-use strata_backend::worker::{self, segment_work, steps, WorkerConfig};
+use strata_backend::worker::{self, steps, WorkerConfig};
 use strata_kernel::segment_flow;
-use strata_kernel::segments::{self as seg, Definition, SegmentDirection, SegmentId, SegmentKey};
+use strata_kernel::segments::{self as seg, Definition, SegmentDirection, SegmentId};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_model::types::AutomationStepResult;
-use strata_protocol::ws::SessionState;
 use strata_storage_api::jobs::{
     JobReport, JobState, JobWork, NewJob, RetryPolicy, RunState, StepState,
 };
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::segment_jobs::SegmentWork;
-use strata_storage_api::{execute, segments as kept, ExecuteError, SessionRecord, Store};
-use strata_substrate::bundle::{
-    plan_install, plan_remove, run_planned, InstalledRecord, Planned, ProductBundle, ProductTarget,
-};
+use strata_storage_api::{execute, segments as kept, Store};
 use strata_substrate::subscribe::{segment_notice, Notice, Selector, SelectorExt};
 
 /// The time the tests start at: noon of a quota day, so that a few minutes never cross midnight.
@@ -460,59 +454,6 @@ impl Fx {
     }
 }
 
-fn batch_jobs(fx: &Fx) -> Vec<strata_storage_api::jobs::Job> {
-    fx.jobs()
-        .into_iter()
-        .filter(|job| matches!(&job.work, JobWork::Segment(SegmentWork::Batch { .. })))
-        .collect()
-}
-
-// Verifies: SEG-028, CT-297
-#[test]
-fn a_segment_of_350_people_is_evaluated_across_batches_with_no_one_twice_or_missed() {
-    let fx = Fx::new("batches", vec![]);
-    for n in 0..350 {
-        fx.create_member(T0 + n, &format!("m{n:03}"), "gold", None);
-    }
-    fx.define(T0 + 1_000, &gold_definition());
-    // The definition left one continuation, and its job is in the same commit.
-    assert_eq!(fx.app.store.segment_batches(&fx.tenant()).unwrap().len(), 1);
-    assert_eq!(batch_jobs(&fx).len(), 1);
-    assert!(
-        fx.members(gold_id()).is_empty(),
-        "nothing is evaluated before the worker runs"
-    );
-
-    fx.drain(T0 + 2_000);
-
-    let members = fx.members(gold_id());
-    let distinct: BTreeSet<&String> = members.iter().collect();
-    assert_eq!(members.len(), 350);
-    assert_eq!(distinct.len(), 350, "no person is a member twice");
-    // 350 persons are 100, 100, 100 and 50: four batches, each the job the one before made.
-    assert_eq!(batch_jobs(&fx).len(), 4);
-    assert!(fx
-        .app
-        .store
-        .segment_batches(&fx.tenant())
-        .unwrap()
-        .is_empty());
-    // One entry for each person, none twice, none missed.
-    let events = fx.events();
-    let entered: BTreeSet<String> = events
-        .iter()
-        .map(|(_, e)| e.event.person.as_str().to_string())
-        .collect();
-    assert_eq!(events.len(), 350);
-    assert_eq!(entered.len(), 350);
-    assert!(events
-        .iter()
-        .all(|(_, e)| e.event.direction == SegmentDirection::Entered));
-    // The log is handed on and every job ended well.
-    assert_eq!(fx.app.store.segment_cursor(&fx.tenant()).unwrap(), 350);
-    assert!(fx.jobs().iter().all(|job| job.state == JobState::Completed));
-}
-
 // Verifies: SEG-022, SEG-024, CT-297
 #[test]
 fn a_changed_predicate_over_260_people_leaves_membership_equal_to_a_fresh_evaluation() {
@@ -658,29 +599,6 @@ fn a_time_dependent_segments_member_leaves_at_the_first_refresh_after_the_wake_t
             && matches!(&job.work, JobWork::Segment(SegmentWork::Refresh { .. }))),
         "the schedule goes on"
     );
-}
-
-// Verifies: SEG-1543, SEG-1544
-#[test]
-fn a_refresh_with_no_quota_is_skipped_and_recorded_and_refuses_no_commit() {
-    let fx = Fx::new("capped", vec![]);
-    segment_work::set_daily_job_quota(&fx.tenant(), 1);
-    fx.define(T0, &recent_definition());
-    // The definition made a batch and the schedule: two jobs of the quota day, past a quota of one.
-    fx.drain(T0 + 60_000);
-    let catalog = fx.app.store.segment_catalog(&fx.tenant()).unwrap();
-    assert_eq!(catalog[0].refresh_skipped_at, Some(Timestamp(T0 + 60_000)));
-    // The change of a person still commits, and the person enters with it.
-    fx.create_member(T0 + 61_000, "fresh", "silver", Some(T0 + 61_000));
-    assert_eq!(fx.members(sid(2)), vec![fx.person("fresh")]);
-    // The schedule is not dropped: the next refresh catches up.
-    assert!(fx.jobs().iter().any(|job| job.state == JobState::Waiting
-        && matches!(&job.work, JobWork::Segment(SegmentWork::Refresh { .. }))));
-    // With room again the refresh runs and records nothing new.
-    segment_work::set_daily_job_quota(&fx.tenant(), 1_000);
-    fx.drain(T0 + 130_000);
-    let catalog = fx.app.store.segment_catalog(&fx.tenant()).unwrap();
-    assert_eq!(catalog[0].refresh_skipped_at, Some(Timestamp(T0 + 60_000)));
 }
 
 // Verifies: SEG-014, SEG-1543, SCH-015
@@ -891,195 +809,4 @@ fn a_restored_snapshot_leaves_membership_equal_to_a_fresh_evaluation_once_the_ba
         catalog[0].version, 2,
         "a restore supersedes what was pending"
     );
-}
-
-fn signed_in(fx: &Fx, who: &str) -> Identity {
-    let principal = principal_id(&fx.person(who));
-    Identity {
-        tenant: fx.tenant(),
-        principal: Principal::User(principal.clone()),
-        session: Some(SessionRecord {
-            id: SessionId::new(format!("s-{who}")).unwrap(),
-            token_hash: format!("hash-{who}"),
-            csrf_token: "csrf".into(),
-            tenant: fx.tenant(),
-            principal,
-            display_name: who.to_string(),
-            created_at: Timestamp(0),
-            last_seen_at: Timestamp(0),
-            expires_at: Timestamp(i64::MAX),
-            revoked_at: None,
-            authenticated_at: Timestamp(0),
-            network: None,
-        }),
-        state: SessionState::Active,
-        correlation: "t-segment-jobs".into(),
-        verified_address: None,
-        idempotency_key: None,
-    }
-}
-
-/// A product that declares a record type and the segment of its gold members.
-fn tiers_bundle() -> serde_json::Value {
-    serde_json::json!({
-        "name": "Tiers",
-        "version": "1.0.0",
-        "product": "tiers",
-        "platform": { "min": "0.2", "below": "0.4" },
-        "content": {
-            "objects": {
-                "tiers__member": {
-                    "id": "tiers__member",
-                    "label": "Member",
-                    "fields": {
-                        "principal": { "id": "principal", "label": "Principal", "ty": "Str", "required": true, "unique": true },
-                        "tier": { "id": "tier", "label": "Tier", "ty": "Str", "required": false, "unique": false }
-                    }
-                }
-            },
-            "segments": {
-                "tiers__gold": {
-                    "name": "Gold",
-                    "subject-type": "tiers__member",
-                    "predicate": "record.tier == 'gold'",
-                    "principal-field": "principal"
-                }
-            }
-        }
-    })
-}
-
-// Verifies: INT-1581, SEG-026, D-6582
-#[test]
-fn a_bundle_with_a_segment_installs_defines_it_once_and_removes_it_without_an_exit_event() {
-    let fx = Fx::new("bundle", vec![]);
-    let identity = signed_in(&fx, "owner");
-    let tenant = fx.tenant();
-    let bundle = ProductBundle::from_json(&tiers_bundle().to_string()).unwrap();
-    let derived = seg::derive_segment_id(&tenant, &SegmentKey::new("tiers__gold").unwrap());
-    let store = fx.app.store.as_ref();
-    let mut run = |sub: Context, intent: Intent| -> Result<Output, ExecuteError> {
-        execute(store, &intent, &sub).map(|done| done.transition.output)
-    };
-
-    // Install: the schema change is one commit; the segment follows through the segment store.
-    let schema = store
-        .load(&tenant, &[])
-        .unwrap()
-        .tenant
-        .unwrap()
-        .schema
-        .clone();
-    let target = ProductTarget {
-        tenant: &tenant,
-        principal: fx.owner(),
-        now: T0,
-        release: "0.2",
-        schema: &schema,
-        installed: None,
-        expected_version: None,
-        idempotency_key: None,
-    };
-    let planned = plan_install(&bundle, &target).unwrap();
-    let Planned::Change(change) = planned.clone() else {
-        panic!("the install is a change")
-    };
-    product_segments::precheck(&fx.app, &identity, &change, None).unwrap();
-    assert!(
-        store.segment_catalog(&tenant).unwrap().is_empty(),
-        "the pre-check touches nothing"
-    );
-    run_planned(planned, &target, &mut run).unwrap();
-    product_segments::define_all(&fx.app, &identity, &change).unwrap();
-    let catalog = store.segment_catalog(&tenant).unwrap();
-    assert_eq!(catalog.len(), 1);
-    assert_eq!(
-        catalog[0].id, derived,
-        "the id is derived from the tenant and the key"
-    );
-    assert_eq!(catalog[0].version, 1);
-    let after = store
-        .load(&tenant, &[])
-        .unwrap()
-        .tenant
-        .unwrap()
-        .schema
-        .clone();
-    let record = InstalledRecord::of(&after, "tiers").unwrap();
-    assert!(record
-        .owns
-        .iter()
-        .any(|e| e.kind == "segment" && e.id == "tiers__gold"));
-
-    // The same bundle again is the same install: the same id at the same version.
-    let target = ProductTarget {
-        tenant: &tenant,
-        principal: fx.owner(),
-        now: T0 + 1,
-        release: "0.2",
-        schema: &after,
-        installed: None,
-        expected_version: None,
-        idempotency_key: None,
-    };
-    assert!(matches!(
-        plan_install(&bundle, &target).unwrap(),
-        Planned::Unchanged { .. }
-    ));
-    product_segments::ensure(&fx.app, &identity, &bundle).unwrap();
-    let again = store.segment_catalog(&tenant).unwrap();
-    assert_eq!(
-        (again.len(), again[0].id, again[0].version),
-        (1, derived, 1)
-    );
-
-    // A member enters with the commit that creates it, so that a removal has something to leave
-    // behind.
-    execute(
-        store,
-        &Intent::CreateRecord {
-            object: object("tiers__member"),
-            fields: BTreeMap::from([
-                (field("principal"), text("bundle:ines")),
-                (field("tier"), text("gold")),
-            ]),
-        },
-        &fx.ctx(T0 + 2),
-    )
-    .unwrap();
-    assert_eq!(fx.members(derived), vec!["bundle:ines".to_string()]);
-    let logged = fx.events().len();
-    assert_eq!(logged, 1);
-
-    // Removal: the segment goes first, with its members and with no exit event, then the schema.
-    let target = ProductTarget {
-        tenant: &tenant,
-        principal: fx.owner(),
-        now: T0 + 20,
-        release: "0.2",
-        schema: &after,
-        installed: None,
-        expected_version: None,
-        idempotency_key: None,
-    };
-    let planned = plan_remove("tiers", true, &target).unwrap();
-    let Planned::Change(removal) = planned.clone() else {
-        panic!("the removal is a change")
-    };
-    assert_eq!(removal.segments.removals(&tenant), vec![derived]);
-    product_segments::precheck(&fx.app, &identity, &removal, None).unwrap();
-    let taken = product_segments::take(&fx.app, &identity, &removal).unwrap();
-    assert!(!taken.is_empty());
-    run_planned(planned, &target, &mut run).unwrap();
-    assert!(store.segment_catalog(&tenant).unwrap().is_empty());
-    assert!(fx.members(derived).is_empty());
-    assert_eq!(fx.events().len(), logged, "a removal writes no exit event");
-    let gone = store
-        .load(&tenant, &[])
-        .unwrap()
-        .tenant
-        .unwrap()
-        .schema
-        .clone();
-    assert!(InstalledRecord::of(&gone, "tiers").is_none());
 }

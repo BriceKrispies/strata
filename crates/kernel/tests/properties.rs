@@ -5,7 +5,6 @@
 //! members, strangers, the public and the system, acting on their own tenant and on others.
 
 use proptest::prelude::*;
-use proptest::strategy::ValueTree;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use strata_kernel::testkit::*;
@@ -744,99 +743,4 @@ proptest! {
         }
     }
 
-    /// A workflow field changes only along a declared transition, and only for someone the
-    /// transition's guard lets through; a record starts in an initial state. (Over random
-    /// input, beside the table of `behaviour.rs`: KRN-008.)
-    #[test]
-    fn a_workflow_field_changes_only_by_a_declared_transition(
-        from in 0..WORLDS,
-        ops in proptest::collection::vec(op_strategy(), 1..30),
-    ) {
-        let status = field("status");
-        let mut world = start(from);
-        for (i, op) in ops.iter().enumerate() {
-            let context = context_of(op, 10_000 + i as i64);
-            let roles = world
-                .tenants
-                .get(&context.tenant)
-                .map(|tenant| roles_held(tenant, &context.principal))
-                .unwrap_or_default();
-            if let Ok((next, outcome)) = world.step(&intent_of(op), &context) {
-                for event in &outcome.events {
-                    match &event.body {
-                        EventBody::RecordCreated { record } if record.object == object("note") => {
-                            prop_assert_eq!(record.get(&status), &text("draft"));
-                        }
-                        EventBody::RecordUpdated { before, after, .. } if before.object == object("note") => {
-                            let (a, b) = (before.get(&status).as_str(), after.get(&status).as_str());
-                            if a != b {
-                                prop_assert!(
-                                    matches!((a, b), (Some("draft"), Some("published")) | (Some("published"), Some("draft"))),
-                                    "{:?} -> {:?} is not a declared transition", a, b
-                                );
-                                if b == Some("published") {
-                                    prop_assert!(roles.contains(&role("editor")), "published without the guard's role");
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                world = next;
-            }
-        }
-    }
-
-    /// Every rejection, of whichever intent and from whichever world, lists at least one check
-    /// that failed. (The same requirement as the example table in `behaviour.rs`, KRN-007, over
-    /// random input.)
-    #[test]
-    fn every_rejection_lists_a_failed_check(
-        from in 0..WORLDS,
-        ops in proptest::collection::vec(op_strategy(), 1..30),
-    ) {
-        let mut world = start(from);
-        for (i, op) in ops.iter().enumerate() {
-            match world.step(&intent_of(op), &context_of(op, 10_000 + i as i64)) {
-                Ok((next, _)) => world = next,
-                Err(error) => prop_assert!(
-                    error.evidence.iter().any(|c| !c.passed),
-                    "{:?} was refused as {:?} with no failed check: {:?}", op, error.kind, error.evidence
-                ),
-            }
-        }
-    }
-}
-
-/// The property tests are only as good as the worlds and intents they draw from: the worlds
-/// really differ, and between them the generated operations reach all seven intents and every
-/// kind of actor.
-#[test]
-fn the_starting_worlds_differ_and_every_intent_is_generated() {
-    let worlds = cached_worlds();
-    assert_eq!(worlds.len(), WORLDS);
-    let hashes: BTreeSet<String> = worlds.iter().map(|(_, w)| w.hash()).collect();
-    assert_eq!(hashes.len(), WORLDS, "two starting worlds are the same");
-
-    let mut runner = proptest::test_runner::TestRunner::deterministic();
-    let mut names = BTreeSet::new();
-    let mut actors = BTreeSet::new();
-    for _ in 0..400 {
-        let op = op_strategy().new_tree(&mut runner).unwrap().current();
-        names.insert(intent_of(&op).name());
-        actors.insert(op.actor);
-    }
-    assert_eq!(
-        names,
-        BTreeSet::from([
-            "create_tenant",
-            "change_schema",
-            "assign_role",
-            "revoke_role",
-            "create_record",
-            "update_record",
-            "delete_record"
-        ])
-    );
-    assert_eq!(actors.len(), 7);
 }

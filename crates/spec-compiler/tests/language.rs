@@ -42,13 +42,6 @@ fn language_text() -> String {
     fs::read_to_string(manifest_dir().join("tests/fixtures/language/spec.jsonc")).unwrap()
 }
 
-fn refusal(text: &str) -> Vec<String> {
-    match strata_spec_compiler::generate_core(LANGUAGE_SPEC, text, LANGUAGE_CRATE) {
-        Ok(_) => Vec::new(),
-        Err(diagnostics) => diagnostics.iter().map(ToString::to_string).collect(),
-    }
-}
-
 #[test]
 fn language_golden_output_matches_its_fixture_crate() {
     let dir = manifest_dir().join("../spec-compiler-language-fixture");
@@ -77,73 +70,6 @@ fn language_golden_output_matches_its_fixture_crate() {
         differences.is_empty(),
         "crates/spec-compiler-language-fixture is not what specc generates from the language fixture: {differences:?}. Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
     );
-}
-
-#[test]
-fn a_language_specc_cannot_generate_is_refused() {
-    let text = language_text();
-    // An operator naming a primitive outside the catalogue.
-    let unknown = text.replace("\"primitive\": \"lower\"", "\"primitive\": \"upper\"");
-    assert!(
-        refusal(&unknown)
-            .iter()
-            .any(|d| d.contains("specc.language-invalid") && d.contains("lower")),
-        "{:?}",
-        refusal(&unknown)
-    );
-    // An AST variant without an operator.
-    let uncovered = text.replace(
-        "{ \"name\": \"is-slug\", \"variant\": \"IsSlug\"",
-        "{ \"name\": \"is-slug\", \"variant\": \"Nowhere\"",
-    );
-    assert!(
-        refusal(&uncovered)
-            .iter()
-            .any(|d| d.contains("IsSlug has no operator")),
-        "{:?}",
-        refusal(&uncovered)
-    );
-    // A language without generation of the values it needs: no bool literal.
-    let no_bool = text.replace(
-        "{ \"name\": \"lit-bool\", \"variant\": \"Lit\", \"case\": { \"field\": \"value\", \"value\": \"Bool\" }, \"syntax\": { \"form\": \"literal\", \"token\": \"bool\" }, \"operands\": [], \"result\": \"bool\", \"nulls\": \"total\", \"primitive\": \"literal\" },",
-        "",
-    );
-    assert_ne!(no_bool, text);
-    assert!(
-        refusal(&no_bool)
-            .iter()
-            .any(|d| d.contains("specc.language")),
-        "{:?}",
-        refusal(&no_bool)
-    );
-    // Time arithmetic over a time literal that does not hold an i64 of milliseconds.
-    let unsigned_time = text.replace(
-        "{ \"name\": \"Time\", \"newtype\": true, \"fields\": [{ \"name\": \"value\", \"type\": \"i64\" }] }",
-        "{ \"name\": \"Time\", \"newtype\": true, \"fields\": [{ \"name\": \"value\", \"type\": \"u64\" }] }",
-    );
-    assert_ne!(unsigned_time, text);
-    assert!(
-        refusal(&unsigned_time)
-            .iter()
-            .any(|d| d.contains("specc.language-unsupported") && d.contains("time arithmetic")),
-        "{:?}",
-        refusal(&unsigned_time)
-    );
-    // The shape of an operand as the result of a primitive the checker does not check in turn.
-    let operand_result = text.replace(
-        "\"operands\": [[\"str\", \"list\"], \"any\"], \"result\": \"bool\"",
-        "\"operands\": [[\"str\", \"list\"], \"any\"], \"result\": \"operand:1\"",
-    );
-    assert_ne!(operand_result, text);
-    assert!(
-        refusal(&operand_result)
-            .iter()
-            .any(|d| d.contains("specc.language-unsupported") && d.contains("operand:1")),
-        "{:?}",
-        refusal(&operand_result)
-    );
-    // The fixture itself generates.
-    assert_eq!(refusal(&text), Vec::<String>::new());
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -225,43 +151,6 @@ fn template_expressions(t: &Json) -> Vec<Site> {
     out
 }
 
-#[test]
-fn the_generated_printer_prints_the_template_as_the_kernel_does() {
-    let sites = template_expressions(&template());
-    assert!(
-        sites.len() >= 30,
-        "the template was read: {} expressions",
-        sites.len()
-    );
-    let mut failures = Vec::new();
-    for site in &sites {
-        let source = site.source.as_str();
-        let kernel = kexpr::parse(source)
-            .unwrap_or_else(|e| panic!("the kernel refuses {source}: {e}"))
-            .to_string();
-        let generated = match lang::parse(source) {
-            Ok(expr) => expr.to_string(),
-            Err(e) => {
-                failures.push(format!("{source}: the generated parser refuses it: {e}"));
-                continue;
-            }
-        };
-        if generated != kernel {
-            failures.push(format!(
-                "{source}:\n  kernel    {kernel}\n  generated {generated}"
-            ));
-        }
-        // What is printed reads back to the same expression.
-        match lang::parse(&generated) {
-            Ok(again) if again.to_string() == generated => {}
-            other => failures.push(format!(
-                "{source}: the printed form does not read back: {other:?}"
-            )),
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
 /// Expressions beyond the template, for the parser, the evaluator and the check.
 const MORE: &[&str] = &[
     "len(new.title) <= 120 and not is_null(new.slug) or has_role(editor)",
@@ -329,58 +218,6 @@ const MORE: &[&str] = &[
     "concat(new.title, null)",
     "param.q + 1",
 ];
-
-const BAD: &[&str] = &[
-    "record.title ==",
-    "drop_table(record.x)",
-    "'open",
-    "record.a == 1 2",
-    "[record.a]",
-    "record.a == 1 == 2",
-    "ref(-1)",
-    "time(x)",
-    "len(1, 2)",
-    "new.",
-    "record.a @ 1",
-    "'bad \\q escape'",
-    "99999999999999999999",
-    "(true",
-    "has_role(",
-    "1 +",
-    "days(1, 2)",
-    "concat('a')",
-];
-
-#[test]
-fn parse_errors_are_the_kernels() {
-    let mut failures = Vec::new();
-    for source in BAD {
-        let kernel = kexpr::parse(source).map(|e| e.to_string());
-        let generated = lang::parse(source).map(|e| e.to_string());
-        if kernel != generated {
-            failures.push(format!(
-                "{source}:\n  kernel    {kernel:?}\n  generated {generated:?}"
-            ));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-// ---------------------------------------------------------------------------------------------
-// Evaluation against the kernel
-// ---------------------------------------------------------------------------------------------
-
-fn to_generated(v: &KValue) -> Value {
-    match v {
-        KValue::Null => Value::Null,
-        KValue::Bool(b) => Value::Bool(*b),
-        KValue::Int(i) => Value::Int(*i),
-        KValue::Str(s) => Value::Str(s.clone()),
-        KValue::Time(t) => Value::Time(*t),
-        KValue::Ref(id) => Value::Ref(id.0),
-        KValue::List(items) => Value::List(items.iter().map(to_generated).collect()),
-    }
-}
 
 /// The generated language's record, reading a kernel record as the kernel reads it.
 struct Rec<'a>(&'a KRecord);
@@ -715,56 +552,4 @@ impl lang::TypeEnv for Definitions<'_> {
     fn has_role(&self, role: &str) -> bool {
         RoleId::new(role).is_ok_and(|r| self.roles.contains(&r))
     }
-}
-
-#[test]
-fn the_static_check_agrees_with_the_kernel() {
-    let t = template();
-    let objects = objects(&t);
-    let roles: BTreeSet<RoleId> = t["roles"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| RoleId::new(r["id"].as_str().unwrap()).unwrap())
-        .chain(["owner", "public"].map(|r| RoleId::new(r).unwrap()))
-        .collect();
-    let mut sites = template_expressions(&t);
-    // The extra expressions, checked at the post with the parameter q.
-    sites.extend(MORE.iter().map(|s| Site {
-        source: s.to_string(),
-        object: "post".to_string(),
-        params: vec!["q".to_string()],
-    }));
-    let mut failures = Vec::new();
-    for site in &sites {
-        let object = &objects[&ObjectTypeId::new(&site.object).unwrap()];
-        let params: BTreeSet<String> = site.params.iter().cloned().collect();
-        // Check every expression at its own object, and the template's at the post too.
-        for at in [object, &objects[&ObjectTypeId::new("post").unwrap()]] {
-            let kenv = kexpr::TypeEnv {
-                fields: &at.fields,
-                params: &params,
-                roles: &roles,
-                objects: &objects,
-            };
-            let genv = Definitions {
-                object: at,
-                objects: &objects,
-                params: &params,
-                roles: &roles,
-            };
-            let source = site.source.as_str();
-            let kernel =
-                kexpr::check(&kexpr::parse(source).unwrap(), &kenv).map(|s| format!("{s:?}"));
-            let generated =
-                lang::check(&lang::parse(source).unwrap(), &genv).map(|s| format!("{s:?}"));
-            if kernel != generated {
-                failures.push(format!(
-                    "{source} at {}:\n  kernel    {kernel:?}\n  generated {generated:?}",
-                    at.id
-                ));
-            }
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

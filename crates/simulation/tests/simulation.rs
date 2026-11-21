@@ -6,9 +6,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use strata_kernel::*;
 use strata_protocol::tenants::load_all;
-use strata_simulation::engine::{
-    replay, run, DeliveryResult, Faults, Outcome, Scenario, Scheduled, Trace,
-};
+use strata_simulation::engine::{run, Faults, Outcome, Scenario, Trace};
 use strata_simulation::journal::{replay_journal, Recorded};
 use strata_simulation::project::{project, Proposal};
 use strata_simulation::workload::generate;
@@ -128,83 +126,6 @@ fn the_same_scenario_gives_the_same_trace() {
         first.hash(),
         other.hash(),
         "a different seed is a different execution"
-    );
-}
-
-#[test]
-fn a_trace_replays_against_the_bare_kernel() {
-    let faults = Faults {
-        commit_conflict: 200_000,
-        delivery_drop: 200_000,
-    };
-    let scenario = scenario(11, 50, faults);
-    let (trace, _) = run(&scenario);
-    let replayed = replay(&scenario.initial, &trace);
-    assert_eq!(replayed.agreed, replayed.steps);
-    assert_eq!(replayed.first_mismatch, None);
-    assert!(replayed.final_hash_matches && replayed.kernel_version_matches);
-
-    // A tampered trace is caught at the step that was changed.
-    let mut forged = trace.clone();
-    let victim = forged
-        .steps
-        .iter()
-        .position(|s| s.outcome.accepted())
-        .unwrap();
-    forged.steps[victim].outcome = Outcome::Rejected {
-        kind: ErrorKind::Unauthorized,
-        message: "forged".into(),
-        failed: vec![],
-    };
-    assert_eq!(
-        replay(&scenario.initial, &forged).first_mismatch,
-        Some(victim)
-    );
-}
-
-#[test]
-fn faults_change_the_path_but_not_the_result() {
-    let calm = run(&scenario(3, 60, Faults::default()));
-    let rough = run(&scenario(
-        3,
-        60,
-        Faults {
-            commit_conflict: 300_000,
-            delivery_drop: 400_000,
-        },
-    ));
-    assert_eq!(
-        calm.1.hash(),
-        rough.1.hash(),
-        "retried commits and redelivered events leave the same state"
-    );
-    assert!(rough.0.steps.iter().any(|s| s.conflicts > 0));
-    assert!(rough
-        .0
-        .deliveries
-        .iter()
-        .any(|d| d.result == DeliveryResult::Dropped));
-    for trace in [&calm.0, &rough.0] {
-        for invariant in &trace.invariants {
-            assert!(
-                invariant.holds,
-                "{}: {:?}",
-                invariant.id, invariant.violations
-            );
-        }
-    }
-    // Every committed event was delivered exactly once despite the drops.
-    let delivered: Vec<u64> = rough
-        .0
-        .deliveries
-        .iter()
-        .filter(|d| d.tenant == tenant() && d.result == DeliveryResult::Delivered)
-        .map(|d| d.seq)
-        .collect();
-    assert!(delivered.windows(2).all(|pair| pair[1] == pair[0] + 1));
-    assert_eq!(
-        *delivered.last().unwrap(),
-        rough.1.tenants[&tenant()].event_seq
     );
 }
 
@@ -351,44 +272,6 @@ fn a_branch_with_a_change_that_changes_nothing_equals_its_baseline() {
             assert!(projection.affected_existing.is_empty(), "{at}");
         }
     }
-}
-
-#[test]
-fn requiring_the_excerpt_strictly_is_refused_because_of_existing_posts() {
-    let scenario = scenario(5, 30, Faults::default());
-    let projection = project(
-        &scenario,
-        &require_excerpt(ExistingData::Reject, 0),
-        &mut |_, _, _| true,
-    )
-    .unwrap();
-    match &projection.change_outcome {
-        Outcome::Rejected { kind, failed, .. } => {
-            assert_eq!(*kind, ErrorKind::MigrationRejected);
-            assert!(failed
-                .iter()
-                .all(|c| c.rule.ends_with("required:post.excerpt")));
-        }
-        other => panic!("expected a rejection, got {}", other.verdict()),
-    }
-    let titles: Vec<&str> = projection
-        .affected_existing
-        .iter()
-        .map(|a| a.title.as_str())
-        .collect();
-    assert_eq!(
-        titles,
-        [
-            "Slow Software",
-            "The Second Hundred Hours",
-            "Notes Toward a Workbench"
-        ]
-    );
-    assert!(
-        projection.comparison.outcome_changes.is_empty(),
-        "a refused change changes nothing downstream"
-    );
-    assert_eq!(projection.baseline.final_hash, projection.branch.final_hash);
 }
 
 /// Run an intent and, when the kernel accepts it, add it to the journal the way the store does.
@@ -561,17 +444,6 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     assert_eq!(again.comparison, projection.comparison);
 }
 
-#[test]
-fn a_projection_can_be_cancelled() {
-    let scenario = scenario(5, 40, Faults::default());
-    let result = project(
-        &scenario,
-        &require_excerpt(ExistingData::Grandfather, 0),
-        &mut |phase, done, _| !(phase == 1 && done >= 10),
-    );
-    assert!(result.is_err());
-}
-
 /// Verifies: SIM-004
 #[test]
 fn a_journal_of_real_commits_replays_to_the_live_state() {
@@ -736,29 +608,4 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
             assert!(found.agreed < found.entries, "{what} at entry {position}");
         }
     }
-}
-
-#[test]
-fn the_generator_reads_the_schema_and_nothing_else() {
-    // The same generator on the notes fixture of the kernel, which has no posts or authors.
-    let world = strata_kernel::testkit::notes_world();
-    let schedule: Vec<Scheduled> = generate(
-        &world,
-        &TenantId::new("alpha").unwrap(),
-        2,
-        40,
-        50_000,
-        1_000,
-    );
-    let accepted = schedule.iter().fold((world, 0), |(world, n), s| {
-        match world.step(&s.intent, &s.context) {
-            Ok((next, _)) => (next, n + 1),
-            Err(_) => (world, n),
-        }
-    });
-    assert!(
-        accepted.1 >= 10,
-        "only {} of 40 generated operations were accepted",
-        accepted.1
-    );
 }

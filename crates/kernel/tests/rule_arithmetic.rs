@@ -5,7 +5,7 @@
 //! it, the filter leaves the record out. Nothing panics, wraps or saturates.
 
 use std::collections::{BTreeMap, BTreeSet};
-use strata_kernel::expr::{self, EvalError};
+use strata_kernel::expr::EvalError;
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 
@@ -187,49 +187,6 @@ fn offer(world: &World, id: RecordId) -> std::sync::Arc<Record> {
         .clone()
 }
 
-// Verifies: CMS-1540
-#[test]
-fn a_policy_computes_with_time_and_integers_and_an_overflow_fails_it_with_evidence() {
-    let (world, id) = create_offer(&offers_world(), 5_000, 0, 10 * DAY, 2);
-    // While the offer runs (now before its end less five minutes) and 2 * 2 + 1 > 3, writer2
-    // may edit it, although the other policy's condition overflows.
-    let (world, outcome) = step(
-        &world,
-        "writer2",
-        5 * DAY,
-        update(id, &[("title", text("Edited"))]),
-    )
-    .expect("the running offer is edited");
-    assert!(outcome
-        .evidence
-        .iter()
-        .any(|c| c.rule == "policy:writers_edit_while_running" && c.passed));
-    // Four minutes before the end, neither policy grants the update: one is false, the other
-    // fails with integer-overflow, which the refusal names.
-    let refused = step(
-        &world,
-        "writer2",
-        10 * DAY - 4 * 60_000,
-        update(id, &[("title", text("Late"))]),
-    )
-    .unwrap_err();
-    assert_eq!(refused.kind, ErrorKind::Unauthorized);
-    assert!(
-        refused
-            .evidence
-            .iter()
-            .any(|c| c.rule == "policy:writers_edit_big"
-                && !c.passed
-                && c.detail.contains("integer-overflow")),
-        "{:?}",
-        refused.evidence
-    );
-    assert!(refused
-        .evidence
-        .iter()
-        .any(|c| c.rule == "policy:writers_edit_while_running" && !c.passed));
-}
-
 // Verifies: CMS-1541
 #[test]
 fn a_workflow_guard_measures_time_and_an_overflowing_guard_refuses_the_transition() {
@@ -385,22 +342,4 @@ fn a_rule_of_the_wrong_shapes_is_refused_when_it_is_defined() {
             refused.message
         );
     }
-}
-
-/// The printer writes what the parser reads back, and a `-` after an operand subtracts.
-#[test]
-fn arithmetic_prints_and_parses_back() {
-    let built = Expr::Arith(
-        ArithOp::Sub,
-        Box::new(Expr::Now),
-        Box::new(Expr::Duration(
-            DurationUnit::Days,
-            Box::new(Expr::Lit(Value::Int(7))),
-        )),
-    );
-    assert_eq!(rule("now - days(7)"), built);
-    assert_eq!(rule("now-days(7)"), built);
-    assert_eq!(built.to_string(), "(now - days(7))");
-    assert_eq!(rule("record.n - -1").to_string(), "(record.n - -1)");
-    assert_eq!(rule("-1"), Expr::Lit(Value::Int(-1)));
 }

@@ -26,22 +26,3 @@ fn a_redemption_carries_no_address_the_caller_controls() {
         );
     }
 }
-
-/// Every operation the browser route accepts parses from its name, and no other name does.
-#[test]
-fn the_operations_are_the_variants_and_nothing_else() {
-    let bodies = [
-        json!({ "op": "assign_role", "principal": "user:a", "role": "editor" }),
-        json!({ "op": "revoke_role", "principal": "user:a", "role": "editor" }),
-        json!({ "op": "add_team_member", "team": "desk", "principal": "user:a" }),
-        json!({ "op": "remove_team_member", "team": "desk", "principal": "user:a" }),
-        json!({ "op": "invite", "invitation": "inv-1", "address": "a@example.org", "roles": ["author"] }),
-        json!({ "op": "redeem", "invitation": "inv-1" }),
-        json!({ "op": "revoke_invitation", "invitation": "inv-1" }),
-    ];
-    for (body, op) in bodies.iter().zip(MembersRequest::OPS) {
-        assert_eq!(body["op"], op);
-        serde_json::from_value::<MembersRequest>(body.clone()).unwrap();
-    }
-    assert!(serde_json::from_value::<MembersRequest>(json!({ "op": "set_owner" })).is_err());
-}

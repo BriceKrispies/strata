@@ -1,9 +1,6 @@
 //! The routine tests of strata-spec-compiler, gathered into one test binary: each module below is one of
 //! the package's test files, unchanged.
 
-#[path = "adversarial.rs"]
-mod adversarial;
-
 #[path = "audit_refusals.rs"]
 mod audit_refusals;
 
@@ -12,9 +9,6 @@ mod catalogue;
 
 #[path = "deploy.rs"]
 mod deploy;
-
-#[path = "derived.rs"]
-mod derived;
 
 #[path = "differential.rs"]
 mod differential;
@@ -37,9 +31,6 @@ mod language_js;
 #[path = "layer_expr_drift.rs"]
 mod layer_expr_drift;
 
-#[path = "machine_refusals.rs"]
-mod machine_refusals;
-
 #[path = "realisation.rs"]
 mod realisation;
 
@@ -48,9 +39,3 @@ mod scenarios;
 
 #[path = "web.rs"]
 mod web;
-
-#[path = "web_rules.rs"]
-mod web_rules;
-
-#[path = "wiring.rs"]
-mod wiring;

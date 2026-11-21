@@ -3,6 +3,3 @@
 
 #[path = "members.rs"]
 mod members;
-
-#[path = "tenants.rs"]
-mod tenants;

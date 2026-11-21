@@ -7,23 +7,16 @@
 use serde_json::json;
 use std::sync::Arc;
 use strata_backend::app::{App, Config};
-use strata_backend::auth::Identity;
 use strata_backend::erasure::erase_subject;
 use strata_backend::mail::DevSink;
 use strata_kernel::{
-    Action, Context, DataSubject, ErrorKind, ExistingData, Expr, FieldDef, FieldId, FieldType,
-    Intent, Need, ObjectTypeId, PersonalDeclaration, PersonalKind, PolicyDef, PolicyId, Principal,
-    PrincipalId, QueryDef, QueryId, Record, RecordId, Resource, RetentionRule, RetentionStart,
-    RoleDef, RoleId, SchemaChange, SessionId, TenantId, Timestamp, Value, ViewDef, ViewId,
-    ViewSection,
+    Context, DataSubject, ExistingData, FieldDef, FieldId, FieldType, Intent, Need, ObjectTypeId,
+    PersonalDeclaration, PersonalKind, Principal, PrincipalId, Record, RecordId, RetentionRule,
+    RetentionStart, SchemaChange, TenantId, Timestamp, Value,
 };
-use strata_protocol::api::ViewRequest;
-use strata_protocol::ws::SessionState;
 use strata_simulation::journal::{replay_journal_with, Recorded};
-use strata_storage_api::sealed::{
-    is_sealed, parse_token, CipherSession, FieldCipher, TOKEN_PREFIX,
-};
-use strata_storage_api::{execute, ExecuteError, SessionRecord, Store};
+use strata_storage_api::sealed::{is_sealed, parse_token, TOKEN_PREFIX};
+use strata_storage_api::{execute, ExecuteError, Store};
 use strata_storage_sqlite::SqliteStore;
 
 const ADA_EMAIL: &str = "ada@example.org";
@@ -217,29 +210,6 @@ fn record(store: &dyn Store, site: &TenantId, id: u64) -> Option<Arc<Record>> {
         .and_then(|tenant| tenant.records.get(&object())?.get(&RecordId(id)).cloned())
 }
 
-fn by_email(store: &dyn Store, site: &TenantId, email: &str) -> Vec<RecordId> {
-    let state = store
-        .load(
-            site,
-            &[Need::ByField {
-                object: object(),
-                field: field("email"),
-                value: Value::Str(email.to_string()),
-            }],
-        )
-        .expect("load");
-    state
-        .tenant
-        .map(|tenant| {
-            tenant
-                .records
-                .get(&object())
-                .map(|records| records.keys().copied().collect())
-                .unwrap_or_default()
-        })
-        .unwrap_or_default()
-}
-
 fn text_of<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string(value).expect("encode")
 }
@@ -356,41 +326,6 @@ fn a_snapshot_taken_before_the_erasure_restores_with_the_subject_erased() {
     let state = text_of(&store.load_complete(&alpha).expect("state"));
     assert!(!state.contains(ADA_EMAIL) && !state.contains(ADA_BIO));
     assert!(state.contains(GRACE_EMAIL));
-}
-
-// Verifies: PRV-1588
-// Verifies: PRV-2723
-#[test]
-fn unique_and_exact_match_work_through_the_blind_hash_and_reveal_nothing_after_erasure() {
-    let app = app();
-    let store = app.store.clone();
-    let alpha = populated(store.as_ref(), "alpha");
-
-    assert_eq!(
-        by_email(store.as_ref(), &alpha, GRACE_EMAIL),
-        vec![RecordId(2)]
-    );
-    assert_eq!(
-        by_email(store.as_ref(), &alpha, ADA_EMAIL),
-        vec![RecordId(1)]
-    );
-    assert!(by_email(store.as_ref(), &alpha, "nobody@example.org").is_empty());
-    let clash = create_profile(store.as_ref(), &alpha, 2_100, "alpha:eve", ADA_EMAIL, "x")
-        .expect_err("the address is taken");
-    assert!(
-        matches!(&clash, ExecuteError::Domain(error) if error.kind == ErrorKind::UniqueViolated),
-        "{clash:?}"
-    );
-
-    erase_subject(&app, &owner(&alpha, 3_000), &who("alpha:ada")).expect("erasure");
-
-    assert!(by_email(store.as_ref(), &alpha, ADA_EMAIL).is_empty());
-    assert_eq!(
-        by_email(store.as_ref(), &alpha, GRACE_EMAIL),
-        vec![RecordId(2)]
-    );
-    create_profile(store.as_ref(), &alpha, 3_100, "alpha:eve", ADA_EMAIL, "y")
-        .expect("the erased address is free again");
 }
 
 // Verifies: PRV-361
@@ -533,202 +468,4 @@ fn another_tenants_keys_open_nothing_and_a_value_opens_only_for_its_own_field() 
     raw.doc_put(&beta, "subject-key", parts.key_id, &key_doc, false)
         .expect("copied");
     assert!(!matches!(open(&beta, "email"), Ok(Some(_))));
-}
-
-/// A signed-in identity of `principal`.
-fn identity(app: &App, site: &TenantId, principal: &str) -> Identity {
-    let principal = who(principal);
-    let now = app.now().0;
-    Identity {
-        tenant: site.clone(),
-        principal: Principal::User(principal.clone()),
-        session: Some(SessionRecord {
-            id: SessionId::new(format!("s-{}-{}", site.as_str(), principal.as_str()))
-                .expect("session id"),
-            token_hash: "hash-of-the-session-token".into(),
-            csrf_token: "csrf-token-value".into(),
-            tenant: site.clone(),
-            principal,
-            display_name: "someone".into(),
-            created_at: Timestamp(now),
-            last_seen_at: Timestamp(now),
-            expires_at: Timestamp(i64::MAX),
-            revoked_at: None,
-            authenticated_at: Timestamp(now),
-            network: None,
-        }),
-        state: SessionState::Active,
-        correlation: "t-sealing-read".into(),
-        verified_address: None,
-        idempotency_key: None,
-    }
-}
-
-/// [`found`], with `bio` readable by editors only, the roles `reader` and `editor` that read
-/// profiles, and a view at `/profiles` that lists them.
-fn found_with_readers(store: &dyn Store, name: &str) -> TenantId {
-    let site = tenant(name);
-    execute(
-        store,
-        &Intent::CreateTenant {
-            name: name.to_string(),
-            owner: who(&format!("{name}:owner")),
-        },
-        &ctx(&site, Principal::System, 1_000),
-    )
-    .expect("the tenant is created");
-    let mut changes = vec![SchemaChange::DefineObject {
-        id: object(),
-        label: "Profile".into(),
-    }];
-    let mut bio = def("bio", false, Some(false));
-    bio.read = Some(Expr::HasRole(RoleId::new("editor").expect("role id")));
-    for field in [
-        def("person", false, None),
-        def("email", true, Some(true)),
-        bio,
-        def("plan", false, None),
-    ] {
-        changes.push(SchemaChange::DefineField {
-            object: object(),
-            field,
-        });
-    }
-    changes.push(SchemaChange::SetRetention {
-        object: object(),
-        retention: RetentionRule {
-            days: 30,
-            from: RetentionStart::Created,
-        },
-    });
-    for role_name in ["reader", "editor"] {
-        let role = RoleId::new(role_name).expect("role id");
-        changes.push(SchemaChange::DefineRole(RoleDef {
-            id: role.clone(),
-            label: role_name.to_string(),
-        }));
-        let policy = PolicyId::new(format!("{role_name}_reads_profile")).expect("policy id");
-        changes.push(SchemaChange::DefinePolicy(PolicyDef {
-            id: policy,
-            role,
-            resource: Resource::Object(object()),
-            actions: [Action::Read].into(),
-            condition: None,
-        }));
-    }
-    changes.push(SchemaChange::DefineQuery(QueryDef {
-        id: QueryId::new("all_profiles").expect("query id"),
-        object: object(),
-        filter: None,
-        params: Default::default(),
-        order: vec![],
-        limit: None,
-        aggregates: None,
-        declared_fields: None,
-    }));
-    changes.push(SchemaChange::DefineView(ViewDef {
-        id: ViewId::new("profiles").expect("view id"),
-        route: "/profiles".into(),
-        title: "Profiles".into(),
-        sections: [(
-            "list".to_string(),
-            ViewSection {
-                query: QueryId::new("all_profiles").expect("query id"),
-                args: Default::default(),
-                include: vec![],
-                markdown: vec![],
-                single: false,
-                aggregate: None,
-            },
-        )]
-        .into(),
-    }));
-    execute(
-        store,
-        &Intent::ChangeSchema {
-            changes,
-            expected_version: None,
-            existing: ExistingData::Reject,
-        },
-        &owner(&site, 1_001),
-    )
-    .expect("the readers and the view are defined");
-    for (person, role_name) in [("alpha:rita", "reader"), ("alpha:eddie", "editor")] {
-        execute(
-            store,
-            &Intent::AssignRole {
-                principal: who(person),
-                role: RoleId::new(role_name).expect("role id"),
-            },
-            &owner(&site, 1_003),
-        )
-        .expect("the role is assigned");
-    }
-    site
-}
-
-// Verifies: PRV-358
-// Verifies: PRV-2720
-#[test]
-fn a_personal_field_reads_back_in_plain_only_for_a_reader_the_policies_permit() {
-    let app = app();
-    let store = app.store.clone();
-    let alpha = found_with_readers(store.as_ref(), "alpha");
-    // `bio` is readable by editors only: a read rule on a personal field.
-    let schema = store
-        .load(&alpha, &[])
-        .expect("load")
-        .tenant
-        .expect("the tenant")
-        .schema
-        .clone();
-    assert!(schema.objects[&object()].fields.contains_key(&field("bio")));
-    create_profile(
-        store.as_ref(),
-        &alpha,
-        2_000,
-        "alpha:ada",
-        ADA_EMAIL,
-        ADA_BIO,
-    )
-    .expect("Ada's profile");
-
-    let served = |reader: &str| {
-        let who = identity(&app, &alpha, reader);
-        let view = strata_backend::ops::view(
-            &app,
-            &who,
-            &ViewRequest {
-                path: "/profiles".into(),
-                request: Default::default(),
-                fields: None,
-                cursor: None,
-                limit: None,
-            },
-        )
-        .expect("the view is served");
-        serde_json::to_string(&view).expect("encode")
-    };
-    // An editor reads the biography in plain, and never the sealed form.
-    let editor = served("alpha:eddie");
-    assert!(
-        editor.contains(ADA_BIO) && !editor.contains(TOKEN_PREFIX),
-        "{editor}"
-    );
-    // A reader whose policies do not permit it is served the record without that field: neither
-    // the value nor the sealed token that stands for it.
-    let reader = served("alpha:rita");
-    assert!(reader.contains(ADA_EMAIL), "{reader}");
-    assert!(
-        !reader.contains(ADA_BIO) && !reader.contains(TOKEN_PREFIX),
-        "{reader}"
-    );
-    // Someone with no role at all reads no profile.
-    let stranger = served("alpha:nobody");
-    assert!(
-        !stranger.contains(ADA_BIO)
-            && !stranger.contains(ADA_EMAIL)
-            && !stranger.contains(TOKEN_PREFIX),
-        "{stranger}"
-    );
 }

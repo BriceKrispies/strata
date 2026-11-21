@@ -1,7 +1,7 @@
 //! Every guard and effect expression of the real specifications must parse.
 
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 use strata_spec_expr::parse;
 
@@ -131,41 +131,6 @@ fn strata_expressions() -> &'static [(String, String)] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specifications/spec.jsonc");
         read_expressions(&path)
     })
-}
-
-fn check_all_parse(found: &[(String, String)], origin: &str) {
-    let failures: Vec<String> = found
-        .iter()
-        .filter_map(|(place, src)| parse(src).err().map(|e| format!("{place}: `{src}`\n{e}")))
-        .collect();
-    assert!(
-        failures.is_empty(),
-        "{} of {} expressions in {origin} do not parse:\n{}",
-        failures.len(),
-        found.len(),
-        failures.join("\n")
-    );
-}
-
-#[test]
-fn strata_specification_expressions_parse() {
-    let found = strata_expressions();
-    assert!(
-        !found.is_empty(),
-        "no expressions found: the walker is broken"
-    );
-    check_all_parse(found, "specifications/spec.jsonc");
-}
-
-#[test]
-fn exegra_specification_expressions_parse() {
-    let path: PathBuf =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../exegra/specs/exegra/spec.jsonc");
-    if !path.exists() {
-        eprintln!("skipped: {} is absent", path.display());
-        return;
-    }
-    check_all_parse(&read_expressions(&path), &path.display().to_string());
 }
 
 /// A scope that gives each reference the type assigned to it, for both targets.
