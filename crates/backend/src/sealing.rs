@@ -24,7 +24,7 @@ pub fn seal(app: &App, aad: &[u8], secret: &[u8]) -> Result<String, ApiError> {
 /// Seal `secret` under `key`, bound to `aad`, in the form [`seal`] writes.
 pub fn seal_with(key: &SealKey, aad: &[u8], secret: &[u8]) -> Result<String, ApiError> {
     let mut nonce = [0u8; NONCE_BYTES];
-    getrandom::getrandom(&mut nonce)
+    strata_runtime::entropy::fill(&mut nonce)
         .map_err(|e| ApiError::new(ErrorCode::Unavailable, format!("no randomness: {e}")))?;
     let cipher = Aes256Gcm::new_from_slice(&key.0)
         .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("sealing a secret: {e}")))?;
