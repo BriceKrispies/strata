@@ -262,6 +262,9 @@ pub fn touched(change: &SchemaChange) -> Vec<EntityRef> {
         C::DefineField { object, .. }
         | C::DefineRelationship { object, .. }
         | C::RemoveField { object, .. }
+        | C::RenameField { object, .. }
+        | C::MoveField { object, .. }
+        | C::RetypeField { object, .. }
         | C::DefineConstraint { object, .. }
         | C::RemoveConstraint { object, .. }
         | C::DefineUnique { object, .. }

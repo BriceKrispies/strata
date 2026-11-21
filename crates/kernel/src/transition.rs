@@ -2,11 +2,13 @@
 
 use crate::definitions::{operation_powers, uniques, AUTOMATIONS_DEFINE};
 use crate::dependencies::{self, Assessment, ChangeClass, DependencyGraph};
+use crate::evolution::{self, PinBook};
 use crate::expr::{self, Env};
 use crate::intent::{
     Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, DomainEvent, Effect, ErrorKind,
     EventBody, ExistingData, Intent, Output, SchemaChange, StateDelta, Transition,
 };
+use crate::rewrite;
 use crate::rules::{
     assigned_roles, authorize, authorize_needing, holds_any, holds_power, insufficient, may_confer,
     missing_error, missing_grants, roles_of, validate_record, Lookup, Subject,
@@ -35,6 +37,20 @@ pub fn transition(
     intent: &Intent,
     ctx: &Context,
 ) -> Result<Transition, DomainError> {
+    transition_pinned(state, intent, ctx, &PinBook::default()).map(|(transition, _)| transition)
+}
+
+/// [`transition`] with the book of structural versions and pins of the tenant
+/// ([`crate::evolution`]): a breaking change that reaches only dependents pinned at the version
+/// in force, and that has a left inverse, is accepted. Returns the book after the decision, which
+/// the shell stores with the transition; it is the book given, unchanged, for every intent but a
+/// change of schema.
+pub fn transition_pinned(
+    state: &State,
+    intent: &Intent,
+    ctx: &Context,
+    pins: &PinBook,
+) -> Result<(Transition, PinBook), DomainError> {
     if state.tenant_id != ctx.tenant {
         return Err(refuse(
             ErrorKind::TenantMismatch,
@@ -47,7 +63,9 @@ pub fn transition(
     }
     refuse_reserved_principals(intent, ctx)?;
     let tenant = match (intent, state.tenant.as_deref()) {
-        (Intent::CreateTenant { name, owner }, None) => return create_tenant(ctx, name, owner),
+        (Intent::CreateTenant { name, owner }, None) => {
+            return create_tenant(ctx, name, owner).map(|t| (t, pins.clone()))
+        }
         (Intent::CreateTenant { .. }, Some(_)) => {
             return Err(refuse(
                 ErrorKind::TenantExists,
@@ -76,13 +94,21 @@ pub fn transition(
         coverage: &state.coverage,
     };
     let mut draft = Draft::new(tenant, ctx, lookup);
+    let mut pins_out = pins.clone();
     let output = match intent {
         Intent::CreateTenant { .. } => unreachable!("handled above"),
         Intent::ChangeSchema {
             changes,
             expected_version,
             existing,
-        } => change_schema(&mut draft, lookup, changes, *expected_version, *existing)?,
+        } => change_schema(
+            &mut draft,
+            lookup,
+            changes,
+            *expected_version,
+            *existing,
+            &mut pins_out,
+        )?,
         Intent::AssignRole { principal, role } => change_member(&mut draft, principal, role, true)?,
         Intent::RevokeRole { principal, role } => {
             change_member(&mut draft, principal, role, false)?
@@ -174,7 +200,8 @@ pub fn transition(
                 inputs,
                 idempotency_key,
             )
-            .and_then(|result| crate::triggers::after_decision(lookup, ctx, result));
+            .and_then(|result| crate::triggers::after_decision(lookup, ctx, result))
+            .map(|t| (t, pins.clone()));
         }
         Intent::PostLedger { postings } => {
             let decided = crate::ledger::decide_intent(state, postings, ctx)?;
@@ -191,7 +218,7 @@ pub fn transition(
             decided.output
         }
     };
-    crate::triggers::after_decision(lookup, ctx, draft.finish(output))
+    crate::triggers::after_decision(lookup, ctx, draft.finish(output)).map(|t| (t, pins_out))
 }
 
 /// The prefix of the principal that stands for a team in events. A person may not hold an id
@@ -300,7 +327,7 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
             for change in changes {
                 let _ = apply_change(&mut changed, change);
             }
-            for object in touched_objects(changes) {
+            for object in touched_objects(schema, changes) {
                 for def in [schema.objects.get(&object), changed.objects.get(&object)]
                     .into_iter()
                     .flatten()
@@ -420,10 +447,22 @@ pub fn refine_needs(state: &State, intent: &Intent) -> Vec<Need> {
 
 /// Object types whose records must be re-validated after these changes, plus the targets of
 /// any reference fields they introduce.
-fn touched_objects(changes: &[SchemaChange]) -> BTreeSet<ObjectTypeId> {
+fn touched_objects(schema: &TenantSchema, changes: &[SchemaChange]) -> BTreeSet<ObjectTypeId> {
     let mut out = BTreeSet::new();
     for change in changes {
         match change {
+            SchemaChange::RenameField { object, .. } | SchemaChange::RetypeField { object, .. } => {
+                out.insert(object.clone());
+            }
+            SchemaChange::MoveField { object, via, .. } => {
+                out.insert(object.clone());
+                let target = schema
+                    .objects
+                    .get(object)
+                    .and_then(|o| o.fields.get(via))
+                    .and_then(|f| f.ty.ref_target().map(|(to, _, _)| to.clone()));
+                out.extend(target);
+            }
             SchemaChange::DefineField { object, field } => {
                 out.insert(object.clone());
                 if let Some((target, _, _)) = field.ty.ref_target() {
@@ -1547,7 +1586,10 @@ fn redeem_invitation(
 }
 
 /// Apply one schema change to a working copy and describe it.
-fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<String, String> {
+pub(crate) fn apply_change(
+    schema: &mut TenantSchema,
+    change: &SchemaChange,
+) -> Result<String, String> {
     fn object<'a>(
         schema: &'a mut TenantSchema,
         id: &ObjectTypeId,
@@ -1616,6 +1658,58 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                 .remove(field)
                 .ok_or_else(|| format!("no field {id}.{field}"))?;
             format!("remove field {id}.{field}")
+        }
+        SchemaChange::RenameField {
+            object: id,
+            from,
+            to,
+        } => {
+            // The dependents that read the old name are rewritten first, against the schema as it
+            // stands, then the field takes its new name (MIG-560, MIG-608).
+            rewrite::rewrite_schema(change, schema)?;
+            let def = object(schema, id)?;
+            let mut field = def
+                .fields
+                .remove(from)
+                .ok_or_else(|| format!("no field {id}.{from}"))?;
+            field.id = to.clone();
+            def.fields.insert(to.clone(), field);
+            format!("rename field {id}.{from} to {to}")
+        }
+        SchemaChange::MoveField {
+            object: id,
+            field,
+            via,
+            to_field,
+        } => {
+            rewrite::rewrite_schema(change, schema)?;
+            let target = schema
+                .objects
+                .get(id)
+                .and_then(|o| o.fields.get(via))
+                .and_then(|f| f.ty.ref_target().map(|(to, _, _)| to.clone()))
+                .ok_or_else(|| format!("{id}.{via} is not a reference"))?;
+            let moved = object(schema, id)?
+                .fields
+                .remove(field)
+                .ok_or_else(|| format!("no field {id}.{field}"))?;
+            object(schema, &target)?
+                .fields
+                .insert(to_field.clone(), rewrite::moved_def(&moved, to_field));
+            format!("move field {id}.{field} to {target}.{to_field} along {via}")
+        }
+        SchemaChange::RetypeField {
+            object: id,
+            field,
+            ty,
+            ..
+        } => {
+            let def = object(schema, id)?
+                .fields
+                .get_mut(field)
+                .ok_or_else(|| format!("no field {id}.{field}"))?;
+            def.ty = ty.clone();
+            format!("retype field {id}.{field}")
         }
         SchemaChange::DefineConstraint {
             object: id,
@@ -1919,7 +2013,8 @@ pub fn plan_migration(
 
     let mut rewritten = Vec::new();
     let mut violations = Vec::new();
-    for object in touched_objects(changes) {
+    let moved = rewrite::plan_moves(lookup, changes, current)?;
+    for object in touched_objects(current, changes) {
         let (Some(def), true) = (
             schema.objects.get(&object),
             current.objects.contains_key(&object),
@@ -1927,13 +2022,19 @@ pub fn plan_migration(
             continue;
         };
         for record in lookup.all_of(&object)? {
-            let stripped: BTreeMap<FieldId, Value> = record
-                .fields
-                .iter()
-                .filter(|(field, _)| def.fields.contains_key(*field))
-                .map(|(field, value)| (field.clone(), value.clone()))
+            // A rename carries the value under the new name, a move brings the value to the
+            // record it moves to, a retype re-encodes it (MIG-560); then what the object type no
+            // longer declares is dropped.
+            let mut carried = rewrite::carry_fields(changes, &object, &record.fields, now)
+                .map_err(|e| DomainError::new(ErrorKind::MigrationRejected, e))?;
+            if let Some(arrived) = moved.get(&(object.clone(), record.id)) {
+                carried.extend(arrived.clone());
+            }
+            let stripped: BTreeMap<FieldId, Value> = carried
+                .into_iter()
+                .filter(|(field, _)| def.fields.contains_key(field))
                 .collect();
-            let candidate = if stripped.len() == record.fields.len() {
+            let candidate = if stripped == record.fields {
                 record.clone()
             } else {
                 let rewritten_record = Arc::new(Record {
@@ -1984,20 +2085,39 @@ pub fn assess_changes(
     for change in changes {
         let class = dependencies::classify(change, &working);
         let footprint = dependencies::footprint(change, &working);
+        // An adaptable change reaches the dependents that read what it moves, and rewrites each
+        // of them: its impact is read in the graph of the schema it is applied to, and the
+        // dependents it rewrites are listed in the order they are rewritten (MIG-608).
+        let (reached, rewritten) = if class == ChangeClass::Adaptable {
+            let graph = DependencyGraph::of(&working);
+            let mut probe = working.clone();
+            let rewritten = rewrite::rewrite_schema(change, &mut probe).unwrap_or_default();
+            (
+                Some(dependencies::impact_between(&footprint, &graph, &graph)),
+                rewritten,
+            )
+        } else {
+            (None, Vec::new())
+        };
         let Ok(description) = apply_change(&mut working, change) else {
             break;
         };
-        steps.push((description, class, footprint));
+        steps.push((description, class, footprint, reached, rewritten));
     }
     let before = DependencyGraph::of(base);
     let after = DependencyGraph::of(after);
     steps
         .into_iter()
-        .map(|(description, class, footprint)| Assessment {
-            description,
-            class,
-            impact: dependencies::impact_between(&footprint, &before, &after),
-        })
+        .map(
+            |(description, class, footprint, reached, rewritten)| Assessment {
+                description,
+                class,
+                impact: reached
+                    .unwrap_or_else(|| dependencies::impact_between(&footprint, &before, &after)),
+                footprint,
+                rewritten,
+            },
+        )
         .collect()
 }
 
@@ -2007,6 +2127,7 @@ fn change_schema(
     changes: &[SchemaChange],
     expected_version: Option<SchemaVersion>,
     existing: ExistingData,
+    pins: &mut PinBook,
 ) -> Result<Output, DomainError> {
     draft.require(Action::Manage, &Resource::Schema, Subject::default())?;
     // D-7204: who defined a trigger or an automation, and when, comes from the context.
@@ -2043,6 +2164,37 @@ fn change_schema(
         return Err(draft.reject(ErrorKind::InvalidSchema, message));
     }
     crate::ledger::check_removals(lookup, changes, &mut draft.evidence)?;
+    // D-8215, MIG-599: the old shape of a pinned entity is removed only when no pin on it remains.
+    // A breaking change that is not a retype has no left inverse (MIG-557), so a dependent pinned
+    // to what it removes keeps it waiting. Said here, before the consistency check below finds
+    // the dependent reading what is gone.
+    if !pins.pins.is_empty() {
+        let mut working = TenantSchema::clone(&draft.tenant.schema);
+        for change in changes {
+            let breaking = dependencies::classify(change, &working) == ChangeClass::Breaking;
+            if breaking && !matches!(change, SchemaChange::RetypeField { .. }) {
+                let held: Vec<String> = dependencies::impact(change, &working)
+                    .into_iter()
+                    .filter(|dependent| pins.is_pinned(dependent))
+                    .map(|dependent| dependent.to_string())
+                    .collect();
+                if !held.is_empty() {
+                    let message = format!(
+                        "{} has no left inverse (MIG-557), so it is not projected and waits until the pins of {} end (MIG-599)",
+                        apply_change(&mut working.clone(), change).unwrap_or_default(),
+                        held.join(", ")
+                    );
+                    draft
+                        .evidence
+                        .push(Check::fail("schema:pin", message.clone()));
+                    return Err(draft.reject(ErrorKind::InvalidSchema, message));
+                }
+            }
+            if apply_change(&mut working, change).is_err() {
+                break;
+            }
+        }
+    }
     let migration = plan_migration(lookup, changes, draft.ctx.now).map_err(|mut e| {
         let mut evidence = draft.evidence.clone();
         evidence.append(&mut e.evidence);
@@ -2069,10 +2221,49 @@ fn change_schema(
         };
         draft.evidence.push(Check::pass("schema:class", detail));
     }
-    let mut refusals = Vec::new();
+    // D-8212, MIG-608: what an adaptable change rewrote, each dependent once, after those it uses.
     for assessment in &assessments {
+        for dependent in &assessment.rewritten {
+            draft.evidence.push(Check::pass(
+                "schema:rewrite",
+                format!("{}: {dependent} rewritten", assessment.description),
+            ));
+        }
+    }
+    let mut refusals = Vec::new();
+    for (change, assessment) in changes.iter().zip(&assessments) {
         if assessment.class != ChangeClass::Breaking || assessment.impact.is_empty() {
             continue;
+        }
+        // D-8214: a dependent pinned to the version in force reads a breaking change through a
+        // projection, where the change has a left inverse on the data (MIG-596, MIG-597).
+        match evolution::decide_breaking(change, assessment, pins, draft.ctx.now) {
+            evolution::Verdict::Pinned => {
+                for dependent in &assessment.impact {
+                    draft.evidence.push(Check::pass(
+                        "schema:pin",
+                        format!(
+                            "{}: {dependent} is pinned and reads through the projection",
+                            assessment.description
+                        ),
+                    ));
+                }
+                continue;
+            }
+            evolution::Verdict::Refused(message) if !pins.pins.is_empty() => {
+                for dependent in &assessment.impact {
+                    draft.evidence.push(Check::fail(
+                        "schema:impact",
+                        format!(
+                            "{}: {dependent} is still bound to what the change removes or replaces",
+                            assessment.description
+                        ),
+                    ));
+                }
+                refusals.push(message);
+                continue;
+            }
+            evolution::Verdict::Refused(_) => {}
         }
         let reached: Vec<String> = assessment.impact.iter().map(|d| d.to_string()).collect();
         for dependent in &reached {
@@ -2093,6 +2284,50 @@ fn change_schema(
     if !refusals.is_empty() {
         return Err(draft.reject(ErrorKind::InvalidSchema, refusals.join("; ")));
     }
+    // MIG-597: a retype that reaches a pinned dependent needs a decode that undoes its encode on
+    // every value stored.
+    for (change, assessment) in changes.iter().zip(&assessments) {
+        let SchemaChange::RetypeField {
+            object,
+            field,
+            encode,
+            decode,
+            ..
+        } = change
+        else {
+            continue;
+        };
+        if assessment.class != ChangeClass::Breaking || assessment.impact.is_empty() {
+            continue;
+        }
+        let stored: Vec<Value> = lookup
+            .all_of(object)?
+            .iter()
+            .map(|record| record.get(field).clone())
+            .collect();
+        if let Err(problem) =
+            evolution::check_left_inverse(encode, decode, stored.iter(), draft.ctx.now)
+        {
+            draft
+                .evidence
+                .push(Check::fail("schema:projection", problem.clone()));
+            return Err(draft.reject(
+                ErrorKind::InvalidSchema,
+                format!(
+                    "{}: no projection: {problem} (MIG-597)",
+                    assessment.description
+                ),
+            ));
+        }
+        draft.evidence.push(Check::pass(
+            "schema:projection",
+            format!(
+                "{}: decode undoes encode on the stored values",
+                assessment.description
+            ),
+        ));
+    }
+    *pins = evolution::advance(pins, changes, &assessments);
     // The overrides and revisions that a change of setting definitions brings with it, or the
     // refusal of a type that changes under overrides (SET-004).
     let settings = crate::settings::schema_change_effects(draft.tenant, changes)

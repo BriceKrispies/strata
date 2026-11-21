@@ -20,7 +20,8 @@
 //!
 //! Where the Lean model and the specification differ (the Lean model calls an added field
 //! adaptable and a rename compatible), this module follows the specification: add-field and
-//! widening are compatible, and a rename is adaptable. The kernel has no rename change yet.
+//! widening are compatible, and a rename or a move of a field is adaptable
+//! ([`crate::rewrite`] rewrites the dependents it reaches).
 //!
 //! Everything here is a pure function of schemas and changes.
 
@@ -374,10 +375,12 @@ pub enum ChangeClass {
     /// Leaves each valid dependent valid, evaluating the same on the data that exists: add a
     /// field, widen a type, define or replace a definition.
     Compatible,
-    /// Applied together with a rewrite of the dependents (rename, move, total split). The kernel
-    /// has no such change yet.
+    /// Applied together with a rewrite of the dependents (rename, move; a total split is not a
+    /// change of the kernel yet): [`crate::rewrite::rewrite_schema`].
     Adaptable,
-    /// Cannot be followed by a rewrite: remove, narrow, retarget, turn a single value into a list.
+    /// Cannot be followed by a rewrite: remove, narrow, retarget, turn a single value into a list,
+    /// re-encode. Refused where it reaches a dependent, unless every dependent it reaches is
+    /// pinned and the change has a left inverse ([`crate::evolution`]).
     Breaking,
 }
 
@@ -447,7 +450,9 @@ pub fn classify(change: &SchemaChange, schema: &TenantSchema) -> ChangeClass {
                 on_delete: *on_delete,
             },
         ),
-        RemoveField { .. }
+        RenameField { .. } | MoveField { .. } => ChangeClass::Adaptable,
+        RetypeField { .. }
+        | RemoveField { .. }
         | RemoveObject { .. }
         | RemoveConstraint { .. }
         | RemoveUnique { .. }
@@ -510,6 +515,10 @@ pub struct Footprint {
     pub objects: BTreeSet<ObjectTypeId>,
     /// Dependents the change defines again or removes. They are not in their own impact.
     pub entities: BTreeSet<DependentId>,
+    /// Cells the change creates under a new name or in a new place (rename, move). No dependent
+    /// reads them before the change, so they reach nothing; two changes that create or touch the
+    /// same cell overlap all the same (see [`crate::evolution::rebase`]).
+    pub created: BTreeSet<Cell>,
 }
 
 /// The dependent a change defines, replaces or removes, if it is one of the graph.
@@ -560,6 +569,28 @@ pub fn footprint(change: &SchemaChange, schema: &TenantSchema) -> Footprint {
         }
         SchemaChange::RemoveField { object, field } => {
             out.cells.insert((object.clone(), field.clone()));
+        }
+        SchemaChange::RetypeField { object, field, .. } => {
+            if existing_field(schema, object, field).is_some() {
+                out.cells.insert((object.clone(), field.clone()));
+            }
+        }
+        SchemaChange::RenameField { object, from, to } => {
+            out.cells.insert((object.clone(), from.clone()));
+            out.created.insert((object.clone(), to.clone()));
+        }
+        SchemaChange::MoveField {
+            object,
+            field,
+            via,
+            to_field,
+        } => {
+            out.cells.insert((object.clone(), field.clone()));
+            if let Some(to) = existing_field(schema, object, via)
+                .and_then(|def| def.ty.ref_target().map(|(to, _, _)| to.clone()))
+            {
+                out.created.insert((to, to_field.clone()));
+            }
         }
         SchemaChange::RemoveObject { id, .. } => {
             out.objects.insert(id.clone());
@@ -642,6 +673,11 @@ pub fn impact(change: &SchemaChange, schema: &TenantSchema) -> BTreeSet<Dependen
 /// The class and impact of one change of a list, as it is applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assessment {
+    /// What the change touches, against the schema it was applied to.
+    pub footprint: Footprint,
+    /// For an adaptable change, the dependents it rewrote, each once, a dependent after those it
+    /// uses (MIG-608). Empty for any other change.
+    pub rewritten: Vec<DependentId>,
     /// What the change does, as the schema change summary words it.
     pub description: String,
     /// Its class, decided against the schema as it stands when the change is applied.

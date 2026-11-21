@@ -5413,7 +5413,7 @@ pub enum ExistingData {
 
 /// Schema Change
 ///
-/// strata_kernel::SchemaChange: one edit of a tenant schema. define-trigger, define-automation and define-operation are define-or-replace; removing one that does not exist is refused, and an automation is not removed while a trigger names it (D-6539). define-unique and remove-unique add and remove a composite unique constraint of an object type (D-6558). declare-ledger-unit, declare-ledger-pool and set-ledger-limit are define-or-replace in tenant-schema.ledger and need the capability ledger-configure; remove-ledger-definition removes a unit or a pool that no account names, or a limit (LDG-1549, D-6554).
+/// strata_kernel::SchemaChange: one edit of a tenant schema. rename-field, move-field and retype-field are decided by the kernel alone (D-8212..D-8217): a rename and a move are adaptable and rewrite every dependent that reads the field (MIG-560, MIG-608), a retype is breaking and is accepted only where every dependent it reaches is pinned and decode undoes encode on the data (MIG-596, MIG-597). define-trigger, define-automation and define-operation are define-or-replace; removing one that does not exist is refused, and an automation is not removed while a trigger names it (D-6539). define-unique and remove-unique add and remove a composite unique constraint of an object type (D-6558). declare-ledger-unit, declare-ledger-pool and set-ledger-limit are define-or-replace in tenant-schema.ledger and need the capability ledger-configure; remove-ledger-definition removes a unit or a pool that no account names, or a limit (LDG-1549, D-6554).
 ///
 /// Specification type `schema-change`: a union, externally tagged.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -5619,6 +5619,42 @@ pub enum SchemaChange {
     ClearSearchable {
         /// Field `object`.
         object: ObjectTypeId,
+    },
+    /// The variant `rename-field`.
+    RenameField {
+        /// Field `object`.
+        object: ObjectTypeId,
+        /// Field `from`.
+        from: FieldId,
+        /// Field `to`.
+        to: FieldId,
+    },
+    /// The variant `move-field`.
+    MoveField {
+        /// Field `object`.
+        object: ObjectTypeId,
+        /// Field `field`.
+        field: FieldId,
+        /// Field `via`.
+        via: FieldId,
+        /// Field `to-field`.
+        to_field: FieldId,
+    },
+    /// The variant `retype-field`.
+    RetypeField {
+        /// Field `object`.
+        object: ObjectTypeId,
+        /// Field `field`.
+        field: FieldId,
+        /// Field `ty`.
+        ty: FieldType,
+        /// Field `encode`.
+        encode: Expr,
+        /// Field `decode`.
+        decode: Expr,
+        /// Field `deprecation-ends`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deprecation_ends: Option<prelude::Timestamp>,
     },
 }
 
