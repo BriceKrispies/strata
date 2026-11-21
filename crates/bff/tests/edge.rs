@@ -615,11 +615,13 @@ async fn sign_in_and_sign_out_carry_a_request_token_the_gateway_issued() {
             "anonymous sign-out with {what}"
         );
     }
+    // With the token, a browser that has no session has none to end: `unauthenticated`
+    // (contract sign-out-of-site).
     assert_eq!(
         edge.send(anonymous_out(Some(("x-csrf-token", issued.as_str()))))
             .await
             .0,
-        200
+        401
     );
 }
 
@@ -664,10 +666,13 @@ async fn the_site_comes_from_the_host_and_nothing_the_client_says() {
     let (token, _) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
     let (_, there, _) = edge.get("localhost", "/api/session", Some(&token)).await;
     assert_eq!(there["session"]["authenticated"], false);
-    let (_, desk, _) = edge
+    // The desk is the signed-in's (contract read-desk-view): the cookie is no session there, so
+    // the view is refused and shows nothing.
+    let (desk_status, desk, _) = edge
         .get("localhost", "/api/view?path=/desk", Some(&token))
         .await;
-    assert_eq!(desk["data"]["posts"], json!([]));
+    assert_eq!(desk_status, 401, "{desk}");
+    assert_eq!(desk["code"], "unauthenticated");
     assert!(!edge
         .get("127.0.0.1", "/api/view?path=/desk", Some(&token))
         .await
