@@ -453,6 +453,60 @@ pub fn generate(seed: u64) -> Scenario {
             _ => home + 3,
         };
         let t = tenant as usize;
+        // One iteration in ten is a short aimed sequence by the owner, so that the outcomes that
+        // need two or three operations to line up (a delete refused because a record still refers
+        // to its target; an over-limit write to a record that exists) do not depend on the
+        // random operations happening to line up.
+        if tenant != 3 && rng.below(10) == 0 {
+            let first = created[t] + 1;
+            let owner = |kind| Op {
+                tenant,
+                principal: home,
+                kind,
+            };
+            ops.push(owner(OpKind::Create(vec![(
+                1,
+                format!("s:{}", word(&mut rng)),
+            )])));
+            created[t] += 1;
+            versions[t].push(1);
+            if rng.below(2) == 0 {
+                // A record refers to the first, then the first is deleted. Mostly the reference
+                // restricts the delete (field 5, or the list 0); otherwise it is cleared (4, 8).
+                let (field, token) = match rng.below(8) {
+                    0..=2 => (5, format!("r:{first}")),
+                    3..=5 => (0, format!("l:r:{first}")),
+                    6 => (4, format!("r:{first}")),
+                    _ => (8, format!("l:r:{first}")),
+                };
+                referred[t].push(first);
+                ops.push(owner(OpKind::Create(vec![
+                    (1, format!("s:{}", word(&mut rng))),
+                    (field, token),
+                ])));
+                created[t] += 1;
+                versions[t].push(1);
+                let expected = (rng.below(4) == 0).then_some(1);
+                ops.push(owner(OpKind::Delete(first, expected)));
+            } else {
+                // A write that is over a limit by one, to the record just made: a replacement or a
+                // patch. It is refused whatever else the record holds, so it never depends on
+                // how near the record bound the record is.
+                let over = match rng.below(3) {
+                    0 => (1, format!("s*{}:x", STRING_LIMIT + 1)),
+                    1 => (7, format!("l*{}:s:a", LIST_LIMIT + 1)),
+                    _ => (7, format!("l:s:oak,s*{}:y", STRING_LIMIT + 1)),
+                };
+                let kind = if rng.below(2) == 0 {
+                    OpKind::Update(first, None, vec![(1, "s:ash".to_string()), over])
+                } else {
+                    OpKind::Patch(first, (rng.below(3) == 0).then_some(1), vec![over])
+                };
+                ops.push(owner(kind));
+                versions[t][first as usize - 1] += 1;
+            }
+            continue;
+        }
         // Half the operations on a real tenant are aimed: made by someone who may write, to
         // build references, to delete what is referred to, to refer to what is gone.
         let aimed = tenant != 3 && rng.below(2) == 0;
