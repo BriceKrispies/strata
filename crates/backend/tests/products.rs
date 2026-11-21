@@ -29,9 +29,8 @@ const SOURCE: &str = "203.0.113.7";
 const SITE: &str = "fieldnotes";
 
 /// The bundle specc writes for `ledger-trigger.jsonc` (the golden file of its tests).
-const LEDGER_TRIGGER: &str = include_str!(
-    "../../spec-compiler/tests/fixtures/products/expected/ledger-trigger.bundle.json"
-);
+const LEDGER_TRIGGER: &str =
+    include_str!("../../spec-compiler/tests/fixtures/products/expected/ledger-trigger.bundle.json");
 
 struct Backend {
     base: String,
@@ -286,12 +285,7 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
 
     // A dry run answers the projection and changes nothing.
     let (status, dry) = backend
-        .install(
-            &owner,
-            &ledger_trigger(),
-            json!({ "dry_run": true }),
-            None,
-        )
+        .install(&owner, &ledger_trigger(), json!({ "dry_run": true }), None)
         .await;
     assert_eq!(status, 200, "{dry}");
     assert_eq!(dry["dry_run"], json!(true));

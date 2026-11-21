@@ -184,8 +184,7 @@ fn the_pure_crate_names_no_impure_crate_or_std_io_in_its_sources() {
             if line.trim_start().starts_with("//") {
                 continue;
             }
-            let depth_change =
-                line.matches('{').count() as i64 - line.matches('}').count() as i64;
+            let depth_change = line.matches('{').count() as i64 - line.matches('}').count() as i64;
             if let Some(depth) = skipping {
                 let depth = depth + depth_change;
                 skipping = (depth > 0).then_some(depth);
