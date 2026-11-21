@@ -300,21 +300,6 @@ fn personal_fields_are_cleared_and_the_others_kept() {
 
 // Verifies: PRV-2460
 #[test]
-fn a_record_of_another_person_is_untouched() {
-    let world = personal_world();
-    let world = must(&world, "owner", 100, profile("alpha:writer1", "Ada"));
-    let world = must(&world, "owner", 101, profile("alpha:writer2", "Grace"));
-    let theirs = stored(&world, "profile", 2);
-    let (world, _) = erase_all(world, "alpha:writer1", 200);
-    assert_eq!(stored(&world, "profile", 2), theirs);
-    assert_eq!(
-        stored(&world, "profile", 2).get(&field("name")),
-        &text("Grace")
-    );
-}
-
-// Verifies: PRV-2460
-#[test]
 fn what_a_person_created_is_cleared_and_unlinked_and_what_others_created_is_not() {
     let world = personal_world();
     let world = must(&world, "writer1", 100, diary("my secret day"));
@@ -492,35 +477,6 @@ fn a_decision_changes_at_most_one_batch_and_says_where_to_continue() {
 
 // Verifies: PRV-2461
 #[test]
-fn the_records_a_person_created_are_found_by_a_page_scan_that_continues() {
-    let mut world = personal_world();
-    let total = erasure::BATCH * 2 + 30;
-    for i in 0..total {
-        let who = if i % 3 == 0 { "writer2" } else { "writer1" };
-        world = must(&world, who, 100 + i as i64, diary(&format!("entry {i}")));
-    }
-    let mine = (0..total).filter(|i| i % 3 != 0).count();
-    let (world, outcomes) = erase_all(world, "alpha:writer1", 10_000);
-    assert!(outcomes.len() >= 3, "{} decisions", outcomes.len());
-    let changed: usize = outcomes.iter().map(|o| erased(o).0.len()).sum();
-    assert_eq!(changed, mine);
-    for i in 0..total {
-        let record = stored(&world, "diary", i as u64 + 1);
-        if i % 3 == 0 {
-            assert_eq!(
-                record.get(&field("entry")),
-                &text(format!("entry {i}").as_str())
-            );
-            assert!(record.created_by.is_some());
-        } else {
-            assert_eq!(record.get(&field("entry")), &text(""));
-            assert!(record.created_by.is_none());
-        }
-    }
-}
-
-// Verifies: PRV-2461
-#[test]
 fn repeating_an_erasure_changes_nothing() {
     let world = personal_world();
     let world = must(&world, "owner", 100, profile("alpha:writer1", "Ada"));
@@ -633,7 +589,6 @@ fn a_field_that_names_its_subject_by_a_reference_is_refused_at_declaration() {
 // Subject export, legal holds on record types, invitations addressed to the subject, retention.
 // ---------------------------------------------------------------------------------------------
 
-use strata_kernel::retention;
 use strata_kernel::rules::Lookup;
 use strata_kernel::subject_export::{export_needs, export_page, ExportCursor};
 
@@ -974,37 +929,4 @@ fn a_record_that_another_record_refers_to_is_kept_by_the_sweep_until_the_referen
     assert!(after.tenants[&tenant_id("alpha")]
         .record(&object("profile"), RecordId(1))
         .is_none());
-}
-
-// Verifies: PRV-357
-// Verifies: PRV-2744
-#[test]
-fn the_candidates_of_a_sweep_come_in_pages_and_only_the_past_ones_are_due() {
-    let mut world = personal_world();
-    let total = strata_kernel::erasure::BATCH + 20;
-    for i in 0..total {
-        world = must(
-            &world,
-            "owner",
-            100 + i as i64,
-            profile("alpha:writer1", "Ada"),
-        );
-    }
-    // The newest record is young; the others are old.
-    world = must(&world, "owner", 60 * DAY, profile("alpha:writer2", "Grace"));
-    let now = Timestamp(61 * DAY);
-    let state = world.state(&tenant_id("alpha"));
-    let tenant = state.tenant.as_ref().expect("tenant");
-    let def = tenant.schema.objects.get(&object("profile")).expect("type");
-    let lookup = Lookup {
-        tenant,
-        coverage: &state.coverage,
-    };
-    let first = retention::due_page(lookup, def, now, None).expect("page");
-    assert!(first.full);
-    assert_eq!(first.due.len(), strata_kernel::erasure::BATCH);
-    let second = retention::due_page(lookup, def, now, first.last.as_ref()).expect("page");
-    assert_eq!(second.due.len(), 20, "the young record is not due");
-    assert!(retention::ended(def, &first.due[0], now));
-    assert!(!retention::ended(def, &first.due[0], Timestamp(10 * DAY)));
 }

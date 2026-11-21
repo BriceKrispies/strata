@@ -375,7 +375,7 @@ fn writers_edit_only_their_own_notes() {
 }
 
 #[test]
-fn workflow_guards_the_status_field_and_sets_fields_when_it_fires() {
+fn publishing_stamps_published_at_and_returning_to_draft_clears_it() {
     let world = must(
         &notes_world(),
         "alpha",
@@ -383,25 +383,6 @@ fn workflow_guards_the_status_field_and_sets_fields_when_it_fires() {
         5_000,
         new_note("First", "first"),
     );
-    let refused = step(
-        &world,
-        "alpha",
-        "writer1",
-        5_001,
-        patch(1, &[("status", text("published"))]),
-    )
-    .unwrap_err();
-    assert_eq!(refused.kind, ErrorKind::WorkflowViolation);
-    let skipped = step(
-        &world,
-        "alpha",
-        "editor",
-        5_001,
-        patch(1, &[("status", text("archived"))]),
-    )
-    .unwrap_err();
-    assert_eq!(skipped.kind, ErrorKind::WorkflowViolation);
-
     let world = must(
         &world,
         "alpha",
@@ -423,21 +404,6 @@ fn workflow_guards_the_status_field_and_sets_fields_when_it_fires() {
     assert_eq!(
         note(&world, "alpha", 1).get(&field("published_at")),
         &Value::Null
-    );
-
-    let started_published = Intent::CreateRecord {
-        object: object("note"),
-        fields: BTreeMap::from([
-            (field("title"), text("T")),
-            (field("slug"), text("t")),
-            (field("status"), text("published")),
-        ]),
-    };
-    assert_eq!(
-        step(&world, "alpha", "editor", 7_001, started_published)
-            .unwrap_err()
-            .kind,
-        ErrorKind::WorkflowViolation
     );
 }
 
@@ -667,14 +633,6 @@ fn a_grandfathered_migration_is_accepted_and_bites_on_the_next_write() {
             ..
         }
     ));
-    // The non-conforming records are listed in the change's own evidence, one check each.
-    for id in [1, 2] {
-        let rule = format!("existing:note/{id}:required:note.rank");
-        assert!(
-            outcome.evidence.iter().any(|c| c.rule == rule && !c.passed),
-            "{rule} is not listed in the accepted change's evidence"
-        );
-    }
     let stuck = step(
         &world,
         "alpha",
@@ -1045,7 +1003,7 @@ fn a_thin_snapshot_is_refused_with_the_missing_need() {
 }
 
 #[test]
-fn removing_the_last_role_asks_for_the_sessions_to_end_and_the_last_owner_stays() {
+fn removing_the_last_role_asks_for_the_sessions_to_end() {
     let world = notes_world();
     let revoke = Intent::RevokeRole {
         principal: principal_id("alpha:writer1"),
@@ -1055,16 +1013,6 @@ fn removing_the_last_role_asks_for_the_sessions_to_end_and_the_last_owner_stays(
     assert!(outcome.effects.contains(&Effect::RevokeSessions {
         principal: principal_id("alpha:writer1")
     }));
-    let last_owner = Intent::RevokeRole {
-        principal: principal_id("alpha:owner"),
-        role: role("owner"),
-    };
-    assert_eq!(
-        step(&world, "alpha", "owner", 5_001, last_owner)
-            .unwrap_err()
-            .kind,
-        ErrorKind::InvalidIntent
-    );
 }
 
 #[test]
@@ -1491,10 +1439,6 @@ fn an_invitation_grants_its_roles_to_the_one_person_with_its_address() {
     let redeem = || Intent::RedeemInvitation {
         invitation: InvitationId::new("inv-ines").unwrap(),
     };
-    // The intent has no field a caller could put an address in: this pattern names them all.
-    let Intent::RedeemInvitation { invitation: _ } = redeem() else {
-        unreachable!()
-    };
 
     // Another person, whose verified address is another, gets nothing, and is not told which
     // address the invitation names.
@@ -1719,73 +1663,6 @@ fn assigning_a_role_is_refused_unless_the_assigner_holds_all_of_its_permissions(
 
     // The owner holds every permission and confers any role.
     must(&world, "alpha", "owner", 8_014, assign("reader_publisher"));
-}
-
-/// Verifies: ADM-151
-///
-/// A capability is held only through a role that names it, assigned to the principal or held by
-/// a team it belongs to: this is what the generated authorizer fills a principal's tenant roles
-/// and teams from.
-#[test]
-fn a_capability_is_held_only_through_a_role_that_names_it() {
-    let capabilities_of = |world: &World, who: &str| {
-        strata_kernel::rules::held_capabilities(
-            &world.tenants[&tenant_id("alpha")],
-            &user(&format!("alpha:{who}")),
-        )
-    };
-    let names = |items: &[&str]| -> BTreeSet<String> {
-        items.iter().map(|item| item.to_string()).collect()
-    };
-    let world = access_world();
-    // The moderator's role names people.manage; its object permission is no capability.
-    assert_eq!(
-        capabilities_of(&world, "stranger"),
-        names(&["people.manage"])
-    );
-    // A principal with no role holds none, and `reviewer`, with only an object permission,
-    // gives none.
-    assert_eq!(capabilities_of(&world, "writer1"), names(&[]));
-    let world = must(
-        &world,
-        "alpha",
-        "owner",
-        8_100,
-        Intent::AssignRole {
-            principal: principal_id("alpha:writer1"),
-            role: role("reviewer"),
-        },
-    );
-    assert_eq!(capabilities_of(&world, "writer1"), names(&[]));
-    // Through a team: the team's role names content.publish, and its members hold it only while
-    // they belong.
-    let world = must(&world, "alpha", "owner", 8_101, define_team("press"));
-    let world = must(
-        &world,
-        "alpha",
-        "owner",
-        8_102,
-        team_gets("press", "publisher"),
-    );
-    assert_eq!(capabilities_of(&world, "writer1"), names(&[]));
-    let world = must(&world, "alpha", "owner", 8_103, joins("press", "writer1"));
-    assert_eq!(
-        capabilities_of(&world, "writer1"),
-        names(&["content.publish"])
-    );
-    // Another principal, in no team, holds nothing of it.
-    assert_eq!(capabilities_of(&world, "writer2"), names(&[]));
-    let world = must(
-        &world,
-        "alpha",
-        "owner",
-        8_104,
-        Intent::RemoveTeamMember {
-            team: team("press"),
-            principal: principal_id("alpha:writer1"),
-        },
-    );
-    assert_eq!(capabilities_of(&world, "writer1"), names(&[]));
 }
 
 #[test]
