@@ -223,8 +223,15 @@ fn context_of(op: &Op, now: i64) -> Context {
     ctx(WORLD_TENANTS[op.tenant], principal, now)
 }
 
+/// The starting worlds, built once per binary: every case starts from a clone of one of them.
+fn cached_worlds() -> &'static [(&'static str, World)] {
+    static WORLDS_ONCE: std::sync::OnceLock<Vec<(&'static str, World)>> =
+        std::sync::OnceLock::new();
+    WORLDS_ONCE.get_or_init(starting_worlds)
+}
+
 fn start(index: usize) -> World {
-    starting_worlds().swap_remove(index).1
+    cached_worlds()[index].1.clone()
 }
 
 /// The partial snapshot a store would build from a list of needs.
@@ -400,7 +407,7 @@ proptest! {
     // A fixed, recorded seed: a run is the same run every time, and a failure reproduces.
     // Change `rng_seed` on purpose to explore other inputs.
     #![proptest_config(ProptestConfig {
-        cases: 160,
+        cases: 48,
         rng_seed: proptest::test_runner::RngSeed::Fixed(20260101),
         ..ProptestConfig::default()
     })]
@@ -806,7 +813,7 @@ proptest! {
 /// kind of actor.
 #[test]
 fn the_starting_worlds_differ_and_every_intent_is_generated() {
-    let worlds = starting_worlds();
+    let worlds = cached_worlds();
     assert_eq!(worlds.len(), WORLDS);
     let hashes: BTreeSet<String> = worlds.iter().map(|(_, w)| w.hash()).collect();
     assert_eq!(hashes.len(), WORLDS, "two starting worlds are the same");

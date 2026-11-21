@@ -984,11 +984,12 @@ fn every_plan_returns_the_rows_of_a_scan_in_the_same_order_across_pages() {
 
 // Verifies: KRN-2520
 #[test]
-fn a_planned_query_over_a_hundred_thousand_records_loads_a_bounded_number() {
+fn a_planned_query_over_a_table_too_big_to_scan_loads_a_bounded_number() {
+    // The smallest table a scan refuses: one record past `MAX_SCAN_RECORDS`.
     let world = item_world();
     let tenant = with_items(
         &world,
-        (1..=100_000).map(|id| {
+        (1..=limits::MAX_SCAN_RECORDS as u64 + 1).map(|id| {
             item(
                 id,
                 &[

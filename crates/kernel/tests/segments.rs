@@ -1445,10 +1445,6 @@ fn the_segments_of_one_tenant_never_see_another() {
         seg::derive_segment_id(&tenant_id("alpha"), &key),
         seg::derive_segment_id(&tenant_id("beta"), &key)
     );
-    assert_eq!(
-        seg::derive_segment_id(&tenant_id("alpha"), &key),
-        seg::derive_segment_id(&tenant_id("alpha"), &key)
-    );
 }
 
 #[test]

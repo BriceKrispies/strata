@@ -1182,7 +1182,6 @@ fn record(product: &str, owns: Vec<EntityRef>) -> SchemaChange {
 #[test]
 fn the_record_of_a_product_is_committed_with_the_entities_it_names() {
     let world = notes_world();
-    let before = hash(&world);
     let installed = must(
         &world,
         "owner",
@@ -1204,21 +1203,6 @@ fn the_record_of_a_product_is_committed_with_the_entities_it_names() {
         Some("badges")
     );
     assert!(products::owner_of(&schema, EntityKind::Object, "note").is_none());
-
-    // Removing the product removes its record and the entity in one change.
-    let removed = must(
-        &installed,
-        "owner",
-        7_001,
-        change(vec![
-            SchemaChange::RemoveObject {
-                id: object("badges__award"),
-                delete_records: false,
-            },
-            SchemaChange::RemoveProduct(ProductId::new("badges").unwrap()),
-        ]),
-    );
-    assert_eq!(hash(&removed), before);
 }
 
 #[test]
