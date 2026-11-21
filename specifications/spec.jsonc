@@ -64965,6 +64965,7 @@
     {"id":"ledger-period-total","name":"Ledger period total","kind":"struct","description":"The credits posted to an account in the calendar period (UTC) that starts at start, kept for each of the four periods so that a cap per period set later counts the credits already posted in its period (LDG-014, LDG-015, LDG-016).","fields":[{"name":"period","type":"ledger-period"},{"name":"start","type":"timestamp"},{"name":"credits","type":"u64"}]},
     {"id":"ledger-account","name":"Ledger account","kind":"struct","description":"kernel ledger.rs: the header of a ledger account (records rec-ledger-account and rec-ledger-balance as the kernel holds them): its derived id, owner, unit and scope, the balance and the number of its last entry, and the credits of the current periods. A decision loads it without loading the entries (D-5003, K-100). owner is absent once the principal that owned the account has been erased (LDG-027). buckets is the remaining credit of each period, oldest first, kept only for a unit that declares an expiry and absent when none remains (D-6553); the index of accounts due to expire orders by the start of the first.","fields":[{"name":"account","type":"ledger-account-id"},{"name":"owner","type":"ledger-owner","optional":true},{"name":"unit","type":"ledger-unit"},{"name":"scope","type":"ledger-scope"},{"name":"balance","type":"ledger-amount"},{"name":"last-sequence","type":"u64"},{"name":"opened-at","type":"timestamp"},{"name":"periods","type":"list<ledger-period-total>"},{"name":"buckets","type":"list<ledger-bucket>","optional":true}]},
     {"id":"ledger-state","name":"Ledger state","kind":"struct","description":"kernel ledger.rs: the part of the tenant ledger a snapshot holds (tenant-state.ledger): account headers keyed by the text of their id, and for each account (keyed the same way) the entries loaded, in the order of their numbers. A complete snapshot holds every account and every entry; a partial one holds what its ledger needs named. limits holds the limits of single accounts the snapshot holds (WG-5172, D-6554): they live in the ledger and not in the schema, and a snapshot holds the one a decision named by its need.","fields":[{"name":"accounts","type":"map<string, ledger-account>"},{"name":"entries","type":"map<string, list<ledger-entry>>"},{"name":"limits","type":"list<ledger-limit>","optional":true}]},
+    {"id":"ledger-limit-walk","name":"Ledger limit walk","kind":"struct","description":"kernel ledger.rs check_limits: where the check of the account limits among a list of schema changes stands. evidence is the evidence of the draft and the checks written so far; held, once a change has needed them, the limits of single accounts the tenant holds as the changes before it leave them.","fields":[{"name":"evidence","type":"list<check>"},{"name":"held","type":"list<ledger-limit>","optional":true}]},
     {"id":"ledger-declarations","name":"Ledger declarations","kind":"struct","description":"kernel ledger.rs: the units, pools and limits of units a tenant has declared (tenant-schema.ledger), changed by the schema changes declare-ledger-unit, declare-ledger-pool, set-ledger-limit and remove-ledger-definition. At most 64 units and 64 pools (LDG-1550). A limit without an owner is the limit of its unit (LDG-011, LDG-012). The limit of one account is not held here: it is kept in the ledger (ledger-state.limits), at most 10,000 of them (LDG-1550, D-7881).","fields":[{"name":"units","type":"map<ledger-unit, ledger-unit-decl>"},{"name":"pools","type":"map<ledger-pool-name, ledger-pool-decl>"},{"name":"limits","type":"list<ledger-limit>"}]},
     {"id":"ledger-need","name":"Ledger need","kind":"union","encoding":{"tag":"external","variantCase":"PascalCase"},"description":"kernel ledger.rs: a piece of the ledger a decision or read needs (need.ledger). account is the header of one account; entry-by-key the entry of an account with that idempotency key, when there is one; entries at most limit entries of an account numbered above after, in order; ranked the first offset + limit accounts of a unit and scope in order of balance, equal balances in ascending order of the owner (LDG-1543); unit-used and pool-used one account of the unit or of the pool, when there is one (LDG-1549). limit is the limit of the one account of that owner, unit and scope, when it has one (D-6554); limits every limit of single accounts, to count and to list them; expiring at most limit accounts of the unit whose oldest bucket starts at or before cutoff, in order of that start and then of the account id, found through an index (D-6553).","variants":[{"name":"account","fields":[{"name":"account","type":"ledger-account-id"}]},{"name":"entry-by-key","fields":[{"name":"account","type":"ledger-account-id"},{"name":"key","type":"string"}]},{"name":"entries","fields":[{"name":"account","type":"ledger-account-id"},{"name":"after","type":"u64","optional":true},{"name":"limit","type":"u32"}]},{"name":"ranked","fields":[{"name":"unit","type":"ledger-unit"},{"name":"scope","type":"ledger-scope"},{"name":"order","type":"ledger-order"},{"name":"offset","type":"u32"},{"name":"limit","type":"u32"}]},{"name":"unit-used","fields":[{"name":"unit","type":"ledger-unit"}]},{"name":"pool-used","fields":[{"name":"pool","type":"ledger-pool-name"}]},{"name":"limit","fields":[{"name":"owner","type":"ledger-owner"},{"name":"unit","type":"ledger-unit"},{"name":"scope","type":"ledger-scope"}]},{"name":"limits"},{"name":"expiring","fields":[{"name":"unit","type":"ledger-unit"},{"name":"cutoff","type":"i64"},{"name":"limit","type":"u32"}]}]},
     {"id":"ledger-delta","name":"Ledger delta","kind":"union","encoding":{"tag":"external","variantCase":"PascalCase"},"description":"kernel ledger.rs: one change to the ledger (delta-op.ledger). put-account writes the header of an account; append-entry adds an entry, numbered one above the last of its account. No change rewrites or removes an entry (LDG-022), and only the commit of a posting writes a header (LDG-021). put-limit writes the limit of one account and remove-limit removes it; the commit of a schema change that sets or removes such a limit writes them (WG-5172).","variants":[{"name":"put-account","newtype":true,"fields":[{"name":"value","type":"ledger-account"}]},{"name":"append-entry","newtype":true,"fields":[{"name":"value","type":"ledger-entry"}]},{"name":"put-limit","newtype":true,"fields":[{"name":"value","type":"ledger-limit"}]},{"name":"remove-limit","fields":[{"name":"owner","type":"ledger-owner"},{"name":"unit","type":"ledger-unit"},{"name":"scope","type":"ledger-scope"}]}]},
@@ -97174,7 +97175,7 @@
       ],
       "returns": "schema-step",
       "errors": "schema-problem",
-      "body": "match change { define-object{id, label} => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, id, match get(schema.objects, id) { Some(o) => object-type-def{id: o.id, label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique}, None => object-type-def{id, label, fields: {}, constraints: {}} }), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define object {}', id)}, define-field{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: insert(o.fields, field.id, field), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: if get(o.fields, field.id) != null then format('redefine field {}.{}', object, field.id) else format('define field {}.{}', object, field.id)} }, define-relationship{object, field, label, target, on-delete, required} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: insert(o.fields, field, field-def{id: field, label, ty: field-type.ref{target, on-delete}, required, unique: false}), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define relationship {}.{} -> {}', object, field, target)} }, remove-field{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(o.fields, field) == null then fail(schema-problem.problem(format('no field {}.{}', object, field))) else let o2 = object-type-def{id: o.id, label: o.label, fields: remove(o.fields, field), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove field {}.{}', object, field)} }, define-constraint{object, constraint} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: insert(o.constraints, constraint.id, constraint), retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define constraint {}.{}', object, constraint.id)} }, remove-constraint{object, constraint} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(o.constraints, constraint) == null then fail(schema-problem.problem(format('no constraint {}.{}', object, constraint))) else let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: remove(o.constraints, constraint), retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove constraint {}.{}', object, constraint)} }, define-role(role) => if role.id == 'public' || role.id == 'owner' then fail(schema-problem.problem(format('{} is built in', role.id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: insert(schema.roles, role.id, role), role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define role {}', role.id)}, define-role-permissions{role, permissions} => if get(schema.roles, role) == null then fail(schema-problem.problem(format('no role {}', role))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: call role-permissions-with(schema, role, permissions), teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define permissions of role {}', role)}, define-policy(p) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: insert(schema.policies, p.id, p), workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define policy {}', p.id)}, remove-policy(id) => if get(schema.policies, id) == null then fail(schema-problem.problem(format('no policy {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: remove(schema.policies, id), workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove policy {}', id)}, define-workflow(w) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: insert(schema.workflows, w.id, w), queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define workflow {}', w.id)}, remove-workflow(id) => if get(schema.workflows, id) == null then fail(schema-problem.problem(format('no workflow {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: remove(schema.workflows, id), queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove workflow {}', id)}, define-query(q) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: insert(schema.queries, q.id, q), views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define query {}', q.id)}, remove-query(id) => if get(schema.queries, id) == null then fail(schema-problem.problem(format('no query {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: remove(schema.queries, id), views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove query {}', id)}, define-view(w) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: insert(schema.views, w.id, w), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define view {}', w.id)}, remove-view(id) => if get(schema.views, id) == null then fail(schema-problem.problem(format('no view {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: remove(schema.views, id), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove view {}', id)}, define-trigger(t) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: insert(call triggers-of(schema), t.id, t), automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define trigger {}', t.id)}, remove-trigger(id) => if get(call triggers-of(schema), id) == null then fail(schema-problem.problem(format('no trigger {}', id))) else let rest = remove(call triggers-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: if keys(rest) == [] then null else rest, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove trigger {}', id)}, define-automation(a) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: insert(call automations-of(schema), a.id, a), operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define automation {}', a.id)}, remove-automation(id) => if get(call automations-of(schema), id) == null then fail(schema-problem.problem(format('no automation {}', id))) else match find(t in values(call triggers-of(schema)), t.automation == id) { Some(t) => fail(schema-problem.problem(format('automation {} is named by trigger {}', id, t.id))), None => let rest = remove(call automations-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: if keys(rest) == [] then null else rest, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove automation {}', id)} }, define-operation(op) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: insert(call operations-of(schema), op.id, op), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define operation {}', op.id)}, remove-operation(id) => if get(call operations-of(schema), id) == null then fail(schema-problem.problem(format('no operation {}', id))) else let rest = remove(call operations-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: if keys(rest) == [] then null else rest, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove operation {}', id)}, define-unique{object, unique} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: insert(call uniques-of(o), unique.id, unique)} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define unique constraint {}.{}', object, unique.id)} }, remove-unique{object, unique} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(call uniques-of(o), unique) == null then fail(schema-problem.problem(format('no unique constraint {}.{}', object, unique))) else let rest = remove(call uniques-of(o), unique) in let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: if keys(rest) == [] then null else rest} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove unique constraint {}.{}', object, unique)} }, define-setting(sd) => schema-step{schema: call schema-with-settings(schema, insert(call settings-of(schema), sd.id, sd)), line: format('define setting {}', sd.id)}, remove-setting(id) => if get(call settings-of(schema), id) == null then fail(schema-problem.problem(format('no setting {}', id))) else schema-step{schema: call schema-with-settings(schema, remove(call settings-of(schema), id)), line: format('remove setting {}', id)}, define-capability(cd) => schema-step{schema: call schema-with-capabilities(schema, insert(call capabilities-of(schema), cd.id, cd)), line: format('define capability {}', cd.id)}, remove-capability(id) => if get(call capabilities-of(schema), id) == null then fail(schema-problem.problem(format('no capability {}', id))) else schema-step{schema: call schema-with-capabilities(schema, remove(call capabilities-of(schema), id)), line: format('remove capability {}', id)}, declare-ledger-unit(u) => schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: insert(ledger.units, u.unit, u), pools: ledger.pools, limits: ledger.limits}), line: if get(ledger.units, u.unit) == null then format('declare ledger unit {}', u.unit) else format('redeclare ledger unit {}', u.unit)}, declare-ledger-pool(p) => schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: ledger.units, pools: insert(ledger.pools, p.pool, p), limits: ledger.limits}), line: if get(ledger.pools, p.pool) == null then format('declare ledger pool {}', p.pool) else format('redeclare ledger pool {}', p.pool)}, set-ledger-limit(l) => schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: ledger.units, pools: ledger.pools, limits: sortBy(x in sortBy(x in concat(filter(x in ledger.limits, !call ledger-same-limit(x, l.unit, l.owner, call ledger-scope-text(l.scope))), [l]), format('{:?}', x)), x.unit)}), line: match l.owner { None => format('set the limits of ledger unit {}', l.unit), Some(_) => format('set the limits of one account of ledger unit {}', l.unit) }}, remove-ledger-definition(r) => match r { unit{unit} => if get(ledger.units, unit) == null then fail(schema-problem.problem(format('no ledger unit {}', unit))) else schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: remove(ledger.units, unit), pools: ledger.pools, limits: ledger.limits}), line: format('remove ledger unit {}', unit)}, pool{pool} => if get(ledger.pools, pool) == null then fail(schema-problem.problem(format('no ledger pool {}', pool))) else schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: ledger.units, pools: remove(ledger.pools, pool), limits: ledger.limits}), line: format('remove ledger pool {}', pool)}, limit{unit, owner, scope} => let kept = filter(x in ledger.limits, !call ledger-same-limit(x, unit, owner, call ledger-scope-text(scope))) in if length(kept) == length(ledger.limits) then fail(schema-problem.problem(format('no such limit of ledger unit {}', unit))) else schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: ledger.units, pools: ledger.pools, limits: kept}), line: format('remove a limit of ledger unit {}', unit)} }, _ => try call apply-meta-change(schema, change) }",
+      "body": "match change { define-object{id, label} => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, id, match get(schema.objects, id) { Some(o) => object-type-def{id: o.id, label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique}, None => object-type-def{id, label, fields: {}, constraints: {}} }), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define object {}', id)}, define-field{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: insert(o.fields, field.id, field), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: if get(o.fields, field.id) != null then format('redefine field {}.{}', object, field.id) else format('define field {}.{}', object, field.id)} }, define-relationship{object, field, label, target, on-delete, required} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: insert(o.fields, field, field-def{id: field, label, ty: field-type.ref{target, on-delete}, required, unique: false}), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define relationship {}.{} -> {}', object, field, target)} }, remove-field{object, field} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(o.fields, field) == null then fail(schema-problem.problem(format('no field {}.{}', object, field))) else let o2 = object-type-def{id: o.id, label: o.label, fields: remove(o.fields, field), constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove field {}.{}', object, field)} }, define-constraint{object, constraint} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: insert(o.constraints, constraint.id, constraint), retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define constraint {}.{}', object, constraint.id)} }, remove-constraint{object, constraint} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(o.constraints, constraint) == null then fail(schema-problem.problem(format('no constraint {}.{}', object, constraint))) else let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: remove(o.constraints, constraint), retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: o.unique} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove constraint {}.{}', object, constraint)} }, define-role(role) => if role.id == 'public' || role.id == 'owner' then fail(schema-problem.problem(format('{} is built in', role.id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: insert(schema.roles, role.id, role), role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define role {}', role.id)}, define-role-permissions{role, permissions} => if get(schema.roles, role) == null then fail(schema-problem.problem(format('no role {}', role))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: call role-permissions-with(schema, role, permissions), teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define permissions of role {}', role)}, define-policy(p) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: insert(schema.policies, p.id, p), workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define policy {}', p.id)}, remove-policy(id) => if get(schema.policies, id) == null then fail(schema-problem.problem(format('no policy {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: remove(schema.policies, id), workflows: schema.workflows, queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove policy {}', id)}, define-workflow(w) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: insert(schema.workflows, w.id, w), queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define workflow {}', w.id)}, remove-workflow(id) => if get(schema.workflows, id) == null then fail(schema-problem.problem(format('no workflow {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: remove(schema.workflows, id), queries: schema.queries, views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove workflow {}', id)}, define-query(q) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: insert(schema.queries, q.id, q), views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define query {}', q.id)}, remove-query(id) => if get(schema.queries, id) == null then fail(schema-problem.problem(format('no query {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: remove(schema.queries, id), views: schema.views, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove query {}', id)}, define-view(w) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: insert(schema.views, w.id, w), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define view {}', w.id)}, remove-view(id) => if get(schema.views, id) == null then fail(schema-problem.problem(format('no view {}', id))) else schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: remove(schema.views, id), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove view {}', id)}, define-trigger(t) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: insert(call triggers-of(schema), t.id, t), automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define trigger {}', t.id)}, remove-trigger(id) => if get(call triggers-of(schema), id) == null then fail(schema-problem.problem(format('no trigger {}', id))) else let rest = remove(call triggers-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: if keys(rest) == [] then null else rest, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove trigger {}', id)}, define-automation(a) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: insert(call automations-of(schema), a.id, a), operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define automation {}', a.id)}, remove-automation(id) => if get(call automations-of(schema), id) == null then fail(schema-problem.problem(format('no automation {}', id))) else match find(t in values(call triggers-of(schema)), t.automation == id) { Some(t) => fail(schema-problem.problem(format('automation {} is named by trigger {}', id, t.id))), None => let rest = remove(call automations-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: if keys(rest) == [] then null else rest, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove automation {}', id)} }, define-operation(op) => schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: insert(call operations-of(schema), op.id, op), mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define operation {}', op.id)}, remove-operation(id) => if get(call operations-of(schema), id) == null then fail(schema-problem.problem(format('no operation {}', id))) else let rest = remove(call operations-of(schema), id) in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: schema.objects, roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: if keys(rest) == [] then null else rest, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove operation {}', id)}, define-unique{object, unique} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: insert(call uniques-of(o), unique.id, unique)} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('define unique constraint {}.{}', object, unique.id)} }, remove-unique{object, unique} => match get(schema.objects, object) { None => fail(schema-problem.problem(format('no object type {}', object))), Some(o) => if get(call uniques-of(o), unique) == null then fail(schema-problem.problem(format('no unique constraint {}.{}', object, unique))) else let rest = remove(call uniques-of(o), unique) in let o2 = object-type-def{id: o.id, label: o.label, fields: o.fields, constraints: o.constraints, retention: o.retention, publication: o.publication, language-field: o.language-field, translation-group: o.translation-group, unique: if keys(rest) == [] then null else rest} in schema-step{schema: tenant-schema{version: schema.version, settings: schema.settings, capabilities: schema.capabilities, ledger: schema.ledger, objects: insert(schema.objects, object, o2), roles: schema.roles, role-permissions: schema.role-permissions, teams: schema.teams, invitations: schema.invitations, policies: schema.policies, workflows: schema.workflows, queries: schema.queries, views: schema.views, triggers: schema.triggers, automations: schema.automations, operations: schema.operations, mail-templates: schema.mail-templates, notice-templates: schema.notice-templates, tokens: schema.tokens, products: schema.products, ui: schema.ui}, line: format('remove unique constraint {}.{}', object, unique)} }, define-setting(sd) => schema-step{schema: call schema-with-settings(schema, insert(call settings-of(schema), sd.id, sd)), line: format('define setting {}', sd.id)}, remove-setting(id) => if get(call settings-of(schema), id) == null then fail(schema-problem.problem(format('no setting {}', id))) else schema-step{schema: call schema-with-settings(schema, remove(call settings-of(schema), id)), line: format('remove setting {}', id)}, define-capability(cd) => schema-step{schema: call schema-with-capabilities(schema, insert(call capabilities-of(schema), cd.id, cd)), line: format('define capability {}', cd.id)}, remove-capability(id) => if get(call capabilities-of(schema), id) == null then fail(schema-problem.problem(format('no capability {}', id))) else schema-step{schema: call schema-with-capabilities(schema, remove(call capabilities-of(schema), id)), line: format('remove capability {}', id)}, declare-ledger-unit(u) => schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: insert(ledger.units, u.unit, u), pools: ledger.pools, limits: ledger.limits}), line: if get(ledger.units, u.unit) == null then format('declare ledger unit {}', u.unit) else format('redeclare ledger unit {}', u.unit)}, declare-ledger-pool(p) => schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: ledger.units, pools: insert(ledger.pools, p.pool, p), limits: ledger.limits}), line: if get(ledger.pools, p.pool) == null then format('declare ledger pool {}', p.pool) else format('redeclare ledger pool {}', p.pool)}, set-ledger-limit(l) => match l.owner { Some(_) => match get(call ledger-limit-problems(ledger, l), 0) { Some(first) => fail(schema-problem.problem(first)), None => schema-step{schema: schema, line: format('set the limits of one account of ledger unit {}', l.unit)} }, None => schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: ledger.units, pools: ledger.pools, limits: sortBy(x in sortBy(x in concat(filter(x in ledger.limits, !call ledger-same-limit(x, l.unit, l.owner, call ledger-scope-text(l.scope))), [l]), format('{:?}', x)), x.unit)}), line: format('set the limits of ledger unit {}', l.unit)} }, remove-ledger-definition(r) => match r { unit{unit} => if get(ledger.units, unit) == null then fail(schema-problem.problem(format('no ledger unit {}', unit))) else schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: remove(ledger.units, unit), pools: ledger.pools, limits: ledger.limits}), line: format('remove ledger unit {}', unit)}, pool{pool} => if get(ledger.pools, pool) == null then fail(schema-problem.problem(format('no ledger pool {}', pool))) else schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: ledger.units, pools: remove(ledger.pools, pool), limits: ledger.limits}), line: format('remove ledger pool {}', pool)}, limit{unit, owner, scope} => match owner { Some(_) => schema-step{schema: schema, line: format('remove a limit of one account of ledger unit {}', unit)}, None => let kept = filter(x in ledger.limits, !call ledger-same-limit(x, unit, owner, call ledger-scope-text(scope))) in if length(kept) == length(ledger.limits) then fail(schema-problem.problem(format('no such limit of ledger unit {}', unit))) else schema-step{schema: call schema-with-ledger(schema, ledger-declarations{units: ledger.units, pools: ledger.pools, limits: kept}), line: format('remove a limit of ledger unit {}', unit)} } }, _ => try call apply-meta-change(schema, change) }",
       "examples": [
         {
           "args": {
@@ -107731,7 +107732,7 @@
           }
         },
         {
-          "description": "The limit of one account replaces the account's own and keeps the others in order.",
+          "description": "The limit of one account is not held by the schema (WG-5172): the schema is left as it is, and the line says so.",
           "args": {
             "schema": {
               "fixture": "fx-tenant-schema-14",
@@ -107740,15 +107741,6 @@
                   {
                     "unit": "credits",
                     "floor": 0
-                  },
-                  {
-                    "unit": "credits",
-                    "owner": {
-                      "principal": {
-                        "principal": "alpha:ed"
-                      }
-                    },
-                    "cap": 5
                   }
                 ]
               }
@@ -108060,15 +108052,6 @@
                   {
                     "unit": "credits",
                     "floor": 0
-                  },
-                  {
-                    "unit": "credits",
-                    "owner": {
-                      "principal": {
-                        "principal": "alpha:ed"
-                      }
-                    },
-                    "cap": 9
                   }
                 ]
               }
@@ -109345,24 +109328,10 @@
           }
         },
         {
-          "description": "A limit of one account is removed by its owner and scope.",
+          "description": "The limit of one account is not held by the schema (WG-5172): removing it leaves the schema as it is, and the line says so.",
           "args": {
             "schema": {
-              "fixture": "fx-tenant-schema-14",
-              "with": {
-                "ledger.limits": [
-                  {
-                    "unit": "credits",
-                    "owner": {
-                      "principal": {
-                        "principal": "alpha:ed"
-                      }
-                    },
-                    "scope": "promo",
-                    "cap": 5
-                  }
-                ]
-              }
+              "fixture": "fx-tenant-schema-14"
             },
             "change": {
               "remove-ledger-definition": {
@@ -109672,7 +109641,7 @@
                 "limits": []
               }
             },
-            "line": "remove a limit of ledger unit credits"
+            "line": "remove a limit of one account of ledger unit credits"
           }
         },
         {
@@ -109727,6 +109696,28 @@
           },
           "error": {
             "problem": "no such limit of ledger unit credits"
+          }
+        },
+        {
+          "description": "The limit of one account of a unit that is not declared is refused with the first problem of the limit (CT-286).",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-6"
+            },
+            "change": {
+              "set-ledger-limit": {
+                "unit": "credits",
+                "owner": {
+                  "principal": {
+                    "principal": "alpha:ed"
+                  }
+                },
+                "cap": 9
+              }
+            }
+          },
+          "error": {
+            "problem": "ledger limit of credits: unknown ledger unit credits"
           }
         }
       ],
@@ -110978,7 +110969,7 @@
     },
     {
       "id": "change-schema",
-      "description": "transition.rs change_schema: Manage on Schema is authorised; a stale expected version is SchemaConflict; no changes is InvalidIntent; more than 200 changes in one intent is LimitExceeded (KRN-1283); then the authority a change of definitions asks (require-definition-authority: automations-define for triggers and automations, the run-as roles of an automation under ADM-152, the step powers of a tenant operation under D-6547); then plan-migration, whose refusal keeps its kind, message and missing need with the draft's evidence before its own. The change's lines pass as schema:change, and every violation is a failed check existing:<object>/<id>:<rule>; in Reject mode any record that would not conform refuses the change with MigrationRejected (\"<n> existing record(s) ...\"), in Grandfather mode it is accepted: the new schema, the rewritten records (each with its RecordUpdated event after the SchemaChanged event, the record one version higher and updated now) and a SchemaChanged event counting the records that do not conform. The definitions of triggers and automations are stamped with their definer and time first (stamp-definitions, D-7204). After the plan, the overrides, revisions and events a change of setting definitions brings (setting-change-effects) follow the schema change in the delta and the events. After the authority, a unit or a pool an account names is not removed (ledger-removal-check, LDG-1549).",
+      "description": "transition.rs change_schema: Manage on Schema is authorised; a stale expected version is SchemaConflict; no changes is InvalidIntent; more than 200 changes in one intent is LimitExceeded (KRN-1283); then the authority a change of definitions asks (require-definition-authority: automations-define for triggers and automations, the run-as roles of an automation under ADM-152, the step powers of a tenant operation under D-6547); then plan-migration, whose refusal keeps its kind, message and missing need with the draft's evidence before its own. The change's lines pass as schema:change, and every violation is a failed check existing:<object>/<id>:<rule>; in Reject mode any record that would not conform refuses the change with MigrationRejected (\"<n> existing record(s) ...\"), in Grandfather mode it is accepted: the new schema, the rewritten records (each with its RecordUpdated event after the SchemaChanged event, the record one version higher and updated now) and a SchemaChanged event counting the records that do not conform. The definitions of triggers and automations are stamped with their definer and time first (stamp-definitions, D-7204). After the plan, the overrides, revisions and events a change of setting definitions brings (setting-change-effects) follow the schema change in the delta and the events. After the authority, the limits of single accounts among the changes are checked and a unit or a pool an account names is not removed (ledger-removal-check, LDG-1549, LDG-1550, D-6554), and the commit puts or removes those limits in the ledger's storage after the settings' operations (ledger-limit-ops, WG-5172).",
       "params": [
         {
           "name": "d",
@@ -111017,7 +111008,7 @@
           "expr": "call stamp-definitions(changes, d.ctx)"
         }
       ],
-      "body": "if stale then fail(call draft-reject(d1.evidence, error-kind.schema-conflict, format('schema is at version {}, expected {}', current, match expected-version { Some(e) => e, None => 0 }))) else if changes == [] then fail(call draft-reject(d1.evidence, error-kind.invalid-intent, 'no changes given')) else if length(changes) > 200 then fail(call draft-reject(d1.evidence, error-kind.limit-exceeded, format('{} changes in one schema change is more than the maximum of 200', length(changes)))) else let d2 = try call require-definition-authority(d1, stamped) in let d3 = try call ledger-removal-check(d2, stamped) in let plan = match call plan-migration(d3.tenant, d3.coverage, stamped, d3.ctx.now) { Ok(m) => m, Err(e) => match e { rejected(err) => fail(rejection.rejected(domain-error{kind: err.kind, message: err.message, evidence: concat(d3.evidence, err.evidence), missing: err.missing})) } } in let fx = try call setting-change-effects(d3.tenant, stamped, d3.evidence) in let affected = fold(a in fold(k in sortBy(k in map(x in plan.violations, format('{}/{}', x.object, x.id)), k), ks = [], if any(a in ks, a == k) then ks else concat(ks, [k])), n = 0, n + 1) in let evidence = concat(concat(d3.evidence, map(l in plan.summary, check{rule: 'schema:change', passed: true, detail: l})), map(x in plan.violations, check{rule: format('existing:{}/{}:{}', x.object, x.id, x.check.rule), passed: false, detail: x.check.detail})) in if existing == existing-data.reject && affected > 0 then fail(call draft-reject(evidence, error-kind.migration-rejected, format('{} existing record(s) would not conform to the new schema', affected))) else decided{draft: draft{tenant: d3.tenant, ctx: d3.ctx, coverage: d3.coverage, ops: concat(concat(concat(d3.ops, [delta-op.put-schema(plan.schema)]), fx.ops), map(r in plan.rewritten, delta-op.put-record(r))), events: concat(concat(concat(d3.events, [event-body.schema-changed{version: plan.schema.version, summary: plan.summary, grandfathered: affected}]), fx.events), map(r in plan.rewritten, event-body.record-updated{before: fold(b in values(match get(d3.tenant.records, r.object) { Some(m) => m, None => {} }), acc = r, if b.id == r.id then b else acc), after: r})), effects: d3.effects, evidence: evidence, next-record: d3.next-record}, output: output.schema{version: plan.schema.version}}",
+      "body": "if stale then fail(call draft-reject(d1.evidence, error-kind.schema-conflict, format('schema is at version {}, expected {}', current, match expected-version { Some(e) => e, None => 0 }))) else if changes == [] then fail(call draft-reject(d1.evidence, error-kind.invalid-intent, 'no changes given')) else if length(changes) > 200 then fail(call draft-reject(d1.evidence, error-kind.limit-exceeded, format('{} changes in one schema change is more than the maximum of 200', length(changes)))) else let d2 = try call require-definition-authority(d1, stamped) in let d3 = try call ledger-removal-check(d2, stamped) in let plan = match call plan-migration(d3.tenant, d3.coverage, stamped, d3.ctx.now) { Ok(m) => m, Err(e) => match e { rejected(err) => fail(rejection.rejected(domain-error{kind: err.kind, message: err.message, evidence: concat(d3.evidence, err.evidence), missing: err.missing})) } } in let fx = try call setting-change-effects(d3.tenant, stamped, d3.evidence) in let affected = fold(a in fold(k in sortBy(k in map(x in plan.violations, format('{}/{}', x.object, x.id)), k), ks = [], if any(a in ks, a == k) then ks else concat(ks, [k])), n = 0, n + 1) in let evidence = concat(concat(d3.evidence, map(l in plan.summary, check{rule: 'schema:change', passed: true, detail: l})), map(x in plan.violations, check{rule: format('existing:{}/{}:{}', x.object, x.id, x.check.rule), passed: false, detail: x.check.detail})) in if existing == existing-data.reject && affected > 0 then fail(call draft-reject(evidence, error-kind.migration-rejected, format('{} existing record(s) would not conform to the new schema', affected))) else decided{draft: draft{tenant: d3.tenant, ctx: d3.ctx, coverage: d3.coverage, ops: concat(concat(concat(concat(d3.ops, [delta-op.put-schema(plan.schema)]), fx.ops), call ledger-limit-ops(stamped)), map(r in plan.rewritten, delta-op.put-record(r))), events: concat(concat(concat(d3.events, [event-body.schema-changed{version: plan.schema.version, summary: plan.summary, grandfathered: affected}]), fx.events), map(r in plan.rewritten, event-body.record-updated{before: fold(b in values(match get(d3.tenant.records, r.object) { Some(m) => m, None => {} }), acc = r, if b.id == r.id then b else acc), after: r})), effects: d3.effects, evidence: evidence, next-record: d3.next-record}, output: output.schema{version: plan.schema.version}}",
       "examples": [
         {
           "description": "behaviour.rs a_strict_migration_is_rejected_when_existing_records_would_not_conform.",
@@ -192588,8 +192579,981 @@
       ]
     },
     {
+      "id": "ledger-limit-step",
+      "description": "ledger.rs check_limits, one change: the limit of one account that a change sets or removes (LDG-1550, D-6554, WG-5172). Account limits live in the ledger's storage and not in the schema. Setting one: the snapshot must hold the limits of single accounts (the need limits) unless an earlier change loaded them, or the change is InsufficientState naming it; one of a new account when max are held is LimitExceeded \"too-many: a tenant holds at most <max> account limits\" with the failed check ledger:too-many-limits; otherwise the limit replaces the one of its account among those held and ledger:account-limits passes with \"<n> account limit(s) after the change\". Removing one: from the limits held when an earlier change loaded them, otherwise the snapshot must hold the limit of that account (the need limit); one that is not held is InvalidSchema \"no such limit of ledger unit <unit>\" with the failed check ledger:limit-exists. The checks are written after the evidence of the walk. Any other change leaves the walk as it is.",
+      "params": [
+        {
+          "name": "d",
+          "type": "draft"
+        },
+        {
+          "name": "w",
+          "type": "ledger-limit-walk"
+        },
+        {
+          "name": "c",
+          "type": "schema-change"
+        },
+        {
+          "name": "max",
+          "type": "u64"
+        }
+      ],
+      "returns": "ledger-limit-walk",
+      "errors": "rejection",
+      "let": [
+        {
+          "name": "stored",
+          "expr": "match d.tenant.ledger { Some(s) => match s.limits { Some(ls) => ls, None => [] }, None => [] }"
+        }
+      ],
+      "body": "match c { set-ledger-limit(l) => match l.owner { Some(_) => let wanted = need.ledger(ledger-need.limits) in if w.held == null && !call covers(d.coverage, wanted) then fail(rejection.rejected(call insufficient(wanted))) else let text = call ledger-scope-text(l.scope) in let all = match w.held { Some(h) => h, None => filter(x in stored, x.owner != null) } in if !any(x in all, call ledger-same-limit(x, l.unit, l.owner, text)) && length(all) >= max then fail(rejection.rejected(domain-error{kind: error-kind.limit-exceeded, message: format('too-many: a tenant holds at most {} account limits', max), evidence: concat(w.evidence, [check{rule: 'ledger:too-many-limits', passed: false, detail: format('too-many: a tenant holds at most {} account limits', max)}])})) else let after = concat(filter(x in all, !call ledger-same-limit(x, l.unit, l.owner, text)), [l]) in ledger-limit-walk{evidence: concat(w.evidence, [check{rule: 'ledger:account-limits', passed: true, detail: format('{} account limit(s) after the change', length(after))}]), held: after}, None => w }, remove-ledger-definition(r) => match r { limit{unit, owner, scope} => match owner { Some(o) => let text = call ledger-scope-text(scope) in match w.held { Some(h) => let kept = filter(x in h, !call ledger-same-limit(x, unit, owner, text)) in if length(kept) == length(h) then fail(rejection.rejected(domain-error{kind: error-kind.invalid-schema, message: format('no such limit of ledger unit {}', unit), evidence: concat(w.evidence, [check{rule: 'ledger:limit-exists', passed: false, detail: format('no such limit of ledger unit {}', unit)}])})) else ledger-limit-walk{evidence: w.evidence, held: kept}, None => let wanted = need.ledger(ledger-need.limit{owner: o, unit, scope: match scope { Some(q) => q, None => '' }}) in if !call covers(d.coverage, wanted) then fail(rejection.rejected(call insufficient(wanted))) else if !any(x in stored, call ledger-same-limit(x, unit, owner, text)) then fail(rejection.rejected(domain-error{kind: error-kind.invalid-schema, message: format('no such limit of ledger unit {}', unit), evidence: concat(w.evidence, [check{rule: 'ledger:limit-exists', passed: false, detail: format('no such limit of ledger unit {}', unit)}])})) else w }, None => w }, _ => w }, _ => w }",
+      "examples": [
+        {
+          "description": "A change that is not a limit of an account leaves the walk as it is.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28"
+            },
+            "w": {
+              "evidence": []
+            },
+            "c": {
+              "declare-ledger-unit": {
+                "unit": "x",
+                "description": "x"
+              }
+            },
+            "max": 3
+          },
+          "result": {
+            "evidence": []
+          }
+        },
+        {
+          "description": "The limit of a unit is not one of an account.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28"
+            },
+            "w": {
+              "evidence": []
+            },
+            "c": {
+              "set-ledger-limit": {
+                "unit": "credits",
+                "floor": 0
+              }
+            },
+            "max": 3
+          },
+          "result": {
+            "evidence": []
+          }
+        },
+        {
+          "description": "The first limit of an account loads the limits the tenant holds, and counts the one set after them.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28",
+              "with": {
+                "tenant.ledger": {
+                  "accounts": {},
+                  "entries": {},
+                  "limits": [
+                    {
+                      "unit": "credits",
+                      "owner": {
+                        "principal": {
+                          "principal": "alpha:ed"
+                        }
+                      },
+                      "scope": "promo",
+                      "cap": 5
+                    }
+                  ]
+                }
+              }
+            },
+            "w": {
+              "evidence": []
+            },
+            "c": {
+              "set-ledger-limit": {
+                "unit": "credits",
+                "owner": {
+                  "principal": {
+                    "principal": "alpha:ed"
+                  }
+                },
+                "cap": 9
+              }
+            },
+            "max": 3
+          },
+          "result": {
+            "evidence": [
+              {
+                "rule": "ledger:account-limits",
+                "passed": true,
+                "detail": "2 account limit(s) after the change"
+              }
+            ],
+            "held": [
+              {
+                "unit": "credits",
+                "owner": {
+                  "principal": {
+                    "principal": "alpha:ed"
+                  }
+                },
+                "cap": 5,
+                "scope": "promo"
+              },
+              {
+                "unit": "credits",
+                "owner": {
+                  "principal": {
+                    "principal": "alpha:ed"
+                  }
+                },
+                "cap": 9
+              }
+            ]
+          }
+        },
+        {
+          "description": "A limit of the same account replaces it, and counts once; the limits held so far are not loaded again, so no need is checked.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28",
+              "with": {
+                "coverage": {
+                  "partial": []
+                }
+              }
+            },
+            "w": {
+              "evidence": [],
+              "held": [
+                {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "scope": "promo",
+                  "cap": 5
+                }
+              ]
+            },
+            "c": {
+              "set-ledger-limit": {
+                "unit": "credits",
+                "owner": {
+                  "principal": {
+                    "principal": "alpha:ed"
+                  }
+                },
+                "scope": "promo",
+                "cap": 7
+              }
+            },
+            "max": 1
+          },
+          "result": {
+            "evidence": [
+              {
+                "rule": "ledger:account-limits",
+                "passed": true,
+                "detail": "1 account limit(s) after the change"
+              }
+            ],
+            "held": [
+              {
+                "unit": "credits",
+                "owner": {
+                  "principal": {
+                    "principal": "alpha:ed"
+                  }
+                },
+                "cap": 7,
+                "scope": "promo"
+              }
+            ]
+          }
+        },
+        {
+          "description": "The limits of single accounts are not in the snapshot: the change needs them.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28",
+              "with": {
+                "coverage": {
+                  "partial": []
+                }
+              }
+            },
+            "w": {
+              "evidence": []
+            },
+            "c": {
+              "set-ledger-limit": {
+                "unit": "credits",
+                "owner": {
+                  "principal": {
+                    "principal": "alpha:ed"
+                  }
+                },
+                "cap": 9
+              }
+            },
+            "max": 3
+          },
+          "error": {
+            "rejected": {
+              "kind": "insufficient-state",
+              "message": "the snapshot does not cover Ledger(Limits)",
+              "evidence": [
+                {
+                  "rule": "coverage",
+                  "passed": false,
+                  "detail": "Ledger(Limits)"
+                }
+              ],
+              "missing": {
+                "ledger": "limits"
+              }
+            }
+          }
+        },
+        {
+          "description": "A limit of a new account past the ceiling is refused with too-many.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28"
+            },
+            "w": {
+              "evidence": [],
+              "held": [
+                {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "scope": "promo",
+                  "cap": 5
+                }
+              ]
+            },
+            "c": {
+              "set-ledger-limit": {
+                "unit": "credits",
+                "owner": {
+                  "principal": {
+                    "principal": "alpha:kim"
+                  }
+                },
+                "cap": 2
+              }
+            },
+            "max": 1
+          },
+          "error": {
+            "rejected": {
+              "kind": "limit-exceeded",
+              "message": "too-many: a tenant holds at most 1 account limits",
+              "evidence": [
+                {
+                  "rule": "ledger:too-many-limits",
+                  "passed": false,
+                  "detail": "too-many: a tenant holds at most 1 account limits"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "The limit of an account the changes before it set is removed from the limits held.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28"
+            },
+            "w": {
+              "evidence": [],
+              "held": [
+                {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "scope": "promo",
+                  "cap": 5
+                },
+                {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "cap": 9
+                }
+              ]
+            },
+            "c": {
+              "remove-ledger-definition": {
+                "limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "scope": "promo"
+                }
+              }
+            },
+            "max": 3
+          },
+          "result": {
+            "evidence": [],
+            "held": [
+              {
+                "unit": "credits",
+                "owner": {
+                  "principal": {
+                    "principal": "alpha:ed"
+                  }
+                },
+                "cap": 9
+              }
+            ]
+          }
+        },
+        {
+          "description": "Removing a limit that the changes before it removed is refused.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28"
+            },
+            "w": {
+              "evidence": [],
+              "held": [
+                {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "cap": 9
+                }
+              ]
+            },
+            "c": {
+              "remove-ledger-definition": {
+                "limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "scope": "promo"
+                }
+              }
+            },
+            "max": 3
+          },
+          "error": {
+            "rejected": {
+              "kind": "invalid-schema",
+              "message": "no such limit of ledger unit credits",
+              "evidence": [
+                {
+                  "rule": "ledger:limit-exists",
+                  "passed": false,
+                  "detail": "no such limit of ledger unit credits"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "The limit of the account is not in the snapshot: the removal needs it.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28",
+              "with": {
+                "coverage": {
+                  "partial": []
+                }
+              }
+            },
+            "w": {
+              "evidence": []
+            },
+            "c": {
+              "remove-ledger-definition": {
+                "limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "scope": "promo"
+                }
+              }
+            },
+            "max": 3
+          },
+          "error": {
+            "rejected": {
+              "kind": "insufficient-state",
+              "message": "the snapshot does not cover Ledger(Limit { owner: Principal { principal: PrincipalId(\"alpha:ed\") }, unit: LedgerUnit(\"credits\"), scope: LedgerScope(\"promo\") })",
+              "evidence": [
+                {
+                  "rule": "coverage",
+                  "passed": false,
+                  "detail": "Ledger(Limit { owner: Principal { principal: PrincipalId(\"alpha:ed\") }, unit: LedgerUnit(\"credits\"), scope: LedgerScope(\"promo\") })"
+                }
+              ],
+              "missing": {
+                "ledger": {
+                  "limit": {
+                    "owner": {
+                      "principal": {
+                        "principal": "alpha:ed"
+                      }
+                    },
+                    "unit": "credits",
+                    "scope": "promo"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "description": "A limit that the tenant holds is removed.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28",
+              "with": {
+                "tenant.ledger": {
+                  "accounts": {},
+                  "entries": {},
+                  "limits": [
+                    {
+                      "unit": "credits",
+                      "owner": {
+                        "principal": {
+                          "principal": "alpha:ed"
+                        }
+                      },
+                      "scope": "promo",
+                      "cap": 5
+                    }
+                  ]
+                },
+                "coverage": {
+                  "partial": [
+                    {
+                      "ledger": {
+                        "limit": {
+                          "owner": {
+                            "principal": {
+                              "principal": "alpha:ed"
+                            }
+                          },
+                          "unit": "credits",
+                          "scope": "promo"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "w": {
+              "evidence": []
+            },
+            "c": {
+              "remove-ledger-definition": {
+                "limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "scope": "promo"
+                }
+              }
+            },
+            "max": 3
+          },
+          "result": {
+            "evidence": []
+          }
+        },
+        {
+          "description": "Removing a limit the tenant does not hold is refused.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28",
+              "with": {
+                "tenant.ledger": {
+                  "accounts": {},
+                  "entries": {},
+                  "limits": [
+                    {
+                      "unit": "credits",
+                      "owner": {
+                        "principal": {
+                          "principal": "alpha:ed"
+                        }
+                      },
+                      "cap": 9
+                    }
+                  ]
+                }
+              }
+            },
+            "w": {
+              "evidence": []
+            },
+            "c": {
+              "remove-ledger-definition": {
+                "limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "scope": "promo"
+                }
+              }
+            },
+            "max": 3
+          },
+          "error": {
+            "rejected": {
+              "kind": "invalid-schema",
+              "message": "no such limit of ledger unit credits",
+              "evidence": [
+                {
+                  "rule": "ledger:limit-exists",
+                  "passed": false,
+                  "detail": "no such limit of ledger unit credits"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "The limit of a unit is removed by the schema, not here.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28"
+            },
+            "w": {
+              "evidence": []
+            },
+            "c": {
+              "remove-ledger-definition": {
+                "limit": {
+                  "unit": "credits"
+                }
+              }
+            },
+            "max": 3
+          },
+          "result": {
+            "evidence": []
+          }
+        },
+        {
+          "description": "The limit of an account in no scope is needed under the empty scope.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28",
+              "with": {
+                "coverage": {
+                  "partial": []
+                }
+              }
+            },
+            "w": {
+              "evidence": []
+            },
+            "c": {
+              "remove-ledger-definition": {
+                "limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  }
+                }
+              }
+            },
+            "max": 3
+          },
+          "error": {
+            "rejected": {
+              "kind": "insufficient-state",
+              "message": "the snapshot does not cover Ledger(Limit { owner: Principal { principal: PrincipalId(\"alpha:ed\") }, unit: LedgerUnit(\"credits\"), scope: LedgerScope(\"\") })",
+              "evidence": [
+                {
+                  "rule": "coverage",
+                  "passed": false,
+                  "detail": "Ledger(Limit { owner: Principal { principal: PrincipalId(\"alpha:ed\") }, unit: LedgerUnit(\"credits\"), scope: LedgerScope(\"\") })"
+                }
+              ],
+              "missing": {
+                "ledger": {
+                  "limit": {
+                    "owner": {
+                      "principal": {
+                        "principal": "alpha:ed"
+                      }
+                    },
+                    "unit": "credits",
+                    "scope": ""
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "description": "A unit is removed by the schema, not here.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28"
+            },
+            "w": {
+              "evidence": []
+            },
+            "c": {
+              "remove-ledger-definition": {
+                "unit": {
+                  "unit": "credits"
+                }
+              }
+            },
+            "max": 3
+          },
+          "result": {
+            "evidence": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "ledger-limit-checks",
+      "description": "ledger.rs check_limits: the evidence of the draft with the checks of the limits of single accounts among the changes, in order (ledger-limit-step, at most 10000 held, LDG-1550), or the refusal of the first change that fails. The limits of a unit are not checked here.",
+      "params": [
+        {
+          "name": "d",
+          "type": "draft"
+        },
+        {
+          "name": "changes",
+          "type": "list<schema-change>"
+        }
+      ],
+      "returns": "list<check>",
+      "errors": "rejection",
+      "body": "let walk = fold(c in changes, acc = ledger-limit-walk{evidence: d.evidence}, try call ledger-limit-step(d, acc, c, 10000)) in walk.evidence",
+      "examples": [
+        {
+          "description": "No change: the evidence of the draft.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28",
+              "with": {
+                "evidence": [
+                  {
+                    "rule": "a",
+                    "passed": true,
+                    "detail": "x"
+                  }
+                ]
+              }
+            },
+            "changes": []
+          },
+          "result": [
+            {
+              "rule": "a",
+              "passed": true,
+              "detail": "x"
+            }
+          ]
+        },
+        {
+          "description": "The limits of single accounts are not in the snapshot: the first change needs them.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28",
+              "with": {
+                "coverage": {
+                  "partial": []
+                }
+              }
+            },
+            "changes": [
+              {
+                "set-ledger-limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "cap": 9
+                }
+              }
+            ]
+          },
+          "error": {
+            "rejected": {
+              "kind": "insufficient-state",
+              "message": "the snapshot does not cover Ledger(Limits)",
+              "evidence": [
+                {
+                  "rule": "coverage",
+                  "passed": false,
+                  "detail": "Ledger(Limits)"
+                }
+              ],
+              "missing": {
+                "ledger": "limits"
+              }
+            }
+          }
+        },
+        {
+          "description": "Two limits of accounts count each after the one before it.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28",
+              "with": {
+                "tenant.ledger": {
+                  "accounts": {},
+                  "entries": {},
+                  "limits": [
+                    {
+                      "unit": "credits",
+                      "owner": {
+                        "principal": {
+                          "principal": "alpha:ed"
+                        }
+                      },
+                      "scope": "promo",
+                      "cap": 5
+                    }
+                  ]
+                }
+              }
+            },
+            "changes": [
+              {
+                "set-ledger-limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "cap": 9
+                }
+              },
+              {
+                "set-ledger-limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:kim"
+                    }
+                  },
+                  "cap": 2
+                }
+              }
+            ]
+          },
+          "result": [
+            {
+              "rule": "ledger:account-limits",
+              "passed": true,
+              "detail": "2 account limit(s) after the change"
+            },
+            {
+              "rule": "ledger:account-limits",
+              "passed": true,
+              "detail": "3 account limit(s) after the change"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ledger-limit-ops",
+      "description": "ledger.rs limit_ops: the delta operations of the limits of single accounts among the changes, in order (WG-5172): setting one puts it, removing one removes it from the ledger's own storage in the commit of the schema change. The limits of a unit stay in the schema.",
+      "params": [
+        {
+          "name": "changes",
+          "type": "list<schema-change>"
+        }
+      ],
+      "returns": "list<delta-op>",
+      "body": "fold(c in changes, acc = [], match c { set-ledger-limit(l) => match l.owner { Some(_) => concat(acc, [delta-op.ledger(ledger-delta.put-limit(l))]), None => acc }, remove-ledger-definition(r) => match r { limit{unit, owner, scope} => match owner { Some(o) => concat(acc, [delta-op.ledger(ledger-delta.remove-limit{owner: o, unit, scope: match scope { Some(q) => q, None => '' }})]), None => acc }, _ => acc }, _ => acc })",
+      "examples": [
+        {
+          "description": "No change: no operation.",
+          "args": {
+            "changes": []
+          },
+          "result": []
+        },
+        {
+          "description": "The limit of an account is put, and the limit of a unit is not.",
+          "args": {
+            "changes": [
+              {
+                "set-ledger-limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "cap": 9
+                }
+              },
+              {
+                "set-ledger-limit": {
+                  "unit": "credits",
+                  "floor": 0
+                }
+              }
+            ]
+          },
+          "result": [
+            {
+              "ledger": {
+                "put-limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "cap": 9
+                }
+              }
+            }
+          ]
+        },
+        {
+          "description": "The limit of an account is removed, and the limit of a unit and a unit are not.",
+          "args": {
+            "changes": [
+              {
+                "remove-ledger-definition": {
+                  "limit": {
+                    "unit": "credits",
+                    "owner": {
+                      "principal": {
+                        "principal": "alpha:ed"
+                      }
+                    },
+                    "scope": "promo"
+                  }
+                }
+              },
+              {
+                "remove-ledger-definition": {
+                  "limit": {
+                    "unit": "credits"
+                  }
+                }
+              },
+              {
+                "remove-ledger-definition": {
+                  "unit": {
+                    "unit": "credits"
+                  }
+                }
+              }
+            ]
+          },
+          "result": [
+            {
+              "ledger": {
+                "remove-limit": {
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "unit": "credits",
+                  "scope": "promo"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "description": "A limit removed with no scope names the empty scope.",
+          "args": {
+            "changes": [
+              {
+                "remove-ledger-definition": {
+                  "limit": {
+                    "unit": "credits",
+                    "owner": {
+                      "principal": {
+                        "principal": "alpha:ed"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "result": [
+            {
+              "ledger": {
+                "remove-limit": {
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "unit": "credits",
+                  "scope": ""
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "ledger-removal-check",
-      "description": "ledger.rs check_removals (LDG-1549): a unit or a pool that an account names is not removed. For each removal of a unit or a pool, in order: the snapshot must cover the need (unit-used, pool-used), or the change is InsufficientState naming it; an account that names it is StillReferenced \"ledger unit <id> is named by an account and is not removed\" with the failed check ledger:in-use after the evidence so far (no intent:<kind> check); otherwise ledger:in-use passes with \"no account names ledger unit <id>\". The accounts are those of the snapshot.",
+      "description": "ledger.rs check_removals (LDG-1549, LDG-1550, D-6554, WG-5172): first the limits of single accounts among the changes (ledger-limit-checks), then a unit or a pool that an account names is not removed. For each removal of a unit or a pool, in order: the snapshot must cover the need (unit-used, pool-used), or the change is InsufficientState naming it; an account that names it is StillReferenced \"ledger unit <id> is named by an account and is not removed\" with the failed check ledger:in-use after the evidence so far (no intent:<kind> check); otherwise ledger:in-use passes with \"no account names ledger unit <id>\". The accounts are those of the snapshot.",
       "params": [
         {
           "name": "d",
@@ -192608,7 +193572,7 @@
           "expr": "match d.tenant.ledger { Some(l) => values(l.accounts), None => [] }"
         }
       ],
-      "body": "fold(c in changes, acc = d, match c { remove-ledger-definition(r) => match r { unit{unit} => try call ledger-removal-step(acc, need.ledger(ledger-need.unit-used{unit}), format('ledger unit {}', unit), any(a in accounts, a.unit == unit)), pool{pool} => try call ledger-removal-step(acc, need.ledger(ledger-need.pool-used{pool}), format('ledger pool {}', pool), any(a in accounts, match a.owner { Some(o) => match o { pool{pool: p} => p == pool, _ => false }, None => false })), limit => acc }, _ => acc })",
+      "body": "let evidence = try call ledger-limit-checks(d, changes) in let d1 = draft{tenant: d.tenant, ctx: d.ctx, coverage: d.coverage, ops: d.ops, events: d.events, effects: d.effects, evidence: evidence, next-record: d.next-record} in fold(c in changes, acc = d1, match c { remove-ledger-definition(r) => match r { unit{unit} => try call ledger-removal-step(acc, need.ledger(ledger-need.unit-used{unit}), format('ledger unit {}', unit), any(a in accounts, a.unit == unit)), pool{pool} => try call ledger-removal-step(acc, need.ledger(ledger-need.pool-used{pool}), format('ledger pool {}', pool), any(a in accounts, match a.owner { Some(o) => match o { pool{pool: p} => p == pool, _ => false }, None => false })), limit => acc }, _ => acc })",
       "examples": [
         {
           "description": "No removal of a unit or a pool: nothing to check.",
@@ -194170,6 +195134,48 @@
                     "unit": "credits"
                   }
                 }
+              }
+            }
+          }
+        },
+        {
+          "description": "A limit of an account is set when the snapshot does not hold the limits of single accounts: the change needs them (LDG-1550).",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-28",
+              "with": {
+                "coverage": {
+                  "partial": []
+                }
+              }
+            },
+            "changes": [
+              {
+                "set-ledger-limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "alpha:ed"
+                    }
+                  },
+                  "cap": 9
+                }
+              }
+            ]
+          },
+          "error": {
+            "rejected": {
+              "kind": "insufficient-state",
+              "message": "the snapshot does not cover Ledger(Limits)",
+              "evidence": [
+                {
+                  "rule": "coverage",
+                  "passed": false,
+                  "detail": "Ledger(Limits)"
+                }
+              ],
+              "missing": {
+                "ledger": "limits"
               }
             }
           }
