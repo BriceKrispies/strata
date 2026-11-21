@@ -11,10 +11,15 @@ import Strata.Model
 open Strata
 
 /-- The two tenants every scenario starts from: one required string field, one optional
-    integer, one optional boolean; an owner, an editor and two writers each. -/
+    integer, one optional boolean, and two optional references to the tenant's own records, the
+    first cleared when its target is deleted (`set-null`), the second restricting the delete
+    (`restrict`); an owner, an editor and two writers each. The schema is in field id order, as
+    the kernel's is. -/
 def initialTenant (n : Nat) : Tenant :=
   { schema := [(1, { ty := .str, required := true }), (2, { ty := .int, required := false }),
-               (3, { ty := .bool, required := false })],
+               (3, { ty := .bool, required := false }),
+               (4, { ty := .ref .setNull, required := false }),
+               (5, { ty := .ref .restrict, required := false })],
     owner := n * 100,
     editors := [n * 100 + 1],
     writers := [n * 100 + 2, n * 100 + 3],
@@ -38,6 +43,7 @@ def parseVal (s : String) : Option Val :=
   else if s.startsWith "s:" then some (.str (dropChars s 2))
   else if s = "b:1" then some (.bool true)
   else if s = "b:0" then some (.bool false)
+  else if s.startsWith "r:" then (dropChars s 2).toNat?.map Val.ref
   else none
 
 def parseField (s : String) : Option (FieldId × Val) :=
@@ -70,6 +76,7 @@ def showVal : Val → String
   | .str s => s!"s:{s}"
   | .bool true => "b:1"
   | .bool false => "b:0"
+  | .ref id => s!"r:{id}"
 
 def showErr : Err → String
   | .noTenant => "no_tenant"
@@ -77,6 +84,8 @@ def showErr : Err → String
   | .notFound => "not_found"
   | .invalid => "invalid"
   | .migrationRejected => "migration_rejected"
+  | .danglingReference => "dangling_reference"
+  | .stillReferenced => "still_referenced"
 
 /-- Insertion sort on a key; the lists here are a handful of elements. -/
 def sortBy {α : Type} (key : α → Nat) : List α → List α
