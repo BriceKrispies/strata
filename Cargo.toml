@@ -115,6 +115,19 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 2
 
+# The specification loader is workspace code, not a dependency, so the rule above does not reach it.
+# At opt-level 0 loading and checking the 5.6 MB specification took seconds in every test process (and
+# in every `specc` run the tests make); tests under nextest each start their own process, so each
+# paid it. Level 1 keeps the compile short and removes most of that.
+[profile.dev.package.strata-spec-compiler]
+opt-level = 1
+
+[profile.dev.package.strata-spec-parts]
+opt-level = 1
+
+[profile.dev.package.strata-spec-expr]
+opt-level = 1
+
 [profile.dev.package.ml-dsa]
 opt-level = 0
 
