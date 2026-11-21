@@ -264,15 +264,26 @@ export function parseCargo(text) {
   const blocks = lines.reduce((n, l) => n + (/^running \d+ tests?$/.test(l) ? 1 : 0), 0);
   const known = blocks > 0 && blocks === headers.length;
   const results = [];
+  const outcome = (word) => (word === 'ok' ? 'passed' : word === 'FAILED' ? 'failed' : 'ignored');
   let block = -1;
+  // A test that prints while it runs puts its output between `test NAME ... ` and the result, so the
+  // result then stands at the start of a later line. The pending names wait for it, in order.
+  const pending = [];
   for (const l of lines) {
     if (/^running \d+ tests?$/.test(l)) {
       block += 1;
+      pending.length = 0;
       continue;
     }
-    const m = /^test (\S+) \.\.\. (ok|FAILED|ignored)\b/.exec(l);
-    if (!m) continue;
-    results.push({ name: m[1], outcome: m[2] === 'ok' ? 'passed' : m[2] === 'FAILED' ? 'failed' : 'ignored', binary: known ? headers[block] ?? null : null });
+    const m = /^test (\S+) \.\.\. (.*)$/.exec(l);
+    if (m) {
+      const done = /^(ok|FAILED|ignored)\b/.exec(m[2]);
+      if (done) results.push({ name: m[1], outcome: outcome(done[1]), binary: known ? headers[block] ?? null : null });
+      else pending.push({ name: m[1], binary: known ? headers[block] ?? null : null });
+      continue;
+    }
+    const late = /^(ok|FAILED|ignored)\b/.exec(l);
+    if (late && pending.length) results.push({ ...pending.shift(), outcome: outcome(late[1]) });
   }
   return results;
 }

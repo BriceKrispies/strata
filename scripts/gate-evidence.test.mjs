@@ -82,6 +82,21 @@ test('cargo output is read per test and binary, the headers at its end naming ea
   assert.deepEqual(parseCargo(CARGO.split('\n').slice(0, -1).join('\n')).map((r) => r.binary), [null, null, null, null]);
 });
 
+test('a result that a test printed over is read from the start of a later line', () => {
+  const text = [
+    'running 2 tests',
+    'test edge::cookie ... {"event":"bff.request","status":200}',
+    '{"event":"bff.request","status":403}',
+    'ok',
+    'test edge::origin ... FAILED',
+    'test result: FAILED. 1 passed; 1 failed',
+  ].join('\n');
+  assert.deepEqual(parseCargo(text).map((r) => [r.name, r.outcome]), [
+    ['edge::cookie', 'passed'],
+    ['edge::origin', 'failed'],
+  ]);
+});
+
 const LEAN = `import Strata.Model
 
 /-- Statement.
