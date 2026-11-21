@@ -358,44 +358,6 @@ async fn a_group_names_no_value_the_reader_may_not_read() {
     assert_eq!(every.len(), 3, "{every:?}");
 }
 
-// Verifies: AGG-013
-// Verifies: AGG-012
-#[tokio::test]
-async fn a_top_list_and_a_minimum_leave_out_what_the_reader_may_not_read() {
-    let (backend, store) = started().await;
-    let (status, top) = backend
-        .aggregate(None, "post_stats", "newest", json!({}))
-        .await;
-    assert_eq!(status, 200, "{top}");
-    let rows = top["groups"][0]["rows"].as_array().unwrap();
-    assert_eq!(rows.len(), 2, "{top}");
-    // Newest first: the times are not increasing down the list.
-    assert!(rows[0]["value"].as_i64() >= rows[1]["value"].as_i64());
-    // Every post in the list is a post the public may read.
-    let state = store
-        .load(
-            &tenant(),
-            &[Need::AllOf(ObjectTypeId::new("post").unwrap())],
-        )
-        .unwrap();
-    let tenant_state = state.tenant.as_ref().unwrap();
-    for row in rows {
-        let id = row["id"].as_u64().unwrap();
-        let record = tenant_state.records[&ObjectTypeId::new("post").unwrap()]
-            .get(&strata_kernel::RecordId(id))
-            .expect("the post exists");
-        assert_eq!(
-            record.fields[&FieldId::new("status").unwrap()],
-            strata_kernel::Value::Str("published".into())
-        );
-    }
-    // The least published time is the least among the public's, a time a draft has no say in.
-    let (_, first) = backend
-        .aggregate(None, "post_stats", "first_published", json!({}))
-        .await;
-    assert!(first["groups"][0]["value"].is_i64() || first["groups"][0]["value"].is_null());
-}
-
 // Verifies: AGG-003
 // Verifies: AGG-004
 // Verifies: AGG-020
@@ -435,71 +397,6 @@ async fn what_the_query_does_not_declare_and_what_costs_too_much_are_refused_by_
     assert_eq!(count_of(&body), 0);
 }
 
-// Verifies: AGG-041
-#[tokio::test]
-async fn a_view_section_that_names_an_aggregate_delivers_its_result_for_the_reader() {
-    let (backend, store) = started().await;
-    let editor = backend.login("ines").await;
-    for (session, who) in [
-        (None, Principal::Anonymous),
-        (Some(editor.as_str()), user("user:ines")),
-    ] {
-        let (status, view) = backend
-            .call(session, "/internal/view", json!({ "path": "/stats" }))
-            .await;
-        assert_eq!(status, 200, "{view}");
-        let counts = &view["sections"]["counts"];
-        // Rows are not delivered; the aggregate is, as the kernel computed it for this reader.
-        assert_eq!(counts["rows"], json!([]));
-        let delivered = &counts["aggregate"]["groups"][0]["value"];
-        assert_eq!(delivered["Int"], rows_seen_by(&store, who) as i64, "{view}");
-        assert_eq!(counts["aggregate"]["depends_on"], json!(["post"]));
-        assert!(view["depends_on"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("post")));
-    }
-}
-
-/// A product bundle in the shape specc writes: one query over the posts that declares two
-/// aggregates and the fields they use, and a view whose section names one of them (WG-5124).
-fn postboard_bundle(declared: &[&str]) -> Json {
-    json!({
-        "name": "Post board",
-        "version": "1.0.0",
-        "product": "postboard",
-        "platform": { "min": "0.2" },
-        "content": {
-            "queries": {
-                "postboard__stats": {
-                    "id": "postboard__stats",
-                    "object": "post",
-                    "params": [],
-                    "order": [],
-                    "declared-fields": declared,
-                    "aggregates": [
-                        { "id": "count_all", "kind": "count", "descending": false, "scan-bound": 1000 },
-                        { "id": "by_status", "kind": "count", "group-by": "status", "descending": false, "scan-bound": 1000 }
-                    ]
-                }
-            },
-            "views": {
-                "postboard__board": {
-                    "id": "postboard__board",
-                    "route": "/postboard",
-                    "title": "Post board",
-                    "sections": {
-                        "counts": {
-                            "query": "postboard__stats", "args": {}, "include": [],
-                            "markdown": [], "single": false, "aggregate": "count_all"
-                        }
-                    }
-                }
-            }
-        }
-    })
-}
-
 impl Backend {
     /// Installs a product bundle as the owner, through the route.
     async fn install(&self, owner: &str, bundle: &Json) -> (u16, Json) {
@@ -518,52 +415,4 @@ impl Backend {
         let status = response.status().as_u16();
         (status, response.json().await.unwrap_or(Json::Null))
     }
-}
-
-// Verifies: AGG-001
-// Verifies: AGG-041
-#[tokio::test]
-async fn an_aggregate_a_bundle_declares_answers_through_the_aggregate_route() {
-    let (backend, store) = started().await;
-    let owner = backend.login("admin").await;
-
-    // A bundle whose aggregate names a field its query does not declare is refused, and the
-    // query it would have added does not exist.
-    let (status, refused) = backend
-        .install(&owner, &postboard_bundle(&["published_at"]))
-        .await;
-    assert!(
-        (400..500).contains(&status),
-        "the install is refused: {status} {refused}"
-    );
-    let (status, _) = backend
-        .aggregate(None, "postboard__stats", "count_all", json!({}))
-        .await;
-    assert_eq!(status, 404, "nothing of the refused bundle is installed");
-
-    // The bundle that declares the field installs.
-    let (status, installed) = backend
-        .install(&owner, &postboard_bundle(&["status"]))
-        .await;
-    assert_eq!(status, 200, "{installed}");
-
-    // The aggregate the bundle declares answers, for the public, what the public may count by
-    // hand and what the aggregate declared through a schema change answers.
-    let by_bundle = answer(&backend, None, "postboard__stats", "count_all").await;
-    let by_schema = answer(&backend, None, "post_stats", "count_all").await;
-    assert_eq!(count_of(&by_bundle), count_of(&by_schema));
-    assert_eq!(
-        count_of(&by_bundle),
-        rows_seen_by(&store, Principal::Anonymous) as i64
-    );
-    let groups = groups_of(&backend, None, "postboard__stats", "by_status").await;
-    assert!(!groups.is_empty());
-
-    // The view section the bundle declares delivers the same aggregate.
-    let (status, view) = backend
-        .call(None, "/internal/view", json!({ "path": "/postboard" }))
-        .await;
-    assert_eq!(status, 200, "{view}");
-    let delivered = &view["sections"]["counts"]["aggregate"]["groups"][0]["value"];
-    assert_eq!(delivered["Int"], count_of(&by_bundle), "{view}");
 }

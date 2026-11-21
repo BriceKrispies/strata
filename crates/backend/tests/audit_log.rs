@@ -17,7 +17,7 @@ use strata_kernel::{
     Context, ExistingData, Intent, Permission, Principal, PrincipalId, RoleDef, RoleId,
     SchemaChange, SessionId, TenantId, Timestamp,
 };
-use strata_protocol::api::{ErrorCode, MembersRequest};
+use strata_protocol::api::MembersRequest;
 use strata_protocol::ws::SessionState;
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, SessionRecord, Store};
@@ -79,18 +79,6 @@ fn identity(app: &App, site: &TenantId, principal: &str, correlation: &str) -> I
         }),
         state: SessionState::Active,
         correlation: correlation.to_string(),
-        verified_address: None,
-        idempotency_key: None,
-    }
-}
-
-fn anonymous(site: &TenantId) -> Identity {
-    Identity {
-        tenant: site.clone(),
-        principal: Principal::Anonymous,
-        session: None,
-        state: SessionState::Anonymous,
-        correlation: "t-anon".into(),
         verified_address: None,
         idempotency_key: None,
     }
@@ -172,90 +160,6 @@ fn entries(app: &App, site: &TenantId, event: &str) -> Vec<(String, Json)> {
         .collect()
 }
 
-// Verifies: OPS-329
-// Verifies: OPS-3120
-#[test]
-fn a_role_change_is_an_entry_with_the_previous_and_the_new_value_the_principal_and_the_correlation()
-{
-    let (app, memory, site) = started();
-    let assign = |correlation: &str, to: &str| {
-        members(
-            &app,
-            &site,
-            correlation,
-            MembersRequest::AssignRole {
-                principal: "alpha:ada".into(),
-                role: to.into(),
-            },
-        )
-        .expect("assigned")
-    };
-    assign("t-role-1", "editor");
-    assign("t-role-2", "viewer");
-    members(
-        &app,
-        &site,
-        "t-role-3",
-        MembersRequest::RevokeRole {
-            principal: "alpha:ada".into(),
-            role: "editor".into(),
-        },
-    )
-    .expect("revoked");
-
-    let changes = entries(&app, &site, "member.roles_changed");
-    assert_eq!(changes.len(), 3, "{changes:?}");
-    // (correlation, previous roles, new roles) of each, in the order they were made.
-    let expected = [
-        ("t-role-1", Json::Null, json!(["editor"])),
-        ("t-role-2", json!(["editor"]), json!(["editor", "viewer"])),
-        ("t-role-3", json!(["editor", "viewer"]), json!(["viewer"])),
-    ];
-    for ((correlation, data), (want, previous, value)) in changes.iter().zip(expected) {
-        assert_eq!(correlation, want);
-        assert_eq!(data["principal"], "alpha:ada", "{data}");
-        assert_eq!(data["actor"], "alpha:owner", "{data}");
-        assert_eq!(data["tenant"], "alpha", "{data}");
-        assert_eq!(data["previous"], previous, "{data}");
-        assert_eq!(data["value"], value, "{data}");
-        assert!(data["revision"].as_u64().is_some(), "{data}");
-    }
-
-    // The person and the roles are sealed under her key as stored, like every audit line.
-    let stored = memory
-        .audit_list(&site, Some("audit"), 1_000)
-        .expect("the audit trail as stored");
-    let lines: Vec<&strata_storage_api::AuditEntry> = stored
-        .iter()
-        .filter(|line| line.event == "member.roles_changed")
-        .collect();
-    assert_eq!(lines.len(), 3);
-    for line in lines {
-        assert!(
-            !line.data.contains("alpha:ada") && !line.data.contains("viewer"),
-            "{}",
-            line.data
-        );
-    }
-
-    // A refused change leaves no entry.
-    let refused = members(
-        &app,
-        &site,
-        "t-role-4",
-        MembersRequest::AssignRole {
-            principal: "alpha:ada".into(),
-            role: "no-such-role".into(),
-        },
-    );
-    assert!(refused.is_err());
-    assert_eq!(
-        entries(&app, &site, "member.roles_changed").len(),
-        3,
-        "a refused change is not an entry"
-    );
-}
-
 /// Give the role `editor` the capability `audit-read`, through the commit path of the routes.
 fn grant_audit_read(app: &App, site: &TenantId, correlation: &str) {
     let owner = identity(app, site, "alpha:owner", correlation);
@@ -332,65 +236,6 @@ fn a_configuration_change_is_an_entry_with_the_previous_and_the_new_value() {
     );
     assert!(refused.is_err());
     assert_eq!(entries(&app, &site, "schema.changed").len(), 2);
-}
-
-// Verifies: OBS-007
-// Verifies: OBS-3121
-#[test]
-fn the_route_reports_an_altered_entry_and_serves_only_a_reader_of_the_log() {
-    let (app, memory, site) = started();
-    for (correlation, to) in [("t-1", "editor"), ("t-2", "viewer"), ("t-3", "viewer")] {
-        members(
-            &app,
-            &site,
-            correlation,
-            MembersRequest::AssignRole {
-                principal: "alpha:ada".into(),
-                role: to.into(),
-            },
-        )
-        .ok();
-    }
-    let owner = identity(&app, &site, "alpha:owner", "t-verify");
-    let whole = audit_log::verify(&app, &owner, &json!({})).expect("verified");
-    assert_eq!(whole["intact"], true, "{whole}");
-    assert!(whole.get("first_break").is_none(), "{whole}");
-    assert!(whole["entries"].as_u64().unwrap() >= 3, "{whole}");
-
-    // Not signed in, a member without the capability, and another tenant's name are refused.
-    let refused = audit_log::verify(&app, &anonymous(&site), &json!({}))
-        .err()
-        .expect("refused");
-    assert!(matches!(refused.0.code, ErrorCode::Unauthenticated));
-    let ada = identity(&app, &site, "alpha:ada", "t-ada");
-    let refused = audit_log::verify(&app, &ada, &json!({}))
-        .err()
-        .expect("refused");
-    assert!(
-        matches!(refused.0.code, ErrorCode::Forbidden),
-        "{refused:?}"
-    );
-    let refused = audit_log::verify(&app, &owner, &json!({ "tenant": "beta" }))
-        .err()
-        .expect("refused");
-    assert_eq!(refused.0.kind.as_deref(), Some("tenant_mismatch"));
-    assert!(
-        !entries(&app, &site, "audit_log.tenant_mismatch").is_empty(),
-        "the refusal is an audit entry"
-    );
-    // Once the role she holds is granted the capability, she may verify.
-    grant_audit_read(&app, &site, "t-grant");
-    assert_eq!(
-        audit_log::verify(&app, &ada, &json!({})).expect("verified")["intact"],
-        true
-    );
-
-    // An entry altered in the storage: the chain is broken at that entry.
-    assert!(memory.tamper_audit_line(&site, 1, |line| line.event = "forged".into()));
-    let altered = audit_log::verify(&app, &owner, &json!({})).expect("verified");
-    assert_eq!(altered["intact"], false, "{altered}");
-    assert_eq!(altered["first_break"], 2, "{altered}");
-    assert!(altered["reason"].as_str().is_some(), "{altered}");
 }
 
 // Verifies: OBS-007

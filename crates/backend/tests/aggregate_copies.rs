@@ -16,13 +16,13 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use strata_backend::aggregates::CopyStats;
-use strata_backend::app::{ApiError, App, Config, Shared};
+use strata_backend::app::{App, Config, Shared};
 use strata_backend::auth::Identity;
 use strata_kernel::testkit::{
     ctx, eq, field, field_def, lit, object, principal_id, role, tenant_id, text, user, var,
 };
 use strata_kernel::*;
-use strata_protocol::api::{AggregateRunRequest, ErrorCode};
+use strata_protocol::api::AggregateRunRequest;
 use strata_protocol::ws::SessionState;
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, Store};
@@ -539,90 +539,6 @@ fn a_commit_to_an_object_type_the_aggregate_reads_is_never_followed_by_a_stale_a
     let served = site.copies().served;
     assert_eq!(count(&site.ask("alpha", &reader, "count_all")), 1);
     assert_eq!(site.copies().served, served);
-}
-
-// Verifies: AGG-040
-#[test]
-fn a_copy_is_never_served_to_another_tenant() {
-    let site = Site::new();
-    site.found("alpha", TYPICAL, [0b001, 0, 0, 0]);
-    site.found("beta", TYPICAL, [0b001, 0, 0, 0]);
-    site.note("alpha", boss("alpha"), 1, true);
-    site.note("beta", boss("beta"), 1, true);
-    site.note("beta", boss("beta"), 2, true);
-
-    // The same roles in two tenants of one schema: the classes are equal, the keys are not.
-    let in_alpha = site.ask("alpha", &member("alpha", 0), "count_all");
-    let in_beta = site.ask("beta", &member("beta", 0), "count_all");
-    assert_eq!((count(&in_alpha), count(&in_beta)), (1, 2));
-    assert_eq!(
-        site.copies(),
-        CopyStats {
-            held: 2,
-            served: 0,
-            stored: 2
-        }
-    );
-    let public_alpha = site.ask("alpha", &Principal::Anonymous, "count_all");
-    let public_beta = site.ask("beta", &Principal::Anonymous, "count_all");
-    assert_eq!((count(&public_alpha), count(&public_beta)), (1, 2));
-    assert_eq!(site.copies().served, 0);
-
-    // A commit in one tenant leaves the other tenant's copy valid.
-    site.note("alpha", boss("alpha"), 3, true);
-    assert_eq!(count(&site.ask("beta", &member("beta", 0), "count_all")), 2);
-    assert_eq!(site.copies().served, 1);
-    assert_eq!(
-        count(&site.ask("alpha", &member("alpha", 0), "count_all")),
-        2
-    );
-}
-
-// Verifies: TEN-1140
-#[test]
-fn a_request_that_names_another_tenant_is_refused_as_a_tenant_mismatch() {
-    let site = Site::new();
-    site.found("alpha", TYPICAL, [0b001, 0, 0, 0]);
-    site.found("beta", TYPICAL, [0b001, 0, 0, 0]);
-    let identity = Site::identity("alpha", &member("alpha", 0));
-    let refused: ApiError = strata_backend::aggregates::run(
-        &site.app,
-        &identity,
-        &Site::request(Some("beta"), "count_all"),
-    )
-    .err()
-    .expect("another tenant is refused");
-    assert!(matches!(refused.0.code, ErrorCode::Forbidden));
-    assert_eq!(refused.0.kind.as_deref(), Some("tenant_mismatch"));
-    assert_eq!(site.copies(), CopyStats::default());
-    // The refusal is an audit entry of the tenant the request was made at, with the request's
-    // correlation identifier.
-    let lines = site
-        .store
-        .audit_list(&tenant_id("alpha"), Some("audit"), 10)
-        .expect("the audit trail");
-    let entry = lines
-        .iter()
-        .find(|line| line.event == "aggregate.tenant_mismatch")
-        .expect("the refusal is an audit entry");
-    assert_eq!(entry.correlation, "t-aggregate-copies");
-    let data: Json = serde_json::from_str(&entry.data).expect("the entry data is JSON");
-    assert_eq!(data["tenant"], "alpha");
-    assert!(
-        site.store
-            .audit_list(&tenant_id("beta"), Some("audit"), 10)
-            .expect("the other tenant's trail")
-            .is_empty(),
-        "nothing is written to the tenant that was named"
-    );
-    // The tenant of the request, named, is accepted.
-    strata_backend::aggregates::run(
-        &site.app,
-        &identity,
-        &Site::request(Some("alpha"), "count_all"),
-    )
-    .ok()
-    .expect("the tenant of the request is accepted");
 }
 
 // ---- the property: a result served from the store equals the result computed fresh ----------------

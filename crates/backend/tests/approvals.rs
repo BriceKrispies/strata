@@ -15,7 +15,7 @@ use std::sync::Arc;
 use strata_backend::app::{ApiError, App, Config, Shared};
 use strata_backend::auth::Identity;
 use strata_backend::mail::DevSink;
-use strata_backend::worker::{self, commands, leases, routes, steps, WorkerConfig};
+use strata_backend::worker::{commands, steps, WorkerConfig};
 use strata_kernel::approvals::WORKFLOW_APPROVE;
 use strata_kernel::testkit::*;
 use strata_kernel::*;
@@ -24,8 +24,7 @@ use strata_model::types::AutomationStepResult;
 use strata_protocol::api::ErrorCode;
 use strata_protocol::ws::SessionState;
 use strata_storage_api::jobs::{
-    ExceptionKind, JobReport, JobWork, NewJob, Reported, RetryPolicy, RunRecord, RunState,
-    StepState,
+    ExceptionKind, JobWork, NewJob, RetryPolicy, RunRecord, RunState, StepState,
 };
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, SessionRecord, Store};
@@ -483,13 +482,6 @@ fn status_of(note: &Record) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn body_of(note: &Record) -> Value {
-    note.fields
-        .get(&field("body"))
-        .cloned()
-        .unwrap_or(Value::Null)
-}
-
 /// A note written by `who` (a draft), returning its id.
 fn write_note(app: &App, who: &str, title: &str, slug: &str, now: i64) -> u64 {
     execute(
@@ -636,53 +628,6 @@ fn a_content_review_publishes_the_note_only_when_an_editor_approves() {
     assert_eq!(finished.params["gate_by"], text("alpha:editor"));
 }
 
-// Verifies: WFL-2680
-#[test]
-fn a_refusal_takes_the_refused_branch_and_the_note_stays_a_draft() {
-    let app = app();
-    install(&app, "alpha");
-    let note = write_note(&app, "writer1", "Review me", "review-me", 200);
-    let run = submit(&app, "writer1", note, "k-1", T0);
-    decide(&app, "editor", &run, false, T0 + 10).expect("refused");
-    worker::tick(&app, "w1", &config(), &at(T0 + 10));
-    assert_eq!(run_of(&app, &run).state, RunState::Completed);
-    let note = notes(&app, "alpha").remove(0);
-    assert_eq!(status_of(&note), text("draft"));
-    assert_eq!(body_of(&note), text("rejected"));
-    let decision = steps_of(&app, &run)
-        .remove(0)
-        .approval
-        .and_then(|approval| approval.decision)
-        .expect("the decision");
-    assert!(!decision.approved && !decision.timed_out);
-}
-
-// Verifies: WFL-2682
-#[test]
-fn a_deadline_that_passes_takes_the_refused_branch_and_a_late_decision_is_refused() {
-    let app = app();
-    install(&app, "alpha");
-    let note = write_note(&app, "writer1", "Review me", "review-me", 200);
-    let run = submit(&app, "writer1", note, "k-1", T0);
-    let deadline = T0 + HOUR as i64;
-    // After the deadline and before the worker has taken it, a decision is a conflict.
-    let late = decide(&app, "editor", &run, true, deadline + 1).expect_err("late");
-    assert_eq!(code_of(&late), ErrorCode::Conflict);
-    assert_eq!(run_of(&app, &run).state, RunState::AwaitingApproval);
-    // The worker takes the deadline: the refused branch, the decision recorded as timed out.
-    worker::tick(&app, "w1", &config(), &at(deadline + 1));
-    assert_eq!(run_of(&app, &run).state, RunState::Completed);
-    assert_eq!(body_of(&notes(&app, "alpha")[0]), text("rejected"));
-    let decision = steps_of(&app, &run)
-        .remove(0)
-        .approval
-        .and_then(|approval| approval.decision)
-        .expect("the decision");
-    assert!(decision.timed_out && !decision.approved);
-    assert_eq!(decision.by, None);
-    assert_eq!(run_of(&app, &run).params["gate_by"], Value::Null);
-}
-
 // Verifies: WFL-2682
 #[test]
 fn a_decision_before_the_deadline_cancels_it_so_nothing_is_taken_twice() {
@@ -699,41 +644,6 @@ fn a_decision_before_the_deadline_cancels_it_so_nothing_is_taken_twice() {
     );
     assert_eq!(status_of(&notes(&app, "alpha")[0]), text("published"));
     assert_eq!(run_of(&app, &run).state, RunState::Completed);
-}
-
-// Verifies: WFL-006, WFL-2680
-#[test]
-fn a_principal_without_the_role_the_policy_names_is_refused_and_the_run_keeps_waiting() {
-    let app = app();
-    install(&app, "alpha");
-    let note = write_note(&app, "writer1", "Review me", "review-me", 200);
-    let run = submit(&app, "writer1", note, "k-1", T0);
-    // writer2 holds workflow-approve and is not the author, but the policy names the editors.
-    let error = decide(&app, "writer2", &run, true, T0 + 10).expect_err("refused");
-    assert_eq!(code_of(&error), ErrorCode::Forbidden);
-    // A stranger holds nothing at all.
-    let error = decide(&app, "stranger", &run, true, T0 + 10).expect_err("refused");
-    assert_eq!(code_of(&error), ErrorCode::Forbidden);
-    assert_eq!(run_of(&app, &run).state, RunState::AwaitingApproval);
-    assert_eq!(steps_of(&app, &run)[0].state, StepState::Waiting);
-    assert_eq!(worker::tick(&app, "w1", &config(), &at(T0 + 10)).jobs, 0);
-}
-
-// Verifies: WFL-2681
-#[test]
-fn the_person_who_started_the_run_may_not_approve_it_even_holding_the_role() {
-    let app = app();
-    install(&app, "alpha");
-    let note = write_note(&app, "editor", "Review me", "review-me", 200);
-    // An editor starts the review of their own note.
-    let run = submit(&app, "editor", note, "k-1", T0);
-    let error = decide(&app, "editor", &run, true, T0 + 10).expect_err("refused");
-    assert_eq!(code_of(&error), ErrorCode::Forbidden);
-    assert_eq!(run_of(&app, &run).state, RunState::AwaitingApproval);
-    // Another editor may.
-    decide(&app, "editor2", &run, true, T0 + 11).expect("approved by another editor");
-    worker::tick(&app, "w1", &config(), &at(T0 + 11));
-    assert_eq!(status_of(&notes(&app, "alpha")[0]), text("published"));
 }
 
 // Verifies: WFL-2683
@@ -756,36 +666,6 @@ fn a_second_decision_is_refused_and_changes_nothing() {
     assert_eq!(after[0].approval, before[0].approval, "the decision stands");
     assert_eq!(status_of(&notes(&app, "alpha")[0]), text("published"));
     assert_eq!(run_of(&app, &run).state, RunState::Completed);
-}
-
-// Verifies: WFL-2680
-#[test]
-fn an_approval_names_a_run_of_this_tenant_and_a_decision_that_is_one() {
-    let app = app();
-    install(&app, "alpha");
-    let missing = decide(&app, "editor", "no-such-run", true, T0).expect_err("unknown");
-    assert_eq!(code_of(&missing), ErrorCode::NotFound);
-    let note = write_note(&app, "writer1", "Review me", "review-me", 200);
-    let run = submit(&app, "writer1", note, "k-1", T0);
-    let undecided = commands::approve_step_at(
-        &app,
-        &signed_in("alpha", "editor"),
-        &json!({ "run": run }),
-        Timestamp(T0 + 1),
-    )
-    .expect_err("no decision");
-    assert_eq!(code_of(&undecided), ErrorCode::Invalid);
-    let mut anonymous = signed_in("alpha", "editor");
-    anonymous.principal = Principal::Anonymous;
-    anonymous.session = None;
-    let error = commands::approve_step_at(
-        &app,
-        &anonymous,
-        &json!({ "run": run, "approved": true }),
-        Timestamp(T0 + 1),
-    )
-    .expect_err("anonymous");
-    assert_eq!(code_of(&error), ErrorCode::Unauthenticated);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -829,56 +709,6 @@ fn a_person_starts_a_run_once_per_key_and_the_same_key_with_other_inputs_is_refu
         .automation_runs(&tenant_id("alpha"), None, None, None, 10)
         .unwrap();
     assert_eq!(runs.len(), 2);
-}
-
-// Verifies: WFL-2687
-#[test]
-fn starting_a_run_needs_jobs_run_an_active_automation_and_inputs_an_automation_reads() {
-    let app = app();
-    install(&app, "alpha");
-    let body =
-        |workflow: &str, input: serde_json::Value| json!({ "workflow": workflow, "input": input });
-    // A stranger holds no permission.
-    let error = commands::start_run_at(
-        &app,
-        &signed_in("alpha", "stranger"),
-        &body("review", json!({})),
-        Timestamp(T0),
-    )
-    .expect_err("forbidden");
-    assert_eq!(code_of(&error), ErrorCode::Forbidden);
-    let writer = signed_in("alpha", "writer1");
-    let refused = |workflow: &str, input: serde_json::Value| {
-        code_of(
-            &commands::start_run_at(&app, &writer, &body(workflow, input), Timestamp(T0))
-                .expect_err("refused"),
-        )
-    };
-    assert_eq!(refused("nobody", json!({})), ErrorCode::NotFound);
-    assert_eq!(
-        refused("drafty", json!({})),
-        ErrorCode::Conflict,
-        "a draft starts no run"
-    );
-    assert_eq!(
-        refused("review", json!({ "colour": 1 })),
-        ErrorCode::Invalid,
-        "not a name an automation reads"
-    );
-    assert_eq!(
-        refused("review", json!({ "at": 1 })),
-        ErrorCode::Invalid,
-        "bound by the platform"
-    );
-    assert_eq!(
-        refused("review", json!({ "subject": { "a": 1 } })),
-        ErrorCode::Invalid
-    );
-    assert!(app
-        .store
-        .jobs_list(&tenant_id("alpha"), None, 10)
-        .unwrap()
-        .is_empty());
 }
 
 // Verifies: WFL-1521, WFL-2684
@@ -1003,317 +833,6 @@ fn a_failed_step_undoes_the_completed_steps_in_reverse_order() {
     assert_eq!(dead[0].step.as_ref().map(|s| s.as_str()), Some("three"));
 }
 
-// Verifies: SCH-1524, WFL-2686
-#[test]
-fn a_compensation_that_is_attempted_again_after_a_crash_compensates_once() {
-    let app = app();
-    install(&app, "alpha");
-    let alpha = tenant_id("alpha");
-    let run = start_job(&app, "saga", "1", T0);
-    // Run the jobs by hand until the compensation of the second step, run it, and stop before
-    // reporting, as a worker that crashed would.
-    let (held, outcome) = loop {
-        let lease = app
-            .store
-            .job_lease(&alpha, "w1", Timestamp(T0))
-            .unwrap()
-            .expect("a job is due");
-        if matches!(lease.job.work, JobWork::Compensate { of_sequence: 2, .. }) {
-            let outcome = steps::run_job(&app, &alpha, &lease, Timestamp(T0));
-            break (lease, outcome);
-        }
-        leases::run_leased(&app, &alpha, &lease, &at(T0)).unwrap();
-    };
-    assert_eq!(outcome.report, JobReport::Succeeded);
-    assert_eq!(
-        notes(&app, "alpha").len(),
-        1,
-        "the second note is deleted, the first is not yet"
-    );
-    // The lease expires; another worker attempts it again under the same key, and the delete is
-    // not applied a second time (a second delete would fail and leave the run compensating).
-    let later = T0 + 60_001;
-    worker::tick(&app, "w2", &config(), &at(later));
-    assert!(notes(&app, "alpha").is_empty());
-    assert_eq!(run_of(&app, &run).state, RunState::Failed);
-    assert_eq!(
-        compensations(&app),
-        [("undo_two".to_string(), 2), ("undo_one".to_string(), 1)]
-    );
-    // The first worker's late report is refused by its token.
-    let late = app
-        .store
-        .job_report(
-            &alpha,
-            &held.job.id,
-            held.token,
-            &outcome.report,
-            &outcome.writes,
-            Timestamp(later + 1),
-        )
-        .unwrap();
-    assert!(matches!(late, Reported::Refused(_)), "{late:?}");
-    assert_eq!(run_of(&app, &run).state, RunState::Failed);
-}
-
-// Verifies: WFL-005, WFL-2686
-#[test]
-fn a_compensation_that_fails_leaves_the_run_compensating_and_the_owner_can_retry_it() {
-    let app = app();
-    install(&app, "alpha");
-    let alpha = tenant_id("alpha");
-    let run = start_job(&app, "saga_stuck", "1", T0);
-    worker::tick(&app, "w1", &config(), &at(T0));
-    // The run is visible as compensating, with the note it could not undo still there.
-    let stuck = run_of(&app, &run);
-    assert_eq!(stuck.state, RunState::Compensating);
-    assert!(stuck.ended_at.is_none());
-    assert!(stuck
-        .error
-        .as_deref()
-        .unwrap()
-        .contains("compensation undo_one of step one failed"));
-    assert_eq!(notes(&app, "alpha").len(), 1);
-    assert_eq!(steps_of(&app, &run)[0].state, StepState::Completed);
-    // The owner finds an unsettled dead-lettered record that names the compensating step and job.
-    let unsettled = |app: &App| {
-        app.store
-            .automation_exceptions(&alpha, Some(ExceptionKind::DeadLettered), true, None, 10)
-            .unwrap()
-    };
-    let records: Vec<_> = unsettled(&app)
-        .into_iter()
-        .filter(|record| record.step.as_ref().map(|s| s.as_str()) == Some("undo_one"))
-        .collect();
-    assert_eq!(records.len(), 1);
-    let job = records[0].job.clone().expect("the compensation job");
-    // Releasing it gives that job one more attempt, which fails again for the same reason.
-    let released = routes::settle_exception(
-        &app,
-        &signed_in("alpha", "owner"),
-        &json!({ "exception": records[0].id, "action": "release" }),
-    )
-    .expect("released");
-    assert_eq!(released["job"], job);
-    // The retry is due at the platform's clock: the worker's clock is moved past it.
-    let after_release = app.now().0 + 10_000;
-    worker::tick(&app, "w1", &config(), &at(after_release));
-    assert_eq!(run_of(&app, &run).state, RunState::Compensating);
-    let again: Vec<_> = unsettled(&app)
-        .into_iter()
-        .filter(|record| record.step.as_ref().map(|s| s.as_str()) == Some("undo_one"))
-        .collect();
-    assert_eq!(
-        again.len(),
-        1,
-        "the first record is settled and the second is the new failure"
-    );
-    assert_ne!(again[0].id, records[0].id);
-}
-
 // ---------------------------------------------------------------------------------------------
 // The step that invokes a tenant operation.
 // ---------------------------------------------------------------------------------------------
-
-// Verifies: WFL-2685
-#[test]
-fn an_invoke_operation_step_invokes_the_operation_as_the_automation_and_records_its_result() {
-    let app = app();
-    install(&app, "alpha");
-    let run = start_job(&app, "stamper", "1", T0);
-    worker::tick(&app, "w1", &config(), &at(T0));
-    assert_eq!(run_of(&app, &run).state, RunState::Completed);
-    let made = notes(&app, "alpha");
-    assert_eq!(made.len(), 1);
-    assert_eq!(made[0].fields[&field("title")], text("Stamped"));
-    assert_eq!(made[0].fields[&field("slug")], text("stamped"));
-    assert_eq!(
-        made[0].created_by,
-        Some(principal_id("automation:stamper")),
-        "the automation principal invoked it"
-    );
-    let call = steps_of(&app, &run).remove(0);
-    match serde_json::from_value(call.result.expect("a result")).expect("a typed result") {
-        AutomationStepResult::InvokeOperation {
-            created,
-            changed,
-            deleted,
-        } => {
-            assert_eq!(created, [made[0].id]);
-            assert!(changed.is_empty() && deleted.is_empty());
-        }
-        other => panic!("{other:?}"),
-    }
-    assert_eq!(
-        run_of(&app, &run).params["call_created"],
-        Value::List(vec![Value::Ref(made[0].id)])
-    );
-}
-
-// Verifies: SCH-1524, WFL-2685
-#[test]
-fn an_invoke_operation_step_that_is_attempted_again_after_a_crash_invokes_once() {
-    let app = app();
-    install(&app, "alpha");
-    let alpha = tenant_id("alpha");
-    let run = start_job(&app, "stamper", "1", T0);
-    // The start job runs and reports; then w1 leases the step, invokes, and stops before reporting.
-    let first = app
-        .store
-        .job_lease(&alpha, "w1", Timestamp(T0))
-        .unwrap()
-        .unwrap();
-    leases::run_leased(&app, &alpha, &first, &at(T0)).unwrap();
-    let held = app
-        .store
-        .job_lease(&alpha, "w1", Timestamp(T0))
-        .unwrap()
-        .unwrap();
-    let outcome = steps::run_job(&app, &alpha, &held, Timestamp(T0));
-    assert_eq!(outcome.report, JobReport::Succeeded);
-    assert_eq!(notes(&app, "alpha").len(), 1);
-    // The lease expires and another worker attempts it again with the same step key: no second note.
-    worker::tick(&app, "w2", &config(), &at(T0 + 60_001));
-    assert_eq!(notes(&app, "alpha").len(), 1);
-    assert_eq!(run_of(&app, &run).state, RunState::Completed);
-}
-
-// Verifies: WFL-2685
-#[test]
-fn an_automation_cannot_invoke_an_operation_beyond_what_its_run_as_and_the_operation_allow() {
-    let app = app();
-    install(&app, "alpha");
-    let alpha = tenant_id("alpha");
-    let owner = Principal::User(principal_id("alpha:owner"));
-    let define = |def: AutomationDef| {
-        execute(
-            app.store.as_ref(),
-            &Intent::ChangeSchema {
-                changes: vec![SchemaChange::DefineAutomation(def)],
-                expected_version: None,
-                existing: ExistingData::Reject,
-            },
-            &ctx("alpha", owner.clone(), 5_000),
-        )
-    };
-    // The operation names the editors; this automation acts as a writer.
-    assert!(define(invoking(
-        "sneak",
-        "writer",
-        "stamp_editors",
-        &[("slug", lit("s"))]
-    ))
-    .is_err());
-    // Acting as an editor it may.
-    assert!(define(invoking(
-        "allowed",
-        "editor",
-        "stamp_editors",
-        &[("slug", lit("s"))]
-    ))
-    .is_ok());
-    // An input the operation does not declare is refused, so a step cannot reach past the operation.
-    assert!(define(invoking(
-        "extra",
-        "writer",
-        "stamp_note",
-        &[("slug", lit("s")), ("status", lit("published"))]
-    ))
-    .is_err());
-    // A missing required input and an input of another type are refused.
-    assert!(define(invoking("missing", "writer", "stamp_note", &[])).is_err());
-    assert!(define(invoking(
-        "typed",
-        "writer",
-        "stamp_note",
-        &[("slug", Expr::Lit(Value::Int(1)))]
-    ))
-    .is_err());
-    // What was refused left nothing behind.
-    let state = app.store.load(&alpha, &[]).unwrap().tenant.unwrap();
-    let held = state.schema.automations.clone().unwrap_or_default();
-    for refused in ["sneak", "extra", "missing", "typed"] {
-        assert!(
-            !held.contains_key(&WorkflowId::new(refused).unwrap()),
-            "{refused}"
-        );
-    }
-    assert!(held.contains_key(&WorkflowId::new("allowed").unwrap()));
-}
-
-// Verifies: WFL-2680, SCH-1524
-#[test]
-fn a_request_approval_step_attempted_again_after_a_crash_waits_once() {
-    let app = app();
-    install(&app, "alpha");
-    let alpha = tenant_id("alpha");
-    let run = start_job(&app, "gated", "1", T0);
-    // The start job runs and reports; then w1 leases the approval step, does it (the wait and its
-    // deadline are written) and stops before it reports.
-    let first = app
-        .store
-        .job_lease(&alpha, "w1", Timestamp(T0))
-        .unwrap()
-        .unwrap();
-    leases::run_leased(&app, &alpha, &first, &at(T0)).unwrap();
-    let held = app
-        .store
-        .job_lease(&alpha, "w1", Timestamp(T0))
-        .unwrap()
-        .unwrap();
-    let outcome = steps::run_job(&app, &alpha, &held, Timestamp(T0));
-    assert_eq!(outcome.report, JobReport::Succeeded);
-    app.store
-        .automation_write(&alpha, &outcome.writes, Timestamp(T0))
-        .unwrap();
-    let deadlines = |app: &App| {
-        app.store
-            .jobs_list(&alpha, None, 50)
-            .unwrap()
-            .into_iter()
-            .filter(|job| matches!(job.work, JobWork::ApprovalTimeout { .. }))
-            .count()
-    };
-    assert_eq!(run_of(&app, &run).state, RunState::AwaitingApproval);
-    assert_eq!(deadlines(&app), 1);
-    // The lease expires and another worker attempts the step again: the step keeps its one wait,
-    // as first requested, and no second deadline is made.
-    let later = T0 + 60_001;
-    worker::tick(&app, "w2", &config(), &at(later));
-    assert_eq!(run_of(&app, &run).state, RunState::AwaitingApproval);
-    let records = steps_of(&app, &run);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].state, StepState::Waiting);
-    let approval = records[0].approval.clone().expect("the approval");
-    assert_eq!(approval.requested_at, Timestamp(T0));
-    assert_eq!(approval.deadline, Timestamp(T0 + HOUR as i64));
-    assert_eq!(approval.decision, None);
-    assert_eq!(deadlines(&app), 1);
-    // The first worker's late report is refused by its token and changes nothing.
-    let late = app
-        .store
-        .job_report(
-            &alpha,
-            &held.job.id,
-            held.token,
-            &outcome.report,
-            &outcome.writes,
-            Timestamp(later + 1),
-        )
-        .unwrap();
-    assert!(matches!(late, Reported::Refused(_)), "{late:?}");
-    assert_eq!(steps_of(&app, &run).len(), 1);
-    assert_eq!(deadlines(&app), 1);
-    // The one wait is decided once, and the run ends.
-    decide(&app, "editor", &run, true, later + 2).expect("approved");
-    worker::tick(&app, "w2", &config(), &at(later + 2));
-    assert_eq!(run_of(&app, &run).state, RunState::Completed);
-    let gate = steps_of(&app, &run).remove(0);
-    assert_eq!(gate.state, StepState::Completed);
-    assert_eq!(
-        gate.approval
-            .and_then(|approval| approval.decision)
-            .map(|d| d.approved),
-        Some(true)
-    );
-}

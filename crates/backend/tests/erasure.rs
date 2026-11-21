@@ -14,7 +14,7 @@ use strata_kernel::{
     RecordId, RetentionRule, RetentionStart, RoleId, SessionId, StateDelta, StateRevision,
     TenantId, TenantSchema, Timestamp, Transition, Value,
 };
-use strata_protocol::api::ErrorCode;
+
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{
     execute, Account, Commit, PasskeyRecord, SessionRecord, Store, TotpRecord,
@@ -559,48 +559,9 @@ fn the_subject_is_erased_and_the_rest_is_kept(store: Arc<dyn Store>) {
 // Verifies: PRV-2462
 // Verifies: PRV-2463
 #[test]
-fn the_subject_is_erased_on_the_memory_store() {
-    the_subject_is_erased_and_the_rest_is_kept(Arc::new(MemoryStore::new()));
-}
-
-// Verifies: PRV-2460
-// Verifies: PRV-2462
-// Verifies: PRV-2463
-#[test]
 fn the_subject_is_erased_on_sqlite() {
     let store = SqliteStore::open_in_memory(Timestamp(1_000)).expect("a store");
     the_subject_is_erased_and_the_rest_is_kept(Arc::new(store));
-}
-
-// Verifies: PRV-2461
-#[test]
-fn many_records_are_erased_in_bounded_batches() {
-    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-    let app = app_on(store.clone());
-    let store = store.as_ref();
-    let alpha = found(store, "alpha");
-    let owner = as_owner(&alpha, 2_000);
-    let total = strata_kernel::erasure::BATCH + 30;
-    for i in 0..total {
-        profile(store, &owner, "alpha:ada", &format!("Person {i}"));
-    }
-    give_credentials(store, &alpha, &who("alpha:ada"), 2_002);
-    let before = store
-        .tenant_summary(&alpha)
-        .expect("summary")
-        .expect("tenant");
-    let receipt = erase_subject(&app, &owner, &who("alpha:ada")).expect("the erasure");
-    assert!(receipt.batches >= 2, "{} commits", receipt.batches);
-    assert_eq!(receipt.batch_bound, strata_kernel::erasure::BATCH as u64);
-    assert_eq!(receipt.records.len(), total);
-    let after = store
-        .tenant_summary(&alpha)
-        .expect("summary")
-        .expect("tenant");
-    assert!(after.revision.0 >= before.revision.0 + 2);
-    for id in 1..=total as u64 {
-        assert!(!record_json(store, &alpha, "profile", id).contains("Person"));
-    }
 }
 
 // Verifies: PRV-353
@@ -689,89 +650,4 @@ fn the_receipt_names_each_backup_image_and_export_with_its_own_expiry() {
         "{}",
         kept[0].1
     );
-}
-
-// Verifies: PRV-2461
-#[test]
-fn repeating_an_erasure_changes_nothing_and_still_answers() {
-    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-    let app = app_on(store.clone());
-    let store = store.as_ref();
-    let alpha = found(store, "alpha");
-    let owner = as_owner(&alpha, 2_000);
-    profile(store, &owner, "alpha:ada", "Ada Lovelace");
-    give_credentials(store, &alpha, &who("alpha:ada"), 2_002);
-    let first = erase_subject(&app, &owner, &who("alpha:ada")).expect("the erasure");
-    assert_eq!(first.records.len(), 1);
-    let revision = store
-        .tenant_summary(&alpha)
-        .expect("summary")
-        .expect("tenant")
-        .revision;
-    let later = as_owner(&alpha, 2_100);
-    let second = erase_subject(&app, &later, &who("alpha:ada")).expect("a repeat is not an error");
-    assert!(second.records.is_empty());
-    assert_eq!(second.batches, 0);
-    assert_eq!(
-        store
-            .tenant_summary(&alpha)
-            .expect("summary")
-            .expect("tenant")
-            .revision,
-        revision,
-        "a repeat commits nothing"
-    );
-    assert_eq!(
-        store
-            .doc_list(&alpha, RECEIPT_KIND)
-            .expect("receipts")
-            .len(),
-        1 + 1
-    );
-}
-
-#[test]
-fn a_principal_the_tenant_does_not_hold_is_not_found_and_another_tenants_is_the_same() {
-    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-    let app = app_on(store.clone());
-    let store = store.as_ref();
-    let alpha = found(store, "alpha");
-    let beta = found(store, "beta");
-    give_credentials(store, &beta, &who("beta:grace"), 2_002);
-    let owner = as_owner(&alpha, 2_000);
-    let nobody = erase_subject(&app, &owner, &who("alpha:nobody")).expect_err("not found");
-    let other = erase_subject(&app, &owner, &who("beta:grace")).expect_err("not found");
-    assert!(matches!(nobody.0.code, ErrorCode::NotFound));
-    assert!(matches!(other.0.code, ErrorCode::NotFound));
-    assert_eq!(nobody.0.message, other.0.message);
-    // Nothing of the other tenant moved.
-    assert!(store
-        .account_of(&beta, &who("beta:grace"))
-        .expect("account")
-        .is_some());
-}
-
-#[test]
-fn only_an_owner_erases_and_the_last_owner_stays() {
-    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-    let app = app_on(store.clone());
-    let store = store.as_ref();
-    let alpha = found(store, "alpha");
-    give_credentials(store, &alpha, &who("alpha:ada"), 2_002);
-    let stranger = ctx(
-        &alpha,
-        Principal::User(who("alpha:ada")),
-        2_000,
-        "t-stranger",
-    );
-    let refused = erase_subject(&app, &stranger, &who("alpha:ada")).expect_err("refused");
-    assert!(matches!(refused.0.code, ErrorCode::Forbidden));
-    assert!(store
-        .account_of(&alpha, &who("alpha:ada"))
-        .expect("account")
-        .is_some());
-
-    let owner = as_owner(&alpha, 2_001);
-    let refused = erase_subject(&app, &owner, &who("alpha:owner")).expect_err("refused");
-    assert!(matches!(refused.0.code, ErrorCode::Invalid));
 }

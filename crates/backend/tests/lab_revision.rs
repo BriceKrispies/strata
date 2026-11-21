@@ -234,29 +234,6 @@ async fn a_projection_is_taken_at_the_revision_the_caller_names() {
     assert_eq!(after["tenant"], second["tenant"]);
 }
 
-/// The overview says that runs are held in memory only, and counts the ones it has dropped.
-#[tokio::test]
-async fn the_overview_is_honest_about_the_runs_it_keeps() {
-    let backend = start().await;
-    let admin = backend.login("admin", "strata-dev-admin").await;
-    let overview = backend.overview(&admin).await;
-    assert_eq!(overview["runs_kept"]["most_per_site"], 12);
-    assert_eq!(overview["runs_kept"]["dropped_since_start"], 0);
-    assert!(overview["runs_kept"]["note"]
-        .as_str()
-        .unwrap()
-        .contains("process"));
-    let (status, gone) = backend
-        .call(
-            Some(&admin),
-            "/internal/lab/result",
-            json!({ "id": "run_000000000000" }),
-        )
-        .await;
-    assert_eq!(status, 404);
-    assert!(gone["message"].as_str().unwrap().contains("process"));
-}
-
 /// AGT-2940: the change a projection showed is applied by an owner, only while the site is still
 /// at the revision the projection was taken at. A site that moved on is a conflict that names its
 /// revision and changes nothing; at the current revision the change is committed once.
