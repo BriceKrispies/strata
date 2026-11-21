@@ -1251,12 +1251,12 @@ fn a_digest_step_sends_one_message_to_each_person_with_notices_in_its_window() {
                 SchemaChange::DefineMailTemplate(MailTemplateDecl {
                     template: TemplateId("daily".into()),
                     subject: "{{count}} new orders".into(),
-                    body: StructuredBlocks(r#"[{"type":"paragraph","text":"{{notices}}"}]"#.into()),
+                    body: StructuredBlocks(r#"[{"type":"paragraph","inlines":[{"type":"value","name":"notices","value_type":"str"}]}]"#.into()),
                 }),
                 SchemaChange::DefineNoticeTemplate(NoticeTemplateDecl {
                     template: TemplateId("order".into()),
                     title: "Order {{order}}".into(),
-                    body: StructuredBlocks(r#"[{"text":"An order."}]"#.into()),
+                    body: StructuredBlocks(r#"[{"type":"paragraph","inlines":[{"type":"text","text":"An order."}]}]"#.into()),
                 }),
             ],
             expected_version: None,
