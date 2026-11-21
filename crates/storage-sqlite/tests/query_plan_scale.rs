@@ -317,7 +317,12 @@ fn commit_ops(store: &dyn Store, tenant: &str, ops: Vec<DeltaOp>) {
     };
     let context = ctx(tenant, Principal::System, 20);
     store
-        .commit(&Commit::of(&intent, &context, &transition))
+        .commit(&Commit::of(
+            &intent,
+            &context,
+            &transition,
+            store.generation(&tenant_id(tenant)).unwrap(),
+        ))
         .unwrap();
 }
 

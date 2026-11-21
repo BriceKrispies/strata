@@ -324,7 +324,7 @@ fn a_snapshot_taken_before_the_erasure_restores_with_the_subject_erased() {
         .expect("snapshot");
     erase_subject(&app, &owner(&alpha, 3_000), &who("alpha:ada")).expect("erasure");
     store
-        .restore_snapshot(&alpha, snapshot.id)
+        .restore_snapshot(&alpha, snapshot.id, None)
         .expect("restore");
     // The key is not part of the snapshot, so its destruction holds after the restore.
     let ada = record(store.as_ref(), &alpha, 1).expect("Ada's profile is back");

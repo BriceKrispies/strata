@@ -39,6 +39,7 @@
 pub mod admission;
 pub mod audit_chain;
 pub mod covering;
+pub mod generation;
 pub mod jobs;
 pub mod memory;
 pub mod schedules;
@@ -51,6 +52,7 @@ pub mod segments;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 
+pub use generation::{random_nonces, Generation, Loaded, NonceSource, RandomNonces, SeededNonces};
 use jobs::{
     ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported, RunRecord,
     RunState, Settled, StepRecord, WorkerWrites,
@@ -86,10 +88,14 @@ pub struct Capabilities {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StoreError {
-    /// The tenant was not at the revision the commit was based on. Nothing was changed.
+    /// The tenant was not at the revision, or not at the generation, the commit was based on.
+    /// Nothing was changed. `found_generation` is the generation the store held when the check
+    /// failed (`None` when the tenant does not exist, or when the refusal is not about a tenant's
+    /// generation).
     Conflict {
         expected: Option<StateRevision>,
         found: Option<StateRevision>,
+        found_generation: Option<Generation>,
     },
     NotFound(String),
     /// The commit is malformed. Nothing was changed.
@@ -103,11 +109,19 @@ pub enum StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StoreError::Conflict { expected, found } => {
+            StoreError::Conflict {
+                expected,
+                found,
+                found_generation,
+            } => {
                 write!(
                     f,
                     "revision conflict: commit based on {expected:?}, store is at {found:?}"
-                )
+                )?;
+                match found_generation {
+                    Some(generation) => write!(f, " (generation {generation})"),
+                    None => Ok(()),
+                }
             }
             StoreError::NotFound(what) => write!(f, "not found: {what}"),
             StoreError::Invalid(why) => write!(f, "invalid commit: {why}"),
@@ -235,6 +249,13 @@ pub struct Commit {
     /// whose id the tenant holds already is not written again.
     #[serde(default)]
     pub exceptions: Vec<ExceptionRecord>,
+    /// The generation of the state the decision was made on: the generation the first load of
+    /// the decision attempt returned. Compared in the write transaction that compares the base
+    /// revision. `None` is accepted only with `base_revision: None` (a commit that creates the
+    /// tenant); a `None` with a base revision is [`StoreError::Invalid`]. It is not part of the
+    /// journal entry, of `delta_hash` or `events_hash`, or of the idempotency request hash.
+    #[serde(default)]
+    pub expected_generation: Option<Generation>,
 }
 
 /// The scope of an idempotency key within a tenant: the principal, as canonical JSON.
@@ -269,13 +290,22 @@ pub fn idempotency_scope_for(intent: &Intent, context: &Context) -> String {
 
 impl Commit {
     /// The commit for an accepted transition.
+    ///
+    /// `expected_generation` is the generation of the load the transition was decided on
+    /// ([`Loaded::generation`]); `None` for a transition that creates the tenant.
     /// Implements: CT-262
-    pub fn of(intent: &Intent, context: &Context, transition: &Transition) -> Commit {
+    pub fn of(
+        intent: &Intent,
+        context: &Context,
+        transition: &Transition,
+        expected_generation: Option<Generation>,
+    ) -> Commit {
         let (jobs, exceptions) =
             jobs::trigger_intake(&transition.delta.tenant, transition, context.now);
         Commit {
             jobs,
             exceptions,
+            expected_generation,
             delta: transition.delta.clone(),
             events: transition.events.clone(),
             journal: JournalEntry {
@@ -348,6 +378,10 @@ pub struct Receipt {
     /// Outbox position, in the tenant's own outbox, of the last event written, if the commit had
     /// events.
     pub last_position: Option<u64>,
+    /// The generation the commit produced: the expected generation with the counter raised by
+    /// one, and for a commit that creates the tenant its first generation (counter 1). A replayed
+    /// idempotent result carries the tenant's generation at the time of the replay.
+    pub generation: Generation,
 }
 
 /// An event waiting to be handed to subscribers.
@@ -836,15 +870,40 @@ pub trait Store: Send + Sync {
 
     /// A snapshot of one tenant holding at least the records that answer `needs`, with partial
     /// coverage stating exactly `needs`. The tenant's schema, members and counters are always
-    /// included. `tenant` is `None` in the result when the tenant does not exist.
-    fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State>;
+    /// included. `tenant` is `None` in the result when the tenant does not exist, and so is the
+    /// generation. The generation is read in the same read transaction as the rows: a returned
+    /// revision is never paired with an earlier or a later generation.
+    fn load_at(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<Loaded>;
 
-    /// A complete snapshot of one tenant.
+    /// A complete snapshot of one tenant, with the generation read in the same read transaction.
     /// Implements: CT-013
-    fn load_complete(&self, tenant: &TenantId) -> StoreResult<State>;
+    fn load_complete_at(&self, tenant: &TenantId) -> StoreResult<Loaded>;
 
-    /// Apply a commit atomically, guarded by the base revision. The commit's events must
-    /// continue the tenant's event sequence without a gap.
+    /// The state of [`Store::load_at`].
+    fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
+        Ok(self.load_at(tenant, needs)?.state)
+    }
+
+    /// The state of [`Store::load_complete_at`].
+    fn load_complete(&self, tenant: &TenantId) -> StoreResult<State> {
+        Ok(self.load_complete_at(tenant)?.state)
+    }
+
+    /// The tenant's generation, from the row that holds it and nothing else: it succeeds on a
+    /// tenant whose schema document cannot be read. `None` when the tenant does not exist.
+    fn generation(&self, tenant: &TenantId) -> StoreResult<Option<Generation>>;
+
+    /// The control plane's step for a tenant whose storage may have changed without a commit (an
+    /// out-of-band restore, the acquisition of a lease): draw a new nonce from the store's
+    /// [`NonceSource`], keep the counter, and return the new generation. A tenant that does not
+    /// exist is `NotFound`. It changes no load result.
+    fn rotate_nonce(&self, tenant: &TenantId) -> StoreResult<Generation>;
+
+    /// Apply a commit atomically, guarded by the base revision and the expected generation,
+    /// compared in the same write transaction. The commit's events must continue the tenant's
+    /// event sequence without a gap. The same transaction raises the tenant's generation counter
+    /// (a commit that creates the tenant draws a nonce and writes counter 1); the receipt carries
+    /// the generation produced.
     /// Implements: CT-014
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt>;
 
@@ -987,11 +1046,15 @@ pub trait Store: Send + Sync {
     /// Clear `principal` from the tenant ledger: the owner of the accounts it owns and `caused_by`
     /// of the entries it caused, keeping every amount, key, reason, number, time and balance
     /// (LDG-027, LDG-028). Called by the erasure of a principal; it is not a commit and moves no
-    /// revision. A tenant that does not exist has nothing to clear.
+    /// revision. A tenant that does not exist has nothing to clear. It changes what a load
+    /// returns when it clears anything, and then raises the generation counter; with `expected`
+    /// the generation is compared in the same write transaction and a mismatch is
+    /// [`StoreError::Conflict`] that changes nothing. `None` is the unguarded control-plane call.
     fn anonymise_ledger_principal(
         &self,
         tenant: &TenantId,
         principal: &PrincipalId,
+        expected: Option<&Generation>,
     ) -> StoreResult<strata_kernel::ledger::Anonymised>;
     /// The login of a principal, for a sign-in method that identifies the person by something
     /// other than a login.
@@ -1250,8 +1313,16 @@ pub trait Store: Send + Sync {
     fn snapshots(&self, tenant: &TenantId) -> StoreResult<Vec<SnapshotInfo>>;
     fn load_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<TenantState>;
     /// Put the tenant back exactly as the snapshot holds it, discarding events and journal
-    /// entries newer than the snapshot. A development and recovery operation.
-    fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()>;
+    /// entries newer than the snapshot. A development and recovery operation. It draws a new nonce
+    /// and raises the generation counter, in the same write transaction; with `expected` the
+    /// generation is compared first and a mismatch is [`StoreError::Conflict`] that changes
+    /// nothing. `None` is the unguarded control-plane call.
+    fn restore_snapshot(
+        &self,
+        tenant: &TenantId,
+        id: u64,
+        expected: Option<&Generation>,
+    ) -> StoreResult<()>;
 
     /// Remove everything. For development fixtures.
     /// Implements: CT-030
@@ -1609,7 +1680,8 @@ pub trait Store: Send + Sync {
 
     /// Apply a segment write that no transition carries (a definition, a removal, a batch, a
     /// refresh, an erasure), atomically, while the tenant is at the revision the decision was
-    /// made at. The revision does not advance: no record changed. Refused with
+    /// made at. The revision does not advance: no record changed, so the generation is not raised
+    /// and the receipt carries the generation as it is. Refused with
     /// [`StoreError::Conflict`] when the tenant moved on or a row the write rests on changed.
     fn commit_segments(&self, _commit: &segments::SegmentCommit) -> StoreResult<Receipt> {
         Err(StoreError::Unavailable(
@@ -1900,7 +1972,7 @@ fn execute_guarded(
         }
     }
     let mut conflicts = 0;
-    loop {
+    'attempt: loop {
         if let Some(key) = &ctx.idempotency_key {
             let scope = idempotency_scope_for(intent, ctx);
             if let Some(first) = store.idempotent_result(&ctx.tenant, &scope, key, ctx.now)? {
@@ -1921,13 +1993,19 @@ fn execute_guarded(
         if let Some(error) = expired() {
             return Err(error);
         }
-        let header = store.load(&ctx.tenant, &[])?;
+        let first = store.load_at(&ctx.tenant, &[])?;
+        // The generation of the attempt: the one the first load returned. The decision is made on
+        // rows of this generation only, and the commit is accepted only while the tenant is
+        // still at it.
+        let generation = first.generation;
+        let header = first.state;
         if let Some(at) = at {
             let found = header.tenant.as_deref().map(|t| t.revision);
             if found != Some(at) {
                 return Err(ExecuteError::Store(StoreError::Conflict {
                     expected: Some(at),
                     found,
+                    found_generation: generation,
                 }));
             }
         }
@@ -1938,7 +2016,22 @@ fn execute_guarded(
         let mut rounds = 0;
         let mut transition = loop {
             let list: Vec<Need> = wanted.iter().cloned().collect();
-            let state = store.load(&ctx.tenant, &list)?;
+            let loaded = store.load_at(&ctx.tenant, &list)?;
+            if loaded.generation != generation {
+                // The tenant changed between two loads of one attempt: what was read is not one
+                // state. Start again from a fresh load, as a lost race does.
+                let found = loaded.state.tenant.as_deref().map(|t| t.revision);
+                if at.is_some() || conflicts >= MAX_CONFLICT_RETRIES {
+                    return Err(ExecuteError::Store(StoreError::Conflict {
+                        expected: at.or_else(|| header.tenant.as_deref().map(|t| t.revision)),
+                        found,
+                        found_generation: loaded.generation,
+                    }));
+                }
+                conflicts += 1;
+                continue 'attempt;
+            }
+            let state = loaded.state;
             // What the loaded state itself says is still needed (the references and unique
             // values of a stored record), asked for in one reload.
             let more: Vec<Need> = strata_kernel::refine_needs(&state, intent)
@@ -1969,6 +2062,7 @@ fn execute_guarded(
                 return Err(ExecuteError::Store(StoreError::Conflict {
                     expected: Some(at),
                     found: transition.delta.base_revision,
+                    found_generation: generation,
                 }));
             }
         }
@@ -1990,7 +2084,7 @@ fn execute_guarded(
         if let Some(error) = expired() {
             return Err(error);
         }
-        let mut commit = Commit::of(intent, ctx, &transition);
+        let mut commit = Commit::of(intent, ctx, &transition, generation);
         // The continuations and events the change leaves are jobs of the same commit (WG-5165).
         commit.jobs.extend(segment_jobs::of_write(
             &decided.write,

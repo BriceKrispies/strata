@@ -16,6 +16,7 @@ conformance = ["strata-kernel/testkit"]
 strata-kernel.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+getrandom.workspace = true
 
 [dev-dependencies]
 strata-spec-parts.workspace = true

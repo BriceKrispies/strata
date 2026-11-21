@@ -1163,7 +1163,12 @@ fn a_rolled_back_change_sends_nothing() {
         .expect("a valid send")
         .0
     };
-    let mut commit = Commit::of(&intent, &context, &transition);
+    let mut commit = Commit::of(
+        &intent,
+        &context,
+        &transition,
+        app.store.generation(&tenant).unwrap(),
+    );
     commit.jobs.push(job_of("k-commit", ADA));
     // The same change decided on the same revision, which the first commit moves: it is refused.
     let mut stale = commit.clone();

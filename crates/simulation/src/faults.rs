@@ -30,8 +30,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use strata_kernel::segments as seg;
 use strata_kernel::{
-    DomainEvent, Need, PrincipalId, Record, SessionId, SettingId, State, TenantId, TenantState,
-    Timestamp, Value, WorkflowId,
+    DomainEvent, Need, PrincipalId, Record, SessionId, SettingId, TenantId, TenantState, Timestamp,
+    Value, WorkflowId,
 };
 use strata_storage_api::jobs::{
     ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported, RunRecord,
@@ -252,6 +252,7 @@ impl FaultyStore {
             return Err(StoreError::Conflict {
                 expected: None,
                 found: None,
+                found_generation: None,
             });
         }
         if self.hit(StoreFault::CommitUnavailable) {
@@ -315,12 +316,24 @@ impl Store for FaultyStore {
         self.inner.stored_bytes(tenant)
     }
 
-    fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
-        self.inner.load(tenant, needs)
+    fn load_at(
+        &self,
+        tenant: &TenantId,
+        needs: &[Need],
+    ) -> StoreResult<strata_storage_api::Loaded> {
+        self.inner.load_at(tenant, needs)
     }
 
-    fn load_complete(&self, tenant: &TenantId) -> StoreResult<State> {
-        self.inner.load_complete(tenant)
+    fn load_complete_at(&self, tenant: &TenantId) -> StoreResult<strata_storage_api::Loaded> {
+        self.inner.load_complete_at(tenant)
+    }
+
+    fn generation(&self, tenant: &TenantId) -> StoreResult<Option<strata_storage_api::Generation>> {
+        self.inner.generation(tenant)
+    }
+
+    fn rotate_nonce(&self, tenant: &TenantId) -> StoreResult<strata_storage_api::Generation> {
+        self.inner.rotate_nonce(tenant)
     }
 
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
@@ -482,8 +495,10 @@ impl Store for FaultyStore {
         &self,
         tenant: &TenantId,
         principal: &PrincipalId,
+        expected: Option<&strata_storage_api::Generation>,
     ) -> StoreResult<strata_kernel::ledger::Anonymised> {
-        self.inner.anonymise_ledger_principal(tenant, principal)
+        self.inner
+            .anonymise_ledger_principal(tenant, principal, expected)
     }
 
     fn account_of(
@@ -794,8 +809,13 @@ impl Store for FaultyStore {
         self.inner.load_snapshot(tenant, id)
     }
 
-    fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()> {
-        self.inner.restore_snapshot(tenant, id)
+    fn restore_snapshot(
+        &self,
+        tenant: &TenantId,
+        id: u64,
+        expected: Option<&strata_storage_api::Generation>,
+    ) -> StoreResult<()> {
+        self.inner.restore_snapshot(tenant, id, expected)
     }
 
     fn reset(&self) -> StoreResult<()> {

@@ -67,7 +67,11 @@ fn domain(error: DomainError) -> ExecuteError {
 }
 
 fn conflict(found: Option<StateRevision>, expected: Option<StateRevision>) -> ExecuteError {
-    ExecuteError::Store(StoreError::Conflict { expected, found })
+    ExecuteError::Store(StoreError::Conflict {
+        expected,
+        found,
+        found_generation: None,
+    })
 }
 
 /// The schema a transition leaves.
@@ -697,15 +701,20 @@ pub fn preview(
 }
 
 /// Commit for an accepted transition with its segment write: [`Commit::of`] and the write, as
-/// [`crate::execute_by`] commits them. For a caller that decided the transition itself.
+/// [`crate::execute_by`] commits them. For a caller that decided the transition itself, on the
+/// load whose generation is `expected_generation` ([`crate::Loaded::generation`]).
 pub fn commit_change(
     store: &dyn Store,
     intent: &strata_kernel::Intent,
     ctx: &Context,
     transition: &Transition,
+    expected_generation: Option<crate::Generation>,
 ) -> Result<Receipt, ExecuteError> {
     let decided = decide_change(store, transition, ctx, 0)?;
-    Ok(store.commit_with_segments(&Commit::of(intent, ctx, transition), &decided.write)?)
+    Ok(store.commit_with_segments(
+        &Commit::of(intent, ctx, transition, expected_generation),
+        &decided.write,
+    )?)
 }
 
 /// The conflict a store answers when a segment write no longer rests on what it holds. A
@@ -714,5 +723,6 @@ pub fn write_conflict() -> StoreError {
     StoreError::Conflict {
         expected: None,
         found: None,
+        found_generation: None,
     }
 }

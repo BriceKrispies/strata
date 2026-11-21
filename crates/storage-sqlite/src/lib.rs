@@ -65,12 +65,13 @@ use strata_storage_api::schedules::{
 };
 use strata_storage_api::segments::{write_conflict, SegmentCommit};
 use strata_storage_api::{
-    check_event_sequence, field_matches, throttle_refund, throttle_step, Account, AuditEntry,
-    Capabilities, Commit, FederatedIdentity, Health, IdempotentResult, JournalEntry, OidcFlow,
-    OutboxEntry, OutboxFault, PasskeyCeremony, PasskeyChallenge, PasskeyRecord, PendingSignIn,
-    PlatformSetting, PlatformWrite, PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest,
-    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
-    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    check_event_sequence, field_matches, random_nonces, throttle_refund, throttle_step, Account,
+    AuditEntry, Capabilities, Commit, FederatedIdentity, Generation, Health, IdempotentResult,
+    JournalEntry, Loaded, NonceSource, OidcFlow, OutboxEntry, OutboxFault, PasskeyCeremony,
+    PasskeyChallenge, PasskeyRecord, PendingSignIn, PlatformSetting, PlatformWrite,
+    PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
+    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
+    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
 
 mod index_page;
@@ -578,7 +579,80 @@ const TENANT_MIGRATIONS: &[Migration] = &[
     OBJECT_REVISIONS_MIGRATION,
     SCHEDULES_RUN_KEYS_RETENTION,
     SEALING_MIGRATION,
+    GENERATION_MIGRATION,
 ];
+
+/// Tenant step 24 (WG-5389): the generation of the tenant, in a row of its own beside the tenant
+/// row ([`strata_storage_api::generation`]): one row, a nonce as 32 hex digits, the counter, and the
+/// fence token of the lease holder (kept, and compared by nobody, until leases exist). A tenant
+/// that exists when the step runs gets a nonce of its own, drawn by SQLite, and counter 1: no
+/// generation seen before this step is carried over.
+const GENERATION_MIGRATION: Migration = Migration {
+    version: 24,
+    name: "tenant generation",
+    sql: "
+    CREATE TABLE generation (
+        id      INTEGER PRIMARY KEY CHECK (id = 1),
+        nonce   TEXT NOT NULL,
+        counter INTEGER NOT NULL,
+        fence   INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO generation (id, nonce, counter, fence)
+        SELECT 1, lower(hex(randomblob(16))), 1, 0 WHERE EXISTS (SELECT 1 FROM tenant);
+    ",
+};
+
+/// The generation row of an open tenant file, none when the file holds no tenant. Reads that row
+/// only.
+fn read_generation(conn: &Connection) -> StoreResult<Option<Generation>> {
+    let row = conn
+        .query_row(
+            "SELECT nonce, counter FROM generation WHERE id = 1",
+            [],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(db)?;
+    row.map(|(nonce, counter)| {
+        Ok(Generation {
+            nonce: Generation::parse_nonce(&nonce)
+                .ok_or_else(|| StoreError::Corrupt(format!("generation nonce {nonce:?}")))?,
+            counter: counter as u64,
+        })
+    })
+    .transpose()
+}
+
+/// Write the generation row, keeping the fence token it holds.
+fn write_generation(tx: &Connection, generation: &Generation) -> StoreResult<()> {
+    tx.execute(
+        "INSERT INTO generation (id, nonce, counter, fence) VALUES (1, ?1, ?2, 0)
+         ON CONFLICT (id) DO UPDATE SET nonce = excluded.nonce, counter = excluded.counter",
+        params![generation.nonce_hex(), generation.counter as i64],
+    )
+    .map_err(db)?;
+    Ok(())
+}
+
+/// Compare the generation a caller expects with the one the file holds, in the caller's write
+/// transaction. `None` is the unguarded control-plane call. Returns the generation held.
+fn guard_generation(
+    tx: &Connection,
+    tenant: &TenantId,
+    expected: Option<&Generation>,
+) -> StoreResult<Option<Generation>> {
+    let held = read_generation(tx)?;
+    if let Some(expected) = expected {
+        if Some(*expected) != held {
+            return Err(StoreError::Conflict {
+                expected: None,
+                found: header(tx, tenant)?.map(|h| h.revision),
+                found_generation: held,
+            });
+        }
+    }
+    Ok(held)
+}
 
 /// The change counter of each object type (`Store::object_revisions`), raised in the commit that
 /// writes or deletes a record of the type. The row with the empty object is raised when a snapshot
@@ -728,6 +802,9 @@ pub struct SqliteStore {
     faults: Mutex<Vec<OutboxFault>>,
     /// When the store was opened: recorded in the ledger of the tenant files it lays out.
     opened_at: Timestamp,
+    /// Where the nonce of a new generation comes from: the operating system's random source
+    /// unless a test or the simulator gives a seeded one ([`SqliteStore::with_nonces`]).
+    nonces: Arc<dyn NonceSource>,
 }
 
 fn db(error: rusqlite::Error) -> StoreError {
@@ -1582,7 +1659,15 @@ impl SqliteStore {
             sweep: AtomicUsize::new(0),
             faults: Mutex::new(Vec::new()),
             opened_at: now,
+            nonces: random_nonces(),
         })
+    }
+
+    /// Draw the nonces of new generations from `nonces`: a seeded source, so that a run is
+    /// reproduced from its seed.
+    pub fn with_nonces(mut self, nonces: Arc<dyn NonceSource>) -> Self {
+        self.nonces = nonces;
+        self
     }
 
     /// Keep at most `max` tenant files open (at least one); the least recently used is closed.
@@ -2060,17 +2145,38 @@ impl SqliteStore {
         Ok(changed)
     }
 
-    fn apply(tx: &Transaction<'_>, commit: &Commit) -> StoreResult<Receipt> {
+    fn apply(
+        tx: &Transaction<'_>,
+        commit: &Commit,
+        nonces: &dyn NonceSource,
+    ) -> StoreResult<Receipt> {
         let delta = &commit.delta;
         let tenant = delta.tenant.as_str();
+        if commit.expected_generation.is_none() && delta.base_revision.is_some() {
+            return Err(StoreError::Invalid(
+                "a commit with a base revision names the generation it was decided on".into(),
+            ));
+        }
         let current = header(tx, &delta.tenant)?;
         let found = current.as_ref().map(|h| h.revision);
-        if found != delta.base_revision {
+        // A tenant that does not exist has no generation, whatever a leftover row says.
+        let held = match &current {
+            Some(_) => Some(read_generation(tx)?.ok_or_else(|| {
+                StoreError::Corrupt(format!("tenant {} has no generation", delta.tenant))
+            })?),
+            None => None,
+        };
+        if found != delta.base_revision || commit.expected_generation != held {
             return Err(StoreError::Conflict {
                 expected: delta.base_revision,
                 found,
+                found_generation: held,
             });
         }
+        let produced = match held {
+            Some(held) => held.raised(),
+            None => Generation::first(nonces.draw(&delta.tenant)),
+        };
         check_event_sequence(commit, current.as_ref().map_or(0, |h| h.event_seq))?;
         // Defence in depth: the kernel produces these today, but a bad delta must not reach the
         // tables. A tenant's revision advances by exactly one, and its record counter never falls.
@@ -2230,6 +2336,9 @@ impl SqliteStore {
         for object in strata_storage_api::changed_objects(delta) {
             raise_object_revision(tx, object.as_str())?;
         }
+        // The generation is raised in the transaction that changes what a load returns, and is
+        // in no hash and in no journalled form.
+        write_generation(tx, &produced)?;
         let mut last_position = None;
         for event in &commit.events {
             tx.execute(
@@ -2279,6 +2388,7 @@ impl SqliteStore {
         Ok(Receipt {
             revision: delta.new_revision,
             last_position,
+            generation: produced,
         })
     }
 }
@@ -2792,13 +2902,21 @@ impl Store for SqliteStore {
             .collect())
     }
 
-    fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
+    fn load_at(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<Loaded> {
         let Some(file) = self.tenant_db(tenant)? else {
-            return Ok(State::absent(tenant.clone()));
+            return Ok(Loaded {
+                state: State::absent(tenant.clone()),
+                generation: None,
+            });
         };
         file.read(dbe, |tx| {
+            // The generation and the rows are read in this one read transaction.
+            let generation = read_generation(tx)?;
             let Some(mut state) = header(tx, tenant)? else {
-                return Ok(State::absent(tenant.clone()));
+                return Ok(Loaded {
+                    state: State::absent(tenant.clone()),
+                    generation: None,
+                });
             };
             for need in needs {
                 let rows = match need {
@@ -2891,23 +3009,51 @@ impl Store for SqliteStore {
                 put_records(&mut state, rows)?;
             }
             ledger::tidy(&mut state);
-            Ok(State {
-                tenant_id: tenant.clone(),
-                tenant: Some(Arc::new(state)),
-                coverage: Coverage::Partial(needs.iter().cloned().collect()),
+            Ok(Loaded {
+                state: State {
+                    tenant_id: tenant.clone(),
+                    tenant: Some(Arc::new(state)),
+                    coverage: Coverage::Partial(needs.iter().cloned().collect()),
+                },
+                generation,
             })
         })
     }
 
-    fn load_complete(&self, tenant: &TenantId) -> StoreResult<State> {
+    fn load_complete_at(&self, tenant: &TenantId) -> StoreResult<Loaded> {
         let Some(file) = self.tenant_db(tenant)? else {
-            return Ok(State::absent(tenant.clone()));
+            return Ok(Loaded {
+                state: State::absent(tenant.clone()),
+                generation: None,
+            });
         };
         file.read(dbe, |tx| {
+            let generation = read_generation(tx)?;
             Ok(match complete(tx, tenant)? {
-                Some(state) => State::complete(Arc::new(state)),
-                None => State::absent(tenant.clone()),
+                Some(state) => Loaded {
+                    state: State::complete(Arc::new(state)),
+                    generation,
+                },
+                None => Loaded {
+                    state: State::absent(tenant.clone()),
+                    generation: None,
+                },
             })
+        })
+    }
+
+    fn generation(&self, tenant: &TenantId) -> StoreResult<Option<Generation>> {
+        Ok(self.on_tenant(tenant, read_generation)?.flatten())
+    }
+
+    fn rotate_nonce(&self, tenant: &TenantId) -> StoreResult<Generation> {
+        let file = self.existing(tenant)?;
+        file.write(dbe, |tx| {
+            let held = read_generation(tx)?
+                .ok_or_else(|| StoreError::Corrupt(format!("tenant {tenant} has no generation")))?;
+            let next = held.rotated(self.nonces.draw(tenant));
+            write_generation(tx, &next)?;
+            Ok(next)
         })
     }
 
@@ -2924,6 +3070,7 @@ impl Store for SqliteStore {
                     return Err(StoreError::Conflict {
                         expected: delta.base_revision,
                         found: None,
+                        found_generation: None,
                     });
                 }
                 check_event_sequence(commit, 0)?;
@@ -2936,14 +3083,14 @@ impl Store for SqliteStore {
             if let Some(due) = wake {
                 self.wake_at(&delta.tenant, due)?;
             }
-            let receipt = file.write(dbe, |tx| Self::apply(tx, commit))?;
+            let receipt = file.write(dbe, |tx| Self::apply(tx, commit, &*self.nonces))?;
             if let Some(due) = wake {
                 let _ = self.wake_at(&delta.tenant, due);
             }
             return Ok(receipt);
         }
         let (file, created) = self.create_tenant_db(&delta.tenant, commit.journal.context.now)?;
-        let result = file.write(dbe, |tx| Self::apply(tx, commit));
+        let result = file.write(dbe, |tx| Self::apply(tx, commit, &*self.nonces));
         if let (Ok(_), Some(due)) = (&result, commit.jobs.iter().map(|job| job.due_at.0).min()) {
             let _ = self.wake_at(&delta.tenant, due);
         }
@@ -2972,6 +3119,7 @@ impl Store for SqliteStore {
             return Err(StoreError::Conflict {
                 expected: commit.delta.base_revision,
                 found: None,
+                found_generation: None,
             });
         };
         // Jobs the commit creates are woken for before and after it, as in `commit`.
@@ -2980,7 +3128,7 @@ impl Store for SqliteStore {
             self.wake_at(&commit.delta.tenant, due)?;
         }
         let receipt = file.write(dbe, |tx| {
-            let receipt = Self::apply(tx, commit)?;
+            let receipt = Self::apply(tx, commit, &*self.nonces)?;
             apply_segments(tx, write)?;
             Ok(receipt)
         })?;
@@ -2995,6 +3143,7 @@ impl Store for SqliteStore {
             return Err(StoreError::Conflict {
                 expected: Some(commit.revision),
                 found: None,
+                found_generation: None,
             });
         };
         check_jobs(&commit.work.jobs)?;
@@ -3005,17 +3154,23 @@ impl Store for SqliteStore {
         }
         let receipt = file.write(dbe, |tx| {
             let found = header(tx, &commit.tenant)?.map(|h| h.revision);
+            let held = read_generation(tx)?;
             if found != Some(commit.revision) {
                 return Err(StoreError::Conflict {
                     expected: Some(commit.revision),
                     found,
+                    found_generation: held,
                 });
             }
             apply_segments(tx, &commit.write)?;
             write_automation(tx, &commit.tenant, &commit.work, commit.now)?;
+            // No record changed: the generation is not raised.
             Ok(Receipt {
                 revision: commit.revision,
                 last_position: None,
+                generation: held.ok_or_else(|| {
+                    StoreError::Corrupt(format!("tenant {} has no generation", commit.tenant))
+                })?,
             })
         })?;
         if let Some(due) = wake {
@@ -3268,6 +3423,8 @@ impl Store for SqliteStore {
             )
             .optional()
             .map_err(db)?;
+        // The generation the tenant holds now: what the first commit produced is not kept.
+        let generation = read_generation(&conn)?;
         row.map(|(request_hash, revision, position, result)| {
             Ok::<_, StoreError>(IdempotentResult {
                 request_hash,
@@ -3275,6 +3432,9 @@ impl Store for SqliteStore {
                 receipt: Receipt {
                     revision: StateRevision(revision as u64),
                     last_position: position.map(|p| p as u64),
+                    generation: generation.ok_or_else(|| {
+                        StoreError::Corrupt(format!("tenant {tenant} has no generation"))
+                    })?,
                 },
             })
         })
@@ -4584,11 +4744,22 @@ impl Store for SqliteStore {
         &self,
         tenant: &TenantId,
         principal: &PrincipalId,
+        expected: Option<&Generation>,
     ) -> StoreResult<strata_kernel::ledger::Anonymised> {
         let Some(file) = self.tenant_db(tenant)? else {
             return Ok(Default::default());
         };
-        file.write(dbe, |tx| ledger::anonymise(tx, principal))
+        file.write(dbe, |tx| {
+            let held = guard_generation(tx, tenant, expected)?;
+            let done = ledger::anonymise(tx, principal)?;
+            // The counter is raised when, and only when, the clearing changed what a load returns.
+            if done != Default::default() {
+                if let Some(held) = held {
+                    write_generation(tx, &held.raised())?;
+                }
+            }
+            Ok(done)
+        })
     }
 
     fn remove_principal(
@@ -4847,10 +5018,16 @@ impl Store for SqliteStore {
         decode(&data.ok_or_else(missing)?, "snapshot")
     }
 
-    fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()> {
+    fn restore_snapshot(
+        &self,
+        tenant: &TenantId,
+        id: u64,
+        expected: Option<&Generation>,
+    ) -> StoreResult<()> {
         let state = self.load_snapshot(tenant, id)?;
         let file = self.existing(tenant)?;
         file.write(dbe, |tx| {
+            let held = guard_generation(tx, tenant, expected)?;
             ledger::check_restorable(tx, state.revision)?;
             tx.execute("DELETE FROM records", []).map_err(db)?;
             raise_object_revision(tx, "")?;
@@ -4909,6 +5086,14 @@ impl Store for SqliteStore {
                     strata_storage_api::segment_jobs::of_write(&write, "restore", Timestamp(0));
                 insert_jobs(tx, tenant, &jobs, Timestamp(0))?;
             }
+            // A restore draws a new nonce and raises the counter, in this transaction.
+            write_generation(
+                tx,
+                &Generation {
+                    nonce: self.nonces.draw(tenant),
+                    counter: held.map_or(0, |g| g.counter) + 1,
+                },
+            )?;
             Ok(())
         })?;
         let _ = self.wake_refresh(tenant, &file);

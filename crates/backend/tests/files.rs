@@ -279,6 +279,7 @@ fn found(store: &dyn Store, name: &str) -> TenantId {
             &intent,
             &ctx(&site, Principal::System, T0 - 9_000),
             &transition,
+            store.generation(&site).unwrap(),
         ))
         .expect("the schema is committed");
     for name in ["reader", "editor", "writer"] {

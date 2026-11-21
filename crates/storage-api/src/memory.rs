@@ -9,12 +9,13 @@ use crate::jobs::{
 };
 use crate::schedules::{self, AutomationPurged, AutomationRetention, Schedule, ScheduleSet};
 use crate::{
-    check_event_sequence, partial_state, throttle_refund, throttle_step, Account, AuditEntry,
-    Capabilities, Commit, FederatedIdentity, Health, IdempotencyEntry, IdempotentResult,
-    JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge, PasskeyRecord, PendingSignIn,
-    PlatformSetting, PlatformWrite, PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest,
-    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
-    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    check_event_sequence, partial_state, random_nonces, throttle_refund, throttle_step, Account,
+    AuditEntry, Capabilities, Commit, FederatedIdentity, Generation, Health, IdempotencyEntry,
+    IdempotentResult, JournalEntry, Loaded, NonceSource, OidcFlow, OutboxEntry, PasskeyChallenge,
+    PasskeyRecord, PendingSignIn, PlatformSetting, PlatformWrite, PrincipalRemoval, Receipt,
+    RecoveryRequest, SamlRequest, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store,
+    StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle,
+    ThrottleVerdict, TotpRecord,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -29,6 +30,8 @@ use strata_kernel::{
 #[derive(Default)]
 struct Inner {
     tenants: BTreeMap<TenantId, Arc<TenantState>>,
+    /// The generation of each tenant, in a row of its own ([`crate::generation`]).
+    generations: BTreeMap<TenantId, Generation>,
     /// The change counter of each object type of each tenant ([`Store::object_revisions`]).
     object_revisions: BTreeMap<(TenantId, ObjectTypeId), u64>,
     /// Every event in commit order, with its position in its tenant's outbox and whether it was
@@ -172,18 +175,37 @@ fn check_jobs(new: &[NewJob]) -> StoreResult<()> {
     }
 }
 
-#[derive(Default)]
 pub struct MemoryStore {
     inner: Mutex<Inner>,
+    /// Where the nonce of a new generation comes from.
+    nonces: Arc<dyn NonceSource>,
     loads: AtomicUsize,
     /// Added to every object type's counter, and raised when a snapshot is restored or a tenant
     /// is reset, so that no counter repeats a value for different records.
     epoch: AtomicU64,
 }
 
+impl Default for MemoryStore {
+    fn default() -> Self {
+        Self::with_nonces(random_nonces())
+    }
+}
+
 impl MemoryStore {
+    /// A store whose nonces come from the operating system's random source.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A store that draws the nonces of its generations from `nonces`: a seeded source in tests
+    /// and in the simulator.
+    pub fn with_nonces(nonces: Arc<dyn NonceSource>) -> Self {
+        MemoryStore {
+            inner: Mutex::default(),
+            nonces,
+            loads: AtomicUsize::default(),
+            epoch: AtomicU64::default(),
+        }
     }
 
     /// How many times `load` has been called, for tests that bound the loads of one decision.
@@ -355,24 +377,48 @@ impl Store for MemoryStore {
         Ok(state + docs as u64)
     }
 
-    fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
+    fn load_at(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<Loaded> {
         self.loads.fetch_add(1, Ordering::Relaxed);
-        Ok(match self.lock()?.tenants.get(tenant) {
-            Some(found) => partial_state(found, needs),
-            None => State::absent(tenant.clone()),
+        let inner = self.lock()?;
+        Ok(Loaded {
+            state: match inner.tenants.get(tenant) {
+                Some(found) => partial_state(found, needs),
+                None => State::absent(tenant.clone()),
+            },
+            generation: inner.generations.get(tenant).copied(),
         })
     }
 
-    fn load_complete(&self, tenant: &TenantId) -> StoreResult<State> {
-        Ok(match self.lock()?.tenants.get(tenant) {
-            Some(found) => State::complete(found.clone()),
-            None => State::absent(tenant.clone()),
+    fn load_complete_at(&self, tenant: &TenantId) -> StoreResult<Loaded> {
+        let inner = self.lock()?;
+        Ok(Loaded {
+            state: match inner.tenants.get(tenant) {
+                Some(found) => State::complete(found.clone()),
+                None => State::absent(tenant.clone()),
+            },
+            generation: inner.generations.get(tenant).copied(),
         })
+    }
+
+    fn generation(&self, tenant: &TenantId) -> StoreResult<Option<Generation>> {
+        Ok(self.lock()?.generations.get(tenant).copied())
+    }
+
+    fn rotate_nonce(&self, tenant: &TenantId) -> StoreResult<Generation> {
+        let mut inner = self.lock()?;
+        let held = inner
+            .generations
+            .get(tenant)
+            .copied()
+            .ok_or_else(|| StoreError::NotFound(format!("tenant {tenant}")))?;
+        let next = held.rotated(self.nonces.draw(tenant));
+        inner.generations.insert(tenant.clone(), next);
+        Ok(next)
     }
 
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
         let mut inner = self.lock()?;
-        commit_in(&mut inner, commit, None)
+        commit_in(&mut inner, commit, None, &*self.nonces)
     }
 
     fn commit_with_segments(
@@ -381,16 +427,18 @@ impl Store for MemoryStore {
         write: &seg::SegmentWrite,
     ) -> StoreResult<Receipt> {
         let mut inner = self.lock()?;
-        commit_in(&mut inner, commit, Some(write))
+        commit_in(&mut inner, commit, Some(write), &*self.nonces)
     }
 
     fn commit_segments(&self, commit: &crate::segments::SegmentCommit) -> StoreResult<Receipt> {
         let mut inner = self.lock()?;
         let found = inner.tenants.get(&commit.tenant).map(|t| t.revision);
+        let held = inner.generations.get(&commit.tenant).copied();
         if found != Some(commit.revision) {
             return Err(StoreError::Conflict {
                 expected: Some(commit.revision),
                 found,
+                found_generation: held,
             });
         }
         check_jobs(&commit.work.jobs)?;
@@ -400,9 +448,13 @@ impl Store for MemoryStore {
             .map_err(|_| crate::segments::write_conflict())?;
         // The jobs and records of the write are part of it: created under the same lock.
         inner.write(&commit.tenant, &commit.work, commit.now);
+        // No record changed: the generation is not raised.
         Ok(Receipt {
             revision: commit.revision,
             last_position: None,
+            generation: held.ok_or_else(|| {
+                StoreError::Corrupt(format!("tenant {} has no generation", commit.tenant))
+            })?,
         })
     }
 
@@ -584,15 +636,21 @@ impl Store for MemoryStore {
         key: &str,
         now: Timestamp,
     ) -> StoreResult<Option<IdempotentResult>> {
-        Ok(self
-            .lock()?
+        let inner = self.lock()?;
+        let current = inner.generations.get(tenant).copied();
+        Ok(inner
             .idempotency
             .get(&(tenant.clone(), principal.to_string(), key.to_string()))
             .filter(|(held, _)| held.recorded_at.0 >= now.0 - held.retention_ms)
             .map(|(held, receipt)| IdempotentResult {
                 request_hash: held.request_hash.clone(),
                 result: held.result.clone(),
-                receipt: receipt.clone(),
+                // The generation the tenant holds now, as the other adapters answer: what the
+                // first commit produced is not kept.
+                receipt: Receipt {
+                    generation: current.unwrap_or(receipt.generation),
+                    ..receipt.clone()
+                },
             }))
     }
 
@@ -1336,16 +1394,26 @@ impl Store for MemoryStore {
         &self,
         tenant: &TenantId,
         principal: &PrincipalId,
+        expected: Option<&Generation>,
     ) -> StoreResult<strata_kernel::ledger::Anonymised> {
         let mut inner = self.lock()?;
+        let held = inner.generations.get(tenant).copied();
+        guard(&inner, tenant, expected)?;
         let Some(state) = inner.tenants.get_mut(tenant) else {
             return Ok(Default::default());
         };
         let state = Arc::make_mut(state);
-        Ok(match state.ledger.as_mut() {
+        let done = match state.ledger.as_mut() {
             Some(ledger) => strata_kernel::ledger::anonymise(ledger, principal),
             None => Default::default(),
-        })
+        };
+        // The counter is raised when, and only when, the clearing changed what a load returns.
+        if done != Default::default() {
+            if let Some(held) = held {
+                inner.generations.insert(tenant.clone(), held.raised());
+            }
+        }
+        Ok(done)
     }
 
     fn remove_principal(
@@ -1575,8 +1643,14 @@ impl Store for MemoryStore {
             .ok_or_else(|| StoreError::NotFound(format!("snapshot {id} of {tenant}")))
     }
 
-    fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()> {
+    fn restore_snapshot(
+        &self,
+        tenant: &TenantId,
+        id: u64,
+        expected: Option<&Generation>,
+    ) -> StoreResult<()> {
         let mut inner = self.lock()?;
+        guard(&inner, tenant, expected)?;
         let mut state = inner
             .snapshots
             .get(&(tenant.clone(), id))
@@ -1605,6 +1679,16 @@ impl Store for MemoryStore {
             .journal
             .retain(|entry| entry.tenant != *tenant || entry.revision <= state.revision);
         inner.tenants.insert(tenant.clone(), state);
+        // A restore draws a new nonce and raises the counter: the rows are not any state the
+        // generation was ever seen with.
+        let counter = inner.generations.get(tenant).map_or(0, |held| held.counter) + 1;
+        inner.generations.insert(
+            tenant.clone(),
+            Generation {
+                nonce: self.nonces.draw(tenant),
+                counter,
+            },
+        );
         self.epoch.fetch_add(1, Ordering::Relaxed);
         // The membership and wake rows no longer rest on the records that were put back: every
         // segment is evaluated again as if its predicate had changed (WG-5167).
@@ -1670,6 +1754,7 @@ impl Store for MemoryStore {
         let mut inner = self.lock()?;
         self.epoch.fetch_add(1, Ordering::Relaxed);
         inner.tenants.remove(tenant);
+        inner.generations.remove(tenant);
         inner.positions.remove(tenant);
         inner.events.retain(|(_, event, _)| event.tenant != *tenant);
         inner.journal.retain(|entry| entry.tenant != *tenant);
@@ -2130,14 +2215,22 @@ fn commit_in(
     inner: &mut Inner,
     commit: &Commit,
     write: Option<&seg::SegmentWrite>,
+    nonces: &dyn NonceSource,
 ) -> StoreResult<Receipt> {
     let tenant = &commit.delta.tenant;
+    if commit.expected_generation.is_none() && commit.delta.base_revision.is_some() {
+        return Err(StoreError::Invalid(
+            "a commit with a base revision names the generation it was decided on".into(),
+        ));
+    }
     let current = inner.tenants.get(tenant).cloned();
     let found = current.as_ref().map(|t| t.revision);
-    if found != commit.delta.base_revision {
+    let held = inner.generations.get(tenant).copied();
+    if found != commit.delta.base_revision || commit.expected_generation != held {
         return Err(StoreError::Conflict {
             expected: commit.delta.base_revision,
             found,
+            found_generation: held,
         });
     }
     check_event_sequence(commit, current.as_ref().map_or(0, |t| t.event_seq))?;
@@ -2171,6 +2264,11 @@ fn commit_in(
 
     // Nothing above changed the store; everything below cannot fail.
     inner.tenants.insert(tenant.clone(), Arc::new(next));
+    let produced = match held {
+        Some(held) => held.raised(),
+        None => Generation::first(nonces.draw(tenant)),
+    };
+    inner.generations.insert(tenant.clone(), produced);
     for object in crate::changed_objects(&commit.delta) {
         *inner
             .object_revisions
@@ -2197,6 +2295,7 @@ fn commit_in(
     let receipt = Receipt {
         revision: commit.delta.new_revision,
         last_position,
+        generation: produced,
     };
     inner
         .idempotency
@@ -2216,4 +2315,18 @@ fn commit_in(
         }
     }
     Ok(receipt)
+}
+
+/// Compare the generation a caller expects with the one the tenant holds. `None` is the
+/// unguarded control-plane call.
+fn guard(inner: &Inner, tenant: &TenantId, expected: Option<&Generation>) -> StoreResult<()> {
+    let held = inner.generations.get(tenant).copied();
+    match expected {
+        Some(expected) if Some(*expected) != held => Err(StoreError::Conflict {
+            expected: None,
+            found: inner.tenants.get(tenant).map(|t| t.revision),
+            found_generation: held,
+        }),
+        _ => Ok(()),
+    }
 }
