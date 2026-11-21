@@ -1259,8 +1259,16 @@ fn situation_27_diamond_rewrite_order() {
     let world = accepted(
         &catalogue(),
         vec![
-            query("first", "ticket", Some(is_text(through("a", "title"), "T1"))),
-            query("second", "ticket", Some(is_text(through("a", "title"), "T2"))),
+            query(
+                "first",
+                "ticket",
+                Some(is_text(through("a", "title"), "T1")),
+            ),
+            query(
+                "second",
+                "ticket",
+                Some(is_text(through("a", "title"), "T2")),
+            ),
             SchemaChange::DefineView(ViewDef {
                 id: ViewId::new("board").unwrap(),
                 route: "/board".into(),
