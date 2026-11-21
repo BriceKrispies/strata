@@ -16,6 +16,7 @@ use crate::CorpusError;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use strata_kernel::segments::{derive_segment_id, SegmentKey};
+use strata_kernel::DomainErrorExt;
 use strata_kernel::{Context, Intent, Output, Principal, PrincipalId, TenantId, Timestamp};
 use strata_spec_compiler::layers::{prepare_platform, ProductFile};
 use strata_storage_api::segments as kept;
@@ -271,72 +272,18 @@ fn install_all(
     let mut schema_version = 0;
     for product in products {
         clock += 1;
-        let state = store.load(tenant, &[]).map_err(CorpusError::from_display)?;
-        let held = state
-            .tenant
-            .ok_or_else(|| CorpusError::new("the tenant disappeared after it was created"))?;
-        let schema = held.schema.clone();
-        let target = ProductTarget {
-            tenant,
-            principal: Principal::User(owner.clone()),
-            now: clock,
-            release: PLATFORM_RELEASE,
-            schema: &schema,
-            installed: None,
-            expected_version: None,
-            idempotency_key: None,
-        };
-        let parsed = ProductBundle::from_json(&product.bundle)
-            .map_err(|e| CorpusError::new(format!("{}: {e}", product.file)))?;
-        let planned = plan_install(&parsed, &target)
-            .map_err(|e| CorpusError::new(format!("{}: {e}", product.file)))?;
-        let change = match &planned {
-            Planned::Change(change) => Some(change.clone()),
-            Planned::Unchanged { .. } => None,
-        };
-        let applied = run_planned(planned, &target, &mut |ctx, intent| {
-            commits += 1;
-            run(store, &ctx, &intent)
-        })
-        .map_err(|e| CorpusError::new(format!("installing {}: {e}", product.file)))?;
-        let (version, record) = match applied {
-            ProductInstall::Applied {
-                schema_version,
-                record,
-            } => (schema_version, record),
-            ProductInstall::Unchanged { schema_version } => (schema_version, None),
-        };
-        schema_version = version;
-
-        // The segments of the product, through the segment store after the schema change.
-        let mut segments = 0;
-        if let Some(change) = &change {
-            let ctx = context(
-                tenant,
-                Principal::User(owner.clone()),
-                clock,
-                format!("corpus:segments:{}", product.id),
-            );
-            let definitions = change
-                .segments
-                .definitions(tenant)
-                .map_err(|e| CorpusError::new(format!("{}: {e}", product.file)))?;
-            for definition in definitions {
-                kept::define(store, &ctx, &definition).map_err(|e| {
-                    CorpusError::new(format!("{}: defining a segment: {e}", product.file))
-                })?;
-                commits += 1;
-                segments += 1;
-            }
-        }
-        let owns = record.as_ref().map_or(0, |r| r.owns.len());
-        reports.push(ProductReport {
-            product: product.id.clone(),
-            version: parsed.version.clone(),
-            entities: owns,
-            segments,
-            schema_version: version,
-        });
+        let (report, made) =
+            install_product_into(store, tenant, owner, clock, product).map_err(|problems| {
+                CorpusError::new(format!(
+                    "installing {}: {} problem(s):\n{}",
+                    product.file,
+                    problems.len(),
+                    problems.join("\n")
+                ))
+            })?;
+        commits += made;
+        schema_version = report.schema_version;
+        reports.push(report);
     }
     store
         .finish_provisioning(tenant)
@@ -349,6 +296,210 @@ fn install_all(
         clock,
         commits,
     })
+}
+
+/// The failing checks a kernel rejection carries: every problem of the schema it found, not only
+/// the first, which is the rejection's message.
+fn rejection_problems(error: &strata_storage_api::ExecuteError) -> Vec<String> {
+    match error {
+        strata_storage_api::ExecuteError::Domain(e) => {
+            let mut out: Vec<String> = e
+                .evidence
+                .iter()
+                .filter(|check| !check.passed)
+                .map(|check| format!("{}: {}", check.rule, check.detail))
+                .collect();
+            if out.is_empty() {
+                out.push(e.describe());
+            }
+            out
+        }
+        other => vec![other.to_string()],
+    }
+}
+
+/// Install one compiled product into an existing tenant: plan it, run its one `change-schema`
+/// intent, define its segments. A refusal returns every problem the kernel reports (the failing
+/// checks of the rejection), not the first. On success: what it installed, and the commits made.
+pub fn install_product_into(
+    store: &dyn Store,
+    tenant: &TenantId,
+    owner: &PrincipalId,
+    clock: i64,
+    product: &CompiledProduct,
+) -> Result<(ProductReport, u64), Vec<String>> {
+    let one = |message: String| vec![message];
+    let state = store.load(tenant, &[]).map_err(|e| one(e.to_string()))?;
+    let held = state
+        .tenant
+        .ok_or_else(|| one("the tenant does not exist".to_string()))?;
+    let schema = held.schema.clone();
+    let target = ProductTarget {
+        tenant,
+        principal: Principal::User(owner.clone()),
+        now: clock,
+        release: PLATFORM_RELEASE,
+        schema: &schema,
+        installed: None,
+        expected_version: None,
+        idempotency_key: None,
+    };
+    let parsed = ProductBundle::from_json(&product.bundle).map_err(|e| one(e.to_string()))?;
+    let planned = plan_install(&parsed, &target).map_err(|e| one(e.to_string()))?;
+    let change = match &planned {
+        Planned::Change(change) => Some(change.clone()),
+        Planned::Unchanged { .. } => None,
+    };
+    let mut commits = 0u64;
+    let mut refused: Vec<String> = Vec::new();
+    let applied = run_planned(planned, &target, &mut |ctx, intent| {
+        commits += 1;
+        match execute(store, &intent, &ctx) {
+            Ok(done) => Ok(done.transition.output),
+            Err(error) => {
+                refused = rejection_problems(&error);
+                Err(error.to_string())
+            }
+        }
+    });
+    let (version, record) = match applied {
+        Ok(ProductInstall::Applied {
+            schema_version,
+            record,
+        }) => (schema_version, record),
+        Ok(ProductInstall::Unchanged { schema_version }) => (schema_version, None),
+        Err(error) => {
+            return Err(if refused.is_empty() {
+                one(error.to_string())
+            } else {
+                refused
+            })
+        }
+    };
+
+    // The segments of the product, through the segment store after the schema change.
+    let mut segments = 0;
+    if let Some(change) = &change {
+        let ctx = context(
+            tenant,
+            Principal::User(owner.clone()),
+            clock,
+            format!("corpus:segments:{}", product.id),
+        );
+        let definitions = change
+            .segments
+            .definitions(tenant)
+            .map_err(|e| one(e.to_string()))?;
+        let mut problems = Vec::new();
+        for definition in definitions {
+            match kept::define(store, &ctx, &definition) {
+                Ok(_) => {
+                    commits += 1;
+                    segments += 1;
+                }
+                Err(e) => problems.extend(
+                    rejection_problems(&e)
+                        .into_iter()
+                        .map(|p| format!("segment {}: {p}", definition.name)),
+                ),
+            }
+        }
+        if !problems.is_empty() {
+            return Err(problems);
+        }
+    }
+    let owns = record.as_ref().map_or(0, |r| r.owns.len());
+    Ok((
+        ProductReport {
+            product: product.id.clone(),
+            version: parsed.version.clone(),
+            entities: owns,
+            segments,
+            schema_version: version,
+        },
+        commits,
+    ))
+}
+
+/// What `check` found for one product.
+#[derive(Clone, Debug)]
+pub struct CheckReport {
+    pub product: String,
+    pub file: String,
+    /// `alone` (a fresh tenant with this product only) or `together` (the products in one
+    /// tenant, in file order, each installed after those that passed).
+    pub pass: &'static str,
+    /// Every problem the kernel reports; empty when the product installs.
+    pub problems: Vec<String>,
+}
+
+fn fresh_tenant(
+    store: &dyn Store,
+    options: &LoadOptions,
+) -> Result<(TenantId, PrincipalId, i64), CorpusError> {
+    let tenant = TenantId::new(options.tenant.clone()).map_err(CorpusError::from_display)?;
+    let owner = PrincipalId::new(options.owner.clone()).map_err(CorpusError::from_display)?;
+    let bundle = Bundle::from_json(
+        &json!({
+            "id": options.tenant, "name": options.name,
+            "owner": options.owner, "created_at": options.created_at,
+        })
+        .to_string(),
+    )
+    .map_err(CorpusError::from_display)?;
+    let clock =
+        strata_substrate::plain::parse_time(&options.created_at).map_err(CorpusError::new)?;
+    install::<String>(&bundle, &mut |ctx, intent| run(store, &ctx, &intent))
+        .map_err(|e| CorpusError::new(format!("creating the tenant: {e}")))?;
+    Ok((tenant, owner, clock))
+}
+
+/// Install every product, each on a fresh in-memory tenant of its own, and report every problem
+/// the kernel finds in each instead of stopping at the first. The products declare only their
+/// own entities and may not name each other, so none needs another installed first. Then install
+/// them all into one tenant, in file order, to find what only collides across products (a route
+/// two screens answer, an id both declare); a product that fails there is skipped and reported,
+/// and the rest carry on.
+pub fn check_corpus(
+    products: &[CompiledProduct],
+    options: &LoadOptions,
+    report: &mut dyn FnMut(&CheckReport),
+) -> Result<Vec<CheckReport>, CorpusError> {
+    let mut out = Vec::new();
+    for product in products {
+        let store = strata_storage_api::memory::MemoryStore::new();
+        let (tenant, owner, clock) = fresh_tenant(&store, options)?;
+        let problems = match install_product_into(&store, &tenant, &owner, clock + 1, product) {
+            Ok(_) => Vec::new(),
+            Err(problems) => problems,
+        };
+        let done = CheckReport {
+            product: product.id.clone(),
+            file: product.file.clone(),
+            pass: "alone",
+            problems,
+        };
+        report(&done);
+        out.push(done);
+    }
+    let store = strata_storage_api::memory::MemoryStore::new();
+    let (tenant, owner, mut clock) = fresh_tenant(&store, options)?;
+    for product in products {
+        clock += 1;
+        let problems = match install_product_into(&store, &tenant, &owner, clock, product) {
+            Ok(_) => Vec::new(),
+            Err(problems) => problems,
+        };
+        let done = CheckReport {
+            product: product.id.clone(),
+            file: product.file.clone(),
+            pass: "together",
+            problems,
+        };
+        report(&done);
+        out.push(done);
+    }
+    Ok(out)
 }
 
 /// The entities the tenant's schema (and its segment store) holds against what the ownership

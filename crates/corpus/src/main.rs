@@ -5,6 +5,7 @@
 //! strata-corpus build --scale small|medium|large [--seed <n>] [--store <store>] [--tenant <id>]
 //!                     [--replace] [--lenient] [--batch <n>] [--catalogue <file>]
 //! strata-corpus hash  [--store <store>] [--tenant <id>]
+//! strata-corpus check [--product <id>]
 //!
 //! --store   memory (the default) | sqlite:<control database file> | postgres[:<url>]
 //!           postgres without a url reads STRATA_PG_URL.
@@ -12,6 +13,8 @@
 //! --corpus  the directory of product files (default: tests/corpus/enterprise)
 //! ```
 //!
+//! `check` installs each product on a fresh in-memory tenant of its own, then all of them into one
+//! tenant, and prints every problem the kernel reports for each, not only the first.
 //! `load` installs the 14 products and checks that the tenant holds every entity they own.
 //! `build` does that and then fills the tenant with records from the seed. `hash` prints the hash
 //! of an existing tenant, for comparing two runs on a store that outlives the process.
@@ -33,6 +36,7 @@ const USAGE: &str = "usage:
   strata-corpus build --scale small|medium|large [--seed <n>] [--store <store>] [--tenant <id>]
                       [--replace] [--lenient] [--batch <n>] [--catalogue <file>]
   strata-corpus hash  [--store <store>] [--tenant <id>]
+  strata-corpus check [--product <id>]
   --store memory (default) | sqlite:<control database file> | postgres[:<url>]";
 
 struct Args {
@@ -47,6 +51,7 @@ struct Args {
     catalogue: Option<PathBuf>,
     spec: Option<String>,
     corpus: Option<String>,
+    product: Option<String>,
 }
 
 fn parse(mut raw: Vec<String>) -> Result<Args, String> {
@@ -66,6 +71,7 @@ fn parse(mut raw: Vec<String>) -> Result<Args, String> {
         catalogue: None,
         spec: None,
         corpus: None,
+        product: None,
     };
     let mut scale_given = false;
     let mut it = raw.into_iter();
@@ -91,6 +97,7 @@ fn parse(mut raw: Vec<String>) -> Result<Args, String> {
             "--catalogue" => args.catalogue = Some(PathBuf::from(value("--catalogue")?)),
             "--spec" => args.spec = Some(value("--spec")?),
             "--corpus" => args.corpus = Some(value("--corpus")?),
+            "--product" => args.product = Some(value("--product")?),
             "--replace" => args.replace = true,
             "--lenient" => args.lenient = true,
             other => return Err(format!("unknown argument {other:?}")),
@@ -150,6 +157,39 @@ fn run(args: Args) -> Result<(), CorpusError> {
         replace: args.replace,
         ..LoadOptions::default()
     };
+
+    if args.command == "check" {
+        let mut products = compile_corpus(&paths)?;
+        if let Some(only) = &args.product {
+            products.retain(|p| &p.id == only);
+            if products.is_empty() {
+                return Err(CorpusError::new(format!(
+                    "no product {only:?} in the corpus"
+                )));
+            }
+        }
+        let reports = strata_corpus::check_corpus(&products, &load, &mut |r| {
+            if r.problems.is_empty() {
+                println!("{:<9} {:<14} ok", r.pass, r.product);
+            } else {
+                println!(
+                    "{:<9} {:<14} {} problem(s)",
+                    r.pass,
+                    r.product,
+                    r.problems.len()
+                );
+                for problem in &r.problems {
+                    println!("    {problem}");
+                }
+            }
+        })?;
+        let total: usize = reports.iter().map(|r| r.problems.len()).sum();
+        println!("{total} problem(s) in all");
+        if total > 0 {
+            return Err(CorpusError::new("the corpus does not install cleanly"));
+        }
+        return Ok(());
+    }
 
     if args.command == "hash" {
         let tenant = TenantId::new(args.tenant.clone()).map_err(CorpusError::from_display)?;
@@ -276,7 +316,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if !["load", "build", "hash"].contains(&args.command.as_str()) {
+    if !["load", "build", "hash", "check"].contains(&args.command.as_str()) {
         eprintln!("strata-corpus: unknown command {:?}\n{USAGE}", args.command);
         return ExitCode::from(2);
     }
