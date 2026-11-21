@@ -4,7 +4,7 @@
 // trailing dot are not part of the path; a directory counts as existing.
 
 const ROOTS = ['crates', 'web', 'tests', 'scripts', 'lean', 'docs', 'tenants', 'specifications', '.github'];
-const ROOT_FILES = ['Cargo.toml', 'Cargo.lock', 'package.json', 'package-lock.json', 'concordance.toml', 'rust-toolchain.toml'];
+const ROOT_FILES = ['Cargo.toml', 'Cargo.lock', 'package.json', 'package-lock.json', 'gate.json', 'rust-toolchain.toml'];
 const PATH = new RegExp(
   `(?<![A-Za-z0-9_./-])((?:${ROOTS.map((r) => r.replace('.', '\\.')).join('|')})/[A-Za-z0-9_.\\-/]*[A-Za-z0-9_]|${ROOT_FILES.map((f) => f.replace(/\./g, '\\.')).join('|')})(?![A-Za-z0-9_-])`,
   'g',

@@ -13,7 +13,7 @@ The platform's intended design is the specification, `specifications/spec.jsonc`
 (739 requirements, 129 model claims, milestones 1 to 12). It describes a larger system than this
 repository builds: one database per tenant on PostgreSQL, a separate identity service, a gateway,
 an agent plane and a cloud profile. The prototype here implements milestone 1. The gate holds the
-code to the milestones listed in `concordance.toml` (`[gate] started_milestones`, currently 1),
+code to the milestones listed in `gate.json` (`startedMilestones`, currently 1),
 which is 37 of the 739 requirements. The rest are planned and are not checked against the code.
 
 The documents in `docs/` describe the prototype as it is. Where they and the specification
@@ -63,7 +63,7 @@ npm run test:web           # the frontend kernel, as plain functions
 npm run check              # type-check the JavaScript through its JSDoc
 npm run e2e                # real browser, on two stacks with their own ports; builds what it runs against
 cd lean && lake build && lake env lean Audit.lean   # the proofs and the axioms they use
-npm run spec               # the specification gate: the tests above except e2e, lints and audits, then Exegra and Concordance
+npm run spec               # the specification gate: the tests above except e2e, audits, then Exegra and the requirement-to-evidence check
 npm run spec:browser       # the same, and the browser suites
 ```
 
@@ -80,8 +80,9 @@ scenario tests from the same specification; `crates/spec-compiler` documents eac
 states what generated code may rely on.
 
 On a shared machine, cap the Rust build and tests: `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2`.
-`npm run spec` needs the Exegra checkout at `../exegra` (or `EXEGRA_HOME`) and `concordance` on
-the PATH. Its details are in `specifications/README.md`.
+`npm run spec` needs the Exegra checkout at `../exegra` (or `EXEGRA_HOME`). Its details are in
+`specifications/README.md`. `gate.json` at the root is the gate's own configuration: the milestones
+whose requirements the gate holds to the code. Add a milestone to it when work on it starts.
 
 ## Run it in containers
 

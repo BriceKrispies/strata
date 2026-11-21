@@ -4,7 +4,7 @@ Each invariant names where it is enforced and what checks it.
 
 The identifiers here (K1 to X3) belong to this document. The specification's requirements have
 their own identifiers (`krn-`, `sto-`, `run-`, `idn-`, `sec-` and so on), and nothing links the two.
-The check named in each row is the prototype's test, not a Concordance proof.
+The check named in each row is the prototype's test, not a proof the evidence check counts.
 
 ## Kernel
 

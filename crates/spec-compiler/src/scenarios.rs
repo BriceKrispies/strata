@@ -58,7 +58,7 @@
 //!
 //! A claim with `models: <requirement>` whose `evaluate.scenarios` includes the scenario is a
 //! check over the model that restates that requirement; each such requirement's `ref` becomes one
-//! `/// Verifies: <ref>` doc line on the test, which Concordance's Rust indexer reads.
+//! `/// Verifies: <ref>` doc line on the test, which the evidence check (scripts/gate-evidence.mjs) reads.
 //!
 //! # Not supported
 //!
@@ -653,7 +653,7 @@ fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
                         None => problems.push(Diagnostic::new(
                             VERIFIES,
                             id,
-                            format!("claim \"{claim_id}\" models requirement \"{m}\", which has no ref, so Concordance cannot link a test to it."),
+                            format!("claim \"{claim_id}\" models requirement \"{m}\", which has no ref, so the evidence check cannot link a test to it."),
                         )),
                     },
                     _ => problems.push(Diagnostic::new(

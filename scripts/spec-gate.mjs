@@ -22,7 +22,10 @@
 //      var/test-results (at most two jobs). Not run with --no-test.
 //   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata): validate the
 //      specification, evaluate its claims.
-//   3. Concordance: lint (strict), then scan with the recorded results and the Exegra results file.
+//   3. Evidence (scripts/gate-evidence.mjs): every requirement of a started milestone (gate.json) has a
+//      passing proof: a Rust test or Lean theorem with a `Verifies: <REF>` line that the recorded results show
+//      as passed, or, for a construction requirement, verified Exegra claims that model it. A `Verifies:` line
+//      naming a ref the specification does not have fails too.
 //   4. Counts read from the specification itself, compared with the last successful gate record.
 //   4b. The specification and the code agree (scripts/gate-audit-checks.mjs, nothing compiled): every
 //      shipped contract has a handler, every table the SQLite adapters create has a shipped record,
@@ -54,6 +57,7 @@ import { auditChecks } from './gate-audit-checks.mjs';
 import { runCommand } from './gate-run.mjs';
 import { GENERATED as CONFORMANCE_SUITE, conformanceCoverage, conformanceVerdict } from './gate-conformance.mjs';
 import { evidenceSources, realisationReport, realisationVerdict } from './gate-realisation.mjs';
+import { readGateConfig, reportLines, runEvidence } from './gate-evidence.mjs';
 import { readWorkspace } from './test-select.mjs';
 import { readTiers, routineSeconds, tierProblems } from './test-tiers.mjs';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
@@ -225,7 +229,7 @@ function workspacePackages() {
 
 // Every file under the source roots and the root manifests, with its modification time.
 const sourceRoots = ['crates', 'lean', 'tests', 'web', 'tenants', 'scripts', 'specifications'];
-const sourceFiles = ['Cargo.toml', 'Cargo.lock', 'package.json', 'package-lock.json', 'concordance.toml', 'rust-toolchain.toml'];
+const sourceFiles = ['Cargo.toml', 'Cargo.lock', 'package.json', 'package-lock.json', 'gate.json', 'rust-toolchain.toml'];
 const skipDirs = new Set(['target', 'node_modules', '.lake', 'dist', 'test-results', 'screenshots', '.git']);
 
 function sourceList() {
@@ -256,21 +260,25 @@ function sourceHashes() {
 mkdirSync(resultsDir, { recursive: true });
 
 // ---------------------------------------------------------------------------------------------
-// The expected counts come from the specification and the Concordance configuration.
+// The expected counts come from the specification and the gate config (gate.json).
 // ---------------------------------------------------------------------------------------------
 const spec = parseJsonc(readFileSync(specPath, 'utf8'));
 const requirements = spec.claims.filter((claim) => claim.kind === 'requirement');
 const modelClaims = spec.claims.filter((claim) => String(claim.id).startsWith('m-'));
 const requirementIds = new Set(requirements.map((claim) => claim.id));
-const config = readFileSync(resolve(root, 'concordance.toml'), 'utf8');
-const startedMatch = config.match(/^\s*started_milestones\s*=\s*\[([^\]]*)\]/m);
-const started = new Set(startedMatch ? startedMatch[1].split(',').map((s) => Number(s.trim())).filter(Number.isFinite) : []);
+let startedList = [];
+try {
+  startedList = readGateConfig(root).startedMilestones;
+} catch (error) {
+  check('gate.json names started milestones', false, error.message);
+}
+const started = new Set(startedList);
 const gated = requirements.filter((claim) => started.has(claim.milestone));
 const counts = { requirements: requirements.length, gated: gated.length, model: modelClaims.length };
 const danglingLinks = modelClaims.filter((claim) => !requirementIds.has(claim.models));
 
 console.log(`specification: ${requirements.length} requirements, ${modelClaims.length} model claims; started milestones: ${[...started].sort((a, b) => a - b).join(', ') || 'none'}`);
-if (!startedMatch || started.size === 0) check('concordance.toml names started milestones', false, 'no [gate] started_milestones');
+if (started.size === 0) check('gate.json names started milestones', false, 'startedMilestones is empty');
 
 // ---------------------------------------------------------------------------------------------
 // 0. Generated code: crates/model and crates/model-core are what specc writes from the
@@ -450,15 +458,11 @@ if (!noTest) {
     check('npm audit (high and critical advisories)', npmAudit.ok, npmAudit.ok ? '' : `${exitText(npmAudit)}: ${lastLine(npmAudit.out)}`);
   }
 
-  // Concordance accepts a result only when a manifest written right after the run says which source
-  // content and which requirement statements it was run on. Record only if nothing changed meanwhile.
+  // The results are bound to the content they were run on by the gate record written at the end
+  // (the specification hash and every source file hash). Record only if nothing changed meanwhile.
   const after = sourceHashes();
   const moved = [...new Set([...Object.keys(snapshot), ...Object.keys(after)])].filter((file) => snapshot[file] !== after[file]);
   check('no source changed while the tests ran', moved.length === 0, moved.length ? `${moved.length} changed, e.g. ${moved[0]}` : '');
-  if (moved.length === 0) {
-    const record = run('concordance', ['record', '--config', 'concordance.toml']);
-    check('concordance record', record.ok, record.ok ? lastLine(record.out) : `${exitText(record)}: ${lastLine(record.out)}`);
-  }
 } else {
   console.log('*** NO TESTS RUN. --no-test reuses the recorded results in var/test-results. This is not a full gate run. ***');
   if (!allowRecorded) {
@@ -528,14 +532,11 @@ if (withBrowser) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 3. Concordance
+// 3. Evidence: every started requirement has a passing proof (scripts/gate-evidence.mjs)
 // ---------------------------------------------------------------------------------------------
-const lint = run('concordance', ['lint', '--config', 'concordance.toml']);
-check('concordance lint (strict)', lint.ok, lint.ok ? lastLine(lint.out) : `${exitText(lint)}: ${lastLine(lint.out)}`);
-
-// A construction requirement is verified by the Exegra claims that model it, so Concordance reads
-// their verdicts. The model claims do not depend on Concordance's results, so they are evaluated
-// first, here, and written where the scan reads them.
+// A construction requirement is verified by the Exegra claims that model it, so their verdicts are
+// read first and written to var/exegra-verdicts.json, where the evidence check and anyone reading
+// the gate's output can see them.
 {
   const cli = resolve(exegraHome, 'cli/exegra.js');
   const verdicts = existsSync(cli) ? run(process.execPath, [cli, 'claims', '--project', exegraProject, ...(process.env.EXEGRA_SPECS ? ['--specs', process.env.EXEGRA_SPECS] : [])], { cwd: exegraHome }) : null;
@@ -548,42 +549,18 @@ check('concordance lint (strict)', lint.ok, lint.ok ? lastLine(lint.out) : `${ex
   const written = Array.isArray(claims);
   if (written) writeFileSync(resolve(root, 'var/exegra-verdicts.json'), JSON.stringify({ results: claims }));
   check('exegra claim verdicts for construction requirements', written, written ? `${claims.length} claims` : `no verdicts: ${verdicts ? exitText(verdicts) : 'no Exegra checkout'}`);
-}
 
-const scan = run('concordance', ['scan', '--config', 'concordance.toml', '--json', '--fail-on', 'unverified', '--exegra-results', 'var/concordance-results.json', '--exegra-verdicts', 'var/exegra-verdicts.json', '--no-generated-at']);
-let report = null;
-try {
-  report = JSON.parse(scan.stdout);
-} catch {
-  report = null;
-}
-if (!report || !Array.isArray(report.findings) || !report.counts) {
-  check('concordance scan', false, `no report; ${exitText(scan)}: ${lastLine(scan.out)}`);
-} else {
-  writeFileSync(resolve(root, 'var/scan.json'), scan.stdout);
-  const provenOk = scan.ok && report.gate?.failed === false;
-  check('concordance scan (fail-on unverified)', provenOk, provenOk ? `${report.counts.violated} violated` : `${exitText(scan)}, gate.failed ${report.gate?.failed}`);
-
-  let results = null;
+  let evidence = null;
   try {
-    results = JSON.parse(readFileSync(resolve(root, 'var/concordance-results.json'), 'utf8'));
+    evidence = runEvidence({ root, spec, resultsDir, verdicts: written ? claims : null, started: startedList });
   } catch (error) {
-    check('concordance results file', false, `unreadable: ${error.message}`);
+    check('requirement evidence', false, `unreadable: ${error.message}`);
   }
-  const proofless = results
-    ? gated.filter((claim) => results.claims?.[claim.id]?.status !== 'verified' || results.claims[claim.id].outcome !== 'pass')
-    : gated;
-  check('every started requirement has a passing proof', results !== null && proofless.length === 0, `${gated.length - proofless.length} of ${gated.length} requirements of the started milestones (${[...started].sort((a, b) => a - b).join(', ')})`);
-  detail(proofless.slice(0, 20).map((claim) => `${claim.id}: ${results?.claims?.[claim.id]?.status ?? 'no entry'}`));
-
-  const gatedFindings = report.findings.filter((finding) => started.has(finding.milestone));
-  const openGated = gatedFindings.filter((finding) => finding.status !== 'verified');
-  check('no open finding on a started milestone', openGated.length === 0, `${gatedFindings.length} findings on started milestones`);
-  detail(openGated.slice(0, 20).map((finding) => `${finding.status}: ${finding.title.slice(0, 120)}`));
-
-  const violatedFindings = report.findings.filter((finding) => finding.status === 'violated');
-  check('no violated finding anywhere', violatedFindings.length === 0, `${violatedFindings.length} violated`);
-  detail(violatedFindings.slice(0, 20).map((finding) => `${finding.title.slice(0, 120)}`));
+  if (evidence) {
+    const lines = reportLines(evidence);
+    check('every started requirement has a passing proof, and every Verifies line names a known ref', evidence.ok, `${lines[0]} (milestones ${startedList.join(', ')})`);
+    detail(lines.slice(1));
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -609,9 +586,8 @@ if (!exegraFound) {
   const validation = exegra('validate');
   const vr = validation.json?.result;
   const problems = vr ? [count(vr.errors), count(vr.warnings), count(vr.gaps)] : [NaN, NaN, NaN];
-  const concordanceWarnings = Array.isArray(vr?.concordance) ? vr.concordance.length : NaN;
-  const validOk = validation.json?.ok === true && problems.every((n) => n === 0) && concordanceWarnings === 0;
-  check('exegra validate', validOk, validOk ? '0 errors, 0 warnings, 0 gaps' : `${validation.json?.ok === true ? '' : 'not ok; '}errors ${problems[0]}, warnings ${problems[1]}, gaps ${problems[2]}, concordance warnings ${concordanceWarnings}; ${exitText(validation.r)}`);
+  const validOk = validation.json?.ok === true && problems.every((n) => n === 0);
+  check('exegra validate', validOk, validOk ? '0 errors, 0 warnings, 0 gaps' : `${validation.json?.ok === true ? '' : 'not ok; '}errors ${problems[0]}, warnings ${problems[1]}, gaps ${problems[2]}; ${exitText(validation.r)}`);
   if (!validOk) detail(envelopeProblems(validation.json));
 
   const evaluation = exegra('claims');

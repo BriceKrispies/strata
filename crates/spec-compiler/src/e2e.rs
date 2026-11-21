@@ -1,7 +1,7 @@
 //! The end-to-end output: `specc e2e` turns the user journeys (`uiScenarios`) of a specification
 //! into Playwright tests, one `<scenario-id>.spec.js` per journey, a runtime module
 //! (`journey.js`) those tests share, and a Playwright configuration that runs them against the
-//! stack the hand-written suite uses and writes a JUnit report Concordance can ingest.
+//! stack the hand-written suite uses and writes a JUnit report.
 //!
 //! # Layout
 //!
@@ -13,9 +13,8 @@
 //! # Linking tests to requirements
 //!
 //! Every requirement a journey `verifies` becomes one `// Verifies: <ref>` comment line directly
-//! above its `test(` call. Concordance's TypeScript indexer reads the consecutive `//` lines
-//! above a `test(...)` call as the test's doc and takes the ids after `Verifies:`; the JUnit
-//! report names each case by its title, which is the test symbol's name, so results join.
+//! above its `test(` call, the form the other tests of the repository use; the JUnit report
+//! names each case by its title, which is the test symbol's name.
 //!
 //! # Steps
 //!
@@ -909,7 +908,7 @@ pub fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
                     VERIFIES,
                     id,
                     format!(
-                        "requirement \"{v}\" has no ref, so Concordance cannot link a test to it."
+                        "requirement \"{v}\" has no ref, so the evidence check cannot link a test to it."
                     ),
                 )),
                 Some((_, Some(r), true)) => {
@@ -3513,8 +3512,8 @@ export class Journey {
 
 fn config() -> String {
     "\
-// Runs the generated journeys against the stack of the hand-written suite and writes a JUnit report
-// for Concordance. Expected at tests/e2e/generated/playwright.generated.config.js. With
+// Runs the generated journeys against the stack of the hand-written suite and writes a JUnit report.
+// Expected at tests/e2e/generated/playwright.generated.config.js. With
 // STRATA_E2E_BASE_URL it starts nothing and runs against that stack instead.
 import { defineConfig } from '@playwright/test';
 import base from '../playwright.config.js';

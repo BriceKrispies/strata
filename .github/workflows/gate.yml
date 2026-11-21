@@ -1,6 +1,6 @@
 # Runs the specification gate (scripts/spec-gate.mjs) on every push and pull request: the generated
 # files are current, cargo test, lake build, the web and script tests, the type check, cargo fmt,
-# cargo clippy, cargo audit, npm audit, Exegra, Concordance, and the three browser suites.
+# cargo clippy, cargo audit, npm audit, Exegra, the requirement-to-evidence check, and the three browser suites.
 # --require-all makes a tool that is missing a failure, never a silent pass.
 #
 # One job, one build. What it assumes, none of which this repository provides:
@@ -12,7 +12,6 @@
 #                                  is NOT created here; a step has to create it before the gate runs
 #                                  (the gate's failure message names what is missing). Until it exists
 #                                  this job fails at the Exegra checks, which is the honest result.
-#   concordance                    installed from its public repository (BriceKrispies/concordance).
 #   elan and Lean                  installed below; lake reads lean/lean-toolchain.
 #   cargo-audit and Chromium       installed below. npm audit and cargo audit need network access.
 name: gate
@@ -52,7 +51,6 @@ jobs:
       - name: Tools the gate runs
         run: |
           cargo install cargo-audit --locked
-          cargo install --git https://github.com/BriceKrispies/concordance --locked
           curl -sSf https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 

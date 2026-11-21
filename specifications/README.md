@@ -1,22 +1,22 @@
 # The Strata specification
 
 `spec.jsonc` is the specification. It is one file and it is the authority for what the platform
-is to do; products are specified beside it (see "Product specifications"). Two tools read it:
+is to do; products are specified beside it (see "Product specifications"). Exegra and the gate's
+own checks read it:
 
 - **Exegra** validates it, draws it, runs its behaviour models, and evaluates the claims it can
   decide from the model alone (ids starting `m-`): structure, the data rules for records and
   copies, and behaviour under injected faults. Its `apply` command edits the file through a
   validated transaction.
-- **Concordance** renders its documents, lints every requirement, and reconciles the
-  requirements with the code and with recorded test results.
+- **The gate's evidence check** (`scripts/gate-evidence.mjs`) reconciles the requirements with the
+  code and with recorded test results: see "How a requirement gets verified".
 
-No Markdown copy of the specification is kept. Concordance renders the documents under the
-paths the file names (`specifications/00-vision/whitepaper.md`,
-`specifications/03-identity/identity.md` and so on), which is why findings cite those paths.
+No Markdown copy of the specification is kept. The documents the file names
+(the white paper, the roadmap, the glossary and so on) are sections of this file, not files.
 
 The specification describes the whole intended platform. The prototype in `crates/` and `lean/`
 answers milestone 1 only. Milestone numbers are in `milestones`; which milestones the gate holds
-the code to is in `[gate] started_milestones` of `concordance.toml`.
+the code to is in `startedMilestones` of `gate.json`.
 
 ## Product specifications
 
@@ -99,7 +99,8 @@ The full gate runs `cargo test --workspace`, `lake build`, the web kernel tests 
 and `npm run check` (type check). It records their output under `var/test-results`, together with
 a gate record there that holds the specification's hash and a content hash of every source file
 as they were before the run. It then asks Exegra to validate the file and evaluate its claims, and
-asks Concordance to lint the requirements and scan them. It passes only when every check passes.
+checks every requirement of a started milestone for a passing proof (`scripts/gate-evidence.mjs`).
+It passes only when every check passes.
 
 `--no-test` reuses the recorded results and says so on screen. Without `--allow-recorded` it
 fails. With it, it still fails when the specification or any source file differs from the hashes
@@ -121,15 +122,13 @@ A passing gate establishes these, and only these:
    passing test; `lake build` completed with no `sorry`; the web kernel tests and the type check
    pass. Each tool's result is read from its own output or exit status. A tool that cannot start,
    crashes, or prints nothing parseable fails the gate.
-2. Every requirement of a started milestone has a passing proof in Concordance's results file,
-   and no Concordance finding on a started milestone is open. Concordance runs with
-   `--fail-on unverified`, so a started requirement with no accepted proof fails the scan itself. The count of such requirements is
-   taken from the specification. Currently that is 37 of the 739 requirements.
+2. Every requirement of a started milestone has a passing proof (see "How a requirement gets
+   verified"), and no `Verifies:` line names a ref the specification does not have. The count of
+   such requirements is taken from the specification. Currently that is 37 of the 739 requirements.
 3. Every `m-` claim is verified by Exegra, with no violated claim. The count is taken from the
    specification, and every `models` link names a requirement that exists.
-4. Exegra validates the file with no errors, warnings, gaps or Concordance warnings.
-5. Concordance lints the requirements under the strict rules, and no finding anywhere is violated.
-6. The number of requirements of started milestones and the number of `m-` claims have not gone
+4. Exegra validates the file with no errors, warnings or gaps.
+5. The number of requirements of started milestones and the number of `m-` claims have not gone
    down since the last successful gate run, unless `--accept-fewer` is given.
 
 A passing gate does not establish these:
@@ -141,9 +140,9 @@ A passing gate does not establish these:
   that the test asserts the statement it is tagged with. A passing test that carries the line is
   evidence that the test passes, not that the
   statement holds.
-- **Lean theorems as proofs of the Rust kernel.** Concordance counts a theorem as passing when the
-  build log shows its own module built without `sorry`. It reports a theorem that states `True` or
-  rests on a declared axiom, and otherwise does not read the theorem. The theorems are about the
+- **Lean theorems as proofs of the Rust kernel.** The evidence check counts a theorem as passing when the
+  build log shows its own module built without `sorry`. It reports a theorem that states `True` and
+  does not count it; it does not otherwise read the theorem or the axioms it uses (`lean/Audit.lean` lists them). The theorems are about the
   abstract model in `lean/Strata/`, not about the Rust code (see `docs/verification.md`).
 - **The model claims as statements about the code.** Exegra evaluates each `m-` claim on the
   scenarios listed in the specification, under their faults. Exegra reads the `models` field: it
@@ -154,30 +153,40 @@ A passing gate does not establish these:
   be planned for a later milestone while the prototype already contradicts it, and the gate does
   not see the contradiction.
 - **That the recorded results came from this code, beyond the gate's own run.** Right after the
-  tests, the gate runs `concordance record`, which binds each results file to the content of every
-  indexed source file and to the text of every requirement. A later change to a source file makes
-  every result stale, and a change to a requirement's text makes that requirement stale. What stays
-  trusted is that the record was written straight after the run; the gate checks that no source
-  changed while the tests ran.
-- **Proofs that inspect source text.** A Rust proof that calls no indexed code is refused unless
-  its doc comment says `Inspects: <path>`. KRN-012 is proved this way. Nothing checks that the test
-  really reads that path.
+  tests, the gate writes a gate record that holds the hash of the specification and of every source
+  file, and of each result file. With `--no-test --allow-recorded` the results are refused when the
+  specification or any source file, `gate.json` included, differs from the record, so a change to a
+  requirement or to a source makes every recorded result stale. What stays trusted is that the record
+  was written straight after the run; the gate checks that no source changed while the tests ran.
+- **Proofs that call no code.** A test that asserts nothing about the code is a passing test all the
+  same; nothing reads the test body. KRN-012 is proved by a test that reads source text, and nothing
+  checks that it reads the right path.
+- **Test names across binaries.** The recorded `cargo test` text names each test by its path and not by
+  its binary, except where the headers it ends with match its `running` blocks one for one; when they
+  do not, a result is matched to a test by name alone and the worst outcome of that name counts.
 - **Anything the specification says that no requirement covers**, and the correctness of Exegra
-  and Concordance themselves.
+  and of the gate's own scripts.
 
 ## How a requirement gets verified
 
 A requirement is verified when a Rust test or a Lean theorem carries a doc-comment line
 `Verifies: <ID>` naming it, and the recorded result of that test is a pass. For Rust, the result
-comes from `cargo test`. For Lean, Concordance reads the output of `lake build`: a theorem passes
-when its module built.
+comes from `cargo test`. For Lean, the check reads the output of `lake build`: a theorem passes
+when its module built and the log shows no `sorry` or error inside the theorem. A requirement
+realised by `construction` is verified instead by the Exegra verdicts of the `m-` claims whose
+`models` names it: all of them `verified`. The gate writes those verdicts to
+`var/exegra-verdicts.json`.
 
-The line goes in the doc comment of the test or theorem, for example a Rust `#[test]` function
+The line goes in the doc comment of the test or theorem (for a Rust test a plain `//` comment line
+directly above it counts too), for example a Rust `#[test]` function
 with `/// Verifies: KRN-003` above it, or a Lean theorem whose doc comment contains
 `Verifies: KRN-013`. Read the test before writing the line; the line is a claim that the test
 checks the requirement.
 
-A requirement whose milestone is not in `[gate] started_milestones` of `concordance.toml` is
+A `Verifies:` line that names a ref the specification does not define (a requirement's or a
+contract's) fails the gate; one that names a contract's ref is accepted and proves nothing.
+
+A requirement whose milestone is not in `startedMilestones` of `gate.json` is
 reported as planned. Starting a milestone means adding its number there. From then on the gate
 requires every requirement of that milestone to have a passing proof, and fails on any that does
 not.
@@ -185,8 +194,7 @@ not.
 ## Changing it
 
 Change the specification first, then the code. Edit `spec.jsonc` through Exegra (`apply`), or by
-hand, and then run the gate. The rules the lint enforces are described in Concordance's
-documentation of its specification lint. The ones that come up most:
+hand, and then run the gate. The rules for wording a requirement that come up most:
 
 - one SHALL per requirement, stated at a boundary, with no implementation detail
 - "for every", "never" and "always" need a property, a proof or a conformance table
