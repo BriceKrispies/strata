@@ -255,8 +255,8 @@
     {"id":"load-snapshot","name":"Load the state a snapshot holds","ref":"CT-028","realisation":"generated","implementedBy":"store-contract","auth":{"scheme":"in-process","description":"Local call inside the platform process; no network credential"},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"id","type":"u64"}],"outputs":[{"name":"tenant","type":"tenant-state"}],"errors":[{"name":"not-found","condition":"The snapshot does not exist.","type":"store-error","kind":"not_found"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error","kind":"internal"}],"exposure":"local","deployment":"shipped"},
     {"id":"restore-snapshot","name":"Put a tenant back as a snapshot holds it","ref":"CT-029","realisation":"generated","implementedBy":"store-contract","auth":{"scheme":"in-process","roles":["platform-operator"],"description":"A platform operator"},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"id","type":"u64"}],"outputs":[],"postconditions":["The tenant is exactly as the snapshot holds it; events and journal entries newer than the snapshot are discarded."],"errors":[{"name":"not-found","condition":"The snapshot does not exist.","type":"store-error","kind":"not_found"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"}],"exposure":"local","deployment":"shipped"},
     {"id":"reset-store","name":"Remove everything from a store","ref":"CT-030","realisation":"generated","implementedBy":"store-contract","auth":{"scheme":"in-process","description":"Development fixtures only; refused outside development"},"idempotent":true,"inputs":[],"outputs":[],"errors":[{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"}],"exposure":"local","development":"STRATA_DEV","deployment":"shipped"},
-    {"id":"execute-intent","name":"Decide an intent and commit it","ref":"CT-031","realisation":"derived","implementedBy":"store-contract","auth":{"scheme":"in-process","description":"Local call inside the platform process; no network credential"},"idempotent":false,"timeoutMs":300,"inputs":[{"name":"tenant","type":"tenant-id","description":"The tenant to load: the context's."},{"name":"intent","type":"intent"},{"name":"context","type":"context"}],"outputs":[{"name":"transition","type":"transition-result"},{"name":"receipt","type":"receipt"}],"postconditions":["The needs the kernel names are loaded, the intent is decided and the commit is applied atomically (storage-api execute): at most 32 needs beyond the first load are asked for (MAX_NEED_ROUNDS), and a commit that lost a race is decided again on the new state at most 8 times (MAX_CONFLICT_RETRIES).","A state-changing intent is confirmed as committed within 300 ms at the 99th percentile (OPS-334).","The number of retried commits, which storage-api Executed reports as conflicts, is not an output of the derivation."],"errors":[{"name":"domain","condition":"The kernel rejected the intent; the store is unchanged. Its HTTP status, where one is served, is error-code-of of its kind.","type":"domain-error","kind":"invalid"},{"name":"store","condition":"The store failed.","type":"store-error","kind":"unavailable"},{"name":"insufficient-state","condition":"The decision asked for more needs than needRounds allows, or for one it was already given.","type":"need","kind":"internal"},{"name":"conflict","condition":"Every commit lost its race to another one, retries times over; nothing is changed.","type":"store-error","kind":"conflict"},{"name":"invalid","condition":"The commit is malformed, or its events do not continue the tenant event sequence without a gap; nothing is changed.","type":"store-error","kind":"invalid"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error","kind":"internal"},{"name":"fault","condition":"An integer overflow in the decision (a revision, an event sequence, a version or a record id past its type); never in practice.","kind":"internal"}],"exposure":"local","derivation":{"kind":"command","needs":"header-needs","load":"load-decision-snapshot","decide":"execute-decide","commit":"commit-accepted","conflict":"conflict","insufficient":"insufficient-state","needRounds":32,"retries":8,"fault":"fault"},"deployment":"shipped"},
-    {"id":"execute-read","name":"Answer a read from the store","ref":"CT-032","realisation":"derived","implementedBy":"store-contract","auth":{"scheme":"in-process","description":"Local call inside the platform process; no network credential"},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id","description":"The tenant to load: the context's."},{"name":"request","type":"read-request"},{"name":"context","type":"context"}],"outputs":[{"name":"result","type":"read-result"}],"postconditions":["Only the records the read needs are loaded (storage-api query: the schema, then read_needs); a decision asks for at most 32 needs beyond the first load."],"errors":[{"name":"domain","condition":"The kernel rejected the read.","type":"domain-error","kind":"invalid"},{"name":"store","condition":"The store failed.","type":"store-error","kind":"unavailable"},{"name":"insufficient-state","condition":"The decision asked for more needs than needRounds allows, or for one it was already given.","type":"need","kind":"internal"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error","kind":"internal"},{"name":"fault","condition":"A checked conversion or integer operation inside the derivation overflowed or broke a type constraint; nothing was changed.","kind":"internal"}],"exposure":"local","derivation":{"kind":"read","needs":"header-needs","load":"load-decision-snapshot","decide":"execute-read-decide","insufficient":"insufficient-state","needRounds":32,"fault":"fault"},"deployment":"shipped"},
+    {"id":"execute-intent","name":"Decide an intent and commit it","ref":"CT-031","realisation":"derived","implementedBy":"store-contract","auth":{"scheme":"in-process","description":"Local call inside the platform process; no network credential"},"idempotent":false,"timeoutMs":300,"inputs":[{"name":"tenant","type":"tenant-id","description":"The tenant to load: the context's."},{"name":"intent","type":"intent"},{"name":"context","type":"context"}],"outputs":[{"name":"transition","type":"transition-result"},{"name":"receipt","type":"receipt"}],"postconditions":["The needs the kernel names are loaded, the intent is decided and the commit is applied atomically (storage-api execute): at most 32 needs beyond the first load are asked for (MAX_NEED_ROUNDS), and a commit that lost a race is decided again on the new state at most 8 times (MAX_CONFLICT_RETRIES).","A state-changing intent is confirmed as committed within 300 ms at the 99th percentile (OPS-334).","The number of retried commits, which storage-api Executed reports as conflicts, is not an output of the derivation."],"errors":[{"name":"domain","condition":"The kernel rejected the intent; the store is unchanged. Its HTTP status, where one is served, is error-code-of of its kind.","type":"domain-error","kind":"invalid"},{"name":"store","condition":"The store failed.","type":"store-error","kind":"unavailable"},{"name":"insufficient-state","condition":"The decision asked for more needs than needRounds allows, or for one it was already given.","type":"need","kind":"internal"},{"name":"conflict","condition":"Every commit lost its race to another one, retries times over; nothing is changed.","type":"store-error","kind":"conflict"},{"name":"invalid","condition":"The commit is malformed, or its events do not continue the tenant event sequence without a gap; nothing is changed.","type":"store-error","kind":"invalid"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error","kind":"internal"},{"name":"fault","condition":"An integer overflow in the decision (a revision, an event sequence, a version or a record id past its type); never in practice.","kind":"internal"}],"exposure":"local","derivation":{"kind":"command","needs":"header-needs","load":"load-tenant","decide":"execute-decide","commit":"commit-accepted","conflict":"conflict","insufficient":"insufficient-state","needRounds":32,"retries":8,"fault":"fault"},"deployment":"shipped"},
+    {"id":"execute-read","name":"Answer a read from the store","ref":"CT-032","realisation":"derived","implementedBy":"store-contract","auth":{"scheme":"in-process","description":"Local call inside the platform process; no network credential"},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id","description":"The tenant to load: the context's."},{"name":"request","type":"read-request"},{"name":"context","type":"context"}],"outputs":[{"name":"result","type":"read-result"}],"postconditions":["Only the records the read needs are loaded (storage-api query: the schema, then read_needs); a decision asks for at most 32 needs beyond the first load."],"errors":[{"name":"domain","condition":"The kernel rejected the read.","type":"domain-error","kind":"invalid"},{"name":"store","condition":"The store failed.","type":"store-error","kind":"unavailable"},{"name":"insufficient-state","condition":"The decision asked for more needs than needRounds allows, or for one it was already given.","type":"need","kind":"internal"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error","kind":"internal"},{"name":"fault","condition":"A checked conversion or integer operation inside the derivation overflowed or broke a type constraint; nothing was changed.","kind":"internal"}],"exposure":"local","derivation":{"kind":"read","needs":"header-needs","load":"load-tenant","decide":"execute-read-decide","insufficient":"insufficient-state","needRounds":32,"fault":"fault"},"deployment":"shipped"},
     {"id":"provision-tenant","name":"Provision a tenant","ref":"CT-033","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["platform-operator"],"csrf":true,"origin":true,"description":"Platform operator, or a person starting a sandbox (see start-sandbox)","requires":["tenant-provision"]},"idempotent":false,"timeoutMs":30000,"inputs":[{"name":"name","type":"string"},{"name":"template","type":"template-id"},{"name":"plan","type":"plan-id"},{"name":"region","type":"region-id","optional":true},{"name":"owner-address","type":"email-address","description":"The mail address that receives the first credential (TEN-1230)."}],"outputs":[{"name":"tenant","type":"tenant-id"},{"name":"state","type":"tenant-lifecycle"}],"postconditions":["A database that holds the data of this tenant alone exists (TEN-001), in the region asked for (TEN-005).","The tenant is recorded as provisioning from the first commit and reported as active only in the last, after its layout, template and first owner credential are in place; a failed run is resumed or rolled back, and leaves no active tenant (TEN-002, TEN-003, TEN-1232).","One bootstrap credential for the first owner is mailed to the owner address and to nobody else; it is not returned, logged or shown to the caller, and it is refused after its first use and after its expiry (TEN-500, TEN-1230).","The tenant is reachable by host name with no restart of any component (TEN-1231).","An audit entry is written and a dry run is offered (AGT-415)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"invalid","condition":"The template, plan or region is unknown.","type":"api-error","kind":"invalid"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error","kind":"unavailable"}],"exposure":"internal","deployment":"target","tenantScope":"platform"},
     {"id":"get-tenant","name":"Read a tenant directory entry","ref":"CT-034","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"service","description":"Service credential of a platform component","requires":["tenant-resolve"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"tenant","type":"tenant-directory-entry"}],"postconditions":["The entry is served for at most 15 minutes after the control plane was last reached (ARC-500).","The control database holds no field of a tenant record (TEN-006)."],"errors":[{"name":"not-found","condition":"The tenant named by the input does not exist.","type":"api-error","kind":"not_found"},{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"}],"exposure":"internal","readOnly":true,"deployment":"target","tenantScope":"platform"},
     {"id":"resolve-host","name":"Resolve a host name to a tenant and placement","ref":"CT-035","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"service","description":"Service credential of a platform component","requires":["tenant-resolve"]},"idempotent":true,"inputs":[{"name":"host","type":"host"}],"outputs":[{"name":"tenant","type":"tenant-id"},{"name":"placement","type":"placement-id"}],"postconditions":["The same name resolves to the same tenant before and after a move (TEN-013)."],"errors":[{"name":"not-found","condition":"The host name is bound to no tenant; no tenant database is contacted (EDG-011).","type":"api-error","kind":"not_found"}],"exposure":"internal","readOnly":true,"deployment":"target","tenantScope":"platform"},
@@ -959,10 +959,9 @@
       "deployment": "shipped"
     },
     {"id":"preview-markdown","name":"Preview constrained Markdown","ref":"CT-261","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/preview","auth":{"scheme":"session","tenantPolicies":true,"origin":true,"description":"A signed-in principal whose policies permit the operation","requires":["content-draft-read"]},"idempotent":true,"timeoutMs":2000,"inputs":[{"name":"markdown","type":"string"}],"outputs":[{"name":"blocks","type":"json"}],"preconditions":["The request carries an allowed origin."],"postconditions":["The blocks are a pure function of the text through parse-markdown; nothing is stored."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error","kind":"unavailable"},{"name":"forbidden","condition":"The request did not come from one of the site's own pages, or the request token is missing or stale.","type":"api-error","kind":"forbidden"}],"exposure":"public","readOnly":true,"tenantScope":"request","deployment":"shipped"},
-    {"id":"load-decision-snapshot","name":"Load a snapshot with the path and time parts functions cannot compute yet","ref":"H-054","realisation":"hand","implementedBy":"store-contract","auth":{"scheme":"in-process","description":"Local call inside the platform process; no network credential"},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"needs","type":"list<need>"},{"name":"intent","type":"intent","optional":true},{"name":"mutation","type":"mutation","optional":true},{"name":"path","type":"string","optional":true}],"outputs":[{"name":"state","type":"state"},{"name":"segments","type":"list<string>"},{"name":"routes","type":"map<view-id, list<route-segment>>"},{"name":"times","type":"map<string, i64>"}],"postconditions":["state is what load-tenant (CT-012) gives for the tenant and the needs.","segments is the path split at / without empty segments; routes is the route of each view of the schema so split, a segment :name read as the parameter name; times holds each string of the mutation's fields that substrate plain.rs parse_time accepts, with its milliseconds.","The hole holds the string splitting and the date parsing the derivations do not do in functions yet; the printing of expressions is print of the tenant rule language in the functions (WG-4966). When the rest is computed in functions, the derivations load through load-tenant and this hole goes."],"errors":[{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error","kind":"internal"}],"exposure":"local","deployment":"shipped"},
     {"id":"commit-accepted","name":"Commit an accepted intent","ref":"CT-262","realisation":"generated","implementedBy":"store-contract","auth":{"scheme":"in-process","description":"Local call inside the platform process; no network credential"},"idempotent":false,"timeoutMs":300,"inputs":[{"name":"context","type":"context"},{"name":"accepted","type":"accepted-intent"}],"outputs":[{"name":"receipt","type":"receipt"}],"preconditions":["The base revision of the transition's delta is the revision the tenant is stored at, or the tenant is absent and the base is none."],"postconditions":["Commits storage-api Commit::of(intent, context, transition) as commit-transition (CT-014) does: the delta, the events, the journal entry (with the kernel version and the hashes of the delta and the events) and the session revocations of the transition's RevokeSessions effects, all or none."],"errors":[{"name":"conflict","condition":"The stored revision of the tenant differs from the base revision of the delta; nothing is changed.","type":"store-error","kind":"conflict"},{"name":"invalid","condition":"The commit is malformed, or its events do not continue the tenant event sequence without a gap; nothing is changed.","type":"store-error","kind":"invalid"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error","kind":"internal"}],"exposure":"local","deployment":"shipped"},
-    {"id":"mutate-record","name":"Change a record of the tenant","ref":"CT-263","conformanceProbe":"{\"mutation\": {\"op\": \"delete\", \"object\": \"post\", \"id\": 1, \"expected_version\": 1}}","realisation":"derived","implementedBy":"runtime","bffRoute":"POST /api/records records","derivation":{"kind":"command","needs":"header-needs","load":"load-decision-snapshot","decide":"decide-mutation","commit":"commit-accepted","conflict":"conflict","insufficient":"insufficient-state","needRounds":32,"retries":8,"fault":"fault"},"auth":{"scheme":"session","tenantPolicies":true,"csrf":true,"origin":true,"requires":["content-write","self-record-write"],"description":"A principal whose policies permit the change; either capability suffices, and self-record-write reaches only the records its description names (D-6591); anonymous callers carry the request token (GWY-002)"},"idempotent":false,"timeoutMs":10000,"inputs":[{"name":"tenant","type":"tenant-id","description":"The tenant the host name serves, the context's."},{"name":"context","type":"context","description":"The caller's context, which the route builds from the session and the request (backend auth.rs Identity::context), not from the body."},{"name":"mutation","type":"mutation"}],"outputs":[{"name":"reply","type":"mutation-reply","optional":true,"description":"Present for every accepted mutation: each one creates, changes or deletes a record."}],"postconditions":["The generic records endpoint (backend ops.rs mutate): the mutation's fields are coerced by field type, the intent is decided by the kernel against what it needs and committed atomically, as execute-intent does, and the reply names the record, its new version (none after a delete), the revision, the event sequence and the checks passed.","Every publication write (create-article, update-article, delete-article, save-site-settings) is a facade lowered onto it."],"errors":[{"name":"unauthenticated","condition":"There is no session, or it has ended.","kind":"unauthenticated"},{"name":"refused","condition":"The request was refused; the body is the error reply, whose code says why: not_found for no site or no object type, invalid for a field that does not coerce, and for a kernel rejection error-code-of of its kind (a refused change to a record the caller cannot read answers as unknown-record).","type":"api-error","kind":"invalid"},{"name":"insufficient-state","condition":"The decision asked for more needs than needRounds allows, or for one it was already given.","type":"need","kind":"internal"},{"name":"conflict","condition":"Every commit lost its race to another one, retries times over; nothing is changed.","type":"store-error","kind":"conflict"},{"name":"invalid","condition":"The commit is malformed, or its events do not continue the tenant event sequence without a gap; nothing is changed.","type":"store-error","kind":"invalid"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error","kind":"internal"},{"name":"fault","condition":"An integer overflow in the decision (a revision, an event sequence, a version or a record id past its type); never in practice.","kind":"internal"},{"name":"tenant-mismatch","condition":"A tenant input names a tenant other than the one resolved from the host and session; the request is refused, recorded as an audit entry and raised as an alert to the platform operators (TEN-1140, THR-259).","type":"api-error","kind":"forbidden"},{"name":"forbidden","condition":"The request did not come from one of the site's own pages, or the request token is missing or stale.","type":"api-error","kind":"forbidden"}],"exposure":"public","tenantScope":"request","deployment":"shipped"},
-    {"id":"read-view","name":"Read a view of the tenant","ref":"CT-264","realisation":"derived","implementedBy":"runtime","bffRoute":"GET /api/view view","derivation":{"kind":"read","needs":"header-needs","load":"load-decision-snapshot","decide":"assemble-view","insufficient":"insufficient-state","needRounds":32,"fault":"fault"},"auth":{"scheme":"anonymous","justification":"Published views are for visitors; a session only widens what its policies let it read.","requires":["content-read"],"description":"Anyone; a session widens what its policies let it read"},"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"tenant","type":"tenant-id","description":"The tenant the host name serves, the context's."},{"name":"context","type":"context","description":"The caller's context, which the route builds from the session and the request (backend auth.rs Identity::context), not from the body."},{"name":"path","type":"string"},{"name":"request","type":"map<string, string>"}],"outputs":[{"name":"view","type":"view-data"}],"postconditions":["The generic view endpoint (backend ops.rs view): the view whose route matches the path, every section read from one snapshot through the kernel's read authorization, the rows and included records without another principal's authorship.","The browser receives the view projected (project-view) by the BFF, which adds the path and, until WG-4942, the publication template's theme and desk fields.","Every publication page read (read-front-page to read-lab-view) is a facade lowered onto it."],"errors":[{"name":"refused","condition":"The request was refused; the body is the error reply, whose code says why: not_found for no site or no object type, invalid for a field that does not coerce, and for a kernel rejection error-code-of of its kind (a refused change to a record the caller cannot read answers as unknown-record).","type":"api-error","kind":"invalid"},{"name":"insufficient-state","condition":"The decision asked for more needs than needRounds allows, or for one it was already given.","type":"need","kind":"internal"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error","kind":"internal"},{"name":"fault","condition":"An integer overflow in the route match (a revision, an event sequence, a version or a record id past its type); never in practice.","kind":"internal"},{"name":"tenant-mismatch","condition":"A tenant input names a tenant other than the one resolved from the host and session; the request is refused, recorded as an audit entry and raised as an alert to the platform operators (TEN-1140, THR-259).","type":"api-error","kind":"forbidden"}],"exposure":"public","tenantScope":"request","readOnly":true,"deployment":"shipped"},
+    {"id":"mutate-record","name":"Change a record of the tenant","ref":"CT-263","conformanceProbe":"{\"mutation\": {\"op\": \"delete\", \"object\": \"post\", \"id\": 1, \"expected_version\": 1}}","realisation":"derived","implementedBy":"runtime","bffRoute":"POST /api/records records","derivation":{"kind":"command","needs":"header-needs","load":"load-tenant","decide":"decide-mutation","commit":"commit-accepted","conflict":"conflict","insufficient":"insufficient-state","needRounds":32,"retries":8,"fault":"fault"},"auth":{"scheme":"session","tenantPolicies":true,"csrf":true,"origin":true,"requires":["content-write","self-record-write"],"description":"A principal whose policies permit the change; either capability suffices, and self-record-write reaches only the records its description names (D-6591); anonymous callers carry the request token (GWY-002)"},"idempotent":false,"timeoutMs":10000,"inputs":[{"name":"tenant","type":"tenant-id","description":"The tenant the host name serves, the context's."},{"name":"context","type":"context","description":"The caller's context, which the route builds from the session and the request (backend auth.rs Identity::context), not from the body."},{"name":"mutation","type":"mutation"}],"outputs":[{"name":"reply","type":"mutation-reply","optional":true,"description":"Present for every accepted mutation: each one creates, changes or deletes a record."}],"postconditions":["The generic records endpoint (backend ops.rs mutate): the mutation's fields are coerced by field type, the intent is decided by the kernel against what it needs and committed atomically, as execute-intent does, and the reply names the record, its new version (none after a delete), the revision, the event sequence and the checks passed.","Every publication write (create-article, update-article, delete-article, save-site-settings) is a facade lowered onto it."],"errors":[{"name":"unauthenticated","condition":"There is no session, or it has ended.","kind":"unauthenticated"},{"name":"refused","condition":"The request was refused; the body is the error reply, whose code says why: not_found for no site or no object type, invalid for a field that does not coerce, and for a kernel rejection error-code-of of its kind (a refused change to a record the caller cannot read answers as unknown-record).","type":"api-error","kind":"invalid"},{"name":"insufficient-state","condition":"The decision asked for more needs than needRounds allows, or for one it was already given.","type":"need","kind":"internal"},{"name":"conflict","condition":"Every commit lost its race to another one, retries times over; nothing is changed.","type":"store-error","kind":"conflict"},{"name":"invalid","condition":"The commit is malformed, or its events do not continue the tenant event sequence without a gap; nothing is changed.","type":"store-error","kind":"invalid"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error","kind":"internal"},{"name":"fault","condition":"An integer overflow in the decision (a revision, an event sequence, a version or a record id past its type); never in practice.","kind":"internal"},{"name":"tenant-mismatch","condition":"A tenant input names a tenant other than the one resolved from the host and session; the request is refused, recorded as an audit entry and raised as an alert to the platform operators (TEN-1140, THR-259).","type":"api-error","kind":"forbidden"},{"name":"forbidden","condition":"The request did not come from one of the site's own pages, or the request token is missing or stale.","type":"api-error","kind":"forbidden"}],"exposure":"public","tenantScope":"request","deployment":"shipped"},
+    {"id":"read-view","name":"Read a view of the tenant","ref":"CT-264","realisation":"derived","implementedBy":"runtime","bffRoute":"GET /api/view view","derivation":{"kind":"read","needs":"header-needs","load":"load-tenant","decide":"assemble-view","insufficient":"insufficient-state","needRounds":32,"fault":"fault"},"auth":{"scheme":"anonymous","justification":"Published views are for visitors; a session only widens what its policies let it read.","requires":["content-read"],"description":"Anyone; a session widens what its policies let it read"},"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"tenant","type":"tenant-id","description":"The tenant the host name serves, the context's."},{"name":"context","type":"context","description":"The caller's context, which the route builds from the session and the request (backend auth.rs Identity::context), not from the body."},{"name":"path","type":"string"},{"name":"request","type":"map<string, string>"}],"outputs":[{"name":"view","type":"view-data"}],"postconditions":["The generic view endpoint (backend ops.rs view): the view whose route matches the path, every section read from one snapshot through the kernel's read authorization, the rows and included records without another principal's authorship.","The browser receives the view projected (project-view) by the BFF, which adds the path and, until WG-4942, the publication template's theme and desk fields.","Every publication page read (read-front-page to read-lab-view) is a facade lowered onto it."],"errors":[{"name":"refused","condition":"The request was refused; the body is the error reply, whose code says why: not_found for no site or no object type, invalid for a field that does not coerce, and for a kernel rejection error-code-of of its kind (a refused change to a record the caller cannot read answers as unknown-record).","type":"api-error","kind":"invalid"},{"name":"insufficient-state","condition":"The decision asked for more needs than needRounds allows, or for one it was already given.","type":"need","kind":"internal"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error","kind":"unavailable"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error","kind":"internal"},{"name":"fault","condition":"An integer overflow in the route match (a revision, an event sequence, a version or a record id past its type); never in practice.","kind":"internal"},{"name":"tenant-mismatch","condition":"A tenant input names a tenant other than the one resolved from the host and session; the request is refused, recorded as an audit entry and raised as an alert to the platform operators (TEN-1140, THR-259).","type":"api-error","kind":"forbidden"}],"exposure":"public","tenantScope":"request","readOnly":true,"deployment":"shipped"},
     {"id":"issue-passkey-challenge","name":"Issue a passkey challenge","ref":"H-031","realisation":"hand","milestone":3,"implementedBy":"identity-service","auth":{"scheme":"anonymous","csrf":true,"origin":true,"justification":"A sign-in challenge is asked for before any session exists; a registration challenge additionally needs the session.","requires":["identity-sign-in"],"description":"Anyone for a sign-in, a signed-in principal for a registration"},"idempotent":false,"inputs":[],"outputs":[{"name":"challenge","type":"challenge-id"},{"name":"options","type":"bytes"}],"postconditions":["The challenge is kept by the identity service with the address it was requested at and, for a registration, the session that asked; it answers once and lapses (IDN-264).","A request that does not come from a host name, an address that WebAuthn can bind a passkey to, is refused."],"errors":[{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error","kind":"throttled"},{"name":"invalid","condition":"The site is not reached by a host name.","type":"api-error","kind":"invalid"},{"name":"unauthenticated","condition":"A registration was asked for without a valid session.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The request did not come from one of the site's own pages, or the request token is missing or stale.","type":"api-error","kind":"forbidden"}],"exposure":"public","tenantScope":"request","bffRoute":"POST /api/passkeys/challenge","deployment":"target"},
     {"id":"list-passkeys","name":"List the passkeys of the caller","ref":"H-032","realisation":"hand","milestone":3,"implementedBy":"identity-service","auth":{"scheme":"session","requires":["account-manage"],"description":"A signed-in principal"},"idempotent":true,"inputs":[],"outputs":[{"name":"credentials","type":"list<credential-id>"}],"postconditions":["Only the passkeys of the caller in this tenant are listed, with their names and times; no key material is."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"}],"exposure":"public","tenantScope":"request","readOnly":true,"bffRoute":"GET /api/passkeys","deployment":"target"},
     {"id":"remove-passkey","name":"Remove a passkey","ref":"H-033","realisation":"hand","milestone":3,"implementedBy":"identity-service","auth":{"scheme":"session","csrf":true,"origin":true,"stepUp":"15 min","requires":["account-manage"],"description":"A signed-in principal"},"idempotent":true,"inputs":[{"name":"credential","type":"credential-id"}],"outputs":[],"postconditions":["The credential signs no one in from then on."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"not-found","condition":"The caller has no such passkey in this tenant.","type":"api-error","kind":"not_found"},{"name":"step-up-required","condition":"The last authentication of the session is older than the step-up age, or the session now appears from another network context than the one that authenticated it, and the person has not authenticated again (D-6201, IDN-019). The call changes nothing.","type":"api-error","kind":"forbidden"},{"name":"forbidden","condition":"The request did not come from one of the site's own pages, or the request token is missing or stale.","type":"api-error","kind":"forbidden"}],"exposure":"public","tenantScope":"request","bffRoute":"POST /api/passkeys/remove","deployment":"target"},
@@ -9330,6 +9329,333 @@
         "point": "the removal of the automation, or the deletion of the tenant file"
       },
       "description": "Table automation_run_keys of a tenant file: the run keys an automation has started a run for (rec-automation-run-key, SCH-1536), so that a repeated key starts no run and writes a declined exception record."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
+      "id": "tbl-platform-settings",
+      "name": "Platform settings (control database)",
+      "scope": "platform",
+      "key": [
+        "setting"
+      ],
+      "fields": [
+        {
+          "name": "setting",
+          "type": "setting-id"
+        },
+        {
+          "name": "value",
+          "type": "json",
+          "optional": true,
+          "personal": "other",
+          "description": "The platform value as JSON text; null once removed."
+        },
+        {
+          "name": "revision",
+          "type": "u64",
+          "description": "Rises at every change and is never reused."
+        },
+        {
+          "name": "updated-at",
+          "type": "timestamp"
+        }
+      ],
+      "retention": "Until the platform override is removed; the revision stays with the definition (SET-030, SET-051).",
+      "erasure": {
+        "point": "the deletion of the control database"
+      },
+      "description": "Table platform_settings of the control database: the platform level of each setting (rec-setting-platform-value), the value, its revision and the time of its last change."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
+      "id": "tbl-setting-overrides",
+      "name": "Setting overrides (tenant file)",
+      "scope": "platform",
+      "key": [
+        "setting",
+        "level",
+        "subject"
+      ],
+      "fields": [
+        {
+          "name": "setting",
+          "type": "setting-id"
+        },
+        {
+          "name": "level",
+          "type": "setting-level"
+        },
+        {
+          "name": "subject",
+          "type": "string"
+        },
+        {
+          "name": "revision",
+          "type": "u64"
+        },
+        {
+          "name": "data",
+          "type": "json",
+          "personal": "other",
+          "description": "The override as canonical JSON: its value and who set it, and when."
+        }
+      ],
+      "retention": "Until the override is removed, with the team or the person it belongs to at the latest, and with the tenant (SET-022, SET-034).",
+      "erasure": {
+        "point": "the removal of the override, the deletion of its team, the erasure of the person it belongs to (PRV-353), or the deletion of the tenant file"
+      },
+      "description": "Table setting_overrides of a tenant file: the value a tenant, team or person gives a setting (rec-setting-override)."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
+      "id": "tbl-setting-revisions",
+      "name": "Setting revisions (tenant file)",
+      "scope": "platform",
+      "key": [
+        "setting"
+      ],
+      "fields": [
+        {
+          "name": "setting",
+          "type": "setting-id"
+        },
+        {
+          "name": "revision",
+          "type": "u64"
+        }
+      ],
+      "retention": "Until the setting is removed from the tenant schema and no override of it remains (SET-051).",
+      "erasure": {
+        "point": "the deletion of the tenant file"
+      },
+      "description": "Table setting_revisions of a tenant file: the revision counter of each setting of the tenant (rec-setting-revision)."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
+      "id": "tbl-segments",
+      "name": "Segments (tenant file)",
+      "scope": "platform",
+      "key": [
+        "id"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "segment-id"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "version",
+          "type": "u64"
+        },
+        {
+          "name": "member-count",
+          "type": "u64"
+        },
+        {
+          "name": "data",
+          "type": "json",
+          "personal": "other",
+          "description": "The definition as canonical JSON (rec-segment)."
+        }
+      ],
+      "retention": "Until removed by the tenant; every version is kept in the schema history. The rows of a segment go with it (SEG-026).",
+      "erasure": {
+        "point": "the deletion of the tenant file"
+      },
+      "description": "Table segments of a tenant file: the definition of each segment with its version and kept member count (rec-segment, SEG-001 to SEG-038)."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
+      "id": "tbl-segment-memberships",
+      "name": "Segment memberships (tenant file)",
+      "scope": "platform",
+      "key": [
+        "segment",
+        "principal"
+      ],
+      "fields": [
+        {
+          "name": "segment",
+          "type": "segment-id"
+        },
+        {
+          "name": "principal",
+          "type": "principal-id"
+        },
+        {
+          "name": "version",
+          "type": "u64"
+        },
+        {
+          "name": "since",
+          "type": "timestamp"
+        }
+      ],
+      "retention": "While the person is a member: removed when the person exits, when the segment is removed and when the person is erased.",
+      "erasure": {
+        "point": "the transaction that records the erasure of the principal (SEG-036)"
+      },
+      "description": "Table segment_memberships of a tenant file: the segment, the person, the version and the time of entry, and no field of the person (rec-segment-membership, SEG-034)."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
+      "id": "tbl-segment-wakes",
+      "name": "Segment wakes (tenant file)",
+      "scope": "platform",
+      "key": [
+        "segment",
+        "principal"
+      ],
+      "fields": [
+        {
+          "name": "segment",
+          "type": "segment-id"
+        },
+        {
+          "name": "principal",
+          "type": "principal-id"
+        },
+        {
+          "name": "wake-at",
+          "type": "timestamp"
+        }
+      ],
+      "retention": "While the value of an indexable time-dependent predicate for the person can still change; removed when it cannot, with the segment, and at the erasure of the person.",
+      "erasure": {
+        "point": "the transaction that records the erasure of the principal (SEG-036)"
+      },
+      "description": "Table segment_wakes of a tenant file: when a person must next be evaluated for an indexable time-dependent segment (rec-segment-wake)."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
+      "id": "tbl-segment-batches",
+      "name": "Segment batches (tenant file)",
+      "scope": "platform",
+      "key": [
+        "segment",
+        "scope"
+      ],
+      "fields": [
+        {
+          "name": "segment",
+          "type": "segment-id"
+        },
+        {
+          "name": "scope",
+          "type": "string"
+        },
+        {
+          "name": "data",
+          "type": "json",
+          "personal": "other",
+          "description": "The batch as canonical JSON: its version, cursor, reason, hop and time (rec-segment-batch)."
+        }
+      ],
+      "retention": "Until the batches of the version end or a newer version supersedes it.",
+      "erasure": {
+        "point": "the deletion of the tenant file"
+      },
+      "description": "Table segment_batches of a tenant file: the progress of the evaluation of a segment in a scope (rec-segment-batch)."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
+      "id": "tbl-segment-erased",
+      "name": "Segment erased persons (tenant file)",
+      "scope": "platform",
+      "key": [
+        "principal"
+      ],
+      "fields": [
+        {
+          "name": "principal",
+          "type": "principal-id"
+        }
+      ],
+      "retention": "For as long as the tenant exists: no later decision enters an erased person into a segment (SEG-037).",
+      "erasure": {
+        "point": "the deletion of the tenant file"
+      },
+      "description": "Table segment_erased of a tenant file: a person whose erasure removed them from every segment (rec-segment-erased, SEG-037)."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
+      "id": "tbl-segment-events",
+      "name": "Segment events (tenant file)",
+      "scope": "platform",
+      "key": [
+        "position"
+      ],
+      "fields": [
+        {
+          "name": "position",
+          "type": "u64",
+          "description": "The place of the event in the ordered log of the tenant."
+        },
+        {
+          "name": "data",
+          "type": "json",
+          "personal": "other",
+          "description": "The entry or exit event as canonical JSON (rec-segment-event)."
+        },
+        {
+          "name": "published",
+          "type": "bool"
+        }
+      ],
+      "retention": "Until the job worker has handed the event on and the retention of the event log has passed.",
+      "erasure": {
+        "point": "the deletion of the tenant file"
+      },
+      "description": "Table segment_events of a tenant file: the entry and exit events, written in the transaction that changes the membership, that the job worker reads as its outbox (rec-segment-event, d-7280)."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
+      "id": "tbl-object-revisions",
+      "name": "Object revisions (tenant file)",
+      "scope": "platform",
+      "key": [
+        "object"
+      ],
+      "fields": [
+        {
+          "name": "object",
+          "type": "object-type-id",
+          "description": "The object type; the empty string counts toward every type."
+        },
+        {
+          "name": "revision",
+          "type": "u64"
+        }
+      ],
+      "retention": "Until the tenant file is deleted: the counter only rises.",
+      "erasure": {
+        "point": "the deletion of the tenant file"
+      },
+      "description": "Table object_revisions of a tenant file: the change counter of each object type, raised in the commit that writes or deletes a record of the type."
     },
     {
       "id": "rec-notification-digest",
