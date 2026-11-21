@@ -1,13 +1,13 @@
 {
   // Refused: an automation names a step kind and a trigger names an event that are not variants of
   // the platform's catalogue, automation-step and trigger-event (layer.outside-catalogue, INT-1522).
-  "product": { "id": "badge-milestones", "name": "Badge milestones", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "product": { "id": "ledger-trigger", "name": "Badge milestones", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
   "triggers": [
-    { "id": "badge_milestones__on_open", "on": { "EmailOpened": { "template": "badge_milestones__silver_mail" } }, "automation": "badge_milestones__script" }
+    { "id": "ledger_trigger__on_open", "on": { "EmailOpened": { "template": "ledger_trigger__crossing_mail" } }, "automation": "ledger_trigger__script" }
   ],
   "automations": [
     {
-      "id": "badge_milestones__script",
+      "id": "ledger_trigger__script",
       "label": "Runs a script",
       "run-as": { "roles": [] },
       "start": "run",

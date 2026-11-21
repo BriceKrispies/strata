@@ -1,12 +1,12 @@
-//! The reference product badge-milestones, end to end (WG-5008): the bundle that specc writes from
-//! `badge-milestones.jsonc` is installed into a tenant, points are posted to a person's ledger
-//! account across the threshold, the worker runs, and the award record exists exactly once, read
-//! through the API as that person. A second crossing starts no second run. An operation awards a
-//! badge by hand, to the holders of the awarder role only, and a person reads their own awards and
-//! no one else's. Real sockets, the in-memory store, the worker driven by `worker::tick`.
+//! The ledger-trigger fixture product, end to end (WG-5008, WG-5364): the bundle that specc writes from
+//! `ledger-trigger.jsonc` is installed into a tenant, points are posted to a person's ledger
+//! account across the threshold, the worker runs, and the crossing record exists exactly once, read
+//! through the API as that person. A second crossing starts no second run, and a person reads their
+//! own crossings and no one else's. Real sockets, the in-memory store, the worker driven by
+//! `worker::tick`.
 //!
-//! Every step of the award runs: the award record, the inbox notice (create-notice, once for the
-//! person), the mail (send-mail) and then the wait of seven days, where the run stays (Waiting). A
+//! Every step of the automation runs: the crossing record, the inbox notice (create-notice, once for
+//! the person), the mail (send-mail) and then the wait of seven days, where the run stays (Waiting). A
 //! person is told in their own inbox and in no one else's, and a second crossing starts no second
 //! run and so makes no second notice.
 
@@ -37,15 +37,15 @@ const TOKEN: &str = "test-service-token-0123456789abcdef";
 const SOURCE: &str = "203.0.113.7";
 const SITE: &str = "fieldnotes";
 
-/// The bundle of `badge-milestones` as specc writes it (the golden file of its tests).
-const BADGE_MILESTONES: &str = include_str!(
-    "../../spec-compiler/tests/fixtures/products/expected/badge-milestones.bundle.json"
+/// The bundle of `ledger-trigger` as specc writes it (the golden file of its tests).
+const LEDGER_TRIGGER: &str = include_str!(
+    "../../spec-compiler/tests/fixtures/products/expected/ledger-trigger.bundle.json"
 );
 
-const UNIT: &str = "badge_milestones__points";
+const UNIT: &str = "ledger_trigger__points";
 
-/// The steps of the automation badge_milestones__silver that run before its wait of seven days.
-const BEFORE_THE_WAIT: [&str; 3] = ["award", "notify", "mail"];
+/// The steps of the automation ledger_trigger__record_crossing that run before its wait of seven days.
+const BEFORE_THE_WAIT: [&str; 3] = ["record", "notify", "mail"];
 
 fn config(addr: std::net::SocketAddr) -> Config {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -111,8 +111,8 @@ fn tenant() -> TenantId {
     TenantId::new(SITE).unwrap()
 }
 
-fn silver() -> WorkflowId {
-    WorkflowId::new("badge_milestones__silver").unwrap()
+fn automation() -> WorkflowId {
+    WorkflowId::new("ledger_trigger__record_crossing").unwrap()
 }
 
 impl Backend {
@@ -129,7 +129,7 @@ impl Backend {
             .header(HEADER_SERVICE, TOKEN)
             .header(HEADER_SITE, SITE)
             .header(HEADER_SOURCE, SOURCE)
-            .header(HEADER_CORRELATION, "t-badge-milestones")
+            .header(HEADER_CORRELATION, "t-ledger-trigger")
             .json(&body);
         if let Some(token) = session {
             request = request.header(HEADER_SESSION, token);
@@ -175,25 +175,25 @@ impl Backend {
         reply
     }
 
-    /// The badges the reader sees on the view of the product, as `(person, badge)` pairs.
-    async fn badges(&self, session: &str) -> Vec<(String, String)> {
+    /// The crossings the reader sees on the view of the product, as `(person, threshold)` pairs.
+    async fn crossings(&self, session: &str) -> Vec<(String, i64)> {
         let (status, view) = self
             .call(
                 Some(session),
                 "/internal/view",
-                json!({ "path": "/badges" }),
+                json!({ "path": "/crossings" }),
                 None,
             )
             .await;
         assert_eq!(status, 200, "{view}");
-        view["sections"]["awards"]["rows"]
+        view["sections"]["crossings"]["rows"]
             .as_array()
             .unwrap()
             .iter()
             .map(|row| {
                 (
                     row["fields"]["person"]["Str"].as_str().unwrap().to_string(),
-                    row["fields"]["badge"]["Str"].as_str().unwrap().to_string(),
+                    row["fields"]["threshold"]["Int"].as_i64().unwrap(),
                 )
             })
             .collect()
@@ -226,7 +226,7 @@ impl Backend {
             worker::tick(&self.app, "t-worker", &config, &|| Timestamp(now_ms()));
             let runs = self
                 .store
-                .automation_runs(&tenant(), Some(&silver()), None, None, 50)
+                .automation_runs(&tenant(), Some(&automation()), None, None, 50)
                 .unwrap();
             if done(&runs) {
                 return runs;
@@ -275,29 +275,33 @@ impl Backend {
             .unwrap();
     }
 
-    fn silver_start_jobs(&self) -> usize {
+    fn start_jobs(&self) -> usize {
         self.store
             .jobs_list(&tenant(), None, 500)
             .unwrap()
             .iter()
-            .filter(|job| matches!(&job.work, JobWork::StartRun { automation, .. } if *automation == silver()))
+            .filter(|job| matches!(&job.work, JobWork::StartRun { automation, .. } if *automation == automation()))
             .count()
     }
 
-    /// The awards as the application reads them: through its store, which opens the personal
+    /// The crossings as the application reads them: through its store, which opens the personal
     /// fields sealed under their subject's key (the raw store holds them sealed).
-    fn awards(&self) -> Vec<(String, String)> {
+    fn recorded(&self) -> Vec<(String, i64)> {
         let state = self.app.store.load_complete(&tenant()).unwrap();
         let tenant = state.tenant.expect("the tenant exists");
         tenant
-            .records_of(&strata_kernel::ObjectTypeId::new("badge_milestones__award").unwrap())
+            .records_of(&strata_kernel::ObjectTypeId::new("ledger_trigger__crossing").unwrap())
             .map(|record| {
-                let text =
-                    |field: &str| match record.get(&strata_kernel::FieldId::new(field).unwrap()) {
-                        strata_kernel::Value::Str(text) => text.clone(),
-                        other => panic!("{field}: {other:?}"),
-                    };
-                (text("person"), text("badge"))
+                let field = |field: &str| record.get(&strata_kernel::FieldId::new(field).unwrap());
+                let person = match field("person") {
+                    strata_kernel::Value::Str(text) => text.clone(),
+                    other => panic!("person: {other:?}"),
+                };
+                let threshold = match field("threshold") {
+                    strata_kernel::Value::Int(number) => *number,
+                    other => panic!("threshold: {other:?}"),
+                };
+                (person, threshold)
             })
             .collect()
     }
@@ -363,20 +367,20 @@ fn assert_waiting_after_the_mail(run: &RunRecord, steps: &[StepRecord]) {
 // Verifies: INT-2902
 // Verifies: WFL-2901
 #[tokio::test]
-async fn points_that_cross_the_threshold_award_the_badge_once() {
+async fn points_that_cross_the_threshold_record_the_crossing_once() {
     let backend = start().await;
     give_the_member_role(&backend, &["mirela", "tomasz"]);
     let owner = backend.login("admin").await;
 
     // The owner installs the product from its bundle: one schema change, with the trigger, the
     // automation, the record type, the ledger unit and the templates it owns.
-    let bundle: Json = serde_json::from_str(BADGE_MILESTONES).unwrap();
+    let bundle: Json = serde_json::from_str(LEDGER_TRIGGER).unwrap();
     let (status, installed) = backend
         .call(
             Some(&owner),
             "/internal/products/install",
             json!({ "bundle": bundle }),
-            Some("install-badges"),
+            Some("install-crossings"),
         )
         .await;
     assert_eq!(status, 200, "{installed}");
@@ -385,13 +389,13 @@ async fn points_that_cross_the_threshold_award_the_badge_once() {
     // Sessions are made once the roles are held.
     let mirela = backend.login("mirela").await;
     let tomasz = backend.login("tomasz").await;
-    assert!(backend.badges(&mirela).await.is_empty());
+    assert!(backend.crossings(&mirela).await.is_empty());
     assert!(backend.notices(&mirela).await.is_empty());
 
-    // 300 points are below the threshold: no run, no award.
+    // 300 points are below the threshold: no run, no crossing.
     backend.post_points(&owner, "user:mirela", 300, "p1").await;
-    assert_eq!(backend.silver_start_jobs(), 0);
-    assert!(backend.awards().is_empty());
+    assert_eq!(backend.start_jobs(), 0);
+    assert!(backend.recorded().is_empty());
 
     // 250 more take the balance from 300 to 550: it crosses 500, and one run starts.
     backend.post_points(&owner, "user:mirela", 250, "p2").await;
@@ -399,7 +403,7 @@ async fn points_that_cross_the_threshold_award_the_badge_once() {
         .work_until(|runs| runs.len() == 1 && runs[0].state != RunState::Running)
         .await;
     let run = &runs[0];
-    assert_eq!(run.automation, silver());
+    assert_eq!(run.automation, automation());
     assert_eq!(
         run.params["owner"],
         strata_kernel::Value::Str("user:mirela".into())
@@ -410,32 +414,32 @@ async fn points_that_cross_the_threshold_award_the_badge_once() {
         .store
         .automation_steps(&tenant(), &run.run, None, 100)
         .unwrap();
-    assert_eq!(steps[0].step.as_str(), "award");
+    assert_eq!(steps[0].step.as_str(), "record");
     assert_eq!(steps[0].state, StepState::Completed);
     assert_waiting_after_the_mail(run, &steps);
 
-    // The award exists, once, and the person reads it through the API; another person reads none.
+    // The crossing is recorded, once, and the person reads it through the API; another person reads none.
     assert_eq!(
-        backend.awards(),
-        vec![("user:mirela".to_string(), "silver".to_string())]
+        backend.recorded(),
+        vec![("user:mirela".to_string(), 500)]
     );
     assert_eq!(
-        backend.badges(&mirela).await,
-        vec![("user:mirela".to_string(), "silver".to_string())]
+        backend.crossings(&mirela).await,
+        vec![("user:mirela".to_string(), 500)]
     );
-    assert!(backend.badges(&tomasz).await.is_empty());
+    assert!(backend.crossings(&tomasz).await.is_empty());
     // The person is told in their own inbox, once, and nobody else is (CT-183).
     assert_eq!(
         backend.notices(&mirela).await,
         vec![(
-            "badge_milestones__silver_notice".to_string(),
+            "ledger_trigger__crossing_notice".to_string(),
             "Your points reached 500.".to_string()
         )]
     );
     assert!(backend.notices(&tomasz).await.is_empty());
 
     // The balance falls to 450 and crosses 500 again: the trigger fires again, and the run key,
-    // which is the person, makes it the same run: no second job, no second award (SCH-1536).
+    // which is the person, makes it the same run: no second job, no second crossing (SCH-1536).
     backend.post_points(&owner, "user:mirela", -100, "p3").await;
     backend.post_points(&owner, "user:mirela", 100, "p4").await;
     // The worker keeps the key it started a run for, so the repeated key starts nothing and
@@ -444,11 +448,11 @@ async fn points_that_cross_the_threshold_award_the_badge_once() {
     assert_eq!(declined, 1);
     let runs = backend.work_until(|runs| runs.len() == 1).await;
     assert_eq!(runs.len(), 1);
-    assert_eq!(backend.awards().len(), 1);
-    assert_eq!(backend.badges(&mirela).await.len(), 1);
+    assert_eq!(backend.recorded().len(), 1);
+    assert_eq!(backend.crossings(&mirela).await.len(), 1);
     assert_eq!(backend.notices(&mirela).await.len(), 1, "no second notice");
 
-    // Another person's crossing is another run and another award.
+    // Another person's crossing is another run and another crossing.
     backend.post_points(&owner, "user:tomasz", 700, "p5").await;
     let runs = backend
         .work_until(|runs| runs.len() == 2 && runs.iter().all(|r| r.state != RunState::Running))
@@ -456,10 +460,10 @@ async fn points_that_cross_the_threshold_award_the_badge_once() {
     assert_eq!(runs.len(), 2);
     assert_eq!(backend.notices(&tomasz).await.len(), 1);
     assert_eq!(backend.notices(&mirela).await.len(), 1);
-    assert_eq!(backend.awards().len(), 2);
+    assert_eq!(backend.recorded().len(), 2);
     assert_eq!(
-        backend.badges(&tomasz).await,
-        vec![("user:tomasz".to_string(), "silver".to_string())]
+        backend.crossings(&tomasz).await,
+        vec![("user:tomasz".to_string(), 500)]
     );
-    assert_eq!(backend.badges(&mirela).await.len(), 1);
+    assert_eq!(backend.crossings(&mirela).await.len(), 1);
 }

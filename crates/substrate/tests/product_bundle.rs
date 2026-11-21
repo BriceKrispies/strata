@@ -235,8 +235,8 @@ fn owned(record: &InstalledRecord) -> Vec<(String, String)> {
 }
 
 // The bundles specc writes from the fixture products (tests/bundle.rs of the spec-compiler).
-const BADGE_MILESTONES: &str = include_str!(
-    "../../spec-compiler/tests/fixtures/products/expected/badge-milestones.bundle.json"
+const LEDGER_TRIGGER: &str = include_str!(
+    "../../spec-compiler/tests/fixtures/products/expected/ledger-trigger.bundle.json"
 );
 
 // ---- what a product holds beyond its record types (WG-5076, WG-5084, WG-5103) ----------------------
@@ -329,19 +329,19 @@ fn installed(world: &mut World, doc: &Json) -> InstalledRecord {
 }
 
 /// The product that reacts to the ledger: its object type, templates, trigger and automation.
-fn badge_milestones() -> Json {
-    serde_json::from_str(BADGE_MILESTONES).unwrap()
+fn ledger_trigger() -> Json {
+    serde_json::from_str(LEDGER_TRIGGER).unwrap()
 }
 
 // Verifies: INT-1921
 #[test]
-fn badge_milestones_installs_with_its_templates_its_trigger_and_its_automation() {
+fn ledger_trigger_installs_with_its_templates_its_trigger_and_its_automation() {
     let mut world = world_with_member();
-    let record = installed(&mut world, &badge_milestones());
+    let record = installed(&mut world, &ledger_trigger());
     let schema = schema_of(&world);
     assert!(schema
         .objects
-        .contains_key(&object_id("badge_milestones__award")));
+        .contains_key(&object_id("ledger_trigger__crossing")));
     assert_eq!(schema.triggers.as_ref().map(|t| t.len()), Some(1));
     assert_eq!(schema.automations.as_ref().map(|t| t.len()), Some(1));
     let templates: Vec<String> = strata_kernel::templates::list(&schema)
@@ -351,9 +351,8 @@ fn badge_milestones_installs_with_its_templates_its_trigger_and_its_automation()
     assert_eq!(
         templates,
         vec![
-            "badge_milestones__silver_follow_up",
-            "badge_milestones__silver_mail",
-            "badge_milestones__silver_notice"
+            "ledger_trigger__crossing_mail",
+            "ledger_trigger__crossing_notice"
         ]
     );
     // The record names what the product owns, templates included, and the schema holds it.
@@ -370,7 +369,7 @@ fn badge_milestones_installs_with_its_templates_its_trigger_and_its_automation()
         assert!(kinds.contains(&kind), "{kind}: {kinds:?}");
     }
     assert_eq!(
-        InstalledRecord::of(&schema, "badge-milestones"),
+        InstalledRecord::of(&schema, "ledger-trigger"),
         Some(record)
     );
 }

@@ -1554,7 +1554,7 @@ mod tests {
 
     #[test]
     fn a_namespace_is_the_product_id_with_underscores_and_two_underscores() {
-        assert_eq!(namespace_of("badge-milestones"), "badge_milestones__");
+        assert_eq!(namespace_of("ledger-trigger"), "ledger_trigger__");
         assert_eq!(namespace_of("badges"), "badges__");
     }
 

@@ -12,7 +12,7 @@
 //!
 //! - The typed sections (objects, policies, queries, views, workflows, segments, settings, ledger
 //!   units, pools and limits, mail and notice templates, tokens, triggers, automations, operations)
-//!   hold values of platform types; `badge-milestones.jsonc` and `promotions.jsonc` are complete products (they declare
+//!   hold values of platform types; `ledger-trigger.jsonc` and `promotions.jsonc` are complete products (they declare
 //!   everything they name, in their own namespace) that specc and Exegra both accept.
 //!
 //! The Exegra checks need the Exegra CLI (see `support`).
@@ -381,7 +381,7 @@ fn a_product_that_keeps_a_mutable_balance_outside_the_ledger_is_refused() {
     // The products that count in the ledger, and the one that updates a record from its inputs, pass.
     assert!(load_with(&[
         product("promotions.jsonc"),
-        product("badge-milestones.jsonc")
+        product("ledger-trigger.jsonc")
     ])
     .is_ok());
 }
@@ -517,7 +517,7 @@ fn exegra_accepts_the_products_and_reports_the_platform_hash_unchanged() {
 
     let specs = exegra_specs(
         "exegra-complete",
-        &["badge-milestones.jsonc", "promotions.jsonc"],
+        &["ledger-trigger.jsonc", "promotions.jsonc"],
     );
     let layered = exegra_validate(&cli, &specs, "layered");
     assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
@@ -529,7 +529,7 @@ fn exegra_accepts_the_products_and_reports_the_platform_hash_unchanged() {
         .flatten()
         .filter_map(|p| p["product"].as_str())
         .collect();
-    assert_eq!(products, vec!["badge-milestones", "promotions"]);
+    assert_eq!(products, vec!["ledger-trigger", "promotions"]);
 }
 
 /// Exegra refuses a few of the refused products with the same rule as specc: one from each kind of
