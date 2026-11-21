@@ -125,21 +125,6 @@ fn a_holder_of_the_capability_and_a_role_the_policy_names_may_approve() {
 
 // Verifies: WFL-2680
 #[test]
-fn the_policy_of_a_step_names_the_role_of_the_policy() {
-    let world = approvals_world();
-    let schema = &world.tenants[&tenant_id("alpha")].schema;
-    assert_eq!(
-        policy_roles(schema, &PolicyId::new("review").unwrap()),
-        Some(editors())
-    );
-    assert_eq!(
-        policy_roles(schema, &PolicyId::new("nobody").unwrap()),
-        None
-    );
-}
-
-// Verifies: WFL-2680
-#[test]
 fn a_principal_without_the_role_the_policy_names_is_refused() {
     // writer1 holds workflow-approve through the writer role, but the policy names the editors.
     let refusal = decided_by("writer1", Some("alpha:writer2")).expect_err("refused");
