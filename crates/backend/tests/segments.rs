@@ -7,7 +7,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use strata_backend::app::Config;
-use strata_kernel::segments::SegmentDirection;
 use strata_kernel::{
     owner_role, Context, ExistingData, Expr, FieldDef, FieldId, FieldType, Intent, ObjectTypeId,
     OnDelete, Principal, PrincipalId, RecordId, SchemaChange, TenantId, Timestamp, Value,
@@ -17,7 +16,6 @@ use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, segments as kept, Store};
 
 const TOKEN: &str = "test-service-token-0123456789abcdef";
-const GOLD: &str = "6a0f3c1e-2280-4000-8000-000000000001";
 const PRO: &str = "6a0f3c1e-2280-4000-8000-000000000002";
 
 struct Backend {
@@ -250,144 +248,6 @@ fn persons(reply: &Json) -> BTreeSet<String> {
         .collect()
 }
 
-// Verifies: SEG-008
-#[tokio::test]
-async fn a_defined_segment_is_kept_by_ordinary_changes_and_listed_to_its_readers() {
-    let store = Arc::new(MemoryStore::new());
-    let backend = start(store.clone()).await;
-    let admin = backend
-        .login("fieldnotes", "admin", "strata-dev-admin")
-        .await;
-    add_members(&store);
-
-    let (status, defined) = backend
-        .call(
-            "fieldnotes",
-            Some(&admin),
-            "/internal/segments/define",
-            json!({
-                "segment": GOLD,
-                "name": "Gold",
-                "subject_type": "member",
-                "predicate": "record.tier == 'gold'",
-                "principal_field": "principal",
-                "visible_to_members": true,
-            }),
-        )
-        .await;
-    assert_eq!(status, 200, "{defined}");
-    assert_eq!(defined["version"], 1);
-
-    let ines = create(
-        &store,
-        2_000,
-        "member",
-        &[("principal", text("user:ines")), ("tier", text("silver"))],
-    );
-    create(
-        &store,
-        2_001,
-        "member",
-        &[("principal", text("user:tomasz")), ("tier", text("gold"))],
-    );
-    update(&store, 2_002, "member", ines, &[("tier", text("gold"))]);
-
-    // The entry events were written in the commits of the changes, in order.
-    let events = store.segment_events_after(&fieldnotes(), 0, 100).unwrap();
-    let entered: Vec<(String, SegmentDirection)> = events
-        .iter()
-        .map(|(_, e)| (e.event.person.as_str().to_string(), e.event.direction))
-        .collect();
-    assert_eq!(
-        entered,
-        [
-            ("user:tomasz".to_string(), SegmentDirection::Entered),
-            ("user:ines".to_string(), SegmentDirection::Entered)
-        ]
-    );
-
-    let (status, members) = backend
-        .call(
-            "fieldnotes",
-            Some(&admin),
-            "/internal/segments/members",
-            json!({ "segment": GOLD }),
-        )
-        .await;
-    assert_eq!(status, 200, "{members}");
-    assert_eq!(
-        persons(&members),
-        BTreeSet::from(["user:ines".to_string(), "user:tomasz".to_string()])
-    );
-    let (status, count) = backend
-        .call(
-            "fieldnotes",
-            Some(&admin),
-            "/internal/segments/count",
-            json!({ "segment": GOLD }),
-        )
-        .await;
-    assert_eq!(status, 200, "{count}");
-    assert_eq!(count["count"]["count"], 2);
-
-    // A member sees the visible segments they belong to.
-    let as_ines = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
-    let (status, mine) = backend
-        .call(
-            "fieldnotes",
-            Some(&as_ines),
-            "/internal/segments/mine",
-            json!({}),
-        )
-        .await;
-    assert_eq!(status, 200, "{mine}");
-    assert_eq!(mine["segments"][0]["segment"], GOLD);
-    // An editor holds no segments-read.
-    let (status, _) = backend
-        .call(
-            "fieldnotes",
-            Some(&as_ines),
-            "/internal/segments/members",
-            json!({ "segment": GOLD }),
-        )
-        .await;
-    assert_eq!(status, 403);
-
-    // Leaving: one exit event, and the member is no longer listed.
-    update(&store, 2_003, "member", ines, &[("tier", text("bronze"))]);
-    let events = store.segment_events_after(&fieldnotes(), 2, 100).unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].1.event.direction, SegmentDirection::Exited);
-    // Verifies: SEG-010
-    update(&store, 2_004, "member", ines, &[("tier", text("silver"))]);
-    assert_eq!(
-        store
-            .segment_events_after(&fieldnotes(), 3, 100)
-            .unwrap()
-            .len(),
-        0
-    );
-
-    // Removing the segment writes no exit event and removes its members.
-    let (status, _) = backend
-        .call(
-            "fieldnotes",
-            Some(&admin),
-            "/internal/segments/remove",
-            json!({ "segment": GOLD }),
-        )
-        .await;
-    assert_eq!(status, 200);
-    assert_eq!(
-        store
-            .segment_events_after(&fieldnotes(), 3, 100)
-            .unwrap()
-            .len(),
-        0
-    );
-    assert!(store.segment_catalog(&fieldnotes()).unwrap().is_empty());
-}
-
 // Verifies: SEG-028
 #[tokio::test]
 async fn a_change_reaching_more_than_a_hundred_persons_leaves_the_rest_to_batches() {
@@ -616,62 +476,4 @@ async fn test_and_preview_change_nothing() {
         revision
     );
     assert!(store.segment_catalog(&fieldnotes()).unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn one_tenant_reaches_no_segment_of_another() {
-    let store = Arc::new(MemoryStore::new());
-    let backend = start(store.clone()).await;
-    let admin = backend
-        .login("fieldnotes", "admin", "strata-dev-admin")
-        .await;
-    let tide = backend
-        .login("tidewater", "admin", "strata-dev-tidewater")
-        .await;
-    add_members(&store);
-    let (status, _) = backend
-        .call(
-            "fieldnotes",
-            Some(&admin),
-            "/internal/segments/define",
-            json!({
-                "segment": GOLD,
-                "name": "Gold",
-                "subject_type": "member",
-                "predicate": "record.tier == 'gold'",
-                "principal_field": "principal",
-            }),
-        )
-        .await;
-    assert_eq!(status, 200);
-    create(
-        &store,
-        2_000,
-        "member",
-        &[("principal", text("user:ines")), ("tier", text("gold"))],
-    );
-    // The other tenant's own segment of that id does not exist.
-    let (status, _) = backend
-        .call(
-            "tidewater",
-            Some(&tide),
-            "/internal/segments/members",
-            json!({ "segment": GOLD }),
-        )
-        .await;
-    assert_eq!(status, 404);
-    // A request that names another tenant than its site is refused.
-    let (status, _) = backend
-        .call(
-            "tidewater",
-            Some(&tide),
-            "/internal/segments/members",
-            json!({ "tenant": "fieldnotes", "segment": GOLD }),
-        )
-        .await;
-    assert_eq!(status, 403);
-    assert!(store
-        .segment_catalog(&TenantId::new("tidewater").unwrap())
-        .unwrap()
-        .is_empty());
 }

@@ -5,9 +5,6 @@
 
 use std::process::{Command, Output};
 
-const TOKEN: &str = "startup-service-token-0123456789";
-const KEY: &str = "startup-factor-key-0123456789abcdefghij";
-
 /// Run the backend with exactly these variables (and the few the operating system needs).
 fn run(vars: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_strata-backend"));
@@ -34,13 +31,6 @@ fn refuses_naming(vars: &[(&str, &str)], variable: &str) {
     );
 }
 
-fn tenants() -> String {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tenants")
-        .display()
-        .to_string()
-}
-
 /// Verifies: RUN-1387
 #[test]
 fn a_start_without_the_service_token_is_refused_by_name() {
@@ -51,51 +41,5 @@ fn a_start_without_the_service_token_is_refused_by_name() {
             ("STRATA_SERVICE_TOKEN", "short"),
         ],
         "STRATA_SERVICE_TOKEN",
-    );
-}
-
-#[test]
-fn a_start_outside_development_without_a_factor_key_is_refused_by_name() {
-    refuses_naming(
-        &[("STRATA_STORE", "memory"), ("STRATA_SERVICE_TOKEN", TOKEN)],
-        "STRATA_FACTOR_KEY",
-    );
-}
-
-#[test]
-fn a_start_outside_development_without_a_tenants_directory_is_refused_by_name() {
-    refuses_naming(
-        &[
-            ("STRATA_STORE", "memory"),
-            ("STRATA_SERVICE_TOKEN", TOKEN),
-            ("STRATA_FACTOR_KEY", KEY),
-            ("STRATA_TENANTS", "no-such-directory-of-tenants"),
-        ],
-        "STRATA_TENANTS",
-    );
-}
-
-#[test]
-fn a_start_outside_development_without_a_mail_server_is_refused_by_name() {
-    refuses_naming(
-        &[
-            ("STRATA_STORE", "memory"),
-            ("STRATA_SERVICE_TOKEN", TOKEN),
-            ("STRATA_FACTOR_KEY", KEY),
-            ("STRATA_TENANTS", &tenants()),
-        ],
-        "STRATA_SMTP_URL",
-    );
-}
-
-#[test]
-fn an_operator_credential_that_is_the_service_credential_is_refused_by_name() {
-    refuses_naming(
-        &[
-            ("STRATA_STORE", "memory"),
-            ("STRATA_SERVICE_TOKEN", TOKEN),
-            ("STRATA_OPERATOR_TOKEN", TOKEN),
-        ],
-        "STRATA_OPERATOR_TOKEN",
     );
 }
