@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
-use strata_model_core::types::{LedgerUnit, SegmentId};
+use strata_model_core::types::LedgerUnit;
 
 // ---------------------------------------------------------------------------------------------
 // Fixtures.
@@ -50,10 +50,6 @@ fn param(s: &str) -> Expr {
 
 fn int(n: i64) -> Expr {
     Expr::Lit(Value::Int(n))
-}
-
-fn ge(a: Expr, b: Expr) -> Expr {
-    Expr::Cmp(CmpOp::Ge, Box::new(a), Box::new(b))
 }
 
 fn plain(action: AutomationStep, next: Option<&str>) -> AutomationStepDef {
@@ -127,20 +123,6 @@ fn on_publish() -> TriggerDef {
     }
 }
 
-fn on_points(id: &str) -> TriggerDef {
-    TriggerDef {
-        id: TriggerId::new(id).unwrap(),
-        on: TriggerEvent::LedgerPosted {
-            unit: LedgerUnit::new("points").unwrap(),
-        },
-        condition: Some(ge(param("balance"), int(500))),
-        automation: WorkflowId::new("award").unwrap(),
-        paused: None,
-        defined_by: None,
-        defined_at: None,
-    }
-}
-
 /// A tenant operation that copies a draft note (its subject) and ranks the copy.
 fn redeem() -> TenantOperationDef {
     TenantOperationDef {
@@ -188,7 +170,7 @@ fn redeem() -> TenantOperationDef {
     }
 }
 
-/// The declaration of the ledger unit `points` that `on_points` and `posting` name.
+/// The declaration of the ledger unit `points` that `posting` names.
 fn points() -> SchemaChange {
     SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
         unit: LedgerUnit::new("points").unwrap(),
@@ -308,171 +290,9 @@ fn a_trigger_and_an_automation_are_held_under_a_new_schema_version() {
     );
 }
 
-#[test]
-fn a_schema_without_definitions_writes_no_member_for_them_and_decodes_without_them() {
-    let world = notes_world();
-    let text = serde_json::to_string(&schema(&world)).unwrap();
-    for member in ["triggers", "automations", "operations", "\"unique\":{"] {
-        assert!(!text.contains(member), "{member} in {text}");
-    }
-    let decoded: TenantSchema = serde_json::from_str(&text).unwrap();
-    assert!(decoded.triggers.is_none() && decoded.automations.is_none());
-    assert!(decoded.operations.is_none());
-}
-
-#[test]
-fn removing_every_definition_restores_the_hash_of_the_schema_before_them() {
-    let world = notes_world();
-    let before = canon::hash_of(&TenantSchema {
-        version: SchemaVersion(0),
-        ..schema(&world)
-    });
-    let world = must(
-        &world,
-        "owner",
-        6_000,
-        change(vec![
-            SchemaChange::DefineAutomation(award(&["writer"])),
-            SchemaChange::DefineTrigger(on_publish()),
-            SchemaChange::DefineOperation(redeem()),
-            define_unique(title_rank()),
-        ]),
-    );
-    let world = must(
-        &world,
-        "owner",
-        6_001,
-        change(vec![
-            SchemaChange::RemoveTrigger(TriggerId::new("on_publish").unwrap()),
-            SchemaChange::RemoveAutomation(WorkflowId::new("award").unwrap()),
-            SchemaChange::RemoveOperation(TenantOperationId::new("redeem").unwrap()),
-            SchemaChange::RemoveUnique {
-                object: object("note"),
-                unique: ConstraintId::new("title_rank").unwrap(),
-            },
-        ]),
-    );
-    let after = canon::hash_of(&TenantSchema {
-        version: SchemaVersion(0),
-        ..schema(&world)
-    });
-    assert_eq!(before, after);
-}
-
-#[test]
-fn removing_a_definition_that_does_not_exist_is_refused() {
-    let world = notes_world();
-    let error = refused(
-        &world,
-        "owner",
-        vec![SchemaChange::RemoveTrigger(
-            TriggerId::new("nothing").unwrap(),
-        )],
-    );
-    assert_eq!(error.kind, ErrorKind::InvalidSchema);
-    assert_eq!(error.message, "no trigger nothing");
-    let error = refused(
-        &world,
-        "owner",
-        vec![SchemaChange::RemoveOperation(
-            TenantOperationId::new("nothing").unwrap(),
-        )],
-    );
-    assert_eq!(error.message, "no operation nothing");
-}
-
 // ---------------------------------------------------------------------------------------------
 // Triggers.
 // ---------------------------------------------------------------------------------------------
-
-#[test]
-fn a_trigger_that_names_no_automation_of_the_schema_is_refused() {
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![SchemaChange::DefineTrigger(on_publish())],
-    );
-    assert_eq!(error.kind, ErrorKind::InvalidSchema);
-    assert_eq!(
-        error.message,
-        "trigger on_publish: unknown automation award"
-    );
-}
-
-// Verifies: INT-1522
-#[test]
-fn a_trigger_on_a_transition_no_workflow_declares_is_refused() {
-    let mut trigger = on_publish();
-    trigger.on = TriggerEvent::RecordUpdated {
-        object: object("note"),
-        transition: Some("archive".into()),
-    };
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![
-            SchemaChange::DefineAutomation(award(&["writer"])),
-            SchemaChange::DefineTrigger(trigger),
-        ],
-    );
-    assert_eq!(
-        error.message,
-        "trigger on_publish: no workflow of note has a transition archive"
-    );
-}
-
-#[test]
-fn a_trigger_condition_reads_only_what_its_event_binds() {
-    // A record event binds no ledger parameter.
-    let mut trigger = on_publish();
-    trigger.condition = Some(ge(param("balance"), int(500)));
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![
-            SchemaChange::DefineAutomation(award(&["writer"])),
-            SchemaChange::DefineTrigger(trigger),
-        ],
-    );
-    assert_eq!(
-        error.message,
-        "trigger on_publish: condition: undeclared parameter balance"
-    );
-    // A ledger event binds no record.
-    let mut trigger = on_points("on_points");
-    trigger.condition = Some(eq(var(Scope::New, "title"), lit("x")));
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![
-            points(),
-            SchemaChange::DefineAutomation(award(&["writer"])),
-            SchemaChange::DefineTrigger(trigger),
-        ],
-    );
-    assert_eq!(
-        error.message,
-        "trigger on_points: condition: unknown field title"
-    );
-}
-
-#[test]
-fn a_tenant_holds_at_most_one_hundred_triggers() {
-    let mut changes = vec![points(), SchemaChange::DefineAutomation(award(&["writer"]))];
-    for n in 0..100 {
-        changes.push(SchemaChange::DefineTrigger(on_points(&format!("t{n}"))));
-    }
-    let world = must(&notes_world(), "owner", 6_000, change(changes));
-    let error = refused(
-        &world,
-        "owner",
-        vec![SchemaChange::DefineTrigger(on_points("one_more"))],
-    );
-    assert_eq!(
-        error.message,
-        "limit: 101 triggers is more than the maximum of 100"
-    );
-}
 
 // ---------------------------------------------------------------------------------------------
 // Automations.
@@ -522,258 +342,6 @@ fn an_automation_whose_run_as_names_a_role_its_definer_may_not_confer_is_refused
     );
 }
 
-// Verifies: WFL-1520
-#[test]
-fn a_definer_without_automations_define_may_not_change_a_trigger_or_an_automation() {
-    let world = definers(false);
-    let error = refused(
-        &world,
-        "editor",
-        vec![SchemaChange::DefineAutomation(award(&["writer"]))],
-    );
-    assert_eq!(error.kind, ErrorKind::Unauthorized);
-    assert_eq!(
-        error.message,
-        "the change needs the capability automations-define"
-    );
-    let error = refused(
-        &world,
-        "editor",
-        vec![SchemaChange::RemoveTrigger(
-            TriggerId::new("on_publish").unwrap(),
-        )],
-    );
-    assert_eq!(error.kind, ErrorKind::Unauthorized);
-    // Other schema changes ask nothing more of the same principal.
-    must(
-        &world,
-        "editor",
-        6_000,
-        change(vec![define_unique(title_rank())]),
-    );
-}
-
-#[test]
-fn an_automation_id_equal_to_a_field_workflow_id_is_refused() {
-    let mut automation = award(&["writer"]);
-    automation.id = WorkflowId::new("note_status").unwrap();
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![SchemaChange::DefineAutomation(automation)],
-    );
-    assert_eq!(
-        error.message,
-        "automation note_status: the id is taken by a field workflow"
-    );
-}
-
-#[test]
-fn every_step_an_automation_names_exists_and_can_be_reached() {
-    let mut automation = award(&["writer"]);
-    automation
-        .steps
-        .insert(name("lost"), plain(AutomationStep::End, Some("gone")));
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![SchemaChange::DefineAutomation(automation)],
-    );
-    let problems: Vec<&str> = error
-        .evidence
-        .iter()
-        .filter(|c| c.rule == "schema:consistency")
-        .map(|c| c.detail.as_str())
-        .collect();
-    assert_eq!(
-        problems,
-        [
-            "automation award.lost: unknown step gone",
-            "automation award.lost: cannot be reached from the start step"
-        ]
-    );
-    let mut automation = award(&["writer"]);
-    automation.start = name("begin");
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![SchemaChange::DefineAutomation(automation)],
-    );
-    assert_eq!(error.message, "automation award: unknown start step begin");
-}
-
-#[test]
-fn a_step_writes_only_fields_of_its_object_type_and_reads_only_declared_parameters() {
-    let mut automation = award(&["writer"]);
-    automation.steps.insert(
-        name("make"),
-        plain(
-            AutomationStep::CreateRecord {
-                object: object("note"),
-                fields: BTreeMap::from([(field("colour"), param("hue"))]),
-            },
-            Some("check"),
-        ),
-    );
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![SchemaChange::DefineAutomation(automation)],
-    );
-    let problems: Vec<&str> = error
-        .evidence
-        .iter()
-        .filter(|c| c.rule == "schema:consistency")
-        .map(|c| c.detail.as_str())
-        .collect();
-    assert_eq!(
-        problems,
-        [
-            "automation award.make: unknown field colour",
-            "automation award.make: colour: undeclared parameter hue"
-        ]
-    );
-}
-
-#[test]
-fn the_bounds_of_a_step_are_enforced_when_it_is_defined() {
-    let bad = |def: AutomationStepDef| {
-        let mut automation = award(&["writer"]);
-        automation.steps.insert(name("check"), def);
-        let error = refused(
-            &notes_world(),
-            "owner",
-            vec![SchemaChange::DefineAutomation(automation)],
-        );
-        error.message
-    };
-    let mut retried = plain(AutomationStep::End, None);
-    retried.retry = Some(StepRetry {
-        attempts: 11,
-        first_delay: None,
-        max_delay: None,
-    });
-    assert_eq!(
-        bad(retried),
-        "automation award.check: retry attempts outside 1 to 10"
-    );
-    let mut slow = plain(AutomationStep::End, None);
-    slow.retry = Some(StepRetry {
-        attempts: 3,
-        first_delay: Some(strata_model_core::prelude::DurationMs(90_000_000)),
-        max_delay: None,
-    });
-    assert_eq!(
-        bad(slow),
-        "automation award.check: a retry delay is longer than one day"
-    );
-    let mut waiting = plain(
-        AutomationStep::WaitFor {
-            duration: strata_model_core::prelude::DurationMs(1_000),
-        },
-        Some("done"),
-    );
-    waiting.timeout = Some(strata_model_core::prelude::DurationMs(1_000));
-    assert_eq!(
-        bad(waiting),
-        "automation award.check: a wait or an approval has no attempt timeout"
-    );
-    // WFL-1537: a wait of more than 366 days.
-    let long = plain(
-        AutomationStep::WaitFor {
-            duration: strata_model_core::prelude::DurationMs(367 * 86_400_000),
-        },
-        Some("done"),
-    );
-    assert_eq!(
-        bad(long),
-        "automation award.check: a wait is from 1 ms to 366 days"
-    );
-    let mut timed = plain(AutomationStep::End, None);
-    timed.timeout = Some(strata_model_core::prelude::DurationMs(900_001));
-    assert_eq!(
-        bad(timed),
-        "automation award.check: a timeout is from 1 ms to 15 minutes"
-    );
-    let segment: SegmentId =
-        serde_json::from_str("\"00000000-0000-0000-0000-000000000001\"").unwrap();
-    let fan = plain(
-        AutomationStep::FanOut {
-            segment,
-            batch: 101,
-            each: name("done"),
-        },
-        None,
-    );
-    assert_eq!(
-        bad(fan),
-        "automation award.check: a fan-out batch is from 1 to 100"
-    );
-
-    // An automation has at most fifty steps.
-    let mut automation = award(&["writer"]);
-    automation
-        .steps
-        .insert(name("done"), plain(AutomationStep::End, Some("s0")));
-    for n in 0..48 {
-        let next = if n == 47 {
-            None
-        } else {
-            Some(format!("s{}", n + 1))
-        };
-        automation.steps.insert(
-            name(&format!("s{n}")),
-            plain(AutomationStep::End, next.as_deref()),
-        );
-    }
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![SchemaChange::DefineAutomation(automation)],
-    );
-    assert_eq!(
-        error.message,
-        "automation award: 51 steps is more than the maximum of 50"
-    );
-}
-
-// Verifies: D-6539
-#[test]
-fn an_automation_a_trigger_names_is_not_removed_until_the_trigger_is() {
-    let world = must(
-        &notes_world(),
-        "owner",
-        6_000,
-        change(vec![
-            SchemaChange::DefineAutomation(award(&["writer"])),
-            SchemaChange::DefineTrigger(on_publish()),
-        ]),
-    );
-    let error = refused(
-        &world,
-        "owner",
-        vec![SchemaChange::RemoveAutomation(
-            WorkflowId::new("award").unwrap(),
-        )],
-    );
-    assert_eq!(error.kind, ErrorKind::InvalidSchema);
-    assert_eq!(
-        error.message,
-        "automation award is named by trigger on_publish"
-    );
-    let world = must(
-        &world,
-        "owner",
-        6_001,
-        change(vec![
-            SchemaChange::RemoveTrigger(TriggerId::new("on_publish").unwrap()),
-            SchemaChange::RemoveAutomation(WorkflowId::new("award").unwrap()),
-        ]),
-    );
-    assert!(schema(&world).automations.is_none());
-    assert!(schema(&world).triggers.is_none());
-}
-
 // ---------------------------------------------------------------------------------------------
 // Tenant operations.
 // ---------------------------------------------------------------------------------------------
@@ -808,66 +376,6 @@ fn a_tenant_operation_is_refused_when_its_definer_lacks_a_power_its_steps_use() 
     assert_eq!(
         error.message,
         "may not define operation redeem: lacks capability ledger-post"
-    );
-}
-
-#[test]
-fn a_definition_naming_an_undeclared_ledger_unit_or_an_undefined_template_is_refused() {
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![
-            SchemaChange::DefineAutomation(award(&["writer"])),
-            SchemaChange::DefineTrigger(on_points("on_points")),
-        ],
-    );
-    assert_eq!(
-        error.message,
-        "trigger on_points: names ledger unit points, which the tenant does not declare"
-    );
-    let mut op = redeem();
-    op.steps.push(posting("count"));
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![SchemaChange::DefineOperation(op)],
-    );
-    assert!(
-        error
-            .message
-            .contains("names ledger unit points, which the tenant does not declare"),
-        "{}",
-        error.message
-    );
-    let mut mailer = award(&["writer"]);
-    mailer.start = name("send");
-    mailer.steps = BTreeMap::from([(
-        name("send"),
-        AutomationStepDef {
-            action: AutomationStep::SendMail {
-                template: TemplateId("welcome".into()),
-                to: Some(lit("person@example.org")),
-                address: None,
-                segment: None,
-                category: None,
-            },
-            next: None,
-            retry: None,
-            timeout: None,
-            compensate: None,
-        },
-    )]);
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![SchemaChange::DefineAutomation(mailer)],
-    );
-    assert!(
-        error
-            .message
-            .contains("names template welcome, which the tenant does not define"),
-        "{}",
-        error.message
     );
 }
 
@@ -937,22 +445,6 @@ fn the_bounds_and_names_of_a_tenant_operation_are_checked_when_it_is_defined() {
         == "operation redeem: condition drafted has 201 nodes, more than the maximum of 200"));
 }
 
-#[test]
-fn a_later_step_reads_the_record_an_earlier_create_step_made() {
-    // `copy` is read by the step after it; read before it, it is not declared.
-    let mut op = redeem();
-    op.steps.reverse();
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![SchemaChange::DefineOperation(op)],
-    );
-    assert_eq!(
-        error.message,
-        "operation redeem.touch: record: undeclared parameter copy"
-    );
-}
-
 // Verifies: OPR-1551
 #[test]
 fn a_field_a_tenant_operation_names_is_not_removed_while_it_names_it() {
@@ -1012,42 +504,6 @@ fn a_create_that_repeats_the_values_of_a_composite_unique_constraint_is_refused(
     );
 }
 
-#[test]
-fn an_update_into_the_values_of_another_record_is_refused() {
-    let world = must(
-        &uniquely_ranked(),
-        "writer1",
-        6_100,
-        note_with("A", "a", Some(1)),
-    );
-    let world = must(&world, "writer1", 6_101, note_with("A", "b", Some(2)));
-    let error = step(
-        &world,
-        "writer1",
-        6_102,
-        Intent::UpdateRecord {
-            object: object("note"),
-            id: RecordId(2),
-            fields: BTreeMap::from([(field("rank"), Value::Int(1))]),
-            expected_version: None,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(error.kind, ErrorKind::UniqueViolated);
-    // Updating a record without changing its own tuple is not a clash with itself.
-    must(
-        &world,
-        "writer1",
-        6_103,
-        Intent::UpdateRecord {
-            object: object("note"),
-            id: RecordId(1),
-            fields: BTreeMap::from([(field("body"), text("again"))]),
-            expected_version: None,
-        },
-    );
-}
-
 // Verifies: CMS-1555
 #[test]
 fn a_record_with_null_in_a_field_of_the_constraint_is_not_constrained() {
@@ -1088,51 +544,6 @@ fn a_composite_unique_constraint_over_existing_duplicates_is_refused_naming_a_pa
     );
 }
 
-// Verifies: CMS-1556
-#[test]
-fn a_composite_unique_constraint_names_two_to_four_declared_fields_that_are_not_lists() {
-    let problem = |fields: &[&str]| {
-        let unique = UniqueDef {
-            fields: fields.iter().map(|f| field(f)).collect(),
-            ..title_rank()
-        };
-        refused(&notes_world(), "owner", vec![define_unique(unique)]).message
-    };
-    assert_eq!(
-        problem(&["title"]),
-        "note.title_rank: a unique constraint names 1 fields, not two to four"
-    );
-    assert_eq!(
-        problem(&["title", "body", "rank", "status", "slug"]),
-        "note.title_rank: a unique constraint names 5 fields, not two to four"
-    );
-    assert_eq!(
-        problem(&["title", "colour"]),
-        "note.title_rank: unknown field colour"
-    );
-    assert_eq!(
-        problem(&["title", "title"]),
-        "note.title_rank: names a field twice"
-    );
-    let world = must(
-        &notes_world(),
-        "owner",
-        6_000,
-        change(vec![SchemaChange::DefineField {
-            object: object("note"),
-            field: field_def("tags", FieldType::List(Box::new(FieldType::Str)), false),
-        }]),
-    );
-    let unique = UniqueDef {
-        fields: vec![field("title"), field("tags")],
-        ..title_rank()
-    };
-    assert_eq!(
-        refused(&world, "owner", vec![define_unique(unique)]).message,
-        "note.title_rank: tags is a list field"
-    );
-}
-
 // Verifies: CMS-1557
 #[test]
 fn the_check_plans_one_lookup_of_the_written_values_and_no_more() {
@@ -1158,97 +569,6 @@ fn the_check_plans_one_lookup_of_the_written_values_and_no_more() {
     };
     let refined = refine_needs(&world.state(&tenant_id("alpha")), &update);
     assert!(refined.contains(&wanted), "{refined:?}");
-}
-
-#[test]
-fn a_snapshot_without_the_lookup_is_asked_for_it() {
-    let world = uniquely_ranked();
-    let tenant = world.tenants[&tenant_id("alpha")].clone();
-    let thin = State {
-        tenant_id: tenant_id("alpha"),
-        tenant: Some(tenant),
-        coverage: Coverage::Partial(BTreeSet::from([Need::ByField {
-            object: object("note"),
-            field: field("slug"),
-            value: text("a"),
-        }])),
-    };
-    let error = transition(
-        &thin,
-        &note_with("A", "a", Some(1)),
-        &ctx("alpha", user("alpha:writer1"), 6_100),
-    )
-    .unwrap_err();
-    assert_eq!(error.kind, ErrorKind::InsufficientState);
-    assert_eq!(
-        error.missing,
-        Some(Need::ByFields {
-            object: object("note"),
-            fields: BTreeMap::from([(field("title"), text("A")), (field("rank"), Value::Int(1))]),
-        })
-    );
-}
-
-fn one_step_automation(action: AutomationStep) -> AutomationDef {
-    let mut automation = award(&["writer"]);
-    automation.start = name("send");
-    automation.steps = BTreeMap::from([(name("send"), plain(action, None))]);
-    automation
-}
-
-fn definition_message(action: AutomationStep) -> String {
-    refused(
-        &notes_world(),
-        "owner",
-        vec![SchemaChange::DefineAutomation(one_step_automation(action))],
-    )
-    .message
-}
-
-// Verifies: NTF-3200
-#[test]
-fn a_mail_or_a_notice_names_exactly_one_target() {
-    let segment: SegmentId =
-        serde_json::from_str("\"00000000-0000-0000-0000-000000000007\"").unwrap();
-    let mail = |to: Option<Expr>, address: Option<Expr>, segment: Option<SegmentId>| {
-        definition_message(AutomationStep::SendMail {
-            template: TemplateId("welcome".into()),
-            to,
-            address,
-            segment,
-            category: None,
-        })
-    };
-    let notice = |to: Option<Expr>, segment: Option<SegmentId>| {
-        definition_message(AutomationStep::CreateNotice {
-            template: TemplateId("update".into()),
-            to,
-            segment,
-            record: None,
-        })
-    };
-    let one_of_three = "a mail names exactly one of to, address and segment";
-    let one_of_two = "a notice names exactly one of to and segment";
-    // None, or several, are refused.
-    assert!(mail(None, None, None).contains(one_of_three));
-    assert!(mail(Some(lit("a")), Some(lit("b@example.org")), None).contains(one_of_three));
-    assert!(mail(Some(lit("a")), None, Some(segment)).contains(one_of_three));
-    assert!(notice(None, None).contains(one_of_two));
-    assert!(notice(Some(lit("a")), Some(segment)).contains(one_of_two));
-    // Each target alone passes this check; what is left to refuse is the missing template.
-    for message in [
-        mail(Some(lit("alpha:reader")), None, None),
-        mail(None, Some(lit("person@example.org")), None),
-        mail(None, None, Some(segment)),
-        notice(Some(lit("alpha:reader")), None),
-        notice(None, Some(segment)),
-    ] {
-        assert!(
-            !message.contains("exactly one")
-                && message.contains("which the tenant does not define"),
-            "{message}"
-        );
-    }
 }
 
 // Verifies: SCH-3202

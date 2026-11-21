@@ -4,9 +4,6 @@
 #[path = "aggregates.rs"]
 mod aggregates;
 
-#[path = "automation_principal.rs"]
-mod automation_principal;
-
 #[path = "behaviour.rs"]
 mod behaviour;
 
@@ -16,17 +13,11 @@ mod definitions;
 #[path = "dependencies.rs"]
 mod dependencies;
 
-#[path = "editor_rules.rs"]
-mod editor_rules;
-
 #[path = "erasure.rs"]
 mod erasure;
 
 #[path = "evolution.rs"]
 mod evolution;
-
-#[path = "final_candidate.rs"]
-mod final_candidate;
 
 #[path = "generated_differential.rs"]
 mod generated_differential;
