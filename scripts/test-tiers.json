@@ -70,7 +70,8 @@
       "target": "files",
       "tier": "full",
       "seconds": null,
-      "unmeasured": true
+      "unmeasured": true,
+      "reason": "Added after the last measured run and not yet measured; full until a green run records its time"
     },
     {
       "package": "strata-backend",
@@ -127,7 +128,8 @@
       "target": "outbound",
       "tier": "full",
       "seconds": null,
-      "unmeasured": true
+      "unmeasured": true,
+      "reason": "Added after the last measured run and not yet measured; full until a green run records its time"
     },
     {
       "package": "strata-backend",
@@ -182,7 +184,8 @@
       "target": "search",
       "tier": "full",
       "seconds": null,
-      "unmeasured": true
+      "unmeasured": true,
+      "reason": "Added after the last measured run and not yet measured; full until a green run records its time"
     },
     {
       "package": "strata-backend",
@@ -294,9 +297,10 @@
     {
       "package": "strata-kernel",
       "target": "approvals",
-      "tier": "routine",
+      "tier": "full",
       "seconds": null,
-      "unmeasured": true
+      "unmeasured": true,
+      "reason": "Shares its name with strata-backend:approvals, which is full, and cargo selects --test by name; not yet measured"
     },
     {
       "package": "strata-kernel",
@@ -328,6 +332,13 @@
     },
     {
       "package": "strata-kernel",
+      "target": "dependencies",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
       "target": "editor_rules",
       "tier": "routine",
       "seconds": null,
@@ -336,6 +347,13 @@
     {
       "package": "strata-kernel",
       "target": "erasure",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
+      "target": "evolution",
       "tier": "routine",
       "seconds": null,
       "unmeasured": true
@@ -421,7 +439,8 @@
       "target": "search",
       "tier": "full",
       "seconds": null,
-      "unmeasured": true
+      "unmeasured": true,
+      "reason": "Added after the last measured run and not yet measured; full until a green run records its time"
     },
     {
       "package": "strata-kernel",
@@ -856,7 +875,8 @@
       "target": "search",
       "tier": "full",
       "seconds": null,
-      "unmeasured": true
+      "unmeasured": true,
+      "reason": "Added after the last measured run and not yet measured; full until a green run records its time"
     },
     {
       "package": "strata-storage-sqlite",
