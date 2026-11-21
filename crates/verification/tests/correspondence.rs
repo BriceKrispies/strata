@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 use strata_verification::lean::{
-    compare_outputs, kernel_output, model_output, parse_audit, scenarios, verify, FIXTURE_COUNT,
-    FIXTURE_SEED,
+    compare_outputs, hand_written, kernel_output, model_output, parse_audit, scenarios, verify,
+    FIXTURE_COUNT, FIXTURE_SEED,
 };
 use strata_verification::lean_diff;
 use strata_verification::obligations;
@@ -48,19 +48,28 @@ fn read(name: &str) -> String {
         .replace("\r\n", "\n")
 }
 
+/// The committed scenario file is the generated scenarios followed by the hand-written ones
+/// (scenarios named `h-...`, one or more for each decision of the model that the generator
+/// does not aim at alone). The expected output is what the Lean model prints for the whole file.
 /// This test never writes the committed files. After an intended change, rewrite them with
-/// `cargo run -p strata-verification --example bless_fixtures` and review the diff.
+/// `cargo run -p strata-verification --example bless_fixtures` (the expected file is written
+/// from the Lean model's output, never from the kernel's) and review the diff.
 #[test]
 fn committed_fixtures_match_the_generator_and_the_kernel() {
     let generated = scenarios(FIXTURE_SEED, FIXTURE_COUNT);
-    let expected = kernel_output(&generated);
-    assert_eq!(
-        read("scenarios.txt"),
-        generated,
-        "lean/fixtures/scenarios.txt is stale; run the bless_fixtures example"
+    let committed_scenarios = read("scenarios.txt");
+    assert!(
+        committed_scenarios.starts_with(&generated),
+        "lean/fixtures/scenarios.txt does not begin with what the generator writes; run the bless_fixtures example"
     );
+    assert_eq!(
+        hand_written(&committed_scenarios),
+        &committed_scenarios[generated.len()..],
+        "everything after the generated scenarios must be hand-written scenarios named h-..."
+    );
+    let expected = kernel_output(&committed_scenarios);
     let committed = read("expected.txt");
-    let difference = compare_outputs(&generated, &committed, &expected).first_difference;
+    let difference = compare_outputs(&committed_scenarios, &committed, &expected).first_difference;
     assert_eq!(
         difference, None,
         "the kernel no longer prints lean/fixtures/expected.txt"
@@ -72,20 +81,31 @@ fn committed_fixtures_match_the_generator_and_the_kernel() {
 fn the_lean_model_agrees_with_the_kernel() {
     let _lake = require_lake();
     let generated = scenarios(FIXTURE_SEED, FIXTURE_COUNT);
+    let committed_scenarios = read("scenarios.txt");
     // The scenarios the Lean program is given are the ones the kernel is given.
-    assert_eq!(
-        read("scenarios.txt"),
-        generated,
-        "lean/fixtures/scenarios.txt is not what the generator writes"
+    assert!(
+        committed_scenarios.starts_with(&generated),
+        "lean/fixtures/scenarios.txt does not begin with what the generator writes"
     );
     let lean = model_output(&lean_dir(), "fixtures/scenarios.txt").expect("the model runs");
-    let result = compare_outputs(&generated, &lean, &kernel_output(&generated));
+    let result = compare_outputs(
+        &committed_scenarios,
+        &lean,
+        &kernel_output(&committed_scenarios),
+    );
     assert!(
         result.agree,
         "model and kernel differ at line {:?}",
         result.first_difference
     );
-    assert_eq!(result.scenarios, FIXTURE_COUNT);
+    assert_eq!(
+        result.scenarios,
+        FIXTURE_COUNT
+            + hand_written(&committed_scenarios)
+                .lines()
+                .filter(|l| l.starts_with("scenario "))
+                .count()
+    );
 }
 
 #[test]
