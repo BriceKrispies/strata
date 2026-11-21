@@ -44,6 +44,7 @@ pub mod signin;
 pub mod subject_export;
 pub mod subject_keys;
 pub mod subject_rights;
+pub mod ui;
 pub mod view_load;
 pub mod worker;
 pub mod ws;
