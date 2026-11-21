@@ -23,10 +23,10 @@ use strata_kernel::ext::TenantSchemaExt;
 use strata_kernel::{
     Action, Context, DataSubject, DeltaOp, ExistingData, Expr, FieldDef, FieldId, FieldType,
     Intent, ObjectTypeDef, ObjectTypeId, Output, PersonalDeclaration, PersonalKind, PolicyDef,
-    PolicyId, Principal, PrincipalId, RecordId, Resource, RoleDef, RoleId, SchemaChange,
-    StateDelta, StateRevision, TenantId, TenantOperationDef, TenantOperationId,
-    TenantOperationInput, TenantOperationInvokers, TenantOperationStep, TenantSchema, Timestamp,
-    Transition, Value,
+    PolicyId, Principal, PrincipalId, RecordId, Resource, RetentionRule, RetentionStart, RoleDef,
+    RoleId, SchemaChange, StateDelta, StateRevision, TenantId, TenantOperationDef,
+    TenantOperationId, TenantOperationInput, TenantOperationInvokers, TenantOperationStep,
+    TenantSchema, Timestamp, Transition, Value,
 };
 use strata_protocol::api::ErrorCode;
 use strata_storage_api::memory::MemoryStore;
@@ -202,23 +202,28 @@ fn found(store: &dyn Store, name: &str) -> TenantId {
             ],
         ),
     );
-    schema.objects.insert(
-        ObjectTypeId::new("profile").expect("object id"),
-        record_type(
-            "profile",
-            vec![
-                field("person", FieldType::Str, None, None),
-                field(
-                    "avatar",
-                    images(),
-                    None,
-                    Some(DataSubject::Field {
-                        field: FieldId::new("person").expect("field id"),
-                    }),
-                ),
-            ],
-        ),
+    let mut profile = record_type(
+        "profile",
+        vec![
+            field("person", FieldType::Str, None, None),
+            field(
+                "avatar",
+                images(),
+                None,
+                Some(DataSubject::Field {
+                    field: FieldId::new("person").expect("field id"),
+                }),
+            ),
+        ],
     );
+    // A type with a personal field must declare its retention (D-6584).
+    profile.retention = Some(RetentionRule {
+        days: 30,
+        from: RetentionStart::Created,
+    });
+    schema
+        .objects
+        .insert(ObjectTypeId::new("profile").expect("object id"), profile);
     for name in ["reader", "editor"] {
         schema.roles.insert(
             role(name),
