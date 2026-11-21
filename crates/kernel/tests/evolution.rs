@@ -1239,8 +1239,8 @@ fn situation_26_aba_with_a_rename_keeps_the_old_binding() {
     );
 }
 
-/// Situation 27: a diamond. Two queries on `ticket` read `code`, a view uses both and includes
-/// `code`. Renaming `code`.
+/// Situation 27: a diamond. Two queries on `ticket` read `dossier.title` through the reference
+/// `a`, and a view uses both and includes `a`. Renaming `a`.
 ///
 /// Wanted: each dependent is rewritten once, and the view after the two queries it uses.
 ///
@@ -1250,7 +1250,8 @@ fn situation_27_diamond_rewrite_order() {
     let section = |query: &str| ViewSection {
         query: QueryId::new(query).unwrap(),
         args: BTreeMap::new(),
-        include: vec![field("code")],
+        // `include` names reference fields only, so the diamond meets at the reference `a`.
+        include: vec![field("a")],
         markdown: vec![],
         single: false,
         aggregate: None,
@@ -1258,8 +1259,8 @@ fn situation_27_diamond_rewrite_order() {
     let world = accepted(
         &catalogue(),
         vec![
-            query("first", "ticket", Some(is_text(here("code"), "c1"))),
-            query("second", "ticket", Some(is_text(here("code"), "c2"))),
+            query("first", "ticket", Some(is_text(through("a", "title"), "T1"))),
+            query("second", "ticket", Some(is_text(through("a", "title"), "T2"))),
             SchemaChange::DefineView(ViewDef {
                 id: ViewId::new("board").unwrap(),
                 route: "/board".into(),
@@ -1272,7 +1273,7 @@ fn situation_27_diamond_rewrite_order() {
         ],
     );
     let base = schema_of(&world);
-    let change = vec![rename("ticket", "code", "reference")];
+    let change = vec![rename("ticket", "a", "holder")];
     let (after, outcome) =
         change_with(&world, change.clone(), None, ExistingData::Reject).expect("absorbed");
     let assessments = assess_changes(&base, &change, &schema_of(&after));
@@ -1288,7 +1289,7 @@ fn situation_27_diamond_rewrite_order() {
     assert_eq!(order.len(), 3, "{order:?}");
     assert!(order[2].contains("view board"), "{order:?}");
     let renamed = &schema_of(&after).views[&ViewId::new("board").unwrap()];
-    assert_eq!(renamed.sections["one"].include, vec![field("reference")]);
+    assert_eq!(renamed.sections["one"].include, vec![field("holder")]);
 }
 
 /// A ticket grade as the retype situations use it: `A` is stored as `1`, and `1` or `one` reads

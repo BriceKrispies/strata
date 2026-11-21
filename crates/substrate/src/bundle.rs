@@ -688,16 +688,19 @@ pub fn install<E>(
             owner: bundle.owner.clone(),
         },
     )?;
-    run(
-        owner.clone(),
-        created_at + 1,
-        "define schema".into(),
-        Intent::ChangeSchema {
-            changes: changes.clone(),
-            expected_version: None,
-            existing: ExistingData::Reject,
-        },
-    )?;
+    // A bundle that defines nothing has no schema step: the kernel refuses an empty change.
+    if !changes.is_empty() {
+        run(
+            owner.clone(),
+            created_at + 1,
+            "define schema".into(),
+            Intent::ChangeSchema {
+                changes: changes.clone(),
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
+        )?;
+    }
     let mut at = created_at + 1;
     for member in &bundle.members {
         for role in &member.roles {
