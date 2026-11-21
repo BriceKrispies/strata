@@ -12,7 +12,7 @@ import * as refusals from '../generated/errors.js';
 import * as forms from '../generated/forms.js';
 import * as live from '../generated/live.js';
 import { matchRoute, route as routeOf } from '../generated/routes.js';
-import { enterSections, rowAction as rowButton, rowActionAsked as rowButtonAsked } from '../generated/screens.js';
+import { enterSections, rowAction as rowButton, rowActionAsked as rowButtonAsked, screenOfView } from '../generated/screens.js';
 import { factorsEnter, factorsInit, factorsInput, factorsRequireStepUp, factorsUpdate, factorsWaiting, isStepUp } from './factors.js';
 import { invitesInit, invitesInput, invitesOpened, invitesUpdate } from './invites.js';
 import { labEnter, labInit, labUpdate } from './lab.js';
@@ -21,6 +21,22 @@ import { oidcEnter, oidcInit, oidcLand, oidcOpened, oidcUpdate } from './oidc.js
 import { passkeysEnter, passkeysInit, passkeysUpdate } from './passkeys.js';
 import { checkRecord, disagreement, draftOf } from './record-rules.js';
 import { sessionsEnter, sessionsInit, sessionsUpdate } from './sessions.js';
+import {
+  acceptManifest,
+  acceptPart,
+  actionInputs,
+  errorsPart,
+  explainRefusal,
+  formInit,
+  formInputs,
+  liveRefreshes,
+  matchTenantRoute,
+  partOf,
+  partsToFetch,
+  tenantHref,
+  tenantScreenOfView,
+  uiInit,
+} from './tenant-ui.js';
 import {
   busy,
   liveInit,
@@ -46,10 +62,10 @@ const EDITOR_OBJECT = 'post';
 
 // Reads whose reply is applied only when it answers the latest request of its kind, as `view`
 // is: an older reply that arrives late must not overwrite a newer one (or a newer sign-in).
-const LATEST_ONLY = ['session', 'sessions.list', 'passkeys.list', 'factors.summary', 'lab.overview'];
+const LATEST_ONLY = ['session', 'sessions.list', 'passkeys.list', 'factors.summary', 'lab.overview', 'ui.manifest'];
 // Requests made on behalf of the person signed in. A reply to one that was made before the
 // user-scoped state was cleared (sign-out, session end, account switch) belongs to someone else.
-const USER_KIND_PREFIXES = ['sessions.', 'lab.', 'editor.', 'post.', 'settings.'];
+const USER_KIND_PREFIXES = ['sessions.', 'lab.', 'editor.', 'post.', 'settings.', 'tenant.'];
 const USER_KINDS = [
   'passkeys.list', 'passkeys.register_start', 'passkeys.register_finish', 'passkeys.remove',
   'factors.summary', 'factors.enrol_start', 'factors.enrol_finish', 'factors.remove_totp', 'factors.new_codes', 'factors.stepup',
@@ -82,6 +98,10 @@ export function initialState() {
     },
     optimistic: {},
     confirmDelete: null,
+    // The interface definition of the tenant (D-8250): its manifest and the parts the page holds.
+    ui: uiInit(),
+    // The forms of the tenant screen on show, by id, and the action whose confirmation is armed.
+    tenant: { forms: /** @type {Record<string, import('./tenant-ui.js').TenantForm>} */ ({}), confirm: /** @type {string | null} */ (null) },
     lab: labInit(),
     sessions: sessionsInit(),
     passkeys: passkeysInit(),
@@ -202,9 +222,59 @@ function toast(state, kind, text) {
   };
 }
 
-/** The screen the current address opens. */
+/**
+ * The screen the current address opens: a platform screen whose route answers it literally, else
+ * a screen of the tenant's interface definition (INT-3256), else the platform's catch-all.
+ * `tenant` is the manifest entry of a tenant screen, null for a platform one.
+ * @returns {{ screen: string, params: Record<string, string>, query: Record<string, string>, tenant: import('./tenant-ui.js').ManifestEntry | null } | null}
+ */
 function screenOf(state) {
-  return matchRoute(state.route.path, state.route.query);
+  const platform = matchRoute(state.route.path, state.route.query);
+  if (platform && !routeOf(platform.screen)?.catchAll) return { ...platform, tenant: null };
+  const tenant = matchTenantRoute(state.ui, state.route.path, state.route.query);
+  if (tenant) return { screen: tenant.screen, params: tenant.params, query: tenant.query, tenant: tenant.entry };
+  return platform ? { ...platform, tenant: null } : null;
+}
+
+/** The tenant screen whose view is on show, with its part when the page holds it. */
+function tenantOnShow(state) {
+  const entry = tenantScreenOfView(state.ui, state.view.model?.view);
+  return { entry, part: partOf(state.ui, entry) };
+}
+
+/**
+ * Ask for the parts of the interface definition a tenant screen needs that the page neither holds
+ * nor has asked for. Each part is fetched by its hash, once.
+ * @param {any} state @param {Message} msg @param {string | null} screen
+ * @returns {Result}
+ */
+function fetchParts(state, msg, screen) {
+  /** @type {Effect[]} */
+  const effects = [];
+  let next = state;
+  for (const hash of partsToFetch(state.ui, screen)) {
+    const [asked, effect] = request(next, 'ui.part', { path: `/api/ui/parts/${hash}`, meta: { hash } }, msg);
+    next = { ...asked, ui: { ...asked.ui, asked: { ...asked.ui.asked, [hash]: effect.type === 'http' ? effect.id : 0 } } };
+    effects.push(effect);
+  }
+  return { state: next, effects };
+}
+
+/**
+ * Whether the page should read the manifest of the tenant's interface definition now: it holds
+ * none, has not asked, and the address is one no literal route of a platform screen answers. A
+ * page of the platform's own screens never needs it.
+ */
+function wantsManifest(state) {
+  if (state.ui.manifest || Object.values(state.pending).some((p) => p.kind === 'ui.manifest')) return false;
+  const platform = matchRoute(state.route.path, state.route.query);
+  return !platform || routeOf(platform.screen)?.catchAll === true;
+}
+
+/** Ask for the manifest of the tenant's interface definition (INT-3258). @returns {Result} */
+function fetchManifest(state, msg) {
+  const [next, effect] = request(state, 'ui.manifest', { path: '/api/ui' }, msg);
+  return { state: next, effects: [effect] };
 }
 
 /** The principal as the generated policy checks read it. */
@@ -233,15 +303,19 @@ function fetchView(state, msg, quiet) {
   const route = state.route;
   const screen = screenOf(state);
   const viewModel = screen ? routeOf(screen.screen)?.viewModel : null;
+  // A tenant screen's view is the tenant view of its route, read with the screen's query parameters.
+  const tenantQuery = screen?.tenant ? Object.entries(screen.query).map(([name, value]) => `&${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join('') : '';
   const [next, asked] = viewModel
     ? call(state, 'view', viewModel, { ...screen?.params, ...screen?.query }, msg, { href: hrefOf(route) })
-    : request(state, 'view', { path: `/api/view?path=${encodeURIComponent(route.path)}`, meta: { href: hrefOf(route) } }, msg);
+    : request(state, 'view', { path: `/api/view?path=${encodeURIComponent(route.path)}${tenantQuery}`, meta: { href: hrefOf(route) } }, msg);
   // The editor asks what the kernel will check on an article, so it can refuse a draft first.
   const effect = screen && routeOf(screen.screen)?.kind === 'desk.editor' && asked.type === 'http' ? { ...asked, path: `${asked.path}&rules=${EDITOR_OBJECT}` } : asked;
   const view = quiet
     ? { ...state.view, request: effect.type === 'http' ? effect.id : 0 }
     : { status: 'loading', model: state.view.model, error: null, request: effect.type === 'http' ? effect.id : 0 };
-  return { state: { ...next, view }, effects: [effect] };
+  const parts = fetchParts({ ...next, view }, msg, screen?.tenant ? screen.screen : null);
+  const manifest = wantsManifest(parts.state) ? fetchManifest(parts.state, msg) : { state: parts.state, effects: [] };
+  return { state: manifest.state, effects: [effect, ...parts.effects, ...manifest.effects] };
 }
 
 /** Ask for the session again. */
@@ -251,7 +325,9 @@ function readSession(state, msg, meta = {}) {
 
 /** True when the screen the address opens needs a signed-in person. */
 function guardedScreen(state) {
-  return routeOf(screenOf(state)?.screen ?? '')?.auth === 'session';
+  const screen = screenOf(state);
+  if (screen?.tenant) return screen.tenant.auth === 'session';
+  return routeOf(screen?.screen ?? '')?.auth === 'session';
 }
 
 /**
@@ -350,6 +426,7 @@ function acceptView(state, model, cursors = {}) {
     // A confirmation belongs to the view it was asked on; a view that replaces it disarms it.
     confirmDelete: null,
     site: site ? { name: site.name ?? '', tagline: site.tagline ?? '' } : state.site,
+    tenant: model.view === state.view.model?.view ? state.tenant : { forms: {}, confirm: null },
     theme: { ...state.theme, accent: model.theme?.accent ?? 'moss', paper: model.theme?.paper ?? 'linen' },
     optimistic: {},
   };
@@ -485,9 +562,17 @@ function onSocket(state, frame, msg) {
       const notice = frame.notice;
       // Whether the view is read again is the generated live binding's decision, for every kind
       // of notice; a change of membership also changes what the session may do, so it is read too.
+      const shown = tenantOnShow(state);
       const relevant = state.view.status === 'ready'
-        && live.refreshes(screenOf(state)?.screen ?? '', 'ui-notice-received', { kind: notice.kind, object: notice.object }, state.view.model);
+        && (shown.entry
+          ? liveRefreshes(shown.part, 'notice', { kind: notice.kind, object: notice.object }, state.view.model)
+          : live.refreshes(screenOf(state)?.screen ?? '', 'ui-notice-received', { kind: notice.kind, object: notice.object }, state.view.model));
       let current = { state: stepped.state, effects: stepped.effects };
+      // A change of the schema may change the tenant's interface: its manifest is read again (INT-3258).
+      if (notice.kind === 'schema' && (current.state.ui.manifest || wantsManifest(current.state))) {
+        const read = fetchManifest(current.state, msg);
+        current = { state: read.state, effects: [...current.effects, ...read.effects] };
+      }
       if (notice.kind === 'membership') {
         const [withRequest, effect] = readSession(stepped.state, msg);
         current = { state: withRequest, effects: [...stepped.effects, effect] };
@@ -521,7 +606,9 @@ function onSocket(state, frame, msg) {
       }
       next = { ...next, session: { ...state.session, authenticated: false, csrf_token: undefined, roles: ['public'], may: {}, may_manage_schema: false } };
       // A guarded page's model was cleared with the person's state, so it is always read again.
-      const refresh = guardedScreen(state) || live.refreshes(screenOf(state)?.screen ?? '', 'ui-session-ended', {}, state.view.model);
+      const shown = tenantOnShow(state);
+      const refresh = guardedScreen(state)
+        || (shown.entry ? liveRefreshes(shown.part, 'session-ended', {}, state.view.model) : live.refreshes(screenOf(state)?.screen ?? '', 'ui-session-ended', {}, state.view.model));
       return refresh ? refreshAfter({ state: next, effects }, msg) : { state: next, effects };
     }
     case 'run':
@@ -821,6 +908,28 @@ function onHttp(state, msg) {
       const done = { ...state, forms: { ...state.forms, settings: { ...settings, flow, busy: busy(flow), dirty: false } } };
       return succeed(done, forms.succeeded(SETTINGS, scopeOf(done, { form: settings.values, response: outputs })), msg);
     }
+    case 'ui.manifest': {
+      if (!msg.ok || !msg.body || typeof msg.body.hash !== 'string') return { state, effects: [] };
+      const next = { ...state, ui: acceptManifest(state.ui, msg.body) };
+      const screen = screenOf(next);
+      const shown = tenantScreenOfView(next.ui, next.view.model?.view);
+      const wanted = shown?.id ?? (screen?.tenant ? screen.screen : null);
+      // An address the platform's catch-all took before the manifest arrived may be a tenant screen.
+      const refetch = !state.ui.manifest && screen?.tenant && !shown && next.view.status !== 'loading';
+      if (refetch) return fetchView(next, msg, true);
+      return fetchParts(next, msg, wanted);
+    }
+    case 'ui.part': {
+      const { hash } = pending;
+      if (!msg.ok || !msg.body) {
+        const { [hash]: _failed, ...asked } = state.ui.asked;
+        return { state: { ...state, ui: { ...state.ui, asked } }, effects: [] };
+      }
+      return { state: { ...state, ui: acceptPart(state.ui, hash, msg.body) }, effects: [] };
+    }
+    case 'tenant.submit':
+    case 'tenant.action':
+      return tenantReply(state, msg, pending, error);
     case 'dev':
       return { state: toast(state, msg.ok ? 'ok' : 'warn', msg.ok ? 'Done.' : 'That did not work.'), effects: [] };
     default:
@@ -840,8 +949,78 @@ function navigate(state, href, replace, msg) {
   return { state: providers.state, effects: [...effects, { type: 'scroll_top' }, ...fetched.effects, ...providers.effects] };
 }
 
+/**
+ * The reply to a tenant form or action: on success its message and its navigation (else the view is
+ * read again); on a refusal the tenant's wording, beside the form or as a message.
+ * @returns {Result}
+ */
+function tenantReply(state, msg, pending, error) {
+  const { part } = tenantOnShow(state);
+  const element = pending.kind === 'tenant.submit' ? part?.forms?.[pending.owner] : part?.actions?.[pending.owner];
+  const held = pending.kind === 'tenant.submit' ? state.tenant.forms[pending.owner] : null;
+  if (msg.ok) {
+    const settled = held ? { ...state, tenant: { ...state.tenant, forms: { ...state.tenant.forms, [pending.owner]: formInit(element) } } } : state;
+    const outcome = element?.on_success ?? {};
+    const toasted = outcome.toast ? toast(settled, 'ok', outcome.toast) : settled;
+    const href = outcome.navigate ? tenantHref(toasted.ui, outcome.navigate, screenOf(toasted)?.params ?? {}) : null;
+    return href ? navigate(toasted, href, false, msg) : fetchView(toasted, msg, true);
+  }
+  const form = pending.kind === 'tenant.submit' ? element : null;
+  const said = explainRefusal(errorsPart(state.ui), pending.owner, form, error ?? {});
+  if (element?.on_error === 'toast' || !held) {
+    const released = held ? { ...state, tenant: { ...state.tenant, forms: { ...state.tenant.forms, [pending.owner]: { ...held, busy: false } } } } : state;
+    return { state: toast(released, 'warn', said.message), effects: [] };
+  }
+  const shown = { ...held, busy: false, error: said.message, errors: said.fields };
+  return { state: { ...state, announce: said.message, tenant: { ...state.tenant, forms: { ...state.tenant.forms, [pending.owner]: shown } } }, effects: [] };
+}
+
+/**
+ * Invoke a tenant operation for a form or an action of a tenant screen, with a key made once for
+ * the attempt (D-6595).
+ * @returns {[any, Effect]}
+ */
+function invokeOperation(state, kind, owner, operation, inputs, msg) {
+  return request(state, kind, { method: 'POST', path: '/api/operations/invoke', body: { operation, inputs }, write: true, idempotencyKey: newKey(state, msg), meta: { owner } }, msg);
+}
+
+/** Submit a form of the tenant screen on show. @returns {Result} */
+function submitTenantForm(state, msg) {
+  const id = msg.form.slice('tenant:'.length);
+  const form = tenantOnShow(state).part?.forms?.[id];
+  if (!form) return { state, effects: [] };
+  const held = state.tenant.forms[id] ?? formInit(form);
+  if (held.busy) return { state, effects: [] };
+  // What the page holds is what was typed; the values the submission carries agree with it.
+  const values = { ...held.values, ...Object.fromEntries(Object.entries(msg.values ?? {}).filter(([name]) => name in held.values)) };
+  const [next, effect] = invokeOperation(state, 'tenant.submit', id, form.operation, formInputs(form, values), msg);
+  return { state: { ...next, tenant: { ...next.tenant, forms: { ...next.tenant.forms, [id]: { ...held, values, busy: true, error: '', errors: {} } } } }, effects: [effect] };
+}
+
+/** Press an action of the tenant screen on show: one with a confirmation takes two presses. @returns {Result} */
+function tenantAction(state, msg) {
+  const id = String(msg.arg ?? '');
+  const action = tenantOnShow(state).part?.actions?.[id];
+  if (!action) return { state, effects: [] };
+  if (action.confirm && state.tenant.confirm !== id) return { state: { ...state, announce: action.confirm, tenant: { ...state.tenant, confirm: id } }, effects: [] };
+  const values = action.form ? state.tenant.forms[action.form]?.values ?? {} : {};
+  const screen = screenOf(state);
+  const route = { ...(screen?.params ?? {}), ...(screen?.query ?? {}), ...(state.view.model?.params ?? {}) };
+  const [next, effect] = invokeOperation({ ...state, tenant: { ...state.tenant, confirm: null } }, 'tenant.action', id, action.operation, actionInputs(action, values, route), msg);
+  return { state: next, effects: [effect] };
+}
+
 function onInput(state, msg) {
   const f = state.forms;
+  if (msg.form.startsWith('tenant:')) {
+    const id = msg.form.slice('tenant:'.length);
+    const form = tenantOnShow(state).part?.forms?.[id];
+    if (!form) return state;
+    const held = state.tenant.forms[id] ?? formInit(form);
+    if (!(msg.name in held.values)) return state;
+    const { [msg.name]: _cleared, ...errors } = held.errors;
+    return { ...state, tenant: { ...state.tenant, forms: { ...state.tenant.forms, [id]: { ...held, values: { ...held.values, [msg.name]: msg.value }, errors } } } };
+  }
   if (msg.form === 'link') return linksInput(state, msg.name, msg.value);
   if (msg.form === 'invite') return invitesInput(state, msg.name, msg.value);
   if (msg.form === 'second' || msg.form === 'totpconfirm' || msg.form === 'stepup') return factorsInput(state, msg.name, msg.value);
@@ -939,6 +1118,8 @@ function onAction(state, msg) {
       return fetchView(state, msg, false);
     case 'view.more':
       return loadMore(state, msg, String(arg));
+    case 'tenant.action':
+      return tenantAction(state, msg);
     case 'dev.expire': {
       const [next, effect] = request(state, 'dev', { method: 'POST', path: '/api/dev/expire-session', write: true, body: {} }, msg);
       return { state: next, effects: [effect] };
@@ -997,6 +1178,7 @@ function onSubmit(state, msg) {
       return { state: { ...next, forms: { ...next.forms, settings: { ...settings, flow: stepped.flow, busy: true, errors: {}, formError: '' } } }, effects: [effect] };
     }
     default:
+      if (msg.form.startsWith('tenant:')) return submitTenantForm(state, msg);
       if (msg.form.startsWith('lab')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
       return { state, effects: [] };
   }
@@ -1054,6 +1236,13 @@ function step(state, msg) {
         const fetched = fetchView(next, msg, false);
         next = fetched.state;
         effects.push(...fetched.effects);
+      }
+      // An address the platform's own screens do not answer, showing a view no platform screen
+      // shows, is a tenant screen: the tenant's interface definition is read (D-8250).
+      if (wantsManifest(next) && !screenOfView(/** @type {any} */ (next.view).model?.view)) {
+        const manifest = fetchManifest(next, msg);
+        next = manifest.state;
+        effects.push(...manifest.effects);
       }
       // A link the page was opened with is taken out of the address bar and, once the request
       // token is known, sent.

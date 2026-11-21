@@ -173,7 +173,7 @@ function main(argv) {
     process.stdout.write(done.stdout ?? '');
     process.stderr.write(done.stderr ?? '');
     const testSeconds = parseCargoLog(done.stdout ?? '').reduce((sum, r) => sum + r.seconds, 0);
-    const web = run(process.execPath, ['--test', 'web/test/kernel.test.js', 'web/test/client.test.js']);
+    const web = run(process.execPath, ['--test', 'web/test/kernel.test.js', 'web/test/client.test.js', 'web/test/tenant-ui.test.js']);
     const over = testSeconds > tiers.budgetSeconds;
     console.log(`routine tier: ${testSeconds.toFixed(1)} s of test time (budget ${tiers.budgetSeconds} s, compilation excluded), ${((Date.now() - started) / 1000).toFixed(0)} s wall with compilation`);
     if (over) console.log('FAIL  the routine tier is over its budget: record the new times (node scripts/test-tiers.mjs times <log> --write) and move the slowest binaries to the full tier');

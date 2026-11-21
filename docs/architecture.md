@@ -98,3 +98,11 @@ estimated, unknown. See `docs/verification.md` for what is and is not claimed.
 `web/src/kernel` is pure: `update(state, message) -> { state, effects }` and `view(state)`. The
 worker driver executes effects (fetch, WebSocket, timers) and posts view models to the main
 thread, which patches the DOM with safe DOM APIs. The main thread issues no application requests.
+
+The platform's own screens are generated from the specification into `web/src/generated`. A
+product's screens are not: they are tenant metadata, installed with the product into the tenant
+schema (`tenant-schema.ui`, D-8250) and served as a manifest and parts named by their hashes
+(`GET /api/ui`, `GET /api/ui/parts/<hash>`). The kernel reads the manifest when an address is one no
+literal platform route answers (and again on a schema notice), routes to the tenant's screen, and
+builds its page with one fixed interpreter (`web/src/kernel/tenant-ui.js`, drawn by
+`web/src/views/tenant.js`).

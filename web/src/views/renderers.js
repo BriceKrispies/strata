@@ -7,6 +7,7 @@
 import * as pages from './pages.js';
 import * as desk from './desk.js';
 import { lab } from './lab.js';
+import * as tenant from './tenant.js';
 
 /**
  * @typedef {(page: any, shell: any) => any} Render
@@ -55,6 +56,8 @@ registerRenderer('desk', (page) => desk.desk(page));
 registerRenderer('editor', (page) => desk.editor(page));
 registerRenderer('settings', (page) => desk.settings(page));
 registerRenderer('lab', (page) => lab(page), { wide: true });
+// Every screen of the tenant's interface definition, drawn by the one interpreter (D-8250).
+registerRenderer('tenant', (page) => tenant.screen(page));
 // The states the frame shows itself, which no screen has.
 registerRenderer('signin_required', (page) => pages.signinRequired(page));
 registerRenderer('forbidden', () => pages.forbidden());
