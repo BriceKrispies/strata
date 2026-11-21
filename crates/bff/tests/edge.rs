@@ -338,10 +338,28 @@ fn post_routes() -> Vec<String> {
         })
         .map(|line| line.split('"').nth(1).expect("a route path").to_string())
         .flat_map(|path| {
+            // A route with an action in its path answers an action it does not know with 404
+            // before it asks for the token, so each is sent the actions that change state there.
+            let actions: &[&str] = if path.starts_with("/dev/") {
+                &["expire-session", "reset"]
+            } else if path.starts_with("/segments/") {
+                &["define", "remove", "test"]
+            } else if path.starts_with("/inbox/") {
+                &["read", "remove", "preferences", "templates"]
+            } else if path.starts_with("/automation/commands/") {
+                &["start-run", "approve", "activate"]
+            } else if path.starts_with("/jobs/") {
+                &["schedule", "cancel", "retry"]
+            } else if path.starts_with("/products/") {
+                &["install", "upgrade", "remove"]
+            } else {
+                &[]
+            };
             if path.contains(":action") {
-                ["expire-session", "reset"]
+                actions
+                    .iter()
                     .map(|action| path.replace(":action", action))
-                    .to_vec()
+                    .collect::<Vec<_>>()
             } else {
                 vec![path]
             }
