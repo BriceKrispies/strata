@@ -42,7 +42,7 @@
       "retention": { "days": 3650, "from": "Created" } },
     { "id": "taxonomy__audience", "label": "Audience",
       "fields": {
-        "label": { "id": "label", "label": "Label", "ty": "Str", "required": true, "unique": false },
+        "label": { "id": "label", "label": "Label", "ty": "Str", "required": true, "unique": true },
         "kind": { "id": "kind", "label": "Kind", "ty": "Str", "required": true, "unique": false },
         "age_band": { "id": "age_band", "label": "Age band", "ty": "Str", "required": false, "unique": false },
         "region": { "id": "region", "label": "Region", "ty": "Str", "required": false, "unique": false },
@@ -64,7 +64,9 @@
     { "id": "taxonomy__category_curator", "name": "Category curator", "description": "Maintains the category tree for the whole tenant.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["taxonomy__browse", "taxonomy__curate"] },
     { "id": "taxonomy__region_editor_emea", "name": "Region editor, EMEA", "description": "Edits the European regions only.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["taxonomy__browse", "taxonomy__region_edit"] },
     { "id": "taxonomy__region_editor_amer", "name": "Region editor, Americas", "description": "Edits the regions of North and South America only.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["taxonomy__browse", "taxonomy__region_edit"] },
-    { "id": "taxonomy__tag_steward", "name": "Tag steward", "description": "Merges duplicate tags and retires unused ones.", "level": "tenant", "holders": ["person"], "capabilities": ["taxonomy__browse", "taxonomy__curate"] }
+    { "id": "taxonomy__tag_steward", "name": "Tag steward", "description": "Merges duplicate tags and retires unused ones.", "level": "tenant", "holders": ["person"], "capabilities": ["taxonomy__browse", "taxonomy__curate"] },
+    { "id": "taxonomy__member", "name": "Member", "description": "Any member of the tenant who reads what the product shares with everyone.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": [] }
   ],
 
   "capabilities": [
@@ -78,18 +80,18 @@
     { "id": "taxonomy__emea_regions", "role": "taxonomy__region_editor_emea", "resource": { "Object": "taxonomy__region" }, "actions": ["Create", "Read", "Update"], "condition": "record.continent == 'europe'" },
     { "id": "taxonomy__amer_regions", "role": "taxonomy__region_editor_amer", "resource": { "Object": "taxonomy__region" }, "actions": ["Create", "Read", "Update"], "condition": "record.continent == 'americas'" },
     { "id": "taxonomy__steward_tags", "role": "taxonomy__tag_steward", "resource": { "Object": "taxonomy__tag" }, "actions": ["Read", "Update", "Delete"] },
-    { "id": "taxonomy__member_active_audiences", "role": "member", "resource": { "Object": "taxonomy__audience" }, "actions": ["Read"], "condition": "record.active == true" }
+    { "id": "taxonomy__member_active_audiences", "role": "taxonomy__member", "resource": { "Object": "taxonomy__audience" }, "actions": ["Read"], "condition": "record.active == true" }
   ],
 
   "queries": [
-    { "id": "taxonomy__categories_all", "object": "taxonomy__category", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 1000 },
+    { "id": "taxonomy__categories_all", "object": "taxonomy__category", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 },
     { "id": "taxonomy__regions_world", "object": "taxonomy__region", "filter": "record.level == 'world'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 10 },
     { "id": "taxonomy__regions_continent", "object": "taxonomy__region", "filter": "record.level == 'continent'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 20 },
-    { "id": "taxonomy__regions_country", "object": "taxonomy__region", "filter": "record.level == 'country'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 300 },
-    { "id": "taxonomy__regions_region", "object": "taxonomy__region", "filter": "record.level == 'region'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 1000 },
-    { "id": "taxonomy__regions_district", "object": "taxonomy__region", "filter": "record.level == 'district'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 5000 },
-    { "id": "taxonomy__regions_city", "object": "taxonomy__region", "filter": "record.level == 'city'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 5000 },
-    { "id": "taxonomy__regions_postcode", "object": "taxonomy__region", "filter": "record.level == 'postcode'", "params": [], "order": [ { "field": "region_code", "descending": false } ], "limit": 500 }
+    { "id": "taxonomy__regions_country", "object": "taxonomy__region", "filter": "record.level == 'country'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 },
+    { "id": "taxonomy__regions_region", "object": "taxonomy__region", "filter": "record.level == 'region'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 },
+    { "id": "taxonomy__regions_district", "object": "taxonomy__region", "filter": "record.level == 'district'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 },
+    { "id": "taxonomy__regions_city", "object": "taxonomy__region", "filter": "record.level == 'city'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 },
+    { "id": "taxonomy__regions_postcode", "object": "taxonomy__region", "filter": "record.level == 'postcode'", "params": [], "order": [ { "field": "region_code", "descending": false } ], "limit": 200 }
   ],
 
   "views": [
@@ -104,9 +106,9 @@
   ],
 
   "segments": [
-    { "id": "taxonomy__active_adults", "name": "Active adults", "subject-type": "taxonomy__audience", "predicate": "record.active == true and record.age_band == 'adult'" },
-    { "id": "taxonomy__lapsed_audience", "name": "Lapsed audience", "subject-type": "taxonomy__audience", "predicate": "record.days_since_visit > 90" },
-    { "id": "taxonomy__european_audience", "name": "European audience", "subject-type": "taxonomy__audience", "predicate": "record.region == 'europe'" }
+    { "id": "taxonomy__active_adults", "name": "Active adults", "subject-type": "taxonomy__audience", "principal-field": "label", "predicate": "record.active == true and record.age_band == 'adult'" },
+    { "id": "taxonomy__lapsed_audience", "name": "Lapsed audience", "subject-type": "taxonomy__audience", "principal-field": "label", "predicate": "record.days_since_visit > 90" },
+    { "id": "taxonomy__european_audience", "name": "European audience", "subject-type": "taxonomy__audience", "principal-field": "label", "predicate": "record.region == 'europe'" }
   ],
 
   "settings": [
@@ -190,14 +192,14 @@
   "operations": [
     { "id": "taxonomy__move_category", "label": "Move a category under a new parent",
       "conditions": [],
-      "inputs": [ { "name": "category", "ty": "Str", "required": true, "label": "The category" },
+      "inputs": [ { "name": "category", "ty": { "Ref": { "target": "taxonomy__category", "on-delete": "Restrict" } }, "required": true, "label": "The category" },
                   { "name": "parent", "ty": "Str", "required": false, "label": "The new parent" } ],
       "invokers": { "signed-in": true, "roles": ["taxonomy__category_curator"] },
       "subject": { "object": "taxonomy__category", "input": "category" },
       "steps": [
         { "UpdateRecord": { "id": "set_parent", "object": "taxonomy__category", "record": "record.$id", "fields": { "parent": "param.parent" } } } ] },
     { "id": "taxonomy__merge_tags", "label": "Merge a duplicate tag into another",
-      "inputs": [ { "name": "keep", "ty": "Str", "required": true, "label": "The tag to keep" },
+      "inputs": [ { "name": "keep", "ty": { "Ref": { "target": "taxonomy__tag", "on-delete": "Restrict" } }, "required": true, "label": "The tag to keep" },
                   { "name": "drop", "ty": "Str", "required": true, "label": "The duplicate to remove" } ],
       "invokers": { "signed-in": true, "roles": ["taxonomy__tag_steward"] },
       "subject": { "object": "taxonomy__tag", "input": "keep" },

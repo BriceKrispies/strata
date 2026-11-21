@@ -269,7 +269,7 @@
   "operations": [
     { "id": "crm__merge_contacts", "label": "Merge a duplicate contact into a survivor",
       "inputs": [
-        { "name": "keep", "ty": "Str", "required": true, "label": "Contact to keep" },
+        { "name": "keep", "ty": { "Ref": { "target": "crm__contact", "on-delete": "Restrict" } }, "required": true, "label": "Contact to keep" },
         { "name": "duplicate", "ty": "Str", "required": true, "label": "Duplicate to remove" } ],
       "invokers": { "signed-in": true, "roles": ["crm__admin"] },
       "subject": { "object": "crm__contact", "input": "keep" },
@@ -278,7 +278,7 @@
         { "UpdateRecord": { "id": "keep_survivor", "object": "crm__contact", "record": "record.$id", "fields": { "merged_from": "param.duplicate" } } },
         { "DeleteRecord": { "id": "drop_duplicate", "object": "crm__contact", "record": "param.duplicate" } } ] },
     { "id": "crm__convert_lead", "label": "Convert a qualified lead to an account and a contact",
-      "inputs": [ { "name": "lead", "ty": "Str", "required": true, "label": "The lead" } ],
+      "inputs": [ { "name": "lead", "ty": { "Ref": { "target": "crm__lead", "on-delete": "Restrict" } }, "required": true, "label": "The lead" } ],
       "invokers": { "signed-in": true, "roles": ["crm__rep_emea", "crm__rep_apac", "crm__rep_amer"] },
       "subject": { "object": "crm__lead", "input": "lead" },
       "conditions": [ { "id": "qualified_only", "expr": "record.status == 'qualified'", "error": "not-qualified", "message": "Only a qualified lead can be converted." } ],

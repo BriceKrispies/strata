@@ -23,7 +23,9 @@
     { "id": "assets__licence_manager", "name": "Licence manager", "description": "Manages licences and usage rights and expires them.", "level": "tenant",
       "holders": ["person", "team"], "capabilities": ["records-read", "media-deliver", "assets__licence_manage"] },
     { "id": "assets__media_processor", "name": "Media processor", "description": "The agent that makes renditions for new assets.", "level": "tenant",
-      "holders": ["agent"], "capabilities": ["media-sign", "media-deliver"] }
+      "holders": ["agent"], "capabilities": ["media-sign", "media-deliver"] },
+    { "id": "assets__member", "name": "Member", "description": "Any member of the tenant who reads what the product shares with everyone.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["records-read"] }
   ],
 
   // Capabilities this module declares for its own actions.
@@ -109,7 +111,7 @@
       "actions": ["Read", "Update"] },
     { "id": "assets__licence_manager_usage", "role": "assets__licence_manager", "resource": { "Object": "assets__usage_right" },
       "actions": ["Create", "Read", "Update", "Delete"] },
-    { "id": "assets__member_readable", "role": "member", "resource": { "Object": "assets__asset" },
+    { "id": "assets__member_readable", "role": "assets__member", "resource": { "Object": "assets__asset" },
       "actions": ["Read"] }
   ],
 
@@ -120,7 +122,7 @@
     { "id": "assets__expiring_licences", "object": "assets__licence", "filter": "record.licence_type == 'term' and record.ends_at < now",
       "params": [], "order": [ { "field": "ends_at", "descending": false } ], "limit": 100 },
     { "id": "assets__collection_assets", "object": "assets__asset", "filter": "record.collection == param.collection",
-      "params": ["collection"], "order": [ { "field": "title", "descending": false } ], "limit": 500 }
+      "params": ["collection"], "order": [ { "field": "title", "descending": false } ], "limit": 200 }
   ],
 
   // The asset board page, presenting the ready images query.
@@ -280,11 +282,11 @@
   // Starts when an asset is created: make a thumbnail rendition, then a notice.
   "automations": [
     { "id": "assets__make_renditions", "label": "Queue the thumbnail rendition for a new asset",
-      "run-as": { "roles": ["assets__media_processor"] }, "run-key": "param.record",
+      "run-as": { "roles": ["assets__media_processor"] }, "run-key": "param.seq",
       "start": "thumbnail",
       "steps": {
-        "thumbnail": { "action": { "CreateRecord": { "object": "assets__rendition", "fields": { "asset": "param.record", "profile": "'thumbnail'", "width": "320", "height": "320", "bytes": "0" } } }, "next": "notice", "retry": { "attempts": 3 } },
-        "notice": { "action": { "CreateNotice": { "template": "assets__rendition_notice", "to": "param.owner", "record": "param.record" } }, "next": "done" },
+        "thumbnail": { "action": { "CreateRecord": { "object": "assets__rendition", "fields": { "asset": "record.$id", "profile": "'thumbnail'", "width": "320", "height": "320", "bytes": "0" } } }, "next": "notice", "retry": { "attempts": 3 } },
+        "notice": { "action": { "CreateNotice": { "template": "assets__rendition_notice", "to": "param.owner", "record": "record.$id" } }, "next": "done" },
         "done": { "action": "End" } } }
   ],
 
@@ -296,7 +298,7 @@
   // Expire a licence: a single UpdateRecord that sets its end time to now.
   "operations": [
     { "id": "assets__expire_licence", "label": "Expire a licence",
-      "inputs": [ { "name": "licence", "ty": "Str", "required": true, "label": "The licence" } ],
+      "inputs": [ { "name": "licence", "ty": { "Ref": { "target": "assets__licence", "on-delete": "Restrict" } }, "required": true, "label": "The licence" } ],
       "invokers": { "signed-in": true, "roles": ["assets__licence_manager"] },
       "subject": { "object": "assets__licence", "input": "licence" },
       "conditions": [ { "id": "not_ended", "expr": "record.ends_at > now", "error": "already-ended", "message": "This licence has already ended." } ],

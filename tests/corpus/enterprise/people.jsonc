@@ -110,7 +110,7 @@
 
   // Queries: lists the screens and the leave board present.
   "queries": [
-    { "id": "people__active_employees", "object": "people__employee", "filter": "record.status == 'active'", "params": [], "order": [ { "field": "family_name", "descending": false } ], "limit": 500 },
+    { "id": "people__active_employees", "object": "people__employee", "filter": "record.status == 'active'", "params": [], "order": [ { "field": "family_name", "descending": false } ], "limit": 200 },
     { "id": "people__requested_leave", "object": "people__leave_request", "filter": "record.status == 'requested'", "params": [], "order": [ { "field": "starts", "descending": false } ], "limit": 100 },
     { "id": "people__agency_open_assignments", "object": "people__agency_assignment", "filter": "record.agency == param.agency and is_null(record.ends)", "params": ["agency"], "order": [ { "field": "starts", "descending": true } ], "limit": 200 }
   ],
@@ -312,12 +312,12 @@
   // Automations: ask the line manager, then tell the employee.
   "automations": [
     { "id": "people__leave_approval_flow", "label": "Ask the line manager to decide leave, then tell the employee",
-      "run-as": { "roles": ["people__hr_admin"] }, "run-key": "param.employee",
+      "run-as": { "roles": ["people__hr_admin"] }, "run-key": "param.seq",
       "start": "approve",
       "steps": {
         "approve": { "action": { "RequestApproval": { "policy": "people__line_manager_leave", "timeout": 172800000, "approved": "mail_approved", "refused": "mail_refused" } } },
-        "mail_approved": { "action": { "SendMail": { "template": "people__leave_approved_mail", "to": "param.employee", "category": "transactional" } }, "next": "done", "timeout": 30000 },
-        "mail_refused": { "action": { "SendMail": { "template": "people__leave_refused_mail", "to": "param.employee", "category": "transactional" } }, "next": "done", "timeout": 30000 },
+        "mail_approved": { "action": { "SendMail": { "template": "people__leave_approved_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
+        "mail_refused": { "action": { "SendMail": { "template": "people__leave_refused_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
         "done": { "action": "End" } } }
   ],
 
@@ -339,7 +339,7 @@
     { "id": "people__transfer_cost_centre", "label": "Move an employee to another cost centre",
       "conditions": [],
       "inputs": [
-        { "name": "employee_number", "ty": "Str", "required": true, "label": "Employee number" },
+        { "name": "employee_number", "ty": { "Ref": { "target": "people__employee", "on-delete": "Restrict" } }, "required": true, "label": "Employee number" },
         { "name": "cost_centre", "ty": "Int", "required": true, "label": "Cost centre id" } ],
       "invokers": { "signed-in": true, "roles": ["people__hr_admin", "people__hr_partner_emea", "people__hr_partner_apac", "people__hr_partner_amer"] },
       "subject": { "object": "people__employee", "input": "employee_number" },

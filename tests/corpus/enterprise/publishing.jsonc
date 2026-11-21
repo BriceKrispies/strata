@@ -17,7 +17,9 @@
     { "id": "publishing__release_manager", "name": "Release manager", "description": "Plans releases, schedules them and cancels schedules.", "level": "tenant",
       "holders": ["person", "team"], "capabilities": ["content-read", "automations-read", "publishing__publish", "publishing__cancel", "publishing__syndicate"] },
     { "id": "publishing__publish_operator", "name": "Publish operator", "description": "Runs publish jobs and syndication to partners.", "level": "tenant",
-      "holders": ["person", "team", "agent"], "capabilities": ["content-read", "outbound-call", "messages-send", "publishing__publish", "publishing__syndicate"] }
+      "holders": ["person", "team", "agent"], "capabilities": ["content-read", "outbound-call", "messages-send", "publishing__publish", "publishing__syndicate"] },
+    { "id": "publishing__member", "name": "Member", "description": "Any member of the tenant who reads what the product shares with everyone.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["content-read"] }
   ],
   "capabilities": [
     { "id": "publishing__publish", "name": "Publish content", "description": "Queue and run publish jobs for a release." },
@@ -73,13 +75,13 @@
       "actions": ["Create", "Read", "Update"] },
     { "id": "publishing__manager_releases", "role": "publishing__release_manager", "resource": { "Object": "publishing__release" },
       "actions": ["Create", "Read", "Update", "Delete"] },
-    { "id": "publishing__member_published_jobs", "role": "member", "resource": { "Object": "publishing__publish_job" },
+    { "id": "publishing__member_published_jobs", "role": "publishing__member", "resource": { "Object": "publishing__publish_job" },
       "actions": ["Read"], "condition": "record.status == 'published'" }
   ],
   "queries": [
     { "id": "publishing__queued_jobs", "object": "publishing__publish_job",
       "filter": "record.status == 'queued' or record.status == 'scheduled'",
-      "params": [], "order": [ { "field": "scheduled_at", "descending": false } ], "limit": 500 },
+      "params": [], "order": [ { "field": "scheduled_at", "descending": false } ], "limit": 200 },
     { "id": "publishing__channel_list", "object": "publishing__channel",
       "filter": "record.active == true", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 }
   ],
@@ -106,7 +108,7 @@
         { "name": "cancel_scheduled", "from": "scheduled", "to": "cancelled", "guard": "old.status == 'scheduled'", "set": {} } ] }
   ],
   "segments": [
-    { "id": "publishing__active_channels", "name": "Active channels", "subject-type": "publishing__channel",
+    { "id": "publishing__active_channels", "name": "Active channels", "subject-type": "publishing__channel", "principal-field": "name",
       "predicate": "record.active == true" }
   ],
   "screens": [
@@ -229,24 +231,24 @@
   ],
   "automations": [
     { "id": "publishing__run_publish", "label": "Run a publish job when it is created",
-      "run-as": { "roles": ["publishing__publish_operator"] }, "run-key": "param.record",
+      "run-as": { "roles": ["publishing__publish_operator"] }, "run-key": "param.seq",
       "start": "mark",
       "steps": {
-        "mark": { "action": { "UpdateRecord": { "object": "publishing__publish_job", "record": "param.record", "fields": { "status": "'publishing'" } } }, "next": "notify" },
-        "notify": { "action": { "CreateNotice": { "template": "publishing__release_notice", "to": "param.owner", "record": "param.record" } }, "next": "done", "retry": { "attempts": 3 } },
+        "mark": { "action": { "UpdateRecord": { "object": "publishing__publish_job", "record": "record.$id", "fields": { "status": "'publishing'" } } }, "next": "notify" },
+        "notify": { "action": { "CreateNotice": { "template": "publishing__release_notice", "to": "param.owner", "record": "record.$id" } }, "next": "done", "retry": { "attempts": 3 } },
         "done": { "action": "End" } } },
     { "id": "publishing__fan_out_channels", "label": "Queue a release on every active channel",
-      "run-as": { "roles": ["publishing__release_manager"] }, "run-key": "param.release",
+      "run-as": { "roles": ["publishing__release_manager"] }, "run-key": "param.seq",
       "start": "fan",
       "steps": {
         "fan": { "action": { "FanOut": { "segment": "publishing__active_channels", "batch": 50, "each": "queue_channel" } }, "next": "done" },
-        "queue_channel": { "action": { "CreateRecord": { "object": "publishing__publish_job", "fields": { "channel": "record.$id", "release": "param.release", "status": "'queued'", "scheduled_at": "now", "attempts": "0", "requested_by": "principal" } } }, "next": "done" },
+        "queue_channel": { "action": { "CreateRecord": { "object": "publishing__publish_job", "fields": { "channel": "record.$id", "release": "param.event_id", "status": "'queued'", "scheduled_at": "now", "attempts": "0", "requested_by": "principal" } } }, "next": "done" },
         "done": { "action": "End" } } },
     { "id": "publishing__syndicate_release", "label": "Send a release to a syndication partner",
-      "run-as": { "roles": ["publishing__publish_operator"] }, "run-key": "param.release",
+      "run-as": { "roles": ["publishing__publish_operator"] }, "run-key": "param.seq",
       "start": "push",
       "steps": {
-        "push": { "action": { "CallWebhook": { "subscription": "8b3e4c5d-5f6a-4b7c-8d9e-2f3a4b5c6d73", "body": { "release": "param.release", "channel": "param.channel" } } }, "next": "pause", "retry": { "attempts": 5 }, "timeout": 30000 },
+        "push": { "action": { "CallWebhook": { "subscription": "8b3e4c5d-5f6a-4b7c-8d9e-2f3a4b5c6d73", "body": { "release": "param.event_id", "channel": "param.body" } } }, "next": "pause", "retry": { "attempts": 5 }, "timeout": 30000 },
         "pause": { "action": { "WaitFor": { "duration": 900000 } }, "next": "notify_owner" },
         "notify_owner": { "action": { "SendMail": { "template": "publishing__syndication_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
         "done": { "action": "End" } } }
@@ -261,7 +263,7 @@
       "steps": [
         { "CreateRecord": { "id": "job", "object": "publishing__publish_job", "fields": { "channel": "param.channel", "release": "param.release", "status": "'queued'", "scheduled_at": "now", "attempts": "0", "requested_by": "principal" } } } ] },
     { "id": "publishing__cancel_schedule", "label": "Cancel a publish schedule",
-      "inputs": [ { "name": "job", "ty": "Str", "required": true, "label": "Publish job" } ],
+      "inputs": [ { "name": "job", "ty": { "Ref": { "target": "publishing__publish_job", "on-delete": "Restrict" } }, "required": true, "label": "Publish job" } ],
       "invokers": { "signed-in": true, "roles": ["publishing__release_manager"] },
       "subject": { "object": "publishing__publish_job", "input": "job" },
       "conditions": [ { "id": "not_started", "expr": "record.status == 'queued' or record.status == 'scheduled'", "error": "already-started", "message": "This job has already started publishing." } ],

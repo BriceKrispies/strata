@@ -209,7 +209,9 @@
     { "id": "forms__compliance_reviewer", "name": "Compliance reviewer", "description": "Reads submissions, consent captures and attachments.", "level": "tenant",
       "holders": ["person", "team"], "capabilities": ["forms__review", "consent-record"] },
     { "id": "forms__respondent", "name": "Respondent", "description": "Completes and sends a published form.", "level": "tenant",
-      "holders": ["person"], "capabilities": ["form-submit"] }
+      "holders": ["person"], "capabilities": ["form-submit"] },
+    { "id": "forms__member", "name": "Member", "description": "Any member of the tenant who reads what the product shares with everyone.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["form-submit"] }
   ],
   "claims": [
     { "id": "forms__submission-retention-follows-consent", "kind": "structural",
@@ -338,7 +340,7 @@
   "policies": [
     { "id": "forms__owner_definitions", "role": "forms__form_owner", "resource": { "Object": "forms__form_definition" }, "actions": ["Create", "Read", "Update"] },
     { "id": "forms__owner_submissions", "role": "forms__form_owner", "resource": { "Object": "forms__form_submission" }, "actions": ["Read"] },
-    { "id": "forms__member_own_submissions", "role": "member", "resource": { "Object": "forms__form_submission" }, "actions": ["Read"], "condition": "record.respondent_email == principal" },
+    { "id": "forms__member_own_submissions", "role": "forms__member", "resource": { "Object": "forms__form_submission" }, "actions": ["Read"], "condition": "record.respondent_email == principal" },
     { "id": "forms__review_consent", "role": "forms__compliance_reviewer", "resource": { "Object": "forms__consent_capture" }, "actions": ["Read"] },
     { "id": "forms__review_attachments", "role": "forms__compliance_reviewer", "resource": { "Object": "forms__attachment" }, "actions": ["Read", "Delete"] }
   ],
@@ -383,21 +385,21 @@
       "run-as": { "roles": ["forms__form_owner"] }, "run-key": "param.owner",
       "start": "notify",
       "steps": {
-        "notify": { "action": { "CreateNotice": { "template": "forms__submission_notice", "to": "param.owner", "record": "param.record" } }, "next": "hook", "retry": { "attempts": 3 } },
-        "hook": { "action": { "CallWebhook": { "subscription": "7a2d3b4c-4e5f-4a6b-9c7d-1e2f3a4b5c62", "body": { "submission": "param.record", "event": "'form.submitted'" } } }, "next": "mail", "timeout": 15000 },
+        "notify": { "action": { "CreateNotice": { "template": "forms__submission_notice", "to": "param.owner", "record": "record.$id" } }, "next": "hook", "retry": { "attempts": 3 } },
+        "hook": { "action": { "CallWebhook": { "subscription": "7a2d3b4c-4e5f-4a6b-9c7d-1e2f3a4b5c62", "body": { "submission": "record.$id", "event": "'form.submitted'" } } }, "next": "mail", "timeout": 15000 },
         "mail": { "action": { "SendMail": { "template": "forms__submission_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
         "done": { "action": "End" } } }
   ],
   "operations": [
     { "id": "forms__publish_form", "label": "Publish a form definition",
-      "inputs": [ { "name": "definition", "ty": "Str", "required": true, "label": "The form definition" } ],
+      "inputs": [ { "name": "definition", "ty": { "Ref": { "target": "forms__form_definition", "on-delete": "Restrict" } }, "required": true, "label": "The form definition" } ],
       "invokers": { "signed-in": true, "roles": ["forms__form_owner"] },
       "subject": { "object": "forms__form_definition", "input": "definition" },
       "conditions": [ { "id": "is_draft", "expr": "record.status == 'draft'", "error": "not-draft", "message": "Only a draft form can be published." } ],
       "steps": [
         { "UpdateRecord": { "id": "set_published", "object": "forms__form_definition", "record": "record.$id", "fields": { "status": "'published'", "published_at": "now" } } } ] },
     { "id": "forms__retire_form", "label": "Retire a published form",
-      "inputs": [ { "name": "definition", "ty": "Str", "required": true, "label": "The form definition" } ],
+      "inputs": [ { "name": "definition", "ty": { "Ref": { "target": "forms__form_definition", "on-delete": "Restrict" } }, "required": true, "label": "The form definition" } ],
       "invokers": { "signed-in": true, "roles": ["forms__form_owner"] },
       "subject": { "object": "forms__form_definition", "input": "definition" },
       "conditions": [ { "id": "is_published", "expr": "record.status == 'published'", "error": "not-published", "message": "Only a published form can be retired." } ],

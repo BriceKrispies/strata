@@ -189,18 +189,18 @@
 
   "automations": [
     { "id": "commerce__order_follow_up", "label": "Confirm a new order, then route high-value orders for finance approval",
-      "run-as": { "roles": ["commerce__finance_reviewer"] }, "run-key": "param.record",
+      "run-as": { "roles": ["commerce__finance_reviewer"] }, "run-key": "param.seq",
       "start": "notify",
       "steps": {
-        "notify": { "action": { "SendMail": { "template": "commerce__order_confirmation_mail", "to": "param.record", "category": "transactional" } }, "next": "check", "retry": { "attempts": 5 } },
-        "check": { "action": { "Branch": { "condition": "record.total_minor >= 100000", "object": "commerce__order", "record": "param.record", "then": "approve", "else": "done" } } },
+        "notify": { "action": { "SendMail": { "template": "commerce__order_confirmation_mail", "to": "param.owner", "category": "transactional" } }, "next": "check", "retry": { "attempts": 5 } },
+        "check": { "action": { "Branch": { "condition": "record.total_minor >= 100000", "object": "commerce__order", "record": "record.$id", "then": "approve", "else": "done" } } },
         "approve": { "action": { "RequestApproval": { "policy": "commerce__high_value_order_review", "timeout": 172800000, "approved": "done", "refused": "done" } } },
         "done": { "action": "End" } } }
   ],
 
   "operations": [
     { "id": "commerce__redeem_promotion", "label": "Redeem a promotion",
-      "inputs": [ { "name": "promotion", "ty": "Str", "required": true, "label": "The promotion" } ],
+      "inputs": [ { "name": "promotion", "ty": { "Ref": { "target": "commerce__promotion", "on-delete": "Restrict" } }, "required": true, "label": "The promotion" } ],
       "invokers": { "signed-in": true, "roles": [] },
       "subject": { "object": "commerce__promotion", "input": "promotion" },
       "conditions": [ { "id": "window", "expr": "now >= record.starts_at and now < record.ends_at", "error": "outside-window", "message": "This promotion is not running." } ],
@@ -224,7 +224,7 @@
         { "CreateRecord": { "id": "order", "object": "commerce__order", "fields": { "customer_email": "param.customer_email", "customer_name": "param.customer_name", "status": "'placed'", "total_minor": "param.total_minor", "currency": "'gbp'", "region": "param.region", "placed_at": "now" } } } ] },
     { "id": "commerce__create_return", "label": "Request a return",
       "inputs": [
-        { "name": "order", "ty": "Str", "required": true, "label": "The order" },
+        { "name": "order", "ty": { "Ref": { "target": "commerce__order", "on-delete": "Restrict" } }, "required": true, "label": "The order" },
         { "name": "reason", "ty": "Str", "required": true, "label": "Reason" } ],
       "invokers": { "signed-in": true, "roles": [] },
       "subject": { "object": "commerce__order", "input": "order" },

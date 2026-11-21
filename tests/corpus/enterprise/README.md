@@ -143,9 +143,40 @@ The platform installs a product as a tenant bundle (`specc bundle`), which refus
 - Route parameters are lower-case names in the kernel (`:category_id`, not `:categoryId`): five routes in localisation and
   taxonomy were renamed, with the `route.<param>` arguments that read them.
 
-What the files still cannot show is whether the kernel accepts the installed schema as a whole (`TenantSchema::problems`:
-expressions against the field types, trigger and automation shapes, the segment predicates). `specc` does not run that
-check; the install does. Run the loader (`strata-corpus load`) to find out.
+What the files still cannot show is whether the kernel accepts the whole installed schema in ways those mirrors miss. `strata-corpus check` installs each product on a fresh tenant and prints every problem the kernel reports.
+
+### Made to pass the kernel's schema rules (WG-5398)
+
+`specc bundle` does not run the kernel's whole-schema check (`TenantSchema::problems`, run by every install). The first
+install failed it (`automation analytics__send_digest.mail: address: unknown field recipient_email`), and a read of
+`crates/kernel/src/definitions.rs`, `schema.rs`, `segments.rs`, `ui.rs`, `templates.rs`, `settings.rs` and `ledger.rs`
+found these classes in the files. Fixed in place, nothing removed:
+
+- Automation expressions read no record fields: their environment is the parameters an event binds (`seq`, `at`, `hop`,
+  `transition`, `person`, `segment`, `owner`, `subject`, `body`, `event_id`, `due_at`, `member` and a few more) and the outputs of
+  earlier steps. `param.record`, `param.stage`, `param.request`, `param.case`, `param.release`, `param.channel`, `param.connector`,
+  `param.employee`, `param.requester` and `param.translator` are bound by no event. Run keys are now `param.seq` (one run per event);
+  the record a step works on is `record.$id`; a recipient is `param.owner`, `param.person` (segment entry) or `param.member` (fan-out);
+  an operation input and a webhook body take `param.subject`, `param.body` or `param.event_id`. These are placeholders in the
+  kernel's event model, which gives a record trigger no record id: they pass the check, and what they read at run time is for the
+  worker to say. Also: the analytics digest goes to the literal address `reports@example.com` (the new schedule's address is not
+  readable), `automation__scheduled_run` waits until `param.due_at` (a field of the schedule is not readable), the approvals
+  escalation branch tests `record.due_at < now` (the stage has no `sla_breached` field), and the marketing win-back fan-out batch is
+  100 (the most the kernel allows).
+- Eight policies named a role `member`, which a tenant schema does not hold (it holds `public`, `owner` and what products add): each
+  of assets, automation, content, forms, marketing, publishing and taxonomy gained a `<module>__member` role and its policies name it.
+- A tenant operation's subject input must be a reference to the subject: the 22 operations with a subject now declare it as
+  `{ "Ref": { "target": <subject object>, "on-delete": "Restrict" } }`, not `Str`.
+- A named query limit is 1 to 200: ten queries asked for 300 to 5000 and now ask for 200.
+- A segment names a required unique string field that holds its members' principal (`principal-field`): all nine segments now do
+  (connector `name`, article `slug`, audience member `email`, channel `name`, audience `label`, made unique). A principal id is
+  letters, digits and `_:.-`, so an email address is no principal and the three marketing segments hold no member until the field
+  is a principal-shaped value.
+
+Checked the same way and found clean: trigger and automation step shapes, reachable steps, mail and notice template bodies,
+settings, ledger declarations, capabilities, retention and personal-data subjects, workflow guards and sets, policy
+conditions, query filters and orders, view arguments, the interface elements. `node` mirrors of these rules (an expression
+shape checker among them) find nothing in the 14 files.
 
 ## Not verified
 

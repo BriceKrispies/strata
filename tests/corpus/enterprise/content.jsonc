@@ -27,7 +27,9 @@
     { "id": "content__editor_eu", "name": "EU editor", "description": "Edits articles whose region is the EU.", "level": "tenant",
       "holders": ["person", "team"], "capabilities": ["content-read", "content-write", "content__edit", "content__region_eu"] },
     { "id": "content__page_designer", "name": "Page designer", "description": "Builds landing pages and campaign pages.", "level": "tenant",
-      "holders": ["person", "team"], "capabilities": ["content-read", "content-write", "content__page_design"] }
+      "holders": ["person", "team"], "capabilities": ["content-read", "content-write", "content__page_design"] },
+    { "id": "content__member", "name": "Member", "description": "Any member of the tenant who reads what the product shares with everyone.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["content-read"] }
   ],
 
   // Capabilities this module declares for its own actions.
@@ -106,7 +108,7 @@
       "actions": ["Read", "Update"], "condition": "record.region == 'uk'" },
     { "id": "content__eu_articles", "role": "content__editor_eu", "resource": { "Object": "content__article" },
       "actions": ["Read", "Update"], "condition": "record.region == 'eu'" },
-    { "id": "content__author_own_drafts", "role": "member", "resource": { "Object": "content__article" },
+    { "id": "content__author_own_drafts", "role": "content__member", "resource": { "Object": "content__article" },
       "actions": ["Read", "Update"], "condition": "record.owner_name == principal" },
     { "id": "content__designer_pages", "role": "content__page_designer", "resource": { "Object": "content__page" },
       "actions": ["Create", "Read", "Update"] }
@@ -340,7 +342,7 @@
       "run-as": { "roles": ["content__publisher"] }, "run-key": "param.owner",
       "start": "notify",
       "steps": {
-        "notify": { "action": { "CreateNotice": { "template": "content__publish_notice", "to": "param.owner", "record": "param.record" } }, "next": "mail", "retry": { "attempts": 5 } },
+        "notify": { "action": { "CreateNotice": { "template": "content__publish_notice", "to": "param.owner", "record": "record.$id" } }, "next": "mail", "retry": { "attempts": 5 } },
         "mail": { "action": { "SendMail": { "template": "content__publish_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
         "done": { "action": "End" } } }
   ],
@@ -354,14 +356,14 @@
   // Composite operations: publish and retire an article, each a single UpdateRecord on the article.
   "operations": [
     { "id": "content__publish_article", "label": "Publish an article",
-      "inputs": [ { "name": "article", "ty": "Str", "required": true, "label": "The article" } ],
+      "inputs": [ { "name": "article", "ty": { "Ref": { "target": "content__article", "on-delete": "Restrict" } }, "required": true, "label": "The article" } ],
       "invokers": { "signed-in": true, "roles": ["content__publisher"] },
       "subject": { "object": "content__article", "input": "article" },
       "conditions": [ { "id": "in_review", "expr": "record.state == 'in_review'", "error": "not-in-review", "message": "Only an article in review can be published." } ],
       "steps": [
         { "UpdateRecord": { "id": "publish", "object": "content__article", "record": "record.$id", "fields": { "state": "'published'", "published_at": "now" } } } ] },
     { "id": "content__retire_article", "label": "Retire an article",
-      "inputs": [ { "name": "article", "ty": "Str", "required": true, "label": "The article" } ],
+      "inputs": [ { "name": "article", "ty": { "Ref": { "target": "content__article", "on-delete": "Restrict" } }, "required": true, "label": "The article" } ],
       "invokers": { "signed-in": true, "roles": ["content__publisher"] },
       "subject": { "object": "content__article", "input": "article" },
       "conditions": [ { "id": "is_published", "expr": "record.state == 'published'", "error": "not-published", "message": "Only a published article can be retired." } ],
@@ -391,7 +393,7 @@
 
   // Audience of articles still in draft.
   "segments": [
-    { "id": "content__stale_drafts", "name": "Draft articles", "subject-type": "content__article",
+    { "id": "content__stale_drafts", "name": "Draft articles", "subject-type": "content__article", "principal-field": "slug",
       "predicate": "record.state == 'draft'" }
   ],
 

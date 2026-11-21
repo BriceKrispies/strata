@@ -239,13 +239,13 @@
   // Automations: wait for the response window, escalate an open case, then tell the owner and the customer.
   "automations": [
     { "id": "service__escalation", "label": "Escalate a case that has not been answered within four hours",
-      "run-as": { "roles": ["service__queue_supervisor"] }, "run-key": "param.case",
+      "run-as": { "roles": ["service__queue_supervisor"] }, "run-key": "param.seq",
       "start": "wait",
       "steps": {
         "wait": { "action": { "WaitFor": { "duration": 14400000 } }, "next": "check" },
-        "check": { "action": { "Branch": { "condition": "record.status == 'open'", "object": "service__case", "record": "param.case", "then": "escalate", "else": "done" } } },
-        "escalate": { "action": { "UpdateRecord": { "object": "service__case", "record": "param.case", "fields": { "priority": "'urgent'" } } }, "next": "notify" },
-        "notify": { "action": { "CreateNotice": { "template": "service__escalation_notice", "to": "param.owner", "record": "param.case" } }, "next": "mail", "retry": { "attempts": 3 } },
+        "check": { "action": { "Branch": { "condition": "record.status == 'open'", "object": "service__case", "record": "record.$id", "then": "escalate", "else": "done" } } },
+        "escalate": { "action": { "UpdateRecord": { "object": "service__case", "record": "record.$id", "fields": { "priority": "'urgent'" } } }, "next": "notify" },
+        "notify": { "action": { "CreateNotice": { "template": "service__escalation_notice", "to": "param.owner", "record": "record.$id" } }, "next": "mail", "retry": { "attempts": 3 } },
         "mail": { "action": { "SendMail": { "template": "service__escalation_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
         "done": { "action": "End" } } }
   ],
@@ -254,7 +254,7 @@
   "operations": [
     { "id": "service__apply_macro", "label": "Apply a macro to a case",
       "inputs": [
-        { "name": "case_reference", "ty": "Str", "required": true, "label": "Case reference" },
+        { "name": "case_reference", "ty": { "Ref": { "target": "service__case", "on-delete": "Restrict" } }, "required": true, "label": "Case reference" },
         { "name": "status", "ty": "Str", "required": true, "label": "New status" },
         { "name": "priority", "ty": "Str", "required": false, "label": "New priority" } ],
       "invokers": { "signed-in": true, "roles": ["service__agent_tier1", "service__agent_tier2"] },
@@ -265,7 +265,7 @@
     { "id": "service__reassign_case", "label": "Reassign a case to another queue",
       "conditions": [],
       "inputs": [
-        { "name": "case_reference", "ty": "Str", "required": true, "label": "Case reference" },
+        { "name": "case_reference", "ty": { "Ref": { "target": "service__case", "on-delete": "Restrict" } }, "required": true, "label": "Case reference" },
         { "name": "queue", "ty": "Int", "required": true, "label": "Queue id" } ],
       "invokers": { "signed-in": true, "roles": ["service__agent_tier2", "service__queue_supervisor"] },
       "subject": { "object": "service__case", "input": "case_reference" },

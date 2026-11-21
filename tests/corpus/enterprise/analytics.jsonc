@@ -263,13 +263,13 @@
       "run-as": { "roles": ["analytics__dashboard_admin"] },
       "start": "mail",
       "steps": {
-        "mail": { "action": { "SendMail": { "template": "analytics__digest_mail", "address": "record.recipient_email", "category": "transactional" } }, "next": "mail_done", "retry": { "attempts": 3 }, "timeout": 30000 },
+        "mail": { "action": { "SendMail": { "template": "analytics__digest_mail", "address": "'reports@example.com'", "category": "transactional" } }, "next": "mail_done", "retry": { "attempts": 3 }, "timeout": 30000 },
         "mail_done": { "action": "End" } } }
   ],
 
   "operations": [
     { "id": "analytics__publish_dashboard", "label": "Publish a dashboard",
-      "inputs": [ { "name": "dashboard", "ty": "Str", "required": true, "label": "The dashboard" } ],
+      "inputs": [ { "name": "dashboard", "ty": { "Ref": { "target": "analytics__dashboard", "on-delete": "Restrict" } }, "required": true, "label": "The dashboard" } ],
       "invokers": { "signed-in": true, "roles": ["analytics__dashboard_admin"] },
       "subject": { "object": "analytics__dashboard", "input": "dashboard" },
       "conditions": [ { "id": "in_review", "expr": "record.state == 'in_review'", "error": "not-in-review", "message": "Only a dashboard in review can be published." } ],

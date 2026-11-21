@@ -27,14 +27,16 @@
     { "id": "marketing__journey_editor", "name": "Journey editor", "description": "Designs and pauses customer journeys.", "level": "tenant",
       "holders": ["person", "team"], "capabilities": ["marketing__manage_journeys", "marketing__view_audiences", "automations-define", "automations-read", "segments-define"] },
     { "id": "marketing__marketing_lead", "name": "Marketing lead", "description": "Approves launches and owns consent.", "level": "tenant",
-      "holders": ["person", "team"], "capabilities": ["marketing__manage_campaigns", "marketing__manage_journeys", "marketing__view_audiences", "workflow-approve", "consent-record"] }
+      "holders": ["person", "team"], "capabilities": ["marketing__manage_campaigns", "marketing__manage_journeys", "marketing__view_audiences", "workflow-approve", "consent-record"] },
+    { "id": "marketing__member", "name": "Member", "description": "Any member of the tenant who reads what the product shares with everyone.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["segments-read"] }
   ],
 
   "policies": [
     { "id": "marketing__marketer_campaigns", "role": "marketing__marketer", "resource": { "Object": "marketing__campaign" }, "actions": ["Create", "Read", "Update"] },
     { "id": "marketing__marketer_audiences", "role": "marketing__marketer", "resource": { "Object": "marketing__audience_member" }, "actions": ["Read"] },
     { "id": "marketing__journey_editor_steps", "role": "marketing__journey_editor", "resource": { "Object": "marketing__journey_step" }, "actions": ["Create", "Read", "Update", "Delete"] },
-    { "id": "marketing__owner_drafts", "role": "member", "resource": { "Object": "marketing__campaign" }, "actions": ["Read", "Update"], "condition": "record.owner_name == principal" },
+    { "id": "marketing__owner_drafts", "role": "marketing__member", "resource": { "Object": "marketing__campaign" }, "actions": ["Read", "Update"], "condition": "record.owner_name == principal" },
     { "id": "marketing__lead_approves_launch", "role": "marketing__marketing_lead", "resource": { "Object": "marketing__campaign" }, "actions": ["Update"] }
   ],
 
@@ -91,9 +93,9 @@
   ],
 
   "segments": [
-    { "id": "marketing__opted_in_members", "name": "Opted-in members", "subject-type": "marketing__audience_member", "predicate": "record.opted_in == true" },
-    { "id": "marketing__lapsed_members", "name": "Lapsed members", "subject-type": "marketing__audience_member", "predicate": "record.opted_in == true and record.lapsed == true" },
-    { "id": "marketing__high_value_members", "name": "High-value members", "subject-type": "marketing__audience_member", "predicate": "record.opted_in == true and record.lifetime_value >= 500" }
+    { "id": "marketing__opted_in_members", "name": "Opted-in members", "subject-type": "marketing__audience_member", "principal-field": "email", "predicate": "record.opted_in == true" },
+    { "id": "marketing__lapsed_members", "name": "Lapsed members", "subject-type": "marketing__audience_member", "principal-field": "email", "predicate": "record.opted_in == true and record.lapsed == true" },
+    { "id": "marketing__high_value_members", "name": "High-value members", "subject-type": "marketing__audience_member", "principal-field": "email", "predicate": "record.opted_in == true and record.lifetime_value >= 500" }
   ],
 
   "settings": [
@@ -158,26 +160,26 @@
 
   "automations": [
     { "id": "marketing__welcome_journey", "label": "Welcome a newly opted-in member",
-      "run-as": { "roles": ["marketing__journey_editor"] }, "run-key": "param.record",
+      "run-as": { "roles": ["marketing__journey_editor"] }, "run-key": "param.seq",
       "start": "wait",
       "steps": {
         "wait": { "action": { "WaitFor": { "duration": 86400000 } }, "next": "check" },
-        "check": { "action": { "Branch": { "condition": "record.opted_in == true", "object": "marketing__audience_member", "record": "param.record", "then": "send", "else": "done" } } },
-        "send": { "action": { "SendMail": { "template": "marketing__welcome_mail", "to": "param.record", "category": "marketing" } }, "next": "done", "retry": { "attempts": 3 }, "timeout": 30000 },
+        "check": { "action": { "Branch": { "condition": "record.opted_in == true", "object": "marketing__audience_member", "record": "record.$id", "then": "send", "else": "done" } } },
+        "send": { "action": { "SendMail": { "template": "marketing__welcome_mail", "to": "param.person", "category": "marketing" } }, "next": "done", "retry": { "attempts": 3 }, "timeout": 30000 },
         "done": { "action": "End" } } },
     { "id": "marketing__reminder_journey", "label": "Remind a high-value member three days later",
-      "run-as": { "roles": ["marketing__journey_editor"] }, "run-key": "param.record",
+      "run-as": { "roles": ["marketing__journey_editor"] }, "run-key": "param.seq",
       "start": "wait",
       "steps": {
         "wait": { "action": { "WaitFor": { "duration": 259200000 } }, "next": "remind" },
-        "remind": { "action": { "SendMail": { "template": "marketing__reminder_mail", "to": "param.record", "category": "marketing" } }, "next": "done", "retry": { "attempts": 3 }, "timeout": 30000 },
+        "remind": { "action": { "SendMail": { "template": "marketing__reminder_mail", "to": "param.person", "category": "marketing" } }, "next": "done", "retry": { "attempts": 3 }, "timeout": 30000 },
         "done": { "action": "End" } } },
     { "id": "marketing__winback_fanout", "label": "Send a win-back mail to every lapsed member in batches",
       "run-as": { "roles": ["marketing__marketing_lead"] },
       "start": "fan",
       "steps": {
-        "fan": { "action": { "FanOut": { "segment": "marketing__lapsed_members", "batch": 500, "each": "mail" } }, "next": "done" },
-        "mail": { "action": { "SendMail": { "template": "marketing__winback_mail", "to": "param.record", "category": "promotional" } }, "next": "done", "retry": { "attempts": 5 } },
+        "fan": { "action": { "FanOut": { "segment": "marketing__lapsed_members", "batch": 100, "each": "mail" } }, "next": "done" },
+        "mail": { "action": { "SendMail": { "template": "marketing__winback_mail", "to": "param.member", "category": "promotional" } }, "next": "done", "retry": { "attempts": 5 } },
         "done": { "action": "End" } } }
   ],
 
@@ -192,7 +194,7 @@
       "steps": [
         { "CreateRecord": { "id": "campaign", "object": "marketing__campaign", "fields": { "title": "param.title", "owner_name": "principal", "state": "'scheduled'", "segment": "param.segment", "send_now": "param.send_now" } } } ] },
     { "id": "marketing__pause_journey", "label": "Pause a journey",
-      "inputs": [ { "name": "journey", "ty": "Str", "required": true, "label": "The journey" } ],
+      "inputs": [ { "name": "journey", "ty": { "Ref": { "target": "marketing__journey", "on-delete": "Restrict" } }, "required": true, "label": "The journey" } ],
       "invokers": { "signed-in": true, "roles": ["marketing__journey_editor", "marketing__marketing_lead"] },
       "subject": { "object": "marketing__journey", "input": "journey" },
       "conditions": [ { "id": "is_live", "expr": "record.state == 'live'", "error": "not-live", "message": "Only a live journey can be paused." } ],

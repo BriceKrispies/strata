@@ -243,23 +243,23 @@
   ],
   "automations": [
     { "id": "approvals__legal_review", "label": "Run the legal stage of an approval request",
-      "run-as": { "roles": ["approvals__approval_admin"] }, "run-key": "param.request",
+      "run-as": { "roles": ["approvals__approval_admin"] }, "run-key": "param.seq",
       "start": "request",
       "steps": {
         "request": { "action": { "RequestApproval": { "policy": "approvals__legal_stage_reviews", "timeout": 172800000, "approved": "legal_approved", "refused": "legal_refused" } } },
-        "legal_approved": { "action": { "UpdateRecord": { "object": "approvals__approval_stage", "record": "param.stage", "fields": { "decision": "'approved'" } } }, "next": "grace" },
-        "legal_refused": { "action": { "UpdateRecord": { "object": "approvals__approval_stage", "record": "param.stage", "fields": { "decision": "'refused'" } } }, "next": "grace" },
+        "legal_approved": { "action": { "UpdateRecord": { "object": "approvals__approval_stage", "record": "record.$id", "fields": { "decision": "'approved'" } } }, "next": "grace" },
+        "legal_refused": { "action": { "UpdateRecord": { "object": "approvals__approval_stage", "record": "record.$id", "fields": { "decision": "'refused'" } } }, "next": "grace" },
         "grace": { "action": { "WaitFor": { "duration": 3600000 } }, "next": "escalate_check" },
-        "escalate_check": { "action": { "Branch": { "condition": "record.sla_breached", "object": "approvals__approval_stage", "record": "param.stage", "then": "raise", "else": "notify_result" } } },
-        "raise": { "action": { "CreateRecord": { "object": "approvals__escalation", "fields": { "stage": "param.stage", "level": "1", "reason": "'sla_breached'", "raised_at": "now" } } }, "next": "notify_result" },
-        "notify_result": { "action": { "CreateNotice": { "template": "approvals__stage_notice", "to": "param.requester", "record": "param.request" } }, "next": "mail", "retry": { "attempts": 3 } },
-        "mail": { "action": { "SendMail": { "template": "approvals__decision_mail", "to": "param.requester", "category": "transactional" } }, "next": "done", "timeout": 30000 },
+        "escalate_check": { "action": { "Branch": { "condition": "record.due_at < now", "object": "approvals__approval_stage", "record": "record.$id", "then": "raise", "else": "notify_result" } } },
+        "raise": { "action": { "CreateRecord": { "object": "approvals__escalation", "fields": { "stage": "record.$id", "level": "1", "reason": "'sla_breached'", "raised_at": "now" } } }, "next": "notify_result" },
+        "notify_result": { "action": { "CreateNotice": { "template": "approvals__stage_notice", "to": "param.owner", "record": "record.$id" } }, "next": "mail", "retry": { "attempts": 3 } },
+        "mail": { "action": { "SendMail": { "template": "approvals__decision_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
         "done": { "action": "End" } } }
   ],
   "operations": [
     { "id": "approvals__delegate_approval", "label": "Delegate an approval stage",
       "inputs": [
-        { "name": "stage", "ty": "Str", "required": true, "label": "Stage" },
+        { "name": "stage", "ty": { "Ref": { "target": "approvals__approval_stage", "on-delete": "Restrict" } }, "required": true, "label": "Stage" },
         { "name": "delegate_name", "ty": "Str", "required": true, "label": "Delegate name" },
         { "name": "delegate_contact", "ty": "Str", "required": true, "label": "Delegate email" },
         { "name": "starts_at", "ty": "Time", "required": true, "label": "Starts" },
@@ -270,7 +270,7 @@
       "steps": [
         { "CreateRecord": { "id": "delegation", "object": "approvals__delegation", "fields": { "stage": "record.$id", "delegator": "principal", "delegate_name": "param.delegate_name", "delegate_contact": "param.delegate_contact", "starts_at": "param.starts_at", "ends_at": "param.ends_at" } } } ] },
     { "id": "approvals__withdraw_request", "label": "Withdraw an approval request",
-      "inputs": [ { "name": "request", "ty": "Str", "required": true, "label": "The request" } ],
+      "inputs": [ { "name": "request", "ty": { "Ref": { "target": "approvals__approval_request", "on-delete": "Restrict" } }, "required": true, "label": "The request" } ],
       "invokers": { "signed-in": true, "roles": ["approvals__approval_admin"] },
       "subject": { "object": "approvals__approval_request", "input": "request" },
       "conditions": [ { "id": "still_open", "expr": "record.status == 'submitted' or record.status == 'in_legal' or record.status == 'in_brand' or record.status == 'in_region'", "error": "already-decided", "message": "This request can no longer be withdrawn." } ],

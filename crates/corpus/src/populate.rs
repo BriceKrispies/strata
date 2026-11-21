@@ -316,7 +316,7 @@ impl Populator<'_> {
                     &plan.module[..plan.module.len().min(3)].to_uppercase()
                 )
             } else {
-                format!("{} {n}", text::title(rng))
+                format!("{}-{n}", text::title(rng).replace(' ', "-"))
             };
             return value;
         }

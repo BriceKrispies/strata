@@ -20,7 +20,9 @@
     { "id": "automation__connector_admin", "name": "Connector admin", "description": "Owns connector setup, webhook subscriptions and secret rotation.", "level": "tenant",
       "holders": ["person", "team"], "capabilities": ["webhooks-manage", "webhook-receive", "automations-read", "automation__run_connectors", "automation__rotate_subscriptions"] },
     { "id": "automation__budget_owner", "name": "Budget owner", "description": "Holds the API call budget and grants allowance from it.", "level": "tenant",
-      "holders": ["person", "team"], "capabilities": ["ledger-configure", "ledger-read", "automation__manage_budget"] }
+      "holders": ["person", "team"], "capabilities": ["ledger-configure", "ledger-read", "automation__manage_budget"] },
+    { "id": "automation__member", "name": "Member", "description": "Any member of the tenant who reads what the product shares with everyone.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["automations-read"] }
   ],
 
   "capabilities": [
@@ -84,7 +86,7 @@
     { "id": "automation__admin_manages_connectors", "role": "automation__connector_admin", "resource": { "Object": "automation__connector" }, "actions": ["Create", "Read", "Update"] },
     { "id": "automation__admin_manages_subscriptions", "role": "automation__connector_admin", "resource": { "Object": "automation__webhook_subscription" }, "actions": ["Read", "Update"] },
     { "id": "automation__budget_owner_grants", "role": "automation__budget_owner", "resource": { "Object": "automation__budget_grant" }, "actions": ["Create", "Read", "Update"] },
-    { "id": "automation__member_reads_runs", "role": "member", "resource": { "Object": "automation__run_log" }, "actions": ["Read"], "condition": "record.outcome != 'cancelled'" }
+    { "id": "automation__member_reads_runs", "role": "automation__member", "resource": { "Object": "automation__run_log" }, "actions": ["Read"], "condition": "record.outcome != 'cancelled'" }
   ],
 
   "queries": [
@@ -228,7 +230,7 @@
   ],
 
   "segments": [
-    { "id": "automation__active_connectors", "name": "Active connectors", "subject-type": "automation__connector",
+    { "id": "automation__active_connectors", "name": "Active connectors", "subject-type": "automation__connector", "principal-field": "name",
       "predicate": "record.status == 'active'" }
   ],
 
@@ -280,34 +282,34 @@
       "run-as": { "roles": ["automation__connector_admin"] }, "run-key": "param.owner",
       "start": "notice",
       "steps": {
-        "notice": { "action": { "CreateNotice": { "template": "automation__rotation_notice_template", "to": "param.owner", "record": "param.record" } }, "next": "mail", "retry": { "attempts": 5 } },
+        "notice": { "action": { "CreateNotice": { "template": "automation__rotation_notice_template", "to": "param.owner", "record": "record.$id" } }, "next": "mail", "retry": { "attempts": 5 } },
         "mail": { "action": { "SendMail": { "template": "automation__rotation_mail", "to": "param.owner", "category": "transactional" } }, "next": "mail_done", "timeout": 30000 },
         "mail_done": { "action": "End" } } },
     { "id": "automation__budget_watch", "label": "Tell the budget owner when API calls are posted",
       "run-as": { "roles": ["automation__budget_owner"] },
       "start": "notice",
       "steps": {
-        "notice": { "action": { "CreateNotice": { "template": "automation__budget_notice_template", "to": "param.owner", "record": "param.record" } }, "next": "notice_done" },
+        "notice": { "action": { "CreateNotice": { "template": "automation__budget_notice_template", "to": "param.owner", "record": "record.$id" } }, "next": "notice_done" },
         "notice_done": { "action": "End" } } },
     { "id": "automation__scheduled_run", "label": "Wait for a schedule's next run and open a run log",
       "run-as": { "roles": ["automation__automation_operator"] }, "run-key": "record.$id",
       "start": "wait",
       "steps": {
-        "wait": { "action": { "WaitUntil": { "at": "record.next_run" } }, "next": "open_run" },
+        "wait": { "action": { "WaitUntil": { "at": "param.due_at" } }, "next": "open_run" },
         "open_run": { "action": { "CreateRecord": { "object": "automation__run_log", "fields": { "schedule": "record.$id", "started_at": "now", "outcome": "'running'", "calls": "0" } } }, "next": "run_done" },
         "run_done": { "action": "End" } } },
     { "id": "automation__invoke_connector_run", "label": "Invoke the connector run that a finished run asks for",
-      "run-as": { "roles": ["automation__automation_operator"] }, "run-key": "param.connector",
+      "run-as": { "roles": ["automation__automation_operator"] }, "run-key": "param.seq",
       "start": "invoke",
       "steps": {
-        "invoke": { "action": { "InvokeOperation": { "operation": "automation__invoke_connector", "inputs": { "connector": "param.connector", "reason": "'run-finished'" } } }, "next": "invoke_done" },
+        "invoke": { "action": { "InvokeOperation": { "operation": "automation__invoke_connector", "inputs": { "connector": "param.subject", "reason": "'run-finished'" } } }, "next": "invoke_done" },
         "invoke_done": { "action": "End" } } }
   ],
 
   "operations": [
     { "id": "automation__invoke_connector", "label": "Invoke a connector run",
       "inputs": [
-        { "name": "connector", "ty": "Str", "required": true, "label": "The connector" },
+        { "name": "connector", "ty": { "Ref": { "target": "automation__connector", "on-delete": "Restrict" } }, "required": true, "label": "The connector" },
         { "name": "reason", "ty": "Str", "required": false, "label": "Reason" } ],
       "invokers": { "signed-in": true, "roles": ["automation__automation_operator"] },
       "subject": { "object": "automation__connector", "input": "connector" },
@@ -316,7 +318,7 @@
         { "PostLedger": { "id": "take_call", "owner": { "Pool": { "pool": "automation__budget_pool" } }, "unit": "automation__api_calls", "scope": "text(record.$id)", "amount": "-1", "reason": "connector-run" } },
         { "CreateRecord": { "id": "run", "object": "automation__run_log", "fields": { "started_at": "now", "outcome": "'queued'", "calls": "1" } } } ] },
     { "id": "automation__rotate_subscription", "label": "Rotate a subscription secret",
-      "inputs": [ { "name": "subscription", "ty": "Str", "required": true, "label": "The subscription" } ],
+      "inputs": [ { "name": "subscription", "ty": { "Ref": { "target": "automation__webhook_subscription", "on-delete": "Restrict" } }, "required": true, "label": "The subscription" } ],
       "invokers": { "signed-in": true, "roles": ["automation__connector_admin"] },
       "subject": { "object": "automation__webhook_subscription", "input": "subscription" },
       "conditions": [ { "id": "is_active", "expr": "record.state == 'active'", "error": "not-active", "message": "Only an active subscription can be rotated." } ],

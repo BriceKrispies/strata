@@ -103,7 +103,7 @@
 
   "queries": [
     { "id": "localisation__open_jobs", "object": "localisation__translation_job", "filter": "record.status != 'delivered' and record.status != 'cancelled'", "params": [], "order": [ { "field": "due_date", "descending": false } ], "limit": 200 },
-    { "id": "localisation__glossary_by_locale", "object": "localisation__glossary_term", "filter": "record.locale == param.locale", "params": ["locale"], "order": [ { "field": "term", "descending": false } ], "limit": 500 }
+    { "id": "localisation__glossary_by_locale", "object": "localisation__glossary_term", "filter": "record.locale == param.locale", "params": ["locale"], "order": [ { "field": "term", "descending": false } ], "limit": 200 }
   ],
 
   "views": [
@@ -215,7 +215,7 @@
   "operations": [
     { "id": "localisation__accept_assignment", "label": "Accept a translation assignment",
       "conditions": [],
-      "inputs": [ { "name": "assignment", "ty": "Str", "required": true, "label": "The assignment" } ],
+      "inputs": [ { "name": "assignment", "ty": { "Ref": { "target": "localisation__translator_assignment", "on-delete": "Restrict" } }, "required": true, "label": "The assignment" } ],
       "invokers": { "signed-in": true, "roles": ["localisation__translator_role"] },
       "subject": { "object": "localisation__translator_assignment", "input": "assignment" },
       "steps": [
@@ -236,7 +236,7 @@
       "run-as": { "roles": ["localisation__project_manager"] },
       "start": "notify",
       "steps": {
-        "notify": { "action": { "SendMail": { "template": "localisation__delivery_mail", "to": "param.translator", "category": "transactional" } }, "next": "done", "timeout": 30000 },
+        "notify": { "action": { "SendMail": { "template": "localisation__delivery_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
         "done": { "action": "End" } } }
   ],
 
