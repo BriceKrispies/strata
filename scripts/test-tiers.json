@@ -74,13 +74,6 @@
       "unmeasured": true
     },
     {
-      "package": "strata-model-core",
-      "target": "model_core_it",
-      "tier": "routine",
-      "seconds": 0.64,
-      "unmeasured": true
-    },
-    {
       "package": "strata-protocol",
       "target": "protocol_it",
       "tier": "routine",

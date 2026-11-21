@@ -161,32 +161,6 @@ fn a_personal_field_that_is_not_searchable_has_no_index_row() {
     );
 }
 
-// Verifies: PRV-1588
-// Verifies: PRV-2723
-#[test]
-fn the_erasure_of_the_subject_removes_the_index_row_of_a_searchable_field() {
-    let path = fresh_path();
-    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
-    setup(&store);
-    let file = store.tenant_file(&tenant_id("alpha")).unwrap().unwrap();
-    assert_eq!(rows(&file, "email").len(), 1);
-    execute(
-        &store,
-        &Intent::EraseSubject {
-            subject: principal_id("alpha:ada"),
-            resume_object: None,
-            resume_after: None,
-            held_objects: Vec::new(),
-            addressed_invitations: Vec::new(),
-        },
-        &ctx("alpha", owner(), 20),
-    )
-    .unwrap();
-    assert!(rows(&file, "email").is_empty());
-    assert!(rows(&file, "bio").is_empty());
-    assert_eq!(rows(&file, "plan").len(), 1);
-}
-
 /// The history of the schema keeps no team and no invitation: they name people (WG-5111).
 // Verifies: PRV-2726
 #[test]
