@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-storage-sqlite"
 description = "SQLite implementation of the Strata persistence contract."
 version.workspace = true
@@ -20,6 +21,14 @@ strata-storage-api = { workspace = true, features = ["conformance"] }
 strata-kernel = { workspace = true, features = ["testkit"] }
 # The publication template, for the recorded-data test.
 strata-substrate.workspace = true
+
+[[test]]
+name = "storage_sqlite_it"
+path = "tests/storage_sqlite_it.rs"
+
+[[test]]
+name = "storage_sqlite_slow"
+path = "tests/storage_sqlite_slow.rs"
 
 [lints]
 workspace = true

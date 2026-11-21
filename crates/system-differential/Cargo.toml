@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-system-differential"
 description = "The acceptance test of the system host: every scenario that drives implementation machines, run on the generated machines and routing table, step for step against Exegra's trace."
 version.workspace = true
@@ -15,6 +16,10 @@ strata-model = { path = "../model", features = ["target-models"] }
 strata-spec-compiler = { path = "../spec-compiler" }
 serde_json.workspace = true
 tokio.workspace = true
+
+[[test]]
+name = "system_differential_slow"
+path = "tests/system_differential_slow.rs"
 
 [lints]
 workspace = true

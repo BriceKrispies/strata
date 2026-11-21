@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-verification"
 description = "Invariant evaluation over kernel states, the proof-obligation table, Lean orchestration and evidence reporting."
 version.workspace = true
@@ -15,6 +16,14 @@ serde_json.workspace = true
 [dev-dependencies]
 strata-kernel = { workspace = true, features = ["testkit"] }
 proptest.workspace = true
+
+[[test]]
+name = "verification_it"
+path = "tests/verification_it.rs"
+
+[[test]]
+name = "verification_slow"
+path = "tests/verification_slow.rs"
 
 [lints]
 workspace = true

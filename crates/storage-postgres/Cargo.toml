@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-storage-postgres"
 description = "PostgreSQL implementation of the Strata persistence contract."
 version.workspace = true
@@ -17,6 +18,10 @@ postgres.workspace = true
 [dev-dependencies]
 strata-storage-api = { workspace = true, features = ["conformance"] }
 strata-kernel = { workspace = true, features = ["testkit"] }
+
+[[test]]
+name = "storage_postgres_slow"
+path = "tests/storage_postgres_slow.rs"
 
 [lints]
 workspace = true

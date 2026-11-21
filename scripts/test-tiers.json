@@ -7,937 +7,206 @@
   "tests": [
     {
       "package": "strata-backend",
-      "target": "aggregate_copies",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Stored aggregate results with a fixed-seed property over random schemas, roles and writes on an in-process backend; scoped runs include it when the backend, the kernel's audience or aggregates modules, or a store changed"
-    },
-    {
-      "package": "strata-backend",
-      "target": "aggregates",
+      "target": "backend_it",
       "tier": "routine",
-      "seconds": null,
+      "seconds": 18.2,
       "unmeasured": true
     },
     {
       "package": "strata-backend",
-      "target": "approvals",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Approval steps, compensation, the invoke-operation step and the direct start of a run through the worker on the in-memory store; not yet measured"
-    },
-    {
-      "package": "strata-backend",
-      "target": "audit_log",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Audit entries of role and configuration changes, and the verify-audit-chain route on a tampered trail, on the in-memory store; not yet measured"
-    },
-    {
-      "package": "strata-backend",
-      "target": "badge_milestones",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "The reference product end to end on real sockets: install, ledger postings, the worker and reads as members; not yet measured"
-    },
-    {
-      "package": "strata-backend",
-      "target": "dispatch",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "The mail dispatcher through the worker on the in-memory store: a segment of 150 members and every send of each test run through worker passes"
-    },
-    {
-      "package": "strata-backend",
-      "target": "erasure",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-backend",
-      "target": "factors",
-      "tier": "routine",
-      "seconds": 3.93
-    },
-    {
-      "package": "strata-backend",
-      "target": "files",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Added after the last measured run and not yet measured; full until a green run records its time"
-    },
-    {
-      "package": "strata-backend",
-      "target": "hosts_invite",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-backend",
-      "target": "inbox",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Not yet measured: the inbox on real sockets, including a send to a segment of 205 members that three worker jobs finish; full tier until it is measured"
-    },
-    {
-      "package": "strata-backend",
-      "target": "keycloak",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "The OpenID Connect authorization code flow against a live Keycloak container (STRATA_IDP=1 node scripts/containers.mjs up); needs STRATA_KEYCLOAK_URL, and fails naming it when unset; not yet measured"
-    },
-    {
-      "package": "strata-backend",
-      "target": "lab_revision",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-backend",
-      "target": "ledger",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-backend",
-      "target": "ledger_more",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "expiry jobs with a retried lease, batches of a hundred accounts, verification of a tampered header and a ledger per tenant"
-    },
-    {
-      "package": "strata-backend",
-      "target": "oidc",
-      "tier": "routine",
-      "seconds": 3.94
-    },
-    {
-      "package": "strata-backend",
-      "target": "operations",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-backend",
-      "target": "outbound",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Added after the last measured run and not yet measured; full until a green run records its time"
-    },
-    {
-      "package": "strata-backend",
-      "target": "production",
-      "tier": "routine",
-      "seconds": 0.77
-    },
-    {
-      "package": "strata-backend",
-      "target": "products",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-backend",
-      "target": "quota",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Starts running backends on real sockets and logs in with Argon2 (the quotas, plans, flags and the usage route)"
-    },
-    {
-      "package": "strata-backend",
-      "target": "saml",
-      "tier": "routine",
-      "seconds": 4.81
-    },
-    {
-      "package": "strata-backend",
-      "target": "schedules",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-backend",
-      "target": "scim",
-      "tier": "routine",
-      "seconds": 1.65
-    },
-    {
-      "package": "strata-backend",
-      "target": "sealing",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "The sealed store through the backend: sealing, erasure, restore, replay and the audit chain on SQLite, with key derivation in every seal"
-    },
-    {
-      "package": "strata-backend",
-      "target": "search",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Added after the last measured run and not yet measured; full until a green run records its time"
-    },
-    {
-      "package": "strata-backend",
-      "target": "segment_jobs",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Runs the worker over a segment of 350 people, its refresh, its event log, a fan-out and a bundle install, on the in-memory store"
-    },
-    {
-      "package": "strata-backend",
-      "target": "segments",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-backend",
-      "target": "service",
+      "target": "backend_slow",
       "tier": "full",
       "seconds": 16.68,
-      "reason": "The backend as a running service on real sockets (60 tests); scoped runs include it when the backend or anything under it changed"
-    },
-    {
-      "package": "strata-backend",
-      "target": "settings",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-backend",
-      "target": "spec_agreement",
-      "tier": "routine",
-      "seconds": 0.02
-    },
-    {
-      "package": "strata-backend",
-      "target": "startup",
-      "tier": "full",
-      "seconds": null,
       "unmeasured": true,
-      "reason": "Runs the real backend binary with a bare environment and checks each refused start names its variable; not yet measured"
+      "reason": "aggregate_copies: Stored aggregate results with a fixed-seed property over random schemas, roles and writes on an in-process backend; scoped runs include it when the backend, the kernel's audience or aggregates modules, or a store changed; approvals: Approval steps, compensation, the invoke-operation step and the direct start of a run through the worker on the in-memory store; not yet measured; audit_log: Audit entries of role and configuration changes, and the verify-audit-chain route on a tampered trail, on the in-memory store; not yet measured; badge_milestones: The reference product end to end on real sockets: install, ledger postings, the worker and reads as members; not yet measured; dispatch: The mail dispatcher through the worker on the in-memory store: a segment of 150 members and every send of each test run through worker passes; files: Added after the last measured run and not yet measured; full until a green run records its time; inbox: Not yet measured: the inbox on real sockets, including a send to a segment of 205 members that three worker jobs finish; full tier until it is measured; keycloak: The OpenID Connect authorization code flow against a live Keycloak container (STRATA_IDP=1 node scripts/containers.mjs up); needs STRATA_KEYCLOAK_URL, and fails naming it when unset; not yet measured; ledger_more: expiry jobs with a retried lease, batches of a hundred accounts, verification of a tampered header and a ledger per tenant; outbound: Added after the last measured run and not yet measured; full until a green run records its time; quota: Starts running backends on real sockets and logs in with Argon2 (the quotas, plans, flags and the usage route); sealing: The sealed store through the backend: sealing, erasure, restore, replay and the audit chain on SQLite, with key derivation in every seal; search: Added after the last measured run and not yet measured; full until a green run records its time; segment_jobs: Runs the worker over a segment of 350 people, its refresh, its event log, a fan-out and a bundle install, on the in-memory store; service: The backend as a running service on real sockets (60 tests); scoped runs include it when the backend or anything under it changed; startup: Runs the real backend binary with a bare environment and checks each refused start names its variable; not yet measured; subject_rights: Subject export, restriction, legal holds and the retention sweep, each on the memory store and SQLite, with the worker running the jobs; scoped runs include it when the backend or the kernel changed"
     },
     {
-      "package": "strata-backend",
-      "target": "subject_rights",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Subject export, restriction, legal holds and the retention sweep, each on the memory store and SQLite, with the worker running the jobs; scoped runs include it when the backend or the kernel changed"
-    },
-    {
-      "package": "strata-backend",
-      "target": "tokens",
+      "package": "strata-bff",
+      "target": "bff_it",
       "tier": "routine",
-      "seconds": 3.08
-    },
-    {
-      "package": "strata-backend",
-      "target": "worker",
-      "tier": "routine",
-      "seconds": null,
+      "seconds": 7.32,
       "unmeasured": true
     },
     {
       "package": "strata-bff",
-      "target": "backend_call",
-      "tier": "routine",
-      "seconds": 2.04
-    },
-    {
-      "package": "strata-bff",
-      "target": "contract_conformance",
+      "target": "bff_slow",
       "tier": "full",
       "seconds": null,
       "unmeasured": true,
-      "reason": "The generated contract conformance suite (WG-5182): one test per shipped contract with a bffRoute, each starting the real backend on an in-memory SQLite store and the BFF, signing in several development accounts and, for a quota, a second stack; not yet measured"
+      "reason": "contract_conformance: The generated contract conformance suite (WG-5182): one test per shipped contract with a bffRoute, each starting the real backend on an in-memory SQLite store and the BFF, signing in several development accounts and, for a quota, a second stack; not yet measured; contract_conformance_fixtures: The self-test of the conformance suite: a stand-in server per fixture contract, nine of whose tests must fail; not yet measured; process: Runs the real gateway binary: refused starts, and on Unix SIGTERM draining it within its deadline; not yet measured"
     },
     {
-      "package": "strata-bff",
-      "target": "contract_conformance_fixtures",
+      "package": "strata-kernel",
+      "target": "kernel_it",
+      "tier": "routine",
+      "seconds": 5.26,
+      "unmeasured": true,
+      "reason": "rule_reads: Four tests over the notes world with one schema change and one posting or setting write each; not yet measured"
+    },
+    {
+      "package": "strata-kernel",
+      "target": "kernel_slow",
       "tier": "full",
       "seconds": null,
       "unmeasured": true,
-      "reason": "The self-test of the conformance suite: a stand-in server per fixture contract, nine of whose tests must fail; not yet measured"
-    },
-    {
-      "package": "strata-bff",
-      "target": "edge",
-      "tier": "routine",
-      "seconds": 5.28
-    },
-    {
-      "package": "strata-bff",
-      "target": "process",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Runs the real gateway binary: refused starts, and on Unix SIGTERM draining it within its deadline; not yet measured"
-    },
-    {
-      "package": "strata-kernel",
-      "target": "aggregates",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "approvals",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Shares its name with strata-backend:approvals, which is full, and cargo selects --test by name; not yet measured"
-    },
-    {
-      "package": "strata-kernel",
-      "target": "audience",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Audience classes with a fixed-seed property over random schemas, roles and records; scoped runs include it when the kernel's audience or aggregates modules changed"
-    },
-    {
-      "package": "strata-kernel",
-      "target": "automation_principal",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "behaviour",
-      "tier": "routine",
-      "seconds": 0.03
-    },
-    {
-      "package": "strata-kernel",
-      "target": "definitions",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "dependencies",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "editor_rules",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "erasure",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "evolution",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "final_candidate",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "generated_differential",
-      "tier": "routine",
-      "seconds": 0.03
-    },
-    {
-      "package": "strata-kernel",
-      "target": "ledger",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "ledger_policies",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "random credits, debits and expiries from a fixed seed, and a tenant of ten thousand account limits"
-    },
-    {
-      "package": "strata-kernel",
-      "target": "limits",
-      "tier": "routine",
-      "seconds": 0.55
-    },
-    {
-      "package": "strata-kernel",
-      "target": "object_meta",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "operations",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "properties",
-      "tier": "routine",
-      "seconds": 4.65
-    },
-    {
-      "package": "strata-kernel",
-      "target": "query_plan",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "rule_arithmetic",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "rule_reads",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Four tests over the notes world with one schema change and one posting or setting write each; not yet measured"
-    },
-    {
-      "package": "strata-kernel",
-      "target": "search",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Added after the last measured run and not yet measured; full until a green run records its time"
-    },
-    {
-      "package": "strata-kernel",
-      "target": "segments",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "settings",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-kernel",
-      "target": "triggers",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
+      "reason": "approvals: not yet measured; audience: Audience classes with a fixed-seed property over random schemas, roles and records; scoped runs include it when the kernel's audience or aggregates modules changed; ledger_policies: random credits, debits and expiries from a fixed seed, and a tenant of ten thousand account limits; search: Added after the last measured run and not yet measured; full until a green run records its time"
     },
     {
       "package": "strata-machine-store",
-      "target": "runtime_cases",
+      "target": "machine_store_it",
       "tier": "routine",
-      "seconds": 2.52
+      "seconds": 2.52,
+      "unmeasured": true
     },
     {
       "package": "strata-model-core",
-      "target": "dependencies",
+      "target": "model_core_it",
       "tier": "routine",
-      "seconds": 0.64
+      "seconds": 0.64,
+      "unmeasured": true
     },
     {
       "package": "strata-protocol",
-      "target": "members",
+      "target": "protocol_it",
       "tier": "routine",
-      "seconds": 0
-    },
-    {
-      "package": "strata-protocol",
-      "target": "tenants",
-      "tier": "routine",
-      "seconds": 0.09
-    },
-    {
-      "package": "strata-runtime",
-      "target": "delayed",
-      "tier": "routine",
-      "seconds": 0.13
-    },
-    {
-      "package": "strata-runtime",
-      "target": "dependencies",
-      "tier": "routine",
-      "seconds": 0.64
-    },
-    {
-      "package": "strata-runtime",
-      "target": "lease",
-      "tier": "routine",
-      "seconds": 0.38
-    },
-    {
-      "package": "strata-runtime",
-      "target": "replay",
-      "tier": "routine",
-      "seconds": 0.44
-    },
-    {
-      "package": "strata-runtime",
-      "target": "serve_limits",
-      "tier": "routine",
-      "seconds": 2.03
-    },
-    {
-      "package": "strata-runtime",
-      "target": "shutdown",
-      "tier": "routine",
-      "seconds": null,
+      "seconds": 0.09,
       "unmeasured": true
     },
     {
       "package": "strata-runtime",
-      "target": "system",
+      "target": "runtime_it",
       "tier": "routine",
-      "seconds": 1.44
-    },
-    {
-      "package": "strata-runtime",
-      "target": "tenants",
-      "tier": "routine",
-      "seconds": 0.09
+      "seconds": 5.15,
+      "unmeasured": true
     },
     {
       "package": "strata-simulation",
-      "target": "simulation",
+      "target": "simulation_slow",
       "tier": "full",
       "seconds": 8.37,
-      "reason": "Determinism and minimisation over the Fieldnotes bundle; scoped runs include it when the simulation crate or a tenant bundle changed"
+      "unmeasured": true,
+      "reason": "simulation: Determinism and minimisation over the Fieldnotes bundle; scoped runs include it when the simulation crate or a tenant bundle changed"
     },
     {
       "package": "strata-spec-compiler-core-fixture",
-      "target": "roundtrip",
+      "target": "spec_compiler_core_fixture_it",
       "tier": "routine",
-      "seconds": 0.01
+      "seconds": 0.01,
+      "unmeasured": true
     },
     {
       "package": "strata-spec-compiler-functions-fixture",
-      "target": "dependencies",
+      "target": "spec_compiler_functions_fixture_it",
       "tier": "routine",
-      "seconds": 0.64
-    },
-    {
-      "package": "strata-spec-compiler-language-fixture",
-      "target": "dependencies",
-      "tier": "routine",
-      "seconds": 0.64
-    },
-    {
-      "package": "strata-spec-compiler-language-fixture",
-      "target": "evaluation",
-      "tier": "routine",
-      "seconds": 0
-    },
-    {
-      "package": "strata-spec-compiler-language-fixture",
-      "target": "kernel_cases",
-      "tier": "routine",
-      "seconds": null,
+      "seconds": 0.64,
       "unmeasured": true
     },
     {
       "package": "strata-spec-compiler-language-fixture",
-      "target": "syntax",
+      "target": "spec_compiler_language_fixture_it",
       "tier": "routine",
-      "seconds": 0
+      "seconds": 0.64,
+      "unmeasured": true
     },
     {
       "package": "strata-spec-compiler",
-      "target": "adversarial",
+      "target": "spec_compiler_it",
       "tier": "routine",
-      "seconds": 1.31
+      "seconds": 30.24,
+      "unmeasured": true
     },
     {
       "package": "strata-spec-compiler",
-      "target": "audit_refusals",
-      "tier": "routine",
-      "seconds": 0.51
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "bundle",
+      "target": "spec_compiler_slow",
       "tier": "full",
-      "seconds": null,
+      "seconds": 1051.92,
       "unmeasured": true,
-      "reason": "Not yet measured: loads the platform specification and runs specc; full tier until it is measured"
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "catalogue",
-      "tier": "routine",
-      "seconds": 2.46
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "conformance",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Loads the platform specification and formats its whole generated conformance suite with rustfmt; not yet measured"
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "deploy",
-      "tier": "routine",
-      "seconds": 1.99
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "derived",
-      "tier": "routine",
-      "seconds": 0
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "differential",
-      "tier": "routine",
-      "seconds": 1.48
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "e2e",
-      "tier": "routine",
-      "seconds": 2.57
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "functions",
-      "tier": "routine",
-      "seconds": 0.02
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "golden",
-      "tier": "full",
-      "seconds": 10.87,
-      "reason": "Regenerates three fixture crates and compares them byte for byte; scoped runs include it when the specc crate changed"
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "kernel_types",
-      "tier": "routine",
-      "seconds": 1.04
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "language",
-      "tier": "routine",
-      "seconds": 0.24
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "language_js",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "layer_expr_drift",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "layers",
-      "tier": "full",
-      "seconds": 207.87,
-      "reason": "Validates the whole specification with Exegra once per product file and runs specc over the whole specification twice per generated tree",
+      "reason": "bundle: Not yet measured: loads the platform specification and runs specc; full tier until it is measured; conformance: Loads the platform specification and formats its whole generated conformance suite with rustfmt; not yet measured; golden: Regenerates three fixture crates and compares them byte for byte; scoped runs include it when the specc crate changed; layers: Validates the whole specification with Exegra once per product file and runs specc over the whole specification twice per generated tree; refusals: Generates from many refused specifications; scoped runs include it when the specc crate changed; strata_differential: Steps every generated machine, Rust and JavaScript, through every scenario trace from Exegra; web_screens: Not yet measured: runs node over the adversarial fixture; full tier until it is measured",
       "slow": true
     },
     {
-      "package": "strata-spec-compiler",
-      "target": "machine_refusals",
+      "package": "strata-spec-expr-cases",
+      "target": "spec_expr_cases_it",
       "tier": "routine",
-      "seconds": 3.1
+      "seconds": 0.08,
+      "unmeasured": true
     },
     {
-      "package": "strata-spec-compiler",
-      "target": "realisation",
+      "package": "strata-spec-expr",
+      "target": "spec_expr_it",
       "tier": "routine",
-      "seconds": 3.13
+      "seconds": 5.62,
+      "unmeasured": true
     },
     {
-      "package": "strata-spec-compiler",
-      "target": "refusals",
-      "tier": "full",
-      "seconds": 15.91,
-      "reason": "Generates from many refused specifications; scoped runs include it when the specc crate changed"
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "scenarios",
+      "package": "strata-storage-api",
+      "target": "storage_api_it",
       "tier": "routine",
-      "seconds": 0.37
+      "seconds": 0.17,
+      "unmeasured": true
     },
     {
-      "package": "strata-spec-compiler",
-      "target": "strata_differential",
-      "tier": "full",
-      "seconds": 817.27,
-      "reason": "Steps every generated machine, Rust and JavaScript, through every scenario trace from Exegra",
-      "slow": true
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "web",
-      "tier": "routine",
-      "seconds": 4.47
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "web_rules",
-      "tier": "routine",
-      "seconds": 7.45
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "web_screens",
+      "package": "strata-storage-api",
+      "target": "storage_api_slow",
       "tier": "full",
       "seconds": null,
       "unmeasured": true,
-      "reason": "Not yet measured: runs node over the adversarial fixture; full tier until it is measured"
-    },
-    {
-      "package": "strata-spec-compiler",
-      "target": "wiring",
-      "tier": "routine",
-      "seconds": 0.1
-    },
-    {
-      "package": "strata-spec-expr-cases",
-      "target": "js_cases",
-      "tier": "routine",
-      "seconds": 0.08
-    },
-    {
-      "package": "strata-spec-expr-cases",
-      "target": "rust_cases",
-      "tier": "routine",
-      "seconds": 0
-    },
-    {
-      "package": "strata-spec-expr",
-      "target": "grammar",
-      "tier": "routine",
-      "seconds": 0
-    },
-    {
-      "package": "strata-spec-expr",
-      "target": "js_semantics",
-      "tier": "routine",
-      "seconds": 0.09
-    },
-    {
-      "package": "strata-spec-expr",
-      "target": "js_translate",
-      "tier": "routine",
-      "seconds": 0
-    },
-    {
-      "package": "strata-spec-expr",
-      "target": "json",
-      "tier": "routine",
-      "seconds": 0
-    },
-    {
-      "package": "strata-spec-expr",
-      "target": "spec_files",
-      "tier": "routine",
-      "seconds": 5.52
-    },
-    {
-      "package": "strata-spec-expr",
-      "target": "translate",
-      "tier": "routine",
-      "seconds": 0.01
-    },
-    {
-      "package": "strata-spec-expr",
-      "target": "typing",
-      "tier": "routine",
-      "seconds": 0
-    },
-    {
-      "package": "strata-storage-api",
-      "target": "memory",
-      "tier": "routine",
-      "seconds": 0.15
-    },
-    {
-      "package": "strata-storage-api",
-      "target": "needs",
-      "tier": "routine",
-      "seconds": 0.02
-    },
-    {
-      "package": "strata-storage-api",
-      "target": "sealed",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "The sealed store over the memory adapter: the whole conformance suite run through it"
+      "reason": "sealed: The sealed store over the memory adapter: the whole conformance suite run through it"
     },
     {
       "package": "strata-storage-postgres",
-      "target": "postgres",
+      "target": "storage_postgres_slow",
       "tier": "full",
       "seconds": null,
       "unmeasured": true,
-      "reason": "Needs STRATA_PG_URL, a PostgreSQL server whose role may create databases, and fails without it; the tiers cannot state an environment requirement, so it is not in the routine tier beside the SQLite conformance test. Runs the whole conformance suite with a fresh database per case"
+      "reason": "postgres: Needs STRATA_PG_URL, a PostgreSQL server whose role may create databases, and fails without it; the tiers cannot state an environment requirement, so it is not in the routine tier beside the SQLite conformance test. Runs the whole conformance suite with a fresh database per case"
     },
     {
       "package": "strata-storage-sqlite",
-      "target": "durability",
-      "tier": "full",
-      "seconds": 9.19,
-      "reason": "SQLite crash, upgrade and many-tenant cases; scoped runs include it when a storage crate changed"
-    },
-    {
-      "package": "strata-storage-sqlite",
-      "target": "fleet",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "SQLite tenant files on disk, one of them marked as migrated by a newer version, run through the fleet migration"
-    },
-    {
-      "package": "strata-storage-sqlite",
-      "target": "ledger_limits",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "upgrades a tenant file whose schema held the limits of accounts, which needs the older layout rebuilt"
-    },
-    {
-      "package": "strata-storage-sqlite",
-      "target": "query_plan_scale",
-      "tier": "full",
-      "seconds": 1432,
-      "reason": "Planned reads and views over 100,000 records on SQLite and the memory store; measured 1432 s in the routine run of 2026-11-20, far past the routine budget"
-    },
-    {
-      "package": "strata-storage-sqlite",
-      "target": "recorded_data",
+      "target": "storage_sqlite_it",
       "tier": "routine",
-      "seconds": 0.16
-    },
-    {
-      "package": "strata-storage-sqlite",
-      "target": "sealed_index",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "SQLite files on disk, opened by a second connection to read the record index and the schema history"
-    },
-    {
-      "package": "strata-storage-sqlite",
-      "target": "search",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Added after the last measured run and not yet measured; full until a green run records its time"
-    },
-    {
-      "package": "strata-storage-sqlite",
-      "target": "sqlite",
-      "tier": "routine",
-      "seconds": 4.03
-    },
-    {
-      "package": "strata-substrate",
-      "target": "product_bundle",
-      "tier": "routine",
-      "seconds": null,
+      "seconds": 4.19,
       "unmeasured": true
     },
     {
-      "package": "strata-substrate",
-      "target": "publication_template",
-      "tier": "routine",
-      "seconds": 0.06
+      "package": "strata-storage-sqlite",
+      "target": "storage_sqlite_slow",
+      "tier": "full",
+      "seconds": 1441.19,
+      "unmeasured": true,
+      "reason": "durability: SQLite crash, upgrade and many-tenant cases; scoped runs include it when a storage crate changed; fleet: SQLite tenant files on disk, one of them marked as migrated by a newer version, run through the fleet migration; ledger_limits: upgrades a tenant file whose schema held the limits of accounts, which needs the older layout rebuilt; query_plan_scale: Planned reads and views over 100,000 records on SQLite and the memory store; measured 1432 s in the routine run of 2026-11-20, far past the routine budget; sealed_index: SQLite files on disk, opened by a second connection to read the record index and the schema history; search: Added after the last measured run and not yet measured; full until a green run records its time",
+      "slow": true
     },
     {
       "package": "strata-substrate",
-      "target": "ui_definition",
+      "target": "substrate_it",
       "tier": "routine",
-      "seconds": null,
+      "seconds": 0.06,
       "unmeasured": true
     },
     {
       "package": "strata-system-differential",
-      "target": "exegra",
+      "target": "system_differential_slow",
       "tier": "full",
       "seconds": 1486.97,
-      "reason": "Replays every implementation scenario through Exegra (one Exegra trace per scenario) and steps the generated system host through it; the one comparison that needs all of them",
+      "unmeasured": true,
+      "reason": "exegra: Replays every implementation scenario through Exegra (one Exegra trace per scenario) and steps the generated system host through it; the one comparison that needs all of them",
       "slow": true
     },
     {
       "package": "strata-verification",
-      "target": "correspondence",
+      "target": "verification_it",
+      "tier": "routine",
+      "seconds": 0.55,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-verification",
+      "target": "verification_slow",
       "tier": "full",
       "seconds": 24.12,
-      "reason": "Runs the Lean build and compares it with the kernel (needs lake); the gate also runs lake build"
-    },
-    {
-      "package": "strata-verification",
-      "target": "purity",
-      "tier": "routine",
-      "seconds": 0.05
-    },
-    {
-      "package": "strata-verification",
-      "target": "state_machine",
-      "tier": "routine",
-      "seconds": 0.5
+      "unmeasured": true,
+      "reason": "correspondence: Runs the Lean build and compares it with the kernel (needs lake); the gate also runs lake build"
     }
   ]
 }

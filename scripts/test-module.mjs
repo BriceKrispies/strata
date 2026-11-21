@@ -127,7 +127,7 @@ export function planSteps(scope, { root: base = root, home, hash = null, product
       id: 'differential',
       label: `machine differential of ${scope.scenarios.length} scenario(s)`,
       command: 'cargo',
-      args: ['test', '-p', 'strata-system-differential', '--test', 'exegra', '--', '--nocapture'],
+      args: ['test', '-p', 'strata-system-differential', '--test', 'system_differential_slow', 'exegra::', '--', '--nocapture'],
       env: { ...env, EXEGRA_HOME: home, STRATA_MODULE_SCENARIOS_FILE: join(base, dir, 'scenarios.json') },
       files: [{ path: `${dir}/scenarios.json`, content: JSON.stringify(scope.scenarios) }],
       skip: scope.scenarios.length === 0 ? `no scenario runs a behaviour of ${scope.module}` : null,

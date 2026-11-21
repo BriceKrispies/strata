@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-kernel"
 description = "Pure, deterministic state-transition kernel for Strata. No I/O, no clock, no randomness."
 version.workspace = true
@@ -22,6 +23,14 @@ strata-model-core.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 strata-kernel = { path = ".", features = ["testkit"] }
+
+[[test]]
+name = "kernel_it"
+path = "tests/kernel_it.rs"
+
+[[test]]
+name = "kernel_slow"
+path = "tests/kernel_slow.rs"
 
 [lints]
 workspace = true

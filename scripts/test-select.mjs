@@ -47,6 +47,7 @@ export function parseManifest(text) {
   let name = null;
   const deps = new Set();
   const declaredTests = [];
+  let autotests = true;
   let currentTest = null;
   for (const raw of lines) {
     const line = raw.trim();
@@ -68,12 +69,13 @@ export function parseManifest(text) {
     } else if (section === '[package]') {
       const m = /^name\s*=\s*"([^"]+)"/.exec(line);
       if (m) name = m[1];
+      if (/^autotests\s*=\s*false\b/.test(line)) autotests = false;
     } else if (currentTest) {
       const m = /^(name|path)\s*=\s*"([^"]+)"/.exec(line);
       if (m) currentTest[m[1]] = m[2];
     }
   }
-  return { name, deps: [...deps], declaredTests };
+  return { name, deps: [...deps], declaredTests, autotests };
 }
 
 /** The workspace members' directories, from the root manifest's `members = [...]`. */
@@ -84,12 +86,13 @@ export function memberDirs(rootManifest) {
 
 /**
  * The integration test targets of a package directory: `tests/<name>.rs`, `tests/<name>/main.rs`, and
- * the `[[test]]` entries of the manifest (which can name a target by another path).
+ * the `[[test]]` entries of the manifest (which can name a target by another path). With
+ * `autotests = false` in the manifest only the `[[test]]` entries are targets.
  */
-export function testTargets(dir, declaredTests, list = defaultLister) {
+export function testTargets(dir, declaredTests, list = defaultLister, autotests = true) {
   const names = new Set();
   const tests = join(dir, 'tests');
-  for (const entry of list(tests)) {
+  for (const entry of autotests ? list(tests) : []) {
     if (entry.isFile && entry.name.endsWith('.rs')) names.add(entry.name.slice(0, -3));
     if (entry.isDirectory && list(join(tests, entry.name)).some((e) => e.isFile && e.name === 'main.rs')) names.add(entry.name);
   }
@@ -115,7 +118,7 @@ export function readWorkspace(root, { read = (p) => readFileSync(p, 'utf8'), lis
       name: p.name,
       dir: p.dir,
       deps: p.deps.filter((d) => names.has(d) && d !== p.name).sort(),
-      tests: testTargets(resolve(root, p.dir), p.declaredTests, list),
+      tests: testTargets(resolve(root, p.dir), p.declaredTests, list, p.autotests),
     })),
   };
 }

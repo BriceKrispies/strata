@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-spec-expr"
 description = "The Exegra expression language of the specification: parser, type checker against representation types, and translation to Rust token streams and to JavaScript."
 version.workspace = true
@@ -13,6 +14,10 @@ quote.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+
+[[test]]
+name = "spec_expr_it"
+path = "tests/spec_expr_it.rs"
 
 [lints]
 workspace = true
