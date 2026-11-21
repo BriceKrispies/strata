@@ -119,6 +119,17 @@ function run(command, commandArgs, options = {}) {
   return result;
 }
 
+// One Exegra command on the project, run once per gate: the evidence step and the Exegra step both
+// read `claims`, which is the same answer for the same specification (WG-5411).
+const exegraRuns = new Map();
+function runExegra(command) {
+  if (!exegraRuns.has(command)) {
+    const cli = resolve(exegraHome, 'cli/exegra.js');
+    exegraRuns.set(command, run(process.execPath, [cli, command, '--project', exegraProject, ...(process.env.EXEGRA_SPECS ? ['--specs', process.env.EXEGRA_SPECS] : [])], { cwd: exegraHome }));
+  }
+  return exegraRuns.get(command);
+}
+
 // Whether a tool is installed: its version command starts and exits 0.
 function hasTool(command, versionArgs, options = {}) {
   return run(command, versionArgs, { ...options, timeoutMs: PROBE_TIMEOUT_MS }).ok;
@@ -516,7 +527,7 @@ if (withBrowser) {
 // the gate's output can see them.
 {
   const cli = resolve(exegraHome, 'cli/exegra.js');
-  const verdicts = existsSync(cli) ? run(process.execPath, [cli, 'claims', '--project', exegraProject, ...(process.env.EXEGRA_SPECS ? ['--specs', process.env.EXEGRA_SPECS] : [])], { cwd: exegraHome }) : null;
+  const verdicts = existsSync(cli) ? runExegra('claims') : null;
   let claims = null;
   try {
     claims = verdicts ? JSON.parse(verdicts.stdout).result : null;
@@ -549,7 +560,7 @@ if (!exegraFound) {
   check('Exegra checkout', false, `no cli/exegra.js under ${exegraHome} (set EXEGRA_HOME)`);
 } else {
   const exegra = (command) => {
-    const r = run(process.execPath, [exegraCli, command, '--project', exegraProject, ...(process.env.EXEGRA_SPECS ? ['--specs', process.env.EXEGRA_SPECS] : [])], { cwd: exegraHome });
+    const r = runExegra(command);
     let json = null;
     try {
       json = JSON.parse(r.stdout);
