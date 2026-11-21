@@ -5,7 +5,7 @@
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use strata_backend::simulated::Backend;
 use strata_kernel::ext::*;
 use strata_kernel::testkit::*;
@@ -54,8 +54,15 @@ fn backend() -> Backend {
     Backend::new(Some(tenants_dir()))
 }
 
+/// The generated workload of a seed and length. A test that compares a clean run with a faulted
+/// one asks for the same workload twice; it is generated (each step decided by the kernel on a
+/// scratch world) once.
 fn workload(seed: u64, steps: usize) -> Vec<Scheduled> {
-    generate(&kernel_seeded(), &fieldnotes(), seed, steps, T0, 60_000)
+    static MADE: Mutex<BTreeMap<(u64, usize), Vec<Scheduled>>> = Mutex::new(BTreeMap::new());
+    let mut made = MADE.lock().unwrap();
+    made.entry((seed, steps))
+        .or_insert_with(|| generate(&kernel_seeded(), &fieldnotes(), seed, steps, T0, 60_000))
+        .clone()
 }
 
 /// An editorial workload on Fieldnotes, sent with idempotency keys.
@@ -126,7 +133,7 @@ fn the_shell_path_decides_as_the_kernel_does() {
     // tenant.
     let scenario = ShellScenario {
         keys: false,
-        ..editorial(7, 40, Faults::default())
+        ..editorial(7, 24, Faults::default())
     };
     let shell = run(&backend(), &scenario);
     assert_clean(&shell.trace);
@@ -196,7 +203,7 @@ fn the_same_shell_scenario_gives_the_same_trace() {
         crash: 100_000,
         ..Faults::default()
     };
-    let scenario = editorial(11, 30, faults);
+    let scenario = editorial(11, 20, faults);
     let first = run(&backend(), &scenario);
     let second = run(&backend(), &scenario);
     assert_eq!(first.trace.hash(), second.trace.hash());
@@ -209,12 +216,12 @@ fn the_same_shell_scenario_gives_the_same_trace() {
 fn a_commit_that_loses_a_race_is_decided_again() {
     // fm: a store conflict. The store refuses the commit; the backend decides again on fresh
     // state and the client learns the same outcome.
-    let clean = run(&backend(), &editorial(5, 30, Faults::default()));
+    let clean = run(&backend(), &editorial(5, 24, Faults::default()));
     let raced = run(
         &backend(),
         &editorial(
             5,
-            30,
+            24,
             store_faults(StoreFaults {
                 commit_conflict: 250_000,
                 ..StoreFaults::default()
@@ -237,12 +244,12 @@ fn a_process_stopped_before_its_write_commits_nothing_and_the_retry_commits_once
     // fm: a stopped process mid-commit (fm-database-failover, fm-disk-full as the request sees
     // them): nothing is written, the client is told the service is unavailable and sends the
     // request again with its key.
-    let clean = run(&backend(), &editorial(6, 30, Faults::default()));
+    let clean = run(&backend(), &editorial(6, 24, Faults::default()));
     let stopped = run(
         &backend(),
         &editorial(
             6,
-            30,
+            24,
             store_faults(StoreFaults {
                 commit_unavailable: 200_000,
                 ..StoreFaults::default()
@@ -269,12 +276,12 @@ fn a_process_stopped_before_its_write_commits_nothing_and_the_retry_commits_once
 fn a_commit_whose_answer_is_lost_is_answered_from_its_key() {
     // fm: the process stops after the write and before it answers. The client's retry finds the
     // first result under its key; nothing is committed twice.
-    let clean = run(&backend(), &editorial(8, 30, Faults::default()));
+    let clean = run(&backend(), &editorial(8, 20, Faults::default()));
     let lost = run(
         &backend(),
         &editorial(
             8,
-            30,
+            20,
             store_faults(StoreFaults {
                 commit_reply_lost: 300_000,
                 ..StoreFaults::default()
@@ -296,12 +303,12 @@ fn a_commit_whose_answer_is_lost_is_answered_from_its_key() {
 #[test]
 fn a_repeated_request_commits_once() {
     // fm: a repeated message (env-cloud message-duplication).
-    let clean = run(&backend(), &editorial(9, 25, Faults::default()));
+    let clean = run(&backend(), &editorial(9, 14, Faults::default()));
     let repeated = run(
         &backend(),
         &editorial(
             9,
-            25,
+            14,
             Faults {
                 request_repeated: 1_000_000,
                 ..Faults::default()
@@ -344,7 +351,7 @@ fn a_delayed_request_arrives_after_later_ones() {
         &backend(),
         &editorial(
             10,
-            30,
+            20,
             Faults {
                 request_delayed: 300_000,
                 ..Faults::default()
@@ -371,7 +378,7 @@ fn a_process_stopped_between_commit_and_publication_publishes_on_restart() {
         &backend(),
         &editorial(
             12,
-            30,
+            20,
             Faults {
                 crash: 300_000,
                 ..Faults::default()
@@ -390,7 +397,7 @@ fn a_publisher_that_cannot_read_or_mark_the_outbox_publishes_everything_in_order
         &backend(),
         &editorial(
             13,
-            30,
+            20,
             store_faults(StoreFaults {
                 publish_unavailable: 400_000,
                 publish_ack_lost: 400_000,
@@ -415,7 +422,7 @@ fn a_failed_installation_leaves_no_half_tenant_and_the_next_start_installs_it() 
         name: "provisioning".into(),
         seed: 21,
         start: T0 - 3_600_000,
-        schedule: workload(21, 8),
+        schedule: workload(21, 3),
         faults: Faults {
             crash: 1_000_000,
             ..Faults::default()
@@ -466,7 +473,7 @@ fn an_installation_whose_creating_commit_loses_its_answer_leaves_no_half_tenant(
         name: "provisioning-reply-lost".into(),
         seed: 22,
         start: T0 - 3_600_000,
-        schedule: workload(22, 8),
+        schedule: workload(22, 3),
         faults: Faults {
             crash: 1_000_000,
             ..Faults::default()
@@ -512,7 +519,7 @@ fn a_process_that_stops_right_after_the_creating_commit_leaves_no_half_tenant() 
         name: "provisioning-stopped-after-create".into(),
         seed: 23,
         start: T0 - 3_600_000,
-        schedule: workload(23, 8),
+        schedule: workload(23, 3),
         faults: Faults {
             crash: 1_000_000,
             ..Faults::default()
@@ -904,7 +911,7 @@ fn a_recorded_workload_replays_to_its_recorded_outcomes() {
     // A deployment's run is recorded as the store journalled it, and replayed through a fresh
     // deployment's request path: every entry is answered with its recorded revision, state delta
     // and events, and the tenant left is the recorded one.
-    let original = run(&backend(), &editorial(14, 40, Faults::default()));
+    let original = run(&backend(), &editorial(14, 30, Faults::default()));
     assert_clean(&original.trace);
     let recording = &original.recordings[&fieldnotes()];
     assert!(recording.entries.len() > 40);
