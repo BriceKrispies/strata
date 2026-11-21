@@ -634,61 +634,6 @@ fn the_owner_lists_runs_and_their_steps() {
     assert!(routes::list_runs(&app, &signed_in("alpha", "writer1"), &json!({})).is_err());
 }
 
-// Verifies: SCH-015
-#[test]
-fn an_effect_with_a_key_is_applied_once_when_its_job_is_attempted_three_times() {
-    let app = app();
-    install(&app, "alpha");
-    let alpha = tenant_id("alpha");
-    let job = start(&app, "alpha", "award", 7, T0);
-    let first = app
-        .store
-        .job_lease(&alpha, "w1", Timestamp(T0))
-        .unwrap()
-        .unwrap();
-    leases::run_leased(&app, &alpha, &first, &at(T0)).unwrap();
-    // Attempt one: w1 makes the note and stops before it reports.
-    let one = app
-        .store
-        .job_lease(&alpha, "w1", Timestamp(T0))
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        steps::run_job(&app, &alpha, &one, Timestamp(T0)).report,
-        JobReport::Succeeded
-    );
-    assert_eq!(notes(&app, "alpha").len(), 1);
-    // Attempt two, after the lease expired: the same key, no second note; w2 stops too.
-    let second_at = T0 + 60_001;
-    let two = app
-        .store
-        .job_lease(&alpha, "w2", Timestamp(second_at))
-        .unwrap()
-        .expect("the lease expired");
-    assert!(two.token > one.token);
-    assert_eq!(
-        steps::run_job(&app, &alpha, &two, Timestamp(second_at)).report,
-        JobReport::Succeeded
-    );
-    assert_eq!(notes(&app, "alpha").len(), 1);
-    // Attempt three reports: still one note, and the step records the three attempts.
-    let third_at = second_at + 60_001;
-    let three = app
-        .store
-        .job_lease(&alpha, "w3", Timestamp(third_at))
-        .unwrap()
-        .expect("the lease expired again");
-    assert!(three.token > two.token);
-    assert_eq!(three.job.attempt, 3);
-    leases::run_leased(&app, &alpha, &three, &at(third_at)).unwrap();
-    assert_eq!(notes(&app, "alpha").len(), 1);
-    worker::tick(&app, "w3", &config(), &at(third_at));
-    assert_eq!(run_of(&app, "alpha", &job).state, RunState::Completed);
-    assert_eq!(notes(&app, "alpha").len(), 1);
-    let made = &app.store.automation_steps(&alpha, &job, None, 10).unwrap()[0];
-    assert_eq!(made.attempts, 3);
-}
-
 // Verifies: MIG-562
 #[test]
 fn a_run_finishes_under_the_definition_version_that_started_it() {

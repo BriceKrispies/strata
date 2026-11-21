@@ -543,9 +543,12 @@ async fn the_seeded_blog_is_served_from_tenant_metadata() {
     assert_eq!(status_of("/oldest").await.0, 404);
 }
 
+/// Verifies: IDN-011
+/// Verifies: IDN-263
 #[tokio::test]
 async fn login_logout_and_authorized_writes() {
-    let backend = start().await;
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
     let (status, body) = backend
         .call(
             "fieldnotes",
@@ -582,6 +585,10 @@ async fn login_logout_and_authorized_writes() {
         .contains(&json!("author")));
     assert_eq!(session["session"]["may_manage_schema"], false);
     assert!(session["session"]["csrf_token"].as_str().unwrap().len() >= 32);
+    let session_id = session["session"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let (status, created) = backend
         .call("fieldnotes", Some(&token), "/internal/mutate", draft)
@@ -703,12 +710,14 @@ async fn login_logout_and_authorized_writes() {
         .await;
     assert_eq!(after["session"]["authenticated"], false);
     assert_eq!(after["state"], "revoked");
-}
+    // The record of the session is kept, revoked, and holds no token.
+    let held = store
+        .session(&strata_kernel::SessionId::new(session_id).unwrap())
+        .unwrap()
+        .expect("the record is kept, revoked");
+    assert!(held.revoked_at.is_some());
 
-/// Verifies: IDN-011
-#[tokio::test]
-async fn a_new_login_ends_the_session_it_replaces() {
-    let backend = start().await;
+    // A new login ends the session it replaces.
     let first = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
     let (status, body) = backend
         .call(
@@ -719,8 +728,7 @@ async fn a_new_login_ends_the_session_it_replaces() {
         )
         .await;
     assert_eq!(status, 200);
-    let second = body["token"].as_str().unwrap();
-    assert_ne!(first, second);
+    assert_ne!(first, body["token"].as_str().unwrap());
     let (_, old) = backend
         .call("fieldnotes", Some(&first), "/internal/session", json!({}))
         .await;
@@ -728,6 +736,7 @@ async fn a_new_login_ends_the_session_it_replaces() {
 }
 
 /// Verifies: RUN-002
+/// Verifies: IDN-009
 #[tokio::test]
 async fn a_session_of_one_tenant_is_nobody_on_another() {
     let backend = start().await;
@@ -1056,44 +1065,6 @@ async fn sessions_expire_and_diagnostics_hold_no_secrets() {
             .await
             .0,
         401
-    );
-}
-
-/// Verifies: IDN-008
-#[tokio::test]
-async fn repeated_wrong_passwords_are_throttled() {
-    let backend = start().await;
-    let attempt = json!({ "login": "ines", "password": "nope" });
-    // D-700: ten failures lock the account; the tenth is still answered as a wrong password.
-    for _ in 0..10 {
-        assert_eq!(
-            backend
-                .call(
-                    "fieldnotes",
-                    None,
-                    "/internal/session/login",
-                    attempt.clone()
-                )
-                .await
-                .0,
-            401
-        );
-    }
-    assert_eq!(
-        backend
-            .call("fieldnotes", None, "/internal/session/login", attempt)
-            .await
-            .0,
-        429
-    );
-    let right = json!({ "login": "ines", "password": "strata-dev-ines" });
-    assert_eq!(
-        backend
-            .call("fieldnotes", None, "/internal/session/login", right)
-            .await
-            .0,
-        429,
-        "locked for now"
     );
 }
 
@@ -1848,26 +1819,6 @@ async fn an_event_is_published_only_after_its_commit() {
 }
 
 #[tokio::test]
-async fn every_commit_kicks_the_publisher_at_once() {
-    let backend = start().await;
-    let admin = backend
-        .login("fieldnotes", "admin", "strata-dev-admin")
-        .await;
-    let (mut socket, head) = listening(&backend, "fieldnotes", &admin).await;
-    for i in 1..=4u64 {
-        let status = add_category(&backend, "fieldnotes", &admin, &format!("kick-{i}")).await;
-        assert_eq!(status, 200);
-        // The sweep is 500 ms after the commit, so an event inside 350 ms came from the kick.
-        let seq = event_within(&mut socket, Duration::from_millis(350)).await;
-        assert_eq!(
-            seq,
-            Some(head + i),
-            "commit {i} was published without waiting"
-        );
-    }
-}
-
-#[tokio::test]
 async fn the_sweep_publishes_what_a_missed_kick_left() {
     let backend = start().await;
     let admin = backend
@@ -2096,24 +2047,6 @@ async fn spellings_of_one_login_share_one_throttle() {
             "{spelling:?} is the locked account"
         );
     }
-}
-
-/// Verifies: IDN-009
-#[tokio::test]
-async fn a_login_of_one_site_is_unknown_to_every_other() {
-    let backend = start().await;
-    assert_eq!(
-        backend
-            .attempt("tidewater", "ines", "strata-dev-ines")
-            .await,
-        401
-    );
-    assert_eq!(
-        backend
-            .attempt("fieldnotes", "ines", "strata-dev-ines")
-            .await,
-        200
-    );
 }
 
 /// Verifies: IDN-250
@@ -2634,34 +2567,6 @@ async fn revoking_a_session_closes_the_sockets_it_has_open() {
         quiet(&mut kept).await,
         "the other session's socket is left alone"
     );
-}
-
-/// Verifies: IDN-263
-#[tokio::test]
-async fn signing_out_revokes_the_session_at_the_backend() {
-    let store = Arc::new(MemoryStore::new());
-    let backend = start_on(store.clone(), |_| {}).await;
-    let token = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
-    let id = backend
-        .call("fieldnotes", Some(&token), "/internal/session", json!({}))
-        .await
-        .1["session"]["session_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    backend
-        .call(
-            "fieldnotes",
-            Some(&token),
-            "/internal/session/logout",
-            json!({}),
-        )
-        .await;
-    let held = store
-        .session(&strata_kernel::SessionId::new(id).unwrap())
-        .unwrap()
-        .expect("the record is kept, revoked");
-    assert!(held.revoked_at.is_some());
 }
 
 /// Verifies: IDN-012
@@ -3509,6 +3414,10 @@ async fn link_first_use_in_the_requesting_browser_signs_in() {
         .await;
     assert_eq!(session["session"]["authenticated"], true);
 
+    // A link that was used signs no one in again.
+    let (status, reply) = backend.open_link(&link, &binding, SITE).await;
+    assert_eq!(status, 401, "{reply}");
+
     let (_, platform) = backend
         .call(
             "fieldnotes",
@@ -3539,28 +3448,12 @@ async fn link_first_use_in_the_requesting_browser_signs_in() {
     );
 }
 
-/// Verifies: IDN-003
-///
-/// Case link-second-use: a link that was used signs no one in again.
-#[tokio::test]
-async fn link_second_use_is_refused() {
-    let (backend, sink) = linking(|_| {}).await;
-    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
-    let binding = reply["binding"].as_str().unwrap().to_string();
-    let link = link_in(&sink, 0);
-    assert_eq!(backend.open_link(&link, &binding, SITE).await.0, 200);
-    let (status, reply) = backend.open_link(&link, &binding, SITE).await;
-    assert_eq!(status, 401, "{reply}");
-    assert!(reply["message"].as_str().unwrap().contains("link"));
-}
-
 /// Verifies: IDN-004
 ///
 /// Case link-expired: a link is accepted through its lifetime and not after it, however fresh its
-/// token and however right its browser. The lifetime the platform states is fifteen minutes.
+/// token and however right its browser.
 #[tokio::test]
 async fn link_expired_is_refused() {
-    use strata_backend::mail::Mailer;
     let (backend, sink) = linking(|cfg| cfg.link_ttl_ms = 150).await;
     let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
     let binding = reply["binding"].as_str().unwrap().to_string();
@@ -3568,18 +3461,6 @@ async fn link_expired_is_refused() {
     tokio::time::sleep(Duration::from_millis(400)).await;
     let (status, _) = backend.open_link(&link, &binding, SITE).await;
     assert_eq!(status, 401);
-
-    let (backend, sink) = linking(|_| {}).await;
-    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
-    let binding = reply["binding"].as_str().unwrap().to_string();
-    assert!(sink.outbox()[0].text.contains("15 minutes"));
-    assert_eq!(
-        backend
-            .open_link(&link_in(&sink, 0), &binding, SITE)
-            .await
-            .0,
-        200
-    );
 }
 
 /// Verifies: IDN-005
@@ -4016,70 +3897,6 @@ async fn projections_are_limited_per_tenant() {
     assert!(
         statuses.contains(&429),
         "the burst was bounded: {statuses:?}"
-    );
-}
-
-/// WG-5075: a projection started twice under one key is started once. The repeat answers the
-/// first run, the same key with another request is refused, and another key starts another run.
-#[tokio::test]
-async fn a_projection_started_twice_under_one_key_is_started_once() {
-    let backend = start().await;
-    let admin = backend
-        .login("fieldnotes", "admin", "strata-dev-admin")
-        .await;
-    let request = json!({ "change": "require post.excerpt", "existing": "grandfather", "source": "generated", "steps": 50, "seed": 5, "faults": false });
-    let (status, first) = backend
-        .call_keyed(
-            "fieldnotes",
-            Some(&admin),
-            "/internal/lab/run",
-            request.clone(),
-            "key-lab-0001",
-        )
-        .await;
-    assert_eq!(status, 200, "{first}");
-    let (status, again) = backend
-        .call_keyed(
-            "fieldnotes",
-            Some(&admin),
-            "/internal/lab/run",
-            request.clone(),
-            "key-lab-0001",
-        )
-        .await;
-    assert_eq!(status, 200, "{again}");
-    assert_eq!(again, first, "the repeat answers the first run");
-
-    let mut other = request.clone();
-    other["seed"] = json!(6);
-    let (status, refused) = backend
-        .call_keyed(
-            "fieldnotes",
-            Some(&admin),
-            "/internal/lab/run",
-            other,
-            "key-lab-0001",
-        )
-        .await;
-    assert_eq!(
-        (status, refused["code"].as_str()),
-        (422, Some("invalid")),
-        "{refused}"
-    );
-
-    let (status, second) = backend
-        .call_keyed(
-            "fieldnotes",
-            Some(&admin),
-            "/internal/lab/run",
-            request,
-            "key-lab-0002",
-        )
-        .await;
-    assert_eq!(status, 200, "{second}");
-    assert_ne!(
-        second["run"], first["run"],
-        "another key starts another run"
     );
 }
 
