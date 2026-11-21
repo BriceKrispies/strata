@@ -6,13 +6,12 @@
 // `tbl-<name>` with the underscores of the name as hyphens, or its description starts a sentence
 // with `Table <name>` (for example "Table login_throttle of a tenant file: ...").
 
-// The tables the sources create, as [{ name, path }]. A name that is not an identifier (the
-// statement builds it, as `CREATE TABLE IF NOT EXISTS {ledger}`) is returned as written.
+// The tables the sources create, as [{ name, path }].
 export function createdTables(sources) {
   const out = [];
   for (const { path, text } of sources) {
     const code = text.replace(/^\s*\/\/.*$/gm, '');
-    for (const m of code.matchAll(/\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z_0-9]*|\{[^}\s]*\})/gi)) {
+    for (const m of code.matchAll(/\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z_0-9]*)/gi)) {
       out.push({ name: m[1], path });
     }
   }
