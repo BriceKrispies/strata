@@ -250,6 +250,30 @@ impl FaultyStore {
         hit
     }
 
+    /// A commit that was written: if it created a tenant whose install was announced, the tenant
+    /// is now `provisioning`, as the directory of a persistent adapter would have it.
+    fn note_creation(&self, commit: &Commit) {
+        if !commit
+            .delta
+            .ops
+            .iter()
+            .any(|op| matches!(op, DeltaOp::CreateTenant { .. }))
+        {
+            return;
+        }
+        let tenant = &commit.delta.tenant;
+        let announced = self
+            .announced
+            .lock()
+            .map(|mut set| set.remove(tenant))
+            .unwrap_or(false);
+        if announced {
+            if let Ok(mut set) = self.provisioning.lock() {
+                set.insert(tenant.clone());
+            }
+        }
+    }
+
     /// An install of `tenant` is over, finished or removed: nothing of it is pending any more.
     fn forget_install(&self, tenant: &TenantId) {
         if let Ok(mut set) = self.announced.lock() {
@@ -379,24 +403,7 @@ impl Store for FaultyStore {
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
         self.commit_through(|| {
             let receipt = self.inner.commit(commit)?;
-            if commit
-                .delta
-                .ops
-                .iter()
-                .any(|op| matches!(op, DeltaOp::CreateTenant { .. }))
-            {
-                let tenant = &commit.delta.tenant;
-                let announced = self
-                    .announced
-                    .lock()
-                    .map(|mut set| set.remove(tenant))
-                    .unwrap_or(false);
-                if announced {
-                    if let Ok(mut set) = self.provisioning.lock() {
-                        set.insert(tenant.clone());
-                    }
-                }
-            }
+            self.note_creation(commit);
             Ok(receipt)
         })
     }
@@ -1208,7 +1215,11 @@ impl Store for FaultyStore {
         commit: &Commit,
         write: &seg::SegmentWrite,
     ) -> StoreResult<Receipt> {
-        self.commit_through(|| self.inner.commit_with_segments(commit, write))
+        self.commit_through(|| {
+            let receipt = self.inner.commit_with_segments(commit, write)?;
+            self.note_creation(commit);
+            Ok(receipt)
+        })
     }
 
     fn commit_segments(&self, commit: &segments::SegmentCommit) -> StoreResult<Receipt> {
