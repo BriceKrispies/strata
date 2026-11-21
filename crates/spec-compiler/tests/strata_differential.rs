@@ -1172,7 +1172,6 @@ fn compare_steps(
 /// Runs Exegra over every drivable scenario of the specification (about 29 s of the suite on its
 /// own), so it is behind an ignore; the stack gate runs it with `--ignored`.
 #[test]
-#[ignore = "scale: run with --ignored"]
 fn the_generated_machines_step_as_exegra_runs_the_specification() {
     let what = "the comparison of the implementation machines of the specification with Exegra";
     let Some(cli) = support::exegra_cli(what) else {
