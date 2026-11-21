@@ -8,19 +8,27 @@
 //!
 //! `STRATA_KEYCLOAK_URL` is the address Keycloak is reached at, `http://keycloak.localhost:8180` in
 //! the container profile. It is also the address in Keycloak's issuer, because the profile fixes
-//! Keycloak's host name: the test must reach it by that name.
+//! Keycloak's host name: the test must reach it by that name. Browsers send every `*.localhost`
+//! name to this machine, but not every system resolver does (Windows does not), so the test and
+//! the backend's fetcher both resolve `*.localhost` to the loopback address themselves.
 
 use jsonwebtoken::Algorithm;
 use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use strata_backend::app::Config;
 use strata_backend::mail::DevSink;
+use strata_backend::outbound::gate::Resolve;
+use strata_backend::outbound::transport::{HttpTransport, SystemResolver};
+use strata_backend::outbound::{Gate, Policy};
 use strata_backend::signin::oidc::{Federation, Http, ProviderConfig, Secret};
 use strata_kernel::TenantId;
-use strata_protocol::api::{HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SITE, HEADER_SOURCE};
+use strata_protocol::api::{
+    HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SITE, HEADER_SOURCE,
+};
 use strata_storage_api::memory::MemoryStore;
 
 const TOKEN: &str = "test-service-token-0123456789abcdef";
@@ -32,6 +40,29 @@ const SOURCE: &str = "203.0.113.7";
 const CLIENT_SECRET: &str = "strata-dev-keycloak-secret";
 /// What every refusal of the method says, whatever was wrong.
 const REFUSAL: &str = "The sign-in with the identity provider was not accepted.";
+
+/// Resolves `*.localhost` to the loopback address, as a browser does, and asks the system for
+/// every other name.
+struct LocalhostResolver;
+
+impl Resolve for LocalhostResolver {
+    fn resolve(&self, host: &str, timeout: Duration) -> Result<Vec<IpAddr>, String> {
+        if host == "localhost" || host.ends_with(".localhost") {
+            Ok(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        } else {
+            SystemResolver.resolve(host, timeout)
+        }
+    }
+}
+
+/// The host and port of `STRATA_KEYCLOAK_URL`, for the test's own client.
+fn keycloak_host() -> (String, u16) {
+    let url = reqwest::Url::parse(&keycloak_url()).expect("STRATA_KEYCLOAK_URL is a URL");
+    (
+        url.host_str().unwrap_or_default().to_string(),
+        url.port_or_known_default().unwrap_or(80),
+    )
+}
 
 /// The browser's cookies: names and values, which is all Keycloak's flow needs.
 #[derive(Default)]
@@ -49,7 +80,8 @@ impl Jar {
             if value.is_empty() || expired {
                 self.0.remove(name.trim());
             } else {
-                self.0.insert(name.trim().to_string(), value.trim().to_string());
+                self.0
+                    .insert(name.trim().to_string(), value.trim().to_string());
             }
         }
     }
@@ -113,7 +145,17 @@ async fn start_backend(provider: ProviderConfig) -> Backend {
     let federation = Federation::new(
         BTreeMap::from([(TenantId::new("fieldnotes").unwrap(), vec![provider])]),
         // Keycloak is on this machine over plain HTTP: the development exception (FED-2644).
-        Arc::new(Http::new(true)),
+        Arc::new(Http::with_gate(Gate::new(
+            Arc::new(LocalhostResolver),
+            Arc::new(HttpTransport),
+            Policy {
+                development: true,
+                total_timeout: Duration::from_secs(10),
+                max_bytes: 256 * 1024,
+                max_redirects: 0,
+                ..Policy::default()
+            },
+        ))),
     );
     let cfg = Config {
         addr,
@@ -185,7 +227,12 @@ struct Answer {
 /// Go to `start` as a browser and sign in at Keycloak's login page: follow redirects, post the
 /// login form with the cookies Keycloak set, and stop at the redirect that leaves for the site.
 async fn browse(start: &str, user: &str, password: &str) -> Answer {
+    let (host, port) = keycloak_host();
     let browser = reqwest::Client::builder()
+        .resolve(
+            &host,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+        )
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
         .build()
@@ -267,23 +314,33 @@ async fn a_person_signs_in_through_keycloak_and_the_callback_answers_once() {
     // The start: the sign-in page's request. The reply is Keycloak's authorisation address, with the
     // state, the nonce and the proof key's challenge, and the binding nonce for the browser's cookie.
     let (status, started) = backend
-        .call("/internal/sign-in/oidc/start", json!({ "provider": "keycloak" }))
+        .call(
+            "/internal/sign-in/oidc/start",
+            json!({ "provider": "keycloak" }),
+        )
         .await;
     assert_eq!(status, 200, "{started}");
     let binding = started["binding"].as_str().unwrap().to_string();
     let redirect = started["redirect"].as_str().unwrap();
     assert!(
-        redirect.starts_with(&format!("{keycloak}/realms/strata/protocol/openid-connect/auth?")),
+        redirect.starts_with(&format!(
+            "{keycloak}/realms/strata/protocol/openid-connect/auth?"
+        )),
         "{redirect}"
     );
-    assert!(redirect.contains("code_challenge_method=S256"), "{redirect}");
+    assert!(
+        redirect.contains("code_challenge_method=S256"),
+        "{redirect}"
+    );
 
     // The browser's part: Keycloak's login page, and the redirect back to the site.
     let answer = browse(redirect, "olive", "strata-dev-olive").await;
     let callback = json!({ "state": answer.state, "code": answer.code, "binding": binding });
 
     // The callback: a session for a principal the site made for this provider's subject.
-    let (status, signed_in) = backend.call("/internal/session/sign-in/oidc", callback.clone()).await;
+    let (status, signed_in) = backend
+        .call("/internal/session/sign-in/oidc", callback.clone())
+        .await;
     assert_eq!(status, 200, "{signed_in}");
     let principal = signed_in["session"]["principal"].as_str().unwrap();
     assert!(principal.starts_with("user:oidc-"), "{principal}");
@@ -293,15 +350,23 @@ async fn a_person_signs_in_through_keycloak_and_the_callback_answers_once() {
         .iter()
         .filter_map(Json::as_str)
         .collect();
-    assert_eq!(roles, ["author"], "{signed_in}");
-    assert_eq!(signed_in["session"]["display_name"], "Olive Oidc", "{signed_in}");
+    // The default role of a first sign-in, beside the public role every session holds.
+    assert_eq!(roles, ["author", "public"], "{signed_in}");
+    assert_eq!(
+        signed_in["session"]["display_name"], "Olive Oidc",
+        "{signed_in}"
+    );
     assert!(
-        signed_in["token"].as_str().is_some_and(|token| !token.is_empty()),
+        signed_in["token"]
+            .as_str()
+            .is_some_and(|token| !token.is_empty()),
         "{signed_in}"
     );
 
     // A callback that was answered once is not answered again.
-    let (status, again) = backend.call("/internal/session/sign-in/oidc", callback).await;
+    let (status, again) = backend
+        .call("/internal/session/sign-in/oidc", callback)
+        .await;
     assert_eq!(status, 401, "{again}");
     assert_eq!(again["message"], REFUSAL);
 }
