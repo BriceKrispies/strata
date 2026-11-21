@@ -1,0 +1,386 @@
+{
+  // The localisation module: locales, translation jobs, glossaries and translators for the tenant's content. It depends only on the product-module owner.
+  "product": {
+    "id": "localisation",
+    "name": "Localisation",
+    "description": "Locales, translation jobs, glossaries and translators that bring the tenant's content into other languages.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../specifications/spec.jsonc",
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error"]
+    }
+  },
+
+  "types": [
+    { "id": "localisation__locale", "name": "Locale", "kind": "enum",
+      "values": ["en-gb", "en-us", "en-ca", "en-au", "fr-fr", "fr-ca", "de-de", "de-at", "de-ch", "es-es", "es-mx", "es-ar", "it-it", "pt-pt", "pt-br", "nl-nl", "nl-be", "sv-se", "da-dk", "nb-no", "fi-fi", "is-is", "pl-pl", "cs-cz", "sk-sk", "hu-hu", "ro-ro", "bg-bg", "el-gr", "tr-tr", "ru-ru", "uk-ua", "ar-sa", "he-il", "hi-in", "ja-jp", "ko-kr", "zh-cn", "zh-tw", "th-th"],
+      "description": "The forty locales the tenant publishes in." },
+    { "id": "localisation__job_status", "name": "Job status", "kind": "enum",
+      "values": ["requested", "assigned", "in_translation", "in_review", "delivered", "cancelled"], "description": "Where a translation job is in its workflow." },
+    { "id": "localisation__term_status", "name": "Term status", "kind": "enum",
+      "values": ["draft", "approved", "deprecated"], "description": "Where a glossary term is in its life." },
+    { "id": "localisation__assignment_state", "name": "Assignment state", "kind": "enum",
+      "values": ["offered", "accepted", "declined", "completed"], "description": "Where a translator's assignment stands." },
+    { "id": "localisation__translator_tier", "name": "Translator tier", "kind": "enum",
+      "values": ["staff", "preferred", "occasional"], "description": "How a translator is engaged." },
+    { "id": "localisation__rate_unit", "name": "Rate unit", "kind": "enum",
+      "values": ["per_word", "per_hour", "per_file"], "description": "How a translator is paid for an assignment." },
+    { "id": "localisation__word_count", "name": "Word count", "kind": "struct",
+      "fields": [ { "name": "source", "type": "u32" }, { "name": "target", "type": "u32" } ], "description": "Source and target word counts of a job." },
+    { "id": "localisation__quality_score", "name": "Quality score", "kind": "struct",
+      "fields": [ { "name": "score", "type": "u32" }, { "name": "reviewer", "type": "string" } ], "description": "A reviewer's score for a delivered job." }
+  ],
+
+  "records": [
+    { "id": "localisation__translation_job_rec", "name": "Translation job", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "title", "type": "string" },
+        { "name": "source_locale", "type": "localisation__locale" },
+        { "name": "target_locale", "type": "localisation__locale" },
+        { "name": "status", "type": "localisation__job_status" },
+        { "name": "region", "type": "string" },
+        { "name": "due_date", "type": "timestamp" },
+        { "name": "assignment", "type": "u64", "refersTo": "localisation__translator_assignment_rec", "onDelete": "restrict", "optional": true } ],
+      "retention": "Kept for five years after delivery, then removed.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "localisation__translator_assignment_rec", "name": "Translator assignment", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "job", "type": "u64", "refersTo": "localisation__translation_job_rec", "onDelete": "restrict" },
+        { "name": "translator", "type": "u64", "refersTo": "localisation__translator_rec", "onDelete": "restrict" },
+        { "name": "state", "type": "localisation__assignment_state" },
+        { "name": "rate_unit", "type": "localisation__rate_unit" } ],
+      "retention": "Kept with the job it belongs to.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "localisation__glossary_term_rec", "name": "Glossary term", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "term", "type": "string" },
+        { "name": "locale", "type": "localisation__locale" },
+        { "name": "definition", "type": "string" },
+        { "name": "status", "type": "localisation__term_status" },
+        { "name": "superseded_by", "type": "u64", "refersTo": "localisation__glossary_term_rec", "onDelete": "set-null", "optional": true } ],
+      "retention": "Until a glossary editor deletes the term.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "localisation__translation_memory_entry_rec", "name": "Translation memory entry", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "source_text", "type": "string" },
+        { "name": "target_text", "type": "string" },
+        { "name": "source_locale", "type": "localisation__locale" },
+        { "name": "target_locale", "type": "localisation__locale" },
+        { "name": "match_percent", "type": "u32" } ],
+      "retention": "Kept while the job that produced it is kept.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "localisation__translator_rec", "name": "Translator", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "name", "type": "string", "personal": "name" },
+        { "name": "email", "type": "string", "personal": "contact" },
+        { "name": "tier", "type": "localisation__translator_tier" },
+        { "name": "active", "type": "bool" } ],
+      "retention": "Two years after the translator's last assignment, then name and contact details are removed.",
+      "schemaVersion": 1, "realisation": "target" }
+  ],
+
+  "objects": [
+    { "id": "localisation__translation_job", "label": "Translation job",
+      "fields": {
+        "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": false },
+        "source_locale": { "id": "source_locale", "label": "Source locale", "ty": "Str", "required": true, "unique": false },
+        "target_locale": { "id": "target_locale", "label": "Target locale", "ty": "Str", "required": true, "unique": false },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false },
+        "region": { "id": "region", "label": "Region", "ty": "Str", "required": true, "unique": false },
+        "due_date": { "id": "due_date", "label": "Due", "ty": "Time", "required": false, "unique": false },
+        "assignment": { "id": "assignment", "label": "Assignment", "ty": { "Ref": { "target": "localisation__translator_assignment", "on-delete": "Restrict" } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1825, "from": "Created" } },
+    { "id": "localisation__glossary_term", "label": "Glossary term",
+      "fields": {
+        "term": { "id": "term", "label": "Term", "ty": "Str", "required": true, "unique": false },
+        "locale": { "id": "locale", "label": "Locale", "ty": "Str", "required": true, "unique": false },
+        "definition": { "id": "definition", "label": "Definition", "ty": "Str", "required": true, "unique": false },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false },
+        "superseded_by": { "id": "superseded_by", "label": "Superseded by", "ty": { "Ref": { "target": "localisation__glossary_term", "on-delete": "Restrict" } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 3650, "from": "Created" } },
+    { "id": "localisation__translation_memory_entry", "label": "Translation memory entry",
+      "fields": {
+        "source_text": { "id": "source_text", "label": "Source text", "ty": "Str", "required": true, "unique": false },
+        "target_text": { "id": "target_text", "label": "Target text", "ty": "Str", "required": true, "unique": false },
+        "source_locale": { "id": "source_locale", "label": "Source locale", "ty": "Str", "required": true, "unique": false },
+        "target_locale": { "id": "target_locale", "label": "Target locale", "ty": "Str", "required": true, "unique": false },
+        "match_percent": { "id": "match_percent", "label": "Match percent", "ty": "Int", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1825, "from": "Created" } },
+    { "id": "localisation__translator", "label": "Translator",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false,
+          "personal": { "kind": "name", "subject": { "Field": { "field": "name" } }, "searchable": true } },
+        "email": { "id": "email", "label": "Email", "ty": "Str", "required": true, "unique": true,
+          "personal": { "kind": "email-address", "subject": { "Field": { "field": "email" } }, "searchable": false } },
+        "tier": { "id": "tier", "label": "Tier", "ty": "Str", "required": true, "unique": false },
+        "active": { "id": "active", "label": "Active", "ty": "Bool", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1095, "from": "Created" } },
+    { "id": "localisation__translator_assignment", "label": "Translator assignment",
+      "fields": {
+        "job": { "id": "job", "label": "Job", "ty": { "Ref": { "target": "localisation__translation_job", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "translator": { "id": "translator", "label": "Translator", "ty": { "Ref": { "target": "localisation__translator", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "translator_principal": { "id": "translator_principal", "label": "Translator principal", "ty": "Str", "required": true, "unique": false },
+        "state": { "id": "state", "label": "State", "ty": "Str", "required": true, "unique": false },
+        "rate_unit": { "id": "rate_unit", "label": "Rate unit", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1825, "from": "Created" } }
+  ],
+
+  "workflows": [
+    { "id": "localisation__job_lifecycle", "object": "localisation__translation_job", "field": "status", "initial": ["requested"],
+      "transitions": [
+        { "name": "assign", "from": "requested", "to": "assigned", "set": {} },
+        { "name": "start", "from": "assigned", "to": "in_translation", "set": {} },
+        { "name": "submit_review", "from": "in_translation", "to": "in_review", "set": {} },
+        { "name": "deliver", "from": "in_review", "to": "delivered", "guard": "old.status == 'in_review'", "set": {} },
+        { "name": "cancel", "from": "requested", "to": "cancelled", "set": {} },
+        { "name": "cancel_assigned", "from": "assigned", "to": "cancelled", "set": {} } ] }
+  ],
+
+  "roles": [
+    { "id": "localisation__project_manager", "name": "Project manager", "description": "Runs translation jobs and engages translators for the whole tenant.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["localisation__view", "localisation__manage_jobs", "localisation__manage_terms", "localisation__manage_translators"] },
+    { "id": "localisation__emea_coordinator", "name": "Coordinator, EMEA", "description": "Runs jobs whose region is EMEA.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["localisation__view", "localisation__manage_jobs"] },
+    { "id": "localisation__apac_coordinator", "name": "Coordinator, APAC", "description": "Runs jobs whose region is APAC.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["localisation__view", "localisation__manage_jobs"] },
+    { "id": "localisation__americas_coordinator", "name": "Coordinator, Americas", "description": "Runs jobs whose region is the Americas.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["localisation__view", "localisation__manage_jobs"] },
+    { "id": "localisation__glossary_editor", "name": "Glossary editor", "description": "Keeps the glossary of approved terms.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["localisation__view", "localisation__manage_terms"] },
+    { "id": "localisation__translator_role", "name": "Translator", "description": "Accepts and completes the assignments offered to them.", "level": "tenant", "holders": ["person"], "capabilities": ["localisation__view"] }
+  ],
+
+  "capabilities": [
+    { "id": "localisation__view", "name": "View localisation", "description": "See jobs, glossary terms and translators." },
+    { "id": "localisation__manage_jobs", "name": "Manage translation jobs", "description": "Create, assign and move translation jobs." },
+    { "id": "localisation__manage_terms", "name": "Manage glossary terms", "description": "Create and approve glossary terms." },
+    { "id": "localisation__manage_translators", "name": "Manage translators", "description": "Engage translators and keep their details current." }
+  ],
+
+  "policies": [
+    { "id": "localisation__emea_jobs", "role": "localisation__emea_coordinator", "resource": { "Object": "localisation__translation_job" }, "actions": ["Create", "Read", "Update"], "condition": "record.region == 'emea'" },
+    { "id": "localisation__apac_jobs", "role": "localisation__apac_coordinator", "resource": { "Object": "localisation__translation_job" }, "actions": ["Create", "Read", "Update"], "condition": "record.region == 'apac'" },
+    { "id": "localisation__americas_jobs", "role": "localisation__americas_coordinator", "resource": { "Object": "localisation__translation_job" }, "actions": ["Create", "Read", "Update"], "condition": "record.region == 'americas'" },
+    { "id": "localisation__translator_own_assignments", "role": "localisation__translator_role", "resource": { "Object": "localisation__translator_assignment" }, "actions": ["Read", "Update"], "condition": "record.translator_principal == principal" },
+    { "id": "localisation__editor_glossary", "role": "localisation__glossary_editor", "resource": { "Object": "localisation__glossary_term" }, "actions": ["Create", "Read", "Update"] },
+    { "id": "localisation__manager_translators", "role": "localisation__project_manager", "resource": { "Object": "localisation__translator" }, "actions": ["Create", "Read", "Update", "Delete"] }
+  ],
+
+  "queries": [
+    { "id": "localisation__open_jobs", "object": "localisation__translation_job", "filter": "record.status != 'delivered' and record.status != 'cancelled'", "params": [], "order": [ { "field": "due_date", "descending": false } ], "limit": 200 },
+    { "id": "localisation__glossary_by_locale", "object": "localisation__glossary_term", "filter": "record.locale == param.locale", "params": ["locale"], "order": [ { "field": "term", "descending": false } ], "limit": 500 }
+  ],
+
+  "views": [
+    { "id": "localisation__job_board", "route": "/localisation/board", "title": "Open translation jobs",
+      "sections": { "main": { "query": "localisation__open_jobs", "args": {}, "include": [], "markdown": [], "single": false } } }
+  ],
+
+  "settings": [
+    { "id": "localisation__fallback_locale", "label": "Fallback locale", "type": "string", "default": {"Str": "en-gb"}, "levels": ["tenant", "team"] },
+    { "id": "localisation__tm_min_match", "label": "Minimum translation memory match percentage", "type": "i64", "default": {"Int": 75}, "levels": ["tenant"] }
+  ],
+
+  "contracts": [
+    { "id": "localisation__read_job_list", "name": "Read the job list", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in member with view access", "requires": ["localisation__view"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "status", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the translation jobs with the status named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "localisation__submit_job", "name": "Save a translation job", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in job coordinator", "requires": ["localisation__manage_jobs"] },
+      "idempotent": false, "timeoutMs": 3000,
+      "inputs": [ { "name": "title", "type": "string" }, { "name": "source_locale", "type": "string" }, { "name": "target_locale", "type": "string" }, { "name": "region", "type": "string" }, { "name": "due_date", "type": "string" }, { "name": "word_count", "type": "string" }, { "name": "notes", "type": "string" }, { "name": "rush", "type": "bool" } ],
+      "outputs": [ { "name": "job", "type": "u64" } ],
+      "postconditions": ["The job exists in the requested state with the locales given."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "localisation__transition_job", "name": "Move a translation job", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in job coordinator", "requires": ["localisation__manage_jobs"] },
+      "idempotent": false, "timeoutMs": 3000,
+      "inputs": [ { "name": "job", "type": "u64" }, { "name": "transition", "type": "string" } ],
+      "outputs": [ { "name": "status", "type": "string" } ],
+      "postconditions": ["The job has moved along the transition named, or the request is refused."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "localisation__read_glossary", "name": "Read the glossary", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in member with view access", "requires": ["localisation__view"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "locale", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the glossary terms for the locale named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "localisation__submit_term", "name": "Save a glossary term", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in glossary editor", "requires": ["localisation__manage_terms"] },
+      "idempotent": false, "timeoutMs": 3000,
+      "inputs": [ { "name": "term", "type": "string" }, { "name": "locale", "type": "string" }, { "name": "definition", "type": "string" }, { "name": "superseded_by", "type": "string" }, { "name": "approved", "type": "bool" } ],
+      "outputs": [ { "name": "term", "type": "u64" } ],
+      "postconditions": ["The term exists for the locale, approved or as a draft."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "localisation__read_translator_list", "name": "Read the translator list", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in project manager", "requires": ["localisation__manage_translators"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "tier", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the translators of the tier named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "localisation__save_translator", "name": "Save a translator", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in project manager", "requires": ["localisation__manage_translators"] },
+      "idempotent": false, "timeoutMs": 3000,
+      "inputs": [ { "name": "name", "type": "string" }, { "name": "email", "type": "string" }, { "name": "phone", "type": "string" }, { "name": "tier", "type": "string" }, { "name": "notes", "type": "string" }, { "name": "active", "type": "bool" } ],
+      "outputs": [ { "name": "translator", "type": "u64" } ],
+      "postconditions": ["The translator exists with the details given."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "localisation__read_settings", "name": "Read the localisation settings", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in project manager", "requires": ["localisation__manage_translators"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the fallback locale and the translation memory threshold."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
+  ],
+
+  "screens": [
+    { "id": "localisation__job_list", "name": "Job list", "route": "/localisation/jobs", "viewModel": "localisation__read_job_list", "kind": "localisation.list", "auth": "session", "description": "The translation jobs, by status.", "viewName": "localisation_job_list", "title": "Translation jobs" },
+    { "id": "localisation__job_editor", "name": "Job editor", "route": "/localisation/jobs/:jobId", "viewModel": "localisation__read_job_list", "kind": "localisation.editor", "auth": "session", "description": "Create or edit one translation job.", "viewName": "localisation_job_editor", "title": "Edit job" },
+    { "id": "localisation__glossary_list", "name": "Glossary list", "route": "/localisation/glossary", "viewModel": "localisation__read_glossary", "kind": "localisation.list", "auth": "session", "description": "The glossary terms for one locale.", "viewName": "localisation_glossary_list", "title": "Glossary" },
+    { "id": "localisation__glossary_editor_screen", "name": "Glossary editor", "route": "/localisation/glossary/:termId", "viewModel": "localisation__read_glossary", "kind": "localisation.editor", "auth": "session", "description": "Create or edit one glossary term.", "viewName": "localisation_glossary_editor", "title": "Edit term" },
+    { "id": "localisation__translator_list", "name": "Translator list", "route": "/localisation/translators", "viewModel": "localisation__read_translator_list", "kind": "localisation.list", "auth": "session", "description": "The translators the tenant engages.", "viewName": "localisation_translator_list", "title": "Translators" },
+    { "id": "localisation__translator_editor", "name": "Translator editor", "route": "/localisation/translators/:translatorId", "viewModel": "localisation__read_translator_list", "kind": "localisation.editor", "auth": "session", "description": "Create or edit one translator.", "viewName": "localisation_translator_editor", "title": "Edit translator" },
+    { "id": "localisation__settings", "name": "Localisation settings", "route": "/localisation/settings", "viewModel": "localisation__read_settings", "kind": "localisation.settings", "auth": "session", "description": "The fallback locale and the translation memory threshold.", "viewName": "localisation_settings", "title": "Localisation settings" }
+  ],
+
+  "forms": [
+    { "id": "localisation__form_job_editor", "screen": "localisation__job_editor", "contract": "localisation__submit_job",
+      "fields": [
+        { "name": "title", "input": "title", "label": "Title", "control": "text", "normalize": "trim" },
+        { "name": "source_locale", "input": "source_locale", "label": "Source locale", "control": "text" },
+        { "name": "target_locale", "input": "target_locale", "label": "Target locale", "control": "text" },
+        { "name": "region", "input": "region", "label": "Region", "control": "text" },
+        { "name": "due_date", "input": "due_date", "label": "Due date", "control": "text" },
+        { "name": "word_count", "input": "word_count", "label": "Word count", "control": "text" },
+        { "name": "notes", "input": "notes", "label": "Notes for the translator", "control": "textarea" },
+        { "name": "rush", "input": "rush", "label": "Rush job", "control": "checkbox" } ],
+      "submitLabel": "Save job", "onSuccess": { "navigate": { "screen": "localisation__job_list" }, "toast": "Job saved." },
+      "onError": { "show": "inline" } },
+    { "id": "localisation__form_term_editor", "screen": "localisation__glossary_editor_screen", "contract": "localisation__submit_term",
+      "fields": [
+        { "name": "term", "input": "term", "label": "Term", "control": "text", "normalize": "trim" },
+        { "name": "locale", "input": "locale", "label": "Locale", "control": "text" },
+        { "name": "definition", "input": "definition", "label": "Definition", "control": "textarea" },
+        { "name": "superseded_by", "input": "superseded_by", "label": "Superseded by", "control": "text" },
+        { "name": "approved", "input": "approved", "label": "Approved", "control": "checkbox" } ],
+      "submitLabel": "Save term", "onSuccess": { "navigate": { "screen": "localisation__glossary_list" }, "toast": "Term saved." },
+      "onError": { "show": "inline" } },
+    { "id": "localisation__form_translator_editor", "screen": "localisation__translator_editor", "contract": "localisation__save_translator",
+      "fields": [
+        { "name": "name", "input": "name", "label": "Full name", "control": "text", "normalize": "trim" },
+        { "name": "email", "input": "email", "label": "Email", "control": "text", "normalize": "trim" },
+        { "name": "phone", "input": "phone", "label": "Phone", "control": "text" },
+        { "name": "tier", "input": "tier", "label": "Tier", "control": "text" },
+        { "name": "notes", "input": "notes", "label": "Notes", "control": "textarea" },
+        { "name": "active", "input": "active", "label": "Active", "control": "checkbox" } ],
+      "submitLabel": "Save translator", "onSuccess": { "navigate": { "screen": "localisation__translator_list" }, "toast": "Translator saved." },
+      "onError": { "show": "inline" } },
+    { "id": "localisation__form_transition", "screen": "localisation__job_list", "contract": "localisation__transition_job",
+      "fields": [
+        { "name": "job", "input": "job", "label": "Job", "control": "text" },
+        { "name": "transition", "input": "transition", "label": "Move to", "control": "text" } ],
+      "submitLabel": "Move job", "onSuccess": { "toast": "Job moved." }, "onError": { "show": "toast" } }
+  ],
+
+  "actions": [
+    { "id": "localisation__action_save_job", "screen": "localisation__job_editor", "label": "Save job", "contract": "localisation__submit_job", "form": "localisation__form_job_editor",
+      "arguments": { "title": "form.title", "source_locale": "form.source_locale", "target_locale": "form.target_locale", "region": "form.region", "due_date": "form.due_date", "word_count": "form.word_count", "notes": "form.notes", "rush": "form.rush" },
+      "onSuccess": { "toast": "Job saved." }, "onError": { "show": "inline" } },
+    { "id": "localisation__action_save_term", "screen": "localisation__glossary_editor_screen", "label": "Save term", "contract": "localisation__submit_term", "form": "localisation__form_term_editor",
+      "arguments": { "term": "form.term", "locale": "form.locale", "definition": "form.definition", "superseded_by": "form.superseded_by", "approved": "form.approved" },
+      "onSuccess": { "toast": "Term saved." }, "onError": { "show": "inline" } },
+    { "id": "localisation__action_save_translator", "screen": "localisation__translator_editor", "label": "Save translator", "contract": "localisation__save_translator", "form": "localisation__form_translator_editor",
+      "arguments": { "name": "form.name", "email": "form.email", "phone": "form.phone", "tier": "form.tier", "notes": "form.notes", "active": "form.active" },
+      "onSuccess": { "toast": "Translator saved." }, "onError": { "show": "inline" } },
+    { "id": "localisation__action_transition_job", "screen": "localisation__job_list", "label": "Move job", "contract": "localisation__transition_job", "form": "localisation__form_transition",
+      "arguments": { "job": "form.job", "transition": "form.transition" },
+      "onSuccess": { "toast": "Job moved." }, "onError": { "show": "toast" } }
+  ],
+
+  "liveBindings": [
+    { "id": "localisation__live_job_list", "screen": "localisation__job_list", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "localisation__live_job_list_ended", "screen": "localisation__job_list", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "localisation__live_job_editor", "screen": "localisation__job_editor", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "localisation__live_job_editor_ended", "screen": "localisation__job_editor", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "localisation__live_glossary_list", "screen": "localisation__glossary_list", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "localisation__live_glossary_list_ended", "screen": "localisation__glossary_list", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "localisation__live_glossary_editor", "screen": "localisation__glossary_editor_screen", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "localisation__live_glossary_editor_ended", "screen": "localisation__glossary_editor_screen", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "localisation__live_translator_list", "screen": "localisation__translator_list", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "localisation__live_translator_list_ended", "screen": "localisation__translator_list", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "localisation__live_translator_editor", "screen": "localisation__translator_editor", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "localisation__live_translator_editor_ended", "screen": "localisation__translator_editor", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "localisation__live_settings", "screen": "localisation__settings", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "localisation__live_settings_ended", "screen": "localisation__settings", "event": "ui-session-ended", "refresh": "whole" }
+  ],
+
+  "operations": [
+    { "id": "localisation__accept_assignment", "label": "Accept a translation assignment",
+      "conditions": [],
+      "inputs": [ { "name": "assignment", "ty": "Str", "required": true, "label": "The assignment" } ],
+      "invokers": { "signed-in": true, "roles": ["localisation__translator_role"] },
+      "subject": { "object": "localisation__translator_assignment", "input": "assignment" },
+      "steps": [
+        { "UpdateRecord": { "id": "accept", "object": "localisation__translator_assignment", "record": "record.$id", "fields": { "state": "'accepted'" } } } ] }
+  ],
+
+  "triggers": [
+    { "id": "localisation__on_job_delivered", "on": { "RecordUpdated": { "object": "localisation__translation_job", "transition": "deliver" } },
+      "condition": "param.hop < 4", "automation": "localisation__notify_delivery" }
+  ],
+
+  "automations": [
+    { "id": "localisation__notify_delivery", "label": "Tell the translator that a delivered job has been accepted",
+      "run-as": { "roles": ["localisation__project_manager"] },
+      "start": "notify",
+      "steps": {
+        "notify": { "action": { "SendMail": { "template": "localisation__delivery_mail", "to": "param.translator", "category": "transactional" } }, "next": "done", "timeout": 30000 },
+        "done": { "action": "End" } } }
+  ],
+
+  "mailTemplates": [
+    { "id": "localisation__delivery_mail", "subject": "Your translation job has been delivered", "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"The translation job you worked on has been delivered and accepted.\"}]}]" }
+  ],
+
+  "noticeTemplates": [
+    { "id": "localisation__delivery_notice", "title": "Job delivered", "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"A translation job was delivered.\"}]}]" }
+  ],
+
+  "events": [
+    { "id": "localisation__job_delivered_event", "name": "Job delivered", "description": "A translation job passed review and was delivered.", "payload": [ { "name": "job", "type": "string" }, { "name": "target_locale", "type": "string" } ] },
+    { "id": "localisation__term_approved_event", "name": "Term approved", "description": "A glossary term was approved for its locale.", "payload": [ { "name": "term", "type": "string" }, { "name": "locale", "type": "string" } ] },
+    { "id": "localisation__translator_assigned_event", "name": "Translator assigned", "description": "A translator was offered an assignment.", "payload": [ { "name": "assignment", "type": "string" } ] }
+  ],
+
+  "errorMessages": [
+    { "id": "localisation__error_locale_unknown", "on": "check", "kinds": ["reference"], "text": "The tenant does not publish in that locale.", "field": "target_locale" },
+    { "id": "localisation__error_job_state", "on": "error", "kinds": ["workflow"], "text": "This job cannot move to that state from where it is now." }
+  ],
+
+  "claims": [
+    { "id": "localisation__delivery-after-review", "kind": "structural", "statement": "A translation job SHALL NOT reach the delivered state without passing through the in_review state.",
+      "subjects": ["product-module"], "rationale": "The deliver transition is guarded by the review state.", "evaluate": { "method": "external-evidence" } },
+    { "id": "localisation__translator-details-erased", "kind": "structural", "statement": "A translator's name and contact details SHALL be removed when their retention period ends.",
+      "subjects": ["product-module"], "rationale": "Personal details of translators are kept no longer than the retention rule allows.", "evaluate": { "method": "external-evidence" } }
+  ]
+}

@@ -1,0 +1,560 @@
+{
+  // People module: employees, departments, cost centres, agency staff and leave. Depends on platform records, settings and the approval workflow only.
+  "product": {
+    "id": "people",
+    "name": "People",
+    "description": "Employees, departments, cost centres, agency assignments and leave requests for the enterprise tenant.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../specifications/spec.jsonc",
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "records-read", "setting-read"]
+    }
+  },
+
+  // Records: the data model. Employee and department refer to each other; agency_assignment refers to employee and agency.
+  "records": [
+    { "id": "people__employee_rec", "name": "Employee", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "employee_number", "type": "string" },
+        { "name": "given_name", "type": "string", "personal": "name" },
+        { "name": "family_name", "type": "string", "personal": "name" },
+        { "name": "email", "type": "string", "personal": "contact" },
+        { "name": "phone", "type": "string", "personal": "contact", "optional": true },
+        { "name": "home_address", "type": "people__address", "personal": "other", "optional": true },
+        { "name": "region", "type": "people__region" },
+        { "name": "site", "type": "people__site" },
+        { "name": "employment_type", "type": "people__employment_type" },
+        { "name": "status", "type": "people__employment_status" },
+        { "name": "onboarding", "type": "people__onboarding_stage" },
+        { "name": "department", "type": "u64", "refersTo": "people__department_rec", "onDelete": "set-null", "optional": true },
+        { "name": "cost_centre", "type": "u64", "refersTo": "people__cost_centre_rec", "onDelete": "restrict", "optional": true },
+        { "name": "line_manager", "type": "u64", "refersTo": "people__employee_rec", "onDelete": "set-null", "optional": true },
+        { "name": "start_date", "type": "timestamp" } ],
+      "retention": "Seven years after the employment ends, then removed.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "people__department_rec", "name": "Department", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "code", "type": "string" },
+        { "name": "name", "type": "string" },
+        { "name": "parent", "type": "u64", "refersTo": "people__department_rec", "onDelete": "set-null", "optional": true },
+        { "name": "head", "type": "u64", "refersTo": "people__employee_rec", "onDelete": "set-null", "optional": true } ],
+      "retention": "Kept while the department exists; no personal data.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "people__cost_centre_rec", "name": "Cost centre", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "code", "type": "string" },
+        { "name": "name", "type": "string" },
+        { "name": "department", "type": "u64", "refersTo": "people__department_rec", "onDelete": "restrict" } ],
+      "retention": "Kept while the cost centre exists; no personal data.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "people__agency_rec", "name": "Agency", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "name", "type": "string" },
+        { "name": "tier", "type": "people__agency_tier" },
+        { "name": "region", "type": "people__region" },
+        { "name": "billing_code", "type": "string" } ],
+      "retention": "Kept for seven years after the last assignment ends.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "people__agency_assignment_rec", "name": "Agency assignment", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "employee", "type": "u64", "refersTo": "people__employee_rec", "onDelete": "restrict" },
+        { "name": "agency", "type": "u64", "refersTo": "people__agency_rec", "onDelete": "restrict" },
+        { "name": "role_title", "type": "string" },
+        { "name": "starts", "type": "timestamp" },
+        { "name": "ends", "type": "timestamp", "optional": true },
+        { "name": "rate_per_day", "type": "u32" } ],
+      "retention": "Seven years after the assignment ends.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "people__leave_request_rec", "name": "Leave request", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "employee", "type": "u64", "refersTo": "people__employee_rec", "onDelete": "restrict" },
+        { "name": "kind", "type": "people__leave_kind" },
+        { "name": "status", "type": "people__leave_status" },
+        { "name": "starts", "type": "timestamp" },
+        { "name": "ends", "type": "timestamp" },
+        { "name": "days", "type": "u32" },
+        { "name": "reason", "type": "string", "personal": "other", "optional": true } ],
+      "retention": "Three years after the leave ends, then removed.",
+      "schemaVersion": 1, "realisation": "target" }
+  ],
+
+  // Types: enums and structs used by the records above.
+  "types": [
+    { "id": "people__employment_status", "name": "Employment status", "kind": "enum", "values": ["active", "on_leave", "notice_period", "left", "suspended"], "description": "Where an employee is in the employment lifecycle." },
+    { "id": "people__employment_type", "name": "Employment type", "kind": "enum", "values": ["permanent", "fixed_term", "contractor", "intern"], "description": "The contractual basis of an employment." },
+    { "id": "people__region", "name": "Region", "kind": "enum", "values": ["emea", "apac", "amer"], "description": "The HR region that holds an employee or agency." },
+    { "id": "people__site", "name": "Site", "kind": "enum", "values": ["london", "manchester", "berlin", "paris", "singapore", "sydney", "new_york", "toronto"], "description": "The office an employee is based at." },
+    { "id": "people__leave_kind", "name": "Leave kind", "kind": "enum", "values": ["annual", "sick", "parental", "unpaid", "study", "compassionate"], "description": "The category of a leave request." },
+    { "id": "people__leave_status", "name": "Leave status", "kind": "enum", "values": ["requested", "approved", "refused", "cancelled"], "description": "Where a leave request is in its approval." },
+    { "id": "people__agency_tier", "name": "Agency tier", "kind": "enum", "values": ["strategic", "preferred", "ad_hoc"], "description": "How an agency is contracted." },
+    { "id": "people__onboarding_stage", "name": "Onboarding stage", "kind": "enum", "values": ["pending", "in_progress", "complete"], "description": "How far an employee has got through onboarding." },
+    { "id": "people__address", "name": "Postal address", "kind": "struct", "fields": [ { "name": "street", "type": "string" }, { "name": "city", "type": "string" }, { "name": "postcode", "type": "string" }, { "name": "country", "type": "string" } ], "description": "A home postal address." }
+  ],
+
+  // Capabilities: our own, named in roles and contracts.
+  "capabilities": [
+    { "id": "people__onboard", "name": "Onboard employees", "description": "Create employee records for new starters." },
+    { "id": "people__move_cost_centre", "name": "Move cost centre", "description": "Change the cost centre an employee is charged to." },
+    { "id": "people__approve_leave", "name": "Decide leave", "description": "Approve or refuse leave requests of people in the team." },
+    { "id": "people__manage_agency_assignments", "name": "Manage agency assignments", "description": "Assign and end agency staff on the agency's books." },
+    { "id": "people__configure_leave", "name": "Configure leave", "description": "Change the leave approval settings of the tenant." }
+  ],
+
+  // Roles: HR is split by region over the same objects, plus agency and line management.
+  "roles": [
+    { "id": "people__hr_admin", "name": "HR administrator", "description": "Runs HR for the whole tenant.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["records-read", "setting-read", "people__onboard", "people__move_cost_centre", "people__approve_leave", "people__manage_agency_assignments", "people__configure_leave"] },
+    { "id": "people__hr_partner_emea", "name": "HR partner EMEA", "description": "Runs HR for employees in the EMEA region.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["records-read", "people__onboard", "people__move_cost_centre", "people__approve_leave"] },
+    { "id": "people__hr_partner_apac", "name": "HR partner APAC", "description": "Runs HR for employees in the APAC region.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["records-read", "people__onboard", "people__move_cost_centre", "people__approve_leave"] },
+    { "id": "people__hr_partner_amer", "name": "HR partner AMER", "description": "Runs HR for employees in the Americas.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["records-read", "people__onboard", "people__move_cost_centre", "people__approve_leave"] },
+    { "id": "people__agency_manager", "name": "Agency manager", "description": "Keeps the assignments of the agencies they manage.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["records-read", "people__manage_agency_assignments"] },
+    { "id": "people__line_manager", "name": "Line manager", "description": "Approves the leave of direct reports.", "level": "tenant", "holders": ["person"], "capabilities": ["records-read", "people__approve_leave"] }
+  ],
+
+  // Objects: tenant data with reference fields. Personal fields require retention.
+  "objects": [
+    { "id": "people__employee", "label": "Employee",
+      "fields": {
+        "employee_number": { "id": "employee_number", "label": "Employee number", "ty": "Str", "required": true, "unique": true },
+        "given_name": { "id": "given_name", "label": "Given name", "ty": "Str", "required": true, "unique": false, "personal": { "kind": "name", "subject": { "Field": { "field": "given_name" } }, "searchable": false } },
+        "family_name": { "id": "family_name", "label": "Family name", "ty": "Str", "required": true, "unique": false, "personal": { "kind": "name", "subject": { "Field": { "field": "family_name" } }, "searchable": false } },
+        "email": { "id": "email", "label": "Work email", "ty": "Str", "required": true, "unique": true, "personal": { "kind": "email-address", "subject": { "Field": { "field": "email" } }, "searchable": false } },
+        "phone": { "id": "phone", "label": "Phone", "ty": "Str", "required": false, "unique": false, "personal": { "kind": "phone-number", "subject": { "Field": { "field": "phone" } }, "searchable": false } },
+        "region": { "id": "region", "label": "Region", "ty": "Str", "required": true, "unique": false },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false },
+        "start_date": { "id": "start_date", "label": "Start date", "ty": "Time", "required": true, "unique": false },
+        "department": { "id": "department", "label": "Department", "ty": { "Ref": { "target": "people__department", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "cost_centre": { "id": "cost_centre", "label": "Cost centre", "ty": { "Ref": { "target": "people__cost_centre", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "line_manager": { "id": "line_manager", "label": "Line manager", "ty": { "Ref": { "target": "people__employee", "on-delete": "Restrict" } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "people__department", "label": "Department",
+      "fields": {
+        "code": { "id": "code", "label": "Code", "ty": "Str", "required": true, "unique": true },
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false },
+        "parent": { "id": "parent", "label": "Parent department", "ty": { "Ref": { "target": "people__department", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "head": { "id": "head", "label": "Head", "ty": { "Ref": { "target": "people__employee", "on-delete": "Restrict" } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 3650, "from": "Created" } },
+    { "id": "people__cost_centre", "label": "Cost centre",
+      "fields": {
+        "code": { "id": "code", "label": "Code", "ty": "Str", "required": true, "unique": true },
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false },
+        "department": { "id": "department", "label": "Department", "ty": { "Ref": { "target": "people__department", "on-delete": "Restrict" } }, "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 3650, "from": "Created" } },
+    { "id": "people__agency", "label": "Agency",
+      "fields": {
+        "name": { "id": "name", "label": "Agency", "ty": "Str", "required": true, "unique": true },
+        "tier": { "id": "tier", "label": "Tier", "ty": "Str", "required": true, "unique": false },
+        "region": { "id": "region", "label": "Region", "ty": "Str", "required": true, "unique": false },
+        "billing_code": { "id": "billing_code", "label": "Billing code", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "people__agency_assignment", "label": "Agency assignment",
+      "fields": {
+        "employee": { "id": "employee", "label": "Employee", "ty": { "Ref": { "target": "people__employee", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "agency": { "id": "agency", "label": "Agency", "ty": { "Ref": { "target": "people__agency", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "role_title": { "id": "role_title", "label": "Role", "ty": "Str", "required": true, "unique": false },
+        "starts": { "id": "starts", "label": "Starts", "ty": "Time", "required": true, "unique": false },
+        "ends": { "id": "ends", "label": "Ends", "ty": "Time", "required": false, "unique": false },
+        "rate_per_day": { "id": "rate_per_day", "label": "Day rate", "ty": "Int", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "people__leave_request", "label": "Leave request",
+      "fields": {
+        "employee": { "id": "employee", "label": "Employee", "ty": { "Ref": { "target": "people__employee", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "kind": { "id": "kind", "label": "Kind", "ty": "Str", "required": true, "unique": false },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false },
+        "starts": { "id": "starts", "label": "Starts", "ty": "Time", "required": true, "unique": false },
+        "ends": { "id": "ends", "label": "Ends", "ty": "Time", "required": true, "unique": false },
+        "days": { "id": "days", "label": "Days", "ty": "Int", "required": true, "unique": false },
+        "reason": { "id": "reason", "label": "Reason", "ty": "Str", "required": false, "unique": false, "personal": { "kind": "other", "subject": { "Field": { "field": "reason" } }, "searchable": false } } },
+      "constraints": {},
+      "retention": { "days": 1095, "from": "Created" } }
+  ],
+
+  // Policies: region-scoped HR over the same employee object, agency scope, and line managers.
+  "policies": [
+    { "id": "people__hr_admin_employees", "role": "people__hr_admin", "resource": { "Object": "people__employee" }, "actions": ["Create", "Read", "Update"] },
+    { "id": "people__hr_emea_employees", "role": "people__hr_partner_emea", "resource": { "Object": "people__employee" }, "actions": ["Read", "Update"], "condition": "record.region == 'emea'" },
+    { "id": "people__hr_apac_employees", "role": "people__hr_partner_apac", "resource": { "Object": "people__employee" }, "actions": ["Read", "Update"], "condition": "record.region == 'apac'" },
+    { "id": "people__hr_amer_employees", "role": "people__hr_partner_amer", "resource": { "Object": "people__employee" }, "actions": ["Read", "Update"], "condition": "record.region == 'amer'" },
+    { "id": "people__agency_manager_assignments", "role": "people__agency_manager", "resource": { "Object": "people__agency_assignment" }, "actions": ["Read", "Update"], "condition": "is_null(record.ends)" },
+    { "id": "people__line_manager_leave", "role": "people__line_manager", "resource": { "Object": "people__leave_request" }, "actions": ["Read", "Update"], "condition": "record.status == 'requested'" }
+  ],
+
+  // Queries: lists the screens and the leave board present.
+  "queries": [
+    { "id": "people__active_employees", "object": "people__employee", "filter": "record.status == 'active'", "params": [], "order": [ { "field": "family_name", "descending": false } ], "limit": 500 },
+    { "id": "people__requested_leave", "object": "people__leave_request", "filter": "record.status == 'requested'", "params": [], "order": [ { "field": "starts", "descending": false } ], "limit": 100 },
+    { "id": "people__agency_open_assignments", "object": "people__agency_assignment", "filter": "record.agency == param.agency and is_null(record.ends)", "params": ["agency"], "order": [ { "field": "starts", "descending": true } ], "limit": 200 }
+  ],
+
+  // Views: a queue page for pending leave. Its route is not a screen route.
+  "views": [
+    { "id": "people__leave_queue", "route": "/people/leave/queue", "title": "Leave queue",
+      "sections": { "main": { "query": "people__requested_leave", "args": {}, "include": [], "markdown": [], "single": false } } }
+  ],
+
+  // Workflows: the leave lifecycle on the status field of leave_request.
+  "workflows": [
+    { "id": "people__leave_lifecycle", "object": "people__leave_request", "field": "status", "initial": ["requested"],
+      "transitions": [
+        { "name": "approve", "from": "requested", "to": "approved", "guard": "old.status == 'requested'", "set": {} },
+        { "name": "refuse", "from": "requested", "to": "refused", "set": {} },
+        { "name": "cancel", "from": "requested", "to": "cancelled", "set": {} } ] }
+  ],
+
+  // Screens: pages of the People module.
+  "screens": [
+    { "id": "people__employee_list", "name": "Employee list", "route": "/people/employees", "viewModel": "people__read_employee_directory", "kind": "people.list", "auth": "session", "description": "The employees of the tenant, by region.", "viewName": "people_employee_list", "title": "Employees" },
+    { "id": "people__employee_detail", "name": "Employee detail", "route": "/people/employees/:id", "viewModel": "people__read_employee", "kind": "people.detail", "auth": "session", "description": "One employee, with their department, cost centre and line manager.", "viewName": "people_employee_detail", "title": "Employee" },
+    { "id": "people__onboarding_editor", "name": "Onboarding editor", "route": "/people/onboarding", "viewModel": "people__read_onboarding_defaults", "kind": "people.editor", "auth": "session", "description": "The form a new starter's details are entered on.", "viewName": "people_onboarding_editor", "title": "Onboard an employee" },
+    { "id": "people__leave_board", "name": "Leave board", "route": "/people/leave", "viewModel": "people__read_leave_board", "kind": "people.list", "auth": "session", "description": "Leave requests, with the decision buttons.", "viewName": "people_leave_board", "title": "Leave" },
+    { "id": "people__agency_assignments", "name": "Agency assignments", "route": "/people/agencies", "viewModel": "people__read_agency_assignments", "kind": "people.list", "auth": "session", "description": "Agency staff on assignment, by agency.", "viewName": "people_agency_assignments", "title": "Agency assignments" },
+    { "id": "people__cost_centre_screen", "name": "Cost centres", "route": "/people/cost-centres", "viewModel": "people__read_cost_centres", "kind": "people.list", "auth": "session", "description": "Cost centres and the move-cost-centre form.", "viewName": "people_cost_centre_screen", "title": "Cost centres" },
+    { "id": "people__settings_screen", "name": "People settings", "route": "/people/settings", "viewModel": "people__read_settings", "kind": "people.settings", "auth": "session", "description": "Leave approval settings for the tenant.", "viewName": "people_settings_screen", "title": "People settings" }
+  ],
+
+  // Forms: inputs collected on screens and submitted through contracts. The onboarding form is wide.
+  "forms": [
+    { "id": "people__form_onboarding", "screen": "people__onboarding_editor", "contract": "people__submit_onboarding",
+      "fields": [
+        { "name": "legal_given_name", "input": "legal_given_name", "label": "Legal given name", "control": "text" },
+        { "name": "legal_family_name", "input": "legal_family_name", "label": "Legal family name", "control": "text" },
+        { "name": "preferred_name", "input": "preferred_name", "label": "Preferred name", "control": "text" },
+        { "name": "middle_names", "input": "middle_names", "label": "Middle names", "control": "text" },
+        { "name": "work_email", "input": "work_email", "label": "Work email", "control": "text", "normalize": "trim" },
+        { "name": "personal_email", "input": "personal_email", "label": "Personal email", "control": "text" },
+        { "name": "mobile_phone", "input": "mobile_phone", "label": "Mobile phone", "control": "text" },
+        { "name": "home_phone", "input": "home_phone", "label": "Home phone", "control": "text" },
+        { "name": "date_of_birth", "input": "date_of_birth", "label": "Date of birth", "control": "text" },
+        { "name": "nationality", "input": "nationality", "label": "Nationality", "control": "text" },
+        { "name": "national_id", "input": "national_id", "label": "National identifier", "control": "text" },
+        { "name": "tax_reference", "input": "tax_reference", "label": "Tax reference", "control": "text" },
+        { "name": "bank_account_name", "input": "bank_account_name", "label": "Account holder", "control": "text" },
+        { "name": "bank_sort_code", "input": "bank_sort_code", "label": "Sort code", "control": "text" },
+        { "name": "bank_account_number", "input": "bank_account_number", "label": "Account number", "control": "text" },
+        { "name": "emergency_contact_name", "input": "emergency_contact_name", "label": "Emergency contact", "control": "text" },
+        { "name": "emergency_contact_phone", "input": "emergency_contact_phone", "label": "Emergency contact phone", "control": "text" },
+        { "name": "emergency_contact_relation", "input": "emergency_contact_relation", "label": "Relationship to employee", "control": "text" },
+        { "name": "home_street", "input": "home_street", "label": "Home street", "control": "text" },
+        { "name": "home_city", "input": "home_city", "label": "Home city", "control": "text" },
+        { "name": "home_postcode", "input": "home_postcode", "label": "Postcode", "control": "text" },
+        { "name": "home_country", "input": "home_country", "label": "Country", "control": "text" },
+        { "name": "job_title", "input": "job_title", "label": "Job title", "control": "text" },
+        { "name": "job_family", "input": "job_family", "label": "Job family", "control": "text" },
+        { "name": "job_grade", "input": "job_grade", "label": "Grade", "control": "text" },
+        { "name": "employment_type", "input": "employment_type", "label": "Employment type", "control": "text" },
+        { "name": "start_date", "input": "start_date", "label": "Start date", "control": "text" },
+        { "name": "probation_end", "input": "probation_end", "label": "Probation ends", "control": "text" },
+        { "name": "contracted_hours", "input": "contracted_hours", "label": "Contracted hours a week", "control": "text" },
+        { "name": "region", "input": "region", "label": "Region", "control": "text" },
+        { "name": "site", "input": "site", "label": "Site", "control": "text" },
+        { "name": "department_code", "input": "department_code", "label": "Department code", "control": "text" },
+        { "name": "cost_centre_code", "input": "cost_centre_code", "label": "Cost centre code", "control": "text" },
+        { "name": "line_manager_number", "input": "line_manager_number", "label": "Line manager employee number", "control": "text" },
+        { "name": "hiring_manager", "input": "hiring_manager", "label": "Hiring manager", "control": "text" },
+        { "name": "recruiter", "input": "recruiter", "label": "Recruiter", "control": "text" },
+        { "name": "right_to_work_checked", "input": "right_to_work_checked", "label": "Right to work checked", "control": "checkbox" },
+        { "name": "right_to_work_reference", "input": "right_to_work_reference", "label": "Right to work document reference", "control": "text" },
+        { "name": "visa_expiry", "input": "visa_expiry", "label": "Visa expiry", "control": "text" },
+        { "name": "background_check_done", "input": "background_check_done", "label": "Background check complete", "control": "checkbox" },
+        { "name": "contract_signed", "input": "contract_signed", "label": "Contract signed", "control": "checkbox" },
+        { "name": "handbook_acknowledged", "input": "handbook_acknowledged", "label": "Handbook acknowledged", "control": "checkbox" },
+        { "name": "data_consent", "input": "data_consent", "label": "Consent to process personal data", "control": "checkbox" },
+        { "name": "marketing_consent", "input": "marketing_consent", "label": "Consent to marketing messages", "control": "checkbox" },
+        { "name": "laptop_required", "input": "laptop_required", "label": "Laptop required", "control": "checkbox" },
+        { "name": "company_phone_required", "input": "company_phone_required", "label": "Company phone required", "control": "checkbox" },
+        { "name": "badge_required", "input": "badge_required", "label": "Building badge required", "control": "checkbox" },
+        { "name": "laptop_model", "input": "laptop_model", "label": "Laptop model", "control": "text" },
+        { "name": "software_requests", "input": "software_requests", "label": "Software requests", "control": "textarea" },
+        { "name": "desk_location", "input": "desk_location", "label": "Desk location", "control": "text" },
+        { "name": "accessibility_needs", "input": "accessibility_needs", "label": "Accessibility needs", "control": "textarea" },
+        { "name": "dietary_requirements", "input": "dietary_requirements", "label": "Dietary requirements", "control": "textarea" },
+        { "name": "pension_opt_in", "input": "pension_opt_in", "label": "Pension scheme opt in", "control": "checkbox" },
+        { "name": "benefits_notes", "input": "benefits_notes", "label": "Benefits enrolment notes", "control": "textarea" },
+        { "name": "training_plan", "input": "training_plan", "label": "Training plan", "control": "textarea" },
+        { "name": "mentor", "input": "mentor", "label": "Mentor", "control": "text" },
+        { "name": "onboarding_buddy", "input": "onboarding_buddy", "label": "Onboarding buddy", "control": "text" },
+        { "name": "welcome_message", "input": "welcome_message", "label": "Welcome message", "control": "textarea" },
+        { "name": "induction_date", "input": "induction_date", "label": "Induction date", "control": "text" },
+        { "name": "onboarding_notes", "input": "onboarding_notes", "label": "Onboarding notes", "control": "textarea" } ],
+      "submitLabel": "Start onboarding", "onSuccess": { "navigate": { "screen": "people__employee_list" }, "toast": "Onboarding started." },
+      "onError": { "show": "inline" } },
+    { "id": "people__form_leave_request", "screen": "people__leave_board", "contract": "people__submit_leave_request",
+      "fields": [
+        { "name": "kind", "input": "kind", "label": "Leave kind", "control": "text" },
+        { "name": "starts", "input": "starts", "label": "First day", "control": "text" },
+        { "name": "ends", "input": "ends", "label": "Last day", "control": "text" },
+        { "name": "reason", "input": "reason", "label": "Reason", "control": "textarea" } ],
+      "submitLabel": "Request leave", "onSuccess": { "toast": "Leave requested." }, "onError": { "show": "inline" } },
+    { "id": "people__form_cost_centre_transfer", "screen": "people__cost_centre_screen", "contract": "people__submit_cost_centre_transfer",
+      "fields": [
+        { "name": "employee_number", "input": "employee_number", "label": "Employee number", "control": "text" },
+        { "name": "cost_centre_code", "input": "cost_centre_code", "label": "New cost centre", "control": "text" },
+        { "name": "effective_date", "input": "effective_date", "label": "Effective from", "control": "text" },
+        { "name": "justification", "input": "justification", "label": "Justification", "control": "textarea" } ],
+      "submitLabel": "Move", "onSuccess": { "toast": "Cost centre moved." }, "onError": { "show": "inline" } },
+    { "id": "people__form_agency_assignment", "screen": "people__agency_assignments", "contract": "people__assign_agency",
+      "fields": [
+        { "name": "employee_number", "input": "employee_number", "label": "Employee number", "control": "text" },
+        { "name": "agency_name", "input": "agency_name", "label": "Agency", "control": "text" },
+        { "name": "role_title", "input": "role_title", "label": "Role", "control": "text" },
+        { "name": "rate_per_day", "input": "rate_per_day", "label": "Day rate", "control": "text" },
+        { "name": "confirmed", "input": "confirmed", "label": "Rate confirmed with the agency", "control": "checkbox" } ],
+      "submitLabel": "Assign", "onSuccess": { "toast": "Assignment saved." }, "onError": { "show": "inline" } },
+    { "id": "people__form_leave_settings", "screen": "people__settings_screen", "contract": "people__save_leave_settings",
+      "fields": [
+        { "name": "leave_approval_days", "input": "leave_approval_days", "label": "Days to decide a leave request", "control": "text" },
+        { "name": "note", "input": "note", "label": "Note for the change log", "control": "textarea" } ],
+      "submitLabel": "Save", "onSuccess": { "toast": "Leave settings saved." }, "onError": { "show": "inline" } }
+  ],
+
+  // Contracts: facade operations the screens, forms and actions call.
+  "contracts": [
+    { "id": "people__read_employee_directory", "name": "Read the employee directory", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in HR member", "requires": ["records-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "region", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the employee directory for the region named, or for every region when none is named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__read_employee", "name": "Read one employee", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in HR member", "requires": ["records-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "employee", "type": "u64" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the employee named, with its department, cost centre and line manager."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__read_onboarding_defaults", "name": "Read the onboarding form defaults", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in HR member", "requires": ["people__onboard"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the onboarding form with its default region and start-date rules."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__submit_onboarding", "name": "Submit an onboarding", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in HR member who may onboard", "requires": ["people__onboard"] },
+      "idempotent": false, "timeoutMs": 5000,
+      "inputs": [
+        { "name": "legal_given_name", "type": "string" }, { "name": "legal_family_name", "type": "string" }, { "name": "preferred_name", "type": "string" }, { "name": "middle_names", "type": "string" },
+        { "name": "work_email", "type": "string" }, { "name": "personal_email", "type": "string" }, { "name": "mobile_phone", "type": "string" }, { "name": "home_phone", "type": "string" },
+        { "name": "date_of_birth", "type": "string" }, { "name": "nationality", "type": "string" }, { "name": "national_id", "type": "string" }, { "name": "tax_reference", "type": "string" },
+        { "name": "bank_account_name", "type": "string" }, { "name": "bank_sort_code", "type": "string" }, { "name": "bank_account_number", "type": "string" }, { "name": "emergency_contact_name", "type": "string" },
+        { "name": "emergency_contact_phone", "type": "string" }, { "name": "emergency_contact_relation", "type": "string" }, { "name": "home_street", "type": "string" }, { "name": "home_city", "type": "string" },
+        { "name": "home_postcode", "type": "string" }, { "name": "home_country", "type": "string" }, { "name": "job_title", "type": "string" }, { "name": "job_family", "type": "string" },
+        { "name": "job_grade", "type": "string" }, { "name": "employment_type", "type": "string" }, { "name": "start_date", "type": "string" }, { "name": "probation_end", "type": "string" },
+        { "name": "contracted_hours", "type": "string" }, { "name": "region", "type": "string" }, { "name": "site", "type": "string" }, { "name": "department_code", "type": "string" },
+        { "name": "cost_centre_code", "type": "string" }, { "name": "line_manager_number", "type": "string" }, { "name": "hiring_manager", "type": "string" }, { "name": "recruiter", "type": "string" },
+        { "name": "right_to_work_checked", "type": "bool" }, { "name": "right_to_work_reference", "type": "string" }, { "name": "visa_expiry", "type": "string" }, { "name": "background_check_done", "type": "bool" },
+        { "name": "contract_signed", "type": "bool" }, { "name": "handbook_acknowledged", "type": "bool" }, { "name": "data_consent", "type": "bool" }, { "name": "marketing_consent", "type": "bool" },
+        { "name": "laptop_required", "type": "bool" }, { "name": "company_phone_required", "type": "bool" }, { "name": "badge_required", "type": "bool" }, { "name": "laptop_model", "type": "string" },
+        { "name": "software_requests", "type": "string" }, { "name": "desk_location", "type": "string" }, { "name": "accessibility_needs", "type": "string" }, { "name": "dietary_requirements", "type": "string" },
+        { "name": "pension_opt_in", "type": "bool" }, { "name": "benefits_notes", "type": "string" }, { "name": "training_plan", "type": "string" }, { "name": "mentor", "type": "string" },
+        { "name": "onboarding_buddy", "type": "string" }, { "name": "welcome_message", "type": "string" }, { "name": "induction_date", "type": "string" }, { "name": "onboarding_notes", "type": "string" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["An employee record exists for the starter, with status active and an onboarding stage of pending."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__read_leave_board", "name": "Read the leave board", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in approver", "requires": ["people__approve_leave"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "status", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the leave requests with the status named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__submit_leave_request", "name": "Request leave", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in employee", "requires": ["records-read"] },
+      "idempotent": false, "timeoutMs": 3000,
+      "inputs": [ { "name": "kind", "type": "string" }, { "name": "starts", "type": "timestamp" }, { "name": "ends", "type": "timestamp" }, { "name": "reason", "type": "string" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["A leave request exists in the requested state, and the line manager is asked to decide it."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__decide_leave_request", "name": "Decide a leave request", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in approver", "requires": ["people__approve_leave"] },
+      "idempotent": false, "timeoutMs": 3000,
+      "inputs": [ { "name": "leave_request", "type": "u64" }, { "name": "decision", "type": "string" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["The leave request moves to approved or refused, and the employee is told."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__read_agency_assignments", "name": "Read agency assignments", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in agency manager", "requires": ["people__manage_agency_assignments"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "agency", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the open assignments of the agency named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__assign_agency", "name": "Assign agency staff", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in agency manager", "requires": ["people__manage_agency_assignments"] },
+      "idempotent": false, "timeoutMs": 3000,
+      "inputs": [ { "name": "employee_number", "type": "string" }, { "name": "agency_name", "type": "string" }, { "name": "role_title", "type": "string" }, { "name": "rate_per_day", "type": "u32" }, { "name": "confirmed", "type": "bool" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["An open agency assignment exists for the employee named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__read_cost_centres", "name": "Read cost centres", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in HR member", "requires": ["people__move_cost_centre"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is every cost centre, with its department."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__submit_cost_centre_transfer", "name": "Move an employee to a cost centre", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in HR member who may move cost centres", "requires": ["people__move_cost_centre"] },
+      "idempotent": false, "timeoutMs": 3000,
+      "inputs": [ { "name": "employee_number", "type": "string" }, { "name": "cost_centre_code", "type": "string" }, { "name": "effective_date", "type": "string" }, { "name": "justification", "type": "string" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["The employee is charged to the cost centre named from the effective date."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__read_settings", "name": "Read people settings", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in HR member", "requires": ["setting-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the people settings in effect for the tenant."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "people__save_leave_settings", "name": "Save leave settings", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in HR administrator", "requires": ["people__configure_leave"] },
+      "idempotent": true, "timeoutMs": 3000,
+      "inputs": [ { "name": "leave_approval_days", "type": "u32" }, { "name": "note", "type": "string" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["The leave approval days setting holds the value given."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
+  ],
+
+  // Actions: buttons that call a contract.
+  "actions": [
+    { "id": "people__action_submit_onboarding", "screen": "people__onboarding_editor", "label": "Start onboarding", "contract": "people__submit_onboarding", "form": "people__form_onboarding",
+      "arguments": { "legal_given_name": "form.legal_given_name", "legal_family_name": "form.legal_family_name", "work_email": "form.work_email", "start_date": "form.start_date", "region": "form.region", "job_title": "form.job_title" },
+      "onSuccess": { "toast": "Onboarding started." }, "onError": { "show": "inline" } },
+    { "id": "people__action_request_leave", "screen": "people__leave_board", "label": "Request leave", "contract": "people__submit_leave_request", "form": "people__form_leave_request",
+      "arguments": { "kind": "form.kind", "starts": "form.starts", "ends": "form.ends", "reason": "form.reason" },
+      "onSuccess": { "toast": "Leave requested." }, "onError": { "show": "inline" } },
+    { "id": "people__action_approve_leave", "screen": "people__leave_board", "label": "Decide leave", "contract": "people__decide_leave_request",
+      "onSuccess": { "toast": "Decision saved." }, "onError": { "show": "toast" } },
+    { "id": "people__action_assign_agency", "screen": "people__agency_assignments", "label": "Assign agency", "contract": "people__assign_agency", "form": "people__form_agency_assignment",
+      "arguments": { "employee_number": "form.employee_number", "agency_name": "form.agency_name", "role_title": "form.role_title" },
+      "onSuccess": { "toast": "Assignment saved." }, "onError": { "show": "inline" } },
+    { "id": "people__action_transfer_cost_centre", "screen": "people__cost_centre_screen", "label": "Move cost centre", "contract": "people__submit_cost_centre_transfer", "form": "people__form_cost_centre_transfer",
+      "arguments": { "employee_number": "form.employee_number", "cost_centre_code": "form.cost_centre_code" },
+      "onSuccess": { "toast": "Cost centre moved." }, "onError": { "show": "inline" } }
+  ],
+
+  // Live bindings: each screen refreshes on a notice; session screens also end on session end.
+  "liveBindings": [
+    { "id": "people__live_employee_list", "screen": "people__employee_list", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "people__live_employee_list_ended", "screen": "people__employee_list", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "people__live_employee_detail", "screen": "people__employee_detail", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "people__live_employee_detail_ended", "screen": "people__employee_detail", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "people__live_onboarding_editor", "screen": "people__onboarding_editor", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "people__live_onboarding_editor_ended", "screen": "people__onboarding_editor", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "people__live_leave_board", "screen": "people__leave_board", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "people__live_leave_board_ended", "screen": "people__leave_board", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "people__live_agency_assignments", "screen": "people__agency_assignments", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "people__live_agency_assignments_ended", "screen": "people__agency_assignments", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "people__live_cost_centre_screen", "screen": "people__cost_centre_screen", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "people__live_cost_centre_screen_ended", "screen": "people__cost_centre_screen", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "people__live_settings_screen", "screen": "people__settings_screen", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "people__live_settings_screen_ended", "screen": "people__settings_screen", "event": "ui-session-ended", "refresh": "whole" }
+  ],
+
+  // Error messages: field checks and conflicts.
+  "errorMessages": [
+    { "id": "people__error_employee_number_taken", "on": "check", "kinds": ["unique"], "text": "Another employee already uses this employee number.", "field": "employee_number" },
+    { "id": "people__error_work_email_required", "on": "check", "kinds": ["required"], "text": "A work email is required to start onboarding.", "field": "work_email" },
+    { "id": "people__error_leave_overlap", "on": "error", "kinds": ["conflict"], "text": "This leave overlaps a leave request already approved for this employee." }
+  ],
+
+  // Events: domain facts this module reports.
+  "events": [
+    { "id": "people__employee_onboarded_event", "name": "Employee onboarded", "description": "A new employee record was created.", "payload": [ { "name": "employee_number", "type": "string" }, { "name": "start_date", "type": "timestamp" } ] },
+    { "id": "people__cost_centre_transferred_event", "name": "Cost centre transferred", "description": "An employee moved to another cost centre.", "payload": [ { "name": "employee_number", "type": "string" }, { "name": "cost_centre", "type": "number" } ] },
+    { "id": "people__leave_decided_event", "name": "Leave decided", "description": "A leave request was approved or refused.", "payload": [ { "name": "leave_request", "type": "number" }, { "name": "decision", "type": "string" } ] }
+  ],
+
+  // Claims: what the module promises.
+  "claims": [
+    { "id": "people__leave-needs-approval", "kind": "structural",
+      "statement": "A leave request SHALL NOT reach the approved state without a decision of its line manager.",
+      "subjects": ["product-module"],
+      "rationale": "The approve transition is guarded by the leave approval workflow.",
+      "evaluate": { "method": "external-evidence" } },
+    { "id": "people__employee-retention", "kind": "structural",
+      "statement": "An employee record SHALL NOT keep personal contact details after its retention period has passed.",
+      "subjects": ["product-module"],
+      "rationale": "Names, emails and phone numbers are personal data and are removed on the retention rule.",
+      "evaluate": { "method": "external-evidence" } }
+  ],
+
+  // Triggers: a new leave request starts the approval automation.
+  "triggers": [
+    { "id": "people__on_leave_requested", "on": { "RecordCreated": { "object": "people__leave_request" } }, "automation": "people__leave_approval_flow" }
+  ],
+
+  // Automations: ask the line manager, then tell the employee.
+  "automations": [
+    { "id": "people__leave_approval_flow", "label": "Ask the line manager to decide leave, then tell the employee",
+      "run-as": { "roles": ["people__hr_admin"] }, "run-key": "param.employee",
+      "start": "approve",
+      "steps": {
+        "approve": { "action": { "RequestApproval": { "policy": "people__line_manager_leave", "timeout": 172800000, "approved": "mail_approved", "refused": "mail_refused" } } },
+        "mail_approved": { "action": { "SendMail": { "template": "people__leave_approved_mail", "to": "param.employee", "category": "transactional" } }, "next": "done", "timeout": 30000 },
+        "mail_refused": { "action": { "SendMail": { "template": "people__leave_refused_mail", "to": "param.employee", "category": "transactional" } }, "next": "done", "timeout": 30000 },
+        "done": { "action": "End" } } }
+  ],
+
+  // Operations: onboard an employee (create) and move a cost centre (update).
+  "operations": [
+    { "id": "people__onboard_employee", "label": "Onboard an employee",
+      "inputs": [
+        { "name": "employee_number", "ty": "Str", "required": true, "label": "Employee number" },
+        { "name": "given_name", "ty": "Str", "required": true, "label": "Given name" },
+        { "name": "family_name", "ty": "Str", "required": true, "label": "Family name" },
+        { "name": "email", "ty": "Str", "required": true, "label": "Work email" },
+        { "name": "phone", "ty": "Str", "required": false, "label": "Phone" },
+        { "name": "region", "ty": "Str", "required": true, "label": "Region" },
+        { "name": "start_date", "ty": "Time", "required": true, "label": "Start date" } ],
+      "invokers": { "signed-in": true, "roles": ["people__hr_admin", "people__hr_partner_emea", "people__hr_partner_apac", "people__hr_partner_amer"] },
+      "conditions": [ { "id": "start_date_set", "expr": "param.start_date != null", "error": "missing-start-date", "message": "A start date is required." } ],
+      "steps": [
+        { "CreateRecord": { "id": "new_employee", "object": "people__employee", "fields": { "employee_number": "param.employee_number", "given_name": "param.given_name", "family_name": "param.family_name", "email": "param.email", "phone": "param.phone", "region": "param.region", "start_date": "param.start_date", "status": "'active'" } } } ] },
+    { "id": "people__transfer_cost_centre", "label": "Move an employee to another cost centre",
+      "conditions": [],
+      "inputs": [
+        { "name": "employee_number", "ty": "Str", "required": true, "label": "Employee number" },
+        { "name": "cost_centre", "ty": "Int", "required": true, "label": "Cost centre id" } ],
+      "invokers": { "signed-in": true, "roles": ["people__hr_admin", "people__hr_partner_emea", "people__hr_partner_apac", "people__hr_partner_amer"] },
+      "subject": { "object": "people__employee", "input": "employee_number" },
+      "steps": [
+        { "UpdateRecord": { "id": "move", "object": "people__employee", "record": "record.$id", "fields": { "cost_centre": "param.cost_centre" } } } ] }
+  ],
+
+  // Mail and notice templates. Bodies are JSON strings holding a block list.
+  "mailTemplates": [
+    { "id": "people__leave_approved_mail", "subject": "Your leave is approved",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your leave request has been approved.\"}]}]" },
+    { "id": "people__leave_refused_mail", "subject": "Your leave request was not approved",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your leave request has not been approved. Speak to your line manager.\"}]}]" }
+  ],
+  "noticeTemplates": [
+    { "id": "people__leave_decided_notice", "title": "Leave decided",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"A leave request has been decided.\"}]}]" }
+  ],
+
+  // Settings: configuration of the module.
+  "settings": [
+    { "id": "people__leave_approval_days", "label": "Days to decide a leave request", "type": "i64", "default": {"Int": 5}, "levels": ["tenant"] },
+    { "id": "people__default_region", "label": "Default region for new starters", "type": "string", "default": {"Str": "emea"}, "levels": ["tenant", "team"] }
+  ],
+
+  // Declared events that other modules may subscribe to.
+  "eventKinds": [
+    { "id": "people__employee_onboarded", "kind": "app.people-employee-onboarded", "fields": [ { "name": "employee_number", "type": "string" }, { "name": "start_date", "type": "timestamp" } ], "readers": ["people__hr_admin"] }
+  ]
+}

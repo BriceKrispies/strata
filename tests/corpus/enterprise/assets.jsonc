@@ -1,0 +1,478 @@
+{
+  // Media assets, renditions, video, licences, usage rights and collections; depends on the platform media and records capabilities.
+  "product": {
+    "id": "assets",
+    "name": "Assets",
+    "description": "The media library of the enterprise tenant: assets, renditions, licences, usage rights and collections.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../specifications/spec.jsonc",
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "media-deliver", "media-sign", "self-file-upload", "upload-scan", "records-read", "setting-read", "setting-write-tenant"]
+    }
+  },
+
+  // Data model. Asset and rendition refer to each other; collections form a tree; licences are personal.
+  "records": [
+    { "id": "assets__asset_rec", "name": "Asset", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "primary_rendition", "type": "u64", "refersTo": "assets__rendition_rec", "onDelete": "restrict", "optional": true },
+        { "name": "title", "type": "string" },
+        { "name": "kind", "type": "assets__asset_kind" },
+        { "name": "status", "type": "assets__upload_status" },
+        { "name": "colour", "type": "assets__colour_space", "optional": true },
+        { "name": "dims", "type": "assets__dimensions", "optional": true },
+        { "name": "collection", "type": "u64", "refersTo": "assets__collection_rec", "onDelete": "set-null", "optional": true },
+        { "name": "licence", "type": "u64", "refersTo": "assets__licence_rec", "onDelete": "restrict", "optional": true },
+        { "name": "uploader_name", "type": "string", "personal": "name" },
+        { "name": "checksum", "type": "string" },
+        { "name": "created_at", "type": "timestamp" } ],
+      "retention": "Until the asset and its licence are removed by their retention rules.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "assets__rendition_rec", "name": "Rendition", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "asset", "type": "u64", "refersTo": "assets__asset_rec", "onDelete": "restrict" },
+        { "name": "profile", "type": "assets__rendition_profile" },
+        { "name": "width", "type": "u32" },
+        { "name": "height", "type": "u32" },
+        { "name": "bytes", "type": "u64" },
+        { "name": "video_codec", "type": "assets__video_codec", "optional": true },
+        { "name": "created_at", "type": "timestamp" } ],
+      "retention": "Removed with its asset.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "assets__licence_rec", "name": "Licence", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "name", "type": "string" },
+        { "name": "licence_type", "type": "assets__licence_type" },
+        { "name": "licensor_name", "type": "string", "personal": "name" },
+        { "name": "licensor_contact", "type": "string", "personal": "contact" },
+        { "name": "territory", "type": "string" },
+        { "name": "starts_at", "type": "timestamp" },
+        { "name": "ends_at", "type": "timestamp", "optional": true } ],
+      "retention": "Seven years after the licence ends, then removed with its personal fields.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "assets__usage_right_rec", "name": "Usage right", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "licence", "type": "u64", "refersTo": "assets__licence_rec", "onDelete": "restrict" },
+        { "name": "asset", "type": "u64", "refersTo": "assets__asset_rec", "onDelete": "restrict" },
+        { "name": "window", "type": "assets__rights_window" },
+        { "name": "scope", "type": "assets__usage_scope" } ],
+      "retention": "Removed with its licence.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "assets__collection_rec", "name": "Collection", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "name", "type": "string" },
+        { "name": "parent", "type": "u64", "refersTo": "assets__collection_rec", "onDelete": "restrict", "optional": true },
+        { "name": "path_note", "type": "string" } ],
+      "retention": "Kept until its owner deletes the collection.",
+      "schemaVersion": 1, "realisation": "target" }
+  ],
+
+  // Value types: asset, licence, rendition and usage enums, and structs for dimensions and rights windows.
+  "types": [
+    { "id": "assets__asset_kind", "name": "Asset kind", "kind": "enum",
+      "values": ["image", "video", "audio", "document"], "description": "The kind of a media asset." },
+    { "id": "assets__licence_type", "name": "Licence type", "kind": "enum",
+      "values": ["perpetual", "term", "editorial"], "description": "How long and for what use a licence runs." },
+    { "id": "assets__rendition_profile", "name": "Rendition profile", "kind": "enum",
+      "values": ["thumbnail", "web_small", "web_large", "print", "social_square", "video_720p", "video_1080p", "audio_mp3", "poster_frame"],
+      "description": "The output a rendition is made for." },
+    { "id": "assets__usage_scope", "name": "Usage scope", "kind": "enum",
+      "values": ["web", "app", "print", "social", "broadcast", "internal"], "description": "Where an asset may be used." },
+    { "id": "assets__colour_space", "name": "Colour space", "kind": "enum",
+      "values": ["srgb", "adobe_rgb", "cmyk", "greyscale"], "description": "The colour space of an image." },
+    { "id": "assets__upload_status", "name": "Upload status", "kind": "enum",
+      "values": ["pending", "scanning", "ready", "quarantined", "rejected"], "description": "Where an upload is in its checks." },
+    { "id": "assets__video_codec", "name": "Video codec", "kind": "enum",
+      "values": ["h264", "h265", "vp9", "av1", "prores"], "description": "The codec of a video rendition." },
+    { "id": "assets__dimensions", "name": "Dimensions", "kind": "struct",
+      "fields": [ { "name": "width", "type": "u32" }, { "name": "height", "type": "u32" }, { "name": "dpi", "type": "u32" } ],
+      "description": "Pixel size and resolution of an image." },
+    { "id": "assets__rights_window", "name": "Rights window", "kind": "struct",
+      "fields": [ { "name": "territory", "type": "string" }, { "name": "starts_at", "type": "timestamp" }, { "name": "ends_at", "type": "timestamp" }, { "name": "exclusive", "type": "bool" } ],
+      "description": "The territory and dates a usage right holds for." }
+  ],
+
+  // Roles: librarians and licence managers are people; the media processor is an agent.
+  "roles": [
+    { "id": "assets__librarian", "name": "Librarian", "description": "Uploads, catalogues and edits assets and collections.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["media-deliver", "self-file-upload", "assets__upload", "assets__edit"] },
+    { "id": "assets__licence_manager", "name": "Licence manager", "description": "Manages licences and usage rights and expires them.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["records-read", "media-deliver", "assets__licence_manage"] },
+    { "id": "assets__media_processor", "name": "Media processor", "description": "The agent that makes renditions for new assets.", "level": "tenant",
+      "holders": ["agent"], "capabilities": ["media-sign", "media-deliver"] }
+  ],
+
+  // Capabilities this module declares for its own actions.
+  "capabilities": [
+    { "id": "assets__upload", "name": "Upload assets", "description": "Add new assets to the library." },
+    { "id": "assets__edit", "name": "Edit assets", "description": "Change the catalogue details of assets and collections." },
+    { "id": "assets__licence_manage", "name": "Manage licences", "description": "Create, change and expire licences and usage rights." }
+  ],
+
+  // Objects. The asset carries File fields for its original and preview; the licence carries personal licensor fields and has retention.
+  "objects": [
+    { "id": "assets__asset", "label": "Asset",
+      "fields": {
+        "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": false },
+        "kind": { "id": "kind", "label": "Kind", "ty": "Str", "required": true, "unique": false },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false },
+        "original": { "id": "original", "label": "Original file", "ty": { "File": { "media-types": ["image/jpeg", "image/png", "image/tiff", "video/mp4", "audio/mpeg", "application/pdf"], "max-bytes": 1073741824, "renditions": [] } }, "required": false, "unique": false },
+        "preview_image": { "id": "preview_image", "label": "Preview image", "ty": { "File": { "media-types": ["image/jpeg", "image/png", "image/webp"], "max-bytes": 10485760, "renditions": [] } }, "required": false, "unique": false },
+        "alt_text": { "id": "alt_text", "label": "Alt text", "ty": "Str", "required": false, "unique": false },
+        "caption": { "id": "caption", "label": "Caption", "ty": "Str", "required": false, "unique": false },
+        "collection": { "id": "collection", "label": "Collection", "ty": { "Ref": { "target": "assets__collection", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "licence": { "id": "licence", "label": "Licence", "ty": { "Ref": { "target": "assets__licence", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "uploader_name": { "id": "uploader_name", "label": "Uploaded by", "ty": "Str", "required": false, "unique": false,
+          "personal": { "kind": "name", "subject": { "Field": { "field": "uploader_name" } }, "searchable": false } },
+        "width": { "id": "width", "label": "Width", "ty": "Int", "required": false, "unique": false },
+        "height": { "id": "height", "label": "Height", "ty": "Int", "required": false, "unique": false },
+        "duration_seconds": { "id": "duration_seconds", "label": "Duration", "ty": "Int", "required": false, "unique": false },
+        "checksum": { "id": "checksum", "label": "Checksum", "ty": "Str", "required": true, "unique": true },
+        "created_at": { "id": "created_at", "label": "Created", "ty": "Time", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1095, "from": "Created" } },
+    { "id": "assets__rendition", "label": "Rendition",
+      "fields": {
+        "asset": { "id": "asset", "label": "Asset", "ty": { "Ref": { "target": "assets__asset", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "profile": { "id": "profile", "label": "Profile", "ty": "Str", "required": true, "unique": false },
+        "width": { "id": "width", "label": "Width", "ty": "Int", "required": true, "unique": false },
+        "height": { "id": "height", "label": "Height", "ty": "Int", "required": true, "unique": false },
+        "bytes": { "id": "bytes", "label": "Size in bytes", "ty": "Int", "required": false, "unique": false },
+        "file": { "id": "file", "label": "Rendition file", "ty": { "File": { "media-types": ["image/jpeg", "image/webp", "video/mp4", "audio/mpeg"], "max-bytes": 536870912, "renditions": [] } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1095, "from": "Created" } },
+    { "id": "assets__licence", "label": "Licence",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false },
+        "licence_type": { "id": "licence_type", "label": "Licence type", "ty": "Str", "required": true, "unique": false },
+        "licensor_name": { "id": "licensor_name", "label": "Licensor", "ty": "Str", "required": true, "unique": false,
+          "personal": { "kind": "name", "subject": { "Field": { "field": "licensor_name" } }, "searchable": false } },
+        "licensor_email": { "id": "licensor_email", "label": "Licensor email", "ty": "Str", "required": false, "unique": false,
+          "personal": { "kind": "email-address", "subject": { "Field": { "field": "licensor_email" } }, "searchable": false } },
+        "territory": { "id": "territory", "label": "Territory", "ty": "Str", "required": true, "unique": false },
+        "starts_at": { "id": "starts_at", "label": "Starts", "ty": "Time", "required": true, "unique": false },
+        "ends_at": { "id": "ends_at", "label": "Ends", "ty": "Time", "required": false, "unique": false },
+        "fee_note": { "id": "fee_note", "label": "Fee note", "ty": "Str", "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "assets__usage_right", "label": "Usage right",
+      "fields": {
+        "licence": { "id": "licence", "label": "Licence", "ty": { "Ref": { "target": "assets__licence", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "asset": { "id": "asset", "label": "Asset", "ty": { "Ref": { "target": "assets__asset", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "scope": { "id": "scope", "label": "Scope", "ty": "Str", "required": true, "unique": false },
+        "starts_at": { "id": "starts_at", "label": "Starts", "ty": "Time", "required": true, "unique": false },
+        "ends_at": { "id": "ends_at", "label": "Ends", "ty": "Time", "required": true, "unique": false },
+        "exclusive": { "id": "exclusive", "label": "Exclusive", "ty": "Bool", "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "assets__collection", "label": "Collection",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false },
+        "slug": { "id": "slug", "label": "Slug", "ty": "Str", "required": true, "unique": true },
+        "parent": { "id": "parent", "label": "Parent collection", "ty": { "Ref": { "target": "assets__collection", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "path_note": { "id": "path_note", "label": "Path note", "ty": "Str", "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1095, "from": "Created" } }
+  ],
+
+  // Who may do what. Librarians catalogue; licence managers handle licences and usage rights.
+  "policies": [
+    { "id": "assets__librarian_assets", "role": "assets__librarian", "resource": { "Object": "assets__asset" },
+      "actions": ["Create", "Read", "Update"] },
+    { "id": "assets__librarian_collections", "role": "assets__librarian", "resource": { "Object": "assets__collection" },
+      "actions": ["Create", "Read", "Update"] },
+    { "id": "assets__licence_manager_licences", "role": "assets__licence_manager", "resource": { "Object": "assets__licence" },
+      "actions": ["Read", "Update"] },
+    { "id": "assets__licence_manager_usage", "role": "assets__licence_manager", "resource": { "Object": "assets__usage_right" },
+      "actions": ["Create", "Read", "Update", "Delete"] },
+    { "id": "assets__member_readable", "role": "member", "resource": { "Object": "assets__asset" },
+      "actions": ["Read"] }
+  ],
+
+  // Named reads over the objects.
+  "queries": [
+    { "id": "assets__ready_images", "object": "assets__asset", "filter": "record.status == 'ready' and record.kind == 'image'",
+      "params": [], "order": [ { "field": "title", "descending": false } ], "limit": 200 },
+    { "id": "assets__expiring_licences", "object": "assets__licence", "filter": "record.licence_type == 'term' and record.ends_at < now",
+      "params": [], "order": [ { "field": "ends_at", "descending": false } ], "limit": 100 },
+    { "id": "assets__collection_assets", "object": "assets__asset", "filter": "record.collection == param.collection",
+      "params": ["collection"], "order": [ { "field": "title", "descending": false } ], "limit": 500 }
+  ],
+
+  // The asset board page, presenting the ready images query.
+  "views": [
+    { "id": "assets__asset_board", "route": "/assets/board", "title": "Ready assets",
+      "sections": { "main": { "query": "assets__ready_images", "args": {}, "include": [], "markdown": [], "single": false } } }
+  ],
+
+  // Asset life cycle on the status field: scan, then accept or quarantine; or reject before scanning.
+  "workflows": [
+    { "id": "assets__asset_lifecycle", "object": "assets__asset", "field": "status", "initial": ["pending"],
+      "transitions": [
+        { "name": "scan", "from": "pending", "to": "scanning", "set": {} },
+        { "name": "accept", "from": "scanning", "to": "ready", "guard": "old.status == 'scanning'", "set": {} },
+        { "name": "quarantine", "from": "scanning", "to": "quarantined", "set": {} },
+        { "name": "reject", "from": "pending", "to": "rejected", "set": {} } ] }
+  ],
+
+  // Screens. Each has one ui-notice-received binding and one ui-session-ended binding (see liveBindings).
+  "screens": [
+    { "id": "assets__library", "name": "Media library", "route": "/assets/library", "viewModel": "assets__read_library",
+      "kind": "assets.list", "auth": "session", "description": "The assets of the library, by kind, collection and keyword.",
+      "viewName": "assets_library", "title": "Media library", "query": ["kind", "collection", "keyword"] },
+    { "id": "assets__asset_detail", "name": "Asset detail", "route": "/assets/library/:slug", "viewModel": "assets__read_asset_detail",
+      "kind": "assets.detail", "auth": "session", "description": "One asset with its renditions, licence and usage rights.",
+      "viewName": "assets_asset_detail", "title": "Asset" },
+    { "id": "assets__asset_upload", "name": "Asset upload", "route": "/assets/upload", "viewModel": "assets__read_library",
+      "kind": "assets.editor", "auth": "session", "description": "Add an asset with its credit, rights and technical details.",
+      "viewName": "assets_asset_upload", "title": "Upload asset" },
+    { "id": "assets__collections", "name": "Collections", "route": "/assets/collections", "viewModel": "assets__read_library",
+      "kind": "assets.list", "auth": "session", "description": "The collection tree of the library.",
+      "viewName": "assets_collections", "title": "Collections" },
+    { "id": "assets__licences", "name": "Licences", "route": "/assets/licences", "viewModel": "assets__read_licences",
+      "kind": "assets.list", "auth": "session", "description": "Licences and their end dates, with expiry actions.",
+      "viewName": "assets_licences", "title": "Licences" },
+    { "id": "assets__usage_settings", "name": "Usage settings", "route": "/assets/settings", "viewModel": "assets__read_usage_settings",
+      "kind": "assets.settings", "auth": "session", "description": "Default licence term and watermarking for the library.",
+      "viewName": "assets_usage_settings", "title": "Usage settings" }
+  ],
+
+  // Forms. The upload form collects 25 fields of metadata, credit, rights and technical detail.
+  "forms": [
+    { "id": "assets__form_upload", "screen": "assets__asset_upload", "contract": "assets__upload_asset",
+      "fields": [
+        { "name": "title", "input": "title", "label": "Title", "control": "text", "normalize": "trim" },
+        { "name": "slug", "input": "slug", "label": "Slug", "control": "text", "normalize": "trim" },
+        { "name": "kind", "input": "kind", "label": "Asset kind", "control": "text" },
+        { "name": "alt_text", "input": "alt_text", "label": "Alt text", "control": "textarea" },
+        { "name": "caption", "input": "caption", "label": "Caption", "control": "textarea" },
+        { "name": "long_description", "input": "long_description", "label": "Long description", "control": "textarea" },
+        { "name": "keywords", "input": "keywords", "label": "Keywords", "control": "text" },
+        { "name": "collection", "input": "collection", "label": "Collection", "control": "text" },
+        { "name": "subject_tags", "input": "subject_tags", "label": "Subject tags", "control": "text" },
+        { "name": "photographer", "input": "photographer", "label": "Photographer", "control": "text" },
+        { "name": "credit_line", "input": "credit_line", "label": "Credit line", "control": "textarea" },
+        { "name": "licence_ref", "input": "licence_ref", "label": "Licence reference", "control": "text" },
+        { "name": "licence_type", "input": "licence_type", "label": "Licence type", "control": "text" },
+        { "name": "territory", "input": "territory", "label": "Territory", "control": "text" },
+        { "name": "rights_expiry_text", "input": "rights_expiry_text", "label": "Rights expire", "control": "text" },
+        { "name": "usage_scope", "input": "usage_scope", "label": "Usage scope", "control": "text" },
+        { "name": "colour_space", "input": "colour_space", "label": "Colour space", "control": "text" },
+        { "name": "dpi", "input": "dpi", "label": "DPI", "control": "text" },
+        { "name": "width_px", "input": "width_px", "label": "Width (px)", "control": "text" },
+        { "name": "height_px", "input": "height_px", "label": "Height (px)", "control": "text" },
+        { "name": "duration_text", "input": "duration_text", "label": "Duration", "control": "text" },
+        { "name": "codec", "input": "codec", "label": "Video codec", "control": "text" },
+        { "name": "original_filename", "input": "original_filename", "label": "Original filename", "control": "text" },
+        { "name": "checksum", "input": "checksum", "label": "Checksum", "control": "text" },
+        { "name": "public_visible", "input": "public_visible", "label": "Visible to readers", "control": "checkbox" } ],
+      "submitLabel": "Upload", "onSuccess": { "navigate": { "screen": "assets__library" }, "toast": "Uploaded." },
+      "onError": { "show": "inline" } },
+    { "id": "assets__form_licence_expiry", "screen": "assets__licences", "contract": "assets__request_licence_expiry",
+      "fields": [
+        { "name": "licence", "input": "licence", "label": "Licence", "control": "text" },
+        { "name": "reason", "input": "reason", "label": "Reason", "control": "textarea" } ],
+      "submitLabel": "Expire", "onSuccess": { "toast": "Licence expired." }, "onError": { "show": "toast" } },
+    { "id": "assets__form_usage_settings", "screen": "assets__usage_settings", "contract": "assets__save_usage_settings",
+      "fields": [
+        { "name": "default_term_days", "input": "default_term_days", "label": "Default term (days)", "control": "text" },
+        { "name": "watermark_default", "input": "watermark_default", "label": "Watermark by default", "control": "checkbox" } ],
+      "submitLabel": "Save settings", "onSuccess": { "toast": "Settings saved." }, "onError": { "show": "inline" } },
+    { "id": "assets__form_library_filter", "screen": "assets__library", "contract": "assets__read_library",
+      "fields": [
+        { "name": "kind", "input": "kind", "label": "Asset kind", "control": "text" },
+        { "name": "collection", "input": "collection", "label": "Collection", "control": "text" },
+        { "name": "keyword", "input": "keyword", "label": "Keyword", "control": "text" } ],
+      "submitLabel": "Filter", "onSuccess": { "toast": "Library updated." }, "onError": { "show": "inline" } }
+  ],
+
+  // Buttons that call contracts.
+  "actions": [
+    { "id": "assets__action_upload", "screen": "assets__asset_upload", "label": "Upload", "contract": "assets__upload_asset",
+      "form": "assets__form_upload", "arguments": { "title": "form.title", "kind": "form.kind" },
+      "onSuccess": { "navigate": { "screen": "assets__library" }, "toast": "Uploaded." }, "onError": { "show": "inline" } },
+    { "id": "assets__action_expire_licence", "screen": "assets__licences", "label": "Expire licence", "contract": "assets__request_licence_expiry",
+      "form": "assets__form_licence_expiry", "arguments": { "licence": "form.licence" },
+      "onSuccess": { "toast": "Licence expired." }, "onError": { "show": "toast" } },
+    { "id": "assets__action_save_usage", "screen": "assets__usage_settings", "label": "Save settings", "contract": "assets__save_usage_settings",
+      "form": "assets__form_usage_settings", "arguments": { "default_term_days": "form.default_term_days" },
+      "onSuccess": { "toast": "Settings saved." }, "onError": { "show": "inline" } }
+  ],
+
+  // Each screen refreshes when a notice arrives, and again when its session ends.
+  "liveBindings": [
+    { "id": "assets__live_library", "screen": "assets__library", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "assets__live_library_ended", "screen": "assets__library", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "assets__live_asset_detail", "screen": "assets__asset_detail", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "assets__live_asset_detail_ended", "screen": "assets__asset_detail", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "assets__live_asset_upload", "screen": "assets__asset_upload", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "assets__live_asset_upload_ended", "screen": "assets__asset_upload", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "assets__live_collections", "screen": "assets__collections", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "assets__live_collections_ended", "screen": "assets__collections", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "assets__live_licences", "screen": "assets__licences", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "assets__live_licences_ended", "screen": "assets__licences", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "assets__live_usage_settings", "screen": "assets__usage_settings", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "assets__live_usage_settings_ended", "screen": "assets__usage_settings", "event": "ui-session-ended", "refresh": "whole" }
+  ],
+
+  // Messages shown for failed checks and errors.
+  "errorMessages": [
+    { "id": "assets__error_checksum_duplicate", "on": "check", "kinds": ["unique"], "text": "This file is already in the library.", "field": "checksum" },
+    { "id": "assets__error_title_required", "on": "check", "kinds": ["required"], "text": "An asset needs a title.", "field": "title" },
+    { "id": "assets__error_file_refused", "on": "error", "kinds": ["policy"], "text": "This file type is not accepted by the library." },
+    { "id": "assets__error_licence_ended", "on": "error", "kinds": ["workflow"], "text": "This licence has already ended." }
+  ],
+
+  // Domain facts this module reports.
+  "events": [
+    { "id": "assets__asset_ingested_event", "name": "Asset ingested", "description": "An asset passed its upload checks and joined the library.",
+      "payload": [ { "name": "asset", "type": "string" }, { "name": "at", "type": "timestamp" } ] },
+    { "id": "assets__renditions_ready_event", "name": "Renditions ready", "description": "The renditions of an asset were made.",
+      "payload": [ { "name": "asset", "type": "string" } ] },
+    { "id": "assets__licence_expired_event", "name": "Licence expired", "description": "A licence reached its end date or was expired early.",
+      "payload": [ { "name": "licence", "type": "string" }, { "name": "at", "type": "timestamp" } ] }
+  ],
+
+  // The contracts the screens, forms and actions call. All are facades.
+  "contracts": [
+    { "id": "assets__read_library", "name": "Read the media library", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["media-deliver"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "kind", "type": "string" }, { "name": "collection", "type": "string" }, { "name": "keyword", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the library view for the kind, collection and keyword named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "assets__read_asset_detail", "name": "Read an asset", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["media-deliver"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "slug", "type": "string" } ],
+      "outputs": [ { "name": "asset", "type": "json" } ],
+      "postconditions": ["The answer is the asset with the slug named, with its renditions."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "assets__upload_asset", "name": "Upload an asset", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in librarian", "requires": ["self-file-upload", "upload-scan"] },
+      "idempotent": false, "timeoutMs": 10000,
+      "inputs": [
+        { "name": "title", "type": "string" }, { "name": "slug", "type": "string" }, { "name": "kind", "type": "string" },
+        { "name": "alt_text", "type": "string" }, { "name": "caption", "type": "string" }, { "name": "long_description", "type": "string" },
+        { "name": "keywords", "type": "string" }, { "name": "collection", "type": "string" }, { "name": "subject_tags", "type": "string" },
+        { "name": "photographer", "type": "string" }, { "name": "credit_line", "type": "string" }, { "name": "licence_ref", "type": "string" },
+        { "name": "licence_type", "type": "string" }, { "name": "territory", "type": "string" }, { "name": "rights_expiry_text", "type": "string" },
+        { "name": "usage_scope", "type": "string" }, { "name": "colour_space", "type": "string" }, { "name": "dpi", "type": "string" },
+        { "name": "width_px", "type": "string" }, { "name": "height_px", "type": "string" }, { "name": "duration_text", "type": "string" },
+        { "name": "codec", "type": "string" }, { "name": "original_filename", "type": "string" }, { "name": "checksum", "type": "string" },
+        { "name": "public_visible", "type": "bool" } ],
+      "outputs": [ { "name": "asset_id", "type": "u64" } ],
+      "postconditions": ["The asset is recorded in the library with status pending until its checks finish."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "assets__read_licences", "name": "Read the licences", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in licence manager", "requires": ["records-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "status", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the licence list for the status named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "assets__request_licence_expiry", "name": "Expire a licence", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in licence manager", "requires": ["assets__licence_manage"] },
+      "idempotent": false, "timeoutMs": 5000,
+      "inputs": [ { "name": "licence", "type": "string" }, { "name": "reason", "type": "string" } ],
+      "outputs": [ { "name": "state", "type": "string" } ],
+      "postconditions": ["The licence ends at the time the expiry was accepted."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "assets__sign_preview", "name": "Sign a preview link", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["media-sign"] },
+      "idempotent": true, "timeoutMs": 1000,
+      "inputs": [ { "name": "asset", "type": "string" } ],
+      "outputs": [ { "name": "url", "type": "string" } ],
+      "postconditions": ["The answer is a short-lived link to the preview image of the asset."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "assets__read_usage_settings", "name": "Read the usage settings", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["setting-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the default licence term and the watermark default."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "assets__save_usage_settings", "name": "Save the usage settings", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in tenant administrator", "requires": ["setting-write-tenant"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "default_term_days", "type": "string" }, { "name": "watermark_default", "type": "bool" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["The tenant usage settings hold the values saved."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
+  ],
+
+  // Claims about what the module promises.
+  "claims": [
+    { "id": "assets__licence-data-erased", "kind": "structural",
+      "statement": "A licence SHALL NOT keep the licensor name or contact details after its retention period has ended.",
+      "subjects": ["product-module"],
+      "rationale": "The licensor is a private person, so their details follow the retention rule.",
+      "evaluate": { "method": "external-evidence" } },
+    { "id": "assets__expired-licence-blocks-use", "kind": "structural",
+      "statement": "A usage right SHALL NOT be exercised after the end of its licence term.",
+      "subjects": ["product-module"],
+      "rationale": "Use after the end of a term is an infringement, so the expiry must stop it.",
+      "evaluate": { "method": "external-evidence" } }
+  ],
+
+  // Starts when an asset is created: make a thumbnail rendition, then a notice.
+  "automations": [
+    { "id": "assets__make_renditions", "label": "Queue the thumbnail rendition for a new asset",
+      "run-as": { "roles": ["assets__media_processor"] }, "run-key": "param.record",
+      "start": "thumbnail",
+      "steps": {
+        "thumbnail": { "action": { "CreateRecord": { "object": "assets__rendition", "fields": { "asset": "param.record", "profile": "'thumbnail'", "width": "320", "height": "320", "bytes": "0" } } }, "next": "notice", "retry": { "attempts": 3 } },
+        "notice": { "action": { "CreateNotice": { "template": "assets__rendition_notice", "to": "param.owner", "record": "param.record" } }, "next": "done" },
+        "done": { "action": "End" } } }
+  ],
+
+  // Starts the rendition automation when an asset record is created.
+  "triggers": [
+    { "id": "assets__on_asset_created", "on": { "RecordCreated": { "object": "assets__asset" } }, "automation": "assets__make_renditions" }
+  ],
+
+  // Expire a licence: a single UpdateRecord that sets its end time to now.
+  "operations": [
+    { "id": "assets__expire_licence", "label": "Expire a licence",
+      "inputs": [ { "name": "licence", "ty": "Str", "required": true, "label": "The licence" } ],
+      "invokers": { "signed-in": true, "roles": ["assets__licence_manager"] },
+      "subject": { "object": "assets__licence", "input": "licence" },
+      "conditions": [ { "id": "not_ended", "expr": "record.ends_at > now", "error": "already-ended", "message": "This licence has already ended." } ],
+      "steps": [
+        { "UpdateRecord": { "id": "expire", "object": "assets__licence", "record": "record.$id", "fields": { "ends_at": "now" } } } ] }
+  ],
+
+  // Mail and notice text. Bodies are JSON held in a string.
+  "mailTemplates": [
+    { "id": "assets__licence_expiring_mail", "subject": "A licence is ending soon",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"A licence in your care ends soon. Review its usage before the end date.\"}]}]" }
+  ],
+  "noticeTemplates": [
+    { "id": "assets__rendition_notice", "title": "Renditions queued", "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Renditions for your new asset are being made.\"}]}]" }
+  ],
+
+  // Tenant settings: the default licence term and the watermark default.
+  "settings": [
+    { "id": "assets__default_term_days", "label": "Default licence term (days)", "type": "i64", "default": {"Int": 365}, "levels": ["tenant"] },
+    { "id": "assets__watermark_default", "label": "Watermark by default", "type": "bool", "default": {"Bool": false}, "levels": ["tenant", "team"] }
+  ],
+
+  // An event kind the tenant can subscribe to.
+  "eventKinds": [
+    { "id": "assets__licence_expired", "kind": "app.assets-licence-expired",
+      "fields": [ { "name": "licence", "type": "string" }, { "name": "at", "type": "timestamp" } ], "readers": ["assets__licence_manager"] }
+  ]
+}
