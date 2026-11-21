@@ -1416,6 +1416,7 @@ pub const TYPES: &[TypeDecl] = &[
             "trigger",
             "automation",
             "operation",
+            "ui-element",
         ]),
     },
     TypeDecl {
