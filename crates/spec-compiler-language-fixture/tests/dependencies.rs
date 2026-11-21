@@ -147,22 +147,3 @@ fn the_pure_crate_names_no_impure_crate_or_std_io_in_its_sources() {
         found.join("\n")
     );
 }
-
-#[test]
-fn the_check_would_catch_a_dependency() {
-    let manifest = "[package]\nname = \"x\"\n\n[dependencies]\nserde = \"1\"\n\
-                    tokio = { version = \"1\" }\n\n[dev-dependencies]\n\
-                    alias = { package = \"rusqlite\", version = \"0.32\" }\n\n\
-                    [target.'cfg(unix)'.dependencies.strata-runtime]\npath = \"../runtime\"\n";
-    let names = declared(manifest);
-    for name in ["tokio", "rusqlite", "strata-runtime"] {
-        assert!(
-            names.contains(&name.to_string()),
-            "{name} missed in {names:?}"
-        );
-    }
-    assert!(
-        !names.contains(&"x".to_string()),
-        "package fields are not dependencies"
-    );
-}

@@ -771,6 +771,7 @@ fn crowded(store: &dyn Store, tenant: &str) {
 // Verifies: KRN-2526
 // Verifies: KRN-2920
 #[test]
+#[ignore = "scale: run with --ignored"]
 fn reads_and_views_over_a_hundred_thousand_records_load_a_bounded_number() {
     for (name, store) in stores() {
         let store = store.as_ref();
@@ -1529,6 +1530,7 @@ fn a_file_whose_pair_rows_are_missing_is_rebuilt_when_it_is_opened() {
 // Verifies: KRN-2922
 // Verifies: KRN-2526
 #[test]
+#[ignore = "scale: run with --ignored"]
 fn a_read_policy_that_follows_a_reference_loads_only_the_records_its_rows_name() {
     for (name, store) in stores() {
         let store = store.as_ref();

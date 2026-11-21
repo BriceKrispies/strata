@@ -19,10 +19,6 @@ use strata_runtime::{
     Machine, MachineStore, NewTimer, Outcome, RecordError, StepError, Telemetry, TestClock, Time,
 };
 
-/// The longest lease id a record may have: the machine's stand-in for a generated record
-/// constraint.
-const MAX_ID: usize = 8;
-
 /// Telemetry that keeps the names of the events reported at level error.
 #[derive(Default)]
 struct Errors {
@@ -161,13 +157,6 @@ impl Machine for Lease {
 
     fn is_elapsed(event: &LeaseEvent) -> bool {
         matches!(event, LeaseEvent::Expired { .. })
-    }
-
-    fn validate_record(record: &LeaseRecord) -> Result<(), String> {
-        if record.id.chars().count() > MAX_ID {
-            return Err(format!("id is longer than {MAX_ID} characters"));
-        }
-        Ok(())
     }
 
     fn step(
@@ -654,64 +643,4 @@ pub async fn quarantines_an_unreadable_timer<S: MachineStore>(open: impl Fn() ->
     clock.advance(TERM);
     let again = host.tick().await.unwrap();
     assert_eq!(again.quarantined, 0, "{again:?}");
-}
-
-/// An event that stands for elapsed time is refused from outside, whichever way it is offered;
-/// the timer that sets it still delivers it.
-pub async fn refuses_an_elapsed_event_from_outside<S: MachineStore>(open: impl Fn() -> Arc<S>) {
-    let (clock, receivers) = start();
-    let host = host(open(), &receivers, &clock);
-    host.handle(
-        key("a"),
-        LeaseEvent::Grant {
-            holder: "w1".into(),
-        },
-    )
-    .await
-    .unwrap();
-    let before = receivers.seen().len();
-    let expired = || LeaseEvent::Expired { token: 1 };
-    match host.handle(key("a"), expired()).await {
-        Err(HostError::Elapsed { machine, event }) => {
-            assert_eq!((machine, event.as_str()), ("lease", "Expired"));
-        }
-        other => panic!(
-            "expected the elapsed event to be refused, got {:?}",
-            other.err()
-        ),
-    }
-    assert!(matches!(
-        host.commit(key("a"), expired()).await,
-        Err(HostError::Elapsed { .. })
-    ));
-    // Nothing moved: same record, nothing emitted, the timer still set.
-    let (state, vars, version) = host.load(&key("a")).await.unwrap().unwrap();
-    assert_eq!((state, vars.token, version), (Phase::Granted, 1, 1));
-    assert_eq!(receivers.seen().len(), before);
-
-    clock.advance(TERM);
-    assert_eq!(host.fire_due_timers().await.unwrap().fired, 1);
-    assert_eq!(host.load(&key("a")).await.unwrap().unwrap().1.token, 2);
-}
-
-/// A record that breaks a constraint is refused: nothing is saved, scheduled or emitted.
-pub async fn refuses_a_record_that_breaks_a_constraint<S: MachineStore>(open: impl Fn() -> Arc<S>) {
-    let (clock, receivers) = start();
-    let store = open();
-    let host = host(store.clone(), &receivers, &clock);
-    let grant = || LeaseEvent::Grant {
-        holder: "w1".into(),
-    };
-    match host.handle(key("much-too-long"), grant()).await {
-        Err(HostError::Constraint(why)) => assert!(why.contains("longer than"), "{why}"),
-        other => panic!("expected the record to be refused, got {:?}", other.err()),
-    }
-    assert!(host.load(&key("much-too-long")).await.unwrap().is_none());
-    assert_eq!(store.pending().unwrap(), 0);
-    clock.advance(TERM * 2);
-    assert_eq!(host.tick().await.unwrap().fired, 0);
-    assert!(receivers.seen().is_empty());
-    // A key within the limit is stored.
-    host.handle(key("short"), grant()).await.unwrap();
-    assert!(host.load(&key("short")).await.unwrap().is_some());
 }

@@ -370,6 +370,30 @@ fn every_change_form_has_a_class() {
         class(SchemaChange::RemoveQuery(QueryId::new("by_title").unwrap())),
         ChangeClass::Breaking
     );
+
+    // The accepted change records the same classes in its evidence, one line per change.
+    let (_, outcome) = tenant()
+        .step(
+            &Intent::ChangeSchema {
+                changes: vec![
+                    str_field("dossier", "extra"),
+                    remove_field("dossier", "memo"),
+                ],
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
+            &at(),
+        )
+        .expect("the change is accepted");
+    let lines: Vec<&str> = outcome
+        .evidence
+        .iter()
+        .filter(|c| c.rule == "schema:class")
+        .map(|c| c.detail.as_str())
+        .collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].contains("define field dossier.extra") && lines[0].contains("compatible"));
+    assert!(lines[1].contains("remove field dossier.memo") && lines[1].contains("breaking"));
 }
 
 /// The impact of a change is the dependents that read what it touches, directly or through
@@ -500,32 +524,4 @@ fn a_name_nothing_reads_may_be_removed_and_defined_again() {
     assert!(!schema_of(&world).objects[&object("dossier")]
         .fields
         .contains_key(&field("title")));
-}
-
-/// The evidence of an accepted change carries the class of each change and the dependents it
-/// reaches.
-#[test]
-fn the_evidence_of_a_change_shows_its_class_and_impact() {
-    let (_, outcome) = tenant()
-        .step(
-            &Intent::ChangeSchema {
-                changes: vec![
-                    str_field("dossier", "extra"),
-                    remove_field("dossier", "memo"),
-                ],
-                expected_version: None,
-                existing: ExistingData::Reject,
-            },
-            &at(),
-        )
-        .expect("the change is accepted");
-    let lines: Vec<&str> = outcome
-        .evidence
-        .iter()
-        .filter(|c| c.rule == "schema:class")
-        .map(|c| c.detail.as_str())
-        .collect();
-    assert_eq!(lines.len(), 2, "{lines:?}");
-    assert!(lines[0].contains("define field dossier.extra") && lines[0].contains("compatible"));
-    assert!(lines[1].contains("remove field dossier.memo") && lines[1].contains("breaking"));
 }

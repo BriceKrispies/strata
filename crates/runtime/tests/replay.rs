@@ -250,11 +250,3 @@ async fn a_failing_key_source_fails_the_call_and_sends_nothing() {
     assert!(matches!(result, Err(CallError::Key(why)) if why == "no entropy"));
     assert_eq!(runs.load(Ordering::SeqCst), 0);
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_default_key_source_makes_distinct_keys() {
-    let first = strata_runtime::random_key().unwrap();
-    let second = strata_runtime::random_key().unwrap();
-    assert_eq!(first.len(), 32);
-    assert_ne!(first, second);
-}

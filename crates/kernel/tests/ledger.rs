@@ -156,7 +156,7 @@ fn entries(world: &World, owner: &LedgerOwner, scope: &str) -> Vec<LedgerEntry> 
 
 /// Verifies: LDG-013
 #[test]
-fn a_floor_admits_a_balance_at_the_floor_and_refuses_one_below_it() {
+fn a_floor_and_a_cap_admit_their_boundary_and_refuse_one_past() {
     let world = ledger_world(vec![unit_limit(Some(0), None, None)]);
     let world = posted(&world, T0, person("writer1"), 10, "a");
     let world = posted(&world, T0 + 1, person("writer1"), -10, "b");
@@ -165,11 +165,8 @@ fn a_floor_admits_a_balance_at_the_floor_and_refuses_one_below_it() {
     assert_eq!(error.kind, ErrorKind::ConstraintViolated);
     assert_eq!(failed_rule(&error), "ledger:below-floor");
     assert_eq!(entries(&world, &person("writer1"), "").len(), 2);
-}
 
-/// Verifies: LDG-013
-#[test]
-fn a_cap_admits_a_balance_at_the_cap_and_refuses_one_above_it() {
+    // A cap, on the pool.
     let world = ledger_world(vec![unit_limit(None, Some(100), None)]);
     let world = posted(&world, T0, pool(), 100, "fill");
     let error = refused(&world, T0 + 1, pool(), 1, "over");
@@ -331,9 +328,9 @@ fn an_account_limit_replaces_the_unit_limit_limit_by_limit_and_each_scope_counts
 // ------------------------------------------------------------------------------------------------
 // Postings
 
-/// Verifies: LDG-006
+/// Verifies: LDG-006, LDG-007
 #[test]
-fn a_retry_with_the_same_key_and_request_answers_with_the_first_entry_and_changes_nothing() {
+fn a_retry_replays_the_first_entry_and_a_reused_key_is_refused() {
     let world = ledger_world(vec![]);
     let (world, first) = post_as(
         &world,
@@ -361,29 +358,24 @@ fn a_retry_with_the_same_key_and_request_answers_with_the_first_entry_and_change
     assert!(retry.delta.ops.is_empty(), "no second entry");
     assert_eq!(balance(&again, &person("writer1")), 7);
     assert_eq!(entries(&again, &person("writer1"), "").len(), 1);
-}
 
-/// Verifies: LDG-007
-#[test]
-fn a_key_reused_with_another_request_is_refused_and_changes_nothing() {
-    let world = ledger_world(vec![]);
-    let world = posted(&world, T0, person("writer1"), 7, "k");
+    // A key reused with another request is refused and changes nothing.
     for (amount, reason) in [(8, "test"), (7, "other")] {
         let mut other = request(person("writer1"), amount, "k");
         other.reason = reason.into();
-        let error = post_as(&world, "owner", T0 + 1, vec![other]).unwrap_err();
+        let error = post_as(&again, "owner", T0 + 51, vec![other]).unwrap_err();
         assert_eq!(error.kind, ErrorKind::VersionConflict);
         assert_eq!(failed_rule(&error), "ledger:idempotency-mismatch");
     }
     // The key is per account: another account may use it.
-    let world = posted(&world, T0 + 2, person("writer2"), 3, "k");
+    let world = posted(&again, T0 + 52, person("writer2"), 3, "k");
     assert_eq!(balance(&world, &person("writer1")), 7);
     assert_eq!(balance(&world, &person("writer2")), 3);
 }
 
 /// Verifies: LDG-002, LDG-003, LDG-004
 #[test]
-fn a_posting_naming_what_does_not_exist_or_a_bad_amount_is_refused() {
+fn a_posting_is_refused_for_what_it_names_who_sends_it_or_its_size() {
     let world = ledger_world(vec![]);
     let mut stamps = request(person("writer1"), 1, "u");
     stamps.unit = LedgerUnit::new("stamps").unwrap();
@@ -413,6 +405,47 @@ fn a_posting_naming_what_does_not_exist_or_a_bad_amount_is_refused() {
     assert_eq!(
         failed_rule(&refused(&world, T0 + 1, person("writer1"), 1, "over")),
         "ledger:invalid-amount"
+    );
+
+    // Only a holder of ledger-post may post; a batch names one to eight postings.
+    let world = ledger_world(vec![]);
+    let error = post_as(
+        &world,
+        "writer1",
+        T0,
+        vec![request(person("writer1"), 1, "self")],
+    )
+    .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Unauthorized);
+    assert_eq!(failed_rule(&error), "permission:capability:ledger-post");
+    // A role granted the capability may post.
+    let world = change_as(
+        &world,
+        "owner",
+        T0,
+        vec![SchemaChange::DefineRolePermissions {
+            role: role("editor"),
+            permissions: vec![Permission::Capability(ledger::LEDGER_POST.into())],
+        }],
+    )
+    .unwrap();
+    assert!(post_as(
+        &world,
+        "editor",
+        T0 + 1,
+        vec![request(person("writer1"), 1, "e")]
+    )
+    .is_ok());
+    assert_eq!(
+        post_as(&world, "owner", T0 + 2, vec![]).unwrap_err().kind,
+        ErrorKind::InvalidIntent
+    );
+    let nine = (0..9)
+        .map(|i| request(person("writer1"), 1, &format!("n{i}")))
+        .collect();
+    assert_eq!(
+        post_as(&world, "owner", T0 + 3, nine).unwrap_err().kind,
+        ErrorKind::InvalidIntent
     );
 }
 
@@ -507,49 +540,6 @@ fn a_transfer_is_two_postings_committed_together_or_not_at_all() {
     assert_eq!(failed_rule(&error), "ledger:above-cap");
     assert_eq!(balance(&world, &person("writer1")), 70);
     assert_eq!(entries(&world, &person("writer1"), "").len(), 2);
-}
-
-#[test]
-fn a_posting_needs_ledger_post_and_names_one_to_eight_postings() {
-    let world = ledger_world(vec![]);
-    let error = post_as(
-        &world,
-        "writer1",
-        T0,
-        vec![request(person("writer1"), 1, "self")],
-    )
-    .unwrap_err();
-    assert_eq!(error.kind, ErrorKind::Unauthorized);
-    assert_eq!(failed_rule(&error), "permission:capability:ledger-post");
-    // A role granted the capability may post.
-    let world = change_as(
-        &world,
-        "owner",
-        T0,
-        vec![SchemaChange::DefineRolePermissions {
-            role: role("editor"),
-            permissions: vec![Permission::Capability(ledger::LEDGER_POST.into())],
-        }],
-    )
-    .unwrap();
-    assert!(post_as(
-        &world,
-        "editor",
-        T0 + 1,
-        vec![request(person("writer1"), 1, "e")]
-    )
-    .is_ok());
-    assert_eq!(
-        post_as(&world, "owner", T0 + 2, vec![]).unwrap_err().kind,
-        ErrorKind::InvalidIntent
-    );
-    let nine = (0..9)
-        .map(|i| request(person("writer1"), 1, &format!("n{i}")))
-        .collect();
-    assert_eq!(
-        post_as(&world, "owner", T0 + 3, nine).unwrap_err().kind,
-        ErrorKind::InvalidIntent
-    );
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -723,9 +713,9 @@ fn the_balance_always_equals_the_sum_of_the_entries() {
 // ------------------------------------------------------------------------------------------------
 // Reads
 
-/// Verifies: LDG-026, LDG-1541
+/// Verifies: LDG-001, LDG-026, LDG-1541
 #[test]
-fn a_member_reads_only_their_own_account() {
+fn reads_stay_within_the_member_and_the_tenant() {
     let world = ledger_world(vec![]);
     let world = posted(&world, T0, person("writer1"), 7, "a");
     let world = posted(&world, T0 + 1, person("writer2"), 9, "b");
@@ -788,11 +778,61 @@ fn a_member_reads_only_their_own_account() {
         ErrorKind::UnknownRecord,
         "an account that does not exist is not found"
     );
+
+    // Accounts of two tenants never meet.
+    let world = ledger_world(vec![]);
+    let world = posted(&world, T0, person("writer1"), 5, "a");
+    let alpha = tenant_id("alpha");
+    let beta = tenant_id("beta");
+    assert_ne!(
+        ledger::account_id(&alpha, &person("writer1"), &points(), ""),
+        ledger::account_id(&beta, &person("writer1"), &points(), "")
+    );
+    // Beta declares no unit, and holds no ledger.
+    assert!(world.tenants[&beta].ledger.is_none());
+    let as_beta = ctx("beta", user("beta:owner"), T0 + 1);
+    assert_eq!(
+        ledger::read_balance(
+            &world.state(&beta),
+            &person("writer1"),
+            &points(),
+            "",
+            false,
+            &as_beta
+        )
+        .unwrap_err()
+        .kind,
+        ErrorKind::UnknownRecord
+    );
+    // A snapshot of alpha read in beta's context is refused.
+    assert_eq!(
+        ledger::read_balance(
+            &world.state(&alpha),
+            &person("writer1"),
+            &points(),
+            "",
+            false,
+            &as_beta
+        )
+        .unwrap_err()
+        .kind,
+        ErrorKind::TenantMismatch
+    );
+    // A posting in beta's context names beta's principals only.
+    let error = world
+        .step(
+            &Intent::PostLedger {
+                postings: vec![request(person("writer1"), 1, "x")],
+            },
+            &ctx("beta", user("beta:owner"), T0 + 2),
+        )
+        .unwrap_err();
+    assert_eq!(failed_rule(&error), "ledger:unknown-unit");
 }
 
-/// Verifies: LDG-024
+/// Verifies: LDG-024, LDG-1543
 #[test]
-fn entries_are_listed_in_order_by_pages() {
+fn reads_are_ordered_and_bounded() {
     let mut world = ledger_world(vec![]);
     for n in 0..5 {
         world = posted(&world, T0 + n, person("writer1"), n + 1, &format!("k{n}"));
@@ -836,11 +876,7 @@ fn entries_are_listed_in_order_by_pages() {
         .kind,
         ErrorKind::InvalidIntent
     );
-}
 
-/// Verifies: LDG-1543
-#[test]
-fn accounts_are_ranked_by_balance_then_owner_within_the_scan_bound() {
     let world = ledger_world(vec![]);
     let world = posted(&world, T0, person("writer2"), 50, "a");
     let world = posted(&world, T0 + 1, person("writer1"), 50, "b");
@@ -892,76 +928,20 @@ fn accounts_are_ranked_by_balance_then_owner_within_the_scan_bound() {
     );
 }
 
-/// Verifies: LDG-1548
+// ------------------------------------------------------------------------------------------------
+// Declarations
+
+/// Verifies: LDG-011, LDG-1548, LDG-1549, LDG-1550
 #[test]
-fn every_declared_unit_pool_and_limit_is_listed() {
+fn declarations_are_checked_and_a_unit_or_pool_in_use_is_not_removed() {
+    // The definitions are listed as declared.
     let world = ledger_world(vec![unit_limit(Some(0), Some(10), None)]);
     let state = world.state(&tenant_id("alpha"));
     let listed = ledger::read_definitions(&state, &ctx("alpha", user("alpha:owner"), T0)).unwrap();
     assert_eq!(listed.units, [points()]);
     assert_eq!(listed.pools, [budget()]);
     assert_eq!(listed.limits, [unit_limit(Some(0), Some(10), None)]);
-}
 
-/// Verifies: LDG-001
-#[test]
-fn accounts_of_two_tenants_never_meet() {
-    let world = ledger_world(vec![]);
-    let world = posted(&world, T0, person("writer1"), 5, "a");
-    let alpha = tenant_id("alpha");
-    let beta = tenant_id("beta");
-    assert_ne!(
-        ledger::account_id(&alpha, &person("writer1"), &points(), ""),
-        ledger::account_id(&beta, &person("writer1"), &points(), "")
-    );
-    // Beta declares no unit, and holds no ledger.
-    assert!(world.tenants[&beta].ledger.is_none());
-    let as_beta = ctx("beta", user("beta:owner"), T0 + 1);
-    assert_eq!(
-        ledger::read_balance(
-            &world.state(&beta),
-            &person("writer1"),
-            &points(),
-            "",
-            false,
-            &as_beta
-        )
-        .unwrap_err()
-        .kind,
-        ErrorKind::UnknownRecord
-    );
-    // A snapshot of alpha read in beta's context is refused.
-    assert_eq!(
-        ledger::read_balance(
-            &world.state(&alpha),
-            &person("writer1"),
-            &points(),
-            "",
-            false,
-            &as_beta
-        )
-        .unwrap_err()
-        .kind,
-        ErrorKind::TenantMismatch
-    );
-    // A posting in beta's context names beta's principals only.
-    let error = world
-        .step(
-            &Intent::PostLedger {
-                postings: vec![request(person("writer1"), 1, "x")],
-            },
-            &ctx("beta", user("beta:owner"), T0 + 2),
-        )
-        .unwrap_err();
-    assert_eq!(failed_rule(&error), "ledger:unknown-unit");
-}
-
-// ------------------------------------------------------------------------------------------------
-// Declarations
-
-/// Verifies: LDG-011, LDG-1549, LDG-1550
-#[test]
-fn declarations_are_checked_and_a_unit_or_pool_in_use_is_not_removed() {
     let world = ledger_world(vec![]);
     // A limit of a unit that is not declared, a floor above the cap, a cap per period without its
     // period.

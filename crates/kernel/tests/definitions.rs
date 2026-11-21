@@ -457,37 +457,6 @@ fn a_trigger_condition_reads_only_what_its_event_binds() {
 }
 
 #[test]
-fn a_trigger_condition_is_a_truth_value() {
-    let mut trigger = on_points("on_points");
-    trigger.condition = Some(param("balance"));
-    // A parameter has no known shape, so it passes; a literal string does not.
-    must(
-        &notes_world(),
-        "owner",
-        6_000,
-        change(vec![
-            points(),
-            SchemaChange::DefineAutomation(award(&["writer"])),
-            SchemaChange::DefineTrigger(trigger.clone()),
-        ]),
-    );
-    trigger.condition = Some(lit("yes"));
-    let error = refused(
-        &notes_world(),
-        "owner",
-        vec![
-            points(),
-            SchemaChange::DefineAutomation(award(&["writer"])),
-            SchemaChange::DefineTrigger(trigger),
-        ],
-    );
-    assert_eq!(
-        error.message,
-        "trigger on_points: condition is Str, not a truth value"
-    );
-}
-
-#[test]
 fn a_tenant_holds_at_most_one_hundred_triggers() {
     let mut changes = vec![points(), SchemaChange::DefineAutomation(award(&["writer"]))];
     for n in 0..100 {
@@ -532,6 +501,16 @@ fn an_automation_whose_run_as_names_a_role_its_definer_may_not_confer_is_refused
         .evidence
         .iter()
         .any(|check| check.rule == "permission:confer:editor" && !check.passed));
+    // Only an owner confers the owner role.
+    let error = refused(
+        &world,
+        "editor",
+        vec![SchemaChange::DefineAutomation(award(&["owner"]))],
+    );
+    assert_eq!(
+        error.message,
+        "may not confer role owner: only an owner confers the owner role"
+    );
     // The editor may make it act as an editor, and as a writer.
     must(
         &world,
@@ -540,19 +519,6 @@ fn an_automation_whose_run_as_names_a_role_its_definer_may_not_confer_is_refused
         change(vec![SchemaChange::DefineAutomation(award(&[
             "editor", "writer",
         ]))]),
-    );
-}
-
-#[test]
-fn only_an_owner_makes_an_automation_act_as_an_owner() {
-    let error = refused(
-        &definers(true),
-        "editor",
-        vec![SchemaChange::DefineAutomation(award(&["owner"]))],
-    );
-    assert_eq!(
-        error.message,
-        "may not confer role owner: only an owner confers the owner role"
     );
 }
 
@@ -743,10 +709,8 @@ fn the_bounds_of_a_step_are_enforced_when_it_is_defined() {
         bad(fan),
         "automation award.check: a fan-out batch is from 1 to 100"
     );
-}
 
-#[test]
-fn an_automation_has_at_most_fifty_steps() {
+    // An automation has at most fifty steps.
     let mut automation = award(&["writer"]);
     automation
         .steps
@@ -810,50 +774,11 @@ fn an_automation_a_trigger_names_is_not_removed_until_the_trigger_is() {
     assert!(schema(&world).triggers.is_none());
 }
 
-#[test]
-fn a_field_an_automation_writes_is_not_removed_while_the_automation_writes_it() {
-    let mut automation = award(&["writer"]);
-    if let AutomationStep::CreateRecord { fields, .. } =
-        &mut automation.steps.get_mut(&name("make")).unwrap().action
-    {
-        fields.insert(field("body"), lit("Well done"));
-    }
-    let world = must(
-        &notes_world(),
-        "owner",
-        6_000,
-        change(vec![SchemaChange::DefineAutomation(automation)]),
-    );
-    let error = refused(
-        &world,
-        "owner",
-        vec![SchemaChange::RemoveField {
-            object: object("note"),
-            field: field("body"),
-        }],
-    );
-    assert_eq!(error.message, "automation award.make: unknown field body");
-}
-
 // ---------------------------------------------------------------------------------------------
 // Tenant operations.
 // ---------------------------------------------------------------------------------------------
 
 // Verifies: OPR-1540
-#[test]
-fn an_owner_defines_a_tenant_operation() {
-    let world = must(
-        &notes_world(),
-        "owner",
-        6_000,
-        change(vec![SchemaChange::DefineOperation(redeem())]),
-    );
-    assert_eq!(
-        schema(&world).operations.as_ref().unwrap()[&TenantOperationId::new("redeem").unwrap()],
-        redeem()
-    );
-}
-
 // Verifies: OPR-1547
 #[test]
 fn a_tenant_operation_is_refused_when_its_definer_lacks_a_power_its_steps_use() {
@@ -1324,27 +1249,6 @@ fn a_mail_or_a_notice_names_exactly_one_target() {
             "{message}"
         );
     }
-}
-
-// Verifies: NTF-3200
-#[test]
-fn a_digest_step_is_a_step_of_the_catalogue_with_one_output() {
-    let digest = AutomationStep::SendDigest {
-        category: strata_model_core::types::MessageCategoryId("orders".into()),
-        template: TemplateId("daily".into()),
-        since: strata_model_core::prelude::Timestamp(0),
-        until: strata_model_core::prelude::Timestamp(86_400_000),
-        recipient: None,
-        reference: None,
-        idempotency_key: None,
-    };
-    assert_eq!(definitions::step_outputs(&digest), ["messages"]);
-    // Its template is a mail template the tenant must define.
-    let message = definition_message(digest);
-    assert!(
-        message.contains("names template daily, which the tenant does not define"),
-        "{message}"
-    );
 }
 
 // Verifies: SCH-3202

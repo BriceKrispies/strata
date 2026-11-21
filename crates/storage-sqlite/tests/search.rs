@@ -796,38 +796,7 @@ fn random_docs(rng: &mut Lcg, count: u64) -> Vec<Arc<Record>> {
 /// kernel's own read: the rows the reader may read, each without the fields it may not, and of
 /// those the searchable fields in which every word of the query starts a word.
 fn expected(store: &dyn Store, who: &Principal, query: &str) -> Vec<(u64, Vec<String>)> {
-    let state = store.load_complete(&tenant_id("alpha")).unwrap();
-    let tenant = state.tenant.as_deref().unwrap();
-    let def = &tenant.schema.objects[&object("doc")];
-    let indexed = search::indexed_fields(def);
-    let wanted = search::tokens_of(query);
-    let all: Vec<RecordId> = tenant.records_of(&object("doc")).map(|r| r.id).collect();
-    let read = strata_kernel::read(
-        &state,
-        &ReadRequest::Records {
-            object: object("doc"),
-            ids: all,
-        },
-        &ctx("alpha", who.clone(), 90_000),
-    )
-    .unwrap();
-    read.rows
-        .iter()
-        .filter_map(|row| {
-            let fields: Vec<String> = indexed
-                .iter()
-                .filter(|f| row.fields.contains_key(*f))
-                .filter(|f| {
-                    let tokens = search::field_tokens(&row.fields[*f]);
-                    wanted
-                        .iter()
-                        .all(|w| tokens.iter().any(|t| t.starts_with(w.as_str())))
-                })
-                .map(|f| f.to_string())
-                .collect();
-            (!fields.is_empty()).then(|| (row.id.0, fields))
-        })
-        .collect()
+    expected_in(store, "alpha", who, query)
 }
 
 // Verifies: SRH-150

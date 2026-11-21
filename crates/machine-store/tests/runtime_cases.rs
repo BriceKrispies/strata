@@ -1,7 +1,7 @@
 //! The runtime's own host cases, run on the machine store over `strata-storage-api`, with the
 //! storage-api memory store and with the SQLite store. The cases are the files the runtime's
 //! tests use for its own stores (`crates/runtime/tests/common`), so the same behaviour is held
-//! to every store.
+//! to every store. Each test runs its case on both stores in turn.
 
 #[path = "../../runtime/tests/common/delayed_cases.rs"]
 mod delayed;
@@ -61,102 +61,62 @@ fn api_sqlite(name: &str) -> impl Fn() -> Arc<StorageApiMachineStore> {
 }
 
 #[tokio::test]
-async fn api_memory_refuses_a_missing_record_when_not_creating() {
+async fn refuses_a_missing_record_when_not_creating() {
     lease::refuses_a_missing_record_when_not_creating(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_refuses_a_missing_record_when_not_creating() {
     lease::refuses_a_missing_record_when_not_creating(api_sqlite("not-creating")).await;
 }
 
 #[tokio::test]
-async fn api_memory_persists() {
+async fn persists() {
     lease::persists(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_persists() {
     lease::persists(api_sqlite("persists")).await;
 }
 
 #[tokio::test]
-async fn api_memory_redelivers_after_a_crash() {
+async fn redelivers_after_a_crash() {
     lease::redelivers_after_a_crash(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_redelivers_after_a_crash() {
     lease::redelivers_after_a_crash(api_sqlite("redelivers")).await;
 }
 
 #[tokio::test]
-async fn api_memory_fires_timers() {
+async fn fires_timers() {
     lease::fires_timers(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_fires_timers() {
     lease::fires_timers(api_sqlite("timers")).await;
 }
 
 #[tokio::test]
-async fn api_memory_never_retries_at_most_once() {
+async fn never_retries_at_most_once() {
     lease::never_retries_at_most_once(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_never_retries_at_most_once() {
     lease::never_retries_at_most_once(api_sqlite("at-most-once")).await;
 }
 
 #[tokio::test]
-async fn api_memory_waits_for_its_delay() {
+async fn waits_for_its_delay() {
     delayed::waits_for_its_delay(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_waits_for_its_delay() {
     delayed::waits_for_its_delay(api_sqlite("waits")).await;
 }
 
 #[tokio::test]
-async fn api_memory_retries_only_at_least_once() {
+async fn retries_only_at_least_once() {
     delayed::retries_only_at_least_once(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_retries_only_at_least_once() {
     delayed::retries_only_at_least_once(api_sqlite("retries")).await;
 }
 
 #[tokio::test]
-async fn api_memory_delivers_at_deadlines() {
+async fn delivers_at_deadlines() {
     system::delivers_at_deadlines(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_delivers_at_deadlines() {
     system::delivers_at_deadlines(api_sqlite("deadlines")).await;
 }
 
 #[tokio::test]
-async fn api_memory_ignores_without_writing() {
+async fn ignores_without_writing() {
     system::ignores_without_writing(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_ignores_without_writing() {
     system::ignores_without_writing(api_sqlite("ignores")).await;
 }
 
 #[tokio::test]
-async fn api_memory_a_failed_step_commits_nothing() {
+async fn a_failed_step_commits_nothing() {
     system::a_failed_step_commits_nothing(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_a_failed_step_commits_nothing() {
     system::a_failed_step_commits_nothing(api_sqlite("failed")).await;
 }
 
@@ -342,92 +302,44 @@ fn a_concurrent_writer_is_a_conflict() {
 }
 
 #[tokio::test]
-async fn api_memory_quarantines_an_unreadable_entry() {
+async fn quarantines_an_unreadable_entry() {
     system::quarantines_an_unreadable_entry(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_quarantines_an_unreadable_entry() {
     system::quarantines_an_unreadable_entry(api_sqlite("quarantine")).await;
 }
 
 #[tokio::test]
-async fn api_memory_two_hosts_dispatch_once() {
+async fn two_hosts_dispatch_once() {
     system::two_hosts_dispatch_once(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_two_hosts_dispatch_once() {
     system::two_hosts_dispatch_once(api_sqlite("two-hosts")).await;
 }
 
 #[tokio::test]
-async fn api_memory_refuses_an_elapsed_event_from_outside() {
+async fn refuses_an_elapsed_event_from_outside() {
     system::refuses_an_elapsed_event_from_outside(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_refuses_an_elapsed_event_from_outside() {
     system::refuses_an_elapsed_event_from_outside(api_sqlite("elapsed")).await;
 }
 
 #[tokio::test]
-async fn api_memory_refuses_a_record_that_breaks_a_constraint() {
+async fn refuses_a_record_that_breaks_a_constraint() {
     system::refuses_a_record_that_breaks_a_constraint(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_refuses_a_record_that_breaks_a_constraint() {
     system::refuses_a_record_that_breaks_a_constraint(api_sqlite("constraint")).await;
 }
 
 #[tokio::test]
-async fn api_memory_lease_quarantines_an_unreadable_timer() {
+async fn lease_quarantines_an_unreadable_timer() {
     lease::quarantines_an_unreadable_timer(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_lease_quarantines_an_unreadable_timer() {
     lease::quarantines_an_unreadable_timer(api_sqlite("quarantine")).await;
 }
 
 #[tokio::test]
-async fn api_memory_lease_refuses_an_elapsed_event_from_outside() {
-    lease::refuses_an_elapsed_event_from_outside(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_lease_refuses_an_elapsed_event_from_outside() {
-    lease::refuses_an_elapsed_event_from_outside(api_sqlite("elapsed")).await;
-}
-
-#[tokio::test]
-async fn api_memory_lease_refuses_a_record_that_breaks_a_constraint() {
-    lease::refuses_a_record_that_breaks_a_constraint(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_lease_refuses_a_record_that_breaks_a_constraint() {
-    lease::refuses_a_record_that_breaks_a_constraint(api_sqlite("constraint")).await;
-}
-
-#[tokio::test]
-async fn api_memory_delayed_two_hosts_dispatch_once() {
+async fn delayed_two_hosts_dispatch_once() {
     delayed::two_hosts_dispatch_once(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_delayed_two_hosts_dispatch_once() {
     delayed::two_hosts_dispatch_once(api_sqlite("two-hosts-delayed")).await;
 }
 
 #[tokio::test]
-async fn api_memory_redelivers_at_least_once_after_a_stop_between_dispatch_and_removal() {
+async fn redelivers_at_least_once_after_a_stop_between_dispatch_and_removal() {
     system::redelivers_at_least_once_after_a_stop_between_dispatch_and_removal(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_redelivers_at_least_once_after_a_stop_between_dispatch_and_removal() {
     system::redelivers_at_least_once_after_a_stop_between_dispatch_and_removal(api_sqlite(
         "redeliver",
     ))
@@ -435,32 +347,20 @@ async fn api_sqlite_redelivers_at_least_once_after_a_stop_between_dispatch_and_r
 }
 
 #[tokio::test]
-async fn api_memory_loses_at_most_once_on_a_stop_between_commit_and_dispatch() {
+async fn loses_at_most_once_on_a_stop_between_commit_and_dispatch() {
     system::loses_at_most_once_on_a_stop_between_commit_and_dispatch(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_loses_at_most_once_on_a_stop_between_commit_and_dispatch() {
     system::loses_at_most_once_on_a_stop_between_commit_and_dispatch(api_sqlite("lose")).await;
 }
 
 #[tokio::test]
-async fn api_memory_retries_at_least_once_with_backoff() {
+async fn retries_at_least_once_with_backoff() {
     system::retries_at_least_once_with_backoff(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_retries_at_least_once_with_backoff() {
     system::retries_at_least_once_with_backoff(api_sqlite("retry")).await;
 }
 
 #[tokio::test]
-async fn api_memory_refuses_an_instance_beyond_max() {
+async fn refuses_an_instance_beyond_max() {
     system::refuses_an_instance_beyond_max(api_memory()).await;
-}
-
-#[tokio::test]
-async fn api_sqlite_refuses_an_instance_beyond_max() {
     system::refuses_an_instance_beyond_max(api_sqlite("max")).await;
 }
 
@@ -500,12 +400,8 @@ fn equal_ids_are_two_instances(api: Arc<dyn Store>) {
 }
 
 #[test]
-fn api_memory_tenants_with_equal_record_ids_share_no_instance_state() {
+fn tenants_with_equal_record_ids_share_no_instance_state() {
     equal_ids_are_two_instances(Arc::new(MemoryStore::new()));
-}
-
-#[test]
-fn api_sqlite_tenants_with_equal_record_ids_share_no_instance_state() {
     let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "machine-store-tenants-{}-{}.db",
         std::process::id(),
@@ -521,48 +417,28 @@ fn api_sqlite_tenants_with_equal_record_ids_share_no_instance_state() {
 
 /// Verifies: OPS-2440
 #[tokio::test]
-async fn api_memory_a_singleton_takes_its_first_event_without_seeding() {
+async fn a_singleton_takes_its_first_event_without_seeding() {
     system::a_singleton_takes_its_first_event_without_seeding(api_memory()).await;
-}
-
-/// Verifies: OPS-2440
-#[tokio::test]
-async fn api_sqlite_a_singleton_takes_its_first_event_without_seeding() {
     system::a_singleton_takes_its_first_event_without_seeding(api_sqlite("singleton")).await;
 }
 
 /// Verifies: OPS-2440
 #[tokio::test]
-async fn api_memory_two_systems_over_one_store_make_one_singleton() {
+async fn two_systems_over_one_store_make_one_singleton() {
     system::two_systems_over_one_store_make_one_singleton(api_memory()).await;
-}
-
-/// Verifies: OPS-2440
-#[tokio::test]
-async fn api_sqlite_two_systems_over_one_store_make_one_singleton() {
     system::two_systems_over_one_store_make_one_singleton(api_sqlite("two-singletons")).await;
 }
 
 /// Verifies: OPS-2441
 #[tokio::test]
-async fn api_memory_a_message_that_always_fails_is_dead_lettered_after_the_cap() {
+async fn a_message_that_always_fails_is_dead_lettered_after_the_cap() {
     system::a_message_that_always_fails_is_dead_lettered_after_the_cap(api_memory()).await;
-}
-
-/// Verifies: OPS-2441
-#[tokio::test]
-async fn api_sqlite_a_message_that_always_fails_is_dead_lettered_after_the_cap() {
     system::a_message_that_always_fails_is_dead_lettered_after_the_cap(api_sqlite("cap")).await;
 }
 
 /// Verifies: OPS-2442
 #[tokio::test]
-async fn api_memory_purges_dead_letters_past_retention() {
+async fn purges_dead_letters_past_retention() {
     system::purges_dead_letters_past_retention(api_memory()).await;
-}
-
-/// Verifies: OPS-2442
-#[tokio::test]
-async fn api_sqlite_purges_dead_letters_past_retention() {
     system::purges_dead_letters_past_retention(api_sqlite("purge-dead")).await;
 }

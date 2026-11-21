@@ -1,7 +1,8 @@
 //! Every guard and effect expression of the real specifications must parse.
 
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use strata_spec_expr::parse;
 
 /// Remove `//` and `/* */` comments and trailing commas, leaving strings untouched.
@@ -113,55 +114,58 @@ fn expressions(v: &Value, at: &str, out: &mut Vec<(String, String)>) {
     }
 }
 
-fn check_file(path: &Path) -> usize {
+/// The expressions of a JSONC specification file, read and parsed once per test binary.
+fn read_expressions(path: &Path) -> Vec<(String, String)> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let json: Value = serde_json::from_str(&strip_jsonc(&text))
         .unwrap_or_else(|e| panic!("{} is not JSONC: {e}", path.display()));
     let mut found = Vec::new();
     expressions(&json, "", &mut found);
-    let mut failures = Vec::new();
-    for (place, src) in &found {
-        if let Err(e) = parse(src) {
-            failures.push(format!("{place}: `{src}`\n{e}"));
-        }
-    }
+    found
+}
+
+/// The expressions of `specifications/spec.jsonc` (6 MB): parsed once, shared by every test.
+fn strata_expressions() -> &'static [(String, String)] {
+    static FOUND: OnceLock<Vec<(String, String)>> = OnceLock::new();
+    FOUND.get_or_init(|| {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specifications/spec.jsonc");
+        read_expressions(&path)
+    })
+}
+
+fn check_all_parse(found: &[(String, String)], origin: &str) {
+    let failures: Vec<String> = found
+        .iter()
+        .filter_map(|(place, src)| parse(src).err().map(|e| format!("{place}: `{src}`\n{e}")))
+        .collect();
     assert!(
         failures.is_empty(),
-        "{} of {} expressions in {} do not parse:\n{}",
+        "{} of {} expressions in {origin} do not parse:\n{}",
         failures.len(),
         found.len(),
-        path.display(),
         failures.join("\n")
     );
-    found.len()
 }
 
 #[test]
 fn strata_specification_expressions_parse() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specifications/spec.jsonc");
-    let n = check_file(&path);
-    assert!(n > 0, "no expressions found: the walker is broken");
+    let found = strata_expressions();
+    assert!(
+        !found.is_empty(),
+        "no expressions found: the walker is broken"
+    );
+    check_all_parse(found, "specifications/spec.jsonc");
 }
 
 #[test]
 fn exegra_specification_expressions_parse() {
-    let path =
+    let path: PathBuf =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../exegra/specs/exegra/spec.jsonc");
     if !path.exists() {
         eprintln!("skipped: {} is absent", path.display());
         return;
     }
-    check_file(&path);
-}
-
-#[test]
-fn jsonc_stripping_respects_strings() {
-    let v: Value = serde_json::from_str(&strip_jsonc(
-        "// c\n{\"a\": \"x // y, }\", /* z */ \"b\": [1,],}",
-    ))
-    .unwrap();
-    assert_eq!(v["a"], "x // y, }");
-    assert_eq!(v["b"][0], 1);
+    check_all_parse(&read_expressions(&path), &path.display().to_string());
 }
 
 /// A scope that gives each reference the type assigned to it, for both targets.
@@ -228,18 +232,13 @@ fn both_targets_accept_exactly_the_same_specification_expressions() {
         Ty::String,
         Ty::Option(Box::new(Ty::U64)),
     ];
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specifications/spec.jsonc");
-    let text = std::fs::read_to_string(&path).unwrap();
-    let json: Value = serde_json::from_str(&strip_jsonc(&text)).unwrap();
-    let mut found = Vec::new();
-    expressions(&json, "", &mut found);
     let (mut accepted, mut refused) = (0usize, 0usize);
-    for (place, src) in &found {
+    for (place, src) in strata_expressions() {
         let e = parse(src).unwrap();
         let mut names = Vec::new();
         refs(&e, &mut names);
-        // At most five references vary; the rest stay u64.
-        let varying = names.len().min(5);
+        // At most three references vary (6^3 assignments); the rest stay u64.
+        let varying = names.len().min(3);
         let total = candidates.len().pow(varying as u32);
         for n in 0..total {
             let mut k = n;

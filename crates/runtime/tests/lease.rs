@@ -1,10 +1,10 @@
 //! The lease machine on the in-memory store and on a SQLite file. The cases themselves are in
-//! `common/lease_cases.rs`, shared with the storage-api adapter's tests.
+//! `common/lease_cases.rs`, shared with the storage-api adapter's tests. Each test runs its case
+//! on both stores in turn.
 
 #[path = "common/lease_cases.rs"]
 mod cases;
 
-use cases::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -47,81 +47,37 @@ fn sqlite(name: &str) -> impl Fn() -> Arc<SqliteMachineStore> {
 }
 
 #[tokio::test]
-async fn memory_refuses_a_missing_record_when_not_creating() {
-    refuses_a_missing_record_when_not_creating(memory()).await;
+async fn refuses_a_missing_record_when_not_creating() {
+    cases::refuses_a_missing_record_when_not_creating(memory()).await;
+    cases::refuses_a_missing_record_when_not_creating(sqlite("not-creating")).await;
 }
 
 #[tokio::test]
-async fn sqlite_refuses_a_missing_record_when_not_creating() {
-    refuses_a_missing_record_when_not_creating(sqlite("not-creating")).await;
+async fn persists() {
+    cases::persists(memory()).await;
+    cases::persists(sqlite("persists")).await;
 }
 
 #[tokio::test]
-async fn memory_persists() {
-    persists(memory()).await;
+async fn redelivers_after_a_crash() {
+    cases::redelivers_after_a_crash(memory()).await;
+    cases::redelivers_after_a_crash(sqlite("redelivers")).await;
 }
 
 #[tokio::test]
-async fn sqlite_persists() {
-    persists(sqlite("persists")).await;
+async fn fires_timers() {
+    cases::fires_timers(memory()).await;
+    cases::fires_timers(sqlite("timers")).await;
 }
 
 #[tokio::test]
-async fn memory_redelivers_after_a_crash() {
-    redelivers_after_a_crash(memory()).await;
+async fn never_retries_at_most_once() {
+    cases::never_retries_at_most_once(memory()).await;
+    cases::never_retries_at_most_once(sqlite("at-most-once")).await;
 }
 
 #[tokio::test]
-async fn sqlite_redelivers_after_a_crash() {
-    redelivers_after_a_crash(sqlite("redelivers")).await;
-}
-
-#[tokio::test]
-async fn memory_fires_timers() {
-    fires_timers(memory()).await;
-}
-
-#[tokio::test]
-async fn sqlite_fires_timers() {
-    fires_timers(sqlite("timers")).await;
-}
-
-#[tokio::test]
-async fn memory_never_retries_at_most_once() {
-    never_retries_at_most_once(memory()).await;
-}
-
-#[tokio::test]
-async fn sqlite_never_retries_at_most_once() {
-    never_retries_at_most_once(sqlite("at-most-once")).await;
-}
-
-#[tokio::test]
-async fn memory_quarantines_an_unreadable_timer() {
-    quarantines_an_unreadable_timer(memory()).await;
-}
-
-#[tokio::test]
-async fn sqlite_quarantines_an_unreadable_timer() {
-    quarantines_an_unreadable_timer(sqlite("quarantine")).await;
-}
-
-#[tokio::test]
-async fn memory_refuses_an_elapsed_event_from_outside() {
-    refuses_an_elapsed_event_from_outside(memory()).await;
-}
-
-#[tokio::test]
-async fn sqlite_refuses_an_elapsed_event_from_outside() {
-    refuses_an_elapsed_event_from_outside(sqlite("elapsed")).await;
-}
-
-#[tokio::test]
-async fn memory_refuses_a_record_that_breaks_a_constraint() {
-    refuses_a_record_that_breaks_a_constraint(memory()).await;
-}
-
-#[tokio::test]
-async fn sqlite_refuses_a_record_that_breaks_a_constraint() {
-    refuses_a_record_that_breaks_a_constraint(sqlite("constraint")).await;
+async fn quarantines_an_unreadable_timer() {
+    cases::quarantines_an_unreadable_timer(memory()).await;
+    cases::quarantines_an_unreadable_timer(sqlite("quarantine")).await;
 }

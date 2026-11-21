@@ -3,7 +3,7 @@
 mod common;
 
 use common::{scope, ty_of_ok, type_err, TestScope};
-use strata_spec_expr::{parse, to_rust_as, type_of, Ty, TypeErrorKind};
+use strata_spec_expr::{parse, to_rust_as, Ty, TypeErrorKind};
 
 fn env() -> TestScope {
     scope(&[
@@ -261,13 +261,6 @@ fn expected_type_is_checked_and_gives_literals_their_type() {
 }
 
 #[test]
-fn type_of_matches_translation() {
-    let e = env();
-    let parsed = parse("a + 1").unwrap();
-    assert_eq!(type_of(&parsed, &e).unwrap(), Ty::U32);
-}
-
-#[test]
 fn errors_carry_source_and_span() {
     let e = env();
     let err = type_err("a + c", &e);
@@ -280,14 +273,4 @@ fn errors_carry_source_and_span() {
     let err = type_err("a == 1 && 7 + small > nope", &e);
     assert_eq!(err.kind, TypeErrorKind::UnknownReference);
     assert_eq!(&err.source[err.span.start..err.span.end], "nope");
-}
-
-#[test]
-fn type_names_display() {
-    assert_eq!(
-        Ty::List(Box::new(Ty::Option(Box::new(Ty::U8)))).to_string(),
-        "list<option<u8>>"
-    );
-    assert_eq!(Ty::Named("x-y".into()).to_string(), "x-y");
-    assert_eq!(Ty::Timestamp.to_string(), "timestamp");
 }

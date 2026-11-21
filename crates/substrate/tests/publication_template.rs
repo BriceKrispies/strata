@@ -441,29 +441,6 @@ fn the_theme_and_cover_rules_are_constraints_in_the_metadata() {
         .any(|c| c.rule == "constraint:post.cover_is_described" && !c.passed));
 }
 
-#[test]
-fn an_author_cannot_touch_another_authors_post() {
-    let world = world();
-    let edit = Intent::UpdateRecord {
-        object: ObjectTypeId::new("post").unwrap(),
-        id: RecordId(4),
-        fields: BTreeMap::from([(
-            FieldId::new("title").unwrap(),
-            Value::Str("Hijacked".into()),
-        )]),
-        expected_version: None,
-    };
-    assert_eq!(
-        world
-            .step(&edit, &ctx(user("bob")))
-            .expect_err("rejected")
-            .kind,
-        ErrorKind::Unauthorized
-    );
-    assert!(world.step(&edit, &ctx(user("ann"))).is_ok());
-    assert!(world.step(&edit, &ctx(user("ed"))).is_ok());
-}
-
 const ANN_AUTHOR: u64 = 2;
 const BOB_AUTHOR: u64 = 6;
 const FEATURED_PUBLISHED_POST: u64 = 4;

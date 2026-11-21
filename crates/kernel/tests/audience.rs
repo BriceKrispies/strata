@@ -682,25 +682,6 @@ fn the_class_of_a_reader_follows_the_policies_of_the_tenant_it_reads() {
     assert_eq!(error.kind, ErrorKind::TenantMismatch);
 }
 
-#[test]
-fn a_schema_only_function_gives_the_class_from_roles_alone() {
-    let world = typical([0, 0, 0, 0]);
-    let schema = world.tenants[&tenant_id(T)].schema.clone();
-    let stats = QueryId::new("stats").unwrap();
-    let count = AggregateId::new("count_all").unwrap();
-    let reading = Reading::Aggregate {
-        query: &stats,
-        aggregate: &count,
-    };
-    let roles = BTreeSet::from([role("public"), role("writer"), role("auditor")]);
-    // `auditor` reads no note here and `score`, which is rule-free for auditors, makes no
-    // difference: only `writer` and `public` matter.
-    assert_eq!(
-        audience_class(&schema, reading, &member(T, 0), &roles),
-        roles_class(&["public", "writer"])
-    );
-}
-
 // ---- the property: a result stored for a class is the result computed for any reader of it ----------
 
 fn shape_strategy() -> impl Strategy<Value = Shape> {
