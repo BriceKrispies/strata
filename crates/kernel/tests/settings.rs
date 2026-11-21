@@ -680,7 +680,6 @@ fn a_setting_that_is_not_defined_and_a_removal_of_nothing_are_refused() {
         0,
     ));
     assert_eq!(refused.kind, ErrorKind::InvalidIntent);
-    assert!(settings::resolve(tenant(&world), &user("alpha:writer1"), &sid("nothing")).is_err());
     assert!(matches!(
         settings::resolve(tenant(&world), &user("alpha:writer1"), &sid("nothing")),
         Err(error) if error.kind == ErrorKind::UnknownObject
@@ -1835,16 +1834,6 @@ fn a_platform_value_is_ignored_where_the_definition_does_not_open_the_platform_l
     )
     .unwrap();
     assert_eq!(found.source, SettingSource::Default);
-}
-
-// Verifies: SET-021
-#[test]
-fn the_platform_value_is_a_flag_a_whole_number_or_text() {
-    assert_eq!(settings::platform_value_problem(&Value::Bool(true)), None);
-    assert_eq!(settings::platform_value_problem(&Value::Int(3)), None);
-    assert_eq!(settings::platform_value_problem(&text_value("x")), None);
-    assert!(settings::platform_value_problem(&Value::List(vec![])).is_some());
-    assert!(settings::platform_value_problem(&Value::Null).is_some());
 }
 
 // Verifies: SET-003

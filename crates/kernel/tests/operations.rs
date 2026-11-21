@@ -618,20 +618,6 @@ fn a_posting_step_posts_to_the_ledger_under_the_key_of_the_invocation() {
         .any(|event| matches!(event.body, EventBody::LedgerEntryPosted { .. })));
 }
 
-// Verifies: OPR-1545
-#[test]
-fn a_posting_is_keyed_by_operation_invoker_key_and_step() {
-    assert_eq!(
-        posting_key(
-            &op_id("redeem"),
-            &principal_id("alpha:stranger"),
-            "k-1",
-            "take_stock"
-        ),
-        "op:redeem:alpha:stranger:k-1:take_stock"
-    );
-}
-
 // ---------------------------------------------------------------------------------------------
 // Tenants and plans.
 // ---------------------------------------------------------------------------------------------

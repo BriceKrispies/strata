@@ -504,6 +504,7 @@ fn a_condition_that_needs_a_record_the_snapshot_lacks_asks_for_it() {
 // ---------------------------------------------------------------------------------------------
 
 // Verifies: SCH-300
+// Verifies: SCH-1533
 #[test]
 fn past_the_hop_limit_a_trigger_declines_with_hop_limit() {
     let world = defined(vec![
@@ -522,28 +523,17 @@ fn past_the_hop_limit_a_trigger_declines_with_hop_limit() {
     let within = at_hop(HOP_LIMIT);
     assert_eq!(starts(&within).len(), 1);
     assert_eq!(starts(&within)[0].hop, HOP_LIMIT);
+    // The run carries the hop count of the event that started it.
+    assert_eq!(
+        starts(&within)[0].params["hop"],
+        Value::Int(HOP_LIMIT as i64)
+    );
     let past = at_hop(HOP_LIMIT + 1);
     assert!(starts(&past).is_empty());
     let declined = declines(&past);
     assert_eq!(declined.len(), 1);
     assert_eq!(declined[0].reason, AutomationExceptionReason::HopLimit);
     assert_eq!(declined[0].hop, HOP_LIMIT + 1);
-}
-
-// Verifies: SCH-1533
-#[test]
-fn a_run_carries_the_hop_count_of_the_event_that_started_it() {
-    let world = defined(vec![
-        SchemaChange::DefineAutomation(flow(&["editor"])),
-        SchemaChange::DefineTrigger(trigger("on_publish", on_transition("publish"), None)),
-    ]);
-    let (world, _) = must(&world, "writer1", 7_000, new_note("Draft", "draft"));
-    let mut context = ctx("alpha", user("alpha:editor"), 7_001);
-    context.hop = Some(3);
-    let (_, outcome) = world.step(&set_status(1, "published"), &context).unwrap();
-    let started = starts(&outcome);
-    assert_eq!(started[0].hop, 3);
-    assert_eq!(started[0].params["hop"], Value::Int(3));
 }
 
 // Verifies: SCH-1536
