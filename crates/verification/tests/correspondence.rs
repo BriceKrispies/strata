@@ -268,7 +268,16 @@ fn the_lean_sources_contain_no_placeholder_proofs() {
             .map(|line| line.split("--").next().unwrap_or(""))
             .collect::<Vec<_>>()
             .join("\n");
-        for forbidden in ["sorry", "admit", "axiom ", "native_decide", "unsafe "] {
+        for forbidden in ["sorry", "native_decide"] {
+            assert!(
+                !words(&code).any(|(_, w)| w == forbidden),
+                "{file} contains `{forbidden}`"
+            );
+        }
+        // `admit` is not scanned for: it is also an ordinary name in the model (`def admit`, a
+        // constructor `| admit`), and the tactic elaborates to sorryAx, which the axiom audit and
+        // lake build's "declaration uses 'sorry'" both refuse.
+        for forbidden in ["axiom ", "unsafe "] {
             assert!(!code.contains(forbidden), "{file} contains `{forbidden}`");
         }
     }
@@ -332,4 +341,37 @@ fn the_generator_produces_every_intent_the_lean_model_executes() {
             "the generator never produces `{kind}`"
         );
     }
+}
+
+/// The identifiers of Lean source, each with the source before it (trailing spaces removed), so a
+/// check can match whole words and look at what precedes one.
+fn words(code: &str) -> impl Iterator<Item = (&str, &str)> {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '\'';
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in code
+        .char_indices()
+        .chain(std::iter::once((code.len(), ' ')))
+    {
+        match (start, is_word(c)) {
+            (None, true) => start = Some(i),
+            (Some(s), false) => {
+                out.push((code[..s].trim_end(), &code[s..i]));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    out.into_iter()
+}
+
+#[test]
+fn the_placeholder_scan_matches_whole_words() {
+    assert!(words(
+        "theorem t : True := by
+  sorry
+"
+    )
+    .any(|(_, w)| w == "sorry"));
+    assert!(!words("def sorryCount := 1").any(|(_, w)| w == "sorry"));
 }
