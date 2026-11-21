@@ -24,9 +24,11 @@ or commit.
 Assumptions, all of them:
 
 W1. The kernel is the model of `Strata/Model.lean`; nothing here refers to Rust.
-W2. Operations are atomic and sequential. Interleaving is modelled by placing other writers'
-    operations (`external`, `unfenced`), lost receipts (`submitLost`) and any other operation
-    between a decision and its commit, and between the rounds of a read request.
+W2. Each operation is atomic: it is one critical section of the tenant runtime (one round of a
+    request, one refresh, one decision step, one commit with its carry-forward). Nothing else is
+    serialised: requests live in slots and interleave freely, and other writers' operations
+    (`external`, `unfenced`) and lost receipts (`submitLost`) can come between any two operations
+    of a request, between a decision and its commit, and between the rounds of a request.
 W3. The size of an entry is a function of its key and value (`size`): accounted bytes, not
     measured memory.
 W4. Every change to what a load returns raises the tenant's generation (`Advances`).
@@ -43,9 +45,14 @@ The theorems the design cites:
   returns, key by key, the store at the moment it finishes, whatever happened between rounds),
   `readWS_value` and `runWS_reads` (unchecked reads, in covered schedules),
   `unfenced_breaks_reads` (the counterexample outside them).
-- Commits: `decideWS_refusal` (a refusal is the kernel's), `submitWS_world` (an accepted commit is
-  a kernel step on the state it is applied to), `runWS_faithful` (both, at every step of every
-  schedule), `w4_violation_breaks_checked_read` (the boundary of W4).
+- Commits: `decideWS_refusal` (a refusal is the kernel's), `submitWS_world` and
+  `submit_one_generation` (an accepted commit is the kernel step at the generation it was decided
+  at), `runWS_faithful` (all of this, at every step of every interleaving),
+  `w4_violation_breaks_checked_read` (the boundary of W4).
+- Multi-round decisions: `decideReq_refusal` (the first-round rule), `decideReq_expected`,
+  `reqGet_eq_fetch`.
+- Conflicts from staleness: `resubmit_no_conflict`, with `conflict_refreshes`, `quiet_run`.
+- Leases: `Strata/WorkingSet/Leases.lean`. The arbiter: `Strata/WorkingSet/Arbiter.lean`.
 - Budget: `stepWS_within`, `runWS_within`, `resize_budget_exact`, `resize_budget_le`,
   `machine_resize`.
 - Pinning: `stepWS_pins`, `admit_keeps_pinned`, `evict_keeps_pinned`, `resize_keeps_pinned`,
@@ -790,14 +797,21 @@ structure Req where
   gen : Nat
   got : List (Key × Payload)
 
+/-- Requests of one tenant runtime are told apart by a slot number. Requests interleave: any
+    operation of any slot may come between two operations of another. Each operation is atomic: it
+    is one critical section of the runtime (one round, one refresh, one decision step, one commit
+    with its carry-forward). -/
+abbrev Slot := Nat
+
 structure Sys (σ : Type) where
   cache : Cache
   store : Store
   /-- The generation of each tenant as the runtime last learned it. -/
   known : TenantId → Nat
-  pending : Option Pending
-  /-- The read request in progress, if any. -/
-  req : Option Req
+  /-- The decision each request is waiting to commit, if any. -/
+  pending : Slot → Option Pending
+  /-- The read request each slot has in progress, if any. -/
+  req : Slot → Option Req
   pst : σ
 
 /-- Forget what the runtime holds for `x` and learn `x`'s generation. -/
@@ -820,23 +834,26 @@ inductive Op where
   | invalidate (k : Key)
   | resize (b : Nat)
   /-- Decide an intent on what the working set serves; nothing is written. -/
-  | decide (i : Intent) (c : Ctx)
-  /-- Send the pending decision to the store, guarded by the generation it was decided at. -/
-  | submit
+  | decide (j : Slot) (i : Intent) (c : Ctx)
+  /-- Decide an intent on what the slot's request has read over its rounds (a multi-round
+      decision), reading the keys the rounds did not read in a last round. -/
+  | decideReq (j : Slot) (i : Intent) (pr : PrincipalId)
+  /-- Send the slot's pending decision to the store, guarded by the generation it was decided at. -/
+  | submit (j : Slot)
   /-- The same, when the receipt is lost: the store does what it does, the runtime learns nothing. -/
-  | submitLost
+  | submitLost (j : Slot)
   /-- A write the runtime is told about (a fenced restore, an anonymisation in this process). -/
   | external (x : TenantId) (t : Option Tenant)
   /-- A write the runtime is not told about. -/
   | unfenced (x : TenantId) (t : Option Tenant)
   /-- A generation read. -/
   | check (x : TenantId)
-  /-- Start a read request on a tenant (a generation read). -/
-  | begin (x : TenantId)
-  /-- One round of the request: read these keys, with the round's generation read. -/
-  | round (ks : List Key)
-  /-- End the request (a generation read) and return its snapshot. -/
-  | finish
+  /-- Start a read request on a tenant in a slot (a generation read). -/
+  | begin (j : Slot) (x : TenantId)
+  /-- One round of the slot's request: read these keys, with the round's generation read. -/
+  | round (j : Slot) (ks : List Key)
+  /-- End the slot's request (a generation read) and return its snapshot. -/
+  | finish (j : Slot)
 
 inductive Outcome where
   | value (p : Payload)
@@ -863,17 +880,42 @@ def readWS (sys : Sys σ) (k : Key) : Sys σ × Outcome :=
 /-- Decide on what the working set serves, at the generation the runtime knows. An acceptance is
     left for the guarded commit to confirm; a refusal is confirmed by a generation read first, and
     decided again on fresh state when the runtime was behind. -/
-def decideWS (sys : Sys σ) (i : Intent) (c : Ctx) : Sys σ × Outcome :=
+def decideWS (sys : Sys σ) (j : Slot) (i : Intent) (c : Ctx) : Sys σ × Outcome :=
   match decideOn (serve sys.cache.entries sys.known sys.store) c.tenant c.principal i with
-  | .ok d => ({ sys with pending := some ⟨c, i, d, sys.known c.tenant⟩ }, .done)
+  | .ok d => ({ sys with pending := upd sys.pending j (some ⟨c, i, d, sys.known c.tenant⟩) }, .done)
   | .error e =>
     if sys.known c.tenant = sys.store.gen c.tenant then
-      ({ sys with pending := none }, .result (.error e))
+      ({ sys with pending := upd sys.pending j none }, .result (.error e))
     else
       match decideOn (serve (sync sys c.tenant).cache.entries (sync sys c.tenant).known
           (sync sys c.tenant).store) c.tenant c.principal i with
-      | .ok d => ({ sync sys c.tenant with pending := some ⟨c, i, d, sys.store.gen c.tenant⟩ }, .done)
-      | .error e' => ({ sync sys c.tenant with pending := none }, .result (.error e'))
+      | .ok d =>
+        ({ sync sys c.tenant with
+            pending := upd sys.pending j (some ⟨c, i, d, sys.store.gen c.tenant⟩) }, .done)
+      | .error e' => ({ sync sys c.tenant with pending := upd sys.pending j none }, .result (.error e'))
+
+/-- What a multi-round decision reads: each key its request read in a round, and the keys it did
+    not read, in a last round from the store. -/
+def reqGet (s : Store) (r : Req) (k : Key) : Payload :=
+  (r.got.lookup k).getD (fetch s.world k)
+
+/-- A multi-round decision: decided on what the slot's request read, at the generation its first
+    round read. An acceptance carries that generation to the guarded commit. A refusal is returned
+    only if a generation read confirms the tenant is still at that generation; otherwise the
+    caller is told to retry. -/
+def decideReqWS (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) : Sys σ × Outcome :=
+  match sys.req j with
+  | none => (sys, .done)
+  | some r =>
+    match decideOn (reqGet sys.store r) r.tenant pr i with
+    | .ok d =>
+      ({ sys with pending := upd sys.pending j (some ⟨⟨r.tenant, pr⟩, i, d, r.gen⟩),
+                  req := upd sys.req j none }, .done)
+    | .error e =>
+      if sys.store.gen r.tenant = r.gen then
+        ({ sys with pending := upd sys.pending j none, req := upd sys.req j none },
+          .result (.error e))
+      else ({ sys with pending := upd sys.pending j none, req := upd sys.req j none }, .conflict)
 
 /-- The working set after the store accepted `p`: invalidated entries go, current ones of the
     tenant are confirmed at the receipt's generation, a pinned header the delta changed comes back. -/
@@ -891,25 +933,25 @@ def acceptCache (sys : Sys σ) (p : Pending) : Cache :=
 /-- The guarded commit: applied only when the tenant is still at the generation the decision was
     made at, in the same step that raises it (the receipt's generation is `expected + 1`);
     otherwise refused, and the runtime refreshes. -/
-def submitWS (sys : Sys σ) : Sys σ × Outcome :=
-  match sys.pending with
+def submitWS (sys : Sys σ) (j : Slot) : Sys σ × Outcome :=
+  match sys.pending j with
   | none => (sys, .done)
   | some p =>
     if sys.store.gen p.ctx.tenant = p.expected then
       ({ sys with cache := acceptCache pol size inv sys p,
                   store := sys.store.applyDelta p.ctx.tenant p.delta,
                   known := upd sys.known p.ctx.tenant (sys.store.gen p.ctx.tenant + 1),
-                  pending := none }, .result (.ok ()))
-    else ({ sync sys p.ctx.tenant with pending := none }, .conflict)
+                  pending := upd sys.pending j none }, .result (.ok ()))
+    else ({ sync sys p.ctx.tenant with pending := upd sys.pending j none }, .conflict)
 
 /-- A commit whose receipt is lost: the runtime drops the tenant's entries and keeps what it knew. -/
-def submitLostWS (sys : Sys σ) : Sys σ × Outcome :=
-  match sys.pending with
+def submitLostWS (sys : Sys σ) (j : Slot) : Sys σ × Outcome :=
+  match sys.pending j with
   | none => (sys, .done)
   | some p =>
-    ({ (submitWS pol size inv sys).1 with
-        cache := { (submitWS pol size inv sys).1.cache with
-          entries := dropTenant (submitWS pol size inv sys).1.cache.entries p.ctx.tenant },
+    ({ (submitWS pol size inv sys j).1 with
+        cache := { (submitWS pol size inv sys j).1.cache with
+          entries := dropTenant (submitWS pol size inv sys j).1.cache.entries p.ctx.tenant },
         known := sys.known }, .unknown)
 
 /-- A round at the request's own generation: the round's keys of the request's tenant, served from
@@ -942,27 +984,30 @@ def stepWS (sys : Sys σ) : Op → Sys σ × Outcome
   | .invalidate k =>
     ({ sys with cache := { sys.cache with entries := removeKey sys.cache.entries k } }, .done)
   | .resize b => ({ sys with cache := resize pol size sys.pst sys.cache b }, .done)
-  | .decide i c => decideWS sys i c
-  | .submit => submitWS pol size inv sys
-  | .submitLost => submitLostWS pol size inv sys
+  | .decide j i c => decideWS sys j i c
+  | .decideReq j i pr => decideReqWS sys j i pr
+  | .submit j => submitWS pol size inv sys j
+  | .submitLost j => submitLostWS pol size inv sys j
   | .external x t => (refresh { sys with store := sys.store.set x t } x, .done)
   | .unfenced x t => ({ sys with store := sys.store.set x t }, .done)
   | .check x => (sync sys x, .done)
-  | .begin x => ({ sync sys x with req := some ⟨x, sys.store.gen x, []⟩ }, .done)
-  | .round ks =>
-    match sys.req with
+  | .begin j x => ({ sync sys x with req := upd sys.req j (some ⟨x, sys.store.gen x, []⟩) }, .done)
+  | .round j ks =>
+    match sys.req j with
     | none => (sys, .done)
     | some r =>
       if sys.store.gen r.tenant = r.gen then
-        ({ sync sys r.tenant with req := some (continueReq (sync sys r.tenant) r ks) }, .done)
+        ({ sync sys r.tenant with
+            req := upd sys.req j (some (continueReq (sync sys r.tenant) r ks)) }, .done)
       else
-        ({ sync sys r.tenant with req := some (restartReq sys r ks) }, .done)
-  | .finish =>
-    match sys.req with
+        ({ sync sys r.tenant with req := upd sys.req j (some (restartReq sys r ks)) }, .done)
+  | .finish j =>
+    match sys.req j with
     | none => (sys, .done)
     | some r =>
-      if sys.store.gen r.tenant = r.gen then ({ sync sys r.tenant with req := none }, .snapshot r.got)
-      else ({ sync sys r.tenant with req := none },
+      if sys.store.gen r.tenant = r.gen then
+        ({ sync sys r.tenant with req := upd sys.req j none }, .snapshot r.got)
+      else ({ sync sys r.tenant with req := upd sys.req j none },
         .snapshot ((r.got.map Prod.fst).map (fun k => (k, fetch sys.store.world k))))
 
 /-- Which tenants may have been written behind the runtime's back since it last read their
@@ -972,7 +1017,7 @@ def nextDirty (dirty : TenantId → Bool) : Op → TenantId → Bool
   | .check x => upd dirty x false
   | .checkedRead k => upd dirty k.tenant false
   | .external x _ => upd dirty x false
-  | .begin x => upd dirty x false
+  | .begin _ x => upd dirty x false
   | _ => dirty
 
 def readOk (dirty : TenantId → Bool) : Op → Bool
@@ -996,15 +1041,15 @@ def KnownLe (known : TenantId → Nat) (s : Store) : Prop := ∀ y, known y ≤ 
 
 /-- A pending decision was made at a generation the tenant has reached, and if the tenant is still
     there, it is the kernel's decision on the tenant's current state. -/
-def PendingOk (pd : Option Pending) (s : Store) : Prop :=
-  ∀ p, pd = some p → p.expected ≤ s.gen p.ctx.tenant ∧
+def PendingOk (pd : Slot → Option Pending) (s : Store) : Prop :=
+  ∀ j p, pd j = some p → p.expected ≤ s.gen p.ctx.tenant ∧
     (p.expected = s.gen p.ctx.tenant →
       decideOn (fetch s.world) p.ctx.tenant p.ctx.principal p.intent = .ok p.delta)
 
 /-- A request in progress started at a generation its tenant has reached, read only its tenant's
     keys, and if the tenant is still at that generation, everything it read is the store's value. -/
-def ReqOk (rq : Option Req) (s : Store) : Prop :=
-  ∀ r, rq = some r → r.gen ≤ s.gen r.tenant ∧ (∀ kv ∈ r.got, kv.1.tenant = r.tenant) ∧
+def ReqOk (rq : Slot → Option Req) (s : Store) : Prop :=
+  ∀ j r, rq j = some r → r.gen ≤ s.gen r.tenant ∧ (∀ kv ∈ r.got, kv.1.tenant = r.tenant) ∧
     (r.gen = s.gen r.tenant → ∀ kv ∈ r.got, kv.2 = fetch s.world kv.1)
 
 def Inv (sys : Sys σ) : Prop :=
@@ -1299,16 +1344,28 @@ theorem sound_advance (es : List Entry) (s s' : Store) (hs : Sound es s) (ha : A
 theorem knownLe_advance (known : TenantId → Nat) (s s' : Store) (h : KnownLe known s)
     (ha : Advances s s') : KnownLe known s' := fun y => Nat.le_trans (h y) (ha y).1
 
-theorem pendingOk_advance (pd : Option Pending) (s s' : Store) (hp : PendingOk pd s)
+theorem pendingOk_advance (pd : Slot → Option Pending) (s s' : Store) (hp : PendingOk pd s)
     (ha : Advances s s') : PendingOk pd s' := by
-  intro p hpd
-  obtain ⟨hle, hdec⟩ := hp p hpd
+  intro j p hpd
+  obtain ⟨hle, hdec⟩ := hp j p hpd
   obtain ⟨hg, hw⟩ := ha p.ctx.tenant
   refine ⟨Nat.le_trans hle hg, fun h => ?_⟩
   have heq : s'.gen p.ctx.tenant = s.gen p.ctx.tenant := by omega
   rw [decideOn_congr (fetch s'.world) (fetch s.world) _ _ _
     (fun k hk => fetch_congr _ _ k (by rw [hk]; exact hw heq))]
   exact hdec (by omega)
+
+/-- Setting one slot's pending decision keeps the others valid. -/
+theorem pendingOk_upd (pd : Slot → Option Pending) (s : Store) (j : Slot) (o : Option Pending)
+    (hp : PendingOk pd s)
+    (ho : ∀ p, o = some p → p.expected ≤ s.gen p.ctx.tenant ∧
+      (p.expected = s.gen p.ctx.tenant →
+        decideOn (fetch s.world) p.ctx.tenant p.ctx.principal p.intent = .ok p.delta)) :
+    PendingOk (upd pd j o) s := by
+  intro j' p hp'
+  by_cases hj : j' = j
+  · subst hj; simp only [upd_same] at hp'; exact ho p hp'
+  · simp only [upd_other _ _ _ _ hj] at hp'; exact hp j' p hp'
 
 theorem serve_decide_current (es : List Entry) (known : TenantId → Nat) (s : Store) (x : TenantId)
     (p : PrincipalId) (i : Intent) (hs : Sound es s) (hk : known x = s.gen x) :
@@ -1405,11 +1462,11 @@ theorem checkedRead_linearizes (sys : Sys σ) (k : Key) (hs : Sound sys.cache.en
 
 /-! ### Decisions -/
 
-theorem decideWS_parts (sys : Sys σ) (i : Intent) (c : Ctx) :
-    (decideWS sys i c).1.store = sys.store ∧
-    (((decideWS sys i c).1.cache = sys.cache ∧ (decideWS sys i c).1.known = sys.known) ∨
-     ((decideWS sys i c).1.cache = (sync sys c.tenant).cache ∧
-      (decideWS sys i c).1.known = (sync sys c.tenant).known)) := by
+theorem decideWS_parts (sys : Sys σ) (j : Slot) (i : Intent) (c : Ctx) :
+    (decideWS sys j i c).1.store = sys.store ∧
+    (((decideWS sys j i c).1.cache = sys.cache ∧ (decideWS sys j i c).1.known = sys.known) ∨
+     ((decideWS sys j i c).1.cache = (sync sys c.tenant).cache ∧
+      (decideWS sys j i c).1.known = (sync sys c.tenant).known)) := by
   unfold decideWS; split
   · exact ⟨rfl, Or.inl ⟨rfl, rfl⟩⟩
   · split
@@ -1418,32 +1475,32 @@ theorem decideWS_parts (sys : Sys σ) (i : Intent) (c : Ctx) :
       · exact ⟨sync_store _ _, Or.inr ⟨rfl, rfl⟩⟩
       · exact ⟨sync_store _ _, Or.inr ⟨rfl, rfl⟩⟩
 
-theorem decideWS_pendingOk (sys : Sys σ) (i : Intent) (c : Ctx) (h : Inv sys) :
-    PendingOk (decideWS sys i c).1.pending sys.store := by
+theorem decideWS_pendingOk (sys : Sys σ) (j : Slot) (i : Intent) (c : Ctx) (h : Inv sys) :
+    PendingOk (decideWS sys j i c).1.pending sys.store := by
   unfold decideWS
   split
   · next d hd =>
-    intro p hp
+    refine pendingOk_upd _ _ _ _ h.2.2 (fun p hp => ?_)
     simp only [Option.some.injEq] at hp
     subst hp
     refine ⟨h.2.1 c.tenant, fun heq => ?_⟩
     show decideOn (fetch sys.store.world) c.tenant c.principal i = .ok d
     rw [← serve_decide_current _ _ _ _ _ _ h.1 heq]; exact hd
   · split
-    · intro p hp; simp at hp
+    · exact pendingOk_upd _ _ _ _ h.2.2 (fun p hp => by simp at hp)
     · split
       · next d hd =>
-        intro p hp
+        refine pendingOk_upd _ _ _ _ h.2.2 (fun p hp => ?_)
         simp only [Option.some.injEq] at hp
         subst hp
         refine ⟨Nat.le_refl _, fun _ => ?_⟩
         show decideOn (fetch sys.store.world) c.tenant c.principal i = .ok d
         rw [← commit_decision sys c i h.1]; exact hd
-      · intro p hp; simp at hp
+      · exact pendingOk_upd _ _ _ _ h.2.2 (fun p hp => by simp at hp)
 
-theorem decideWS_inv (sys : Sys σ) (i : Intent) (c : Ctx) (h : Inv sys) :
-    Inv (decideWS sys i c).1 := by
-  obtain ⟨hst, hck⟩ := decideWS_parts sys i c
+theorem decideWS_inv (sys : Sys σ) (j : Slot) (i : Intent) (c : Ctx) (h : Inv sys) :
+    Inv (decideWS sys j i c).1 := by
+  obtain ⟨hst, hck⟩ := decideWS_parts sys j i c
   refine ⟨?_, ?_, ?_⟩
   · rw [hst]
     rcases hck with ⟨hc, _⟩ | ⟨hc, _⟩
@@ -1453,13 +1510,14 @@ theorem decideWS_inv (sys : Sys σ) (i : Intent) (c : Ctx) (h : Inv sys) :
     rcases hck with ⟨_, hk⟩ | ⟨_, hk⟩
     · rw [hk]; exact h.2.1
     · rw [hk]; have := sync_knownLe sys c.tenant h.2.1; rwa [sync_store] at this
-  · rw [hst]; exact decideWS_pendingOk sys i c h
+  · rw [hst]; exact decideWS_pendingOk sys j i c h
 
-theorem decideWS_safe (sys : Sys σ) (i : Intent) (c : Ctx) (hs : Sound sys.cache.entries sys.store)
+theorem decideWS_safe (sys : Sys σ) (j : Slot) (i : Intent) (c : Ctx)
+    (hs : Sound sys.cache.entries sys.store)
     (y : TenantId) (hy : SafeAt sys.cache.entries sys.known sys.store y) :
-    SafeAt (decideWS sys i c).1.cache.entries (decideWS sys i c).1.known
-      (decideWS sys i c).1.store y := by
-  obtain ⟨hst, hck⟩ := decideWS_parts sys i c
+    SafeAt (decideWS sys j i c).1.cache.entries (decideWS sys j i c).1.known
+      (decideWS sys j i c).1.store y := by
+  obtain ⟨hst, hck⟩ := decideWS_parts sys j i c
   rw [hst]
   rcases hck with ⟨hc, hk⟩ | ⟨hc, hk⟩
   · rw [hc, hk]; exact hy
@@ -1470,9 +1528,9 @@ theorem decideWS_safe (sys : Sys σ) (i : Intent) (c : Ctx) (hs : Sound sys.cach
 
 /-- **A refusal is the kernel's refusal on the current state**: it is confirmed by a generation
     read, and decided again on fresh state when the runtime was behind. -/
-theorem decideWS_refusal (sys : Sys σ) (i : Intent) (c : Ctx) (e : Err)
+theorem decideWS_refusal (sys : Sys σ) (j : Slot) (i : Intent) (c : Ctx) (e : Err)
     (hs : Sound sys.cache.entries sys.store)
-    (hr : (decideWS sys i c).2 = .result (.error e)) : step sys.store.world i c = .error e := by
+    (hr : (decideWS sys j i c).2 = .result (.error e)) : step sys.store.world i c = .error e := by
   unfold decideWS at hr
   split at hr
   · simp at hr
@@ -1529,7 +1587,8 @@ theorem acceptCache_pins (sys : Sys σ) (p : Pending) :
   · rw [admit_pins]
   · rfl
 
-theorem submitWS_advances (sys : Sys σ) : Advances sys.store (submitWS pol size inv sys).1.store := by
+theorem submitWS_advances (sys : Sys σ) (j : Slot) :
+    Advances sys.store (submitWS pol size inv sys j).1.store := by
   unfold submitWS; split
   · exact advances_refl _
   · split
@@ -1537,20 +1596,20 @@ theorem submitWS_advances (sys : Sys σ) : Advances sys.store (submitWS pol size
     · show Advances sys.store (sync sys _).store
       rw [sync_store]; exact advances_refl _
 
-theorem submitWS_pending (sys : Sys σ) (p : Pending) (hp : sys.pending = some p) :
-    (submitWS pol size inv sys).1.pending = none := by
+theorem submitWS_pending (sys : Sys σ) (j : Slot) (p : Pending) (hp : sys.pending j = some p) :
+    (submitWS pol size inv sys j).1.pending = upd sys.pending j none := by
   unfold submitWS; rw [hp]; simp only []
   split <;> rfl
 
-theorem submitWS_known_other (sys : Sys σ) (p : Pending) (hp : sys.pending = some p) (y : TenantId)
-    (hy : y ≠ p.ctx.tenant) : (submitWS pol size inv sys).1.known y = sys.known y := by
+theorem submitWS_known_other (sys : Sys σ) (j : Slot) (p : Pending) (hp : sys.pending j = some p)
+    (y : TenantId) (hy : y ≠ p.ctx.tenant) : (submitWS pol size inv sys j).1.known y = sys.known y := by
   unfold submitWS; rw [hp]; simp only []
   split
   · simp [hy]
   · exact sync_known_other sys _ y hy
 
-theorem submitWS_inv (sys : Sys σ) (hinv : InvSound inv) (h : Inv sys) :
-    Inv (submitWS pol size inv sys).1 := by
+theorem submitWS_inv (sys : Sys σ) (j : Slot) (hinv : InvSound inv) (h : Inv sys) :
+    Inv (submitWS pol size inv sys j).1 := by
   unfold submitWS
   split
   · exact h
@@ -1561,14 +1620,17 @@ theorem submitWS_inv (sys : Sys σ) (hinv : InvSound inv) (h : Inv sys) :
         by_cases hy : y = p.ctx.tenant
         · subst hy; simp [Store.applyDelta]
         · simpa [Store.applyDelta, hy] using h.2.1 y
-      · intro q hq; simp at hq
+      · exact pendingOk_upd _ _ _ _ (pendingOk_advance _ _ _ h.2.2 (advances_apply _ _ _))
+          (fun q hq => by simp at hq)
     · refine ⟨sync_sound sys _ h.1, sync_knownLe sys _ h.2.1, ?_⟩
-      intro q hq; simp at hq
+      show PendingOk (upd sys.pending j none) (sync sys p.ctx.tenant).store
+      rw [sync_store]
+      exact pendingOk_upd _ _ _ _ h.2.2 (fun q hq => by simp at hq)
 
-theorem submitWS_safe (sys : Sys σ) (hinv : InvSound inv) (h : Inv sys) (y : TenantId)
+theorem submitWS_safe (sys : Sys σ) (j : Slot) (hinv : InvSound inv) (h : Inv sys) (y : TenantId)
     (hy : SafeAt sys.cache.entries sys.known sys.store y) :
-    SafeAt (submitWS pol size inv sys).1.cache.entries (submitWS pol size inv sys).1.known
-      (submitWS pol size inv sys).1.store y := by
+    SafeAt (submitWS pol size inv sys j).1.cache.entries (submitWS pol size inv sys j).1.known
+      (submitWS pol size inv sys j).1.store y := by
   unfold submitWS
   split
   · exact hy
@@ -1582,10 +1644,10 @@ theorem submitWS_safe (sys : Sys σ) (hinv : InvSound inv) (h : Inv sys) (y : Te
 /-- **An accepted commit is a kernel step on the state it was applied to.** The store applies the
     delta only when the tenant is at the generation the decision was made at; then the decision is
     the kernel's on the current state, whatever the runtime held. -/
-theorem submitWS_world (sys : Sys σ) (h : Inv sys) :
-    (submitWS pol size inv sys).1.store.world = sys.store.world ∨
-    ∃ p, sys.pending = some p ∧
-      step sys.store.world p.intent p.ctx = .ok (submitWS pol size inv sys).1.store.world := by
+theorem submitWS_world (sys : Sys σ) (j : Slot) (h : Inv sys) :
+    (submitWS pol size inv sys j).1.store.world = sys.store.world ∨
+    ∃ p, sys.pending j = some p ∧
+      step sys.store.world p.intent p.ctx = .ok (submitWS pol size inv sys j).1.store.world := by
   unfold submitWS
   split
   · left; rfl
@@ -1593,48 +1655,59 @@ theorem submitWS_world (sys : Sys σ) (h : Inv sys) :
     split
     · next hg =>
       right
-      exact ⟨p, hp, decide_ok_step _ _ _ _ ((h.2.2 p hp).2 hg.symm)⟩
+      exact ⟨p, hp, decide_ok_step _ _ _ _ ((h.2.2 j p hp).2 hg.symm)⟩
     · left; exact congrArg Store.world (sync_store sys _)
 
-theorem submitWS_within (sys : Sys σ) (hw : Within size sys.cache) :
-    Within size (submitWS pol size inv sys).1.cache := by
+/-- **An accepted commit applies the kernel step at one generation**: the generation the decision
+    was made at, which the store still shows when it applies the delta. -/
+theorem submit_one_generation (sys : Sys σ) (j : Slot) (p : Pending) (h : Inv sys)
+    (hp : sys.pending j = some p) (hok : (submitWS pol size inv sys j).2 = .result (.ok ())) :
+    sys.store.gen p.ctx.tenant = p.expected ∧
+      step sys.store.world p.intent p.ctx = .ok (submitWS pol size inv sys j).1.store.world := by
+  unfold submitWS at hok ⊢
+  rw [hp] at hok ⊢
+  simp only [] at hok ⊢
+  split at hok
+  · next hg =>
+    rw [ite_eq_left hg]
+    exact ⟨hg, decide_ok_step _ _ _ _ ((h.2.2 j p hp).2 hg.symm)⟩
+  · simp at hok
+
+theorem submitWS_within (sys : Sys σ) (j : Slot) (hw : Within size sys.cache) :
+    Within size (submitWS pol size inv sys j).1.cache := by
   unfold submitWS; split
   · exact hw
   · split
     · exact acceptCache_within pol size inv sys _ hw
     · exact sync_within size sys _ hw
 
-theorem submitWS_pins (sys : Sys σ) :
-    (submitWS pol size inv sys).1.cache.pins = sys.cache.pins := by
+theorem submitWS_pins (sys : Sys σ) (j : Slot) :
+    (submitWS pol size inv sys j).1.cache.pins = sys.cache.pins := by
   unfold submitWS; split
   · rfl
   · split
     · exact acceptCache_pins pol size inv sys _
     · exact sync_pins sys _
 
-theorem submitLostWS_parts (sys : Sys σ) :
-    (submitLostWS pol size inv sys).1.store = (submitWS pol size inv sys).1.store := by
+theorem submitLostWS_parts (sys : Sys σ) (j : Slot) :
+    (submitLostWS pol size inv sys j).1.store = (submitWS pol size inv sys j).1.store := by
   unfold submitLostWS; split
   · next hp => unfold submitWS; rw [hp]
   · rfl
 
-theorem submitLostWS_inv (sys : Sys σ) (hinv : InvSound inv) (h : Inv sys) :
-    Inv (submitLostWS pol size inv sys).1 := by
-  have hr := submitWS_inv pol size inv sys hinv h
+theorem submitLostWS_inv (sys : Sys σ) (j : Slot) (hinv : InvSound inv) (h : Inv sys) :
+    Inv (submitLostWS pol size inv sys j).1 := by
+  have hr := submitWS_inv pol size inv sys j hinv h
   unfold submitLostWS; split
   · exact h
   · next p hp =>
-    refine ⟨sound_sub _ _ _ hr.1 (dropTenant_sub _ _),
-      knownLe_advance _ _ _ h.2.1 (submitWS_advances pol size inv sys), ?_⟩
-    intro q hq
-    change (submitWS pol size inv sys).1.pending = some q at hq
-    rw [submitWS_pending pol size inv sys p hp] at hq
-    cases hq
+    exact ⟨sound_sub _ _ _ hr.1 (dropTenant_sub _ _),
+      knownLe_advance _ _ _ h.2.1 (submitWS_advances pol size inv sys j), hr.2.2⟩
 
-theorem submitLostWS_safe (sys : Sys σ) (hinv : InvSound inv) (h : Inv sys) (y : TenantId)
-    (hy : SafeAt sys.cache.entries sys.known sys.store y) :
-    SafeAt (submitLostWS pol size inv sys).1.cache.entries (submitLostWS pol size inv sys).1.known
-      (submitLostWS pol size inv sys).1.store y := by
+theorem submitLostWS_safe (sys : Sys σ) (j : Slot) (hinv : InvSound inv) (h : Inv sys)
+    (y : TenantId) (hy : SafeAt sys.cache.entries sys.known sys.store y) :
+    SafeAt (submitLostWS pol size inv sys j).1.cache.entries (submitLostWS pol size inv sys j).1.known
+      (submitLostWS pol size inv sys j).1.store y := by
   unfold submitLostWS; split
   · exact hy
   · next p hp =>
@@ -1642,28 +1715,131 @@ theorem submitLostWS_safe (sys : Sys σ) (hinv : InvSound inv) (h : Inv sys) (y 
     · subst hyx
       intro e he hx _
       exact absurd hx (dropTenant_tenant _ _ e he)
-    · have hs := submitWS_safe pol size inv sys hinv h y hy
+    · have hs := submitWS_safe pol size inv sys j hinv h y hy
       intro e he hey hst
       apply hs e (dropTenant_sub _ _ e he) hey
-      rw [submitWS_known_other pol size inv sys p hp y hyx]
+      rw [submitWS_known_other pol size inv sys j p hp y hyx]
       exact hst
 
-theorem submitLostWS_within (sys : Sys σ) (hw : Within size sys.cache) :
-    Within size (submitLostWS pol size inv sys).1.cache := by
+theorem submitLostWS_within (sys : Sys σ) (j : Slot) (hw : Within size sys.cache) :
+    Within size (submitLostWS pol size inv sys j).1.cache := by
   unfold submitLostWS; split
   · exact hw
-  · exact Nat.le_trans (bytes_filter_le size _ _) (submitWS_within pol size inv sys hw)
+  · exact Nat.le_trans (bytes_filter_le size _ _) (submitWS_within pol size inv sys j hw)
 
-theorem submitLostWS_pins (sys : Sys σ) :
-    (submitLostWS pol size inv sys).1.cache.pins = sys.cache.pins := by
+theorem submitLostWS_pins (sys : Sys σ) (j : Slot) :
+    (submitLostWS pol size inv sys j).1.cache.pins = sys.cache.pins := by
   unfold submitLostWS; split
   · rfl
-  · exact submitWS_pins pol size inv sys
+  · exact submitWS_pins pol size inv sys j
 
 /-! ### Every operation -/
 
-theorem stepWS_inv (sys : Sys σ) (op : Op) (hinv : InvSound inv) (h : Inv sys) :
-    Inv (stepWS pol size inv sys op).1 := by
+/-! ### Multi-round decisions -/
+
+private theorem lookup_mem (l : List (Key × Payload)) (k : Key) (v : Payload)
+    (h : l.lookup k = some v) : (k, v) ∈ l := by
+  induction l with
+  | nil => simp at h
+  | cons kv l ih =>
+    obtain ⟨k', v'⟩ := kv
+    by_cases hk : k = k'
+    · subst hk
+      simp [List.lookup] at h
+      subst h
+      exact List.mem_cons_self
+    · have hb : (k == k') = false := by simp [hk]
+      simp only [List.lookup, hb] at h
+      exact List.mem_cons_of_mem _ (ih h)
+
+/-- What a request read is the store's value while the tenant is at the request's generation, so
+    a decision on it is a decision on the store. -/
+theorem reqGet_eq_fetch (s : Store) (r : Req)
+    (hv : r.gen = s.gen r.tenant → ∀ kv ∈ r.got, kv.2 = fetch s.world kv.1)
+    (hg : r.gen = s.gen r.tenant) (k : Key) : reqGet s r k = fetch s.world k := by
+  unfold reqGet
+  cases hl : r.got.lookup k with
+  | none => rfl
+  | some v => simpa using hv hg (k, v) (lookup_mem _ _ _ hl)
+
+theorem decideReqWS_parts (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) :
+    (decideReqWS sys j i pr).1.store = sys.store ∧ (decideReqWS sys j i pr).1.cache = sys.cache ∧
+    (decideReqWS sys j i pr).1.known = sys.known := by
+  unfold decideReqWS; split
+  · exact ⟨rfl, rfl, rfl⟩
+  · split
+    · exact ⟨rfl, rfl, rfl⟩
+    · split <;> exact ⟨rfl, rfl, rfl⟩
+
+theorem decideReqWS_pendingOk (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId)
+    (h : Inv sys) (hr : ReqOk sys.req sys.store) :
+    PendingOk (decideReqWS sys j i pr).1.pending sys.store := by
+  unfold decideReqWS
+  split
+  · exact h.2.2
+  · next r hrq =>
+    obtain ⟨hle, _, hv⟩ := hr j r hrq
+    split
+    · next d hd =>
+      refine pendingOk_upd _ _ _ _ h.2.2 (fun p hp => ?_)
+      simp only [Option.some.injEq] at hp
+      subst hp
+      refine ⟨hle, fun heq => ?_⟩
+      show decideOn (fetch sys.store.world) r.tenant pr i = .ok d
+      rw [← hd]
+      exact decideOn_congr _ _ _ _ _ (fun k _ => (reqGet_eq_fetch _ _ hv heq k).symm)
+    · split <;> exact pendingOk_upd _ _ _ _ h.2.2 (fun p hp => by simp at hp)
+
+theorem decideReqWS_inv (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) (h : Inv sys)
+    (hr : ReqOk sys.req sys.store) : Inv (decideReqWS sys j i pr).1 := by
+  obtain ⟨hst, hc, hk⟩ := decideReqWS_parts sys j i pr
+  refine ⟨?_, ?_, ?_⟩
+  · rw [hst, hc]; exact h.1
+  · rw [hst, hk]; exact h.2.1
+  · rw [hst]; exact decideReqWS_pendingOk sys j i pr h hr
+
+/-- **The first-round rule.** A refusal a multi-round decision returns is the kernel's refusal at
+    the state the confirmation read, and that state is still the one the request's first round
+    read. -/
+theorem decideReq_refusal (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) (e : Err)
+    (hr : ReqOk sys.req sys.store) (hres : (decideReqWS sys j i pr).2 = .result (.error e)) :
+    ∃ r, sys.req j = some r ∧ sys.store.gen r.tenant = r.gen ∧
+      step sys.store.world i ⟨r.tenant, pr⟩ = .error e := by
+  unfold decideReqWS at hres
+  split at hres
+  · simp at hres
+  · next r hrq =>
+    obtain ⟨_, _, hv⟩ := hr j r hrq
+    split at hres
+    · simp at hres
+    · next e0 he0 =>
+      split at hres
+      · next hg =>
+        have hre : e0 = e := by simpa using hres
+        subst hre
+        refine ⟨r, hrq, hg, ?_⟩
+        apply decide_error_step
+        show decideOn (fetch sys.store.world) r.tenant pr i = .error e0
+        rw [← he0]
+        exact decideOn_congr _ _ _ _ _ (fun k _ => (reqGet_eq_fetch _ _ hv hg.symm k).symm)
+      · simp at hres
+
+/-- The generation a multi-round decision carries to its commit is the one its first round read. -/
+theorem decideReq_expected (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) (r : Req)
+    (p : Pending) (hrq : sys.req j = some r)
+    (hp : (decideReqWS sys j i pr).1.pending j = some p) :
+    p.expected = r.gen ∧ p.ctx.tenant = r.tenant := by
+  unfold decideReqWS at hp
+  rw [hrq] at hp
+  simp only [] at hp
+  split at hp
+  · simp only [upd_same, Option.some.injEq] at hp
+    subst hp
+    exact ⟨rfl, rfl⟩
+  · split at hp <;> simp at hp
+
+theorem stepWS_inv (sys : Sys σ) (op : Op) (hinv : InvSound inv) (h : Inv sys)
+    (hr : ReqOk sys.req sys.store) : Inv (stepWS pol size inv sys op).1 := by
   cases op with
   | read k => exact readWS_inv pol size sys k h
   | checkedRead k => exact readWS_inv pol size _ k (sync_inv sys k.tenant h)
@@ -1673,9 +1849,10 @@ theorem stepWS_inv (sys : Sys σ) (op : Op) (hinv : InvSound inv) (h : Inv sys) 
   | evict ks => exact ⟨sound_sub _ _ _ h.1 (dropKeys_sub _ _ _), h.2.1, h.2.2⟩
   | invalidate k => exact ⟨sound_sub _ _ _ h.1 (removeKey_sub _ _), h.2.1, h.2.2⟩
   | resize b => exact ⟨sound_sub _ _ _ h.1 (resize_sub pol size _ _ _), h.2.1, h.2.2⟩
-  | decide i c => exact decideWS_inv sys i c h
-  | submit => exact submitWS_inv pol size inv sys hinv h
-  | submitLost => exact submitLostWS_inv pol size inv sys hinv h
+  | decide j i c => exact decideWS_inv sys j i c h
+  | decideReq j i pr => exact decideReqWS_inv sys j i pr h hr
+  | submit j => exact submitWS_inv pol size inv sys j hinv h
+  | submitLost j => exact submitLostWS_inv pol size inv sys j hinv h
   | external x t =>
     show Inv (refresh { sys with store := sys.store.set x t } x)
     refine ⟨sound_sub _ _ _ (sound_set _ _ x t h.1) (dropTenant_sub _ _), ?_,
@@ -1689,15 +1866,15 @@ theorem stepWS_inv (sys : Sys σ) (op : Op) (hinv : InvSound inv) (h : Inv sys) 
     exact ⟨sound_set _ _ x t h.1, knownLe_advance _ _ _ h.2.1 (advances_set _ x t),
       pendingOk_advance _ _ _ h.2.2 (advances_set _ x t)⟩
   | check x => exact sync_inv sys x h
-  | begin x => exact sync_inv sys x h
-  | round ks =>
+  | begin j x => exact sync_inv sys x h
+  | round j ks =>
     simp only [stepWS]
     split
     · exact h
     · split
       · exact sync_inv sys _ h
       · exact sync_inv sys _ h
-  | finish =>
+  | finish j =>
     simp only [stepWS]
     split
     · exact h
@@ -1715,24 +1892,27 @@ theorem stepWS_within (sys : Sys σ) (op : Op) (hw : Within size sys.cache) :
   | evict ks => exact Nat.le_trans (bytes_filter_le size _ _) hw
   | invalidate k => exact Nat.le_trans (bytes_filter_le size _ _) hw
   | resize b => exact resize_within pol size _ _ _
-  | decide i c =>
-    rcases (decideWS_parts sys i c).2 with ⟨hc, _⟩ | ⟨hc, _⟩
-    · show Within size (decideWS sys i c).1.cache; rw [hc]; exact hw
-    · show Within size (decideWS sys i c).1.cache; rw [hc]; exact sync_within size sys _ hw
-  | submit => exact submitWS_within pol size inv sys hw
-  | submitLost => exact submitLostWS_within pol size inv sys hw
+  | decide j i c =>
+    rcases (decideWS_parts sys j i c).2 with ⟨hc, _⟩ | ⟨hc, _⟩
+    · show Within size (decideWS sys j i c).1.cache; rw [hc]; exact hw
+    · show Within size (decideWS sys j i c).1.cache; rw [hc]; exact sync_within size sys _ hw
+  | decideReq j i pr =>
+    show Within size (decideReqWS sys j i pr).1.cache
+    rw [(decideReqWS_parts sys j i pr).2.1]; exact hw
+  | submit j => exact submitWS_within pol size inv sys j hw
+  | submitLost j => exact submitLostWS_within pol size inv sys j hw
   | external x t => exact Nat.le_trans (bytes_filter_le size _ _) hw
   | unfenced x t => exact hw
   | check x => exact sync_within size sys x hw
-  | begin x => exact sync_within size sys x hw
-  | round ks =>
+  | begin j x => exact sync_within size sys x hw
+  | round j ks =>
     simp only [stepWS]
     split
     · exact hw
     · split
       · exact sync_within size sys _ hw
       · exact sync_within size sys _ hw
-  | finish =>
+  | finish j =>
     simp only [stepWS]
     split
     · exact hw
@@ -1757,25 +1937,28 @@ theorem stepWS_pins (sys : Sys σ) (op : Op) :
   | evict ks => rfl
   | invalidate k => rfl
   | resize b => rfl
-  | decide i c =>
-    show (decideWS sys i c).1.cache.pins = _
-    rcases (decideWS_parts sys i c).2 with ⟨hc, _⟩ | ⟨hc, _⟩
+  | decide j i c =>
+    show (decideWS sys j i c).1.cache.pins = _
+    rcases (decideWS_parts sys j i c).2 with ⟨hc, _⟩ | ⟨hc, _⟩
     · rw [hc]
     · rw [hc]; exact sync_pins sys _
-  | submit => exact submitWS_pins pol size inv sys
-  | submitLost => exact submitLostWS_pins pol size inv sys
+  | decideReq j i pr =>
+    show (decideReqWS sys j i pr).1.cache.pins = _
+    rw [(decideReqWS_parts sys j i pr).2.1]
+  | submit j => exact submitWS_pins pol size inv sys j
+  | submitLost j => exact submitLostWS_pins pol size inv sys j
   | external x t => rfl
   | unfenced x t => rfl
   | check x => exact sync_pins sys x
-  | begin x => exact sync_pins sys x
-  | round ks =>
+  | begin j x => exact sync_pins sys x
+  | round j ks =>
     simp only [stepWS]
     split
     · rfl
     · split
       · exact sync_pins sys _
       · exact sync_pins sys _
-  | finish =>
+  | finish j =>
     simp only [stepWS]
     split
     · rfl
@@ -1792,23 +1975,30 @@ theorem stepWS_safe (sys : Sys σ) (op : Op) (hinv : InvSound inv) (h : Inv sys)
       SafeAt (stepWS pol size inv sys op).1.cache.entries (stepWS pol size inv sys op).1.known
         (stepWS pol size inv sys op).1.store y := by
   intro y hy
+  have hsync : ∀ x, (y ≠ x → dirty y = false) →
+      SafeAt (sync sys x).cache.entries (sync sys x).known (sync sys x).store y := by
+    intro x hx
+    by_cases hyx : y = x
+    · subst hyx; exact sync_safe_self sys _ h.1
+    · exact sync_safe_other sys x y hyx (hsafe y (hx hyx))
   cases op with
   | read k => exact readWS_safe pol size sys k h.1 y (hsafe y hy)
   | checkedRead k =>
-    have h1 : SafeAt (sync sys k.tenant).cache.entries (sync sys k.tenant).known
-        (sync sys k.tenant).store y := by
-      by_cases hyx : y = k.tenant
-      · subst hyx; exact sync_safe_self sys _ h.1
-      · exact sync_safe_other sys _ y hyx (hsafe y (by simpa [nextDirty, upd, hyx] using hy))
-    exact readWS_safe pol size _ k (sync_sound sys _ h.1) y h1
+    exact readWS_safe pol size _ k (sync_sound sys _ h.1) y
+      (hsync k.tenant (fun hne => by simpa [nextDirty, upd, hne] using hy))
   | pin k => exact admit_safe pol size _ { sys.cache with pins := _ } _ _ _ _ _ (hsafe y hy)
   | unpin k => exact hsafe y hy
   | evict ks => exact safe_sub _ _ _ _ _ (hsafe y hy) (dropKeys_sub _ _ _)
   | invalidate k => exact safe_sub _ _ _ _ _ (hsafe y hy) (removeKey_sub _ _)
   | resize b => exact safe_sub _ _ _ _ _ (hsafe y hy) (resize_sub pol size _ _ _)
-  | decide i c => exact decideWS_safe sys i c h.1 y (hsafe y hy)
-  | submit => exact submitWS_safe pol size inv sys hinv h y (hsafe y hy)
-  | submitLost => exact submitLostWS_safe pol size inv sys hinv h y (hsafe y hy)
+  | decide j i c => exact decideWS_safe sys j i c h.1 y (hsafe y hy)
+  | decideReq j i pr =>
+    obtain ⟨hst, hc, hk⟩ := decideReqWS_parts sys j i pr
+    show SafeAt (decideReqWS sys j i pr).1.cache.entries (decideReqWS sys j i pr).1.known
+      (decideReqWS sys j i pr).1.store y
+    rw [hst, hc, hk]; exact hsafe y hy
+  | submit j => exact submitWS_safe pol size inv sys j hinv h y (hsafe y hy)
+  | submitLost j => exact submitLostWS_safe pol size inv sys j hinv h y (hsafe y hy)
   | external x t =>
     apply refresh_safe { sys with store := sys.store.set x t } x y
     intro hne
@@ -1817,234 +2007,26 @@ theorem stepWS_safe (sys : Sys σ) (op : Op) (hinv : InvSound inv) (h : Inv sys)
     by_cases hyx : y = x
     · subst hyx; simp [nextDirty] at hy
     · exact safe_set_other _ _ _ x y t (hsafe y (by simpa [nextDirty, upd, hyx] using hy)) hyx
-  | check x =>
-    by_cases hyx : y = x
-    · subst hyx; exact sync_safe_self sys _ h.1
-    · exact sync_safe_other sys x y hyx (hsafe y (by simpa [nextDirty, upd, hyx] using hy))
-  | begin x =>
-    by_cases hyx : y = x
-    · subst hyx; exact sync_safe_self sys _ h.1
-    · exact sync_safe_other sys x y hyx (hsafe y (by simpa [nextDirty, upd, hyx] using hy))
-  | round ks =>
+  | check x => exact hsync x (fun hne => by simpa [nextDirty, upd, hne] using hy)
+  | begin j x => exact hsync x (fun hne => by simpa [nextDirty, upd, hne] using hy)
+  | round j ks =>
     simp only [stepWS]
     split
     · exact hsafe y hy
     · next r _ =>
-      have hsy : SafeAt (sync sys r.tenant).cache.entries (sync sys r.tenant).known
-          (sync sys r.tenant).store y := by
-        by_cases hyx : y = r.tenant
-        · subst hyx; exact sync_safe_self sys _ h.1
-        · exact sync_safe_other sys _ y hyx (hsafe y hy)
       split
-      · exact hsy
-      · exact hsy
-  | finish =>
+      · exact hsync r.tenant (fun _ => hy)
+      · exact hsync r.tenant (fun _ => hy)
+  | finish j =>
     simp only [stepWS]
     split
     · exact hsafe y hy
     · next r _ =>
-      have hsy : SafeAt (sync sys r.tenant).cache.entries (sync sys r.tenant).known
-          (sync sys r.tenant).store y := by
-        by_cases hyx : y = r.tenant
-        · subst hyx; exact sync_safe_self sys _ h.1
-        · exact sync_safe_other sys _ y hyx (hsafe y hy)
       split
-      · exact hsy
-      · exact hsy
+      · exact hsync r.tenant (fun _ => hy)
+      · exact hsync r.tenant (fun _ => hy)
 
-/-- What each operation guarantees. A safe read returns the store's value; a checked read always
-    does; a refusal is the kernel's; and the committed world changes only by a kernel step of a
-    decided intent or by another writer's write. -/
-def StepFaithful (sys : Sys σ) (op : Op) (r : Sys σ × Outcome) : Prop :=
-  (∀ k, op = .read k → SafeAt sys.cache.entries sys.known sys.store k.tenant →
-    r.2 = .value (fetch sys.store.world k)) ∧
-  (∀ k, op = .checkedRead k → r.2 = .value (fetch sys.store.world k)) ∧
-  (∀ i c e, op = .decide i c → r.2 = .result (.error e) → step sys.store.world i c = .error e) ∧
-  (r.1.store.world = sys.store.world ∨
-    (∃ p, (op = .submit ∨ op = .submitLost) ∧ sys.pending = some p ∧
-      step sys.store.world p.intent p.ctx = .ok r.1.store.world) ∨
-    (∃ x t, (op = .external x t ∨ op = .unfenced x t) ∧ r.1.store.world = upd sys.store.world x t))
-
-theorem stepWS_faithful (sys : Sys σ) (op : Op) (h : Inv sys) :
-    StepFaithful sys op (stepWS pol size inv sys op) := by
-  cases op with
-  | read k =>
-    refine ⟨fun k' hk hy => ?_, fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk), ?_⟩
-    · cases hk; exact readWS_value pol size sys k hy
-    · left; exact congrArg Store.world (readWS_store pol size sys k)
-  | checkedRead k =>
-    refine ⟨fun _ hk => (by cases hk), fun k' hk => ?_, fun _ _ _ hk => (by cases hk), ?_⟩
-    · cases hk; exact checkedRead_linearizes pol size inv sys k h.1
-    · left
-      show (readWS pol size (sync sys k.tenant) k).1.store.world = _
-      rw [readWS_store, sync_store]
-  | pin k => exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
-      Or.inl rfl⟩
-  | unpin k => exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
-      Or.inl rfl⟩
-  | evict ks => exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk),
-      fun _ _ _ hk => (by cases hk), Or.inl rfl⟩
-  | invalidate k => exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk),
-      fun _ _ _ hk => (by cases hk), Or.inl rfl⟩
-  | resize b => exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk),
-      fun _ _ _ hk => (by cases hk), Or.inl rfl⟩
-  | decide i c =>
-    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun i' c' e hk hr => ?_, ?_⟩
-    · cases hk; exact decideWS_refusal sys i c e h.1 hr
-    · left; exact congrArg Store.world (decideWS_parts sys i c).1
-  | submit =>
-    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk), ?_⟩
-    rcases submitWS_world pol size inv sys h with hw | ⟨p, hp, hs⟩
-    · exact Or.inl hw
-    · exact Or.inr (Or.inl ⟨p, Or.inl rfl, hp, hs⟩)
-  | submitLost =>
-    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk), ?_⟩
-    show (submitLostWS pol size inv sys).1.store.world = _ ∨
-      (∃ p, (Op.submitLost = .submit ∨ Op.submitLost = .submitLost) ∧ sys.pending = some p ∧
-        step sys.store.world p.intent p.ctx = .ok (submitLostWS pol size inv sys).1.store.world) ∨ _
-    rw [submitLostWS_parts]
-    rcases submitWS_world pol size inv sys h with hw | ⟨p, hp, hs⟩
-    · exact Or.inl hw
-    · exact Or.inr (Or.inl ⟨p, Or.inr rfl, hp, hs⟩)
-  | external x t =>
-    exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
-      Or.inr (Or.inr ⟨x, t, Or.inl rfl, rfl⟩)⟩
-  | unfenced x t =>
-    exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
-      Or.inr (Or.inr ⟨x, t, Or.inr rfl, rfl⟩)⟩
-  | check x =>
-    exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
-      Or.inl (congrArg Store.world (sync_store sys x))⟩
-  | begin x =>
-    exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
-      Or.inl (congrArg Store.world (sync_store sys x))⟩
-  | round ks =>
-    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
-      Or.inl ?_⟩
-    simp only [stepWS]
-    split
-    · rfl
-    · split
-      · exact congrArg Store.world (sync_store sys _)
-      · exact congrArg Store.world (sync_store sys _)
-  | finish =>
-    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
-      Or.inl ?_⟩
-    simp only [stepWS]
-    split
-    · rfl
-    · split
-      · exact congrArg Store.world (sync_store sys _)
-      · exact congrArg Store.world (sync_store sys _)
-
-/-! ### Whole schedules -/
-
-def RunFaithful : Sys σ → List Op → Prop
-  | _, [] => True
-  | sys, op :: ops =>
-    StepFaithful sys op (stepWS pol size inv sys op) ∧ RunFaithful (stepWS pol size inv sys op).1 ops
-
-/-- **Every schedule** (any policy, any invalidation map meeting the criterion, any interleaving of
-    reads, decisions, guarded commits, lost receipts, fenced and unfenced writes, given W4): at
-    every step, a checked read returns the store's value, a refusal is the kernel's, and the
-    committed world changes only by a kernel step of a decided intent on the state it is applied to,
-    or by another writer. -/
-theorem runWS_faithful (hinv : InvSound inv) (ops : List Op) :
-    ∀ (sys : Sys σ), Inv sys → RunFaithful pol size inv sys ops := by
-  induction ops with
-  | nil => intro _ _; trivial
-  | cons op ops ih =>
-    intro sys h
-    exact ⟨stepWS_faithful pol size inv sys op h, ih _ (stepWS_inv pol size inv sys op hinv h)⟩
-
-def ReadsTrue : Sys σ → List Op → Prop
-  | _, [] => True
-  | sys, op :: ops =>
-    (∀ k, op = .read k → (stepWS pol size inv sys op).2 = .value (fetch sys.store.world k)) ∧
-    ReadsTrue (stepWS pol size inv sys op).1 ops
-
-/-- **Unchecked reads**, in a covered schedule (no unchecked read of a tenant written behind the
-    runtime's back since its last generation read), return the store's value at every step. -/
-theorem runWS_reads (hinv : InvSound inv) (ops : List Op) :
-    ∀ (sys : Sys σ) (dirty : TenantId → Bool), Inv sys →
-      (∀ y, dirty y = false → SafeAt sys.cache.entries sys.known sys.store y) →
-      covered dirty ops = true → ReadsTrue pol size inv sys ops := by
-  induction ops with
-  | nil => intro _ _ _ _ _; trivial
-  | cons op ops ih =>
-    intro sys dirty h hsafe hcov
-    simp only [covered, Bool.and_eq_true] at hcov
-    refine ⟨fun k hk => ?_, ih _ _ (stepWS_inv pol size inv sys op hinv h)
-      (stepWS_safe pol size inv sys op hinv h dirty hsafe) hcov.2⟩
-    subst hk
-    have hd : dirty k.tenant = false := by simpa [readOk] using hcov.1
-    exact readWS_value pol size sys k (hsafe _ hd)
-
-/-- The working set after a schedule. -/
-def finalWS : Sys σ → List Op → Cache
-  | sys, [] => sys.cache
-  | sys, op :: ops => finalWS (stepWS pol size inv sys op).1 ops
-
-theorem runWS_within (ops : List Op) :
-    ∀ (sys : Sys σ), Within size sys.cache → Within size (finalWS pol size inv sys ops) := by
-  induction ops with
-  | nil => intro sys hw; exact hw
-  | cons op ops ih =>
-    intro sys hw
-    exact ih _ (stepWS_within pol size inv sys op hw)
-
-theorem empty_sound (s : Store) : Sound [] s := fun _ h => absurd h List.not_mem_nil
-
-theorem empty_safe (known : TenantId → Nat) (s : Store) (y : TenantId) : SafeAt [] known s y :=
-  fun _ h => absurd h List.not_mem_nil
-
-/-- The world of the counterexamples: tenant 1 exists, empty. -/
-def cexTenant : Tenant :=
-  { schema := [], owner := 0, editors := [], writers := [], records := [], nextId := 1 }
-
-def cexWorld : World := fun x => if x = 1 then some cexTenant else none
-
-/-- A runtime holding tenant 1's header, current at generation 0. -/
-def cexSys : Sys Unit :=
-  { cache := { entries := [{ key := .header 1, stamp := 0, val := fetch cexWorld (.header 1) }],
-               pins := [], budget := 0 },
-    store := { world := cexWorld, gen := fun _ => 0 },
-    known := fun _ => 0,
-    pending := none,
-    req := none,
-    pst := () }
-
-/-- **Why leased reads need fencing.** An unchecked read after a write behind the runtime's back
-    serves the value from before the write. -/
-theorem unfenced_breaks_reads (pol : Policy Unit) (size : Key → Payload → Nat)
-    (inv : Delta → Key → Bool) :
-    Inv cexSys ∧
-    (stepWS pol size inv (stepWS pol size inv cexSys (.unfenced 1 none)).1 (.read (.header 1))).2 ≠
-      .value (fetch (cexSys.store.set 1 none).world (.header 1)) := by
-  refine ⟨⟨?_, fun _ => Nat.le_refl _, fun _ hp => by simp [cexSys] at hp⟩, ?_⟩
-  · intro e' he'
-    simp only [cexSys, List.mem_singleton] at he'
-    subst he'
-    exact ⟨Nat.le_refl _, fun _ => rfl⟩
-  · simp [stepWS, readWS, Store.set, hit, upd, fetch, cexSys, cexWorld, cexTenant]
-
-/-- The store state after a restore that broke W4: the world changed, the generation did not. -/
-def cexRolledBack : Store := { world := upd cexWorld 1 none, gen := fun _ => 0 }
-
-/-- **W4 is load-bearing.** A store change that leaves the generation as it was (a restore that
-    brought an old generation back) is not an advance, and after it even a checked read serves the
-    old value. -/
-theorem w4_violation_breaks_checked_read (pol : Policy Unit) (size : Key → Payload → Nat)
-    (inv : Delta → Key → Bool) :
-    ¬ Advances cexSys.store cexRolledBack ∧
-    (stepWS pol size inv { cexSys with store := cexRolledBack } (.checkedRead (.header 1))).2 ≠
-      .value (fetch cexRolledBack.world (.header 1)) := by
-  refine ⟨fun ha => ?_, ?_⟩
-  · have := (ha 1).2 rfl
-    simp [cexRolledBack, cexSys, cexWorld, upd] at this
-  · simp [stepWS, readWS, sync, hit, upd, fetch, cexSys, cexRolledBack, cexWorld, cexTenant]
-
-/-! ### Multi-key requests -/
+/-! ### Requests in slots -/
 
 theorem sync_req (sys : Sys σ) (x : TenantId) : (sync sys x).req = sys.req := by
   unfold sync; split <;> rfl
@@ -2054,7 +2036,8 @@ theorem readWS_req (sys : Sys σ) (k : Key) : (readWS pol size sys k).1.req = sy
   · rfl
   · exact sync_req sys k.tenant
 
-theorem decideWS_req (sys : Sys σ) (i : Intent) (c : Ctx) : (decideWS sys i c).1.req = sys.req := by
+theorem decideWS_req (sys : Sys σ) (j : Slot) (i : Intent) (c : Ctx) :
+    (decideWS sys j i c).1.req = sys.req := by
   unfold decideWS; split
   · rfl
   · split
@@ -2063,27 +2046,39 @@ theorem decideWS_req (sys : Sys σ) (i : Intent) (c : Ctx) : (decideWS sys i c).
       · exact sync_req _ _
       · exact sync_req _ _
 
-theorem submitWS_req (sys : Sys σ) : (submitWS pol size inv sys).1.req = sys.req := by
+theorem submitWS_req (sys : Sys σ) (j : Slot) : (submitWS pol size inv sys j).1.req = sys.req := by
   unfold submitWS; split
   · rfl
   · split
     · rfl
     · exact sync_req _ _
 
-theorem submitLostWS_req (sys : Sys σ) : (submitLostWS pol size inv sys).1.req = sys.req := by
+theorem submitLostWS_req (sys : Sys σ) (j : Slot) :
+    (submitLostWS pol size inv sys j).1.req = sys.req := by
   unfold submitLostWS; split
   · rfl
-  · exact submitWS_req pol size inv sys
+  · exact submitWS_req pol size inv sys j
 
-theorem reqOk_advance (rq : Option Req) (s s' : Store) (h : ReqOk rq s) (ha : Advances s s') :
-    ReqOk rq s' := by
-  intro r hr
-  obtain ⟨hle, ht, hv⟩ := h r hr
+theorem reqOk_advance (rq : Slot → Option Req) (s s' : Store) (h : ReqOk rq s)
+    (ha : Advances s s') : ReqOk rq s' := by
+  intro j r hr
+  obtain ⟨hle, ht, hv⟩ := h j r hr
   obtain ⟨hg, hw⟩ := ha r.tenant
   refine ⟨Nat.le_trans hle hg, ht, fun heq kv hkv => ?_⟩
   have hgs : s'.gen r.tenant = s.gen r.tenant := by omega
   rw [fetch_congr s'.world s.world kv.1 (by rw [ht kv hkv]; exact hw hgs)]
   exact hv (by omega) kv hkv
+
+/-- Setting one slot's request keeps the others valid. -/
+theorem reqOk_upd (rq : Slot → Option Req) (s : Store) (j : Slot) (o : Option Req)
+    (h : ReqOk rq s)
+    (ho : ∀ r, o = some r → r.gen ≤ s.gen r.tenant ∧ (∀ kv ∈ r.got, kv.1.tenant = r.tenant) ∧
+      (r.gen = s.gen r.tenant → ∀ kv ∈ r.got, kv.2 = fetch s.world kv.1)) :
+    ReqOk (upd rq j o) s := by
+  intro j' r hr
+  by_cases hj : j' = j
+  · subst hj; simp only [upd_same] at hr; exact ho r hr
+  · simp only [upd_other _ _ _ _ hj] at hr; exact h j' r hr
 
 private theorem filter_tenant (ks : List Key) (x : TenantId) (k : Key)
     (hk : k ∈ ks.filter (fun k => k.tenant == x)) : k.tenant = x := by
@@ -2105,39 +2100,51 @@ theorem stepWS_reqOk (sys : Sys σ) (op : Op) (h : Inv sys) (hr : ReqOk sys.req 
   | evict ks => exact hr
   | invalidate k => exact hr
   | resize b => exact hr
-  | decide i c =>
-    show ReqOk (decideWS sys i c).1.req (decideWS sys i c).1.store
-    rw [decideWS_req, (decideWS_parts sys i c).1]; exact hr
-  | submit =>
-    show ReqOk (submitWS pol size inv sys).1.req (submitWS pol size inv sys).1.store
-    rw [submitWS_req]; exact reqOk_advance _ _ _ hr (submitWS_advances pol size inv sys)
-  | submitLost =>
-    show ReqOk (submitLostWS pol size inv sys).1.req (submitLostWS pol size inv sys).1.store
+  | decide j i c =>
+    show ReqOk (decideWS sys j i c).1.req (decideWS sys j i c).1.store
+    rw [decideWS_req, (decideWS_parts sys j i c).1]; exact hr
+  | decideReq j i pr =>
+    show ReqOk (decideReqWS sys j i pr).1.req (decideReqWS sys j i pr).1.store
+    rw [(decideReqWS_parts sys j i pr).1]
+    unfold decideReqWS
+    split
+    · exact hr
+    · split
+      · exact reqOk_upd _ _ _ _ hr (fun _ h => by simp at h)
+      · split
+        · exact reqOk_upd _ _ _ _ hr (fun _ h => by simp at h)
+        · exact reqOk_upd _ _ _ _ hr (fun _ h => by simp at h)
+  | submit j =>
+    show ReqOk (submitWS pol size inv sys j).1.req (submitWS pol size inv sys j).1.store
+    rw [submitWS_req]; exact reqOk_advance _ _ _ hr (submitWS_advances pol size inv sys j)
+  | submitLost j =>
+    show ReqOk (submitLostWS pol size inv sys j).1.req (submitLostWS pol size inv sys j).1.store
     rw [submitLostWS_req, submitLostWS_parts]
-    exact reqOk_advance _ _ _ hr (submitWS_advances pol size inv sys)
+    exact reqOk_advance _ _ _ hr (submitWS_advances pol size inv sys j)
   | external x t => exact reqOk_advance _ _ _ hr (advances_set _ x t)
   | unfenced x t => exact reqOk_advance _ _ _ hr (advances_set _ x t)
   | check x =>
     show ReqOk (sync sys x).req (sync sys x).store
     rw [sync_req, sync_store]; exact hr
-  | begin x =>
-    show ReqOk (some ⟨x, sys.store.gen x, []⟩) (sync sys x).store
+  | begin j x =>
+    show ReqOk (upd sys.req j (some ⟨x, sys.store.gen x, []⟩)) (sync sys x).store
     rw [sync_store]
-    intro r hr'
+    refine reqOk_upd _ _ _ _ hr (fun r hr' => ?_)
     simp only [Option.some.injEq] at hr'
     subst hr'
     exact ⟨Nat.le_refl _, fun _ h => absurd h List.not_mem_nil, fun _ _ h => absurd h List.not_mem_nil⟩
-  | round ks =>
+  | round j ks =>
     simp only [stepWS]
     split
     · exact hr
     · next r hrq =>
-      obtain ⟨hle, ht, hv⟩ := hr r hrq
+      obtain ⟨hle, ht, hv⟩ := hr j r hrq
       split
       · next hg =>
-        show ReqOk (some (continueReq (sync sys r.tenant) r ks)) (sync sys r.tenant).store
+        show ReqOk (upd sys.req j (some (continueReq (sync sys r.tenant) r ks)))
+          (sync sys r.tenant).store
         rw [sync_store]
-        intro r' hr'
+        refine reqOk_upd _ _ _ _ hr (fun r' hr' => ?_)
         simp only [Option.some.injEq] at hr'
         subst hr'
         refine ⟨hle, fun kv hkv => ?_, fun _ kv hkv => ?_⟩
@@ -2153,9 +2160,9 @@ theorem stepWS_reqOk (sys : Sys σ) (op : Op) (h : Inv sys) (hr : ReqOk sys.req 
               (sync sys r.tenant).store k = fetch sys.store.world k
             rw [serve_eq_fetch _ _ _ k (by rw [hkt]; exact sync_safe_self sys r.tenant h.1),
               sync_store]
-      · show ReqOk (some (restartReq sys r ks)) (sync sys r.tenant).store
+      · show ReqOk (upd sys.req j (some (restartReq sys r ks))) (sync sys r.tenant).store
         rw [sync_store]
-        intro r' hr'
+        refine reqOk_upd _ _ _ _ hr (fun r' hr' => ?_)
         simp only [Option.some.injEq] at hr'
         subst hr'
         refine ⟨Nat.le_refl _, fun kv hkv => ?_, fun _ kv hkv => ?_⟩
@@ -2166,13 +2173,15 @@ theorem stepWS_reqOk (sys : Sys σ) (op : Op) (h : Inv sys) (hr : ReqOk sys.req 
           · exact filter_tenant ks r.tenant k h1
         · obtain ⟨k, _, rfl⟩ := List.mem_map.mp hkv
           rfl
-  | finish =>
+  | finish j =>
     simp only [stepWS]
     split
     · exact hr
     · split
-      · intro r hr'; simp at hr'
-      · intro r hr'; simp at hr'
+      · show ReqOk (upd sys.req j none) (sync sys _).store
+        rw [sync_store]; exact reqOk_upd _ _ _ _ hr (fun _ h => by simp at h)
+      · show ReqOk (upd sys.req j none) (sync sys _).store
+        rw [sync_store]; exact reqOk_upd _ _ _ _ hr (fun _ h => by simp at h)
 
 private theorem pairs_eq (l : List (Key × Payload)) (f : Key → Payload)
     (h : ∀ kv ∈ l, kv.2 = f kv.1) : l = (l.map Prod.fst).map (fun k => (k, f k)) := by
@@ -2185,19 +2194,171 @@ private theorem pairs_eq (l : List (Key × Payload)) (f : Key → Payload)
     rw [← ih (fun kv' h' => h kv' (List.mem_cons_of_mem _ h'))]
 
 /-- **A request's snapshot is the store at one state.** However many rounds it took and whatever
-    happened between them (commits, writes behind the runtime's back, restores), the snapshot a
-    request returns is, key by key, the store's value at the moment it finishes. -/
-theorem request_snapshot (sys : Sys σ) (r : Req) (hrq : sys.req = some r)
+    happened between them (other requests' rounds, decisions and commits, writes behind the
+    runtime's back, restores), the snapshot a request returns is, key by key, the store's value at
+    the moment it finishes. -/
+theorem request_snapshot (sys : Sys σ) (j : Slot) (r : Req) (hrq : sys.req j = some r)
     (hr : ReqOk sys.req sys.store) :
-    (stepWS pol size inv sys .finish).2 =
+    (stepWS pol size inv sys (.finish j)).2 =
       .snapshot ((r.got.map Prod.fst).map (fun k => (k, fetch sys.store.world k))) := by
-  obtain ⟨_, _, hv⟩ := hr r hrq
+  obtain ⟨_, _, hv⟩ := hr j r hrq
   simp only [stepWS, hrq]
   split
   · next hg =>
     show Outcome.snapshot r.got = _
     rw [← pairs_eq r.got _ (hv hg.symm)]
   · rfl
+
+/-- Both invariants. -/
+def InvR (sys : Sys σ) : Prop := Inv sys ∧ ReqOk sys.req sys.store
+
+theorem stepWS_invR (sys : Sys σ) (op : Op) (hinv : InvSound inv) (h : InvR sys) :
+    InvR (stepWS pol size inv sys op).1 :=
+  ⟨stepWS_inv pol size inv sys op hinv h.1 h.2, stepWS_reqOk pol size inv sys op h.1 h.2⟩
+
+/-! ### What each operation guarantees -/
+
+/-- A safe read returns the store's value; a checked read always does; a refusal is the kernel's
+    (for a multi-round decision, at the state its confirmation read, still the first round's); and
+    the committed world changes only by a kernel step of a pending decision at a submit, or by
+    another writer's write. -/
+def StepFaithful (sys : Sys σ) (op : Op) (r : Sys σ × Outcome) : Prop :=
+  (∀ k, op = .read k → SafeAt sys.cache.entries sys.known sys.store k.tenant →
+    r.2 = .value (fetch sys.store.world k)) ∧
+  (∀ k, op = .checkedRead k → r.2 = .value (fetch sys.store.world k)) ∧
+  (∀ j i c e, op = .decide j i c → r.2 = .result (.error e) → step sys.store.world i c = .error e) ∧
+  (∀ j i pr e, op = .decideReq j i pr → r.2 = .result (.error e) →
+    ∃ rq, sys.req j = some rq ∧ sys.store.gen rq.tenant = rq.gen ∧
+      step sys.store.world i ⟨rq.tenant, pr⟩ = .error e) ∧
+  (r.1.store.world = sys.store.world ∨
+    (∃ j p, (op = .submit j ∨ op = .submitLost j) ∧ sys.pending j = some p ∧
+      step sys.store.world p.intent p.ctx = .ok r.1.store.world) ∨
+    (∃ x t, (op = .external x t ∨ op = .unfenced x t) ∧ r.1.store.world = upd sys.store.world x t))
+
+theorem stepWS_faithful (sys : Sys σ) (op : Op) (h : InvR sys) :
+    StepFaithful sys op (stepWS pol size inv sys op) := by
+  cases op with
+  | read k =>
+    refine ⟨fun k' hk hy => ?_, fun _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), ?_⟩
+    · cases hk; exact readWS_value pol size sys k hy
+    · left; exact congrArg Store.world (readWS_store pol size sys k)
+  | checkedRead k =>
+    refine ⟨fun _ hk => (by cases hk), fun k' hk => ?_, fun _ _ _ _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), ?_⟩
+    · cases hk; exact checkedRead_linearizes pol size inv sys k h.1.1
+    · left
+      show (readWS pol size (sync sys k.tenant) k).1.store.world = _
+      rw [readWS_store, sync_store]
+  | pin k => exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk), Or.inl rfl⟩
+  | unpin k => exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk), Or.inl rfl⟩
+  | evict ks => exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk), Or.inl rfl⟩
+  | invalidate k => exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk), Or.inl rfl⟩
+  | resize b => exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk), Or.inl rfl⟩
+  | decide j i c =>
+    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun j' i' c' e hk hr => ?_,
+      fun _ _ _ _ hk => (by cases hk), ?_⟩
+    · cases hk; exact decideWS_refusal sys j i c e h.1.1 hr
+    · left; exact congrArg Store.world (decideWS_parts sys j i c).1
+  | decideReq j i pr =>
+    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk),
+      fun j' i' pr' e hk hres => ?_, ?_⟩
+    · cases hk; exact decideReq_refusal sys j i pr e h.2 hres
+    · left; exact congrArg Store.world (decideReqWS_parts sys j i pr).1
+  | submit j =>
+    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), ?_⟩
+    rcases submitWS_world pol size inv sys j h.1 with hw | ⟨p, hp, hs⟩
+    · exact Or.inl hw
+    · exact Or.inr (Or.inl ⟨j, p, Or.inl rfl, hp, hs⟩)
+  | submitLost j =>
+    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), ?_⟩
+    show (submitLostWS pol size inv sys j).1.store.world = _ ∨
+      (∃ j' p, (Op.submitLost j = .submit j' ∨ Op.submitLost j = .submitLost j') ∧
+        sys.pending j' = some p ∧
+        step sys.store.world p.intent p.ctx = .ok (submitLostWS pol size inv sys j).1.store.world) ∨ _
+    rw [submitLostWS_parts]
+    rcases submitWS_world pol size inv sys j h.1 with hw | ⟨p, hp, hs⟩
+    · exact Or.inl hw
+    · exact Or.inr (Or.inl ⟨j, p, Or.inr rfl, hp, hs⟩)
+  | external x t =>
+    exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), Or.inr (Or.inr ⟨x, t, Or.inl rfl, rfl⟩)⟩
+  | unfenced x t =>
+    exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), Or.inr (Or.inr ⟨x, t, Or.inr rfl, rfl⟩)⟩
+  | check x =>
+    exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), Or.inl (congrArg Store.world (sync_store sys x))⟩
+  | begin j x =>
+    exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), Or.inl (congrArg Store.world (sync_store sys x))⟩
+  | round j ks =>
+    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), Or.inl ?_⟩
+    simp only [stepWS]
+    split
+    · rfl
+    · split
+      · exact congrArg Store.world (sync_store sys _)
+      · exact congrArg Store.world (sync_store sys _)
+  | finish j =>
+    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ _ hk => (by cases hk),
+      fun _ _ _ _ hk => (by cases hk), Or.inl ?_⟩
+    simp only [stepWS]
+    split
+    · rfl
+    · split
+      · exact congrArg Store.world (sync_store sys _)
+      · exact congrArg Store.world (sync_store sys _)
+
+/-! ### Whole schedules: every interleaving of every request -/
+
+def RunFaithful : Sys σ → List Op → Prop
+  | _, [] => True
+  | sys, op :: ops =>
+    StepFaithful sys op (stepWS pol size inv sys op) ∧ RunFaithful (stepWS pol size inv sys op).1 ops
+
+/-- **Every schedule** (any interleaving of any number of requests, any policy, any invalidation
+    map meeting the criterion, any mix of reads, rounds, decisions, guarded commits, lost receipts,
+    fenced and unfenced writes, given W4): at every step a checked read returns the store's value,
+    a refusal is the kernel's, and the committed world changes only by a kernel step of a decided
+    intent on the state it is applied to, or by another writer. -/
+theorem runWS_faithful (hinv : InvSound inv) (ops : List Op) :
+    ∀ (sys : Sys σ), InvR sys → RunFaithful pol size inv sys ops := by
+  induction ops with
+  | nil => intro _ _; trivial
+  | cons op ops ih =>
+    intro sys h
+    exact ⟨stepWS_faithful pol size inv sys op h, ih _ (stepWS_invR pol size inv sys op hinv h)⟩
+
+def ReadsTrue : Sys σ → List Op → Prop
+  | _, [] => True
+  | sys, op :: ops =>
+    (∀ k, op = .read k → (stepWS pol size inv sys op).2 = .value (fetch sys.store.world k)) ∧
+    ReadsTrue (stepWS pol size inv sys op).1 ops
+
+/-- **Unchecked reads**, in a covered schedule, return the store's value at every step. -/
+theorem runWS_reads (hinv : InvSound inv) (ops : List Op) :
+    ∀ (sys : Sys σ) (dirty : TenantId → Bool), InvR sys →
+      (∀ y, dirty y = false → SafeAt sys.cache.entries sys.known sys.store y) →
+      covered dirty ops = true → ReadsTrue pol size inv sys ops := by
+  induction ops with
+  | nil => intro _ _ _ _ _; trivial
+  | cons op ops ih =>
+    intro sys dirty h hsafe hcov
+    simp only [covered, Bool.and_eq_true] at hcov
+    refine ⟨fun k hk => ?_, ih _ _ (stepWS_invR pol size inv sys op hinv h)
+      (stepWS_safe pol size inv sys op hinv h.1 dirty hsafe) hcov.2⟩
+    subst hk
+    have hd : dirty k.tenant = false := by simpa [readOk] using hcov.1
+    exact readWS_value pol size sys k (hsafe _ hd)
 
 def RunReqOk : Sys σ → List Op → Prop
   | _, [] => True
@@ -2206,15 +2367,226 @@ def RunReqOk : Sys σ → List Op → Prop
     RunReqOk (stepWS pol size inv sys op).1 ops
 
 /-- The request invariant at every step of every schedule, so `request_snapshot` applies to every
-    `finish` in it. -/
+    `finish` of every slot in it, under every interleaving. -/
 theorem runWS_reqOk (hinv : InvSound inv) (ops : List Op) :
-    ∀ (sys : Sys σ), Inv sys → ReqOk sys.req sys.store → RunReqOk pol size inv sys ops := by
+    ∀ (sys : Sys σ), InvR sys → RunReqOk pol size inv sys ops := by
   induction ops with
-  | nil => intro _ _ _; trivial
+  | nil => intro _ _; trivial
   | cons op ops ih =>
-    intro sys h hr
-    have hr' := stepWS_reqOk pol size inv sys op h hr
-    exact ⟨hr', ih _ (stepWS_inv pol size inv sys op hinv h) hr'⟩
+    intro sys h
+    have h' := stepWS_invR pol size inv sys op hinv h
+    exact ⟨h'.2, ih _ h'⟩
+
+/-- The working set after a schedule. -/
+def finalWS : Sys σ → List Op → Cache
+  | sys, [] => sys.cache
+  | sys, op :: ops => finalWS (stepWS pol size inv sys op).1 ops
+
+theorem runWS_within (ops : List Op) :
+    ∀ (sys : Sys σ), Within size sys.cache → Within size (finalWS pol size inv sys ops) := by
+  induction ops with
+  | nil => intro sys hw; exact hw
+  | cons op ops ih =>
+    intro sys hw
+    exact ih _ (stepWS_within pol size inv sys op hw)
+
+theorem empty_sound (s : Store) : Sound [] s := fun _ h => absurd h List.not_mem_nil
+
+theorem empty_safe (known : TenantId → Nat) (s : Store) (y : TenantId) : SafeAt [] known s y :=
+  fun _ h => absurd h List.not_mem_nil
+
+/-! ### A bound on conflicts from staleness -/
+
+/-- An operation that writes nothing to the store and leaves slot `j`'s pending decision alone. -/
+def Quiet (j : Slot) : Op → Bool
+  | .submit _ => false
+  | .submitLost _ => false
+  | .external _ _ => false
+  | .unfenced _ _ => false
+  | .decide j' _ _ => j' != j
+  | .decideReq j' _ _ => j' != j
+  | _ => true
+
+theorem decideWS_pending_other (sys : Sys σ) (j j' : Slot) (i : Intent) (c : Ctx) (h : j ≠ j') :
+    (decideWS sys j' i c).1.pending j = sys.pending j := by
+  unfold decideWS; split
+  · simp [upd_other _ _ _ _ h]
+  · split
+    · simp [upd_other _ _ _ _ h]
+    · split
+      · simp [upd_other _ _ _ _ h]
+      · simp [upd_other _ _ _ _ h]
+
+theorem decideReqWS_pending_other (sys : Sys σ) (j j' : Slot) (i : Intent) (pr : PrincipalId)
+    (h : j ≠ j') : (decideReqWS sys j' i pr).1.pending j = sys.pending j := by
+  unfold decideReqWS; split
+  · rfl
+  · split
+    · simp [upd_other _ _ _ _ h]
+    · split
+      · simp [upd_other _ _ _ _ h]
+      · simp [upd_other _ _ _ _ h]
+
+theorem quiet_keeps (sys : Sys σ) (j : Slot) (op : Op) (hq : Quiet j op = true) :
+    (stepWS pol size inv sys op).1.store = sys.store ∧
+    (stepWS pol size inv sys op).1.pending j = sys.pending j := by
+  cases op with
+  | read k => exact ⟨readWS_store pol size sys k, congrFun (readWS_pending pol size sys k) j⟩
+  | checkedRead k =>
+    show (readWS pol size (sync sys k.tenant) k).1.store = _ ∧
+      (readWS pol size (sync sys k.tenant) k).1.pending j = _
+    rw [readWS_store, readWS_pending, sync_store, sync_pending]; exact ⟨rfl, rfl⟩
+  | pin k => exact ⟨rfl, rfl⟩
+  | unpin k => exact ⟨rfl, rfl⟩
+  | evict ks => exact ⟨rfl, rfl⟩
+  | invalidate k => exact ⟨rfl, rfl⟩
+  | resize b => exact ⟨rfl, rfl⟩
+  | decide j' i c =>
+    have hne : j ≠ j' := by simp [Quiet] at hq; exact fun h => hq h.symm
+    exact ⟨(decideWS_parts sys j' i c).1, decideWS_pending_other sys j j' i c hne⟩
+  | decideReq j' i pr =>
+    have hne : j ≠ j' := by simp [Quiet] at hq; exact fun h => hq h.symm
+    exact ⟨(decideReqWS_parts sys j' i pr).1, decideReqWS_pending_other sys j j' i pr hne⟩
+  | submit j' => simp [Quiet] at hq
+  | submitLost j' => simp [Quiet] at hq
+  | external x t => simp [Quiet] at hq
+  | unfenced x t => simp [Quiet] at hq
+  | check x => exact ⟨sync_store sys x, congrFun (sync_pending sys x) j⟩
+  | begin j' x => exact ⟨sync_store sys x, congrFun (sync_pending sys x) j⟩
+  | round j' ks =>
+    simp only [stepWS]
+    split
+    · exact ⟨rfl, rfl⟩
+    · split
+      · exact ⟨sync_store sys _, congrFun (sync_pending sys _) j⟩
+      · exact ⟨sync_store sys _, congrFun (sync_pending sys _) j⟩
+  | finish j' =>
+    simp only [stepWS]
+    split
+    · exact ⟨rfl, rfl⟩
+    · split
+      · exact ⟨sync_store sys _, congrFun (sync_pending sys _) j⟩
+      · exact ⟨sync_store sys _, congrFun (sync_pending sys _) j⟩
+
+/-- The state after a schedule. -/
+def finalSys : Sys σ → List Op → Sys σ
+  | sys, [] => sys
+  | sys, op :: ops => finalSys (stepWS pol size inv sys op).1 ops
+
+theorem quiet_run (j : Slot) (ops : List Op) (hq : ∀ op ∈ ops, Quiet j op = true) :
+    ∀ (sys : Sys σ), (finalSys pol size inv sys ops).store = sys.store ∧
+      (finalSys pol size inv sys ops).pending j = sys.pending j := by
+  induction ops with
+  | nil => intro _; exact ⟨rfl, rfl⟩
+  | cons op ops ih =>
+    intro sys
+    obtain ⟨h1, h2⟩ := quiet_keeps pol size inv sys j op (hq op List.mem_cons_self)
+    obtain ⟨h3, h4⟩ := ih (fun o ho => hq o (List.mem_cons_of_mem _ ho)) (stepWS pol size inv sys op).1
+    exact ⟨h3.trans h1, h4.trans h2⟩
+
+/-- A conflict refreshes the tenant: afterwards the runtime knows its current generation. -/
+theorem conflict_refreshes (sys : Sys σ) (j : Slot) (p : Pending) (hp : sys.pending j = some p)
+    (hc : (submitWS pol size inv sys j).2 = .conflict) :
+    (submitWS pol size inv sys j).1.known p.ctx.tenant =
+      (submitWS pol size inv sys j).1.store.gen p.ctx.tenant := by
+  unfold submitWS at hc ⊢
+  rw [hp] at hc ⊢
+  simp only [] at hc ⊢
+  split at hc
+  · simp at hc
+  · next hg =>
+    rw [ite_eq_right hg]
+    show (sync sys p.ctx.tenant).known p.ctx.tenant = (sync sys p.ctx.tenant).store.gen p.ctx.tenant
+    rw [sync_current, sync_store]
+
+/-- A decision made while the runtime is current carries the current generation. -/
+theorem decide_current_expected (sys : Sys σ) (j : Slot) (i : Intent) (c : Ctx) (p : Pending)
+    (hcur : sys.known c.tenant = sys.store.gen c.tenant)
+    (hp : (decideWS sys j i c).1.pending j = some p) :
+    p.expected = sys.store.gen c.tenant ∧ p.ctx = c := by
+  unfold decideWS at hp
+  split at hp
+  · simp only [upd_same, Option.some.injEq] at hp
+    subst hp
+    exact ⟨hcur, rfl⟩
+  · split at hp
+    · simp at hp
+    · next hn => exact absurd hcur hn
+
+theorem submit_accepts (sys : Sys σ) (j : Slot) (p : Pending) (hp : sys.pending j = some p)
+    (hg : sys.store.gen p.ctx.tenant = p.expected) :
+    (submitWS pol size inv sys j).2 = .result (.ok ()) := by
+  unfold submitWS
+  rw [hp]
+  simp only []
+  rw [ite_eq_left hg]
+
+/-- **Conflicts from staleness are bounded by one.** After a commit is refused for a stale
+    generation (which refreshes the tenant), the same intent decided again and resubmitted, with
+    no write to the store in between (any reads, rounds, cache work, checks and other slots'
+    decisions may come between), is accepted. -/
+theorem resubmit_no_conflict (sys : Sys σ) (j : Slot) (p : Pending) (ops : List Op)
+    (hp : sys.pending j = some p) (hc : (submitWS pol size inv sys j).2 = .conflict)
+    (hq : ∀ op ∈ ops, Quiet j op = true)
+    (hd : ((decideWS (submitWS pol size inv sys j).1 j p.intent p.ctx).1.pending j).isSome) :
+    (submitWS pol size inv
+      (finalSys pol size inv (decideWS (submitWS pol size inv sys j).1 j p.intent p.ctx).1 ops)
+      j).2 = .result (.ok ()) := by
+  have hcur := conflict_refreshes pol size inv sys j p hp hc
+  cases hq2 : (decideWS (submitWS pol size inv sys j).1 j p.intent p.ctx).1.pending j with
+  | none => rw [hq2] at hd; simp at hd
+  | some q =>
+    obtain ⟨hqe, hqc⟩ := decide_current_expected _ j p.intent p.ctx q hcur hq2
+    obtain ⟨hst, hpend⟩ := quiet_run pol size inv j ops hq
+      (decideWS (submitWS pol size inv sys j).1 j p.intent p.ctx).1
+    apply submit_accepts pol size inv _ j q (by rw [hpend, hq2])
+    rw [hst, (decideWS_parts _ j p.intent p.ctx).1, hqc, hqe]
+
+/-- The world of the counterexamples: tenant 1 exists, empty. -/
+def cexTenant : Tenant :=
+  { schema := [], owner := 0, editors := [], writers := [], records := [], nextId := 1 }
+
+def cexWorld : World := fun x => if x = 1 then some cexTenant else none
+
+/-- A runtime holding tenant 1's header, current at generation 0. -/
+def cexSys : Sys Unit :=
+  { cache := { entries := [{ key := .header 1, stamp := 0, val := fetch cexWorld (.header 1) }],
+               pins := [], budget := 0 },
+    store := { world := cexWorld, gen := fun _ => 0 },
+    known := fun _ => 0,
+    pending := fun _ => none,
+    req := fun _ => none,
+    pst := () }
+
+/-- **Why leased reads need fencing.** An unchecked read after a write behind the runtime's back
+    serves the value from before the write. -/
+theorem unfenced_breaks_reads (pol : Policy Unit) (size : Key → Payload → Nat)
+    (inv : Delta → Key → Bool) :
+    Inv cexSys ∧
+    (stepWS pol size inv (stepWS pol size inv cexSys (.unfenced 1 none)).1 (.read (.header 1))).2 ≠
+      .value (fetch (cexSys.store.set 1 none).world (.header 1)) := by
+  refine ⟨⟨?_, fun _ => Nat.le_refl _, fun _ _ hp => by simp [cexSys] at hp⟩, ?_⟩
+  · intro e' he'
+    simp only [cexSys, List.mem_singleton] at he'
+    subst he'
+    exact ⟨Nat.le_refl _, fun _ => rfl⟩
+  · simp [stepWS, readWS, Store.set, hit, upd, fetch, cexSys, cexWorld, cexTenant]
+
+/-- The store state after a restore that broke W4: the world changed, the generation did not. -/
+def cexRolledBack : Store := { world := upd cexWorld 1 none, gen := fun _ => 0 }
+
+/-- **W4 is load-bearing.** A store change that leaves the generation as it was (a restore that
+    brought an old generation back) is not an advance, and after it even a checked read serves the
+    old value. -/
+theorem w4_violation_breaks_checked_read (pol : Policy Unit) (size : Key → Payload → Nat)
+    (inv : Delta → Key → Bool) :
+    ¬ Advances cexSys.store cexRolledBack ∧
+    (stepWS pol size inv { cexSys with store := cexRolledBack } (.checkedRead (.header 1))).2 ≠
+      .value (fetch cexRolledBack.world (.header 1)) := by
+  refine ⟨fun ha => ?_, ?_⟩
+  · have := (ha 1).2 rfl
+    simp [cexRolledBack, cexSys, cexWorld, upd] at this
+  · simp [stepWS, readWS, sync, hit, upd, fetch, cexSys, cexRolledBack, cexWorld, cexTenant]
 
 /-! ### Pinning -/
 

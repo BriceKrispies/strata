@@ -9,3 +9,5 @@ import Strata.Evolution.Lens
 import Strata.Evolution.Compose
 import Strata.Evolution.Commute
 import Strata.WorkingSet
+import Strata.WorkingSet.Leases
+import Strata.WorkingSet.Arbiter

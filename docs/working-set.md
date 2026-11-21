@@ -323,9 +323,10 @@ its end. Guarantees, under W4:
   generation, which the runtime compares with the request's, and a round that finds it changed
   rereads everything the request has read at the new generation;
 - a refusal linearizes at its confirming generation read (`decideWS_refusal`);
-- an accepted commit is the kernel's step on the state it was applied to (`submitWS_world`). This is
-  safety only: the claim that staleness costs at most one conflict per request is argued, not
-  proved.
+- an accepted commit is the kernel's step at the generation it was decided at, which the store
+  still shows when it applies it (`submit_one_generation`); a conflict caused by staleness costs one
+  refresh, after which the same intent decided again is accepted unless something writes the store
+  in between (`resubmit_no_conflict`).
 
 There is no uncovered path for reads in checked mode. W4 is still assumed: it is the store's
 obligation, not a condition on the environment.
@@ -336,11 +337,16 @@ a request's rounds compare against the generation the runtime knows. A refusal i
 by one generation read, and a commit is still guarded by the store. Guarantees: commits and
 refusals as in checked mode; reads and request snapshots return the store's value as long as every
 counter-raising write to the tenant is made by the holder, which the fence token enforces for
-writers using the `Store` API (`runWS_reads` under `covered`);
-when a writer is not fenced (the lease was lost without the cell knowing), reads are stale for at
-most the renewal interval, and the first commit or renewal discovers it (`unfenced_breaks_reads`
-shows the staleness is real without the lease). The model's request rounds use generation reads,
-that is checked mode; the leased variant is argued from `covered`, not modelled separately.
+writers using the `Store` API. This is proved in the lease model
+(`lean/Strata/WorkingSet/Leases.lean`), with a logical clock, several processes, acquisition,
+renewal, expiry and revocation: in every schedule whose counter-raising writes all go through the
+fence, every read returns the store's value, from resident entries or not
+(`leased_reads_correct`). The `covered` condition the main model assumes for unchecked reads is
+what this derives. A write that bypasses the fence (raw database access) does serve a stale
+resident value (`raw_breaks_leased_read`, and `unfenced_breaks_reads` in the main model). In the
+lease model a holder knows the current generation whenever it may serve (the `ServeOk`
+invariant), so a leased request round that compares with the generation the runtime knows compares
+with the store's; the request model itself uses generation reads.
 
 ### Leases (follow-up item 13)
 
@@ -388,8 +394,9 @@ Rust already decides above the store and commits separately, guarded by the base
    then refuses, since the tenant is no longer at the first round's generation.
 2. A refusal is confirmed by a generation read before it is returned: the store's generation is
    compared with the generation the decision's **first round** read, and if they differ the
-   runtime refreshes and decides again. In the model `decideWS` is a single step, so the
-   multi-round form of this rule is argued, not proved.
+   caller is told to retry. In the model a multi-round decision decides on what its request read
+   over its rounds (`decideReq`), and a refusal it returns is the kernel's refusal at the state the
+   confirmation read, which is still the first round's (`decideReq_refusal`).
 3. An acceptance is committed with `expected_generation`. The store applies it only if the tenant
    is still at that generation, in the same transaction that raises it (`submitWS`). An out-of-commit
    write landing between the decision and the commit (the reviewer's `old + 2` case) changes the
@@ -397,16 +404,21 @@ Rust already decides above the store and commits separately, guarded by the base
 4. After an accepted commit: drop the entries the delta invalidates, confirm the tenant's other
    current entries at the receipt's generation, take the counters from the receipt, re-admit a
    pinned header the commit changed.
-5. A conflict refreshes the tenant and the request is decided again (`execute_guarded`'s retry). In
-   leased mode a conflict caused by the runtime's own staleness should happen at most once per
-   request, since the refresh makes it current; that is argued, not proved. With key creation
-   raising no generation, a commit naming a new data subject does not conflict with itself.
+5. A conflict refreshes the tenant and the request is decided again (`execute_guarded`'s retry).
+   After that one refresh, the same intent decided again and resubmitted is accepted unless the
+   store is written in between (`resubmit_no_conflict`; reads, rounds, cache work, checks and other
+   requests' decisions may come between). A further conflict therefore means a real concurrent
+   write, not staleness. With key creation raising no generation, a commit naming a new data subject
+   does not conflict with itself.
 6. A commit whose outcome is unknown (timeout, lost connection) drops the tenant's entries and
    assumes no generation (`submitLost`).
 
-Concurrency inside a runtime is outside the model (W2): each tenant runtime's refresh,
-commit-and-carry and snapshot assembly is one critical section against the tenant's other requests.
-Simultaneous misses on one key are coalesced (CPY-012): one load per key per generation.
+Concurrency inside a runtime is in the model: requests live in slots and interleave freely, and
+the theorems hold under every interleaving. What the Rust must provide is that each operation of
+the model is atomic: one round of a request, one refresh, one decision step, one commit with its
+carry-forward is each one critical section of the tenant runtime (W2). Nothing larger needs to be
+serialised. Simultaneous misses on one key are coalesced (CPY-012): one load per key per
+generation.
 
 ### What a decision reads, now that records reference records
 
@@ -520,12 +532,15 @@ budget never goes below the pinned bytes. Under the arbiter's floor rule (each g
 tenant's pinned bytes), grants that sum to the arbiter's total keep the cell within it
 (`machine_resize`); a grant below the floor is exceeded by at most the floor (`resize_budget_le`).
 
-Nothing proves the arbiter can always meet every floor: when the cell's pinned bytes exceed the
-arbiter's total, the cell is over-placed. What happens then is specified, not proved: the arbiter
-grants floors in order of the tenants' plans and recent cost and leaves the rest unpinned (their
-pinned keys stay pinned but are not resident, the cliff above), raises a placement alarm, and the
-control plane moves tenants out. Correctness is unaffected: every read and commit still goes
-through the store when nothing is resident.
+The arbiter is modelled in `lean/Strata/WorkingSet/Arbiter.lean`: each tenant has a floor and a
+want (from any policy). It grants every floor, then shares the rest by the wants in order. When the
+floors fit the total, every grant meets its floor (`arbiter_floors`) and the grants never exceed
+the total (`arbiter_within`). The over-placement alarm is raised exactly when the floors do not fit
+(`arbiter_alarm`). Then the arbiter grants floors in order until the memory runs out, no tenant gets
+more than its floor (`arbiter_overplaced_le_floors`), the grants still never exceed the total, and
+the control plane moves tenants out. The tenants left short have their pinned keys still pinned but
+not resident (the cliff above). Correctness is unaffected: every read and commit still goes through
+the store when nothing is resident.
 
 Each tenant runtime estimates its miss-cost curve by sampling its access stream into small ghost
 caches; the arbiter gives memory in chunks to the tenant whose curve shows the largest saving per
@@ -534,92 +549,149 @@ from the plan (BIL-150), as a new requirement beside STO-013.
 
 ## What is proved
 
-`lean/Strata/WorkingSet.lean`, imported from `lean/Strata.lean`, over the kernel model of
-`lean/Strata/Model.lean`. Parameters: the policy (`Policy σ`), the size function, the invalidation
-map (any map meeting `InvSound`). Operations: unchecked and checked reads, pins, unpins, evictions,
-invalidations, resizes, decisions, guarded commits, commits with lost receipts, fenced and unfenced
-writes by others, and generation reads, in any order, so anything may happen between a decision
-and its commit. Assumptions W1 to W4 are at the head of the file; W4 (every change raises the
-generation) is the store obligation the contract above has to deliver. No `sorry`, no added axioms;
-`lake env lean Audit.lean` lists only `propext`, `Classical.choice` and `Quot.sound` for all 36
-audited theorems.
+`lean/Strata/WorkingSet.lean`, `lean/Strata/WorkingSet/Leases.lean` and
+`lean/Strata/WorkingSet/Arbiter.lean`, imported from `lean/Strata.lean`, over the kernel model of
+`lean/Strata/Model.lean` (with references). Parameters of the main model: the policy (`Policy σ`),
+the size function, the invalidation map (any map meeting `InvSound`). Its operations: unchecked
+and checked reads, pins, unpins, evictions, invalidations, resizes, single-step and multi-round
+decisions, guarded commits, commits with lost receipts, fenced and unfenced writes by others,
+generation reads, and request rounds, for any number of requests in slots, in any interleaving.
+Assumptions W1 to W4 are at the head of the file: W2 is now only that each operation is atomic,
+and W4 (every change raises the generation) is the store obligation the contract above has to
+deliver. No `sorry`, `admit` or added axiom; `lake env lean Audit.lean` lists only `propext`,
+`Classical.choice` and `Quot.sound` for all 58 audited working-set theorems.
 
 | Property | Theorem |
 |---|---|
 | A decision from the header, counters, the records it names and (for a delete or a strict schema change) the record list is the kernel's step, references included | `problem_eq_via`, `decideTenant_faithful`, `decideOn_fetch`, `decideOn_congr` |
 | One invalidation map meets the criterion, with a finer rule for ordered pages | `touchedIn_sound` |
 | A checked single-key read returns the store's value, whatever the runtime held | `checkedRead_linearizes` |
-| A read request over several rounds returns, key by key, the store at the moment it finishes | `request_snapshot`, `stepWS_reqOk`, `runWS_reqOk` |
+| A read request over several rounds returns, key by key, the store at the moment it finishes, under every interleaving of other requests and writers | `request_snapshot`, `stepWS_reqOk`, `runWS_reqOk` |
 | An unchecked read of a safe tenant returns the store's value; in covered schedules, every one | `readWS_value`, `runWS_reads` |
 | A refusal is the kernel's refusal on the current state | `decideWS_refusal` |
-| An accepted commit is a kernel step on the state it is applied to (safety only) | `submitWS_world` |
-| At every step of every schedule (given W4): the above, and the committed world changes only by such steps or by other writers | `runWS_faithful` |
-| The invariants (coherence, knowledge never ahead of the store, pending decisions valid) hold at every step | `stepWS_inv` |
+| A multi-round decision's refusal is the kernel's at the state its confirmation read, which is the first round's (the first-round rule) | `decideReq_refusal`, `reqGet_eq_fetch` |
+| An accepted commit applies the kernel step at one generation: the one it was decided at (for a multi-round decision, its first round's) | `submit_one_generation`, `submitWS_world`, `decideReq_expected` |
+| After one refresh with no intervening write to the store, a resubmitted decision does not conflict | `resubmit_no_conflict`, `conflict_refreshes`, `quiet_run` |
+| At every step of every interleaving (given W4): the above, and the committed world changes only by such steps or by other writers | `runWS_faithful`, `stepWS_faithful` |
+| The invariants (coherence, knowledge never ahead of the store, pending decisions and requests valid) hold at every step | `stepWS_inv`, `stepWS_invR` |
+| A non-holder's counter-raising write is refused even with the current generation | `write_refused_unless_holder` |
+| A second would-be holder cannot take the lease while the holder can serve | `acquire_refused_while_serving` |
+| A holder serves from resident entries only before its term end (less the margin) | `cache_read_before_term` |
+| Leased reads are fetch-correct whenever every counter-raising write is fenced (`covered`, derived) | `leased_reads_correct`, `stepL_inv`, `read_correct`, `linv_init` |
+| A write that bypasses the fence serves a stale resident value | `raw_breaks_leased_read` |
 | An unchecked read after an unfenced write serves the old value | `unfenced_breaks_reads` |
 | Without W4, even a checked read serves the old value | `w4_violation_breaks_checked_read` |
 | Accounted bytes never exceed the budget | `stepWS_within`, `runWS_within` |
 | Pins change only when asked; pinned keys survive admission, eviction, resize | `stepWS_pins`, `admit_keeps_pinned`, `evict_keeps_pinned`, `resize_keeps_pinned`, `pin_resident` |
 | Budgets on one machine, under the floor rule | `resize_budget_exact`, `resize_budget_le`, `machine_resize` |
+| The arbiter: floors met and the total respected when the floors fit; the alarm exactly when they do not; never more than the total | `arbiter_floors`, `arbiter_within`, `arbiter_alarm`, `arbiter_overplaced_le_floors`, `arbiter_length` |
 | Placement against sealing, on schedules of admissions, value writes, key destructions and reads | `below_sealing_erasure_safe`, `above_sealing_serves_erased` |
 
 The central statements:
 
 ```lean
-theorem checkedRead_linearizes (sys : Sys σ) (k : Key) (hs : Sound sys.cache.entries sys.store) :
-    (stepWS pol size inv sys (.checkedRead k)).2 = .value (fetch sys.store.world k)
+theorem submit_one_generation (sys : Sys σ) (j : Slot) (p : Pending) (h : Inv sys)
+    (hp : sys.pending j = some p) (hok : (submitWS pol size inv sys j).2 = .result (.ok ())) :
+    sys.store.gen p.ctx.tenant = p.expected ∧
+      step sys.store.world p.intent p.ctx = .ok (submitWS pol size inv sys j).1.store.world
 
-theorem submitWS_world (sys : Sys σ) (h : Inv sys) :
-    (submitWS pol size inv sys).1.store.world = sys.store.world ∨
-    ∃ p, sys.pending = some p ∧
-      step sys.store.world p.intent p.ctx = .ok (submitWS pol size inv sys).1.store.world
+theorem decideReq_refusal (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) (e : Err)
+    (hr : ReqOk sys.req sys.store) (hres : (decideReqWS sys j i pr).2 = .result (.error e)) :
+    ∃ r, sys.req j = some r ∧ sys.store.gen r.tenant = r.gen ∧
+      step sys.store.world i ⟨r.tenant, pr⟩ = .error e
 
-theorem runWS_faithful (hinv : InvSound inv) (ops : List Op) :
-    ∀ (sys : Sys σ), Inv sys → RunFaithful pol size inv sys ops
+theorem resubmit_no_conflict (sys : Sys σ) (j : Slot) (p : Pending) (ops : List Op)
+    (hp : sys.pending j = some p) (hc : (submitWS pol size inv sys j).2 = .conflict)
+    (hq : ∀ op ∈ ops, Quiet j op = true)
+    (hd : ((decideWS (submitWS pol size inv sys j).1 j p.intent p.ctx).1.pending j).isSome) :
+    (submitWS pol size inv
+      (finalSys pol size inv (decideWS (submitWS pol size inv sys j).1 j p.intent p.ctx).1 ops)
+      j).2 = .result (.ok ())
 
-theorem request_snapshot (sys : Sys σ) (r : Req) (hrq : sys.req = some r)
+theorem request_snapshot (sys : Sys σ) (j : Slot) (r : Req) (hrq : sys.req j = some r)
     (hr : ReqOk sys.req sys.store) :
-    (stepWS pol size inv sys .finish).2 =
+    (stepWS pol size inv sys (.finish j)).2 =
       .snapshot ((r.got.map Prod.fst).map (fun k => (k, fetch sys.store.world k)))
 
-theorem runWS_reads (hinv : InvSound inv) (ops : List Op) :
-    ∀ (sys : Sys σ) (dirty : TenantId → Bool), Inv sys →
-      (∀ y, dirty y = false → SafeAt sys.cache.entries sys.known sys.store y) →
-      covered dirty ops = true → ReadsTrue pol size inv sys ops
+theorem runWS_faithful (hinv : InvSound inv) (ops : List Op) :
+    ∀ (sys : Sys σ), InvR sys → RunFaithful pol size inv sys ops
+
+-- Leases.lean
+theorem write_refused_unless_holder (s : LState) (p : ProcId) (hinv : LInv m s)
+    (hnh : ∀ n e, s.dir ≠ some (p, n, e)) (g : Nat) (t : Option Tenant) :
+    stepL m s (.write p g t) = (s, .refused)
+
+theorem cache_read_before_term (s : LState) (p : ProcId) (k : Key) (v : Payload)
+    (h : (stepL m s (.read p k)).2 = .value v true) :
+    ∃ n e, (s.procs p).lease = some (n, e) ∧ s.now + m < e
+
+theorem leased_reads_correct (ops : List LOp) (hf : ∀ op ∈ ops, op.fenced = true) :
+    ∀ s, LInv m s → ReadsTrueL m s ops
+
+-- Arbiter.lean
+theorem arbiter_floors (ts : List (Nat × Nat)) (total : Nat)
+    (h : (ts.map Prod.fst).sum ≤ total) :
+    LeAll (ts.map Prod.fst) (arbiter ts total).1
+
+theorem arbiter_within (ts : List (Nat × Nat)) (total : Nat) :
+    (arbiter ts total).1.sum ≤ total
+
+theorem arbiter_alarm (ts : List (Nat × Nat)) (total : Nat) :
+    (arbiter ts total).2 = true ↔ total < (ts.map Prod.fst).sum
 ```
 
 `RunFaithful` says, at every step: a safe unchecked read and every checked read return the store's
-value; a refusal is the kernel's; and the committed world is unchanged, or (only at a submit) is the
-kernel's step of the pending decision on the state it was applied to, or (only at another writer's
-write) is that write. `covered` is a
-property of the environment, not something the runtime can observe: no unchecked read of a tenant
-written behind the runtime's back since its last generation read. It is what a lease provides;
-checked mode does not need it.
+value; a refusal is the kernel's (for a multi-round decision, at the state its confirmation read);
+and the committed world is unchanged, or (only at a submit) is the kernel's step of that slot's
+pending decision on the state it was applied to, or (only at another writer's write) is that write.
+`covered` in the main model is a property of the environment; the lease model derives it from
+fencing.
 
 ### What is not proved, and what turned out false
 
-- **The generation's realisation is not proved.** The model assumes W4; the Rust pair of a rotated
-  nonce and a counter is argued above and held by conformance cases, including an out-of-band
-  restore. A restore under an open file is outside the guarantee, and the model shows the
-  consequence (`w4_violation_breaks_checked_read`).
-- **Leases are not modelled.** Their effect is modelled (fenced writes keep `covered`; the commit
-  guard is the fence for writes); expiry, renewal and clocks are specified in prose.
-- **"The pinned closure is always resident" is false**: a budget below the pinned bytes, a header
-  grown past its grant, and the stale entries correctness removes.
-- **No policy optimality, no arbiter feasibility** is proved.
-- **Concurrency inside the runtime** is outside the model (W2).
-- **The model's kernel is small**: one object type, three scalar value kinds and references, no
+Still open, each with the task that carries it:
+
+- **W4's realisation in Rust.** The model assumes every change raises the generation; that the
+  Rust nonce and counter deliver it is held by the exhaustive differential conformance case of
+  WG-5389. A file replaced under an open handle is outside the guarantee; the restore runbook that
+  closes handles first is WG-5404. `w4_violation_breaks_checked_read` shows what fails without it.
+- **Accounted bytes against resident memory.** The budget theorems are about accounted bytes; the
+  gap (in-flight snapshots, policy structures, the adapter's memory) is measured and calibrated in
+  WG-5394.
+- **Lean–Rust correspondence.** The model is evidence about the design, not proof about the code
+  (D20 in `docs/decisions.md`); the differential check of the model against `ResidentStore`,
+  including the fault kinds, is WG-5396. The lease model's single logical clock with a margin
+  stands for drifting real clocks; that the margin covers the drift, and that the lease
+  implementation matches the model, is tested in WG-5401. The lease model and the request model
+  are separate models joined by an argument (a serving holder knows the current generation, the
+  `ServeOk` invariant); WG-5396 covers their composition in the code.
+- **The kernel model's size.** One object type, three scalar value kinds and references; no
   indexes, uniqueness, policies reading other records, segments, journal, idempotency, jobs or
-  settings, and a four-constructor delta (a delete now names the records it clears). No theorem
-  weakened when references arrived: the faithfulness and invalidation theorems were restated over
-  the new kernel and still hold exactly. `decideTenant_faithful` holds partly because `decideTenant` was
-  written next to `stepTenant`; its value is in fixing which keys a decision reads. `InvSound` is
-  the general part; each Rust key kind's criterion is follow-up item 4.
-- **The sealing model is separate from the main one** and has one key per value; it shows the
-  placement decision on schedules with writes, generations and destructions, not the Rust token
-  format.
-- **"At most one conflict from staleness"** is argued, not proved; `submitWS_world` is safety.
-- **Accounted bytes are not resident memory**; the gap is measured, not proved.
-- **Correspondence with the Rust code is evidence, not proof** (D20 in `docs/decisions.md`).
+  settings; a four-constructor delta. Growing the kernel model is WG-5373. Each Rust key kind's
+  invalidation criterion against the real `apply_delta` is WG-5392. `decideTenant_faithful` holds
+  partly because `decideTenant` was written next to `stepTenant`; its value is in fixing which keys
+  a decision reads.
+- **The sealing model is separate from the main one** and has one key per value; the Rust token
+  format is checked by WG-5391's acceptance test (a key destroyed through another handle gives the
+  erased token on the next read).
+- **Policy optimality** is a measurement question, not a proof obligation: WG-5400.
+
+What turned out false:
+
+- **"The pinned closure is always resident"**: a budget below the pinned bytes, a header grown past
+  its grant, and the stale entries correctness removes. The conditional statements above hold.
+- **Revision as the coherence key** (first review): two states at one revision. Replaced by the
+  generation.
+
+None of the five obligations closed here turned out false as stated. Two were stated in the form
+the model supports:
+
+- the conflict bound is "no conflict after one refresh when nothing writes the store in between",
+  where "in between" allows any reads, rounds, cache work, checks and other requests' decisions,
+  but no write by anyone, including another request of the same runtime; a commit by another
+  request is a real concurrent write, and the conflict it causes is correct;
+- "a holder serves only before its term end" is proved with the margin: before the term end less
+  the margin.
 
 ## Experiments that would test it
 
@@ -862,6 +934,27 @@ criteria that a test or a check can fail. Items are ordered by dependency; none 
 
 ## Answers to the reviews
 
+### Closing the open obligations (WG-5406)
+
+Five obligations the earlier sections left argued or out of the model are now proved:
+
+- **Leases**: modelled with a logical clock, several processes, acquisition (fence token,
+  generation rotation), renewal with a generation read, expiry at term end less the margin,
+  revocation, and a second would-be holder. A non-holder's write is refused even with the current
+  generation; a holder serves from resident entries only before its term end; leased reads are
+  fetch-correct whenever every counter-raising write is fenced, which derives the main model's
+  `covered` condition.
+- **Multi-round decisions**: a decision decides on what its request read over its rounds. An
+  accepted commit applies the kernel step at the first round's generation; a refusal is the
+  kernel's at the state the confirmation read.
+- **Interleaving requests**: requests live in slots and interleave freely. W2 shrinks from
+  "requests are sequential" to "each operation is atomic". `request_snapshot` and the commit
+  theorems hold under every interleaving.
+- **The conflict bound**: after one refresh with no intervening write to the store, a resubmitted
+  decision does not conflict.
+- **Arbiter feasibility**: floors met and the total respected when the floors fit; the alarm exactly
+  when they do not.
+
 ### Integration merge: references in the kernel model
 
 The merged kernel model checks references on create and update and clears or refuses them on
@@ -879,7 +972,7 @@ the deleted record, was replaced.
 | 1 | The nonce is not a fence | **Fixed.** A separate fence token (the lease number), stored in the tenant's storage, not returned by `generation()`, compared on every counter-raising write under a lease. The leased-mode claims now rest on "every counter-raising write is made by the holder", enforced for writers using the `Store` API |
 | 2 | Method list hand-written | **Fixed.** Confirmed: `remove_principal` touches sign-in rows only (`storage-sqlite/src/lib.rs:4594-4616`); `reset`, `reset_tenant` and provisioning change load results through the directory. The list is now decided by an exhaustive differential conformance case over the trait; the reading from the code is given as a starting point; directory-state changes are handled by a decision (revoke before, acquire afresh after) |
 | 3 | `expected_generation: None` | **Fixed.** Accepted only with `base_revision: None`, refused otherwise |
-| 4 | Multi-round refusals; request prose | **Fixed.** The refusal confirmation compares with the first round's generation (argued, not proved); the request claim is "consistent at one point inside the request interval" |
+| 4 | Multi-round refusals; request prose | **Fixed.** The refusal confirmation compares with the first round's generation (argued then; proved since as `decideReq_refusal`); the request claim is "consistent at one point inside the request interval" |
 | - | Migrations per tenant, `open_file` migrations, multi-process cells, the plaintext exclusion's scope, tenant-key rotation | **Addressed in text** |
 
 ### Third review
