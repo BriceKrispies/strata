@@ -1484,6 +1484,7 @@ async fn view_model(
     request: BTreeMap<String, String>,
     paging: Paging,
 ) -> Result<Json_, Failure> {
+    let asked = request.clone();
     let data: ViewData = backend(
         bff,
         visit,
@@ -1514,6 +1515,7 @@ async fn view_model(
     }
     model["theme"] = json!(resolved);
     model["path"] = json!(path);
+    echo_request(&mut model, data.view.as_str(), &asked);
     if let Some(info) = screens::view_info(data.view.as_str()) {
         // The outputs the screen's view model states beyond the sections (for the writing desk:
         // each article as its per-row actions name it, the topic and author choices, the record
@@ -1524,6 +1526,21 @@ async fn view_model(
         model["title"] = json!(title);
     }
     Ok(model)
+}
+
+/// The request parameters a view's model repeats as members of its own: (view, parameter). The
+/// search page shows the words searched for beside the results (read-search-page, CT-245, whose
+/// output `q` is the request's `q`).
+const ECHOED_PARAMETERS: &[(&str, &str)] = &[("search", "q")];
+
+/// Add to the model the parameters of the request that the view repeats (`ECHOED_PARAMETERS`); one
+/// the request did not carry is left out.
+fn echo_request(model: &mut Json_, view: &str, request: &BTreeMap<String, String>) {
+    for (_, parameter) in ECHOED_PARAMETERS.iter().filter(|(v, _)| *v == view) {
+        if let Some(value) = request.get(*parameter) {
+            model[*parameter] = json!(value);
+        }
+    }
 }
 
 /// The value at a dotted path of a record; null when there is none.
