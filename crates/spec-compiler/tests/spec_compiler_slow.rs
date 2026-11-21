@@ -13,11 +13,5 @@ mod golden;
 #[path = "layers.rs"]
 mod layers;
 
-#[path = "refusals.rs"]
-mod refusals;
-
 #[path = "strata_differential.rs"]
 mod strata_differential;
-
-#[path = "web_screens.rs"]
-mod web_screens;

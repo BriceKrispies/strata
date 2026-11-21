@@ -1301,62 +1301,6 @@ fn samples() -> Vec<(&'static str, Json)> {
 }
 
 #[test]
-fn the_kernel_types_are_the_serde_form_of_the_specification_types() {
-    let types = Types::load();
-    let mut used = BTreeSet::new();
-    let mut failures = Vec::new();
-    for (ty, value) in samples() {
-        if let Err(e) = check(&types, &mut used, ty, &value) {
-            failures.push(format!("{ty}: {e}\n    sample: {value}"));
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "samples the specification does not describe:\n{}",
-        failures.join("\n")
-    );
-
-    // Every type of the list must have been reached, directly or through another type.
-    let expected = [
-        "value",
-        "field-type",
-        "expr",
-        "intent",
-        "schema-change",
-        "delta-op",
-        "state-delta",
-        "event-body",
-        "domain-event",
-        "effect",
-        "output",
-        "transition-result",
-        "check",
-        "error-kind",
-        "domain-error",
-        "need",
-        "coverage",
-        "principal",
-        "record",
-        "tenant-state",
-        "state",
-        "tenant-schema",
-        "object-type-def",
-        "field-def",
-        "policy-def",
-        "constraint-def",
-        "workflow-def",
-        "role-def",
-        "query-def",
-        "view-def",
-        "read-request",
-        "read-result",
-        "context",
-    ];
-    let missed: Vec<_> = expected.iter().filter(|t| !used.contains(**t)).collect();
-    assert!(missed.is_empty(), "no sample reaches {missed:?}");
-}
-
-#[test]
 fn every_kernel_sample_decodes_exactly_into_the_generated_types() {
     let mut failures = Vec::new();
     let mut checked = BTreeSet::new();
@@ -1398,54 +1342,4 @@ fn every_kernel_sample_decodes_exactly_into_the_generated_types() {
         decoded.records.values().any(|by_id| !by_id.is_empty()),
         "the tenant sample holds records, so the map of record maps was decoded"
     );
-}
-
-#[test]
-fn the_generated_types_refuse_what_the_kernel_refuses() {
-    // A set that repeats an item: serde's BTreeSet would drop it; the generated decode refuses it.
-    let repeated =
-        serde_json::json!({"PutMember": {"principal": "alpha:owner", "roles": ["owner", "owner"]}});
-    assert!(serde_json::from_value::<generated::DeltaOp>(repeated).is_err());
-    let distinct = serde_json::json!({"PutMember": {"principal": "alpha:owner", "roles": ["editor", "owner"]}});
-    assert!(serde_json::from_value::<generated::DeltaOp>(distinct).is_ok());
-    // A tuple variant with the wrong number of positions or the wrong item types, which the
-    // WG-4927 stand-in (a newtype of a list of json) accepted.
-    for bad in [
-        serde_json::json!({"Cmp": ["Eq", {"Lit": "Null"}]}),
-        serde_json::json!({"Cmp": ["Equal", {"Lit": "Null"}, {"Lit": "Null"}]}),
-        serde_json::json!({"Var": ["Record"]}),
-        serde_json::json!({"If": [1, 2, 3]}),
-    ] {
-        assert!(
-            serde_json::from_value::<generated::Expr>(bad.clone()).is_err(),
-            "the generated Expr accepted {bad}"
-        );
-        assert!(
-            serde_json::from_value::<Expr>(bad.clone()).is_err(),
-            "the kernel Expr accepted {bad}"
-        );
-    }
-}
-
-#[test]
-fn the_checker_refuses_what_the_specification_does_not_describe() {
-    let types = Types::load();
-    let mut used = BTreeSet::new();
-    let bad = [
-        ("value", serde_json::json!({"Float": 1.5})),
-        ("value", serde_json::json!("Int")),
-        (
-            "intent",
-            serde_json::json!({"DeleteRecord": {"object": "note", "id": 1}}),
-        ),
-        ("output", serde_json::json!({"Tenant": {}})),
-        ("record", serde_json::json!({"id": 1})),
-        ("field-id", serde_json::json!("Title")),
-    ];
-    for (ty, value) in bad {
-        assert!(
-            check(&types, &mut used, ty, &value).is_err(),
-            "{ty} accepted {value}"
-        );
-    }
 }

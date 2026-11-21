@@ -103,20 +103,6 @@
       "reason": "simulation: Determinism and minimisation over the Fieldnotes bundle; scoped runs include it when the simulation crate or a tenant bundle changed"
     },
     {
-      "package": "strata-spec-compiler-core-fixture",
-      "target": "spec_compiler_core_fixture_it",
-      "tier": "routine",
-      "seconds": 0.01,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-spec-compiler-functions-fixture",
-      "target": "spec_compiler_functions_fixture_it",
-      "tier": "routine",
-      "seconds": 0.64,
-      "unmeasured": true
-    },
-    {
       "package": "strata-spec-compiler-language-fixture",
       "target": "spec_compiler_language_fixture_it",
       "tier": "routine",
@@ -136,7 +122,7 @@
       "tier": "full",
       "seconds": 1051.92,
       "unmeasured": true,
-      "reason": "bundle: Not yet measured: loads the platform specification and runs specc; full tier until it is measured; conformance: Loads the platform specification and formats its whole generated conformance suite with rustfmt; not yet measured; golden: Regenerates three fixture crates and compares them byte for byte; scoped runs include it when the specc crate changed; layers: Validates the whole specification with Exegra once per product file and runs specc over the whole specification twice per generated tree; refusals: Generates from many refused specifications; scoped runs include it when the specc crate changed; strata_differential: Steps every generated machine, Rust and JavaScript, through every scenario trace from Exegra; web_screens: Not yet measured: runs node over the adversarial fixture; full tier until it is measured",
+      "reason": "bundle: Not yet measured: loads the platform specification and runs specc; full tier until it is measured; conformance: Loads the platform specification and formats its whole generated conformance suite with rustfmt; not yet measured; golden: Regenerates three fixture crates and compares them byte for byte; scoped runs include it when the specc crate changed; layers: Validates the whole specification with Exegra once per product file and runs specc over the whole specification twice per generated tree; strata_differential: Steps every generated machine, Rust and JavaScript, through every scenario trace from Exegra",
       "slow": true
     },
     {

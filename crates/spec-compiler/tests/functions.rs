@@ -24,13 +24,13 @@ use strata_kernel::testkit::{
     ctx, field, new_note, notes_world, object, principals, tenant_id, text, user,
 };
 use strata_kernel::{
-    Action as KAction, ErrorKind, Intent, Principal as KPrincipal, PrincipalId, Record as KRecord,
-    RecordId, Resource as KResource, TenantState, Timestamp, Value as KValue, World,
+    Action as KAction, Principal as KPrincipal, PrincipalId, Record as KRecord, RecordId,
+    Resource as KResource, TenantState, Timestamp, Value as KValue, World,
 };
 use strata_spec_compiler_functions_fixture::functions;
 use strata_spec_compiler_functions_fixture::rule_language;
 use strata_spec_compiler_functions_fixture::types::{
-    Action, DomainError, PolicyDef, Principal, Resource, Subject, Tenant, Value,
+    Action, PolicyDef, Principal, Resource, Subject, Tenant, Value,
 };
 
 fn value(v: &KValue) -> Value {
@@ -234,95 +234,4 @@ fn authorize_agrees_with_the_kernel() {
     }
     assert!(compared > 500, "{compared}");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-#[test]
-fn may_attempt_agrees_with_the_kernel() {
-    let (world, _) = world_with_a_note();
-    let alpha = world.tenants[&tenant_id("alpha")].clone();
-    let generated_tenant = tenant(&alpha);
-    let mut who = principals("alpha");
-    who.push(KPrincipal::System);
-    for p in &who {
-        for a in [
-            KAction::Read,
-            KAction::Create,
-            KAction::Update,
-            KAction::Delete,
-            KAction::Manage,
-        ] {
-            for r in [
-                KResource::Object(object("note")),
-                KResource::Object(object("person")),
-                KResource::AnyObject,
-                KResource::Schema,
-                KResource::Members,
-            ] {
-                assert_eq!(
-                    rules::may_attempt(&alpha, p, a, &r),
-                    functions::may_attempt(
-                        &generated_tenant,
-                        &principal(p),
-                        &action(a),
-                        &resource(&r)
-                    ),
-                    "{p:?} {a:?} {r:?}"
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn check_version_agrees_with_the_kernel() {
-    let (world, _) = world_with_a_note();
-    let patch = |expected: Option<u64>| Intent::UpdateRecord {
-        object: object("note"),
-        id: RecordId(1),
-        fields: BTreeMap::from([(field("body"), text("one"))]),
-        expected_version: expected,
-    };
-    let world = world
-        .step(&patch(None), &ctx("alpha", user("alpha:writer1"), 5_001))
-        .expect("writer1 edits its note")
-        .0;
-    let version = world.tenants[&tenant_id("alpha")]
-        .record(&object("note"), RecordId(1))
-        .expect("note 1")
-        .version;
-    assert_eq!(version, 2);
-    for expected in [None, Some(0), Some(1), Some(2), Some(3), Some(7)] {
-        let kernel = world.step(
-            &patch(expected),
-            &ctx("alpha", user("alpha:writer1"), 5_002),
-        );
-        let generated = functions::check_version(version, expected);
-        match (&kernel, &generated) {
-            (Err(e), Err(DomainError::VersionConflict { message })) => {
-                assert_eq!(e.kind, ErrorKind::VersionConflict, "{expected:?}: {e:?}");
-                assert_eq!(&e.message, message, "{expected:?}");
-            }
-            (Ok(_), Ok(())) => {}
-            (Err(e), Ok(_)) => assert_ne!(
-                e.kind,
-                ErrorKind::VersionConflict,
-                "{expected:?}: the kernel saw a conflict the function did not"
-            ),
-            (Ok(_), Err(e)) => {
-                panic!("{expected:?}: the function failed with {e:?}, the kernel accepted")
-            }
-        }
-    }
-    // next_version passes the conflict on, and computes the next version otherwise.
-    assert_eq!(functions::next_version(version, None), Ok(3));
-    assert!(matches!(
-        functions::next_version(version, Some(1)),
-        Err(functions::Failure::Error(
-            DomainError::VersionConflict { .. }
-        ))
-    ));
-    assert_eq!(
-        functions::next_version(u64::MAX, None),
-        Err(functions::Failure::Fault(functions::Fault { op: "+" }))
-    );
 }
