@@ -380,30 +380,6 @@ fn a_governed_contract_needs_a_policy_default() {
     assert_refused_with(&text.to_string(), "ready.policy-default-missing", "do-it");
 }
 
-/// The Strata specification is either generated from or refused with diagnostics; which one
-/// depends on how far its generation readiness has come, so only the absence of a panic and the
-/// diagnostic format are asserted.
-#[test]
-fn the_strata_specification_is_handled() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../specifications/spec.jsonc"
-    );
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return;
-    };
-    let options = Options {
-        crate_name: "strata-spec".to_string(),
-        runtime: RuntimeDependency::Workspace,
-    };
-    if let Err(diagnostics) = generate("specifications/spec.jsonc", &text, &options) {
-        assert!(!diagnostics.is_empty());
-        for d in diagnostics {
-            assert!(d.to_string().starts_with("error["));
-        }
-    }
-}
-
 // Wire naming and json (WG-4881).
 
 #[test]

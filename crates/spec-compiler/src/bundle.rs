@@ -382,6 +382,24 @@ pub fn generate(
     platform_file: Option<&Path>,
     product: &ProductFile,
 ) -> Result<Output, Vec<Diagnostic>> {
+    generate_prepared(
+        platform_path,
+        &layers::prepare_platform(platform_path, platform_text),
+        platform_file,
+        product,
+    )
+}
+
+/// The bundle of `product` on a platform specification that was loaded and parsed once
+/// ([`layers::prepare_platform`]). The same output, and the same refusals, as [`generate`] gives
+/// for the text the platform was prepared from: callers that make many bundles on one platform
+/// use this, so the 6 MB platform is not parsed for each.
+pub fn generate_prepared(
+    platform_path: &str,
+    prepared: &layers::PreparedPlatform,
+    platform_file: Option<&Path>,
+    product: &ProductFile,
+) -> Result<Output, Vec<Diagnostic>> {
     let file = product.path.replace('\\', "/");
     let mut diagnostics = Vec::new();
     let parsed = jsonc::parse(&product.text).ok();
@@ -391,12 +409,7 @@ pub fn generate(
             release = read_release(&file, header, &mut diagnostics);
         }
     }
-    let layered = layers::load_layered(
-        platform_path,
-        platform_text,
-        platform_file,
-        std::slice::from_ref(product),
-    );
+    let layered = layers::layer_products(prepared, platform_file, std::slice::from_ref(product));
     let layered = match layered {
         Ok(layered) => layered,
         Err(layer_diagnostics) => {
@@ -420,14 +433,15 @@ pub fn generate(
     };
     let built = build(&layer.id, &layer.name, &version, platform.as_ref(), top)?;
     // The bundle is a value of tenant-bundle: check it as the typed sections are checked.
-    let platform_value = jsonc::parse(platform_text).map_err(|e| {
+    // The layer checks above refuse a platform that does not parse, so the value is there.
+    let platform_value = prepared.value().ok_or_else(|| {
         vec![Diagnostic::new(
             layers::SYNTAX,
             platform_path,
-            format!("{platform_path} is not valid JSONC: {e}"),
+            format!("{platform_path} is not valid JSONC"),
         )]
     })?;
-    let types = Types::of(&platform_value);
+    let types = Types::of(platform_value);
     let whole = TypedSection {
         section: "bundle",
         ty: "tenant-bundle",

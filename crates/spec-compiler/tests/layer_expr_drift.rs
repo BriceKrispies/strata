@@ -53,8 +53,10 @@ fn language_of(spec: &str, id: &str) -> Language {
         .unwrap_or_else(|| panic!("{spec} declares no language {id}"))
 }
 
-fn platform_language() -> Language {
-    language_of(PLATFORM, "tenant-rule-language")
+/// The platform's rule language, loaded once for every test in this binary.
+fn platform_language() -> &'static Language {
+    static LANGUAGE: std::sync::OnceLock<Language> = std::sync::OnceLock::new();
+    LANGUAGE.get_or_init(|| language_of(PLATFORM, "tenant-rule-language"))
 }
 
 /// The context probes are checked in: no object type, the role `member`.
@@ -361,7 +363,7 @@ fn the_language_fixture_declares_the_operators_of_the_platform_language() {
             })
             .collect::<Vec<_>>()
     };
-    assert_eq!(declared(&platform), declared(&fixture));
+    assert_eq!(declared(platform), declared(&fixture));
     assert_eq!(platform.shapes, fixture.shapes);
     assert_eq!(platform.any_shape, fixture.any_shape);
 }

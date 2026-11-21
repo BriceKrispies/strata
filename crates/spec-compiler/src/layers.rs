@@ -389,6 +389,13 @@ pub struct PreparedPlatform {
     ids: BTreeMap<String, String>,
 }
 
+impl PreparedPlatform {
+    /// The platform's parsed value, when it parses.
+    pub fn value(&self) -> Option<&Value> {
+        self.value.as_ref()
+    }
+}
+
 /// Loads and parses the platform specification once. `platform_path` is the path to print in
 /// headers and diagnostics.
 pub fn prepare_platform(platform_path: &str, platform_text: &str) -> PreparedPlatform {

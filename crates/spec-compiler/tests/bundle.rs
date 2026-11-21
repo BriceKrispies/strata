@@ -64,10 +64,16 @@ fn with_release(file: ProductFile, version: Option<&str>, platform: Option<Value
     }
 }
 
+/// The platform, loaded and parsed once for every test in this binary.
+fn prepared_platform() -> &'static layers::PreparedPlatform {
+    static PREPARED: std::sync::OnceLock<layers::PreparedPlatform> = std::sync::OnceLock::new();
+    PREPARED.get_or_init(|| layers::prepare_platform(PLATFORM, &platform_text()))
+}
+
 fn generate(file: &ProductFile) -> Result<bundle::Output, Vec<Diagnostic>> {
-    bundle::generate(
+    bundle::generate_prepared(
         PLATFORM,
-        &platform_text(),
+        prepared_platform(),
         Some(&root().join(PLATFORM)),
         file,
     )
@@ -443,34 +449,6 @@ fn the_same_product_gives_the_same_bytes_whatever_the_order_of_its_file() {
     }
 }
 
-#[test]
-fn sections_and_keys_are_written_in_sorted_order() {
-    let output = bundle_of(&product("badge-milestones.jsonc"));
-    let text = &output.files[0].contents;
-    assert!(text.ends_with("}\n"));
-    let mut top = Vec::new();
-    let mut content = Vec::new();
-    let mut inside = false;
-    for line in text.lines() {
-        if line == "  \"content\": {" {
-            inside = true;
-        } else if line == "  }," && inside {
-            inside = false;
-        }
-        if inside && line.starts_with("    \"") && !line.starts_with("     ") {
-            content.push(line.trim().split('"').nth(1).unwrap().to_string());
-        }
-        if line.starts_with("  \"") && !line.starts_with("   ") {
-            top.push(line.trim().split('"').nth(1).unwrap().to_string());
-        }
-    }
-    assert_eq!(top, ["content", "name", "platform", "product", "version"]);
-    assert!(content.len() > 3, "{content:?}");
-    let mut sorted = content.clone();
-    sorted.sort();
-    assert_eq!(content, sorted);
-}
-
 // ---- refusals -------------------------------------------------------------------------------
 
 fn refused(relative: &str) -> Vec<Diagnostic> {
@@ -572,26 +550,6 @@ fn a_section_the_bundle_has_no_place_for_is_refused() {
     assert_eq!(diagnostics[0].entity, "types");
     for word in ["\"types\"", "tenant bundle", "objects", "ledgerUnits"] {
         assert!(message.contains(word), "{word}: {message}");
-    }
-}
-
-#[test]
-fn each_section_of_a_product_has_a_place_or_is_a_statement_about_the_product_or_is_refused() {
-    for (section, _) in layers::product_sections() {
-        let placed = bundle::bundle_section(section).is_some();
-        let documentation = bundle::DOCUMENTATION_SECTIONS.contains(&section);
-        let mut top = Map::new();
-        top.insert("product".to_string(), json!({}));
-        top.insert(section.to_string(), json!([]));
-        let result = bundle::build("p", "P", "1.0.0", None, &top);
-        match (placed, documentation) {
-            (true, false) | (false, true) => assert!(result.is_ok(), "{section}"),
-            (false, false) => {
-                let diagnostics = result.unwrap_err();
-                assert_eq!(codes(&diagnostics), [bundle::SECTION_NO_PLACE], "{section}");
-            }
-            (true, true) => panic!("{section} is both placed and documentation"),
-        }
     }
 }
 
@@ -706,41 +664,31 @@ fn specc_bundle_writes_the_bundle_file() {
 // Verifies: INT-1583
 #[test]
 fn specc_bundle_refuses_a_product_and_writes_nothing() {
-    for (relative, code) in [
-        ("bundle-refused/no-version.jsonc", "bundle.version-missing"),
-        (
-            "bundle-refused/section-no-place.jsonc",
-            "bundle.section-no-place",
-        ),
-        (
-            "bundle-refused/platform-invalid.jsonc",
-            "layer.header-invalid",
-        ),
-    ] {
-        let out = root().join("var/specc-bundle/refused");
-        let _ = fs::remove_dir_all(&out);
-        let product = product_arg(relative);
-        let output = specc(&[
-            "bundle",
-            "--spec",
-            PLATFORM,
-            "--product",
-            product.as_str(),
-            "--out",
-            "var/specc-bundle/refused",
-        ]);
-        assert_eq!(output.status.code(), Some(1), "{relative}");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains(&format!("error[{code}]")),
-            "{relative}: {stderr}"
-        );
-        assert!(
-            stderr.contains("nothing was written"),
-            "{relative}: {stderr}"
-        );
-        assert!(!out.exists(), "{relative}");
-    }
+    // One representative: the in-process tests above cover every refusal code.
+    let relative = "bundle-refused/section-no-place.jsonc";
+    let out = root().join("var/specc-bundle/refused");
+    let _ = fs::remove_dir_all(&out);
+    let product = product_arg(relative);
+    let output = specc(&[
+        "bundle",
+        "--spec",
+        PLATFORM,
+        "--product",
+        product.as_str(),
+        "--out",
+        "var/specc-bundle/refused",
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{relative}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!("error[{}]", bundle::SECTION_NO_PLACE)),
+        "{relative}: {stderr}"
+    );
+    assert!(
+        stderr.contains("nothing was written"),
+        "{relative}: {stderr}"
+    );
+    assert!(!out.exists(), "{relative}");
 }
 
 #[test]

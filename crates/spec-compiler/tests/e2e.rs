@@ -237,10 +237,16 @@ fn step_options() -> e2e::Options {
 
 const STEP_SPEC: &str = "tests/e2e/step-fixtures/spec.jsonc";
 
+/// The journeys of the Strata specification, generated once for every test in this binary.
+fn strata_files() -> &'static Vec<GeneratedFile> {
+    static FILES: std::sync::OnceLock<Vec<GeneratedFile>> = std::sync::OnceLock::new();
+    FILES.get_or_init(|| generated("specifications/spec.jsonc", &strata_options()))
+}
+
 #[test]
 fn strata_journeys_generate_and_are_committed() {
-    let files = generated("specifications/spec.jsonc", &strata_options());
-    let differences = output::compare(&repo_root().join("tests/e2e/generated"), &files).unwrap();
+    let files = strata_files();
+    let differences = output::compare(&repo_root().join("tests/e2e/generated"), files).unwrap();
     assert!(
         differences.is_empty(),
         "tests/e2e/generated is not what specc e2e generates: {differences:?}; run npm run generate"
@@ -249,8 +255,8 @@ fn strata_journeys_generate_and_are_committed() {
 
 #[test]
 fn the_full_journey_checks_the_backend_log_after_each_step() {
-    let files = generated("specifications/spec.jsonc", &strata_options());
-    let text = contents(&files, "ui-author-writes-publishes-live.spec.js");
+    let files = strata_files();
+    let text = contents(files, "ui-author-writes-publishes-live.spec.js");
     let events: Vec<&str> = text
         .lines()
         .filter_map(|l| l.trim().strip_prefix("await j.expectLog(\"backend\", \""))
@@ -274,7 +280,7 @@ fn the_full_journey_checks_the_backend_log_after_each_step() {
         "await j.logScan([j.re(\"${authorSession}\"), j.re(\"${authorCsrf}\"), j.re(\"strata-dev-\")]);"
     ));
     // The runtime links each line to a request the journey's browsers sent and to the BFF's line.
-    let runtime = contents(&files, "journey.js");
+    let runtime = contents(files, "journey.js");
     assert!(runtime.contains("this.correlations.has(line.correlation)"));
     assert!(
         runtime.contains("l.json.service !== service && l.json.correlation === line.correlation")
@@ -285,14 +291,14 @@ fn the_full_journey_checks_the_backend_log_after_each_step() {
 
 #[test]
 fn the_security_journeys_expect_what_the_backend_now_answers() {
-    let files = generated("specifications/spec.jsonc", &strata_options());
-    let others = contents(&files, "ui-author-cannot-edit-others.spec.js");
+    let files = strata_files();
+    let others = contents(files, "ui-author-cannot-edit-others.spec.js");
     assert!(others.contains("\"id\":15"));
     assert!(others.contains("\"expectJson\":{\"code\":\"not_found\"},\"expectStatus\":404"));
     assert!(others.contains(
         "\"expectJson\":{\"failed.0.rule\":\"policy:authors_own_posts\"},\"expectStatus\":403"
     ));
-    let ends = contents(&files, "ui-session-ends.spec.js");
+    let ends = contents(files, "ui-session-ends.spec.js");
     assert!(ends.contains("fill(\"admin\")"));
     assert!(!ends.contains("tomasz"));
 }

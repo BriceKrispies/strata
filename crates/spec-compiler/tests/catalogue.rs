@@ -105,11 +105,21 @@ fn a_specification_that_is_not_jsonc_or_not_an_object_is_refused() {
     assert_eq!(codes("[]"), [catalogue::SHAPE]);
 }
 
+/// The platform specification's text and its catalogue, read and generated once for every test in
+/// this binary.
+fn platform() -> &'static (String, Vec<GeneratedFile>) {
+    static PLATFORM: std::sync::OnceLock<(String, Vec<GeneratedFile>)> = std::sync::OnceLock::new();
+    PLATFORM.get_or_init(|| {
+        let spec = "specifications/spec.jsonc";
+        let text = fs::read_to_string(repo_root().join(spec)).unwrap();
+        let files = catalogue::generate(spec, &text).unwrap().files;
+        (text, files)
+    })
+}
+
 #[test]
 fn the_catalogue_of_the_real_specification_is_small_and_lists_every_public_contract() {
-    let spec = "specifications/spec.jsonc";
-    let text = fs::read_to_string(repo_root().join(spec)).unwrap();
-    let files = catalogue::generate(spec, &text).unwrap().files;
+    let (text, files) = platform();
     let generated = &files[0].contents;
     assert!(
         generated.len() <= BUDGET_BYTES,
@@ -117,7 +127,7 @@ fn the_catalogue_of_the_real_specification_is_small_and_lists_every_public_contr
         generated.len()
     );
 
-    let value = jsonc::parse(&text).unwrap();
+    let value = jsonc::parse(text).unwrap();
     let public: Vec<&str> = value["contracts"]
         .as_array()
         .unwrap()
@@ -138,16 +148,10 @@ fn the_catalogue_of_the_real_specification_is_small_and_lists_every_public_contr
 #[test]
 fn the_committed_catalogue_is_what_specc_catalogue_generates() {
     let committed = fs::read_to_string(repo_root().join("specifications/catalogue.md")).unwrap();
-    let spec = "specifications/spec.jsonc";
-    let text = fs::read_to_string(repo_root().join(spec)).unwrap();
-    let generated = catalogue::generate(spec, &text)
-        .unwrap()
-        .files
-        .remove(0)
-        .contents;
+    let (_, files) = platform();
     assert_eq!(
         body(&committed),
-        body(&generated),
+        body(&files[0].contents),
         "specifications/catalogue.md is stale; run npm run generate"
     );
 }

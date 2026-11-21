@@ -43,16 +43,22 @@ use strata_spec_compiler::jsonc;
 struct Types(BTreeMap<String, Json>);
 
 impl Types {
+    /// The types of the specification, parsed once for every test in this binary.
     fn load() -> Types {
-        let path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../specifications/spec.jsonc");
-        let text = fs::read_to_string(path).expect("read the specification");
-        let spec = jsonc::parse(&text).expect("parse the specification");
-        let types = spec["types"].as_array().expect("types").iter();
+        static TYPES: std::sync::OnceLock<BTreeMap<String, Json>> = std::sync::OnceLock::new();
         Types(
-            types
-                .map(|t| (t["id"].as_str().unwrap().to_string(), t.clone()))
-                .collect(),
+            TYPES
+                .get_or_init(|| {
+                    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../specifications/spec.jsonc");
+                    let text = fs::read_to_string(path).expect("read the specification");
+                    let spec = jsonc::parse(&text).expect("parse the specification");
+                    let types = spec["types"].as_array().expect("types").iter();
+                    types
+                        .map(|t| (t["id"].as_str().unwrap().to_string(), t.clone()))
+                        .collect()
+                })
+                .clone(),
         )
     }
 }
