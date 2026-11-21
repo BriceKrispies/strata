@@ -1285,19 +1285,40 @@ impl ProductBundle {
                 .iter()
                 .find(|(k, _)| k.as_str() == id)
                 .and_then(|(key, def)| same(schema.tokens.as_ref().and_then(|t| t.get(key)), def)),
+            // The kernel stamps defined-by and defined-at from the context of every define of a
+            // trigger or an automation, and the input's values are replaced (D-7204, WFL-2201), so
+            // the held definition is compared with those two cleared.
             "trigger" => self
                 .triggers
                 .iter()
                 .find(|(k, _)| k.to_string() == id)
                 .and_then(|(key, def)| {
-                    same(schema.triggers.as_ref().and_then(|t| t.get(key)), def)
+                    schema
+                        .triggers
+                        .as_ref()
+                        .and_then(|t| t.get(key))
+                        .map(|held| {
+                            let mut held = held.clone();
+                            held.defined_by = None;
+                            held.defined_at = None;
+                            held == *def
+                        })
                 }),
             "automation" => self
                 .automations
                 .iter()
                 .find(|(k, _)| k.to_string() == id)
                 .and_then(|(key, def)| {
-                    same(schema.automations.as_ref().and_then(|t| t.get(key)), def)
+                    schema
+                        .automations
+                        .as_ref()
+                        .and_then(|t| t.get(key))
+                        .map(|held| {
+                            let mut held = held.clone();
+                            held.defined_by = None;
+                            held.defined_at = None;
+                            held == *def
+                        })
                 }),
             "operation" => self
                 .operations
