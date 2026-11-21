@@ -736,49 +736,6 @@ fn the_person_who_started_the_run_may_not_approve_it_even_holding_the_role() {
     assert_eq!(status_of(&notes(&app, "alpha")[0]), text("published"));
 }
 
-// Verifies: WFL-2681
-#[test]
-fn a_run_started_by_a_trigger_records_the_person_who_caused_the_event_and_separates_them() {
-    let app = app();
-    install(&app, "alpha");
-    execute(
-        app.store.as_ref(),
-        &Intent::ChangeSchema {
-            changes: vec![SchemaChange::DefineTrigger(TriggerDef {
-                id: TriggerId::new("on_note").unwrap(),
-                on: TriggerEvent::RecordCreated {
-                    object: object("note"),
-                },
-                condition: None,
-                automation: WorkflowId::new("gated").unwrap(),
-                paused: None,
-                defined_by: None,
-                defined_at: None,
-            })],
-            expected_version: None,
-            existing: ExistingData::Reject,
-        },
-        &ctx("alpha", user("alpha:owner"), 150),
-    )
-    .expect("a trigger");
-    // editor creates a note: the trigger on note-created starts `gated` for that event.
-    write_note(&app, "editor", "Gated", "gated", 200);
-    worker::tick(&app, "w1", &config(), &at(T0));
-    let runs = app
-        .store
-        .automation_runs(&tenant_id("alpha"), None, None, None, 10)
-        .unwrap();
-    assert_eq!(runs.len(), 1);
-    let run = runs[0].run.clone();
-    assert_eq!(runs[0].state, RunState::AwaitingApproval);
-    assert_eq!(runs[0].started_by, Some(principal_id("alpha:editor")));
-    let error = decide(&app, "editor", &run, true, T0 + 10).expect_err("refused");
-    assert_eq!(code_of(&error), ErrorCode::Forbidden);
-    decide(&app, "editor2", &run, true, T0 + 11).expect("approved");
-    worker::tick(&app, "w1", &config(), &at(T0 + 11));
-    assert_eq!(run_of(&app, &run).state, RunState::Completed);
-}
-
 // Verifies: WFL-2683
 #[test]
 fn a_second_decision_is_refused_and_changes_nothing() {

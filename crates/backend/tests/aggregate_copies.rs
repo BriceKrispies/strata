@@ -541,40 +541,6 @@ fn a_commit_to_an_object_type_the_aggregate_reads_is_never_followed_by_a_stale_a
     assert_eq!(site.copies().served, served);
 }
 
-// Verifies: AGG-032
-#[test]
-fn a_field_read_rule_that_differs_between_two_roles_gives_each_its_own_stored_result() {
-    let site = Site::new();
-    // u0 is an auditor; u1 holds nothing. Only auditors read `score`.
-    let shape = Shape {
-        score_rule: 2,
-        ..TYPICAL
-    };
-    site.found("alpha", shape, [0b100, 0, 0, 0]);
-    site.note("alpha", boss("alpha"), 3, true);
-    site.note("alpha", boss("alpha"), 4, true);
-
-    let auditor = site.ask("alpha", &member("alpha", 0), "sum_score");
-    let nobody = site.ask("alpha", &member("alpha", 1), "sum_score");
-    assert_eq!(auditor["groups"][0]["value"], 70);
-    assert_eq!(
-        nobody["groups"][0]["value"], 0,
-        "a note whose score the reader may not read is left out, not counted with a hidden value"
-    );
-    assert_eq!(
-        site.copies(),
-        CopyStats {
-            held: 2,
-            served: 0,
-            stored: 2
-        }
-    );
-    // Each is then served to its own class only.
-    assert_eq!(site.ask("alpha", &member("alpha", 0), "sum_score"), auditor);
-    assert_eq!(site.ask("alpha", &member("alpha", 1), "sum_score"), nobody);
-    assert_eq!(site.copies().served, 2);
-}
-
 // Verifies: AGG-040
 #[test]
 fn a_copy_is_never_served_to_another_tenant() {

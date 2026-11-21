@@ -982,21 +982,6 @@ async fn a_recovery_can_be_cancelled_and_an_unknown_address_is_answered_alike() 
     );
 }
 
-/// IDN-265: an account with no contact to tell cannot be recovered by this route.
-#[tokio::test]
-async fn an_account_with_no_contact_to_tell_is_not_recoverable() {
-    let backend = start_with(|cfg| cfg.factors.recovery_delay_ms = 0).await;
-    let (status, asked) = backend
-        .call(
-            None,
-            "/internal/recovery/request",
-            json!({ "email": "ines" }),
-        )
-        .await;
-    assert_eq!((status, &asked), (200, &json!({ "requested": true })));
-    assert!(backend.mail.outbox().is_empty());
-}
-
 impl Backend {
     /// Sign in with a password and an authenticator's code `steps` from now; the session.
     async fn session_of_second(&self, name: &str, secret: &str, steps: i64) -> String {

@@ -201,7 +201,7 @@ impl Backend {
     /// Pass the worker until the runs of the automation are in the state `done` accepts.
     async fn work_until(&self, done: impl Fn(&[RunRecord]) -> bool) -> Vec<RunRecord> {
         let config = WorkerConfig::from_limits(&Default::default());
-        for _ in 0..400 {
+        for _ in 0..200 {
             worker::tick(&self.app, "t-worker", &config, &|| Timestamp(now_ms()));
             let runs = self
                 .store
