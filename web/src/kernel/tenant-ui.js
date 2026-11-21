@@ -22,7 +22,7 @@
 /**
  * @typedef {{ kind: string, id: string, hash: string, route?: string, view?: string, title?: string, layout?: string, auth?: string, query?: string[] }} ManifestEntry
  * @typedef {{ hash: string, schema_version: number, parts: ManifestEntry[] }} Manifest
- * @typedef {{ manifest: Manifest | null, parts: Record<string, any>, asked: Record<string, number> }} TenantUi
+ * @typedef {{ manifest: Manifest | null, parts: Record<string, any>, asked: Record<string, number>, held?: Record<string, any> }} TenantUi
  */
 
 /** The definition a page holds before the manifest arrives. @returns {TenantUi} */
@@ -49,7 +49,67 @@ export function acceptManifest(ui, manifest) {
   /** @type {Record<string, number>} */
   const asked = {};
   for (const [hash, id] of Object.entries(ui.asked)) if (listed.has(hash)) asked[hash] = id;
-  return { manifest, parts, asked };
+  // A part the new manifest replaces stays in `held`, by the screen or errors id it was for, and is
+  // used until its replacement arrives: the screen is never drawn empty during an upgrade.
+  /** @type {Record<string, any>} */
+  const held = {};
+  const old = new Map((ui.manifest?.parts ?? []).map((entry) => [heldKey(entry), entry]));
+  for (const entry of manifest?.parts ?? []) {
+    if (entry.kind !== 'screen' && entry.kind !== 'errors') continue;
+    if (entry.hash in parts) continue;
+    const key = heldKey(entry);
+    const before = old.get(key);
+    const part = (before && ui.parts[before.hash]) ?? ui.held?.[key];
+    if (part) held[key] = part;
+  }
+  return { manifest, parts, asked, held };
+}
+
+/** @param {ManifestEntry} entry */
+function heldKey(entry) {
+  return `${entry.kind}:${entry.id}`;
+}
+
+/**
+ * Whether a manifest is older than the one the page holds: a lower schema version.
+ * @param {TenantUi} ui @param {Manifest} manifest
+ */
+export function manifestIsOlder(ui, manifest) {
+  const held = ui.manifest?.schema_version;
+  return typeof held === 'number' && typeof manifest?.schema_version === 'number' && manifest.schema_version < held;
+}
+
+/**
+ * The drafts a part no longer has a field for. A form the part dropped, or a field of a kept form
+ * that was removed, with a value the person typed, is lost: the value is taken out of the form's
+ * state, and the loss is named on the form (`notice`) when the form is still there.
+ * @param {Record<string, TenantForm>} forms @param {any} part
+ * @returns {{ forms: Record<string, TenantForm>, lost: string[] }}
+ */
+export function lostDrafts(forms, part) {
+  /** @type {Record<string, TenantForm>} */
+  const next = {};
+  /** @type {string[]} */
+  const lost = [];
+  const typed = (/** @type {any} */ v) => v === true || (typeof v === 'string' && v !== '');
+  for (const [id, held] of Object.entries(forms)) {
+    const form = part?.forms?.[id];
+    const names = new Set((form?.fields ?? []).map((/** @type {any} */ f) => f.name));
+    const gone = Object.entries(held.values).filter(([name, value]) => (!form || !names.has(name)) && typed(value)).map(([name]) => name);
+    if (!form) {
+      if (gone.length) lost.push(`The ${id} form was removed; what you had entered in ${gone.join(', ')} was not saved.`);
+      continue;
+    }
+    if (!gone.length) {
+      next[id] = held;
+      continue;
+    }
+    const text = `The ${gone.join(', ')} field${gone.length > 1 ? 's were' : ' was'} removed in an update; what you had entered there was not saved.`;
+    lost.push(text);
+    const values = Object.fromEntries(Object.entries(held.values).filter(([name]) => names.has(name)));
+    next[id] = { ...held, values, notice: text };
+  }
+  return { forms: next, lost };
 }
 
 /** @param {TenantUi} ui @param {string} hash @param {any} part @returns {TenantUi} */
@@ -139,13 +199,13 @@ export function tenantScreenOfView(ui, view) {
 
 /** The part a manifest entry names, when the page holds it. @param {TenantUi | undefined} ui @param {ManifestEntry | null} entry */
 export function partOf(ui, entry) {
-  return entry ? ui?.parts[entry.hash] ?? null : null;
+  return entry ? ui?.parts[entry.hash] ?? ui?.held?.[heldKey(entry)] ?? null : null;
 }
 
 /** The part of the error messages, when the tenant has one and the page holds it. @param {TenantUi | undefined} ui */
 export function errorsPart(ui) {
   const entry = (ui?.manifest?.parts ?? []).find((e) => e.kind === 'errors');
-  return entry ? ui?.parts[entry.hash] ?? null : null;
+  return entry ? ui?.parts[entry.hash] ?? ui?.held?.[heldKey(entry)] ?? null : null;
 }
 
 /** @param {any} value @param {string} path */
@@ -198,7 +258,7 @@ function sectionsOf(model) {
 /**
  * The state of a form of a tenant screen the page keeps: its values, whether it is waiting for a
  * reply, and the refusal it shows.
- * @typedef {{ values: Record<string, string | boolean>, busy: boolean, error: string, errors: Record<string, string> }} TenantForm
+ * @typedef {{ values: Record<string, string | boolean>, busy: boolean, error: string, notice?: string, errors: Record<string, string> }} TenantForm
  */
 
 /** The values a form opens with. @param {any} form @returns {TenantForm} */
@@ -319,6 +379,7 @@ export function tenantPage(entry, part, model, context) {
       submitLabel: form.submit_label,
       busy: held.busy,
       error: held.error,
+      notice: held.notice ?? '',
       fields: (form.fields ?? []).map((/** @type {any} */ field) => ({
         name: field.name,
         label: field.label,

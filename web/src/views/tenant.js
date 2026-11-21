@@ -80,6 +80,7 @@ function form(form) {
   return h(
     'form',
     { class: 'form form--narrow', 'data-form': dataForm, novalidate: true, key: form.id },
+    form.notice ? h('p', { class: 'form__notice', role: 'status' }, form.notice) : null,
     form.error ? h('p', { class: 'form__error', role: 'alert' }, form.error) : null,
     form.fields.map((/** @type {any} */ field) => input(form.id, field)),
     h('div', { class: 'form__actions' }, h('button', { class: 'button', type: 'submit', disabled: form.busy }, form.busy ? 'Working…' : form.submitLabel)),

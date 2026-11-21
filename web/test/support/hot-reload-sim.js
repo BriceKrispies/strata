@@ -649,7 +649,7 @@ export class Tab {
     if (page.kind === 'tenant') {
       const entry = manifest?.parts.find((/** @type {any} */ e) => e.kind === 'screen' && e.id === page.screen);
       if (!entry) fail('I1', `drawn tenant screen ${page.screen} is not listed in the accepted manifest ${manifest?.hash ?? '(none)'}`);
-      else if (!(entry.hash in state.ui.parts)) fail('I1', `drawn tenant screen ${page.screen} shows a part other than the one the accepted manifest lists (${entry.hash.slice(0, 8)}); the tab holds ${Object.keys(state.ui.parts).map((h) => h.slice(0, 8)).join(',') || 'no parts'}`);
+      else if (!(entry.hash in state.ui.parts) && !(entry.hash in state.ui.asked && state.ui.held?.[`screen:${entry.id}`])) fail('I1', `drawn tenant screen ${page.screen} shows a part other than the one the accepted manifest lists (${entry.hash.slice(0, 8)}); the tab holds ${Object.keys(state.ui.parts).map((h) => h.slice(0, 8)).join(',') || 'no parts'}`);
     }
 
     // I4: no draft value is lost unless its field was removed and the loss is shown.

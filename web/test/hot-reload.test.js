@@ -59,6 +59,10 @@ const V3 = version(h('4'), h('d'), 'Open tickets', [summaryField]);
 
 /** A simulator at version 1 with a view, a create operation, one ticket and `names` tabs on the screen. */
 function desk(...names) {
+  return deskWith({}, ...names);
+}
+
+function deskWith(tabOptions, ...names) {
   const sim = new Simulator();
   const gateway = sim.gateway;
   gateway.addVersion('v1', V1).addVersion('v2', V2).addVersion('v2b', V2B).addVersion('v3', V3);
@@ -66,7 +70,7 @@ function desk(...names) {
   gateway.defineView(VIEW, { title: 'Tickets', dependsOn: [OBJECT], sections: { open: { object: OBJECT } } });
   gateway.defineCreate(OPERATION, OBJECT, { required: ['title'] });
   gateway.createRecord(OBJECT, { title: 'Leak', status: 'open' });
-  const tabs = names.map((name) => sim.addTab(name, { path: '/tickets' }));
+  const tabs = names.map((name) => sim.addTab(name, { path: '/tickets', ...tabOptions }));
   sim.quiesce();
   return { sim, gateway, tabs };
 }
@@ -184,14 +188,25 @@ test('I1 fires when a stale screen is drawn after a newer manifest was accepted'
   };
   const sim = new Simulator({ version: V1 });
   sim.gateway.defineView(VIEW, { dependsOn: [OBJECT], sections: { open: { object: OBJECT } } });
-  sim.addTab('a', { path: '/tickets', kernel: { view: staleView } });
+  // A kernel that never takes a part in keeps drawing the old screen after the upgrade.
+  const deaf = (state, msg) => {
+    const refused = msg.type === 'http_result' && state.pending?.[msg.id]?.kind === 'ui.part' && Object.keys(state.ui.held ?? {}).length ?  { ...msg, ok: false, status: 500, body: null } : msg;
+    return update(state, refused);
+  };
+  sim.addTab('a', { path: '/tickets', kernel: { view: staleView, update: deaf } });
   sim.quiesce();
   sim.gateway.upgrade(V2);
   assert.throws(() => sim.quiesce(), fires('I1', 'a'));
 });
 
 test('I2 fires when the gateway serves a manifest with a lower schema version', () => {
-  const { sim, gateway } = desk('a');
+  // A kernel without the version guard.
+  const unguarded = (state, msg) => {
+    const result = update(state, msg);
+    if (msg.type === 'http_result' && state.pending?.[msg.id]?.kind === 'ui.manifest' && msg.ok) return { ...result, state: { ...result.state, ui: { ...result.state.ui, manifest: msg.body } } };
+    return result;
+  };
+  const { sim, gateway } = deskWith({ kernel: { update: unguarded } }, 'a');
   gateway.upgrade('v2');
   sim.quiesce();
   gateway.install('v1', { schemaVersion: 1 });
@@ -206,7 +221,12 @@ test('I3 fires when a connected tab never hears of an upgrade', () => {
 });
 
 test('I4 fires when a draft is dropped with its field and nothing says so', () => {
-  const { sim, gateway, tabs: [a] } = desk('a');
+  // A kernel that says nothing of a lost draft.
+  const silent = (state, msg) => {
+    const result = update(state, msg);
+    return { ...result, state: { ...result.state, toasts: state.toasts, announce: '' } };
+  };
+  const { sim, gateway, tabs: [a] } = deskWith({ kernel: { update: silent } }, 'a');
   a.type(FORM, 'title', 'Half typed');
   gateway.upgrade('v3');
   assert.throws(() => sim.quiesce(), (error) => fires('I4', 'a')(error) && /nothing on the page says so/.test(error.detail));
@@ -267,7 +287,7 @@ test('I7 fires when the kernel throws, when one message makes too many effects, 
 
 // ---- Gaps of the client the simulator shows --------------------------------------------------
 
-test('a resync after a missed schema notice leaves the tab on the old manifest', { todo: 'gap: a resync frame reads the view again but never the manifest (update.js onSocket resync); I3 then fails after quiescence' }, () => {
+test('a resync after a missed schema notice leaves the tab on the old manifest', () => {
   const { sim, gateway, tabs: [, b] } = desk('a', 'b');
   sim.disconnect(b);
   gateway.upgrade('v2');
@@ -277,7 +297,7 @@ test('a resync after a missed schema notice leaves the tab on the old manifest',
   assert.equal(b.state.ui.manifest.hash, h('2'));
 });
 
-test('a record notice that arrives while the new screen part is on its way is not lost', { todo: 'gap: with the part dropped, liveRefreshes(null part) is false, so the notice refreshes nothing and the view stays stale (update.js onSocket event)' }, () => {
+test('a record notice that arrives while the new screen part is on its way is not lost', () => {
   const { sim, gateway, tabs: [a] } = desk('a');
   gateway.upgrade('v2');
   gateway.createRecord(OBJECT, { title: 'During upgrade', status: 'open' });
@@ -288,10 +308,43 @@ test('a record notice that arrives while the new screen part is on its way is no
   assert.match(pageText(a), /During upgrade/);
 });
 
-test('while the new screen part is on its way the page shows nothing of the screen', { todo: 'gap: acceptManifest drops the replaced part at once, so the screen flickers to loading (view.js partOf)' }, () => {
+test('while the new screen part is on its way the page shows nothing of the screen', () => {
   const { sim, gateway, tabs: [a] } = desk('a');
   gateway.upgrade('v2');
   sim.deliver(a, (item) => item.notice?.kind === 'schema');
   sim.deliver(a, (item) => item.path === '/api/ui');
   assert.match(pageText(a), /# Open tickets/);
+});
+
+test('a draft in a field an upgrade removed is shown as lost, as a notice', () => {
+  const { sim, gateway, tabs: [a] } = desk('a');
+  a.type(FORM, 'title', 'Half typed');
+  gateway.upgrade('v3');
+  sim.quiesce();
+  const drawn = a.draw();
+  assert.ok(drawn.toasts.some((t) => /title/.test(t.text) && /not saved/.test(t.text)));
+});
+
+test('a manifest with a lower schema version than the accepted one is ignored', () => {
+  const { sim, gateway, tabs: [a] } = desk('a');
+  gateway.upgrade('v2');
+  sim.quiesce();
+  const accepted = a.state.ui.manifest;
+  gateway.install('v1', { schemaVersion: 1 });
+  // The tab differs from the gateway on purpose (I3), but never goes down (I2).
+  assert.throws(() => sim.quiesce(), fires('I3', 'a'));
+  assert.equal(a.state.ui.manifest.hash, accepted.hash);
+  assert.equal(a.state.ui.manifest.schema_version, accepted.schema_version);
+});
+
+test('a request that gets no reply times out as an unreachable site, so a form is not busy for good', () => {
+  const { sim, tabs: [a] } = desk('a');
+  a.type(FORM, 'title', 'Lost reply');
+  a.submit(FORM);
+  assert.equal(sim.drop('a', (item) => item.path === '/api/operations/invoke'), 1);
+  const id = Object.entries(a.state.pending).find(([, p]) => p.kind === 'tenant.submit')[0];
+  assert.ok(Object.values(a.state.tenant.forms).some((f) => f.busy));
+  a.step({ type: 'timer', name: 'request', token: Number(id) });
+  assert.ok(Object.values(a.state.tenant.forms).every((f) => !f.busy));
+  assert.equal(a.state.pending[id], undefined);
 });

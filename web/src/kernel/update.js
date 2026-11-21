@@ -34,6 +34,8 @@ import {
   partOf,
   partsToFetch,
   tenantHref,
+  lostDrafts,
+  manifestIsOlder,
   tenantScreenOfView,
   uiInit,
 } from './tenant-ui.js';
@@ -65,6 +67,8 @@ const EDITOR_OBJECT = 'post';
 const LATEST_ONLY = ['session', 'sessions.list', 'passkeys.list', 'factors.summary', 'lab.overview', 'ui.manifest'];
 // Requests made on behalf of the person signed in. A reply to one that was made before the
 // user-scoped state was cleared (sign-out, session end, account switch) belongs to someone else.
+/** How long a request may go unanswered, in milliseconds. */
+const REQUEST_TIMEOUT_MS = 30000;
 const USER_KIND_PREFIXES = ['sessions.', 'lab.', 'editor.', 'post.', 'settings.', 'tenant.'];
 const USER_KINDS = [
   'passkeys.list', 'passkeys.register_start', 'passkeys.register_finish', 'passkeys.remove',
@@ -581,7 +585,13 @@ function onSocket(state, frame, msg) {
     }
     case 'resync':
       // Too far behind to replay: carry on from the server's head, with the view read again.
-      return refreshAfter(liveStep(state, 'ui-live-resync', { head: frame.head }, msg) ?? { state, effects: [] }, msg);
+    {
+      // A schema notice may have been missed, so the manifest is read again as well.
+      const refreshed = refreshAfter(liveStep(state, 'ui-live-resync', { head: frame.head }, msg) ?? { state, effects: [] }, msg);
+      if (!(refreshed.state.ui.manifest || wantsManifest(refreshed.state))) return refreshed;
+      const read = fetchManifest(refreshed.state, msg);
+      return { state: read.state, effects: [...refreshed.effects, ...read.effects] };
+    }
     case 'pong': {
       // A head beyond what this connection delivered means changes arrived that no frame told of.
       const behind = frame.head > (state.ws.lastSeq ?? 0);
@@ -910,6 +920,8 @@ function onHttp(state, msg) {
     }
     case 'ui.manifest': {
       if (!msg.ok || !msg.body || typeof msg.body.hash !== 'string') return { state, effects: [] };
+      // An answer that goes backwards in schema version is ignored.
+      if (manifestIsOlder(state.ui, msg.body)) return { state, effects: [] };
       const next = { ...state, ui: acceptManifest(state.ui, msg.body) };
       const screen = screenOf(next);
       const shown = tenantScreenOfView(next.ui, next.view.model?.view);
@@ -925,7 +937,15 @@ function onHttp(state, msg) {
         const { [hash]: _failed, ...asked } = state.ui.asked;
         return { state: { ...state, ui: { ...state.ui, asked } }, effects: [] };
       }
-      return { state: { ...state, ui: acceptPart(state.ui, hash, msg.body) }, effects: [] };
+      const accepted = { ...state, ui: acceptPart(state.ui, hash, msg.body) };
+      // The part of the screen on show may have dropped a field the person had typed in.
+      const shown = tenantScreenOfView(accepted.ui, accepted.view.model?.view);
+      if (!shown || shown.hash !== hash) return { state: accepted, effects: [] };
+      const { forms: kept, lost } = lostDrafts(accepted.tenant.forms, msg.body);
+      if (!lost.length) return { state: accepted, effects: [] };
+      let told = { ...accepted, tenant: { ...accepted.tenant, forms: kept } };
+      for (const text of lost) told = toast(told, 'warn', text);
+      return { state: { ...told, announce: lost.join(' ') }, effects: [] };
     }
     case 'tenant.submit':
     case 'tenant.action':
@@ -1200,10 +1220,13 @@ export function update(state, msg) {
   // Every message that appears is given a time to go away again by itself.
   const known = new Set(state.toasts.map((t) => t.id));
   const fresh = result.state.toasts.filter((t) => !known.has(t.id));
-  if (!fresh.length) return result;
+  // Every request is given a time to be answered in: past it, it ends as an unreachable site.
+  /** @type {Effect[]} */
+  const deadlines = result.effects.filter((e) => e.type === 'http').map((e) => ({ type: 'timer', name: 'request', token: e.id, ms: REQUEST_TIMEOUT_MS }));
+  if (!fresh.length) return deadlines.length ? { state: result.state, effects: [...result.effects, ...deadlines] } : result;
   /** @type {Effect[]} */
   const timers = fresh.map((t) => ({ type: 'timer', name: 'toast', token: t.id, ms: t.kind === 'warn' ? 9000 : 5000 }));
-  return { state: result.state, effects: [...result.effects, ...timers] };
+  return { state: result.state, effects: [...result.effects, ...deadlines, ...timers] };
 }
 
 /**
@@ -1311,6 +1334,8 @@ function step(state, msg) {
       return { state: closed.state, effects: [...lead, ...closed.effects] };
     }
     case 'timer': {
+      // A request nobody answered ends as a status-0 outcome, as a lost connection does.
+      if (msg.name === 'request') return state.pending[msg.token] ? onHttp(state, { ...msg, type: 'http_result', id: msg.token, ok: false, status: 0, body: null }) : { state, effects: [] };
       if (msg.name.startsWith('lab.')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
       // Live updates gave up after repeated refusals: the attempt that was waiting does not run.
       if (msg.name === 'reconnect' && state.wsStopped) return { state, effects: [] };
