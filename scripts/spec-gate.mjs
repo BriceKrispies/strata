@@ -211,14 +211,15 @@ function readPlaywright(out, exitedOk) {
 function workspacePackages() {
   const manifest = readFileSync(resolve(root, 'Cargo.toml'), 'utf8');
   const members = [...(manifest.match(/^members\s*=\s*\[([^\]]*)\]/m)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-  const generated = new Set(['crates/model', 'crates/model-core']);
+  // crates/model/<area> are the crates by area of the generated model (WG-5371).
+  const isGenerated = (dir) => dir === 'crates/model' || dir === 'crates/model-core' || dir.startsWith('crates/model/');
   const all = [];
   const handWritten = [];
   for (const dir of members) {
     const name = readFileSync(resolve(root, dir, 'Cargo.toml'), 'utf8').match(/^name\s*=\s*"([^"]+)"/m)?.[1];
     if (!name) continue;
     all.push(name);
-    if (!generated.has(dir)) handWritten.push(name);
+    if (!isGenerated(dir)) handWritten.push(name);
   }
   return { all, handWritten, generated: all.filter((name) => !handWritten.includes(name)) };
 }

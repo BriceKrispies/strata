@@ -5145,36 +5145,6 @@ impl strata_runtime::Contract for DecideIntent {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::DecideIntentError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::TenantMismatch { .. } | Self::InsufficientState { .. } | Self::Fault { .. } => {
-                500
-            }
-            Self::TenantExists { .. }
-            | Self::UnknownField { .. }
-            | Self::UnknownRole { .. }
-            | Self::TypeMismatch { .. }
-            | Self::MissingRequired { .. }
-            | Self::ConstraintViolated { .. }
-            | Self::UniqueViolated { .. }
-            | Self::DanglingReference { .. }
-            | Self::StillReferenced { .. }
-            | Self::WorkflowViolation { .. }
-            | Self::InvalidSchema { .. }
-            | Self::MigrationRejected { .. }
-            | Self::Evaluation { .. }
-            | Self::InvalidIntent { .. }
-            | Self::Rejected { .. } => 422,
-            Self::TenantNotFound { .. }
-            | Self::UnknownObject { .. }
-            | Self::UnknownRecord { .. } => 404,
-            Self::Unauthorized { .. } => 403,
-            Self::VersionConflict { .. } | Self::SchemaConflict { .. } => 409,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::DecideIntentError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -5255,12 +5225,6 @@ impl strata_runtime::Contract for PlanIntentNeeds {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::PlanIntentNeedsError {
-    fn status(&self) -> u16 {
-        500
-    }
-}
-
 impl BodyError for crate::contracts::PlanIntentNeedsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -5308,18 +5272,6 @@ impl strata_runtime::Contract for AnswerRead {
     type Error = crate::contracts::AnswerReadError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::AnswerReadError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::TenantMismatch { .. } | Self::InsufficientState { .. } | Self::Fault { .. } => {
-                500
-            }
-            Self::TenantNotFound { .. } | Self::UnknownObject { .. } => 404,
-            Self::Evaluation { .. } | Self::InvalidIntent { .. } | Self::Rejected { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::AnswerReadError {
@@ -5378,12 +5330,6 @@ impl strata_runtime::Contract for PlanReadNeeds {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::PlanReadNeedsError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
-}
-
 impl BodyError for crate::contracts::PlanReadNeedsError {
     fn body(&self) -> types::ApiError {
         match *self {}
@@ -5427,12 +5373,6 @@ impl strata_runtime::Contract for CheckRecordVisibility {
     type Error = crate::contracts::CheckRecordVisibilityError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::CheckRecordVisibilityError {
-    fn status(&self) -> u16 {
-        500
-    }
 }
 
 impl BodyError for crate::contracts::CheckRecordVisibilityError {
@@ -5484,15 +5424,6 @@ impl strata_runtime::Contract for ApplyStateDelta {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ApplyStateDeltaError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::VersionConflict { .. } => 409,
-            Self::Rejected { .. } => 422,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ApplyStateDeltaError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -5539,15 +5470,6 @@ impl strata_runtime::Contract for PlanSchemaMigration {
     type Error = crate::contracts::PlanSchemaMigrationError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::PlanSchemaMigrationError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::InvalidSchema { .. } | Self::Rejected { .. } => 422,
-            Self::Fault { .. } => 500,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::PlanSchemaMigrationError {
@@ -5601,12 +5523,6 @@ impl strata_runtime::Contract for StoreCapabilities {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::StoreCapabilitiesError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
-}
-
 impl BodyError for crate::contracts::StoreCapabilitiesError {
     fn body(&self) -> types::ApiError {
         match *self {}
@@ -5650,12 +5566,6 @@ impl strata_runtime::Contract for StoreHealth {
     type Error = crate::contracts::StoreHealthError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::StoreHealthError {
-    fn status(&self) -> u16 {
-        503
-    }
 }
 
 impl BodyError for crate::contracts::StoreHealthError {
@@ -5703,15 +5613,6 @@ impl strata_runtime::Contract for ListStorageMigrations {
     type Error = crate::contracts::ListStorageMigrationsError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListStorageMigrationsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListStorageMigrationsError {
@@ -5762,15 +5663,6 @@ impl strata_runtime::Contract for ListStoreTenants {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListStoreTenantsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListStoreTenantsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -5817,15 +5709,6 @@ impl strata_runtime::Contract for LoadTenant {
     type Error = crate::contracts::LoadTenantError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::LoadTenantError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::LoadTenantError {
@@ -5876,15 +5759,6 @@ impl strata_runtime::Contract for LoadCompleteTenant {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::LoadCompleteTenantError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::LoadCompleteTenantError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -5931,17 +5805,6 @@ impl strata_runtime::Contract for CommitTransition {
     type Error = crate::contracts::CommitTransitionError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::CommitTransitionError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Conflict { .. } => 409,
-            Self::Invalid { .. } => 422,
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::CommitTransitionError {
@@ -5994,15 +5857,6 @@ impl strata_runtime::Contract for ListEventsAfter {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListEventsAfterError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListEventsAfterError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -6049,15 +5903,6 @@ impl strata_runtime::Contract for ListOutbox {
     type Error = crate::contracts::ListOutboxError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListOutboxError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListOutboxError {
@@ -6108,12 +5953,6 @@ impl strata_runtime::Contract for MarkOutboxPublished {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::MarkOutboxPublishedError {
-    fn status(&self) -> u16 {
-        503
-    }
-}
-
 impl BodyError for crate::contracts::MarkOutboxPublishedError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -6159,15 +5998,6 @@ impl strata_runtime::Contract for ListJournalAfter {
     type Error = crate::contracts::ListJournalAfterError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListJournalAfterError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListJournalAfterError {
@@ -6218,12 +6048,6 @@ impl strata_runtime::Contract for PutSession {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::PutSessionError {
-    fn status(&self) -> u16 {
-        503
-    }
-}
-
 impl BodyError for crate::contracts::PutSessionError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -6269,15 +6093,6 @@ impl strata_runtime::Contract for FindSessionByToken {
     type Error = crate::contracts::FindSessionByTokenError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::FindSessionByTokenError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::FindSessionByTokenError {
@@ -6328,15 +6143,6 @@ impl strata_runtime::Contract for FindSessionById {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::FindSessionByIdError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::FindSessionByIdError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -6383,15 +6189,6 @@ impl strata_runtime::Contract for ListLiveSessions {
     type Error = crate::contracts::ListLiveSessionsError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListLiveSessionsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListLiveSessionsError {
@@ -6442,12 +6239,6 @@ impl strata_runtime::Contract for PurgeEndedSessions {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::PurgeEndedSessionsError {
-    fn status(&self) -> u16 {
-        503
-    }
-}
-
 impl BodyError for crate::contracts::PurgeEndedSessionsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -6495,12 +6286,6 @@ impl strata_runtime::Contract for PutAccount {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::PutAccountError {
-    fn status(&self) -> u16 {
-        503
-    }
-}
-
 impl BodyError for crate::contracts::PutAccountError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -6546,15 +6331,6 @@ impl strata_runtime::Contract for FindAccount {
     type Error = crate::contracts::FindAccountError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::FindAccountError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::FindAccountError {
@@ -6605,15 +6381,6 @@ impl strata_runtime::Contract for CreateSnapshot {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::CreateSnapshotError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::NotFound { .. } => 404,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::CreateSnapshotError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -6662,15 +6429,6 @@ impl strata_runtime::Contract for ListSnapshots {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListSnapshotsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListSnapshotsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -6717,16 +6475,6 @@ impl strata_runtime::Contract for LoadSnapshot {
     type Error = crate::contracts::LoadSnapshotError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::LoadSnapshotError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::NotFound { .. } => 404,
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::LoadSnapshotError {
@@ -6778,15 +6526,6 @@ impl strata_runtime::Contract for RestoreSnapshot {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RestoreSnapshotError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::NotFound { .. } => 404,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RestoreSnapshotError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -6835,12 +6574,6 @@ impl strata_runtime::Contract for ResetStore {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ResetStoreError {
-    fn status(&self) -> u16 {
-        503
-    }
-}
-
 impl BodyError for crate::contracts::ResetStoreError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -6886,17 +6619,6 @@ impl strata_runtime::Contract for ExecuteIntent {
     type Error = crate::contracts::ExecuteIntentError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ExecuteIntentError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Domain { .. } | Self::Invalid { .. } => 422,
-            Self::Store { .. } | Self::Unavailable { .. } => 503,
-            Self::InsufficientState { .. } | Self::Corrupt { .. } | Self::Fault { .. } => 500,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ExecuteIntentError {
@@ -6955,16 +6677,6 @@ impl strata_runtime::Contract for ExecuteRead {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ExecuteReadError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Domain { .. } => 422,
-            Self::Store { .. } | Self::Unavailable { .. } => 503,
-            Self::InsufficientState { .. } | Self::Corrupt { .. } | Self::Fault { .. } => 500,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ExecuteReadError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -7019,12 +6731,6 @@ impl strata_runtime::Contract for HealthCheck {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::HealthCheckError {
-    fn status(&self) -> u16 {
-        503
-    }
-}
-
 impl BodyError for crate::contracts::HealthCheckError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -7076,18 +6782,6 @@ impl strata_runtime::Contract for ScheduleJob {
     type Error = crate::contracts::ScheduleJobError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ScheduleJobError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } => 422,
-            Self::NotFound { .. } => 404,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ScheduleJobError {
@@ -7171,15 +6865,6 @@ impl strata_runtime::Contract for LeaseJob {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::LeaseJobError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::LeaseJobError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -7239,15 +6924,6 @@ impl strata_runtime::Contract for ReportJobResult {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ReportJobResultError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Conflict { .. } => 409,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ReportJobResultError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -7305,16 +6981,6 @@ impl strata_runtime::Contract for CancelJob {
     type Error = crate::contracts::CancelJobError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::CancelJobError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::CancelJobError {
@@ -7380,17 +7046,6 @@ impl strata_runtime::Contract for RetryJob {
     type Error = crate::contracts::RetryJobError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::RetryJobError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::RetryJobError {
@@ -7464,15 +7119,6 @@ impl strata_runtime::Contract for ListJobs {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListJobsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListJobsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -7534,16 +7180,6 @@ impl strata_runtime::Contract for DefineSchedule {
     type Error = crate::contracts::DefineScheduleError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::DefineScheduleError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::DefineScheduleError {
@@ -7613,18 +7249,6 @@ impl strata_runtime::Contract for ActivateWorkflow {
     type Error = crate::contracts::ActivateWorkflowError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ActivateWorkflowError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Conflict { .. } => 409,
-            Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ActivateWorkflowError {
@@ -7708,18 +7332,6 @@ impl strata_runtime::Contract for StartWorkflowRun {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::StartWorkflowRunError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Conflict { .. } => 409,
-            Self::Invalid { .. } => 422,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::StartWorkflowRunError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -7799,18 +7411,6 @@ impl strata_runtime::Contract for ApproveWorkflowStep {
     type Error = crate::contracts::ApproveWorkflowStepError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ApproveWorkflowStepError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Conflict { .. } => 409,
-            Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ApproveWorkflowStepError {
@@ -7894,16 +7494,6 @@ impl strata_runtime::Contract for SubscribeEvents {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SubscribeEventsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::Throttled { .. } => 429,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::SubscribeEventsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -7967,17 +7557,6 @@ impl strata_runtime::Contract for SignMediaAddress {
     type Error = crate::contracts::SignMediaAddressError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::SignMediaAddressError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::SignMediaAddressError {
@@ -8055,15 +7634,6 @@ impl strata_runtime::Contract for VerifyAuditChain {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::VerifyAuditChainError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::VerifyAuditChainError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -8127,12 +7697,6 @@ impl strata_runtime::Contract for ShowSignInPage {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ShowSignInPageError {
-    fn status(&self) -> u16 {
-        404
-    }
-}
-
 impl BodyError for crate::contracts::ShowSignInPageError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -8184,15 +7748,6 @@ impl strata_runtime::Contract for ShowAuthoringView {
     type Error = crate::contracts::ShowAuthoringViewError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ShowAuthoringViewError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ShowAuthoringViewError {
@@ -8254,15 +7809,6 @@ impl strata_runtime::Contract for PutFile {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::PutFileError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Invalid { .. } => 422,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::PutFileError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -8309,15 +7855,6 @@ impl strata_runtime::Contract for GetFile {
     type Error = crate::contracts::GetFileError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::GetFileError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::NotFound { .. } => 404,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::GetFileError {
@@ -8368,12 +7905,6 @@ impl strata_runtime::Contract for DeleteFile {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::DeleteFileError {
-    fn status(&self) -> u16 {
-        503
-    }
-}
-
 impl BodyError for crate::contracts::DeleteFileError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -8421,12 +7952,6 @@ impl strata_runtime::Contract for SignFileAddress {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SignFileAddressError {
-    fn status(&self) -> u16 {
-        404
-    }
-}
-
 impl BodyError for crate::contracts::SignFileAddressError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -8472,16 +7997,6 @@ impl strata_runtime::Contract for SubmitMessage {
     type Error = crate::contracts::SubmitMessageError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::SubmitMessageError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::TemporaryRefusal { .. } | Self::Held { .. } => 503,
-            Self::PermanentRefusal { .. } | Self::Invalid { .. } => 422,
-            Self::Suppressed { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::SubmitMessageError {
@@ -8547,12 +8062,6 @@ impl strata_runtime::Contract for RunScenario {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RunScenarioError {
-    fn status(&self) -> u16 {
-        409
-    }
-}
-
 impl BodyError for crate::contracts::RunScenarioError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -8600,16 +8109,6 @@ impl strata_runtime::Contract for ProjectChange {
     type Error = crate::contracts::ProjectChangeError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ProjectChangeError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Cancelled { .. } => 409,
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ProjectChangeError {
@@ -8673,12 +8172,6 @@ impl strata_runtime::Contract for ReplayJournal {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ReplayJournalError {
-    fn status(&self) -> u16 {
-        403
-    }
-}
-
 impl BodyError for crate::contracts::ReplayJournalError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -8730,17 +8223,6 @@ impl strata_runtime::Contract for ReceiveInboundWebhook {
     type Error = crate::contracts::ReceiveInboundWebhookError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ReceiveInboundWebhookError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::StaleDelivery { .. } | Self::TooLarge { .. } => 422,
-            Self::Throttled { .. } => 429,
-            Self::TenantMismatch { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ReceiveInboundWebhookError {
@@ -8818,15 +8300,6 @@ impl strata_runtime::Contract for ListWebhookDeliveries {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListWebhookDeliveriesError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListWebhookDeliveriesError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -8888,17 +8361,6 @@ impl strata_runtime::Contract for Search {
     type Error = crate::contracts::SearchError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::SearchError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-            Self::Throttled { .. } => 429,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::SearchError {
@@ -8967,12 +8429,6 @@ impl strata_runtime::Contract for ListInbox {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListInboxError {
-    fn status(&self) -> u16 {
-        401
-    }
-}
-
 impl BodyError for crate::contracts::ListInboxError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -9026,12 +8482,6 @@ impl strata_runtime::Contract for SendNotice {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SendNoticeError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
-}
-
 impl BodyError for crate::contracts::SendNoticeError {
     fn body(&self) -> types::ApiError {
         match *self {}
@@ -9075,16 +8525,6 @@ impl strata_runtime::Contract for UploadFile {
     type Error = crate::contracts::UploadFileError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::UploadFileError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } | Self::TooLarge { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::UploadFileError {
@@ -9160,12 +8600,6 @@ impl strata_runtime::Contract for ScanUpload {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ScanUploadError {
-    fn status(&self) -> u16 {
-        503
-    }
-}
-
 impl BodyError for crate::contracts::ScanUploadError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -9217,15 +8651,6 @@ impl strata_runtime::Contract for DeliverFile {
     type Error = crate::contracts::DeliverFileError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::DeliverFileError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::NotFound { .. } => 404,
-            Self::Forbidden { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::DeliverFileError {
@@ -9285,18 +8710,6 @@ impl strata_runtime::Contract for ExportSubjectData {
     type Error = crate::contracts::ExportSubjectDataError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ExportSubjectDataError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ExportSubjectDataError {
@@ -9371,19 +8784,6 @@ impl strata_runtime::Contract for RestrictSubject {
     type Error = crate::contracts::RestrictSubjectError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::RestrictSubjectError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::RestrictSubjectError {
@@ -9464,20 +8864,6 @@ impl strata_runtime::Contract for EraseSubject {
     type Error = crate::contracts::EraseSubjectError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::EraseSubjectError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::Conflict { .. } => 409,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::EraseSubjectError {
@@ -9566,18 +8952,6 @@ impl strata_runtime::Contract for PlaceLegalHold {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::PlaceLegalHoldError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::Invalid { .. } => 422,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::PlaceLegalHoldError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -9652,12 +9026,6 @@ impl strata_runtime::Contract for RenderMessage {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RenderMessageError {
-    fn status(&self) -> u16 {
-        422
-    }
-}
-
 impl BodyError for crate::contracts::RenderMessageError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -9709,15 +9077,6 @@ impl strata_runtime::Contract for ListMailMessages {
     type Error = crate::contracts::ListMailMessagesError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListMailMessagesError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListMailMessagesError {
@@ -9783,15 +9142,6 @@ impl strata_runtime::Contract for ManageSuppressionList {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ManageSuppressionListError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ManageSuppressionListError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -9853,19 +9203,6 @@ impl strata_runtime::Contract for InstallBundle {
     type Error = crate::contracts::InstallBundleError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::InstallBundleError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::InvalidBundle { .. } | Self::InstallRefused { .. } | Self::Invalid { .. } => 422,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::InstallBundleError {
@@ -9949,12 +9286,6 @@ impl strata_runtime::Contract for ParseBundle {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ParseBundleError {
-    fn status(&self) -> u16 {
-        422
-    }
-}
-
 impl BodyError for crate::contracts::ParseBundleError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -10004,12 +9335,6 @@ impl strata_runtime::Contract for IssueRequestToken {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::IssueRequestTokenError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
-}
-
 impl BodyError for crate::contracts::IssueRequestTokenError {
     fn body(&self) -> types::ApiError {
         match *self {}
@@ -10053,12 +9378,6 @@ impl strata_runtime::Contract for CheckRequestToken {
     type Error = crate::contracts::CheckRequestTokenError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::CheckRequestTokenError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
 }
 
 impl BodyError for crate::contracts::CheckRequestTokenError {
@@ -10106,12 +9425,6 @@ impl strata_runtime::Contract for SetSessionCookie {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SetSessionCookieError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
-}
-
 impl BodyError for crate::contracts::SetSessionCookieError {
     fn body(&self) -> types::ApiError {
         match *self {}
@@ -10155,12 +9468,6 @@ impl strata_runtime::Contract for CallInternalService {
     type Error = crate::contracts::CallInternalServiceError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::CallInternalServiceError {
-    fn status(&self) -> u16 {
-        503
-    }
 }
 
 impl BodyError for crate::contracts::CallInternalServiceError {
@@ -10219,15 +9526,6 @@ impl strata_runtime::Contract for OpenSqliteStore {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::OpenSqliteStoreError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::OpenSqliteStoreError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -10276,12 +9574,6 @@ impl strata_runtime::Contract for ParseMarkdown {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ParseMarkdownError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
-}
-
 impl BodyError for crate::contracts::ParseMarkdownError {
     fn body(&self) -> types::ApiError {
         match *self {}
@@ -10325,12 +9617,6 @@ impl strata_runtime::Contract for HashBytes {
     type Error = crate::contracts::HashBytesError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::HashBytesError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
 }
 
 impl BodyError for crate::contracts::HashBytesError {
@@ -10378,12 +9664,6 @@ impl strata_runtime::Contract for SignWebhookBody {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SignWebhookBodyError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
-}
-
 impl BodyError for crate::contracts::SignWebhookBodyError {
     fn body(&self) -> types::ApiError {
         match *self {}
@@ -10429,12 +9709,6 @@ impl strata_runtime::Contract for VerifyWebhookSignature {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::VerifyWebhookSignatureError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
-}
-
 impl BodyError for crate::contracts::VerifyWebhookSignatureError {
     fn body(&self) -> types::ApiError {
         match *self {}
@@ -10478,12 +9752,6 @@ impl strata_runtime::Contract for JudgeOutboundAddress {
     type Error = crate::contracts::JudgeOutboundAddressError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::JudgeOutboundAddressError {
-    fn status(&self) -> u16 {
-        403
-    }
 }
 
 impl BodyError for crate::contracts::JudgeOutboundAddressError {
@@ -10535,15 +9803,6 @@ impl strata_runtime::Contract for PerformOutboundHttp {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::PerformOutboundHttpError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::TooLarge { .. } => 422,
-            Self::Unreachable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::PerformOutboundHttpError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -10593,17 +9852,6 @@ impl strata_runtime::Contract for SignInAtSite {
     type Error = crate::contracts::SignInAtSiteError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::SignInAtSiteError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Throttled { .. } => 429,
-            Self::Unavailable { .. } => 503,
-            Self::Forbidden { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::SignInAtSiteError {
@@ -10677,15 +9925,6 @@ impl strata_runtime::Contract for SignOutOfSite {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SignOutOfSiteError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::SignOutOfSiteError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -10745,12 +9984,6 @@ impl strata_runtime::Contract for ReadSessionView {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ReadSessionViewError {
-    fn status(&self) -> u16 {
-        503
-    }
-}
-
 impl BodyError for crate::contracts::ReadSessionViewError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -10802,16 +10035,6 @@ impl strata_runtime::Contract for PreviewMarkdown {
     type Error = crate::contracts::PreviewMarkdownError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::PreviewMarkdownError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Unavailable { .. } => 503,
-            Self::Forbidden { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::PreviewMarkdownError {
@@ -10879,15 +10102,6 @@ impl strata_runtime::Contract for LoadDecisionSnapshot {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::LoadDecisionSnapshotError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::LoadDecisionSnapshotError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -10934,17 +10148,6 @@ impl strata_runtime::Contract for CommitAccepted {
     type Error = crate::contracts::CommitAcceptedError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::CommitAcceptedError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Conflict { .. } => 409,
-            Self::Invalid { .. } => 422,
-            Self::Unavailable { .. } => 503,
-            Self::Corrupt { .. } => 500,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::CommitAcceptedError {
@@ -10995,19 +10198,6 @@ impl strata_runtime::Contract for MutateRecord {
     type Error = crate::contracts::MutateRecordError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::MutateRecordError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Refused { .. } | Self::Invalid { .. } => 422,
-            Self::InsufficientState { .. } | Self::Corrupt { .. } | Self::Fault { .. } => 500,
-            Self::Conflict { .. } => 409,
-            Self::Unavailable { .. } => 503,
-            Self::TenantMismatch { .. } | Self::Forbidden { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::MutateRecordError {
@@ -11084,17 +10274,6 @@ impl strata_runtime::Contract for ReadView {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ReadViewError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Refused { .. } => 422,
-            Self::InsufficientState { .. } | Self::Corrupt { .. } | Self::Fault { .. } => 500,
-            Self::Unavailable { .. } => 503,
-            Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ReadViewError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -11158,17 +10337,6 @@ impl strata_runtime::Contract for AssignRole {
     type Error = crate::contracts::AssignRoleError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::AssignRoleError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } => 403,
-            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::AssignRoleError {
@@ -11250,17 +10418,6 @@ impl strata_runtime::Contract for RevokeRole {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RevokeRoleError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RevokeRoleError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -11334,17 +10491,6 @@ impl strata_runtime::Contract for AddTeamMember {
     type Error = crate::contracts::AddTeamMemberError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::AddTeamMemberError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } => 403,
-            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::AddTeamMemberError {
@@ -11426,17 +10572,6 @@ impl strata_runtime::Contract for RemoveTeamMember {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RemoveTeamMemberError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RemoveTeamMemberError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -11510,17 +10645,6 @@ impl strata_runtime::Contract for InvitePerson {
     type Error = crate::contracts::InvitePersonError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::InvitePersonError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } => 403,
-            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::InvitePersonError {
@@ -11602,17 +10726,6 @@ impl strata_runtime::Contract for RedeemInvitation {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RedeemInvitationError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RedeemInvitationError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -11688,21 +10801,6 @@ impl strata_runtime::Contract for DecideLedgerPosting {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::DecideLedgerPostingError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::UnknownUnit { .. } | Self::UnknownOwner { .. } => 404,
-            Self::InvalidAmount { .. }
-            | Self::BelowFloor { .. }
-            | Self::AboveCap { .. }
-            | Self::AbovePeriodCap { .. }
-            | Self::BadCorrection { .. } => 422,
-            Self::IdempotencyMismatch { .. } => 409,
-            Self::Fault { .. } => 500,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::DecideLedgerPostingError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -11760,18 +10858,6 @@ impl strata_runtime::Contract for PostLedgerEntry {
     type Error = crate::contracts::PostLedgerEntryError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::PostLedgerEntryError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Refused { .. } => 422,
-            Self::IdempotencyMismatch { .. } | Self::Conflict { .. } => 409,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::PostLedgerEntryError {
@@ -11850,16 +10936,6 @@ impl strata_runtime::Contract for ReadLedgerBalance {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ReadLedgerBalanceError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ReadLedgerBalanceError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -11927,16 +11003,6 @@ impl strata_runtime::Contract for ListLedgerEntries {
     type Error = crate::contracts::ListLedgerEntriesError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListLedgerEntriesError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListLedgerEntriesError {
@@ -12008,16 +11074,6 @@ impl strata_runtime::Contract for DeclareLedgerUnit {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::DeclareLedgerUnitError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } => 422,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::DeclareLedgerUnitError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -12085,16 +11141,6 @@ impl strata_runtime::Contract for DeclareLedgerPool {
     type Error = crate::contracts::DeclareLedgerPoolError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::DeclareLedgerPoolError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::DeclareLedgerPoolError {
@@ -12166,16 +11212,6 @@ impl strata_runtime::Contract for SetLedgerLimit {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SetLedgerLimitError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } => 422,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::SetLedgerLimitError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -12243,18 +11279,6 @@ impl strata_runtime::Contract for DefineSegment {
     type Error = crate::contracts::DefineSegmentError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::DefineSegmentError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::FieldForbidden { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::Invalid { .. } | Self::LimitReached { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::DefineSegmentError {
@@ -12335,15 +11359,6 @@ impl strata_runtime::Contract for RemoveSegment {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RemoveSegmentError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RemoveSegmentError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -12405,16 +11420,6 @@ impl strata_runtime::Contract for ListSegmentMembers {
     type Error = crate::contracts::ListSegmentMembersError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListSegmentMembersError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListSegmentMembersError {
@@ -12484,17 +11489,6 @@ impl strata_runtime::Contract for TestSegmentPredicate {
     type Error = crate::contracts::TestSegmentPredicateError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::TestSegmentPredicateError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } => 422,
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::TestSegmentPredicateError {
@@ -12570,18 +11564,6 @@ impl strata_runtime::Contract for SettingSaveDefinition {
     type Error = crate::contracts::SettingSaveDefinitionError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::SettingSaveDefinitionError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::Invalid { .. } | Self::TypeLocked { .. } => 422,
-            Self::Conflict { .. } => 409,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::SettingSaveDefinitionError {
@@ -12665,17 +11647,6 @@ impl strata_runtime::Contract for SettingResolve {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SettingResolveError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::SettingResolveError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -12747,16 +11718,6 @@ impl strata_runtime::Contract for SettingResolveAll {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SettingResolveAllError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::SettingResolveAllError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -12820,19 +11781,6 @@ impl strata_runtime::Contract for SettingSetTenant {
     type Error = crate::contracts::SettingSetTenantError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::SettingSetTenantError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::LevelNotAllowed { .. } | Self::WrongType { .. } => 422,
-            Self::Conflict { .. } => 409,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::SettingSetTenantError {
@@ -12920,19 +11868,6 @@ impl strata_runtime::Contract for SettingSetTeam {
     type Error = crate::contracts::SettingSetTeamError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::SettingSetTeamError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::LevelNotAllowed { .. } | Self::WrongType { .. } | Self::Invalid { .. } => 422,
-            Self::Conflict { .. } => 409,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::SettingSetTeamError {
@@ -13027,19 +11962,6 @@ impl strata_runtime::Contract for SettingSetPerson {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SettingSetPersonError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::LevelNotAllowed { .. } | Self::WrongType { .. } => 422,
-            Self::Conflict { .. } => 409,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::SettingSetPersonError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -13127,17 +12049,6 @@ impl strata_runtime::Contract for AggregateRun {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::AggregateRunError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } | Self::ScanBoundExceeded { .. } | Self::SumOverflow { .. } => 422,
-            Self::Throttled { .. } => 429,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::AggregateRunError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -13216,19 +12127,6 @@ impl strata_runtime::Contract for SendMessage {
     type Error = crate::contracts::SendMessageError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::SendMessageError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-            Self::Conflict { .. } => 409,
-            Self::Throttled { .. } => 429,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::SendMessageError {
@@ -13318,17 +12216,6 @@ impl strata_runtime::Contract for SetNoticeRead {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SetNoticeReadError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::SetNoticeReadError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -13402,17 +12289,6 @@ impl strata_runtime::Contract for RemoveNotices {
     type Error = crate::contracts::RemoveNoticesError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::RemoveNoticesError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::RemoveNoticesError {
@@ -13490,15 +12366,6 @@ impl strata_runtime::Contract for CountUnreadNotices {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::CountUnreadNoticesError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::CountUnreadNoticesError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -13560,16 +12427,6 @@ impl strata_runtime::Contract for DefineNoticeTemplate {
     type Error = crate::contracts::DefineNoticeTemplateError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::DefineNoticeTemplateError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::DefineNoticeTemplateError {
@@ -13639,16 +12496,6 @@ impl strata_runtime::Contract for DefineMessageCategory {
     type Error = crate::contracts::DefineMessageCategoryError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::DefineMessageCategoryError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } | Self::LimitReached { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::DefineMessageCategoryError {
@@ -13722,17 +12569,6 @@ impl strata_runtime::Contract for SetNotificationPreference {
     type Error = crate::contracts::SetNotificationPreferenceError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::SetNotificationPreferenceError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::SetNotificationPreferenceError {
@@ -13810,15 +12646,6 @@ impl strata_runtime::Contract for ChangeSubscriptionByLink {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ChangeSubscriptionByLinkError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::NotFound { .. } => 404,
-            Self::Throttled { .. } => 429,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ChangeSubscriptionByLinkError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -13878,12 +12705,6 @@ impl strata_runtime::Contract for ResolveRecipientSetting {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ResolveRecipientSettingError {
-    fn status(&self) -> u16 {
-        403
-    }
-}
-
 impl BodyError for crate::contracts::ResolveRecipientSettingError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -13935,16 +12756,6 @@ impl strata_runtime::Contract for DeclareEventKind {
     type Error = crate::contracts::DeclareEventKindError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::DeclareEventKindError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } | Self::LimitReached { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::DeclareEventKindError {
@@ -14018,18 +12829,6 @@ impl strata_runtime::Contract for EmitEvent {
     type Error = crate::contracts::EmitEventError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::EmitEventError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-            Self::Throttled { .. } => 429,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::EmitEventError {
@@ -14113,17 +12912,6 @@ impl strata_runtime::Contract for CreateWebhookEndpoint {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::CreateWebhookEndpointError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Conflict { .. } => 409,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::CreateWebhookEndpointError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -14199,16 +12987,6 @@ impl strata_runtime::Contract for RotateWebhookSecret {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RotateWebhookSecretError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RotateWebhookSecretError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -14278,16 +13056,6 @@ impl strata_runtime::Contract for CountMailMessages {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::CountMailMessagesError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } => 422,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::CountMailMessagesError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -14355,20 +13123,6 @@ impl strata_runtime::Contract for UpgradeBundle {
     type Error = crate::contracts::UpgradeBundleError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::UpgradeBundleError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::UpgradeBundleError {
@@ -14457,19 +13211,6 @@ impl strata_runtime::Contract for RemoveBundle {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RemoveBundleError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::Invalid { .. } => 422,
-            Self::Conflict { .. } => 409,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RemoveBundleError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -14550,15 +13291,6 @@ impl strata_runtime::Contract for ListInstalledProducts {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListInstalledProductsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListInstalledProductsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -14620,17 +13352,6 @@ impl strata_runtime::Contract for StartUpload {
     type Error = crate::contracts::StartUploadError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::StartUploadError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::TooLarge { .. } | Self::Invalid { .. } => 422,
-            Self::Throttled { .. } => 429,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::StartUploadError {
@@ -14710,18 +13431,6 @@ impl strata_runtime::Contract for PutUploadChunk {
     type Error = crate::contracts::PutUploadChunkError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::PutUploadChunkError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::TooLarge { .. } => 422,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::PutUploadChunkError {
@@ -14805,17 +13514,6 @@ impl strata_runtime::Contract for FinishUpload {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::FinishUploadError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::FinishUploadError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -14889,18 +13587,6 @@ impl strata_runtime::Contract for PublishContent {
     type Error = crate::contracts::PublishContentError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::PublishContentError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::PublishContentError {
@@ -14984,18 +13670,6 @@ impl strata_runtime::Contract for WithdrawContent {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::WithdrawContentError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-            Self::Conflict { .. } => 409,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::WithdrawContentError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -15075,18 +13749,6 @@ impl strata_runtime::Contract for SubmitForReview {
     type Error = crate::contracts::SubmitForReviewError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::SubmitForReviewError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::SubmitForReviewError {
@@ -15170,18 +13832,6 @@ impl strata_runtime::Contract for SchedulePublication {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::SchedulePublicationError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } => 422,
-            Self::Conflict { .. } => 409,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::SchedulePublicationError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -15263,17 +13913,6 @@ impl strata_runtime::Contract for ConfigureTenantSettings {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ConfigureTenantSettingsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } => 422,
-            Self::Conflict { .. } => 409,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ConfigureTenantSettingsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -15349,15 +13988,6 @@ impl strata_runtime::Contract for ReadTenantSettings {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ReadTenantSettingsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ReadTenantSettingsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -15419,19 +14049,6 @@ impl strata_runtime::Contract for InvokeTenantOperation {
     type Error = crate::contracts::InvokeTenantOperationError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::InvokeTenantOperationError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Invalid { .. } | Self::Refused { .. } => 422,
-            Self::IdempotencyMismatch { .. } | Self::Conflict { .. } => 409,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::InvokeTenantOperationError {
@@ -15520,17 +14137,6 @@ impl strata_runtime::Contract for DecideTenantOperation {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::DecideTenantOperationError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::UnknownOperation { .. } => 404,
-            Self::ConditionFailed { .. } | Self::StepRefused { .. } => 422,
-            Self::IdempotencyMismatch { .. } => 409,
-            Self::Fault { .. } => 500,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::DecideTenantOperationError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -15586,15 +14192,6 @@ impl strata_runtime::Contract for ReadMyLedgerBalance {
     type Error = crate::contracts::ReadMyLedgerBalanceError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ReadMyLedgerBalanceError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ReadMyLedgerBalanceError {
@@ -15660,15 +14257,6 @@ impl strata_runtime::Contract for ListMyLedgerEntries {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListMyLedgerEntriesError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListMyLedgerEntriesError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -15730,17 +14318,6 @@ impl strata_runtime::Contract for ListLedgerAccounts {
     type Error = crate::contracts::ListLedgerAccountsError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListLedgerAccountsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::ScanBoundExceeded { .. } => 422,
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListLedgerAccountsError {
@@ -15818,15 +14395,6 @@ impl strata_runtime::Contract for ListLedgerDefinitions {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListLedgerDefinitionsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListLedgerDefinitionsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -15888,17 +14456,6 @@ impl strata_runtime::Contract for RemoveLedgerDefinition {
     type Error = crate::contracts::RemoveLedgerDefinitionError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::RemoveLedgerDefinitionError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::InUse { .. } => 409,
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::RemoveLedgerDefinitionError {
@@ -15976,12 +14533,6 @@ impl strata_runtime::Contract for ExpireLedgerCredits {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ExpireLedgerCreditsError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
-}
-
 impl BodyError for crate::contracts::ExpireLedgerCreditsError {
     fn body(&self) -> types::ApiError {
         match *self {}
@@ -16025,15 +14576,6 @@ impl strata_runtime::Contract for ListMySegments {
     type Error = crate::contracts::ListMySegmentsError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListMySegmentsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListMySegmentsError {
@@ -16097,17 +14639,6 @@ impl strata_runtime::Contract for CountSegmentMembers {
     type Error = crate::contracts::CountSegmentMembersError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::CountSegmentMembersError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::ScanBoundExceeded { .. } => 422,
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::CountSegmentMembersError {
@@ -16185,16 +14716,6 @@ impl strata_runtime::Contract for PreviewSegmentPredicate {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::PreviewSegmentPredicateError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } => 422,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::PreviewSegmentPredicateError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -16264,15 +14785,6 @@ impl strata_runtime::Contract for ResolveSettingFor {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ResolveSettingForError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::NotFound { .. } => 404,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ResolveSettingForError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -16330,18 +14842,6 @@ impl strata_runtime::Contract for DefineTrigger {
     type Error = crate::contracts::DefineTriggerError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::DefineTriggerError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::FieldForbidden { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::OutsideCatalogue { .. } | Self::Invalid { .. } | Self::LimitReached { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::DefineTriggerError {
@@ -16427,15 +14927,6 @@ impl strata_runtime::Contract for RemoveTrigger {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RemoveTriggerError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RemoveTriggerError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -16497,16 +14988,6 @@ impl strata_runtime::Contract for DefineAutomation {
     type Error = crate::contracts::DefineAutomationError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::DefineAutomationError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::RunAsExceeds { .. } | Self::TenantMismatch { .. } => 403,
-            Self::OutsideCatalogue { .. } | Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::DefineAutomationError {
@@ -16587,16 +15068,6 @@ impl strata_runtime::Contract for RemoveAutomation {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RemoveAutomationError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Conflict { .. } => 409,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RemoveAutomationError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -16666,15 +15137,6 @@ impl strata_runtime::Contract for ListAutomationRuns {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListAutomationRunsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListAutomationRunsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -16736,16 +15198,6 @@ impl strata_runtime::Contract for ListAutomationSteps {
     type Error = crate::contracts::ListAutomationStepsError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListAutomationStepsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListAutomationStepsError {
@@ -16817,15 +15269,6 @@ impl strata_runtime::Contract for ListAutomationExceptions {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListAutomationExceptionsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListAutomationExceptionsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -16887,17 +15330,6 @@ impl strata_runtime::Contract for SettleAutomationException {
     type Error = crate::contracts::SettleAutomationExceptionError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::SettleAutomationExceptionError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::SettleAutomationExceptionError {
@@ -16975,12 +15407,6 @@ impl strata_runtime::Contract for RecheckAutomationAuthority {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RecheckAutomationAuthorityError {
-    fn status(&self) -> u16 {
-        match *self {}
-    }
-}
-
 impl BodyError for crate::contracts::RecheckAutomationAuthorityError {
     fn body(&self) -> types::ApiError {
         match *self {}
@@ -17024,15 +15450,6 @@ impl strata_runtime::Contract for ListSignInProviders {
     type Error = crate::contracts::ListSignInProvidersError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListSignInProvidersError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unavailable { .. } => 503,
-            Self::Throttled { .. } => 429,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListSignInProvidersError {
@@ -17092,18 +15509,6 @@ impl strata_runtime::Contract for StartPasskeyRegistration {
     type Error = crate::contracts::StartPasskeyRegistrationError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::StartPasskeyRegistrationError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
-            Self::Conflict { .. } => 409,
-            Self::Invalid { .. } => 422,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::StartPasskeyRegistrationError {
@@ -17187,16 +15592,6 @@ impl strata_runtime::Contract for StepUpSession {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::StepUpSessionError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Throttled { .. } => 429,
-            Self::Forbidden { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::StepUpSessionError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -17262,12 +15657,6 @@ impl strata_runtime::Contract for ListFactors {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListFactorsError {
-    fn status(&self) -> u16 {
-        401
-    }
-}
-
 impl BodyError for crate::contracts::ListFactorsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -17319,16 +15708,6 @@ impl strata_runtime::Contract for StartTotpEnrolment {
     type Error = crate::contracts::StartTotpEnrolmentError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::StartTotpEnrolmentError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::StartTotpEnrolmentError {
@@ -17400,16 +15779,6 @@ impl strata_runtime::Contract for ConfirmTotpEnrolment {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ConfirmTotpEnrolmentError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
-            Self::Throttled { .. } => 429,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ConfirmTotpEnrolmentError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -17479,15 +15848,6 @@ impl strata_runtime::Contract for RemoveTotpFactor {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RemoveTotpFactorError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RemoveTotpFactorError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -17549,16 +15909,6 @@ impl strata_runtime::Contract for RegenerateRecoveryCodes {
     type Error = crate::contracts::RegenerateRecoveryCodesError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::RegenerateRecoveryCodesError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::RegenerateRecoveryCodesError {
@@ -17628,18 +15978,6 @@ impl strata_runtime::Contract for CompleteRecovery {
     type Error = crate::contracts::CompleteRecoveryError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::CompleteRecoveryError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Invalid { .. } => 422,
-            Self::Conflict { .. } => 409,
-            Self::Throttled { .. } => 429,
-            Self::Forbidden { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::CompleteRecoveryError {
@@ -17719,16 +16057,6 @@ impl strata_runtime::Contract for CancelRecovery {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::CancelRecoveryError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Throttled { .. } => 429,
-            Self::Forbidden { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::CancelRecoveryError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -17794,15 +16122,6 @@ impl strata_runtime::Contract for RevokeOtherSessions {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RevokeOtherSessionsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RevokeOtherSessionsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -17864,16 +16183,6 @@ impl strata_runtime::Contract for ListIdentityClients {
     type Error = crate::contracts::ListIdentityClientsError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ListIdentityClientsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ListIdentityClientsError {
@@ -17941,15 +16250,6 @@ impl strata_runtime::Contract for IntrospectTokenOverHttp {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::IntrospectTokenOverHttpError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Throttled { .. } => 429,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::IntrospectTokenOverHttpError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -18009,12 +16309,6 @@ impl strata_runtime::Contract for ServeJwksDocument {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ServeJwksDocumentError {
-    fn status(&self) -> u16 {
-        429
-    }
-}
-
 impl BodyError for crate::contracts::ServeJwksDocumentError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -18066,17 +16360,6 @@ impl strata_runtime::Contract for AcceptSiteInvitation {
     type Error = crate::contracts::AcceptSiteInvitationError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::AcceptSiteInvitationError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Invalid { .. } => 422,
-            Self::Throttled { .. } => 429,
-            Self::Forbidden { .. } => 403,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::AcceptSiteInvitationError {
@@ -18150,16 +16433,6 @@ impl strata_runtime::Contract for ReadLabOverview {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ReadLabOverviewError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ReadLabOverviewError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -18223,20 +16496,6 @@ impl strata_runtime::Contract for RunLabProjection {
     type Error = crate::contracts::RunLabProjectionError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::RunLabProjectionError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
-            Self::Throttled { .. } => 429,
-            Self::Unavailable { .. } => 503,
-            Self::Conflict { .. } => 409,
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::RunLabProjectionError {
@@ -18332,16 +16591,6 @@ impl strata_runtime::Contract for ReadLabRun {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ReadLabRunError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::NotFound { .. } => 404,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ReadLabRunError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -18407,16 +16656,6 @@ impl strata_runtime::Contract for ReplayLabJournal {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ReplayLabJournalError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ReplayLabJournalError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -18480,17 +16719,6 @@ impl strata_runtime::Contract for VerifyLabProofs {
     type Error = crate::contracts::VerifyLabProofsError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::VerifyLabProofsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::NotFound { .. } => 404,
-            Self::Throttled { .. } => 429,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::VerifyLabProofsError {
@@ -18564,16 +16792,6 @@ impl strata_runtime::Contract for ReadDiagnostics {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ReadDiagnosticsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::Unavailable { .. } => 503,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ReadDiagnosticsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -18639,16 +16857,6 @@ impl strata_runtime::Contract for RunDevelopmentAction {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RunDevelopmentActionError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } => 403,
-            Self::NotFound { .. } => 404,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RunDevelopmentActionError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -18712,17 +16920,6 @@ impl strata_runtime::Contract for WithdrawInvitation {
     type Error = crate::contracts::WithdrawInvitationError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::WithdrawInvitationError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } => 403,
-            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
-            Self::Unavailable { .. } => 503,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::WithdrawInvitationError {
@@ -18804,15 +17001,6 @@ impl strata_runtime::Contract for ListErasureReceipts {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListErasureReceiptsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListErasureReceiptsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -18874,16 +17062,6 @@ impl strata_runtime::Contract for CreateWebhookSubscription {
     type Error = crate::contracts::CreateWebhookSubscriptionError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::CreateWebhookSubscriptionError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::Invalid { .. } => 422,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::CreateWebhookSubscriptionError {
@@ -18955,16 +17133,6 @@ impl strata_runtime::Contract for RotateWebhookSubscriptionSecret {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::RotateWebhookSubscriptionSecretError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-            Self::NotFound { .. } => 404,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::RotateWebhookSubscriptionSecretError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -19032,18 +17200,6 @@ impl strata_runtime::Contract for FetchSubjectExport {
     type Error = crate::contracts::FetchSubjectExportError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::FetchSubjectExportError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::FetchSubjectExportError {
@@ -19120,17 +17276,6 @@ impl strata_runtime::Contract for LiftSubjectRestriction {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::LiftSubjectRestrictionError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-        }
-    }
-}
-
 impl BodyError for crate::contracts::LiftSubjectRestrictionError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -19197,18 +17342,6 @@ impl strata_runtime::Contract for ReleaseLegalHold {
     type Error = crate::contracts::ReleaseLegalHoldError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ReleaseLegalHoldError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::NotFound { .. } => 404,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ReleaseLegalHoldError {
@@ -19285,15 +17418,6 @@ impl strata_runtime::Contract for ListLegalHolds {
     type Body = ErrorBody;
 }
 
-impl strata_runtime::ContractError for crate::contracts::ListLegalHoldsError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
-        }
-    }
-}
-
 impl BodyError for crate::contracts::ListLegalHoldsError {
     fn body(&self) -> types::ApiError {
         match self {
@@ -19355,20 +17479,6 @@ impl strata_runtime::Contract for ApplyLabChange {
     type Error = crate::contracts::ApplyLabChangeError;
 
     type Body = ErrorBody;
-}
-
-impl strata_runtime::ContractError for crate::contracts::ApplyLabChangeError {
-    fn status(&self) -> u16 {
-        match self {
-            Self::Unauthenticated { .. } => 401,
-            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
-                403
-            }
-            Self::Invalid { .. } => 422,
-            Self::NotFound { .. } => 404,
-            Self::Conflict { .. } => 409,
-        }
-    }
 }
 
 impl BodyError for crate::contracts::ApplyLabChangeError {

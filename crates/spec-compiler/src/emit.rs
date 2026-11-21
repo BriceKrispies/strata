@@ -125,6 +125,359 @@ pub fn crate_files_with(
     rust_files(spec, files, modules)
 }
 
+/// One crate of a model split by area ([`split_crate_files`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Area {
+    /// The crate's directory inside the model crate's, and the suffix of its package name.
+    pub dir: &'static str,
+    /// What the crate holds, for its documentation.
+    pub summary: &'static str,
+    /// The modules it holds. A module no area names goes to the last one.
+    pub modules: &'static [&'static str],
+}
+
+/// The crates a split model is made of, each depending only on earlier ones: the modules of an area
+/// refer only to modules of their own area or of earlier ones, which [`split_crate_files`] checks.
+/// The records module and the constructs over records come first; the contracts, with their
+/// validations (inherent impls on request types) and derived reads, next; the machines over
+/// records, with the glue that delivers their events; the target machines, compiled only with the
+/// model's `target-models` feature; and last the routes, which use contracts and constructs.
+pub const AREAS: &[Area] = &[
+    Area {
+        dir: "records",
+        summary: "the representation types, the declared types the pure crate does not hold, the records and the cross-cutting constructs",
+        modules: &[
+            "prelude",
+            "types",
+            "records",
+            "support",
+            "policies",
+            "audits",
+            "retentions",
+            "quotas",
+            "retries",
+            "telemetry",
+        ],
+    },
+    Area {
+        dir: "contracts",
+        summary: "the contracts' request, response and error types, their validations and the derived reads",
+        modules: &["contracts", "validations", "derived"],
+    },
+    Area {
+        dir: "machines",
+        summary: "the shipped implementation-level machines and how events reach them",
+        modules: &["machines", "handlers"],
+    },
+    Area {
+        dir: "target-machines",
+        summary: "the target implementation-level machines, which do not ship",
+        modules: &[crate::backend::TARGET_MODULE],
+    },
+    Area {
+        dir: "routes",
+        summary: "the contracts on the wire (their routes and typed clients) and what each component may call",
+        modules: &["routes", "deps"],
+    },
+];
+
+/// The modules a module's code names as `crate::<module>`, directly or in a `use crate::{...}`
+/// tree. Doc text is not code, so a module named only in documentation is not counted.
+pub fn crate_refs(tokens: &TokenStream) -> std::collections::BTreeSet<String> {
+    use proc_macro2::{Delimiter, TokenTree};
+    fn walk(tokens: TokenStream, out: &mut std::collections::BTreeSet<String>) {
+        let trees: Vec<TokenTree> = tokens.into_iter().collect();
+        for (i, tree) in trees.iter().enumerate() {
+            if let TokenTree::Group(g) = tree {
+                walk(g.stream(), out);
+                continue;
+            }
+            let TokenTree::Ident(id) = tree else { continue };
+            if id != "crate" {
+                continue;
+            }
+            let colons = matches!(
+                (trees.get(i + 1), trees.get(i + 2)),
+                (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b)))
+                    if a.as_char() == ':' && b.as_char() == ':'
+            );
+            if !colons {
+                continue;
+            }
+            match trees.get(i + 3) {
+                Some(TokenTree::Ident(m)) => {
+                    out.insert(m.to_string());
+                }
+                Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
+                    let mut first = true;
+                    for t in g.stream() {
+                        match t {
+                            TokenTree::Ident(m) if first => {
+                                out.insert(m.to_string());
+                                first = false;
+                            }
+                            TokenTree::Punct(p) if p.as_char() == ',' => first = true,
+                            _ => first = false,
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    walk(tokens.clone(), &mut out);
+    out
+}
+
+/// The files of a model split by area (WG-5371): rather than one crate, the model crate in `--out`
+/// is a thin facade that re-exports, under the same module paths, the modules of several crates
+/// written into its subdirectories, one per [`Area`] with anything in it, named
+/// `<crate name>-<area>`. Each compiles in a compiler process of its own, so no one process holds
+/// the whole model. Every path into the model crate a dependant writes stays valid, and the
+/// facade keeps the `target-models` feature and the machine registry macros.
+///
+/// Inside an area crate, the modules of earlier areas it names are imported at its root, so their
+/// `crate::<module>` paths resolve as they do in one crate. The `ContractError` impls of the
+/// served contracts are written into the contracts module rather than the routes module, since the
+/// orphan rule allows an impl of the runtime's trait only in the crate of the error type. A module
+/// that names a module of a later area would make a cycle, and refuses the generation with an
+/// internal diagnostic.
+pub fn split_crate_files(
+    spec: &Spec,
+    options: &Options,
+    core: &crate::model_core::CoreDependency,
+) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let core_ident = core.crate_name.replace('-', "_");
+    let mut modules: Vec<(&str, TokenStream)> =
+        vec![(prelude::MODULE, prelude::emit_with(Some(&core_ident)))];
+    for backend in BACKENDS.iter().filter(|b| b.wanted(spec)) {
+        let tokens = match backend.module() {
+            "types" => crate::backend::types::emit(
+                spec,
+                crate::backend::types::Selection::Rest {
+                    core_crate: &core_ident,
+                },
+            ),
+            crate::backend::derived::MODULE => {
+                crate::backend::derived::emit_with(spec, Some(&core_ident))
+            }
+            "routes" => crate::backend::routes::emit_with(spec, false),
+            "contracts" => {
+                let contracts = backend.emit(spec);
+                let impls = crate::backend::routes::contract_error_impls(spec);
+                quote! { #contracts #impls }
+            }
+            _ => backend.emit(spec),
+        };
+        modules.push((backend.module(), tokens));
+    }
+    let last = AREAS.len() - 1;
+    let area_of = |m: &str| {
+        AREAS
+            .iter()
+            .position(|a| a.modules.contains(&m))
+            .unwrap_or(last)
+    };
+    let names: BTreeSet<&str> = modules.iter().map(|(m, _)| *m).collect();
+    let mut errors = Vec::new();
+    // Per area: its modules, and the modules of earlier areas it names, with their area.
+    let mut held: Vec<Vec<(&str, TokenStream)>> = vec![Vec::new(); AREAS.len()];
+    let mut imports: Vec<BTreeMap<String, usize>> = vec![BTreeMap::new(); AREAS.len()];
+    for (module, tokens) in &modules {
+        let area = area_of(module);
+        for named in crate_refs(tokens) {
+            if !names.contains(named.as_str()) {
+                continue;
+            }
+            let other = area_of(&named);
+            if other > area {
+                errors.push(Diagnostic::new(
+                    INTERNAL,
+                    *module,
+                    format!(
+                        "module {module} names module {named}, which the model split puts in the later crate {}; this is a defect in specc.",
+                        AREAS[other].dir
+                    ),
+                ));
+            } else if other < area {
+                imports[area].insert(named, other);
+            }
+        }
+        held[area].push((module, tokens.clone()));
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let area_crate = |a: usize| format!("{}-{}", options.crate_name, AREAS[a].dir);
+    let area_ident = |a: usize| Ident::new(&area_crate(a).replace('-', "_"), Span::call_site());
+    let target = AREAS
+        .iter()
+        .position(|a| a.modules.contains(&crate::backend::TARGET_MODULE));
+    // The paths of the runtime and the pure crate are relative to the model crate's directory;
+    // an area crate is one level below it.
+    let below = |path: &str| {
+        if path == "." {
+            "..".to_string()
+        } else {
+            format!("../{path}")
+        }
+    };
+    let area_options = |a: usize| Options {
+        crate_name: area_crate(a),
+        runtime: match &options.runtime {
+            RuntimeDependency::Workspace => RuntimeDependency::Workspace,
+            RuntimeDependency::Path(path) => RuntimeDependency::Path(below(path)),
+        },
+    };
+    let core_line = format!(
+        "{} = {{ path = \"{}\" }}\n",
+        core.crate_name,
+        toml_escape(&below(&core.path))
+    );
+    let mut files = Vec::new();
+    let mut facade_deps = String::new();
+    for (a, area_modules) in held.iter().enumerate() {
+        if area_modules.is_empty() {
+            continue;
+        }
+        let dir = AREAS[a].dir;
+        let mut deps = core_line.clone();
+        for b in imports[a].values().copied().collect::<BTreeSet<usize>>() {
+            deps.push_str(&format!(
+                "{} = {{ path = \"../{}\" }}\n",
+                area_crate(b),
+                AREAS[b].dir
+            ));
+        }
+        let manifest = manifest(spec, &area_options(a), &deps, "");
+        let mut area_files = vec![GeneratedFile {
+            path: "Cargo.toml".to_string(),
+            contents: manifest,
+        }];
+        let lib = area_lib_rs(spec, options, a, area_modules, &imports[a], &area_ident);
+        let mut sources: Vec<(&str, TokenStream)> = area_modules.clone();
+        sources.push(("lib", lib));
+        area_files = rust_files(spec, area_files, sources)?;
+        files.extend(area_files.into_iter().map(|f| GeneratedFile {
+            path: format!("{dir}/{}", f.path),
+            contents: f.contents,
+        }));
+        let optional = if Some(a) == target {
+            ", optional = true"
+        } else {
+            ""
+        };
+        facade_deps.push_str(&format!(
+            "{} = {{ path = \"{dir}\"{optional} }}\n",
+            area_crate(a)
+        ));
+    }
+    // The facade.
+    let features = match target {
+        Some(t) if !held[t].is_empty() => format!(
+            "\n[features]\n# Compiles `target_machines`: the machines the specification marks as target, which do not ship.\ntarget-models = [\"dep:{}\"]\n",
+            area_crate(t)
+        ),
+        _ => String::new(),
+    };
+    files.push(GeneratedFile {
+        path: "Cargo.toml".to_string(),
+        contents: format!(
+            "{header}\n\
+             [package]\n\
+             name = \"{name}\"\n\
+             version = \"0.1.0\"\n\
+             edition = \"2021\"\n\
+             publish = false\n\
+             \n\
+             [dependencies]\n\
+             {facade_deps}\
+             {features}\n\
+             [lints]\n\
+             workspace = true\n",
+            header = toml_header(&spec.path),
+            name = options.crate_name,
+        ),
+    });
+    let exports: Vec<TokenStream> = modules
+        .iter()
+        .map(|(m, _)| {
+            let module = Ident::new(m, Span::call_site());
+            let krate = area_ident(area_of(m));
+            if *m == crate::backend::TARGET_MODULE {
+                quote! { #[cfg(feature = "target-models")] pub use #krate::#module; }
+            } else {
+                quote! { pub use #krate::#module; }
+            }
+        })
+        .collect();
+    let facade = lib_with(spec, quote! { #(#exports)* });
+    let mut all = rust_files(spec, files, vec![("lib", facade)])?;
+    let collisions = crate::output::path_collisions(&all);
+    if !collisions.is_empty() {
+        return Err(collisions);
+    }
+    all.sort();
+    Ok(all)
+}
+
+/// The `lib.rs` of area `a` of a split model: its modules, and the modules of earlier areas its
+/// code names, imported at its root so that `crate::<module>` paths resolve.
+fn area_lib_rs(
+    spec: &Spec,
+    options: &Options,
+    a: usize,
+    modules: &[(&str, TokenStream)],
+    imports: &std::collections::BTreeMap<String, usize>,
+    area_ident: &dyn Fn(usize) -> Ident,
+) -> TokenStream {
+    let summary = format!(
+        " The part of the model of {} that holds {}.",
+        spec.system.name, AREAS[a].summary
+    );
+    let part = format!(
+        " One of the crates of the model `{}`, which re-exports its modules under the same paths; depend on that crate rather than this one.",
+        options.crate_name
+    );
+    let origin = format!(
+        " Generated by specc from system `{}`. Change the specification and regenerate; do not edit.",
+        spec.system.id
+    );
+    let declarations: Vec<TokenStream> = modules
+        .iter()
+        .map(|(m, _)| {
+            let ident = Ident::new(m, Span::call_site());
+            quote! { pub mod #ident; }
+        })
+        .collect();
+    let uses: Vec<TokenStream> = imports
+        .iter()
+        .map(|(m, b)| {
+            let krate = area_ident(*b);
+            let module = Ident::new(m, Span::call_site());
+            quote! {
+                #[allow(unused_imports)]
+                use #krate::#module;
+            }
+        })
+        .collect();
+    quote! {
+        #![doc = #summary]
+        #![doc = ""]
+        #![doc = #part]
+        #![doc = ""]
+        #![doc = #origin]
+        #![warn(missing_docs)]
+        #![allow(clippy::enum_variant_names)]
+
+        #(#declarations)*
+
+        #(#uses)*
+    }
+}
+
 /// The files of the modules, after `files`, sorted by path; or every diagnostic of a module that
 /// could not be written.
 pub(crate) fn rust_files(
@@ -268,6 +621,23 @@ const ITEM_KEYWORDS: &[&str] = &[
 ];
 
 fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStream {
+    // The target machines are compiled only with the `target-models` feature.
+    let declarations: Vec<TokenStream> = modules
+        .map(|m| {
+            let ident = Ident::new(m, Span::call_site());
+            if m == crate::backend::TARGET_MODULE {
+                quote! { #[cfg(feature = "target-models")] pub mod #ident; }
+            } else {
+                quote! { pub mod #ident; }
+            }
+        })
+        .collect();
+    lib_with(spec, quote! { #(#declarations)* })
+}
+
+/// The model crate's `lib.rs` with `items` (its module declarations, or a split model's
+/// re-exports) between its documentation and the machine registry macros.
+fn lib_with(spec: &Spec, items: TokenStream) -> TokenStream {
     let parts = if spec.machines.is_empty() && spec.memory_machines.is_empty() {
         "the declared types, records, contracts and cross-cutting constructs"
     } else {
@@ -281,17 +651,6 @@ fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStrea
         " Generated by specc from system `{}`. Change the specification and regenerate; do not edit.",
         spec.system.id
     );
-    // The target machines are compiled only with the `target-models` feature.
-    let declarations: Vec<TokenStream> = modules
-        .map(|m| {
-            let ident = Ident::new(m, Span::call_site());
-            if m == crate::backend::TARGET_MODULE {
-                quote! { #[cfg(feature = "target-models")] pub mod #ident; }
-            } else {
-                quote! { pub mod #ident; }
-            }
-        })
-        .collect();
     let registry = crate::backend::machines::registry_macros(spec);
     quote! {
         #![doc = #summary]
@@ -300,7 +659,7 @@ fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStrea
         #![warn(missing_docs)]
         #![allow(clippy::enum_variant_names)]
 
-        #(#declarations)*
+        #items
 
         #registry
     }
@@ -312,6 +671,13 @@ fn cargo_toml(spec: &Spec, options: &Options, core: &str) -> String {
     } else {
         "\n[features]\n# Compiles `target_machines`: the machines the specification marks as target, which do not ship.\ntarget-models = []\n".to_string()
     };
+    manifest(spec, options, core, &features)
+}
+
+/// The manifest of a model crate named by `options`, with the dependency lines `local` (the pure
+/// crate, and a split model's earlier area crates) and the `features` table.
+fn manifest(spec: &Spec, options: &Options, local: &str, features: &str) -> String {
+    let core = local;
     let runtime = if !(crate::backend::routes::uses_runtime(spec)
         || crate::backend::telemetry::wanted(spec))
     {
@@ -430,6 +796,32 @@ mod tests {
         );
         assert_eq!(relative_path(&at("a"), &at("a")).as_deref(), Some("."));
         assert_eq!(relative_path(&at("a"), &at("a/b")).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn crate_refs_read_paths_and_use_trees_but_not_docs() {
+        let tokens = quote! {
+            #![doc = " See crate::routes."]
+            use crate::{prelude, types::Name};
+            fn f(r: &crate::records::Rec) -> crate::contracts::X { todo!() }
+        };
+        let refs: Vec<String> = crate_refs(&tokens).into_iter().collect();
+        assert_eq!(refs, ["contracts", "prelude", "records", "types"]);
+    }
+
+    /// Every module a backend writes has an area, and no area names a module twice.
+    #[test]
+    fn every_backend_module_has_one_area() {
+        let mut seen = std::collections::BTreeSet::new();
+        for area in AREAS {
+            for m in area.modules {
+                assert!(seen.insert(*m), "{m} is in two areas");
+            }
+        }
+        for backend in BACKENDS {
+            assert!(seen.contains(backend.module()), "{}", backend.module());
+        }
+        assert!(seen.contains(prelude::MODULE));
     }
 
     #[test]

@@ -28193,3 +28193,1893 @@ pub mod meta {
         APPLY_LAB_CHANGE,
     ];
 }
+
+impl strata_runtime::ContractError for crate::contracts::DecideIntentError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::TenantMismatch { .. } | Self::InsufficientState { .. } | Self::Fault { .. } => {
+                500
+            }
+            Self::TenantExists { .. }
+            | Self::UnknownField { .. }
+            | Self::UnknownRole { .. }
+            | Self::TypeMismatch { .. }
+            | Self::MissingRequired { .. }
+            | Self::ConstraintViolated { .. }
+            | Self::UniqueViolated { .. }
+            | Self::DanglingReference { .. }
+            | Self::StillReferenced { .. }
+            | Self::WorkflowViolation { .. }
+            | Self::InvalidSchema { .. }
+            | Self::MigrationRejected { .. }
+            | Self::Evaluation { .. }
+            | Self::InvalidIntent { .. }
+            | Self::Rejected { .. } => 422,
+            Self::TenantNotFound { .. }
+            | Self::UnknownObject { .. }
+            | Self::UnknownRecord { .. } => 404,
+            Self::Unauthorized { .. } => 403,
+            Self::VersionConflict { .. } | Self::SchemaConflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PlanIntentNeedsError {
+    fn status(&self) -> u16 {
+        500
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::AnswerReadError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::TenantMismatch { .. } | Self::InsufficientState { .. } | Self::Fault { .. } => {
+                500
+            }
+            Self::TenantNotFound { .. } | Self::UnknownObject { .. } => 404,
+            Self::Evaluation { .. } | Self::InvalidIntent { .. } | Self::Rejected { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PlanReadNeedsError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CheckRecordVisibilityError {
+    fn status(&self) -> u16 {
+        500
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ApplyStateDeltaError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::VersionConflict { .. } => 409,
+            Self::Rejected { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PlanSchemaMigrationError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::InvalidSchema { .. } | Self::Rejected { .. } => 422,
+            Self::Fault { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::StoreCapabilitiesError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::StoreHealthError {
+    fn status(&self) -> u16 {
+        503
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListStorageMigrationsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListStoreTenantsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::LoadTenantError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::LoadCompleteTenantError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CommitTransitionError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Conflict { .. } => 409,
+            Self::Invalid { .. } => 422,
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListEventsAfterError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListOutboxError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::MarkOutboxPublishedError {
+    fn status(&self) -> u16 {
+        503
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListJournalAfterError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PutSessionError {
+    fn status(&self) -> u16 {
+        503
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::FindSessionByTokenError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::FindSessionByIdError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListLiveSessionsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PurgeEndedSessionsError {
+    fn status(&self) -> u16 {
+        503
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PutAccountError {
+    fn status(&self) -> u16 {
+        503
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::FindAccountError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CreateSnapshotError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::NotFound { .. } => 404,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListSnapshotsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::LoadSnapshotError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::NotFound { .. } => 404,
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RestoreSnapshotError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::NotFound { .. } => 404,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ResetStoreError {
+    fn status(&self) -> u16 {
+        503
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ExecuteIntentError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Domain { .. } | Self::Invalid { .. } => 422,
+            Self::Store { .. } | Self::Unavailable { .. } => 503,
+            Self::InsufficientState { .. } | Self::Corrupt { .. } | Self::Fault { .. } => 500,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ExecuteReadError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Domain { .. } => 422,
+            Self::Store { .. } | Self::Unavailable { .. } => 503,
+            Self::InsufficientState { .. } | Self::Corrupt { .. } | Self::Fault { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::HealthCheckError {
+    fn status(&self) -> u16 {
+        503
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ScheduleJobError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } => 422,
+            Self::NotFound { .. } => 404,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::LeaseJobError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReportJobResultError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CancelJobError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RetryJobError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListJobsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DefineScheduleError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ActivateWorkflowError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Conflict { .. } => 409,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::StartWorkflowRunError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Conflict { .. } => 409,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ApproveWorkflowStepError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Conflict { .. } => 409,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SubscribeEventsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::Throttled { .. } => 429,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SignMediaAddressError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::VerifyAuditChainError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ShowSignInPageError {
+    fn status(&self) -> u16 {
+        404
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ShowAuthoringViewError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PutFileError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Invalid { .. } => 422,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::GetFileError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::NotFound { .. } => 404,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DeleteFileError {
+    fn status(&self) -> u16 {
+        503
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SignFileAddressError {
+    fn status(&self) -> u16 {
+        404
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SubmitMessageError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::TemporaryRefusal { .. } | Self::Held { .. } => 503,
+            Self::PermanentRefusal { .. } | Self::Invalid { .. } => 422,
+            Self::Suppressed { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RunScenarioError {
+    fn status(&self) -> u16 {
+        409
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ProjectChangeError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Cancelled { .. } => 409,
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReplayJournalError {
+    fn status(&self) -> u16 {
+        403
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReceiveInboundWebhookError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::StaleDelivery { .. } | Self::TooLarge { .. } => 422,
+            Self::Throttled { .. } => 429,
+            Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListWebhookDeliveriesError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SearchError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+            Self::Throttled { .. } => 429,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListInboxError {
+    fn status(&self) -> u16 {
+        401
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SendNoticeError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::UploadFileError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } | Self::TooLarge { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ScanUploadError {
+    fn status(&self) -> u16 {
+        503
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DeliverFileError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::NotFound { .. } => 404,
+            Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ExportSubjectDataError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RestrictSubjectError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::EraseSubjectError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::Conflict { .. } => 409,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PlaceLegalHoldError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RenderMessageError {
+    fn status(&self) -> u16 {
+        422
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListMailMessagesError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ManageSuppressionListError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::InstallBundleError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::InvalidBundle { .. } | Self::InstallRefused { .. } | Self::Invalid { .. } => 422,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ParseBundleError {
+    fn status(&self) -> u16 {
+        422
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::IssueRequestTokenError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CheckRequestTokenError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SetSessionCookieError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CallInternalServiceError {
+    fn status(&self) -> u16 {
+        503
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::OpenSqliteStoreError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ParseMarkdownError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::HashBytesError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SignWebhookBodyError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::VerifyWebhookSignatureError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::JudgeOutboundAddressError {
+    fn status(&self) -> u16 {
+        403
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PerformOutboundHttpError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::TooLarge { .. } => 422,
+            Self::Unreachable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SignInAtSiteError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Throttled { .. } => 429,
+            Self::Unavailable { .. } => 503,
+            Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SignOutOfSiteError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReadSessionViewError {
+    fn status(&self) -> u16 {
+        503
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PreviewMarkdownError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Unavailable { .. } => 503,
+            Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::LoadDecisionSnapshotError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CommitAcceptedError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Conflict { .. } => 409,
+            Self::Invalid { .. } => 422,
+            Self::Unavailable { .. } => 503,
+            Self::Corrupt { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::MutateRecordError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Refused { .. } | Self::Invalid { .. } => 422,
+            Self::InsufficientState { .. } | Self::Corrupt { .. } | Self::Fault { .. } => 500,
+            Self::Conflict { .. } => 409,
+            Self::Unavailable { .. } => 503,
+            Self::TenantMismatch { .. } | Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReadViewError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Refused { .. } => 422,
+            Self::InsufficientState { .. } | Self::Corrupt { .. } | Self::Fault { .. } => 500,
+            Self::Unavailable { .. } => 503,
+            Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::AssignRoleError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } => 403,
+            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RevokeRoleError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::AddTeamMemberError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } => 403,
+            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RemoveTeamMemberError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::InvitePersonError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } => 403,
+            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RedeemInvitationError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DecideLedgerPostingError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::UnknownUnit { .. } | Self::UnknownOwner { .. } => 404,
+            Self::InvalidAmount { .. }
+            | Self::BelowFloor { .. }
+            | Self::AboveCap { .. }
+            | Self::AbovePeriodCap { .. }
+            | Self::BadCorrection { .. } => 422,
+            Self::IdempotencyMismatch { .. } => 409,
+            Self::Fault { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PostLedgerEntryError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Refused { .. } => 422,
+            Self::IdempotencyMismatch { .. } | Self::Conflict { .. } => 409,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReadLedgerBalanceError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListLedgerEntriesError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DeclareLedgerUnitError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DeclareLedgerPoolError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SetLedgerLimitError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DefineSegmentError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::FieldForbidden { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::Invalid { .. } | Self::LimitReached { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RemoveSegmentError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListSegmentMembersError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::TestSegmentPredicateError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } => 422,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SettingSaveDefinitionError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::Invalid { .. } | Self::TypeLocked { .. } => 422,
+            Self::Conflict { .. } => 409,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SettingResolveError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SettingResolveAllError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SettingSetTenantError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::LevelNotAllowed { .. } | Self::WrongType { .. } => 422,
+            Self::Conflict { .. } => 409,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SettingSetTeamError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::LevelNotAllowed { .. } | Self::WrongType { .. } | Self::Invalid { .. } => 422,
+            Self::Conflict { .. } => 409,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SettingSetPersonError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::LevelNotAllowed { .. } | Self::WrongType { .. } => 422,
+            Self::Conflict { .. } => 409,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::AggregateRunError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } | Self::ScanBoundExceeded { .. } | Self::SumOverflow { .. } => 422,
+            Self::Throttled { .. } => 429,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SendMessageError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+            Self::Conflict { .. } => 409,
+            Self::Throttled { .. } => 429,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SetNoticeReadError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RemoveNoticesError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CountUnreadNoticesError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DefineNoticeTemplateError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DefineMessageCategoryError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } | Self::LimitReached { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SetNotificationPreferenceError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ChangeSubscriptionByLinkError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::NotFound { .. } => 404,
+            Self::Throttled { .. } => 429,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ResolveRecipientSettingError {
+    fn status(&self) -> u16 {
+        403
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DeclareEventKindError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } | Self::LimitReached { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::EmitEventError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+            Self::Throttled { .. } => 429,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CreateWebhookEndpointError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RotateWebhookSecretError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CountMailMessagesError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::UpgradeBundleError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RemoveBundleError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::Invalid { .. } => 422,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListInstalledProductsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::StartUploadError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::TooLarge { .. } | Self::Invalid { .. } => 422,
+            Self::Throttled { .. } => 429,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PutUploadChunkError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::TooLarge { .. } => 422,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::FinishUploadError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PublishContentError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::WithdrawContentError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SubmitForReviewError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SchedulePublicationError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } => 422,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ConfigureTenantSettingsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } => 422,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReadTenantSettingsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::InvokeTenantOperationError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Invalid { .. } | Self::Refused { .. } => 422,
+            Self::IdempotencyMismatch { .. } | Self::Conflict { .. } => 409,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DecideTenantOperationError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::UnknownOperation { .. } => 404,
+            Self::ConditionFailed { .. } | Self::StepRefused { .. } => 422,
+            Self::IdempotencyMismatch { .. } => 409,
+            Self::Fault { .. } => 500,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReadMyLedgerBalanceError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListMyLedgerEntriesError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListLedgerAccountsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::ScanBoundExceeded { .. } => 422,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListLedgerDefinitionsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RemoveLedgerDefinitionError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::InUse { .. } => 409,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ExpireLedgerCreditsError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListMySegmentsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CountSegmentMembersError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::ScanBoundExceeded { .. } => 422,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::PreviewSegmentPredicateError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ResolveSettingForError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DefineTriggerError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::FieldForbidden { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::OutsideCatalogue { .. } | Self::Invalid { .. } | Self::LimitReached { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RemoveTriggerError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::DefineAutomationError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::RunAsExceeds { .. } | Self::TenantMismatch { .. } => 403,
+            Self::OutsideCatalogue { .. } | Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RemoveAutomationError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListAutomationRunsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListAutomationStepsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListAutomationExceptionsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SettleAutomationExceptionError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RecheckAutomationAuthorityError {
+    fn status(&self) -> u16 {
+        match *self {}
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListSignInProvidersError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unavailable { .. } => 503,
+            Self::Throttled { .. } => 429,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::StartPasskeyRegistrationError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
+            Self::Conflict { .. } => 409,
+            Self::Invalid { .. } => 422,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::StepUpSessionError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Throttled { .. } => 429,
+            Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListFactorsError {
+    fn status(&self) -> u16 {
+        401
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::StartTotpEnrolmentError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ConfirmTotpEnrolmentError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
+            Self::Throttled { .. } => 429,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RemoveTotpFactorError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RegenerateRecoveryCodesError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CompleteRecoveryError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Invalid { .. } => 422,
+            Self::Conflict { .. } => 409,
+            Self::Throttled { .. } => 429,
+            Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CancelRecoveryError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Throttled { .. } => 429,
+            Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RevokeOtherSessionsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::StepUpRequired { .. } | Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListIdentityClientsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::IntrospectTokenOverHttpError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Throttled { .. } => 429,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ServeJwksDocumentError {
+    fn status(&self) -> u16 {
+        429
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::AcceptSiteInvitationError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Invalid { .. } => 422,
+            Self::Throttled { .. } => 429,
+            Self::Forbidden { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReadLabOverviewError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RunLabProjectionError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
+            Self::Throttled { .. } => 429,
+            Self::Unavailable { .. } => 503,
+            Self::Conflict { .. } => 409,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReadLabRunError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReplayLabJournalError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::VerifyLabProofsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::Throttled { .. } => 429,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReadDiagnosticsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RunDevelopmentActionError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::WithdrawInvitationError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } => 403,
+            Self::Invalid { .. } | Self::IdempotencyMismatch { .. } => 422,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListErasureReceiptsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::CreateWebhookSubscriptionError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::Invalid { .. } => 422,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::RotateWebhookSubscriptionSecretError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::FetchSubjectExportError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::LiftSubjectRestrictionError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ReleaseLegalHoldError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::NotFound { .. } => 404,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ListLegalHoldsError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::TenantMismatch { .. } => 403,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::ApplyLabChangeError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } | Self::StepUpRequired { .. } | Self::TenantMismatch { .. } => {
+                403
+            }
+            Self::Invalid { .. } => 422,
+            Self::NotFound { .. } => 404,
+            Self::Conflict { .. } => 409,
+        }
+    }
+}

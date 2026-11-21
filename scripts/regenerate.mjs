@@ -2,13 +2,15 @@
 //
 //   npm run generate
 //
-//   1. crates/model/src/lib.rs and crates/model-core/src/lib.rs: if one is missing, a placeholder is
-//      written first. Cargo cannot load the workspace while a member has no target, and specc runs
-//      through the workspace, so a clean checkout (or one where a src directory was deleted) could
-//      not regenerate itself.
-//   2. The backend model, from specifications/spec.jsonc, in two crates: the pure crate
-//      crates/model-core (the declared types that reach no runtime type, which the kernel can
-//      depend on) and crates/model, which depends on it and re-exports its types.
+//   1. crates/model/src/lib.rs, crates/model-core/src/lib.rs and the crates by area of the model
+//      (crates/model/<area>, workspace members): if one is missing, a placeholder is written
+//      first. Cargo cannot load the workspace while a member has no target, and specc runs through
+//      the workspace, so a clean checkout (or one where a src directory was deleted) could not
+//      regenerate itself.
+//   2. The backend model, from specifications/spec.jsonc: the pure crate crates/model-core (the
+//      declared types that reach no runtime type, which the kernel can depend on, with the function
+//      examples as its tests/function_examples_<n>.rs) and crates/model, a facade that re-exports
+//      the crates by area in crates/model/<area>, which depend on the pure crate.
 //   3. The web modules: web/src/generated, from the same specification.
 //   4. The browser journeys: tests/e2e/generated, from the same specification's uiScenarios,
 //      written against the stack on http://127.0.0.1:4200 (STRATA_E2E_BASE_URL moves them).
@@ -32,7 +34,7 @@
 //
 // The first failing step stops the run. Cargo runs with two jobs.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { productArgs, semanticHashDetail } from './spec-hash.mjs';
 
@@ -71,6 +73,20 @@ function specc(name, specArgs) {
     console.error(`\nregenerate: ${name} failed with exit ${done.status}; nothing after it was regenerated`);
     process.exit(done.status ?? 1);
   }
+}
+
+// The crates by area of the model (crates/model/<area>, WG-5371) are workspace members too: a
+// missing one gets a placeholder manifest as well as a placeholder lib.rs.
+const manifest = readFileSync(join(root, 'Cargo.toml'), 'utf8');
+const areaDirs = [...manifest.matchAll(/"(crates\/model\/[^"]+)"/g)].map((m) => m[1]);
+for (const dir of areaDirs) {
+  const toml = join(root, dir, 'Cargo.toml');
+  libs.push(join(root, dir, 'src', 'lib.rs'));
+  if (existsSync(toml)) continue;
+  mkdirSync(dirname(toml), { recursive: true });
+  const name = `strata-model-${dir.split('/').pop()}`;
+  writeFileSync(toml, `# Placeholder so that Cargo can load the workspace. specc replaces this file.\n[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\npublish = false\n`);
+  console.log(`wrote placeholder ${toml}`);
 }
 
 for (const lib of libs) {
