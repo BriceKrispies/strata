@@ -47018,7 +47018,7 @@
           "description": "Defect: rewrites the joint dependent before both of the entities it depends on are rewritten."
         },
         {
-          "id": "dsp-rewrite-d",
+          "id": "dsp-rewrite-d-t",
           "from": "dsp-rewriting",
           "to": "dsp-rewriting",
           "on": "dsp-rewrite-d",
@@ -47065,7 +47065,7 @@
           ]
         },
         {
-          "id": "dsp-rewrite-b",
+          "id": "dsp-rewrite-b-t",
           "from": "dsp-rewriting",
           "to": "dsp-rewriting",
           "on": "dsp-rewrite-b",
@@ -47098,7 +47098,7 @@
           ]
         },
         {
-          "id": "dsp-rewrite-c",
+          "id": "dsp-rewrite-c-t",
           "from": "dsp-rewriting",
           "to": "dsp-rewriting",
           "on": "dsp-rewrite-c",
