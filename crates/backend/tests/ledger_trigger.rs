@@ -38,9 +38,8 @@ const SOURCE: &str = "203.0.113.7";
 const SITE: &str = "fieldnotes";
 
 /// The bundle of `ledger-trigger` as specc writes it (the golden file of its tests).
-const LEDGER_TRIGGER: &str = include_str!(
-    "../../spec-compiler/tests/fixtures/products/expected/ledger-trigger.bundle.json"
-);
+const LEDGER_TRIGGER: &str =
+    include_str!("../../spec-compiler/tests/fixtures/products/expected/ledger-trigger.bundle.json");
 
 const UNIT: &str = "ledger_trigger__points";
 
@@ -419,10 +418,7 @@ async fn points_that_cross_the_threshold_record_the_crossing_once() {
     assert_waiting_after_the_mail(run, &steps);
 
     // The crossing is recorded, once, and the person reads it through the API; another person reads none.
-    assert_eq!(
-        backend.recorded(),
-        vec![("user:mirela".to_string(), 500)]
-    );
+    assert_eq!(backend.recorded(), vec![("user:mirela".to_string(), 500)]);
     assert_eq!(
         backend.crossings(&mirela).await,
         vec![("user:mirela".to_string(), 500)]

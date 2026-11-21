@@ -900,7 +900,7 @@ fn plain_mail(subject: &str, text: &str) -> Mail {
 /// The rows of the table `cases-mail-conformance` in the text of the specification, first column.
 fn spec_mail_cases() -> Vec<String> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../specifications/spec.jsonc");
-    let spec = std::fs::read_to_string(path).expect("the specification file");
+    let spec = strata_spec_parts::read_spec_text(&path).expect("the specification file");
     let line = spec
         .lines()
         .find(|line| {

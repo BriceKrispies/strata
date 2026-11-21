@@ -1,13 +1,14 @@
 # The Strata specification
 
-`spec.jsonc` is the specification. It is one file and it is the authority for what the platform
-is to do; products are specified beside it (see "Product specifications"). Exegra and the gate's
-own checks read it:
+`spec.jsonc` is the specification. It is a manifest: it lists the part files beside it, and the parts
+together are the authority for what the platform is to do (see "Parts of the specification");
+products are specified beside it (see "Product specifications"). Exegra, specc, Concordance and the
+gate's own checks read it, each through the manifest:
 
 - **Exegra** validates it, draws it, runs its behaviour models, and evaluates the claims it can
   decide from the model alone (ids starting `m-`): structure, the data rules for records and
-  copies, and behaviour under injected faults. Its `apply` command edits the file through a
-  validated transaction.
+  copies, and behaviour under injected faults. Its `apply` command edits the parts through a
+  validated transaction, each changed entity in the part that holds it.
 - **The gate's evidence check** (`scripts/gate-evidence.mjs`) reconciles the requirements with the
   code and with recorded test results: see "How a requirement gets verified".
 
@@ -49,7 +50,47 @@ validates it with the platform and reports the platform's hash unchanged. The ru
 accepted and a refused fixture of each, are in `crates/spec-compiler/src/layers.rs` and
 `crates/spec-compiler/tests/fixtures/products`.
 
-## What the file holds
+## Parts of the specification
+
+`spec.jsonc` holds one member, `"specParts"`, the part files in order, and an optional `"specSections"`
+table saying which part each section belongs to (Exegra's `apply` uses it to place a new section or
+entity; the other readers ignore it). Every top-level section of the specification is in exactly one
+part, except `claims`, which is in two:
+
+| Part | Sections | Read by |
+|---|---|---|
+| `intent.jsonc` | `system`, `exegra`, `vocabulary`, `goals`, `nonGoals`, `boundaries`, `decisions`, `constraints`, `openQuestions`, `assumptions`, `releaseStages`, `milestones`, `terms`, `documents`, `sections`, `views`, `environments` | people, and Concordance rendering the documents |
+| `boundary.jsonc` | `types`, `records`, `copies`, `contracts`, `capabilities`, `roles`, `quotas`, `retentions`, `plans`, `grants`, `delegations`, `tokenScopes`, `featureFlags`, `validations`, `languages`, `components`, `relationships`, `screens`, `forms`, `actions`, `liveBindings`, `errorMessages` | specc, which generates from them |
+| `behaviour.jsonc` | `events`, `behaviors`, `faults`, `scenarios`, `uiScenarios`, `failureModes`, `faultModels`, and the `claims` that are not requirements (`m-...`) | Exegra, which runs them |
+| `requirements.jsonc` | the `claims` with `"kind": "requirement"`, `caseTables` | the gate's evidence check |
+| `functions.jsonc` | `functions`, `exampleFixtures` | specc (the transcribed function layer) |
+
+Resolving the manifest gives the single document one file would hold, and every tool does it by the
+same rule:
+
+- array sections are concatenated in manifest order (`claims`: the `m-` claims, then the requirements);
+- a section that is not an array (`system`, `vocabulary`, `exegra`) may be in one part only;
+- an entity id that two parts give one section is refused, naming both files, as are a missing part,
+  a part that is itself a manifest, and a manifest with sections of its own;
+- the assembled text is canonical (one member per line, one array item per line, each item's text
+  unchanged), so every tool produces the same bytes and the specification's text hash is the same
+  in all of them.
+
+The order of the entities within a section changes nothing the tools compute: the semantic hash is
+the same as for the one-file specification, and specc's output is byte-identical. It does change the
+order in which `claims` are listed (`exegra evaluate`).
+
+`node scripts/spec-parts.mjs` is the reader for scripts (`readSpecValue`, `specSha256`);
+`strata-spec-parts` is the Rust one (specc and the tests that read the specification). Do not read
+`spec.jsonc` as a JSON document directly.
+
+`node scripts/split-spec.mjs` splits a one-file `spec.jsonc` into the manifest and parts, the same way
+each time (a second run changes nothing). Run it again on a one-file `spec.jsonc` that another branch has
+edited; `node scripts/split-spec.mjs --check <monolithic file>` confirms the parts reassemble to it.
+A section that is in no part makes it stop: add the section to `SECTION_PART` in the script and to the
+table above.
+
+## What the specification holds
 
 | Section | Holds |
 |---|---|
@@ -242,7 +283,7 @@ checks; no started requirement is documentation yet.
 
 ## Changing it
 
-Change the specification first, then the code. Edit `spec.jsonc` through Exegra (`apply`), or by
+Change the specification first, then the code. Edit the parts through Exegra (`apply`), or by
 hand, and then run the gate. The rules for wording a requirement that come up most:
 
 - one SHALL per requirement, stated at a boundary, with no implementation detail

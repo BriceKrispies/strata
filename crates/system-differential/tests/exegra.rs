@@ -1008,7 +1008,7 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
 async fn the_system_host_runs_every_scenario_as_exegra_does() {
     let exegra = Exegra::new();
     let path = spec_path();
-    let text = std::fs::read_to_string(&path).unwrap();
+    let text = strata_spec_parts::read_spec_text(&path).unwrap();
     let all = jsonc::parse(&text).unwrap();
     let spec = load::load("specifications/spec.jsonc", &text)
         .unwrap_or_else(|d| panic!("the specification does not load: {d:?}"));

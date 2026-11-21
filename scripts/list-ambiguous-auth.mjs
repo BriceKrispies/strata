@@ -2,13 +2,12 @@
 // auth beside it, so that a person reviews them (WG-4908). Reads specifications/spec.jsonc and prints
 // one line per contract, "<id> <ref>: <reasons>", sorted by contract id, then the count.
 // Usage: node scripts/list-ambiguous-auth.mjs [spec path] [--json]
-import fs from 'node:fs';
+import { readSpecValue } from './spec-parts.mjs';
 
 const args = process.argv.slice(2);
 const json = args.includes('--json');
 const specPath = args.find((a) => !a.startsWith('--')) ?? 'specifications/spec.jsonc';
-const text = fs.readFileSync(specPath, 'utf8').replace(/^\uFEFF/, '').replace(/^\s*\/\/.*$/gm, '');
-const spec = JSON.parse(text);
+const spec = readSpecValue(specPath);
 
 // Each test returns a reason, or null when the structured auth and the prose agree.
 const tests = [

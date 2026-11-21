@@ -6,10 +6,10 @@ use strata_storage_api::{conformance, Store};
 
 /// The cases of the conformance table, as the specification states them.
 fn table() -> Vec<String> {
-    let spec = std::fs::read_to_string(concat!(
+    let spec = strata_spec_parts::read_spec_text(std::path::Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../specifications/spec.jsonc"
-    ))
+    )))
     .expect("the specification file");
     conformance::spec_cases(&spec)
 }

@@ -51,7 +51,7 @@ fn platform() -> &'static (String, Vec<GeneratedFile>) {
     static PLATFORM: std::sync::OnceLock<(String, Vec<GeneratedFile>)> = std::sync::OnceLock::new();
     PLATFORM.get_or_init(|| {
         let spec = "specifications/spec.jsonc";
-        let text = fs::read_to_string(repo_root().join(spec)).unwrap();
+        let text = strata_spec_parts::read_spec_text(&repo_root().join(spec)).unwrap();
         let files = catalogue::generate(spec, &text).unwrap().files;
         (text, files)
     })

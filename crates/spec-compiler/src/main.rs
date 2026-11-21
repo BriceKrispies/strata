@@ -380,6 +380,12 @@ fn refuse_unready(args: &Args, text: &str) -> Option<ExitCode> {
     Some(ExitCode::from(1))
 }
 
+/// The text of the specification at `path`. `specifications/spec.jsonc` is a manifest of part files
+/// (WG-5386); it is resolved to the one document the parts make, so every command reads the same.
+fn read_spec(path: &str) -> Result<String, String> {
+    strata_spec_parts::read_spec_text(Path::new(path)).map_err(|e| e.to_string())
+}
+
 fn run() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     if raw.first().map(String::as_str) == Some("lint") {
@@ -392,10 +398,10 @@ fn run() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let text = match std::fs::read_to_string(&args.spec) {
+    let text = match read_spec(&args.spec) {
         Ok(text) => text,
-        Err(e) => {
-            eprintln!("specc: cannot read {}: {e}", args.spec);
+        Err(message) => {
+            eprintln!("specc: {message}");
             return ExitCode::from(1);
         }
     };
@@ -541,10 +547,10 @@ fn run_lint(rest: &[String]) -> ExitCode {
         );
         return ExitCode::from(2);
     };
-    let text = match std::fs::read_to_string(&spec) {
+    let text = match read_spec(&spec) {
         Ok(text) => text,
-        Err(e) => {
-            eprintln!("specc: cannot read {spec}: {e}");
+        Err(message) => {
+            eprintln!("specc: {message}");
             return ExitCode::from(1);
         }
     };

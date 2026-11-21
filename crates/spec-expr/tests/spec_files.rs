@@ -116,7 +116,8 @@ fn expressions(v: &Value, at: &str, out: &mut Vec<(String, String)>) {
 
 /// The expressions of a JSONC specification file, read and parsed once per test binary.
 fn read_expressions(path: &Path) -> Vec<(String, String)> {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let text = strata_spec_parts::read_spec_text(path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let json: Value = serde_json::from_str(&strip_jsonc(&text))
         .unwrap_or_else(|e| panic!("{} is not JSONC: {e}", path.display()));
     let mut found = Vec::new();

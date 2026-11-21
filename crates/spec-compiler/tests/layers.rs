@@ -36,7 +36,7 @@ fn root() -> PathBuf {
 }
 
 fn platform_text() -> String {
-    fs::read_to_string(root().join(PLATFORM)).unwrap()
+    strata_spec_parts::read_spec_text(&root().join(PLATFORM)).unwrap()
 }
 
 fn product(relative: &str) -> ProductFile {
@@ -379,11 +379,7 @@ fn a_product_that_keeps_a_mutable_balance_outside_the_ledger_is_refused() {
         );
     }
     // The products that count in the ledger, and the one that updates a record from its inputs, pass.
-    assert!(load_with(&[
-        product("promotions.jsonc"),
-        product("ledger-trigger.jsonc")
-    ])
-    .is_ok());
+    assert!(load_with(&[product("promotions.jsonc"), product("ledger-trigger.jsonc")]).is_ok());
 }
 
 // Verifies: SET-001

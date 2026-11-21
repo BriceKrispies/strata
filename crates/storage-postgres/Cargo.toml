@@ -16,6 +16,7 @@ serde_json.workspace = true
 postgres.workspace = true
 
 [dev-dependencies]
+strata-spec-parts.workspace = true
 strata-storage-api = { workspace = true, features = ["conformance"] }
 strata-kernel = { workspace = true, features = ["testkit"] }
 

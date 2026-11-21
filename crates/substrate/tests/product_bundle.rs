@@ -235,9 +235,8 @@ fn owned(record: &InstalledRecord) -> Vec<(String, String)> {
 }
 
 // The bundles specc writes from the fixture products (tests/bundle.rs of the spec-compiler).
-const LEDGER_TRIGGER: &str = include_str!(
-    "../../spec-compiler/tests/fixtures/products/expected/ledger-trigger.bundle.json"
-);
+const LEDGER_TRIGGER: &str =
+    include_str!("../../spec-compiler/tests/fixtures/products/expected/ledger-trigger.bundle.json");
 
 // ---- what a product holds beyond its record types (WG-5076, WG-5084, WG-5103) ----------------------
 
@@ -368,10 +367,7 @@ fn ledger_trigger_installs_with_its_templates_its_trigger_and_its_automation() {
     ] {
         assert!(kinds.contains(&kind), "{kind}: {kinds:?}");
     }
-    assert_eq!(
-        InstalledRecord::of(&schema, "ledger-trigger"),
-        Some(record)
-    );
+    assert_eq!(InstalledRecord::of(&schema, "ledger-trigger"), Some(record));
 }
 
 // Verifies: INT-2344

@@ -3962,6 +3962,7 @@ dependencies = [
  "strata-protocol",
  "strata-runtime",
  "strata-simulation",
+ "strata-spec-parts",
  "strata-storage-api",
  "strata-storage-postgres",
  "strata-storage-sqlite",
@@ -4173,6 +4174,7 @@ dependencies = [
  "strata-spec-compiler-machines-fixture",
  "strata-spec-compiler-wiring-fixture",
  "strata-spec-expr",
+ "strata-spec-parts",
  "strata-substrate",
  "syn 2.0.119",
  "tokio",
@@ -4258,6 +4260,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_json",
+ "strata-spec-parts",
 ]
 
 [[package]]
@@ -4272,12 +4275,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-spec-parts"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "strata-storage-api"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
  "strata-kernel",
+ "strata-spec-parts",
  "strata-storage-api",
 ]
 
@@ -4289,6 +4300,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strata-kernel",
+ "strata-spec-parts",
  "strata-storage-api",
 ]
 
@@ -4323,6 +4335,7 @@ dependencies = [
  "strata-model",
  "strata-runtime",
  "strata-spec-compiler",
+ "strata-spec-parts",
  "tokio",
 ]
 
