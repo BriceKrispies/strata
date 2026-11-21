@@ -16,3 +16,9 @@ import Strata
 #print axioms Strata.step_local
 #print axioms Strata.step_deterministic
 #print axioms Strata.lax_change_can_break_wf
+
+#print axioms Strata.Evolution.closure
+#print axioms Strata.Evolution.locality
+#print axioms Strata.Evolution.compatibility
+#print axioms Strata.Evolution.breaking_change_can_change_value
+#print axioms Strata.Evolution.breaking_change_can_invalidate
