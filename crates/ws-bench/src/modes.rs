@@ -10,7 +10,8 @@
 //!
 //! - `none`: no mode layer.
 //! - `header`: placeholder, a pass-through until header residency (WG-5390) lands.
-//! - `full`: placeholder, a pass-through until the record cache (WG-5391) lands.
+//! - `full`: the working set of header and single records ([`ResidentStore::new`]) under a byte
+//!   budget; answers always go to the store.
 //! - `stale`: a deliberately broken read cache that never learns of a write made through another
 //!   handle. The coherence check must catch it.
 //!
@@ -384,7 +385,12 @@ impl Built {
 
 /// Stack the layers of `mode` over `base`. `counting` is shared so that the counts survive a
 /// rebuild of the stack (a reopen).
-pub fn build(base: Arc<dyn Store>, mode: Mode, counting: Arc<CountingHook>) -> Built {
+pub fn build(
+    base: Arc<dyn Store>,
+    mode: Mode,
+    counting: Arc<CountingHook>,
+    budget_bytes: u64,
+) -> Built {
     let counted: Arc<dyn Store> = Arc::new(Layer::new(base, counting.clone()));
     let layered = |hook: Arc<dyn Hook>| -> (
         Arc<dyn Store>,
@@ -415,7 +421,32 @@ pub fn build(base: Arc<dyn Store>, mode: Mode, counting: Arc<CountingHook>) -> B
             });
             (resident as Arc<dyn Store>, Some(stats))
         }
-        Mode::Full => layered(Arc::new(PlaceholderHook { name: "full" })),
+        Mode::Full => {
+            let resident = Arc::new(ResidentStore::new(counted.clone(), budget_bytes));
+            let probe = resident.clone();
+            let stats: Arc<dyn Fn() -> WrapperStats + Send + Sync> = Arc::new(move || {
+                let s = probe.stats();
+                WrapperStats {
+                    name: "full".to_string(),
+                    placeholder: false,
+                    // The header and the record entries both answer a load.
+                    hits: s.hits + s.record_hits,
+                    misses: s.misses + s.record_misses,
+                    decodes: Some(s.decodes),
+                    resident_bytes: s.resident_bytes,
+                    resident_tenants: Some(s.resident_tenants),
+                    resident_records: Some(s.resident_records),
+                    budget_bytes: Some(probe.budget()),
+                    hit_saved_bytes: Some(s.hit_saved_bytes),
+                    hit_saved_rows: Some(s.hit_saved_rows),
+                    evictions: Some(s.evictions),
+                    invalidations: Some(s.invalidations),
+                    rereads: Some(s.rereads),
+                    ..WrapperStats::default()
+                }
+            });
+            (resident as Arc<dyn Store>, Some(stats))
+        }
         Mode::Stale => layered(Arc::new(StaleHook::default())),
     };
     Built {

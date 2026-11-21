@@ -233,8 +233,8 @@ fn a_coherent_mode_gives_the_answers_of_no_wrapper() {
         );
         assert_eq!(report.coherence.divergences, 0);
         assert!(
-            report.wrapper.stats.placeholder,
-            "{} is a placeholder",
+            !report.wrapper.stats.placeholder,
+            "{} is a real layer",
             mode.name()
         );
     }
@@ -296,4 +296,155 @@ fn the_check_runs_over_sqlite_with_a_second_handle() {
 fn sqlcipher_is_refused_with_a_reason() {
     let refused = StoreSpec::parse("sqlcipher").expect_err("no sqlcipher in this build");
     assert!(refused.contains("SQLCipher"));
+}
+
+/// The lock scope of the working set (`docs/working-set.md`, item 3): one lock per tenant runtime,
+/// held across a whole operation including its store I/O. The store underneath is instrumented to
+/// count the operations in flight at once, and every operation sleeps inside it, so that a missing
+/// lock shows as an overlap.
+mod lock_scope {
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Barrier, Mutex};
+    use std::time::Duration;
+    use strata_kernel::testkit::*;
+    use strata_kernel::{Intent, Need, Principal, RecordId, TenantId};
+    use strata_storage_api::memory::MemoryStore;
+    use strata_storage_api::resident::{HeldHeader, HeldLoad, ResidentStore};
+    use strata_storage_api::{execute, Commit, Receipt, Store, StoreResult};
+    use strata_ws_bench::layer::{Hook, Layer};
+
+    #[derive(Default)]
+    struct InFlight {
+        now: Mutex<BTreeMap<String, u32>>,
+        most_in_one_tenant: AtomicU32,
+        most_in_all: AtomicU32,
+        armed: Mutex<bool>,
+    }
+
+    impl InFlight {
+        fn inside<T>(&self, tenant: &TenantId, run: impl FnOnce() -> T) -> T {
+            let armed = *self.armed.lock().unwrap();
+            if armed {
+                let mut now = self.now.lock().unwrap();
+                let one = now.entry(tenant.to_string()).or_default();
+                *one += 1;
+                self.most_in_one_tenant.fetch_max(*one, Ordering::SeqCst);
+                let all: u32 = now.values().sum();
+                self.most_in_all.fetch_max(all, Ordering::SeqCst);
+                drop(now);
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            let done = run();
+            if armed {
+                let mut now = self.now.lock().unwrap();
+                *now.entry(tenant.to_string()).or_default() -= 1;
+            }
+            done
+        }
+    }
+
+    impl Hook for InFlight {
+        fn load_at_held(
+            &self,
+            inner: &dyn Store,
+            tenant: &TenantId,
+            needs: &[Need],
+            held: Option<&HeldHeader>,
+        ) -> StoreResult<HeldLoad> {
+            self.inside(tenant, || inner.load_at_held(tenant, needs, held))
+        }
+        fn commit(&self, inner: &dyn Store, commit: &Commit) -> StoreResult<Receipt> {
+            self.inside(&commit.delta.tenant, || inner.commit(commit))
+        }
+    }
+
+    fn setup() -> (Arc<ResidentStore>, Arc<InFlight>) {
+        let probe = Arc::new(InFlight::default());
+        let layer: Arc<dyn Store> =
+            Arc::new(Layer::new(Arc::new(MemoryStore::new()), probe.clone()));
+        let resident = Arc::new(ResidentStore::new(layer, 1 << 22));
+        for name in ["alpha", "beta"] {
+            execute(
+                resident.as_ref(),
+                &Intent::CreateTenant {
+                    name: name.into(),
+                    owner: principal_id(&format!("{name}:owner")),
+                },
+                &ctx(name, Principal::System, 1),
+            )
+            .expect("a tenant");
+        }
+        *probe.armed.lock().unwrap() = true;
+        (resident, probe)
+    }
+
+    fn run_all(jobs: Vec<Box<dyn FnOnce() + Send>>) {
+        let barrier = Arc::new(Barrier::new(jobs.len()));
+        let workers: Vec<_> = jobs
+            .into_iter()
+            .map(|job| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    job()
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().expect("a worker");
+        }
+    }
+
+    #[test]
+    fn one_tenants_operations_do_not_overlap_in_the_store_and_two_tenants_do() {
+        let (resident, probe) = setup();
+        // Misses on different records of one tenant, a commit among them: one at a time.
+        let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
+        for n in 0..5u64 {
+            let resident = resident.clone();
+            jobs.push(Box::new(move || {
+                let needs = [Need::Record {
+                    object: object("note"),
+                    id: RecordId(900 + n),
+                }];
+                resident
+                    .load_at(&tenant_id("alpha"), &needs)
+                    .expect("a load");
+            }));
+        }
+        let writer = resident.clone();
+        jobs.push(Box::new(move || {
+            let intent = new_note("one", "one");
+            execute(
+                writer.as_ref(),
+                &intent,
+                &ctx("alpha", Principal::System, 5),
+            )
+            .ok();
+        }));
+        run_all(jobs);
+        assert_eq!(
+            probe.most_in_one_tenant.load(Ordering::SeqCst),
+            1,
+            "a tenant's operations wait for each other's store I/O"
+        );
+
+        // Different tenants never share the lock.
+        let jobs: Vec<Box<dyn FnOnce() + Send>> = ["alpha", "beta"]
+            .into_iter()
+            .map(|name| {
+                let resident = resident.clone();
+                Box::new(move || {
+                    let needs = [Need::Record {
+                        object: object("note"),
+                        id: RecordId(950),
+                    }];
+                    resident.load_at(&tenant_id(name), &needs).expect("a load");
+                }) as Box<dyn FnOnce() + Send>
+            })
+            .collect();
+        run_all(jobs);
+        assert_eq!(probe.most_in_all.load(Ordering::SeqCst), 2);
+    }
 }

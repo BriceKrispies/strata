@@ -4,7 +4,7 @@
 //! ws-bench <scenario.jsonc> [--store memory|sqlite[:path]] [--mode none|header|full|stale]
 //!          [--loader enterprise|stub] [--scale small|medium|large] [--reuse <sqlite path>]
 //!          [--seed N] [--out report.json] [--coherence off|reads|full]
-//!          [--max-divergences N] [--count-bytes] [--fail-on-divergence]
+//!          [--max-divergences N] [--count-bytes] [--fail-on-divergence] [--budget <bytes>]
 //! ```
 //!
 //! The population is the enterprise corpus (`strata-corpus`) at `--scale`; `--loader stub` uses the
@@ -24,7 +24,7 @@ use strata_ws_bench::stores::StoreSpec;
 
 const USAGE: &str = "usage: ws-bench <scenario.jsonc> [--store memory|sqlite[:path]] \
 [--mode none|header|full|stale] [--seed N] [--out report.json] [--coherence off|reads|full] \
-[--max-divergences N] [--count-bytes] [--fail-on-divergence]";
+[--max-divergences N] [--count-bytes] [--fail-on-divergence] [--budget <bytes>]";
 
 /// The loader the harness populates tenants with.
 fn loader(stub: bool, scale: Scale) -> Box<dyn CorpusLoader> {
@@ -59,6 +59,7 @@ fn real_main() -> Result<ExitCode, String> {
     let mut stub = false;
     let mut scale = Scale::Small;
     let mut reuse = false;
+    let mut budget = None;
     while let Some(arg) = args.next() {
         let mut value = |name: &str| args.next().ok_or_else(|| format!("{name} needs a value"));
         match arg.as_str() {
@@ -95,6 +96,13 @@ fn real_main() -> Result<ExitCode, String> {
                     .parse()
                     .map_err(|_| "--max-divergences is a number".to_string())?
             }
+            "--budget" => {
+                budget = Some(
+                    value("--budget")?
+                        .parse::<u64>()
+                        .map_err(|_| "--budget is a number of bytes".to_string())?,
+                )
+            }
             "--count-bytes" => count_bytes = true,
             "--fail-on-divergence" => fail_on_divergence = true,
             "-h" | "--help" => {
@@ -119,6 +127,9 @@ fn real_main() -> Result<ExitCode, String> {
     config.max_divergences = max_divergences;
     config.count_bytes = count_bytes;
     config.reuse = reuse;
+    if let Some(bytes) = budget {
+        config.budget_bytes = bytes;
+    }
     let report = run(
         &scenario,
         &config,

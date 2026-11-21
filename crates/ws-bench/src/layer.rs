@@ -23,6 +23,20 @@ pub struct WrapperStats {
     pub decodes: Option<u64>,
     /// Tenants with something resident, where the wrapper counts them.
     pub resident_tenants: Option<u64>,
+    /// Record entries resident, where the wrapper keeps records.
+    pub resident_records: Option<u64>,
+    /// The byte budget, where the wrapper has one.
+    pub budget_bytes: Option<u64>,
+    /// Estimated bytes the record hits did not read, where the wrapper keeps records.
+    pub hit_saved_bytes: Option<u64>,
+    /// Records the hits did not read.
+    pub hit_saved_rows: Option<u64>,
+    /// Entries removed to make room.
+    pub evictions: Option<u64>,
+    /// Entries dropped because a commit wrote them or the tenant moved.
+    pub invalidations: Option<u64>,
+    /// Requests read again because an entry was not at the generation the load found.
+    pub rereads: Option<u64>,
 }
 
 /// The behaviour of a layer. Every method defaults to forwarding.

@@ -53,7 +53,12 @@ pub struct Config {
     pub count_bytes: bool,
     /// The storage holds the primary tenant already: address it, do not build it.
     pub reuse: bool,
+    /// The byte budget of `--mode full`'s working set.
+    pub budget_bytes: u64,
 }
+
+/// The budget of `--mode full` when none is given: 64 MiB.
+pub const DEFAULT_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
 
 impl Config {
     pub fn new(store: StoreSpec, mode: Mode, seed: u64) -> Config {
@@ -65,6 +70,7 @@ impl Config {
             max_divergences: 5,
             count_bytes: false,
             reuse: false,
+            budget_bytes: DEFAULT_BUDGET_BYTES,
         }
     }
 }
@@ -201,7 +207,7 @@ pub fn run(
         })
         .collect();
     let counting = Arc::new(CountingHook::with_bytes(cfg.count_bytes));
-    let built = build(opened.primary.clone(), cfg.mode, counting);
+    let built = build(opened.primary.clone(), cfg.mode, counting, cfg.budget_bytes);
     let mut runner = Runner {
         scenario,
         cfg,
@@ -1111,7 +1117,12 @@ impl Runner<'_> {
                     .reopen_primary()
                     .map_err(|e| format!("reopen: {e}"))?;
                 let counting = self.built.counting.clone();
-                self.built = build(self.opened.primary.clone(), self.cfg.mode, counting);
+                self.built = build(
+                    self.opened.primary.clone(),
+                    self.cfg.mode,
+                    counting,
+                    self.cfg.budget_bytes,
+                );
                 "reopened".to_string()
             }
         };
