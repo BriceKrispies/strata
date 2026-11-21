@@ -51,6 +51,8 @@ aes-gcm = "=0.10.3"
 
 [dev-dependencies]
 strata-spec-parts.workspace = true
+# The adapter conformance suite, run through the working set under sealing.
+strata-storage-api = { workspace = true, features = ["conformance"] }
 webauthn-authenticator-rs = { version = "=0.6.2", default-features = false, features = ["softpasskey"] }
 tokio-tungstenite.workspace = true
 # The notes fixture the automation worker's tests run on.

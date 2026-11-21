@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use strata_kernel::{DomainError, ErrorKind, TenantId, Timestamp};
 use strata_protocol::api::{ErrorCode, ErrorReply};
 use strata_protocol::log::{now_ms, Logger};
+use strata_storage_api::resident::ResidentStore;
 use strata_storage_api::sealed::SealedStore;
 use strata_storage_api::{AuditEntry, ExecuteError, Store, StoreError};
 
@@ -314,6 +315,10 @@ pub struct App {
     clock: std::sync::OnceLock<Clock>,
 }
 
+/// The byte budget of the working set held below the sealed store: headers and single records of
+/// every tenant together (estimated bytes).
+pub const RESIDENT_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
+
 pub type Shared = Arc<App>;
 
 /// A clock that stands in for the system clock in [`App::now`].
@@ -327,7 +332,10 @@ impl App {
             cfg.factors.seal_key,
             cfg.factors.previous_seal_keys.clone(),
         ))));
-        let sealed = Arc::new(SealedStore::new(store, keys.clone()));
+        // The working set sits below the sealed store, so what it holds is the stored form (sealed
+        // tokens) and a destroyed key shows on the next read (`docs/working-set.md`, placement).
+        let resident = Arc::new(ResidentStore::new(store, RESIDENT_BUDGET_BYTES));
+        let sealed = Arc::new(SealedStore::new(resident, keys.clone()));
         Arc::new(App {
             lab: Lab::with_limits(&cfg.limits),
             admission: Admission::new(&cfg.limits),

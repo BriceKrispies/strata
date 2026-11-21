@@ -28,6 +28,9 @@ mod outbound;
 #[path = "quota.rs"]
 mod quota;
 
+#[path = "resident_sealed.rs"]
+mod resident_sealed;
+
 #[path = "sealing.rs"]
 mod sealing;
 
