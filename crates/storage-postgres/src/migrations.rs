@@ -583,4 +583,23 @@ pub(crate) const TENANT_MIGRATIONS: &[Migration] = &[
     UPDATE schema_history SET schema = ((schema::jsonb) - 'teams' - 'invitations')::text;
     ",
     },
+    Migration {
+        version: 24,
+        name: "tenant generation",
+        // The generation of the tenant, in a row of its own beside the tenant row, as in the
+        // SQLite adapter: a nonce as 32 hex digits, the counter, and the fence token of the lease
+        // holder (kept, and compared by nobody, until leases exist). A tenant that exists when the
+        // step runs gets a nonce of its own and counter 1.
+        sql: "
+    CREATE TABLE generation (
+        id      INTEGER PRIMARY KEY CHECK (id = 1),
+        nonce   TEXT NOT NULL,
+        counter BIGINT NOT NULL,
+        fence   BIGINT NOT NULL DEFAULT 0
+    );
+    INSERT INTO generation (id, nonce, counter, fence)
+        SELECT 1, md5(random()::text || clock_timestamp()::text || txid_current()::text), 1, 0
+        WHERE EXISTS (SELECT 1 FROM tenant);
+    ",
+    },
 ];

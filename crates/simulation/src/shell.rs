@@ -41,7 +41,7 @@ use strata_kernel::{
 };
 use strata_storage_api::jobs::JobState;
 use strata_storage_api::memory::MemoryStore;
-use strata_storage_api::Store;
+use strata_storage_api::{Generation, SeededNonces, Store};
 use strata_verification::evidence::Class;
 use strata_verification::invariants::{check_world, InvariantResult};
 
@@ -376,6 +376,9 @@ pub struct ShellRun {
     pub trace: ShellTrace,
     pub world: World,
     pub recordings: BTreeMap<TenantId, Recording>,
+    /// The generation each tenant holds at the end. The store draws its nonces from the
+    /// scenario's seed, so two runs of one scenario end at the same generations.
+    pub generations: BTreeMap<TenantId, Generation>,
 }
 
 /// Requests to send after an operation, made from what it answered (such as a definition that
@@ -631,7 +634,9 @@ pub fn run_shell_with(
 ) -> Result<ShellRun, String> {
     let clock = LogicalClock::at(scenario.start);
     let store = Arc::new(FaultyStore::new(
-        Arc::new(MemoryStore::new()),
+        Arc::new(MemoryStore::with_nonces(SeededNonces::shared(
+            scenario.seed,
+        ))),
         scenario.seed,
         scenario.start_faults,
         clock.reader(),
@@ -884,10 +889,21 @@ pub fn run_shell_with(
     for tenant in world.tenants.keys() {
         recordings.insert(tenant.clone(), record(run.process(), tenant)?);
     }
+    let mut generations = BTreeMap::new();
+    for tenant in world.tenants.keys() {
+        if let Some(held) = run
+            .store
+            .generation(tenant)
+            .map_err(|e| format!("generation of {tenant}: {e}"))?
+        {
+            generations.insert(tenant.clone(), held);
+        }
+    }
     Ok(ShellRun {
         trace,
         world,
         recordings,
+        generations,
     })
 }
 
@@ -1049,7 +1065,7 @@ pub fn replay_recording(
         .map_or(0, |entry| entry.context.now.0);
     let clock = LogicalClock::at(start);
     let store = Arc::new(FaultyStore::new(
-        Arc::new(MemoryStore::new()),
+        Arc::new(MemoryStore::with_nonces(SeededNonces::shared(seed))),
         seed,
         StoreFaults::default(),
         clock.reader(),

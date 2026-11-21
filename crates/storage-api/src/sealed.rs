@@ -45,12 +45,12 @@ use crate::jobs::{
 use crate::schedules::{AutomationPurged, AutomationRetention, Schedule, ScheduleSet};
 use crate::segments::SegmentCommit;
 use crate::{
-    partial_state, Account, AuditEntry, Capabilities, Commit, FederatedIdentity, Health,
-    IdempotentResult, JournalEntry, OidcFlow, OutboxEntry, OutboxFault, PasskeyChallenge,
-    PasskeyRecord, PendingSignIn, PlatformSetting, PlatformWrite, PrincipalRemoval, Receipt,
-    RecoveryRequest, SamlRequest, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store,
-    StoreError, StoreResult, TenantSummary, ThrottleRule, ThrottleSettle, ThrottleVerdict,
-    TotpRecord,
+    partial_state, Account, AuditEntry, Capabilities, Commit, FederatedIdentity, Generation,
+    Health, IdempotentResult, JournalEntry, Loaded, OidcFlow, OutboxEntry, OutboxFault,
+    PasskeyChallenge, PasskeyRecord, PendingSignIn, PlatformSetting, PlatformWrite,
+    PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
+    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRule,
+    ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -672,7 +672,9 @@ impl SealedStore {
                 if commit.delta.base_revision.is_none() {
                     return Ok(Cow::Borrowed(commit));
                 }
-                let header = self.inner.load(tenant, &[])?;
+                let loaded = self.inner.load_at(tenant, &[])?;
+                let found_generation = loaded.generation;
+                let header = loaded.state;
                 let Some(current) = header.tenant else {
                     // The adapter refuses a commit to a tenant that does not exist.
                     return Ok(Cow::Borrowed(commit));
@@ -681,6 +683,7 @@ impl SealedStore {
                     return Err(StoreError::Conflict {
                         expected: commit.delta.base_revision,
                         found: Some(current.revision),
+                        found_generation,
                     });
                 }
                 current.schema.clone()
@@ -852,16 +855,23 @@ impl SealedStore {
         }
     }
 
-    /// One attempt at a load with lookups: `None` when the schema moved between the header and
-    /// the rows, and the translation may be wrong.
-    fn load_translated(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<Option<State>> {
-        let header = self.inner.load(tenant, &[])?;
+    /// One attempt at a load with lookups: `None` when the tenant moved between the header and
+    /// the rows (another schema, or another generation), and the translation may be wrong. The
+    /// generation returned is the one of the rows the state was cut from.
+    fn load_translated(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<Option<Loaded>> {
+        let header_loaded = self.inner.load_at(tenant, &[])?;
+        let header = header_loaded.state;
         let Some(head) = header.tenant.as_deref() else {
-            return Ok(Some(header));
+            return Ok(Some(Loaded {
+                state: header,
+                generation: header_loaded.generation,
+            }));
         };
         let plan = Plan::of(&head.schema);
         if plan.is_empty() {
-            return self.open_state(self.inner.load(tenant, needs)?).map(Some);
+            return self
+                .open_loaded(self.inner.load_at(tenant, needs)?)
+                .map(Some);
         }
         let mut wanted: BTreeSet<Need> = BTreeSet::new();
         let mut translated = false;
@@ -880,18 +890,32 @@ impl SealedStore {
             }
         }
         if !translated {
-            return self.open_state(self.inner.load(tenant, needs)?).map(Some);
+            return self
+                .open_loaded(self.inner.load_at(tenant, needs)?)
+                .map(Some);
         }
         let list: Vec<Need> = wanted.into_iter().collect();
-        let loaded = self.open_state(self.inner.load(tenant, &list)?)?;
-        let Some(found) = loaded.tenant.as_deref() else {
+        let loaded = self.open_loaded(self.inner.load_at(tenant, &list)?)?;
+        let Some(found) = loaded.state.tenant.as_deref() else {
             return Ok(Some(loaded));
         };
-        if found.revision != head.revision && found.schema != head.schema {
+        if loaded.generation != header_loaded.generation
+            || (found.revision != head.revision && found.schema != head.schema)
+        {
             return Ok(None);
         }
         // Exactly what the kernel asked for, judged on the opened values.
-        Ok(Some(partial_state(found, needs)))
+        Ok(Some(Loaded {
+            state: partial_state(found, needs),
+            generation: loaded.generation,
+        }))
+    }
+
+    fn open_loaded(&self, loaded: Loaded) -> StoreResult<Loaded> {
+        Ok(Loaded {
+            state: self.open_state(loaded.state)?,
+            generation: loaded.generation,
+        })
     }
 
     /// Seal the members of an audit line that name a person.
@@ -972,7 +996,7 @@ impl SealedStore {
 }
 
 impl Store for SealedStore {
-    fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
+    fn load_at(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<Loaded> {
         let lookups = needs.iter().any(|need| {
             matches!(
                 need,
@@ -983,11 +1007,11 @@ impl Store for SealedStore {
             )
         });
         if !lookups {
-            return self.open_state(self.inner.load(tenant, needs)?);
+            return self.open_loaded(self.inner.load_at(tenant, needs)?);
         }
         for _ in 0..3 {
-            if let Some(state) = self.load_translated(tenant, needs)? {
-                return Ok(state);
+            if let Some(loaded) = self.load_translated(tenant, needs)? {
+                return Ok(loaded);
             }
         }
         Err(StoreError::Unavailable(
@@ -995,8 +1019,16 @@ impl Store for SealedStore {
         ))
     }
 
-    fn load_complete(&self, tenant: &TenantId) -> StoreResult<State> {
-        self.open_state(self.inner.load_complete(tenant)?)
+    fn load_complete_at(&self, tenant: &TenantId) -> StoreResult<Loaded> {
+        self.open_loaded(self.inner.load_complete_at(tenant)?)
+    }
+
+    fn generation(&self, tenant: &TenantId) -> StoreResult<Option<Generation>> {
+        self.inner.generation(tenant)
+    }
+
+    fn rotate_nonce(&self, tenant: &TenantId) -> StoreResult<Generation> {
+        self.inner.rotate_nonce(tenant)
     }
 
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
@@ -1249,8 +1281,10 @@ impl Store for SealedStore {
         &self,
         tenant: &TenantId,
         principal: &PrincipalId,
+        expected: Option<&Generation>,
     ) -> StoreResult<strata_kernel::ledger::Anonymised> {
-        self.inner.anonymise_ledger_principal(tenant, principal)
+        self.inner
+            .anonymise_ledger_principal(tenant, principal, expected)
     }
 
     fn account_of(
@@ -1544,8 +1578,13 @@ impl Store for SealedStore {
         self.inner.snapshots(tenant)
     }
 
-    fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()> {
-        self.inner.restore_snapshot(tenant, id)
+    fn restore_snapshot(
+        &self,
+        tenant: &TenantId,
+        id: u64,
+        expected: Option<&Generation>,
+    ) -> StoreResult<()> {
+        self.inner.restore_snapshot(tenant, id, expected)
     }
 
     fn reset(&self) -> StoreResult<()> {

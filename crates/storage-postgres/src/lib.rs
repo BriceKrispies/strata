@@ -67,12 +67,13 @@ use strata_storage_api::schedules::{
 };
 use strata_storage_api::segments::{write_conflict, SegmentCommit};
 use strata_storage_api::{
-    check_event_sequence, field_matches, throttle_refund, throttle_step, Account, AuditEntry,
-    Capabilities, Commit, FederatedIdentity, Health, IdempotentResult, JournalEntry, OidcFlow,
-    OutboxEntry, OutboxFault, PasskeyCeremony, PasskeyChallenge, PasskeyRecord, PendingSignIn,
-    PlatformSetting, PlatformWrite, PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest,
-    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
-    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    check_event_sequence, field_matches, random_nonces, throttle_refund, throttle_step, Account,
+    AuditEntry, Capabilities, Commit, FederatedIdentity, Generation, Health, IdempotentResult,
+    JournalEntry, Loaded, NonceSource, OidcFlow, OutboxEntry, OutboxFault, PasskeyCeremony,
+    PasskeyChallenge, PasskeyRecord, PendingSignIn, PlatformSetting, PlatformWrite,
+    PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
+    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
+    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -293,6 +294,58 @@ fn tenant_present(t: &mut Transaction<'_>, tenant: &TenantId) -> StoreResult<boo
         )
         .map_err(db)?;
     get(&row, 0)
+}
+
+/// The generation row of the tenant's schema, none when the schema holds no tenant. Reads that row
+/// only.
+fn read_generation(t: &mut Transaction<'_>) -> StoreResult<Option<Generation>> {
+    let Some(row) = t
+        .query_opt("SELECT nonce, counter FROM generation WHERE id = 1", &[])
+        .map_err(db)?
+    else {
+        return Ok(None);
+    };
+    let nonce: String = get(&row, 0)?;
+    let counter: i64 = get(&row, 1)?;
+    Ok(Some(Generation {
+        nonce: Generation::parse_nonce(&nonce)
+            .ok_or_else(|| StoreError::Corrupt(format!("generation nonce {nonce:?}")))?,
+        counter: counter as u64,
+    }))
+}
+
+/// Write the generation row, keeping the fence token it holds.
+fn write_generation(t: &mut Transaction<'_>, generation: &Generation) -> StoreResult<()> {
+    let nonce = generation.nonce_hex();
+    let counter: i64 = generation.counter as i64;
+    t.execute(
+        "INSERT INTO generation (id, nonce, counter, fence) VALUES (1, $1, $2, 0)
+         ON CONFLICT (id) DO UPDATE SET nonce = EXCLUDED.nonce, counter = EXCLUDED.counter",
+        &[&nonce, &counter],
+    )
+    .map_err(db)?;
+    Ok(())
+}
+
+/// Compare the generation a caller expects with the one the schema holds, in the caller's write
+/// transaction (which holds the schema's writer lock). `None` is the unguarded control-plane
+/// call. Returns the generation held.
+fn guard_generation(
+    t: &mut Transaction<'_>,
+    tenant: &TenantId,
+    expected: Option<&Generation>,
+) -> StoreResult<Option<Generation>> {
+    let held = read_generation(t)?;
+    if let Some(expected) = expected {
+        if Some(*expected) != held {
+            return Err(StoreError::Conflict {
+                expected: None,
+                found: header(t, tenant)?.map(|h| h.revision),
+                found_generation: held,
+            });
+        }
+    }
+    Ok(held)
 }
 
 /// The setting overrides and revisions of the tenant, none when there is neither (SET-051).
@@ -1158,6 +1211,9 @@ pub struct PostgresStore {
     durable: bool,
     /// The control connection without its user and password, for the diagnostics.
     control_location: String,
+    /// Where the nonce of a new generation comes from: the operating system's random source
+    /// unless a test or the simulator gives a seeded one ([`PostgresStore::with_nonces`]).
+    nonces: Arc<dyn NonceSource>,
 }
 
 impl PostgresStore {
@@ -1220,9 +1276,17 @@ impl PostgresStore {
             faults: Mutex::new(Vec::new()),
             durable,
             control_location: redact(control_url),
+            nonces: random_nonces(),
         };
         store.finish_deletions();
         Ok(store)
+    }
+
+    /// Draw the nonces of new generations from `nonces`: a seeded source, so that a run is
+    /// reproduced from its seed.
+    pub fn with_nonces(mut self, nonces: Arc<dyn NonceSource>) -> Self {
+        self.nonces = nonces;
+        self
     }
 
     /// The schema of a tenant that exists in the directory as active, or `None`.
@@ -1749,9 +1813,18 @@ impl PostgresStore {
     }
 
     /// Apply a commit in the transaction `t`, which holds the tenant's writer lock.
-    fn apply(t: &mut Transaction<'_>, commit: &Commit) -> StoreResult<Receipt> {
+    fn apply(
+        t: &mut Transaction<'_>,
+        commit: &Commit,
+        nonces: &dyn NonceSource,
+    ) -> StoreResult<Receipt> {
         let delta = &commit.delta;
         let tenant = delta.tenant.as_str();
+        if commit.expected_generation.is_none() && delta.base_revision.is_some() {
+            return Err(StoreError::Invalid(
+                "a commit with a base revision names the generation it was decided on".into(),
+            ));
+        }
         // The row lock of the tenant: the revision is compared under it, and the outbox
         // positions are handed out from its counter under it.
         let mut position: i64 = match t
@@ -1766,12 +1839,25 @@ impl PostgresStore {
         };
         let current = header(t, &delta.tenant)?;
         let found = current.as_ref().map(|h| h.revision);
-        if found != delta.base_revision {
+        // A tenant that does not exist has no generation, whatever a leftover row says. The
+        // generation is compared under the row lock taken above, in this transaction.
+        let held = match &current {
+            Some(_) => Some(read_generation(t)?.ok_or_else(|| {
+                StoreError::Corrupt(format!("tenant {} has no generation", delta.tenant))
+            })?),
+            None => None,
+        };
+        if found != delta.base_revision || commit.expected_generation != held {
             return Err(StoreError::Conflict {
                 expected: delta.base_revision,
                 found,
+                found_generation: held,
             });
         }
+        let produced = match held {
+            Some(held) => held.raised(),
+            None => Generation::first(nonces.draw(&delta.tenant)),
+        };
         check_event_sequence(commit, current.as_ref().map_or(0, |h| h.event_seq))?;
         // Defence in depth: a tenant's revision advances by exactly one, and its record counter
         // never falls.
@@ -1927,6 +2013,9 @@ impl PostgresStore {
         for object in strata_storage_api::changed_objects(delta) {
             raise_object_revision(t, object.as_str())?;
         }
+        // The generation is raised in the transaction that changes what a load returns, and is
+        // in no hash and in no journalled form.
+        write_generation(t, &produced)?;
         let mut last_position = None;
         for event in &commit.events {
             position += 1;
@@ -1989,6 +2078,7 @@ impl PostgresStore {
         Ok(Receipt {
             revision: delta.new_revision,
             last_position,
+            generation: produced,
         })
     }
 }
@@ -2184,13 +2274,21 @@ impl Store for PostgresStore {
             .collect())
     }
 
-    fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
+    fn load_at(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<Loaded> {
         let Some(scope) = self.tenant_db(tenant)? else {
-            return Ok(State::absent(tenant.clone()));
+            return Ok(Loaded {
+                state: State::absent(tenant.clone()),
+                generation: None,
+            });
         };
         scope.read(|t| {
+            // The generation and the rows are read in this one REPEATABLE READ transaction.
+            let generation = read_generation(t)?;
             let Some(mut state) = header(t, tenant)? else {
-                return Ok(State::absent(tenant.clone()));
+                return Ok(Loaded {
+                    state: State::absent(tenant.clone()),
+                    generation: None,
+                });
             };
             for need in needs {
                 let rows = match need {
@@ -2287,23 +2385,51 @@ impl Store for PostgresStore {
                 put_records(&mut state, rows)?;
             }
             ledger::tidy(&mut state);
-            Ok(State {
-                tenant_id: tenant.clone(),
-                tenant: Some(Arc::new(state)),
-                coverage: Coverage::Partial(needs.iter().cloned().collect()),
+            Ok(Loaded {
+                state: State {
+                    tenant_id: tenant.clone(),
+                    tenant: Some(Arc::new(state)),
+                    coverage: Coverage::Partial(needs.iter().cloned().collect()),
+                },
+                generation,
             })
         })
     }
 
-    fn load_complete(&self, tenant: &TenantId) -> StoreResult<State> {
+    fn load_complete_at(&self, tenant: &TenantId) -> StoreResult<Loaded> {
         let Some(scope) = self.tenant_db(tenant)? else {
-            return Ok(State::absent(tenant.clone()));
+            return Ok(Loaded {
+                state: State::absent(tenant.clone()),
+                generation: None,
+            });
         };
         scope.read(|t| {
+            let generation = read_generation(t)?;
             Ok(match complete(t, tenant)? {
-                Some(state) => State::complete(Arc::new(state)),
-                None => State::absent(tenant.clone()),
+                Some(state) => Loaded {
+                    state: State::complete(Arc::new(state)),
+                    generation,
+                },
+                None => Loaded {
+                    state: State::absent(tenant.clone()),
+                    generation: None,
+                },
             })
+        })
+    }
+
+    fn generation(&self, tenant: &TenantId) -> StoreResult<Option<Generation>> {
+        Ok(self.peek(tenant, read_generation)?.flatten())
+    }
+
+    fn rotate_nonce(&self, tenant: &TenantId) -> StoreResult<Generation> {
+        let scope = self.existing(tenant)?;
+        scope.write(|t| {
+            let held = read_generation(t)?
+                .ok_or_else(|| StoreError::Corrupt(format!("tenant {tenant} has no generation")))?;
+            let next = held.rotated(self.nonces.draw(tenant));
+            write_generation(t, &next)?;
+            Ok(next)
         })
     }
 
@@ -2320,6 +2446,7 @@ impl Store for PostgresStore {
                     return Err(StoreError::Conflict {
                         expected: delta.base_revision,
                         found: None,
+                        found_generation: None,
                     });
                 }
                 check_event_sequence(commit, 0)?;
@@ -2332,14 +2459,14 @@ impl Store for PostgresStore {
             if let Some(due) = wake {
                 self.wake_at(&delta.tenant, due)?;
             }
-            let receipt = scope.write(|t| Self::apply(t, commit))?;
+            let receipt = scope.write(|t| Self::apply(t, commit, &*self.nonces))?;
             if let Some(due) = wake {
                 let _ = self.wake_at(&delta.tenant, due);
             }
             return Ok(receipt);
         }
         let (scope, created) = self.create_tenant_db(&delta.tenant, commit.journal.context.now)?;
-        let result = scope.write(|t| Self::apply(t, commit));
+        let result = scope.write(|t| Self::apply(t, commit, &*self.nonces));
         if let (Ok(_), Some(due)) = (&result, commit.jobs.iter().map(|job| job.due_at.0).min()) {
             let _ = self.wake_at(&delta.tenant, due);
         }
@@ -2366,6 +2493,7 @@ impl Store for PostgresStore {
             return Err(StoreError::Conflict {
                 expected: commit.delta.base_revision,
                 found: None,
+                found_generation: None,
             });
         };
         let wake = commit.jobs.iter().map(|job| job.due_at.0).min();
@@ -2373,7 +2501,7 @@ impl Store for PostgresStore {
             self.wake_at(&commit.delta.tenant, due)?;
         }
         let receipt = scope.write(|t| {
-            let receipt = Self::apply(t, commit)?;
+            let receipt = Self::apply(t, commit, &*self.nonces)?;
             apply_segments(t, write)?;
             Ok(receipt)
         })?;
@@ -2388,6 +2516,7 @@ impl Store for PostgresStore {
             return Err(StoreError::Conflict {
                 expected: Some(commit.revision),
                 found: None,
+                found_generation: None,
             });
         };
         check_jobs(&commit.work.jobs)?;
@@ -2410,17 +2539,23 @@ impl Store for PostgresStore {
                 }
                 None => None,
             };
+            let held = read_generation(t)?;
             if found != Some(commit.revision) {
                 return Err(StoreError::Conflict {
                     expected: Some(commit.revision),
                     found,
+                    found_generation: held,
                 });
             }
             apply_segments(t, &commit.write)?;
             write_automation(t, &commit.tenant, &commit.work, commit.now)?;
+            // No record changed: the generation is not raised.
             Ok(Receipt {
                 revision: commit.revision,
                 last_position: None,
+                generation: held.ok_or_else(|| {
+                    StoreError::Corrupt(format!("tenant {} has no generation", commit.tenant))
+                })?,
             })
         })?;
         if let Some(due) = wake {
@@ -2658,12 +2793,16 @@ impl Store for PostgresStore {
             let revision: i64 = get(&row, 1)?;
             let position: Option<i64> = get(&row, 2)?;
             let result: String = get(&row, 3)?;
+            // The generation the tenant holds now: what the first commit produced is not kept.
+            let generation = read_generation(t)?
+                .ok_or_else(|| StoreError::Corrupt(format!("tenant {tenant} has no generation")))?;
             Ok(Some(IdempotentResult {
                 request_hash,
                 result: decode(&result, "idempotency result")?,
                 receipt: Receipt {
                     revision: StateRevision(revision as u64),
                     last_position: position.map(|p| p as u64),
+                    generation,
                 },
             }))
         })?;
@@ -3930,9 +4069,27 @@ impl Store for PostgresStore {
         &self,
         tenant: &TenantId,
         principal: &PrincipalId,
+        expected: Option<&Generation>,
     ) -> StoreResult<strata_kernel::ledger::Anonymised> {
         Ok(self
-            .on_tenant(tenant, |t| ledger::anonymise(t, principal))?
+            .on_tenant(tenant, |t| {
+                // The tenant row is locked for the comparison, as in a commit.
+                t.query_opt(
+                    "SELECT 1 FROM tenant WHERE id = $1 FOR UPDATE",
+                    &[&tenant.as_str()],
+                )
+                .map_err(db)?;
+                let held = guard_generation(t, tenant, expected)?;
+                let done = ledger::anonymise(t, principal)?;
+                // The counter is raised when, and only when, the clearing changed what a load
+                // returns.
+                if done != Default::default() {
+                    if let Some(held) = held {
+                        write_generation(t, &held.raised())?;
+                    }
+                }
+                Ok(done)
+            })?
             .unwrap_or_default())
     }
 
@@ -4201,10 +4358,21 @@ impl Store for PostgresStore {
     /// As SQLite restores a snapshot, and one thing more: the search entries of the records put
     /// back are written again from the snapshot's schema, so that the index stays the function of
     /// the records and the schema that it is everywhere else. (SQLite's restore leaves them out.)
-    fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()> {
+    fn restore_snapshot(
+        &self,
+        tenant: &TenantId,
+        id: u64,
+        expected: Option<&Generation>,
+    ) -> StoreResult<()> {
         let state = self.load_snapshot(tenant, id)?;
         let scope = self.existing(tenant)?;
         scope.write(|t| {
+            t.query_opt(
+                "SELECT 1 FROM tenant WHERE id = $1 FOR UPDATE",
+                &[&tenant.as_str()],
+            )
+            .map_err(db)?;
+            let held = guard_generation(t, tenant, expected)?;
             ledger::check_restorable(t, state.revision)?;
             t.execute("DELETE FROM records", &[]).map_err(db)?;
             raise_object_revision(t, "")?;
@@ -4266,6 +4434,14 @@ impl Store for PostgresStore {
                     strata_storage_api::segment_jobs::of_write(&write, "restore", Timestamp(0));
                 insert_jobs(t, tenant, &jobs, Timestamp(0))?;
             }
+            // A restore draws a new nonce and raises the counter, in this transaction.
+            write_generation(
+                t,
+                &Generation {
+                    nonce: self.nonces.draw(tenant),
+                    counter: held.map_or(0, |g| g.counter) + 1,
+                },
+            )?;
             Ok(())
         })?;
         let _ = self.wake_refresh(tenant, &scope);

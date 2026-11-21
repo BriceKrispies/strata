@@ -775,7 +775,7 @@ fn a_restored_snapshot_leaves_membership_equal_to_a_fresh_evaluation_once_the_ba
 
     fx.app
         .store
-        .restore_snapshot(&fx.tenant(), snapshot.id)
+        .restore_snapshot(&fx.tenant(), snapshot.id, None)
         .unwrap();
     // The rows no longer rest on the records: they are cleared and every person is evaluated
     // again by the batches the restore left.

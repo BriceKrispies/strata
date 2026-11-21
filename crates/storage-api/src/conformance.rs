@@ -14,6 +14,13 @@ use std::collections::BTreeMap;
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 
+mod generation;
+pub use generation::{
+    a_commit_names_the_generation_it_was_decided_on, generation_follows_every_store_method,
+    generations_are_reproducible_from_the_seed,
+    interleaved_commits_and_loads_keep_each_revision_with_one_generation,
+};
+
 /// A store and a world that have received exactly the same accepted intents.
 struct Pair<'a> {
     store: &'a dyn Store,
@@ -208,15 +215,22 @@ fn a_stale_commit_conflicts_and_changes_nothing(store: &dyn Store) {
         .unwrap()
         .schema
         .clone();
-    let stale_state = store
-        .load(&alpha, &needs(Some(&schema), &new_note("Stale", "stale")))
+    let stale_loaded = store
+        .load_at(&alpha, &needs(Some(&schema), &new_note("Stale", "stale")))
         .unwrap();
+    let stale_generation = stale_loaded.generation;
+    let stale_state = stale_loaded.state;
     let context = ctx("alpha", user("alpha:writer1"), 9_000);
     let stale = transition(&stale_state, &new_note("Stale", "stale"), &context).unwrap();
     pair.note("alpha", "Winner", "winner");
     let events_before = store.events_after(&alpha, 0, 1_000).unwrap().len();
     let error = store
-        .commit(&Commit::of(&new_note("Stale", "stale"), &context, &stale))
+        .commit(&Commit::of(
+            &new_note("Stale", "stale"),
+            &context,
+            &stale,
+            stale_generation,
+        ))
         .unwrap_err();
     assert!(
         matches!(error, StoreError::Conflict { .. }),
@@ -247,6 +261,7 @@ fn a_stale_commit_conflicts_and_changes_nothing(store: &dyn Store) {
             &create,
             &ctx("alpha", Principal::System, 9_001),
             &again,
+            None,
         ))
         .unwrap_err();
     assert!(matches!(error, StoreError::Conflict { .. }));
@@ -266,16 +281,19 @@ fn a_malformed_commit_is_refused_whole(store: &dyn Store) {
         .unwrap()
         .schema
         .clone();
-    let state = store.load(&alpha, &needs(Some(&schema), &intent)).unwrap();
-    let good = transition(&state, &intent, &context).unwrap();
+    let loaded = store
+        .load_at(&alpha, &needs(Some(&schema), &intent))
+        .unwrap();
+    let generation = loaded.generation;
+    let good = transition(&loaded.state, &intent, &context).unwrap();
     let journal_before = store.journal_after(&alpha, 0, 1_000).unwrap().len();
 
     // An event sequence number that is already taken: the record write must not survive.
-    let mut reused = Commit::of(&intent, &context, &good);
+    let mut reused = Commit::of(&intent, &context, &good, generation);
     reused.events[0].seq -= 1;
     assert!(matches!(store.commit(&reused), Err(StoreError::Invalid(_))));
     // An event addressed to another tenant.
-    let mut foreign = Commit::of(&intent, &context, &good);
+    let mut foreign = Commit::of(&intent, &context, &good, generation);
     foreign.events[0].tenant = tenant_id("beta");
     assert!(matches!(
         store.commit(&foreign),
@@ -298,7 +316,9 @@ fn a_malformed_commit_is_refused_whole(store: &dyn Store) {
             == 1
     );
     // The untouched commit still applies.
-    store.commit(&Commit::of(&intent, &context, &good)).unwrap();
+    store
+        .commit(&Commit::of(&intent, &context, &good, generation))
+        .unwrap();
 }
 
 fn partial_loads_hold_what_the_needs_name(store: &dyn Store) {
@@ -557,10 +577,13 @@ fn events_are_published_only_after_their_commit(store: &dyn Store) {
         .unwrap()
         .schema
         .clone();
-    let stale_state = store.load(&alpha, &needs(Some(&schema), &intent)).unwrap();
+    let stale_loaded = store
+        .load_at(&alpha, &needs(Some(&schema), &intent))
+        .unwrap();
+    let stale_generation = stale_loaded.generation;
     let context = ctx("alpha", user("alpha:writer1"), 9_000);
-    let stale = transition(&stale_state, &intent, &context).unwrap();
-    let mut malformed = Commit::of(&intent, &context, &stale);
+    let stale = transition(&stale_loaded.state, &intent, &context).unwrap();
+    let mut malformed = Commit::of(&intent, &context, &stale, stale_generation);
     malformed.events[0].seq += 7;
     assert!(matches!(
         store.commit(&malformed),
@@ -573,7 +596,7 @@ fn events_are_published_only_after_their_commit(store: &dyn Store) {
     pair.note("alpha", "Winner", "winner");
     publish_everything(store);
     assert!(matches!(
-        store.commit(&Commit::of(&intent, &context, &stale)),
+        store.commit(&Commit::of(&intent, &context, &stale, stale_generation)),
         Err(StoreError::Conflict { .. })
     ));
     assert!(
@@ -586,10 +609,11 @@ fn events_are_published_only_after_their_commit(store: &dyn Store) {
     pair.note("beta", "Beta", "beta");
     publish_everything(store);
     let state = store.load(&alpha, &[]).unwrap();
+    let next_loaded = store
+        .load_at(&alpha, &needs(Some(&schema), &new_note("Next", "next")))
+        .unwrap();
     let decided = transition(
-        &store
-            .load(&alpha, &needs(Some(&schema), &new_note("Next", "next")))
-            .unwrap(),
+        &next_loaded.state,
         &new_note("Next", "next"),
         &ctx("alpha", user("alpha:writer1"), 9_100),
     )
@@ -603,6 +627,7 @@ fn events_are_published_only_after_their_commit(store: &dyn Store) {
             &new_note("Next", "next"),
             &ctx("alpha", user("alpha:writer1"), 9_100),
             &decided,
+            next_loaded.generation,
         ))
         .unwrap();
     let waiting = store.outbox(10).unwrap();
@@ -1332,7 +1357,7 @@ fn snapshots_restore_to_the_same_hash(store: &dyn Store) {
     ));
 
     let passed_seq = pair.world.tenants[&alpha].event_seq;
-    store.restore_snapshot(&alpha, info.id).unwrap();
+    store.restore_snapshot(&alpha, info.id, None).unwrap();
     // The restored state is the snapshot's, except that its event counter stays where it was.
     let mut restored = kept_world.tenants[&alpha].clone();
     std::sync::Arc::make_mut(&mut restored).event_seq = passed_seq;
@@ -1484,12 +1509,12 @@ fn the_ledger_is_kept_with_its_commit_and_never_rewritten(store: &dyn Store) {
 
     // Erasure clears the principal from the entries it caused and keeps the rest (LDG-028).
     let cleared = store
-        .anonymise_ledger_principal(&alpha, &principal_id("alpha:owner"))
+        .anonymise_ledger_principal(&alpha, &principal_id("alpha:owner"), None)
         .unwrap();
     assert_eq!(cleared.entries, 3);
     assert_eq!(cleared.accounts, 0);
     let cleared = store
-        .anonymise_ledger_principal(&alpha, &principal_id("alpha:writer1"))
+        .anonymise_ledger_principal(&alpha, &principal_id("alpha:writer1"), None)
         .unwrap();
     assert_eq!(cleared.accounts, 1);
     let whole = store.load_complete(&alpha).unwrap();
@@ -1512,7 +1537,7 @@ fn the_ledger_is_kept_with_its_commit_and_never_rewritten(store: &dyn Store) {
 
     // Entries are never removed, so a snapshot older than one is not restored.
     assert!(matches!(
-        store.restore_snapshot(&alpha, info.id),
+        store.restore_snapshot(&alpha, info.id, None),
         Err(StoreError::Invalid(_))
     ));
     assert_eq!(
@@ -2186,11 +2211,11 @@ pub fn jobs_conform(store: &dyn Store) {
 
     // The jobs and exception records of a commit are written with it, and a commit that is
     // refused writes none (SCH-004).
-    let state = store.load_complete(&alpha).unwrap();
+    let loaded = store.load_complete_at(&alpha).unwrap();
     let intent = new_note("Jobbed", "jobbed");
     let context = ctx("alpha", user("alpha:writer1"), 10_000);
-    let transition = strata_kernel::transition(&state, &intent, &context).expect("accepted");
-    let mut commit = Commit::of(&intent, &context, &transition);
+    let transition = strata_kernel::transition(&loaded.state, &intent, &context).expect("accepted");
+    let mut commit = Commit::of(&intent, &context, &transition, loaded.generation);
     commit.jobs.push(job("c", 10_000));
     commit.exceptions.push(ExceptionRecord {
         id: "x-3".into(),
@@ -2586,12 +2611,13 @@ pub fn idempotency_retention_is_a_property_of_the_entry(store: &dyn Store) {
     keyed.idempotency_key = Some("k-default".into());
     execute(store, &new_note("Default", "default"), &keyed).expect("the first request commits");
     let commit_with = |key: &str, scope: String, retention_ms: i64, slug: &str| {
-        let state = store.load_complete(&alpha).unwrap();
+        let loaded = store.load_complete_at(&alpha).unwrap();
         let intent = new_note(slug, slug);
         let mut context = ctx("alpha", writer.clone(), t0 + 1);
         context.idempotency_key = Some(key.to_string());
-        let transition = strata_kernel::transition(&state, &intent, &context).expect("accepted");
-        let mut commit = Commit::of(&intent, &context, &transition);
+        let transition =
+            strata_kernel::transition(&loaded.state, &intent, &context).expect("accepted");
+        let mut commit = Commit::of(&intent, &context, &transition, loaded.generation);
         let entry = commit.idempotency.as_mut().expect("an entry");
         entry.retention_ms = retention_ms;
         entry.principal = scope;
@@ -2639,19 +2665,20 @@ pub fn idempotency_retention_is_a_property_of_the_entry(store: &dyn Store) {
     assert!(!found(&format!("{scope}|op:three"), "k-same", t0 + 6 * day));
 
     // A commit that names a scope recorded and not past its retention fails; past it, it applies.
-    let state = store.load_complete(&alpha).unwrap();
+    let loaded = store.load_complete_at(&alpha).unwrap();
+    let state = loaded.state;
     let again = new_note("Again", "again");
     let mut inside = ctx("alpha", writer.clone(), t0 + 3 * day);
     inside.idempotency_key = Some("k-week".into());
     let transition = strata_kernel::transition(&state, &again, &inside).expect("accepted");
     assert!(store
-        .commit(&Commit::of(&again, &inside, &transition))
+        .commit(&Commit::of(&again, &inside, &transition, loaded.generation))
         .is_err());
     let mut late = ctx("alpha", writer, t0 + 8 * day);
     late.idempotency_key = Some("k-week".into());
     let transition = strata_kernel::transition(&state, &again, &late).expect("accepted");
     store
-        .commit(&Commit::of(&again, &late, &transition))
+        .commit(&Commit::of(&again, &late, &transition, loaded.generation))
         .expect("a key past its retention is new");
 }
 

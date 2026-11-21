@@ -385,7 +385,11 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
     scim::end_sessions(app, tenant, subject, &ctx.correlation)?;
     let documents = erase_documents(app, ctx, subject)?;
     // The ledger keeps every amount, key and balance, and loses the person (LDG-027, LDG-028).
-    let ledger = app.store.anonymise_ledger_principal(tenant, subject)?;
+    // It is not decided on a loaded state, so it names no generation: the store raises the
+    // generation itself when it clears anything.
+    let ledger = app
+        .store
+        .anonymise_ledger_principal(tenant, subject, None)?;
     // The segments: every membership ends with an exit event that names the person sealed, the
     // wake rows go, and the person is marked so that no later decision enters them (SEG-036 to
     // SEG-038).

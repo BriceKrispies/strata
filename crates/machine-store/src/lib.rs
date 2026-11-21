@@ -58,7 +58,7 @@ use strata_runtime::store::{
     RecordStore, StoredRecord, TimerEntry, TimerStore, Tx,
 };
 use strata_runtime::{Clock, Delivery, Isolation, StorageError, Time};
-use strata_storage_api::{Commit, JournalEntry, Store, StoreError};
+use strata_storage_api::{Commit, Generation, JournalEntry, Store, StoreError};
 
 /// The object type of the runtime's outbox messages.
 pub const OUTBOX: &str = "runtime_outbox";
@@ -74,7 +74,9 @@ const INTERNAL: [&str; 4] = [OUTBOX, TIMERS, QUEUE, DEAD_LETTERS];
 
 fn storage(error: StoreError) -> StorageError {
     match error {
-        StoreError::Conflict { expected, found } => StorageError::Conflict(format!(
+        StoreError::Conflict {
+            expected, found, ..
+        } => StorageError::Conflict(format!(
             "tenant revision changed: based on {expected:?}, store is at {found:?}"
         )),
         StoreError::NotFound(what) => StorageError::Invalid(format!("not found: {what}")),
@@ -256,6 +258,9 @@ struct ApiTx<'a> {
     now: Time,
     header: Header,
     next_record: u64,
+    /// The generation of the load the transaction's reads were made on: the commit is accepted
+    /// only while the tenant is still at it.
+    generation: Option<Generation>,
     pending: BTreeMap<(ObjectTypeId, RecordId), Slot>,
 }
 
@@ -263,8 +268,9 @@ impl<'a> ApiTx<'a> {
     /// Open a transaction, creating the tenant first if the store does not have it.
     fn begin(store: &'a dyn Store, tenant: &'a TenantId, now: Time) -> Result<Self, StorageError> {
         for _ in 0..2 {
-            let state = store.load(tenant, &[]).map_err(storage)?;
-            if let Some(found) = state.tenant {
+            let loaded = store.load_at(tenant, &[]).map_err(storage)?;
+            let generation = loaded.generation;
+            if let Some(found) = loaded.state.tenant {
                 return Ok(ApiTx {
                     store,
                     tenant,
@@ -274,6 +280,7 @@ impl<'a> ApiTx<'a> {
                         event_seq: found.event_seq,
                     },
                     next_record: found.next_record,
+                    generation,
                     pending: BTreeMap::new(),
                 });
             }
@@ -330,6 +337,8 @@ impl<'a> ApiTx<'a> {
             idempotency: None,
             jobs: Vec::new(),
             exceptions: Vec::new(),
+            // The commit that creates the tenant has no generation to name.
+            expected_generation: None,
         };
         match store.commit(&commit) {
             // Another writer created it first: the caller loads it again.
@@ -633,6 +642,7 @@ impl<'a> ApiTx<'a> {
             idempotency: None,
             jobs: Vec::new(),
             exceptions: Vec::new(),
+            expected_generation: self.generation,
         };
         self.store.commit(&commit).map_err(storage)?;
         Ok(())
