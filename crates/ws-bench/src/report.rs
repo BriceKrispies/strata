@@ -48,6 +48,9 @@ pub struct KindCounts {
     /// The operation could not be built (the tenant offers none of its kind, or the type has no
     /// records left).
     pub skipped: u64,
+    /// The kernel's refusals of this kind of operation, by the kind of error (a policy refusal
+    /// is `Unauthorized`). Counted in `domain_errors` as well.
+    pub refused: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -84,6 +87,8 @@ pub struct FaultRecord {
     pub kind: String,
     pub at_op: u64,
     pub outcome: String,
+    /// The fault took effect, by its own check (a no-op fault is not).
+    pub effective: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -170,6 +175,10 @@ pub struct Report {
     pub coherence: Coherence,
     pub conflicts: Conflicts,
     pub faults: Vec<FaultRecord>,
+    /// Faults that did not take effect: any is a failure of the run.
+    pub faults_ineffective: u64,
+    /// The kernel's refusals of operations, by the kind of error, over the whole run.
+    pub refusals: BTreeMap<String, u64>,
     pub store_side: StoreSide,
     pub wrapper: Wrapper,
     pub timing: Timing,

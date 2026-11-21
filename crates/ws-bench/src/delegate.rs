@@ -23,27 +23,27 @@ use strata_storage_api::*;
 
 impl<H: Hook> Store for Layer<H> {
     fn capabilities(&self) -> Capabilities {
-        self.inner.capabilities()
+        self.inner.get().capabilities()
     }
 
     fn health(&self) -> StoreResult<Health> {
-        self.inner.health()
+        self.inner.get().health()
     }
 
     fn liveness(&self) -> StoreResult<()> {
-        self.inner.liveness()
+        self.inner.get().liveness()
     }
 
     fn migrations(&self) -> StoreResult<Vec<StorageMigration>> {
-        self.inner.migrations()
+        self.inner.get().migrations()
     }
 
     fn tenants(&self) -> StoreResult<Vec<TenantSummary>> {
-        self.inner.tenants()
+        self.inner.get().tenants()
     }
 
     fn tenant_summary(&self, tenant: &TenantId) -> StoreResult<Option<TenantSummary>> {
-        self.inner.tenant_summary(tenant)
+        self.inner.get().tenant_summary(tenant)
     }
 
     fn object_revisions(
@@ -51,30 +51,31 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         objects: &[strata_kernel::ObjectTypeId],
     ) -> StoreResult<std::collections::BTreeMap<strata_kernel::ObjectTypeId, u64>> {
-        self.inner.object_revisions(tenant, objects)
+        self.inner.get().object_revisions(tenant, objects)
     }
 
     fn tenant_plan(&self, tenant: &TenantId) -> StoreResult<Option<String>> {
-        self.inner.tenant_plan(tenant)
+        self.inner.get().tenant_plan(tenant)
     }
 
     fn set_tenant_plan(&self, tenant: &TenantId, plan: &str) -> StoreResult<()> {
-        self.inner.set_tenant_plan(tenant, plan)
+        self.inner.get().set_tenant_plan(tenant, plan)
     }
 
     fn stored_bytes(&self, tenant: &TenantId) -> StoreResult<u64> {
-        self.inner.stored_bytes(tenant)
+        self.inner.get().stored_bytes(tenant)
     }
 
     // `load` and `load_complete` are the trait's defaults over the two methods below, so every
     // read reaches the hook. Each of the four loads is forwarded explicitly: a layer never falls
     // back to a default that would decode a header it was handed already.
     fn load_at(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<Loaded> {
-        self.hook.load_at(self.inner.as_ref(), tenant, needs)
+        self.hook.load_at(self.inner.get().as_ref(), tenant, needs)
     }
 
     fn load_complete_at(&self, tenant: &TenantId) -> StoreResult<Loaded> {
-        self.hook.load_complete_at(self.inner.as_ref(), tenant)
+        self.hook
+            .load_complete_at(self.inner.get().as_ref(), tenant)
     }
 
     fn load_at_held(
@@ -84,7 +85,7 @@ impl<H: Hook> Store for Layer<H> {
         held: Option<&resident::HeldHeader>,
     ) -> StoreResult<resident::HeldLoad> {
         self.hook
-            .load_at_held(self.inner.as_ref(), tenant, needs, held)
+            .load_at_held(self.inner.get().as_ref(), tenant, needs, held)
     }
 
     fn load_complete_at_held(
@@ -93,21 +94,21 @@ impl<H: Hook> Store for Layer<H> {
         held: Option<&resident::HeldHeader>,
     ) -> StoreResult<resident::HeldLoad> {
         self.hook
-            .load_complete_at_held(self.inner.as_ref(), tenant, held)
+            .load_complete_at_held(self.inner.get().as_ref(), tenant, held)
     }
 
     fn generation(&self, tenant: &TenantId) -> StoreResult<Option<Generation>> {
-        self.inner.generation(tenant)
+        self.inner.get().generation(tenant)
     }
 
     fn rotate_nonce(&self, tenant: &TenantId) -> StoreResult<Generation> {
-        let done = self.inner.rotate_nonce(tenant);
+        let done = self.inner.get().rotate_nonce(tenant);
         self.hook.wrote(tenant, done.as_ref().err());
         done
     }
 
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
-        let done = self.hook.commit(self.inner.as_ref(), commit);
+        let done = self.hook.commit(self.inner.get().as_ref(), commit);
         self.hook.wrote(&commit.delta.tenant, done.as_ref().err());
         done
     }
@@ -119,7 +120,9 @@ impl<H: Hook> Store for Layer<H> {
         key: &str,
         now: Timestamp,
     ) -> StoreResult<Option<IdempotentResult>> {
-        self.inner.idempotent_result(tenant, principal, key, now)
+        self.inner
+            .get()
+            .idempotent_result(tenant, principal, key, now)
     }
 
     fn events_after(
@@ -128,23 +131,23 @@ impl<H: Hook> Store for Layer<H> {
         after: u64,
         limit: usize,
     ) -> StoreResult<Vec<DomainEvent>> {
-        self.inner.events_after(tenant, after, limit)
+        self.inner.get().events_after(tenant, after, limit)
     }
 
     fn outbox(&self, limit: usize) -> StoreResult<Vec<OutboxEntry>> {
-        self.inner.outbox(limit)
+        self.inner.get().outbox(limit)
     }
 
     fn outbox_faults(&self) -> Vec<OutboxFault> {
-        self.inner.outbox_faults()
+        self.inner.get().outbox_faults()
     }
 
     fn outbox_pending_of(&self, tenant: &TenantId) -> StoreResult<u64> {
-        self.inner.outbox_pending_of(tenant)
+        self.inner.get().outbox_pending_of(tenant)
     }
 
     fn mark_published(&self, tenant: &TenantId, position: u64) -> StoreResult<()> {
-        self.inner.mark_published(tenant, position)
+        self.inner.get().mark_published(tenant, position)
     }
 
     fn journal_after(
@@ -153,19 +156,19 @@ impl<H: Hook> Store for Layer<H> {
         after: u64,
         limit: usize,
     ) -> StoreResult<Vec<JournalEntry>> {
-        self.inner.journal_after(tenant, after, limit)
+        self.inner.get().journal_after(tenant, after, limit)
     }
 
     fn journal_count(&self, tenant: &TenantId) -> StoreResult<u64> {
-        self.inner.journal_count(tenant)
+        self.inner.get().journal_count(tenant)
     }
 
     fn put_session(&self, session: &SessionRecord) -> StoreResult<()> {
-        self.inner.put_session(session)
+        self.inner.get().put_session(session)
     }
 
     fn session_seen(&self, id: &SessionId, at: Timestamp) -> StoreResult<()> {
-        self.inner.session_seen(id, at)
+        self.inner.get().session_seen(id, at)
     }
 
     fn session_authenticated(
@@ -174,19 +177,19 @@ impl<H: Hook> Store for Layer<H> {
         at: Timestamp,
         network: Option<&str>,
     ) -> StoreResult<()> {
-        self.inner.session_authenticated(id, at, network)
+        self.inner.get().session_authenticated(id, at, network)
     }
 
     fn session_by_token(&self, token_hash: &str) -> StoreResult<Option<SessionRecord>> {
-        self.inner.session_by_token(token_hash)
+        self.inner.get().session_by_token(token_hash)
     }
 
     fn session(&self, id: &SessionId) -> StoreResult<Option<SessionRecord>> {
-        self.inner.session(id)
+        self.inner.get().session(id)
     }
 
     fn live_sessions(&self, now: Timestamp) -> StoreResult<Vec<SessionRecord>> {
-        self.inner.live_sessions(now)
+        self.inner.get().live_sessions(now)
     }
 
     fn live_sessions_of(
@@ -195,11 +198,11 @@ impl<H: Hook> Store for Layer<H> {
         principal: Option<&PrincipalId>,
         now: Timestamp,
     ) -> StoreResult<Vec<SessionRecord>> {
-        self.inner.live_sessions_of(tenant, principal, now)
+        self.inner.get().live_sessions_of(tenant, principal, now)
     }
 
     fn purge_sessions(&self, before: Timestamp) -> StoreResult<u64> {
-        self.inner.purge_sessions(before)
+        self.inner.get().purge_sessions(before)
     }
 
     fn throttle_reserve(
@@ -208,7 +211,7 @@ impl<H: Hook> Store for Layer<H> {
         rules: &[ThrottleRule],
         now: Timestamp,
     ) -> StoreResult<ThrottleVerdict> {
-        self.inner.throttle_reserve(tenant, rules, now)
+        self.inner.get().throttle_reserve(tenant, rules, now)
     }
 
     fn throttle_settle(
@@ -218,31 +221,31 @@ impl<H: Hook> Store for Layer<H> {
         max: u32,
         how: ThrottleSettle,
     ) -> StoreResult<()> {
-        self.inner.throttle_settle(tenant, key, max, how)
+        self.inner.get().throttle_settle(tenant, key, max, how)
     }
 
     fn purge_throttle(&self, now: Timestamp) -> StoreResult<u64> {
-        self.inner.purge_throttle(now)
+        self.inner.get().purge_throttle(now)
     }
 
     fn put_account(&self, account: &Account) -> StoreResult<()> {
-        self.inner.put_account(account)
+        self.inner.get().put_account(account)
     }
 
     fn create_account(&self, account: &Account) -> StoreResult<bool> {
-        self.inner.create_account(account)
+        self.inner.get().create_account(account)
     }
 
     fn update_account(&self, expected: &Account, replacement: &Account) -> StoreResult<bool> {
-        self.inner.update_account(expected, replacement)
+        self.inner.get().update_account(expected, replacement)
     }
 
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>> {
-        self.inner.account(tenant, login)
+        self.inner.get().account(tenant, login)
     }
 
     fn remove_account(&self, tenant: &TenantId, login: &str) -> StoreResult<bool> {
-        self.inner.remove_account(tenant, login)
+        self.inner.get().remove_account(tenant, login)
     }
 
     fn remove_principal(
@@ -250,7 +253,7 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         principal: &PrincipalId,
     ) -> StoreResult<PrincipalRemoval> {
-        self.inner.remove_principal(tenant, principal)
+        self.inner.get().remove_principal(tenant, principal)
     }
 
     fn anonymise_ledger_principal(
@@ -261,6 +264,7 @@ impl<H: Hook> Store for Layer<H> {
     ) -> StoreResult<strata_kernel::ledger::Anonymised> {
         let done = self
             .inner
+            .get()
             .anonymise_ledger_principal(tenant, principal, expected);
         self.hook.wrote(tenant, done.as_ref().err());
         done
@@ -271,15 +275,15 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         principal: &PrincipalId,
     ) -> StoreResult<Option<Account>> {
-        self.inner.account_of(tenant, principal)
+        self.inner.get().account_of(tenant, principal)
     }
 
     fn put_passkey(&self, passkey: &PasskeyRecord) -> StoreResult<bool> {
-        self.inner.put_passkey(passkey)
+        self.inner.get().put_passkey(passkey)
     }
 
     fn passkey(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<PasskeyRecord>> {
-        self.inner.passkey(tenant, id)
+        self.inner.get().passkey(tenant, id)
     }
 
     fn passkeys(
@@ -287,7 +291,7 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         principal: &PrincipalId,
     ) -> StoreResult<Vec<PasskeyRecord>> {
-        self.inner.passkeys(tenant, principal)
+        self.inner.get().passkeys(tenant, principal)
     }
 
     fn update_passkey(
@@ -297,7 +301,9 @@ impl<H: Hook> Store for Layer<H> {
         credential: &str,
         used_at: Timestamp,
     ) -> StoreResult<bool> {
-        self.inner.update_passkey(tenant, id, credential, used_at)
+        self.inner
+            .get()
+            .update_passkey(tenant, id, credential, used_at)
     }
 
     fn remove_passkey(
@@ -306,11 +312,11 @@ impl<H: Hook> Store for Layer<H> {
         principal: &PrincipalId,
         id: &str,
     ) -> StoreResult<bool> {
-        self.inner.remove_passkey(tenant, principal, id)
+        self.inner.get().remove_passkey(tenant, principal, id)
     }
 
     fn put_passkey_challenge(&self, challenge: &PasskeyChallenge) -> StoreResult<()> {
-        self.inner.put_passkey_challenge(challenge)
+        self.inner.get().put_passkey_challenge(challenge)
     }
 
     fn take_passkey_challenge(
@@ -319,15 +325,17 @@ impl<H: Hook> Store for Layer<H> {
         id_hash: &str,
         now: Timestamp,
     ) -> StoreResult<Option<PasskeyChallenge>> {
-        self.inner.take_passkey_challenge(tenant, id_hash, now)
+        self.inner
+            .get()
+            .take_passkey_challenge(tenant, id_hash, now)
     }
 
     fn purge_passkey_challenges(&self, now: Timestamp) -> StoreResult<u64> {
-        self.inner.purge_passkey_challenges(now)
+        self.inner.get().purge_passkey_challenges(now)
     }
 
     fn put_sign_in_link(&self, link: &SignInLink) -> StoreResult<()> {
-        self.inner.put_sign_in_link(link)
+        self.inner.get().put_sign_in_link(link)
     }
 
     fn take_sign_in_link(
@@ -335,27 +343,27 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         id_hash: &str,
     ) -> StoreResult<Option<SignInLink>> {
-        self.inner.take_sign_in_link(tenant, id_hash)
+        self.inner.get().take_sign_in_link(tenant, id_hash)
     }
 
     fn purge_sign_in_links(&self, now: Timestamp) -> StoreResult<u64> {
-        self.inner.purge_sign_in_links(now)
+        self.inner.get().purge_sign_in_links(now)
     }
 
     fn put_oidc_flow(&self, flow: &OidcFlow) -> StoreResult<()> {
-        self.inner.put_oidc_flow(flow)
+        self.inner.get().put_oidc_flow(flow)
     }
 
     fn take_oidc_flow(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<OidcFlow>> {
-        self.inner.take_oidc_flow(tenant, id_hash)
+        self.inner.get().take_oidc_flow(tenant, id_hash)
     }
 
     fn purge_oidc_flows(&self, now: Timestamp) -> StoreResult<u64> {
-        self.inner.purge_oidc_flows(now)
+        self.inner.get().purge_oidc_flows(now)
     }
 
     fn put_saml_request(&self, request: &SamlRequest) -> StoreResult<()> {
-        self.inner.put_saml_request(request)
+        self.inner.get().put_saml_request(request)
     }
 
     fn take_saml_request(
@@ -363,11 +371,11 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         id_hash: &str,
     ) -> StoreResult<Option<SamlRequest>> {
-        self.inner.take_saml_request(tenant, id_hash)
+        self.inner.get().take_saml_request(tenant, id_hash)
     }
 
     fn purge_saml_requests(&self, now: Timestamp) -> StoreResult<u64> {
-        self.inner.purge_saml_requests(now)
+        self.inner.get().purge_saml_requests(now)
     }
 
     fn put_saml_assertion(
@@ -378,15 +386,16 @@ impl<H: Hook> Store for Layer<H> {
         expires_at: Timestamp,
     ) -> StoreResult<bool> {
         self.inner
+            .get()
             .put_saml_assertion(tenant, provider, id_hash, expires_at)
     }
 
     fn purge_saml_assertions(&self, now: Timestamp) -> StoreResult<u64> {
-        self.inner.purge_saml_assertions(now)
+        self.inner.get().purge_saml_assertions(now)
     }
 
     fn put_identity(&self, identity: &FederatedIdentity) -> StoreResult<bool> {
-        self.inner.put_identity(identity)
+        self.inner.get().put_identity(identity)
     }
 
     fn identity(
@@ -395,15 +404,15 @@ impl<H: Hook> Store for Layer<H> {
         provider: &str,
         subject: &str,
     ) -> StoreResult<Option<FederatedIdentity>> {
-        self.inner.identity(tenant, provider, subject)
+        self.inner.get().identity(tenant, provider, subject)
     }
 
     fn put_totp(&self, totp: &TotpRecord) -> StoreResult<bool> {
-        self.inner.put_totp(totp)
+        self.inner.get().put_totp(totp)
     }
 
     fn totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<Option<TotpRecord>> {
-        self.inner.totp(tenant, principal)
+        self.inner.get().totp(tenant, principal)
     }
 
     fn confirm_totp(
@@ -412,7 +421,7 @@ impl<H: Hook> Store for Layer<H> {
         principal: &PrincipalId,
         step: i64,
     ) -> StoreResult<bool> {
-        self.inner.confirm_totp(tenant, principal, step)
+        self.inner.get().confirm_totp(tenant, principal, step)
     }
 
     fn use_totp_step(
@@ -421,11 +430,11 @@ impl<H: Hook> Store for Layer<H> {
         principal: &PrincipalId,
         step: i64,
     ) -> StoreResult<bool> {
-        self.inner.use_totp_step(tenant, principal, step)
+        self.inner.get().use_totp_step(tenant, principal, step)
     }
 
     fn remove_totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<bool> {
-        self.inner.remove_totp(tenant, principal)
+        self.inner.get().remove_totp(tenant, principal)
     }
 
     fn replace_recovery_codes(
@@ -436,6 +445,7 @@ impl<H: Hook> Store for Layer<H> {
         at: Timestamp,
     ) -> StoreResult<()> {
         self.inner
+            .get()
             .replace_recovery_codes(tenant, principal, hashes, at)
     }
 
@@ -445,15 +455,17 @@ impl<H: Hook> Store for Layer<H> {
         principal: &PrincipalId,
         hash: &str,
     ) -> StoreResult<bool> {
-        self.inner.spend_recovery_code(tenant, principal, hash)
+        self.inner
+            .get()
+            .spend_recovery_code(tenant, principal, hash)
     }
 
     fn recovery_codes_left(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<u32> {
-        self.inner.recovery_codes_left(tenant, principal)
+        self.inner.get().recovery_codes_left(tenant, principal)
     }
 
     fn put_pending(&self, pending: &PendingSignIn) -> StoreResult<()> {
-        self.inner.put_pending(pending)
+        self.inner.get().put_pending(pending)
     }
 
     fn attempt_pending(
@@ -463,7 +475,7 @@ impl<H: Hook> Store for Layer<H> {
         now: Timestamp,
         max: u32,
     ) -> StoreResult<Option<PendingSignIn>> {
-        self.inner.attempt_pending(tenant, id_hash, now, max)
+        self.inner.get().attempt_pending(tenant, id_hash, now, max)
     }
 
     fn take_pending(
@@ -472,15 +484,15 @@ impl<H: Hook> Store for Layer<H> {
         id_hash: &str,
         now: Timestamp,
     ) -> StoreResult<Option<PendingSignIn>> {
-        self.inner.take_pending(tenant, id_hash, now)
+        self.inner.get().take_pending(tenant, id_hash, now)
     }
 
     fn put_recovery(&self, request: &RecoveryRequest) -> StoreResult<()> {
-        self.inner.put_recovery(request)
+        self.inner.get().put_recovery(request)
     }
 
     fn recovery(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<RecoveryRequest>> {
-        self.inner.recovery(tenant, id_hash)
+        self.inner.get().recovery(tenant, id_hash)
     }
 
     fn take_recovery(
@@ -488,7 +500,7 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         id_hash: &str,
     ) -> StoreResult<Option<RecoveryRequest>> {
-        self.inner.take_recovery(tenant, id_hash)
+        self.inner.get().take_recovery(tenant, id_hash)
     }
 
     fn cancel_recovery(
@@ -497,11 +509,13 @@ impl<H: Hook> Store for Layer<H> {
         id_hash: &str,
         cancel_hash: &str,
     ) -> StoreResult<bool> {
-        self.inner.cancel_recovery(tenant, id_hash, cancel_hash)
+        self.inner
+            .get()
+            .cancel_recovery(tenant, id_hash, cancel_hash)
     }
 
     fn purge_factor_challenges(&self, now: Timestamp) -> StoreResult<u64> {
-        self.inner.purge_factor_challenges(now)
+        self.inner.get().purge_factor_challenges(now)
     }
 
     fn doc_put(
@@ -512,23 +526,25 @@ impl<H: Hook> Store for Layer<H> {
         value: &str,
         create_only: bool,
     ) -> StoreResult<bool> {
-        self.inner.doc_put(tenant, kind, key, value, create_only)
+        self.inner
+            .get()
+            .doc_put(tenant, kind, key, value, create_only)
     }
 
     fn doc_get(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<Option<String>> {
-        self.inner.doc_get(tenant, kind, key)
+        self.inner.get().doc_get(tenant, kind, key)
     }
 
     fn doc_list(&self, tenant: &TenantId, kind: &str) -> StoreResult<Vec<(String, String)>> {
-        self.inner.doc_list(tenant, kind)
+        self.inner.get().doc_list(tenant, kind)
     }
 
     fn doc_remove(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<bool> {
-        self.inner.doc_remove(tenant, kind, key)
+        self.inner.get().doc_remove(tenant, kind, key)
     }
 
     fn audit_append(&self, tenant: &TenantId, entry: &AuditEntry) -> StoreResult<()> {
-        self.inner.audit_append(tenant, entry)
+        self.inner.get().audit_append(tenant, entry)
     }
 
     fn audit_list(
@@ -537,7 +553,7 @@ impl<H: Hook> Store for Layer<H> {
         kind: Option<&str>,
         limit: usize,
     ) -> StoreResult<Vec<AuditEntry>> {
-        self.inner.audit_list(tenant, kind, limit)
+        self.inner.get().audit_list(tenant, kind, limit)
     }
 
     fn audit_chain(
@@ -546,7 +562,7 @@ impl<H: Hook> Store for Layer<H> {
         after: u64,
         limit: usize,
     ) -> StoreResult<Vec<audit_chain::ChainedAuditEntry>> {
-        self.inner.audit_chain(tenant, after, limit)
+        self.inner.get().audit_chain(tenant, after, limit)
     }
 
     fn verified_address(
@@ -554,7 +570,7 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         principal: &PrincipalId,
     ) -> StoreResult<Option<String>> {
-        self.inner.verified_address(tenant, principal)
+        self.inner.get().verified_address(tenant, principal)
     }
 
     fn create_snapshot(
@@ -563,15 +579,15 @@ impl<H: Hook> Store for Layer<H> {
         label: &str,
         at: Timestamp,
     ) -> StoreResult<SnapshotInfo> {
-        self.inner.create_snapshot(tenant, label, at)
+        self.inner.get().create_snapshot(tenant, label, at)
     }
 
     fn snapshots(&self, tenant: &TenantId) -> StoreResult<Vec<SnapshotInfo>> {
-        self.inner.snapshots(tenant)
+        self.inner.get().snapshots(tenant)
     }
 
     fn load_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<TenantState> {
-        self.inner.load_snapshot(tenant, id)
+        self.inner.get().load_snapshot(tenant, id)
     }
 
     fn restore_snapshot(
@@ -580,17 +596,17 @@ impl<H: Hook> Store for Layer<H> {
         id: u64,
         expected: Option<&Generation>,
     ) -> StoreResult<()> {
-        let done = self.inner.restore_snapshot(tenant, id, expected);
+        let done = self.inner.get().restore_snapshot(tenant, id, expected);
         self.hook.wrote(tenant, done.as_ref().err());
         done
     }
 
     fn reset(&self) -> StoreResult<()> {
-        self.inner.reset()
+        self.inner.get().reset()
     }
 
     fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()> {
-        let done = self.inner.reset_tenant(tenant);
+        let done = self.inner.get().reset_tenant(tenant);
         self.hook.wrote(tenant, done.as_ref().err());
         done
     }
@@ -601,11 +617,11 @@ impl<H: Hook> Store for Layer<H> {
         jobs: &[NewJob],
         now: Timestamp,
     ) -> StoreResult<Vec<String>> {
-        self.inner.jobs_create(tenant, jobs, now)
+        self.inner.get().jobs_create(tenant, jobs, now)
     }
 
     fn job(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<Job>> {
-        self.inner.job(tenant, id)
+        self.inner.get().job(tenant, id)
     }
 
     fn jobs_list(
@@ -614,7 +630,7 @@ impl<H: Hook> Store for Layer<H> {
         before: Option<u64>,
         limit: usize,
     ) -> StoreResult<Vec<Job>> {
-        self.inner.jobs_list(tenant, before, limit)
+        self.inner.get().jobs_list(tenant, before, limit)
     }
 
     fn job_lease(
@@ -623,7 +639,7 @@ impl<H: Hook> Store for Layer<H> {
         worker: &str,
         now: Timestamp,
     ) -> StoreResult<Option<Lease>> {
-        self.inner.job_lease(tenant, worker, now)
+        self.inner.get().job_lease(tenant, worker, now)
     }
 
     fn job_report(
@@ -636,6 +652,7 @@ impl<H: Hook> Store for Layer<H> {
         now: Timestamp,
     ) -> StoreResult<Reported> {
         self.inner
+            .get()
             .job_report(tenant, id, token, report, writes, now)
     }
 
@@ -646,15 +663,15 @@ impl<H: Hook> Store for Layer<H> {
         reason: &str,
         now: Timestamp,
     ) -> StoreResult<JobChange> {
-        self.inner.job_cancel(tenant, id, reason, now)
+        self.inner.get().job_cancel(tenant, id, reason, now)
     }
 
     fn job_retry(&self, tenant: &TenantId, id: &str, now: Timestamp) -> StoreResult<JobChange> {
-        self.inner.job_retry(tenant, id, now)
+        self.inner.get().job_retry(tenant, id, now)
     }
 
     fn jobs_due(&self, now: Timestamp, limit: usize) -> StoreResult<Vec<TenantId>> {
-        self.inner.jobs_due(now, limit)
+        self.inner.get().jobs_due(now, limit)
     }
 
     fn automation_write(
@@ -663,11 +680,11 @@ impl<H: Hook> Store for Layer<H> {
         writes: &WorkerWrites,
         now: Timestamp,
     ) -> StoreResult<()> {
-        self.inner.automation_write(tenant, writes, now)
+        self.inner.get().automation_write(tenant, writes, now)
     }
 
     fn automation_run(&self, tenant: &TenantId, run: &str) -> StoreResult<Option<RunRecord>> {
-        self.inner.automation_run(tenant, run)
+        self.inner.get().automation_run(tenant, run)
     }
 
     fn automation_runs(
@@ -679,6 +696,7 @@ impl<H: Hook> Store for Layer<H> {
         limit: usize,
     ) -> StoreResult<Vec<RunRecord>> {
         self.inner
+            .get()
             .automation_runs(tenant, automation, state, before, limit)
     }
 
@@ -689,7 +707,7 @@ impl<H: Hook> Store for Layer<H> {
         after: Option<u64>,
         limit: usize,
     ) -> StoreResult<Vec<StepRecord>> {
-        self.inner.automation_steps(tenant, run, after, limit)
+        self.inner.get().automation_steps(tenant, run, after, limit)
     }
 
     fn automation_exceptions(
@@ -701,6 +719,7 @@ impl<H: Hook> Store for Layer<H> {
         limit: usize,
     ) -> StoreResult<Vec<ExceptionRecord>> {
         self.inner
+            .get()
             .automation_exceptions(tenant, kind, unsettled, before, limit)
     }
 
@@ -712,6 +731,7 @@ impl<H: Hook> Store for Layer<H> {
         now: Timestamp,
     ) -> StoreResult<Settled> {
         self.inner
+            .get()
             .automation_exception_settle(tenant, id, release, now)
     }
 
@@ -721,15 +741,15 @@ impl<H: Hook> Store for Layer<H> {
         set: &schedules::ScheduleSet,
         now: Timestamp,
     ) -> StoreResult<schedules::Schedule> {
-        self.inner.schedule_set(tenant, set, now)
+        self.inner.get().schedule_set(tenant, set, now)
     }
 
     fn schedule(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<schedules::Schedule>> {
-        self.inner.schedule(tenant, id)
+        self.inner.get().schedule(tenant, id)
     }
 
     fn schedules(&self, tenant: &TenantId) -> StoreResult<Vec<schedules::Schedule>> {
-        self.inner.schedules(tenant)
+        self.inner.get().schedules(tenant)
     }
 
     fn run_key_holder(
@@ -738,7 +758,7 @@ impl<H: Hook> Store for Layer<H> {
         automation: &WorkflowId,
         key: &str,
     ) -> StoreResult<Option<String>> {
-        self.inner.run_key_holder(tenant, automation, key)
+        self.inner.get().run_key_holder(tenant, automation, key)
     }
 
     fn open_run_key_starts(
@@ -747,7 +767,9 @@ impl<H: Hook> Store for Layer<H> {
         automation: &WorkflowId,
         key: &str,
     ) -> StoreResult<Vec<Job>> {
-        self.inner.open_run_key_starts(tenant, automation, key)
+        self.inner
+            .get()
+            .open_run_key_starts(tenant, automation, key)
     }
 
     fn purge_automation(
@@ -755,11 +777,11 @@ impl<H: Hook> Store for Layer<H> {
         now: Timestamp,
         retention: &schedules::AutomationRetention,
     ) -> StoreResult<schedules::AutomationPurged> {
-        self.inner.purge_automation(now, retention)
+        self.inner.get().purge_automation(now, retention)
     }
 
     fn platform_settings(&self) -> StoreResult<Vec<PlatformSetting>> {
-        self.inner.platform_settings()
+        self.inner.get().platform_settings()
     }
 
     fn platform_setting_write(
@@ -770,23 +792,24 @@ impl<H: Hook> Store for Layer<H> {
         at: Timestamp,
     ) -> StoreResult<PlatformWrite> {
         self.inner
+            .get()
             .platform_setting_write(setting, value, expected_revision, at)
     }
 
     fn begin_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {
-        self.inner.begin_provisioning(tenant)
+        self.inner.get().begin_provisioning(tenant)
     }
 
     fn finish_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {
-        self.inner.finish_provisioning(tenant)
+        self.inner.get().finish_provisioning(tenant)
     }
 
     fn rollback_provisioning(&self) -> StoreResult<Vec<TenantId>> {
-        self.inner.rollback_provisioning()
+        self.inner.get().rollback_provisioning()
     }
 
     fn segment_catalog(&self, tenant: &TenantId) -> StoreResult<Vec<seg::Segment>> {
-        self.inner.segment_catalog(tenant)
+        self.inner.get().segment_catalog(tenant)
     }
 
     fn segment_rows(
@@ -794,7 +817,7 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         pairs: &[(seg::SegmentId, PrincipalId)],
     ) -> StoreResult<seg::Rows> {
-        self.inner.segment_rows(tenant, pairs)
+        self.inner.get().segment_rows(tenant, pairs)
     }
 
     fn segment_members(
@@ -804,7 +827,9 @@ impl<H: Hook> Store for Layer<H> {
         after: Option<&PrincipalId>,
         limit: usize,
     ) -> StoreResult<Vec<seg::Membership>> {
-        self.inner.segment_members(tenant, segment, after, limit)
+        self.inner
+            .get()
+            .segment_members(tenant, segment, after, limit)
     }
 
     fn segment_memberships_of(
@@ -812,7 +837,7 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         person: &PrincipalId,
     ) -> StoreResult<Vec<seg::Membership>> {
-        self.inner.segment_memberships_of(tenant, person)
+        self.inner.get().segment_memberships_of(tenant, person)
     }
 
     fn segment_wakes_of(
@@ -820,7 +845,7 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         person: &PrincipalId,
     ) -> StoreResult<Vec<seg::Wake>> {
-        self.inner.segment_wakes_of(tenant, person)
+        self.inner.get().segment_wakes_of(tenant, person)
     }
 
     fn segment_due(
@@ -830,11 +855,11 @@ impl<H: Hook> Store for Layer<H> {
         at: Timestamp,
         limit: usize,
     ) -> StoreResult<Vec<seg::Wake>> {
-        self.inner.segment_due(tenant, segment, at, limit)
+        self.inner.get().segment_due(tenant, segment, at, limit)
     }
 
     fn segment_batches(&self, tenant: &TenantId) -> StoreResult<Vec<seg::Batch>> {
-        self.inner.segment_batches(tenant)
+        self.inner.get().segment_batches(tenant)
     }
 
     fn segment_referencing(
@@ -847,6 +872,7 @@ impl<H: Hook> Store for Layer<H> {
         limit: usize,
     ) -> StoreResult<Vec<Arc<Record>>> {
         self.inner
+            .get()
             .segment_referencing(tenant, object, field, record, after, limit)
     }
 
@@ -855,7 +881,7 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         object: &strata_kernel::ObjectTypeId,
     ) -> StoreResult<u64> {
-        self.inner.segment_subject_count(tenant, object)
+        self.inner.get().segment_subject_count(tenant, object)
     }
 
     fn segment_events_after(
@@ -864,11 +890,11 @@ impl<H: Hook> Store for Layer<H> {
         after: u64,
         limit: usize,
     ) -> StoreResult<Vec<(u64, seg::SegmentEvent)>> {
-        self.inner.segment_events_after(tenant, after, limit)
+        self.inner.get().segment_events_after(tenant, after, limit)
     }
 
     fn segment_cursor(&self, tenant: &TenantId) -> StoreResult<u64> {
-        self.inner.segment_cursor(tenant)
+        self.inner.get().segment_cursor(tenant)
     }
 
     fn commit_with_segments(
@@ -878,13 +904,13 @@ impl<H: Hook> Store for Layer<H> {
     ) -> StoreResult<Receipt> {
         let done = self
             .hook
-            .commit_with_segments(self.inner.as_ref(), commit, write);
+            .commit_with_segments(self.inner.get().as_ref(), commit, write);
         self.hook.wrote(&commit.delta.tenant, done.as_ref().err());
         done
     }
 
     fn commit_segments(&self, commit: &segments::SegmentCommit) -> StoreResult<Receipt> {
-        self.inner.commit_segments(commit)
+        self.inner.get().commit_segments(commit)
     }
 
     fn search_candidates(
@@ -892,6 +918,6 @@ impl<H: Hook> Store for Layer<H> {
         tenant: &TenantId,
         probe: &strata_kernel::search::Probe,
     ) -> StoreResult<Vec<strata_kernel::search::Candidate>> {
-        self.inner.search_candidates(tenant, probe)
+        self.inner.get().search_candidates(tenant, probe)
     }
 }

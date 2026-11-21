@@ -152,6 +152,8 @@ struct Runner<'a> {
     decodes: Option<u64>,
     timed: std::time::Duration,
     aliases: BTreeMap<String, String>,
+    /// The object type or query the operation in hand is about: which module's actor acts.
+    subject: Option<String>,
 }
 
 /// Run `scenario` under `cfg`, populating through `loader`.
@@ -207,7 +209,13 @@ pub fn run(
         })
         .collect();
     let counting = Arc::new(CountingHook::with_bytes(cfg.count_bytes));
-    let built = build(opened.primary.clone(), cfg.mode, counting, cfg.budget_bytes);
+    let built = build(
+        opened.primary.clone(),
+        cfg.mode,
+        counting,
+        cfg.budget_bytes,
+        None,
+    );
     let mut runner = Runner {
         scenario,
         cfg,
@@ -232,6 +240,7 @@ pub fn run(
         decodes: cfg.store.schema_decodes().map(|_| 0),
         timed: std::time::Duration::ZERO,
         aliases: BTreeMap::new(),
+        subject: None,
     };
     runner.play()?;
     let mut report = runner.finish(wall.elapsed().as_secs_f64() * 1e3, populate_ms);
@@ -540,7 +549,7 @@ impl Runner<'_> {
         let tid = self.tenants[tenant].tenant().clone();
         Context {
             tenant: tid,
-            principal: self.tenants[tenant].actor(actor),
+            principal: self.tenants[tenant].actor(actor, self.subject.as_deref()),
             session: None,
             now: Timestamp(self.clock),
             correlation: format!("ws-bench-{}", self.counter),
@@ -593,6 +602,7 @@ impl Runner<'_> {
         plan: Plan,
     ) {
         let kind = plan.kind;
+        self.subject = entry.object.clone().or_else(|| entry.query.clone());
         match plan.body {
             Body::Read(needs) => {
                 self.do_read(op, client, tenant, kind, &plan.label, entry.actor, needs)
@@ -619,12 +629,16 @@ impl Runner<'_> {
         }
     }
 
-    fn note_outcome(&mut self, kind: OpKind, outcome: &str) {
+    fn note_outcome(&mut self, kind: OpKind, outcome: &str, refusal: Option<String>) {
         let counts = self.report.ops.entry(kind.name().to_string()).or_default();
         match outcome {
             "ok" => counts.ok += 1,
             "domain" => counts.domain_errors += 1,
             _ => counts.store_errors += 1,
+        }
+        if let Some(kind_name) = refusal {
+            *counts.refused.entry(kind_name.clone()).or_default() += 1;
+            *self.report.refusals.entry(kind_name).or_default() += 1;
         }
     }
 
@@ -784,7 +798,7 @@ impl Runner<'_> {
         if timed {
             self.answers.update(test_answer.0.as_bytes());
             let outcome = if test.is_ok() { "ok" } else { "store" };
-            self.note_outcome(kind, outcome);
+            self.note_outcome(kind, outcome, None);
         }
         if compare {
             let g0 = self.generation(&tid);
@@ -859,7 +873,11 @@ impl Runner<'_> {
             Err(ExecuteError::Domain(_)) => "domain",
             Err(_) => "store",
         };
-        self.note_outcome(kind, outcome);
+        let refusal = match &test {
+            Err(ExecuteError::Domain(e)) => Some(format!("{:?}", e.kind)),
+            _ => None,
+        };
+        self.note_outcome(kind, outcome, refusal);
         if self.cfg.coherence != CoherenceLevel::Off {
             let tid = ctx.tenant.clone();
             let g0 = self.generation(&tid);
@@ -948,7 +966,11 @@ impl Runner<'_> {
             Err(ExecuteError::Domain(_)) => "domain",
             Err(_) => "store",
         };
-        self.note_outcome(kind, outcome);
+        let refusal = match &result {
+            Err(ExecuteError::Domain(e)) => Some(format!("{:?}", e.kind)),
+            _ => None,
+        };
+        self.note_outcome(kind, outcome, refusal);
         if let Some((decided, g0, g1)) = expected {
             if outcome != "store" {
                 let reference = match &decided {
@@ -1022,82 +1044,66 @@ impl Runner<'_> {
         }
     }
 
+    fn revision(&self) -> Option<u64> {
+        let tid = self.tenants[0].tenant();
+        self.opened
+            .reference
+            .tenant_summary(tid)
+            .ok()
+            .flatten()
+            .map(|s| s.revision.0)
+    }
+
+    fn schema_version(&self) -> Option<u64> {
+        let tid = self.tenants[0].tenant();
+        let state = self.opened.reference.load(tid, &[]).ok()?;
+        Some(state.tenant.as_deref()?.schema.version.0)
+    }
+
     fn apply_fault(&mut self, fault: &Fault, op: u64) -> Result<(), String> {
         let tid = self.tenants[0].tenant().clone();
         let name = format!("{:?}", fault.kind);
         self.counter += 1;
         self.clock += 10;
-        let outcome = match fault.kind {
+        self.subject = None;
+        let (outcome, effective) = match fault.kind {
             FaultKind::ForeignCommit => self.foreign_commit(fault),
             FaultKind::Restore => {
-                let marker = self.foreign_commit(fault);
-                let restored = match self.snapshot {
-                    Some(id) => self
-                        .opened
-                        .reference
-                        .restore_snapshot(&tid, id, None)
-                        .map(|_| "restored".to_string())
-                        .unwrap_or_else(|e| format!("restore failed: {e}")),
-                    None => "no snapshot".to_string(),
+                let (marker, marked) = self.foreign_commit(fault);
+                let before = self.revision();
+                let (restored, done) = match self.snapshot {
+                    Some(id) => match self.opened.reference.restore_snapshot(&tid, id, None) {
+                        Ok(()) => ("restored".to_string(), true),
+                        Err(e) => (format!("restore failed: {e}"), false),
+                    },
+                    None => ("no snapshot".to_string(), false),
                 };
+                let after = self.revision();
                 self.resync_live();
-                format!("{marker}; {restored}")
+                let went_back = matches!((before, after), (Some(b), Some(a)) if a < b);
+                (
+                    format!("{marker}; {restored}; revision {before:?} -> {after:?}"),
+                    marked && done && went_back,
+                )
             }
             FaultKind::Erasure => {
                 let n = self.counter;
                 match self.tenants[0].erasure(n) {
-                    None => "the tenant offers no erasure".to_string(),
-                    Some(erasure) => {
-                        let ctx = self.ctx(0, Actor::System);
-                        let mut done: Result<usize, String> = Ok(0);
-                        let (mut object, mut after) = (None, None);
-                        // One decision erases a batch; repeat while its output says there is more.
-                        for batch in 1..=50 {
-                            let intent = Intent::EraseSubject {
-                                subject: erasure.subject.clone(),
-                                resume_object: object.take(),
-                                resume_after: after.take(),
-                                held_objects: Vec::new(),
-                                addressed_invitations: Vec::new(),
-                            };
-                            match execute(self.opened.reference.as_ref(), &intent, &ctx) {
-                                Ok(executed) => {
-                                    done = Ok(batch);
-                                    match executed.transition.output {
-                                        strata_kernel::Output::Erased {
-                                            more: true,
-                                            next_object,
-                                            next_after,
-                                            ..
-                                        } => {
-                                            object = next_object;
-                                            after = next_after;
-                                        }
-                                        _ => break,
-                                    }
-                                }
-                                Err(e) => {
-                                    done = Err(e.to_string());
-                                    break;
-                                }
-                            }
-                        }
-                        self.erased.extend(erasure.probes);
-                        self.resync_live();
-                        match done {
-                            Ok(batches) => format!("erased in {batches} decision(s)"),
-                            Err(e) => format!("refused: {e}"),
-                        }
-                    }
+                    None => (
+                        "the tenant offers no erasure (no data subject with probes)".to_string(),
+                        false,
+                    ),
+                    Some(erasure) => self.erase(erasure),
                 }
             }
             FaultKind::SchemaChange => {
                 let n = self.counter;
                 match self.tenants[0].schema_change(n) {
-                    None => "the tenant offers no schema change".to_string(),
+                    None => ("the tenant offers no schema change".to_string(), false),
                     Some(changes) => {
                         let ctx = self.ctx(0, Actor::Owner);
-                        match execute(
+                        let before = self.schema_version();
+                        let done = execute(
                             self.opened.reference.as_ref(),
                             &Intent::ChangeSchema {
                                 changes,
@@ -1105,9 +1111,14 @@ impl Runner<'_> {
                                 existing: strata_kernel::ExistingData::Reject,
                             },
                             &ctx,
-                        ) {
-                            Ok(_) => "changed".to_string(),
-                            Err(e) => format!("refused: {e}"),
+                        );
+                        let after = self.schema_version();
+                        match done {
+                            Ok(_) => (
+                                format!("schema version {before:?} -> {after:?}"),
+                                matches!((before, after), (Some(b), Some(a)) if a > b),
+                            ),
+                            Err(e) => (format!("refused: {e}"), false),
                         }
                     }
                 }
@@ -1116,47 +1127,157 @@ impl Runner<'_> {
                 self.opened
                     .reopen_primary()
                     .map_err(|e| format!("reopen: {e}"))?;
+                self.built.swap_handle(self.opened.primary.clone());
+                (
+                    "adapter handle replaced under the working set".to_string(),
+                    true,
+                )
+            }
+            FaultKind::Restart => {
+                // The stack is down: nothing reads through it while another handle commits.
+                let stale = self.built.stale.clone();
+                let (marker, marked) = self.foreign_commit(fault);
+                self.opened
+                    .reopen_primary()
+                    .map_err(|e| format!("restart: {e}"))?;
                 let counting = self.built.counting.clone();
                 self.built = build(
                     self.opened.primary.clone(),
                     self.cfg.mode,
                     counting,
                     self.cfg.budget_bytes,
+                    stale,
                 );
-                "reopened".to_string()
+                let stats = self.built.wrapper_stats(self.cfg.mode);
+                let cold = self.cfg.mode == Mode::Stale
+                    || stats.placeholder
+                    || stats.hits + stats.misses == 0;
+                (
+                    format!("stack rebuilt over a fresh handle; while down: {marker}"),
+                    marked && cold,
+                )
             }
         };
         self.report.faults.push(FaultRecord {
             kind: name.clone(),
             at_op: op,
             outcome,
+            effective,
         });
-        self.probe_after(&name, op);
+        // A restart is not warmed by a probe: the first operations after it are the measurement,
+        // and they are compared like any other.
+        if fault.kind != FaultKind::Restart {
+            self.probe_after(&name, op);
+        }
         Ok(())
     }
 
-    /// An update of one of the hottest records through the reference handle.
-    fn foreign_commit(&mut self, fault: &Fault) -> String {
+    /// Erase the subject through the reference handle, batch by batch, and check that it took
+    /// effect: records changed, and no probe still holds its plaintext on the reference.
+    fn erase(&mut self, erasure: crate::corpus::Erasure) -> (String, bool) {
+        if erasure.probes.is_empty() {
+            return ("the subject has no probe records".to_string(), false);
+        }
+        let ctx = self.ctx(0, Actor::Owner);
+        let (mut object, mut after) = (None, None);
+        let mut changed = 0usize;
+        let mut batches = 0usize;
+        let mut failure = None;
+        // One decision erases a batch; repeat while its output says there is more.
+        for _ in 0..50 {
+            let intent = Intent::EraseSubject {
+                subject: erasure.subject.clone(),
+                resume_object: object.take(),
+                resume_after: after.take(),
+                held_objects: Vec::new(),
+                addressed_invitations: Vec::new(),
+            };
+            match execute(self.opened.reference.as_ref(), &intent, &ctx) {
+                Ok(executed) => {
+                    batches += 1;
+                    match executed.transition.output {
+                        strata_kernel::Output::Erased {
+                            changed: done,
+                            more,
+                            next_object,
+                            next_after,
+                            ..
+                        } => {
+                            changed += done.len();
+                            if more {
+                                object = next_object;
+                                after = next_after;
+                            } else {
+                                break;
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                Err(e) => {
+                    failure = Some(e.to_string());
+                    break;
+                }
+            }
+        }
+        let tid = self.tenants[0].tenant().clone();
+        let mut remaining = 0usize;
+        for probe in &erasure.probes {
+            let need = vec![Need::Record {
+                object: probe.object.clone(),
+                id: probe.id,
+            }];
+            if let Ok(state) = self.opened.reference.load(&tid, &need) {
+                let held = state
+                    .tenant
+                    .as_deref()
+                    .and_then(|t| t.record(&probe.object, probe.id))
+                    .map(|r| r.get(&probe.field).clone());
+                if held.as_ref() == Some(&probe.plaintext) {
+                    remaining += 1;
+                }
+            }
+        }
+        let probes = erasure.probes.len();
+        self.erased.extend(erasure.probes);
+        self.resync_live();
+        match failure {
+            Some(e) => (format!("refused: {e}"), false),
+            None => (
+                format!(
+                    "erased in {batches} decision(s): {changed} record(s) changed, \
+                     {remaining} of {probes} probe(s) still hold the plaintext"
+                ),
+                changed > 0 && remaining == 0,
+            ),
+        }
+    }
+
+    /// An update of one of the hottest records through the reference handle; effective when the
+    /// tenant's generation moved.
+    fn foreign_commit(&mut self, fault: &Fault) -> (String, bool) {
         let name = fault
             .object
             .clone()
             .or_else(|| self.scenario.mix.iter().find_map(|m| m.object.clone()));
         let Some(name) = name else {
-            return "no object".to_string();
+            return ("no object".to_string(), false);
         };
         let Some(object) = self.resolve(0, &name) else {
-            return "no such object".to_string();
+            return ("no such object".to_string(), false);
         };
         let width = self.live[0].get(&object).map_or(0, |ids| ids.len().min(3));
         if width == 0 {
-            return "no records".to_string();
+            return ("no records".to_string(), false);
         }
         let id = self.live[0][&object][self.rng.below(width as u64) as usize];
         let Some(fields) = self.tenants[0].update_fields(&object, id, self.counter) else {
-            return "no update".to_string();
+            return (format!("no update field for {object}"), false);
         };
+        let tid = self.tenants[0].tenant().clone();
         let ctx = self.ctx(0, Actor::Owner);
-        match execute(
+        let before = self.generation(&tid);
+        let done = execute(
             self.opened.reference.as_ref(),
             &Intent::UpdateRecord {
                 object,
@@ -1165,9 +1286,14 @@ impl Runner<'_> {
                 expected_version: None,
             },
             &ctx,
-        ) {
-            Ok(done) => format!("foreign commit at revision {}", done.receipt.revision.0),
-            Err(e) => format!("foreign commit refused: {e}"),
+        );
+        let after = self.generation(&tid);
+        match done {
+            Ok(done) => (
+                format!("foreign commit at revision {}", done.receipt.revision.0),
+                before != after,
+            ),
+            Err(e) => (format!("foreign commit refused: {e}"), false),
         }
     }
 
@@ -1240,6 +1366,7 @@ impl Runner<'_> {
     fn finish(mut self, wall_ms: f64, populate_ms: f64) -> Report {
         let scenario = self.scenario;
         let mut report = std::mem::take(&mut self.report);
+        report.faults_ineffective = report.faults.iter().filter(|f| !f.effective).count() as u64;
         report.scenario = scenario.name.clone();
         report.store = self.cfg.store.name();
         report.mode = self.cfg.mode.name().to_string();

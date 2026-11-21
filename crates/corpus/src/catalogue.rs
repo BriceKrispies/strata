@@ -55,6 +55,10 @@ pub struct Catalogue {
     pub hot_people: Vec<HotPerson>,
     /// The size of the shared pool of people.
     pub people: u64,
+    /// The members the population created: for each module role of the corpus, the principal that
+    /// holds it (and nothing else), so that a workload can act as an editor, a reviewer, a support
+    /// agent or a marketer and not only as the owner.
+    pub members: BTreeMap<String, String>,
     /// Records the kernel refused in a lenient run, by object type: how many, and the first
     /// reason. Empty when the run was strict, which stops at the first.
     pub rejections: BTreeMap<String, (u64, String)>,
@@ -127,6 +131,7 @@ impl Catalogue {
             "records": self.records,
             "commits": self.commits,
             "people": self.people,
+            "members": self.members,
             "rejections": self.rejections.iter().map(|(k, (n, why))| (k.clone(), json!({"count": n, "first": why}))).collect::<serde_json::Map<String, Json>>(),
             "hot_people": self.hot_people.iter().map(|p| json!({"name": p.name, "email": p.email})).collect::<Vec<_>>(),
             "types": types,

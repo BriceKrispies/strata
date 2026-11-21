@@ -369,9 +369,18 @@ pub struct Built {
     pub store: Arc<dyn Store>,
     pub counting: Arc<CountingHook>,
     pub wrapper: Option<Arc<dyn Fn() -> WrapperStats + Send + Sync>>,
+    /// The counting layer, over the adapter: where a handle cycle swaps the adapter.
+    base: Arc<Layer<Arc<CountingHook>>>,
+    /// The stale cache, which a restart keeps (a cache persisted across the restart).
+    pub stale: Option<Arc<StaleHook>>,
 }
 
 impl Built {
+    /// A handle cycle: forward to `handle` from now on. Whatever the layers above hold stays.
+    pub fn swap_handle(&self, handle: Arc<dyn Store>) {
+        self.base.swap_inner(handle);
+    }
+
     pub fn wrapper_stats(&self, mode: Mode) -> WrapperStats {
         match &self.wrapper {
             Some(stats) => stats(),
@@ -384,14 +393,19 @@ impl Built {
 }
 
 /// Stack the layers of `mode` over `base`. `counting` is shared so that the counts survive a
-/// rebuild of the stack (a reopen).
+/// rebuild of the stack (a restart). `stale` is the stale cache of the stack before the rebuild,
+/// when the mode is `stale`: that wrapper is a cache that persists across a restart, so it is the
+/// one thing a restart does not empty.
 pub fn build(
     base: Arc<dyn Store>,
     mode: Mode,
     counting: Arc<CountingHook>,
     budget_bytes: u64,
+    stale: Option<Arc<StaleHook>>,
 ) -> Built {
-    let counted: Arc<dyn Store> = Arc::new(Layer::new(base, counting.clone()));
+    let counted_layer = Arc::new(Layer::new(base, counting.clone()));
+    let counted: Arc<dyn Store> = counted_layer.clone();
+    let mut kept_stale = None;
     let layered = |hook: Arc<dyn Hook>| -> (
         Arc<dyn Store>,
         Option<Arc<dyn Fn() -> WrapperStats + Send + Sync>>,
@@ -447,11 +461,17 @@ pub fn build(
             });
             (resident as Arc<dyn Store>, Some(stats))
         }
-        Mode::Stale => layered(Arc::new(StaleHook::default())),
+        Mode::Stale => {
+            let hook = stale.unwrap_or_default();
+            kept_stale = Some(hook.clone());
+            layered(hook)
+        }
     };
     Built {
         store,
         counting,
         wrapper,
+        base: counted_layer,
+        stale: kept_stale,
     }
 }

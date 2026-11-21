@@ -1,9 +1,12 @@
-// Cold start after idle. The process restarts twice (an empty working set and a fresh handle
-// on the same data) and the first reads after each pay for everything. Read the max and p99 of
-// get; the steady-state p50 should barely move.
+// Cold start after idle. The process restarts twice: the whole stack is dropped, another handle
+// commits while it is down, and a new stack is built over a fresh handle with an empty working
+// set. The first reads after each restart pay for everything. In between, the adapter handle is
+// cycled once under the working set (a handle cycle, which must change nothing). Read the max
+// and p99 of get; the steady-state p50 should barely move. The stale wrapper is a cache persisted
+// across the restart, so the commit made while the process was down is one it never saw.
 {
   "name": "cold-start-after-idle",
-  "description": "Two restarts (reopen: new handle, empty working set) in a read-mostly content workload: the cost of the first reads after idle.",
+  "description": "Two process restarts (stack dropped, a foreign commit while down, a cold rebuild) and one handle cycle in a read-mostly content workload: the cost of the first reads after idle.",
   "modules": ["content", "taxonomy"],
   "scale": 3000,
   "length": 3000,
@@ -17,17 +20,19 @@
     { "op": "header", "weight": 10 }
   ],
   "faults": [
-    { "kind": "reopen", "at": 0.25 },
-    { "kind": "reopen", "at": 0.65 }
+    { "kind": "restart", "at": 0.25, "object": "content__article" },
+    { "kind": "reopen", "at": 0.45 },
+    { "kind": "restart", "at": 0.65, "object": "content__article" }
   ],
   "measures": [
     "timing.by_kind.get",
     "timing.overall",
     "store_side.schema_decodes",
-    "wrapper.hit_rate_by_count"
+    "wrapper.hit_rate_by_count",
+    "coherence.divergences"
   ],
   "refutation": {
     "criterion": "Header residency alone reaching most of the cost-weighted saving: build the header and stop.",
-    "result": "The slowdown of the first reads after a reopen (get max and p99 against p50) is the same in mode header as in mode full: a warmed record cache does not help a cold start, so only the header, which is cheap to refill, is worth keeping."
+    "result": "The slowdown of the first reads after a restart (get max and p99 against p50) is the same in mode header as in mode full: a warmed record cache does not help a cold start, so only the header, which is cheap to refill, is worth keeping."
   }
 }

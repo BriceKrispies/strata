@@ -126,7 +126,7 @@ fn the_scenarios_cover_the_required_products_and_faults() {
     };
     use strata_ws_bench::scenario::FaultKind::*;
     assert!(fault(Erasure) && fault(Restore) && fault(SchemaChange) && fault(ForeignCommit));
-    assert!(fault(Reopen));
+    assert!(fault(Reopen) && fault(Restart));
     assert!(all.iter().any(|s| s.small_tenants.is_some()));
     assert!(all
         .iter()
@@ -447,4 +447,44 @@ mod lock_scope {
         run_all(jobs);
         assert_eq!(probe.most_in_all.load(Ordering::SeqCst), 2);
     }
+}
+
+#[test]
+fn a_restart_is_cold_and_the_stale_cache_that_survives_it_is_caught() {
+    let scenario = tiny(
+        r#"[{ "kind": "restart", "at": 0.3, "object": "note" },
+            { "kind": "restart", "at": 0.7, "object": "note" }]"#,
+    );
+    let none = play(&scenario, Mode::None, 4, StoreSpec::Memory);
+    assert_eq!(none.coherence.divergences, 0, "{:?}", none.coherence.first);
+    assert_eq!(none.faults_ineffective, 0, "{:?}", none.faults);
+    let header = play(&scenario, Mode::Header, 4, StoreSpec::Sqlite(None));
+    assert_eq!(
+        header.coherence.divergences, 0,
+        "{:?}",
+        header.coherence.first
+    );
+    assert_eq!(header.faults_ineffective, 0, "{:?}", header.faults);
+    // Each restart empties the working set: the header is decoded again after each.
+    assert!(header.store_side.schema_decodes.is_some_and(|d| d >= 3));
+    let stale = play(&scenario, Mode::Stale, 4, StoreSpec::Memory);
+    assert!(stale.coherence.divergences > 0, "{:?}", stale.coherence);
+}
+
+#[test]
+fn a_fault_that_does_nothing_is_reported_as_ineffective() {
+    // The stand-in tenant offers an erasure with no probe records: it cannot show an effect.
+    let scenario = tiny(r#"[{ "kind": "erasure", "at": 0.5 }]"#);
+    let report = play(&scenario, Mode::None, 2, StoreSpec::Memory);
+    assert_eq!(report.faults_ineffective, 1, "{:?}", report.faults);
+    assert!(!report.faults[0].effective);
+    // The others take effect on the stand-in.
+    let scenario = tiny(
+        r#"[{ "kind": "foreign-commit", "at": 0.2, "object": "note" },
+            { "kind": "restore", "at": 0.5, "object": "note" },
+            { "kind": "schema-change", "at": 0.7 },
+            { "kind": "reopen", "at": 0.8 }]"#,
+    );
+    let report = play(&scenario, Mode::None, 2, StoreSpec::Sqlite(None));
+    assert_eq!(report.faults_ineffective, 0, "{:?}", report.faults);
 }

@@ -739,6 +739,28 @@ pub fn populate_with(
         ..Catalogue::default()
     };
 
+    // One member per module role, holding that role and nothing else: the editors, reviewers,
+    // support agents and marketers a workload acts as. A principal is `user:<role id>`.
+    for role in schema.roles.keys().filter(|r| r.as_str().contains("__")) {
+        let name = format!("user:{role}");
+        let principal = strata_kernel::PrincipalId::new(name.clone())
+            .map_err(|e| CorpusError::new(format!("member {name}: {e:?}")))?;
+        match gen.commit(Intent::AssignRole {
+            principal,
+            role: role.clone(),
+        }) {
+            Ok(_) => {
+                catalogue.members.insert(role.to_string(), name);
+            }
+            // A role the kernel will not assign is left without a member and reported.
+            Err(e) => {
+                catalogue
+                    .rejections
+                    .insert(format!("role:{role}"), (1, e.to_string()));
+            }
+        }
+    }
+
     for &ti in &order {
         let plan = &plans[ti];
         let mut rng = Rng::derive(options.seed, &format!("type:{}", plan.key));
