@@ -8,3 +8,4 @@ import Strata.Evolution.Proofs
 import Strata.Evolution.Lens
 import Strata.Evolution.Compose
 import Strata.Evolution.Commute
+import Strata.WorkingSet
