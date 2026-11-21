@@ -76,7 +76,8 @@ export function deriveLabel(evidence) {
 export function realisationReport({ claims, uiScenarios = [], sources }) {
   const refs = verifiedRefs(sources);
   const textOf = new Map(sources.map((s) => [s.path, s.text]));
-  const requirements = claims.filter((c) => c.kind === 'requirement');
+  // documentation (`"check": "documentation"`) is held by no check and has no realisation label to support
+  const requirements = claims.filter((c) => c.kind === 'requirement' && c.check !== 'documentation');
   const declared = { construction: 0, checked: 0, operational: 0, missing: 0 };
   const derived = { construction: 0, checked: 0, operational: 0, none: 0 };
   const differ = [];

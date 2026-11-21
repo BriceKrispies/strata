@@ -264,9 +264,12 @@ mkdirSync(resultsDir, { recursive: true });
 // The expected counts come from the specification and the gate config (gate.json).
 // ---------------------------------------------------------------------------------------------
 const spec = parseJsonc(readFileSync(specPath, 'utf8'));
-const requirements = spec.claims.filter((claim) => claim.kind === 'requirement');
+// A statement marked `"check": "documentation"` is for people: no check holds it, and the gate's counts leave it out.
+const allRequirements = spec.claims.filter((claim) => claim.kind === 'requirement');
+const requirements = allRequirements.filter((claim) => claim.check !== 'documentation');
+const documentationCount = allRequirements.length - requirements.length;
 const modelClaims = spec.claims.filter((claim) => String(claim.id).startsWith('m-'));
-const requirementIds = new Set(requirements.map((claim) => claim.id));
+const requirementIds = new Set(allRequirements.map((claim) => claim.id));
 let startedList = [];
 try {
   startedList = readGateConfig(root).startedMilestones;
@@ -278,7 +281,7 @@ const gated = requirements.filter((claim) => started.has(claim.milestone));
 const counts = { requirements: requirements.length, gated: gated.length, model: modelClaims.length };
 const danglingLinks = modelClaims.filter((claim) => !requirementIds.has(claim.models));
 
-console.log(`specification: ${requirements.length} requirements, ${modelClaims.length} model claims; started milestones: ${[...started].sort((a, b) => a - b).join(', ') || 'none'}`);
+console.log(`specification: ${requirements.length} requirements (${documentationCount} more are documentation, outside the counts), ${modelClaims.length} model claims; started milestones: ${[...started].sort((a, b) => a - b).join(', ') || 'none'}`);
 if (started.size === 0) check('gate.json names started milestones', false, 'startedMilestones is empty');
 
 // ---------------------------------------------------------------------------------------------
