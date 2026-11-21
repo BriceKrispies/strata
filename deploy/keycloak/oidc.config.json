@@ -1,0 +1,41 @@
+{
+  "tenants": {
+    "fieldnotes": [
+      {
+        "id": "keycloak",
+        "label": "Keycloak OIDC",
+        "issuer": "http://keycloak.localhost:8180/realms/strata",
+        "client_id": "strata",
+        "client_secret_env": "STRATA_KEYCLOAK_CLIENT_SECRET",
+        "algorithms": ["RS256"],
+        "domains": ["keycloak.example", "upstream.example"],
+        "create_on_first_sign_in": true,
+        "default_role": "author"
+      },
+      {
+        "id": "keycloak-consent",
+        "label": "Keycloak with consent",
+        "issuer": "http://keycloak.localhost:8180/realms/strata",
+        "client_id": "strata-consent",
+        "client_secret_env": "STRATA_KEYCLOAK_CLIENT_SECRET",
+        "algorithms": ["RS256"],
+        "domains": ["keycloak.example"],
+        "create_on_first_sign_in": true,
+        "default_role": "author"
+      }
+    ],
+    "tidewater": [
+      {
+        "id": "keycloak",
+        "label": "Keycloak OIDC",
+        "issuer": "http://keycloak.localhost:8180/realms/strata",
+        "client_id": "strata",
+        "client_secret_env": "STRATA_KEYCLOAK_CLIENT_SECRET",
+        "algorithms": ["RS256"],
+        "domains": ["keycloak.example", "upstream.example"],
+        "create_on_first_sign_in": true,
+        "default_role": "author"
+      }
+    ]
+  }
+}

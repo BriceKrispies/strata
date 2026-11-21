@@ -27,6 +27,7 @@ pub mod canon;
 pub mod capabilities;
 pub mod declared_types;
 pub mod definitions;
+pub mod dependencies;
 pub mod editor_rules;
 pub mod erasure;
 pub mod expr;
@@ -64,7 +65,8 @@ pub use read::{read, read_needs, visible, visible_in};
 pub use schema::*;
 pub use state::*;
 pub use transition::{
-    apply_delta, needs, plan_migration, refine_needs, transition, Migration, Violation,
+    apply_delta, assess_changes, needs, plan_migration, refine_needs, transition, Migration,
+    Violation,
 };
 pub use types::*;
 pub use world::World;

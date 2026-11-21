@@ -1,0 +1,43 @@
+{
+  "realm": "upstream",
+  "displayName": "Upstream provider (local development only)",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "verifyEmail": false,
+  "bruteForceProtected": false,
+  "clients": [
+    {
+      "clientId": "strata-broker",
+      "name": "Realm strata as a client (local development only)",
+      "description": "The client that realm strata signs people in with. The secret is a development-only value.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "strata-dev-broker-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "consentRequired": false,
+      "redirectUris": ["http://keycloak.localhost:8180/realms/strata/broker/upstream/endpoint"],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "una",
+      "email": "una@upstream.example",
+      "emailVerified": true,
+      "firstName": "Una",
+      "lastName": "Upstream",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "strata-dev-una", "temporary": false }]
+    }
+  ]
+}

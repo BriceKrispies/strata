@@ -567,11 +567,13 @@ fn situation_09_aba_with_another_type_does_not_bind_silently() {
 /// Wanted: refused naming the query, because removing `title` breaks every dependent of it, even
 /// when a field of that name comes back in the same change.
 ///
-/// Today: accepted. Only the final schema is checked, and `title` is text there, so the query type-
-/// checks and silently binds to the redefined field. `plan_migration` does not see that a removal
-/// happened, so nothing refuses it.
+/// Today: refused by `change_schema` (`transition.rs`, `assess_changes`). The removal is a breaking
+/// change (`dependencies::classify`), and its impact, read in the graph before and the graph after
+/// the whole list, holds the query: it reads `dossier.title` in both, so it would bind to the new
+/// field. The refusal is `InvalidSchema` and names `tickets_by_title`.
+///
+/// Verifies: MIG-604
 #[test]
-#[ignore = "gap: removing and redefining dossier.title as Str in one change is accepted, and the query tickets_by_title silently binds to the new field"]
 fn situation_09b_aba_with_the_same_type_must_not_rebind_silently() {
     let world = accepted(
         &catalogue(),
@@ -661,11 +663,10 @@ fn situation_11_reference_cycle_removing_one_side_stays_consistent() {
 ///
 /// Wanted: refused, naming the transition and the value.
 ///
-/// Today: accepted. `problems()` checks the workflow's `set` values only for their shape
-/// (`schema.rs:465-478`), and `WorkflowDefExt::states` (`schema.rs:76-86`) does not take `set`
-/// values into account. Records are checked against states only when they are written.
+/// Today: refused. `problems()` checks a transition whose `set` assigns the workflow's own field
+/// a literal against the workflow's states (`schema.rs`, workflow validation), so the change
+/// names the transition and the value.
 #[test]
-#[ignore = "gap: a transition sets status to closed, which is not a state of the workflow; the schema change is accepted, the value is only refused on a later write"]
 fn situation_12_a_transition_writing_a_removed_state_is_refused_naming_it() {
     let world = accepted(
         &catalogue(),
