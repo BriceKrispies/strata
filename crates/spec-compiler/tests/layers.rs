@@ -19,9 +19,10 @@
 
 mod support;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use serde_json::Value;
 use strata_spec_compiler::layer_expr;
@@ -462,43 +463,104 @@ fn exegra_specs(dir: &str, products: &[&str]) -> PathBuf {
     specs
 }
 
-fn exegra_validate(cli: &Path, specs: &Path, project: &str) -> Value {
-    let output = Command::new("node")
-        .arg(cli)
-        .args(["validate", "--project", project, "--specs"])
-        .arg(specs)
-        .output()
-        .expect("node runs the Exegra CLI");
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
-        panic!(
-            "the Exegra CLI did not print JSON ({e}): {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })
-}
-
-/// Exegra's validation of the platform alone, run once for every test that compares a layered
-/// project with it (the platform's analysis is the largest cost of a validation).
-fn platform_validation(cli: &Path) -> &'static Value {
-    static ALONE: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-    ALONE.get_or_init(|| {
-        let specs = exegra_specs("exegra-platform", &[]);
-        exegra_validate(cli, &specs, "platform")
-    })
+/// Exegra's `validate` of every `(key, specs, project)` in `jobs`, by key. One Exegra process per
+/// shard (`scripts/exegra-validate.mjs`, two by default, `STRATA_EXEGRA_SHARDS`) loads Exegra once
+/// and runs the command the CLI runs for each of its share of the jobs; `exegra validate` once per
+/// job started Node and loaded Exegra once per job. Each value is the envelope the CLI prints.
+fn exegra_validate_all(
+    cli: &Path,
+    dir: &str,
+    jobs: &[(&str, &Path, &str)],
+) -> BTreeMap<String, Value> {
+    let home = cli.parent().and_then(Path::parent).unwrap();
+    let out = root().join("var").join("specc-layers").join(dir);
+    let _ = fs::remove_dir_all(&out);
+    fs::create_dir_all(&out).unwrap();
+    let list = out.join("jobs.json");
+    let listed: Vec<Value> = jobs
+        .iter()
+        .map(|(key, specs, project)| {
+            serde_json::json!({ "key": key, "specs": specs, "project": project })
+        })
+        .collect();
+    fs::write(&list, Value::Array(listed).to_string()).unwrap();
+    let shards: usize = std::env::var("STRATA_EXEGRA_SHARDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|n| *n >= 1)
+        .unwrap_or(2)
+        .min(jobs.len());
+    let script = root().join("scripts").join("exegra-validate.mjs");
+    let children: Vec<_> = (0..shards)
+        .map(|i| {
+            Command::new("node")
+                .arg(&script)
+                .arg("--exegra")
+                .arg(home)
+                .arg("--jobs")
+                .arg(&list)
+                .arg("--out")
+                .arg(&out)
+                .arg("--shard")
+                .arg(format!("{i}/{shards}"))
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap_or_else(|e| panic!("node could not be run ({e})"))
+        })
+        .collect();
+    for child in children {
+        let output = child.wait_with_output().expect("node is waited for");
+        let envelope: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+            panic!(
+                "scripts/exegra-validate.mjs did not print JSON ({e}): {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+        assert_eq!(
+            envelope["ok"],
+            Value::Bool(true),
+            "scripts/exegra-validate.mjs failed: {envelope}"
+        );
+    }
+    jobs.iter()
+        .map(|(key, _, _)| {
+            let text = fs::read_to_string(out.join(format!("{key}.json")))
+                .unwrap_or_else(|e| panic!("no validation of {key} was written ({e})"));
+            let envelope = serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("the validation of {key} is not JSON ({e})"));
+            (key.to_string(), envelope)
+        })
+        .collect()
 }
 
 /// Exegra accepts the fixture product and the complete products beside the platform, and reports
-/// the platform semantic hash unchanged with each set.
+/// the platform semantic hash unchanged with each set. The three validations (the platform alone
+/// and the two layered projects) run together, in one batch.
 #[test]
 fn exegra_accepts_the_products_and_reports_the_platform_hash_unchanged() {
     let Some(cli) = support::exegra_cli("the layered validation") else {
         return;
     };
-    let alone = platform_validation(&cli);
+    let platform = exegra_specs("exegra-platform", &[]);
+    let accepted = exegra_specs("exegra-accepted", &["badges.jsonc"]);
+    let complete = exegra_specs(
+        "exegra-complete",
+        &["ledger-trigger.jsonc", "promotions.jsonc"],
+    );
+    let validations = exegra_validate_all(
+        &cli,
+        "validations-accepted",
+        &[
+            ("alone", &platform, "platform"),
+            ("accepted", &accepted, "layered"),
+            ("complete", &complete, "layered"),
+        ],
+    );
+    let alone = &validations["alone"];
     assert!(alone["semanticHash"].is_string(), "{alone}");
 
-    let specs = exegra_specs("exegra-accepted", &["badges.jsonc"]);
-    let layered = exegra_validate(&cli, &specs, "layered");
+    let layered = &validations["accepted"];
     assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
     assert_eq!(layered["result"]["errors"], Value::from(0), "{layered}");
     assert_eq!(
@@ -510,11 +572,7 @@ fn exegra_accepts_the_products_and_reports_the_platform_hash_unchanged() {
         Value::from("badges")
     );
 
-    let specs = exegra_specs(
-        "exegra-complete",
-        &["ledger-trigger.jsonc", "promotions.jsonc"],
-    );
-    let layered = exegra_validate(&cli, &specs, "layered");
+    let layered = &validations["complete"];
     assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
     assert_eq!(layered["result"]["errors"], Value::from(0), "{layered}");
     assert_eq!(layered["semanticHash"], alone["semanticHash"]);
@@ -543,15 +601,31 @@ fn exegra_refuses_each_refused_product_with_the_same_rule() {
     let Some(cli) = support::exegra_cli("the layered refusals") else {
         return;
     };
-    let mut checked = 0;
-    for (name, code, _) in REFUSED {
-        if !EXEGRA_SAMPLE.contains(name) {
-            continue;
-        }
-        checked += 1;
+    let cases: Vec<(&str, &str, PathBuf)> = REFUSED
+        .iter()
+        .filter(|(name, _, _)| EXEGRA_SAMPLE.contains(name))
+        .map(|(name, code, _)| {
+            let file = format!("refused/{name}.jsonc");
+            (
+                *name,
+                *code,
+                exegra_specs(&format!("exegra-{name}"), &[file.as_str()]),
+            )
+        })
+        .collect();
+    assert_eq!(
+        cases.len(),
+        EXEGRA_SAMPLE.len(),
+        "a sampled fixture is missing from REFUSED"
+    );
+    let jobs: Vec<(&str, &Path, &str)> = cases
+        .iter()
+        .map(|(name, _, specs)| (*name, specs.as_path(), "layered"))
+        .collect();
+    let validations = exegra_validate_all(&cli, "validations-refused", &jobs);
+    for (name, code, _) in &cases {
         let file = format!("refused/{name}.jsonc");
-        let specs = exegra_specs(&format!("exegra-{name}"), &[file.as_str()]);
-        let out = exegra_validate(&cli, &specs, "layered");
+        let out = &validations[*name];
         assert_eq!(out["ok"], Value::Bool(false), "{file}: {out}");
         let codes: Vec<&str> = out["result"]["diagnostics"]
             .as_array()
@@ -565,9 +639,4 @@ fn exegra_refuses_each_refused_product_with_the_same_rule() {
             "{file}: Exegra refused with {codes:?}, not {code}"
         );
     }
-    assert_eq!(
-        checked,
-        EXEGRA_SAMPLE.len(),
-        "a sampled fixture is missing from REFUSED"
-    );
 }

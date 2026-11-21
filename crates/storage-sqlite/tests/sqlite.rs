@@ -24,6 +24,31 @@ fn fresh_path(name: &str) -> PathBuf {
     path
 }
 
+/// Verifies: STO-002
+///
+/// Every row of the table in the specification has a check and every check has a row, and each
+/// check runs on a database file.
+#[test]
+fn sqlite_store_conforms_on_disk() {
+    let ran = conformance::run(&|| {
+        Box::new(SqliteStore::open(&fresh_path("conformance"), Timestamp(1)).unwrap())
+            as Box<dyn Store>
+    });
+    let spec = strata_spec_parts::read_spec_text(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../specifications/spec.jsonc"
+    )))
+    .expect("the specification file");
+    let (mut ran, mut rows) = (ran, conformance::spec_cases(&spec));
+    assert!(rows.len() >= 13, "the table was not read: {rows:?}");
+    ran.sort();
+    rows.sort();
+    assert_eq!(
+        ran, rows,
+        "the checks that ran are not the rows of the conformance table"
+    );
+}
+
 /// Verifies: OPS-318
 ///
 /// A retried create after the process restarted: the key was recorded in the tenant's file by the

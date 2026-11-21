@@ -4313,6 +4313,7 @@ dependencies = [
  "serde_json",
  "strata-kernel",
  "strata-runtime",
+ "strata-spec-parts",
  "strata-storage-api",
  "strata-substrate",
 ]

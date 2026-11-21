@@ -111,7 +111,7 @@ fn fresh_store() -> PostgresStore {
         .unwrap_or_else(|e| panic!("could not connect a store to {name}: {e}"))
 }
 
-/// Verifies: STO-002
+/// Verifies: STO-004
 ///
 /// Every row of the table in the specification has a check and every check has a row, and each
 /// check runs on a database of its own.

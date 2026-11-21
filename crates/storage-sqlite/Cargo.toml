@@ -19,6 +19,8 @@ rusqlite.workspace = true
 [dev-dependencies]
 strata-storage-api = { workspace = true, features = ["conformance"] }
 strata-kernel = { workspace = true, features = ["testkit"] }
+# Reads the conformance table from the specification manifest.
+strata-spec-parts.workspace = true
 # The publication template, for the recorded-data test.
 strata-substrate.workspace = true
 
