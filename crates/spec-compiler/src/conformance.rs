@@ -1915,12 +1915,14 @@ mod tests {
             r#""conformanceProbe": "{\"slug\": \"probe\"}", "conformanceExample""#,
         );
         let text = run(&with_probe, None).unwrap().files[0].contents.clone();
+        // The suite is formatted across lines; compare it with its whitespace taken out.
+        let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            text.contains(r#"probe: Request { path: "/api/notes/probe""#),
+            flat.contains(r#"probe:Request{path:"/api/notes/probe""#),
             "{text}"
         );
         assert!(
-            text.contains(r#"success: Some(Request { path: "/api/notes/a%20b""#),
+            flat.contains(r#"success:Some(Request{path:"/api/notes/a%20b""#),
             "{text}"
         );
         // A probe may leave out inputs, but not name one the contract lacks.
@@ -1954,8 +1956,9 @@ mod tests {
             r#""conformanceSetup": "[{\"read\": \"/api/overview\", \"set\": {\"slug\": \"tenant.revision\"}}, {\"step\": \"enrol-authenticator\"}]", "conformanceExample""#,
         );
         let text = run(&read, None).unwrap().files[0].contents.clone();
+        let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            text.contains(r#"setup: &[Setup::Read { path: "/api/overview", set: &[("slug", "tenant.revision")] }, Setup::Step("enrol-authenticator")]"#),
+            flat.contains(r#"setup:&[Setup::Read{path:"/api/overview",set:&[("slug","tenant.revision")],},Setup::Step("enrol-authenticator"),]"#),
             "{text}"
         );
         let unknown = read.replace("enrol-authenticator", "nothing");
