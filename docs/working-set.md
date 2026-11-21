@@ -408,6 +408,33 @@ Concurrency inside a runtime is outside the model (W2): each tenant runtime's re
 commit-and-carry and snapshot assembly is one critical section against the tenant's other requests.
 Simultaneous misses on one key are coalesced (CPY-012): one load per key per generation.
 
+### What a decision reads, now that records reference records
+
+The kernel model gained references (integration's `lean/Strata/References.lean` and the
+`problem` check in `Model.lean`): a create or update is valid only if every record the new value
+references exists, and a delete is refused while a record references the deleted one through a field
+that forbids it, and otherwise clears the references to it in every other record. That changes what
+a decision reads and what a delete writes:
+
+| Intent | Reads |
+|---|---|
+| create | the header, the counters, and the record key of every id the new record references (only whether it exists; a resident absence answers it) |
+| update | the header, the record itself, and the record key of every id the new value references |
+| delete | the header, the record itself, and the whole record list, to find the records that forbid the delete and the records whose references are cleared |
+| strict schema change | the header and the whole record list |
+
+A create or update therefore reads a few more single records, not every record: validity depends
+on the other records only through whether the referenced ones exist (`problem_eq_via`). A delete
+reads `all`, which every record write invalidates, so deletes will mostly miss in the model's
+design; in Rust the natural fix is a resident referrer answer per reference field (a `ByField`
+need on the field's value), which the coarse answer rule invalidates on any record write of the
+type and which a finer rule could keep.
+
+Validity depending on other records does not by itself make a resident entry stale: the working
+set holds records and answers, never validity verdicts, and every decision is recomputed from
+values served at one generation. The new staleness is the delete's writes to other records, and
+the delta now names them.
+
 ### What a delta invalidates
 
 The model states the **criterion** an invalidation map must meet: a key of the committed tenant
@@ -419,7 +446,11 @@ that the map does not invalidate has the same store answer after the delta, in e
   and the pages that start below the new id;
 - an update invalidates the record, every unordered answer and `all`, and **no page** (ids and
   their order are unchanged);
-- a delete invalidates the record, every unordered answer, `all`, and the pages that start below it;
+- a delete invalidates the record, **every record whose references to it it clears** (the delta
+  names them, as the Rust `StateDelta` names every record it writes), every unordered answer,
+  `all`, and the pages that start below it. Before references, a delete wrote one record; the
+  earlier rule, which invalidated only the deleted record, would now leave stale referrers
+  resident, so it was refined rather than kept;
 - a schema change invalidates the header and everything derived from the schema version;
 - in Rust, the counters change on every commit, so `counters` is invalidated by every delta.
 
@@ -510,12 +541,12 @@ invalidations, resizes, decisions, guarded commits, commits with lost receipts, 
 writes by others, and generation reads, in any order, so anything may happen between a decision
 and its commit. Assumptions W1 to W4 are at the head of the file; W4 (every change raises the
 generation) is the store obligation the contract above has to deliver. No `sorry`, no added axioms;
-`lake env lean Audit.lean` lists only `propext`, `Classical.choice` and `Quot.sound` for all 35
+`lake env lean Audit.lean` lists only `propext`, `Classical.choice` and `Quot.sound` for all 36
 audited theorems.
 
 | Property | Theorem |
 |---|---|
-| A decision from the header, counters and needed records is the kernel's step | `decideTenant_faithful`, `decideOn_fetch`, `decideOn_congr` |
+| A decision from the header, counters, the records it names and (for a delete or a strict schema change) the record list is the kernel's step, references included | `problem_eq_via`, `decideTenant_faithful`, `decideOn_fetch`, `decideOn_congr` |
 | One invalidation map meets the criterion, with a finer rule for ordered pages | `touchedIn_sound` |
 | A checked single-key read returns the store's value, whatever the runtime held | `checkedRead_linearizes` |
 | A read request over several rounds returns, key by key, the store at the moment it finishes | `request_snapshot`, `stepWS_reqOk`, `runWS_reqOk` |
@@ -576,9 +607,11 @@ checked mode does not need it.
   grown past its grant, and the stale entries correctness removes.
 - **No policy optimality, no arbiter feasibility** is proved.
 - **Concurrency inside the runtime** is outside the model (W2).
-- **The model's kernel is small**: one object type, three value kinds, no indexes, uniqueness,
-  references, policies reading other records, segments, journal, idempotency, jobs or settings,
-  and a four-constructor delta. `decideTenant_faithful` holds partly because `decideTenant` was
+- **The model's kernel is small**: one object type, three scalar value kinds and references, no
+  indexes, uniqueness, policies reading other records, segments, journal, idempotency, jobs or
+  settings, and a four-constructor delta (a delete now names the records it clears). No theorem
+  weakened when references arrived: the faithfulness and invalidation theorems were restated over
+  the new kernel and still hold exactly. `decideTenant_faithful` holds partly because `decideTenant` was
   written next to `stepTenant`; its value is in fixing which keys a decision reads. `InvSound` is
   the general part; each Rust key kind's criterion is follow-up item 4.
 - **The sealing model is separate from the main one** and has one key per value; it shows the
@@ -828,6 +861,16 @@ criteria that a test or a check can fail. Items are ordered by dependency; none 
   names the check that holds it (item 1's conformance case, item 13's tests).
 
 ## Answers to the reviews
+
+### Integration merge: references in the kernel model
+
+The merged kernel model checks references on create and update and clears or refuses them on
+delete. Changes: `decideTenant` reads the records a new value references (through
+`problemVia`, equal to the kernel's `problem` by `problem_eq_via`) and, for a delete, the record
+list; `Delta.remove` names the records it clears; the invalidation map invalidates them; the
+proofs of `decideTenant_faithful`, `decideOn_fetch` and `touchedIn_sound` were redone over the new
+kernel. Nothing weakened. The one rule that would have become unsound, a delete invalidating only
+the deleted record, was replaced.
 
 ### Fourth review
 

@@ -33,7 +33,9 @@ W4. Every change to what a load returns raises the tenant's generation (`Advance
 
 The theorems the design cites:
 
-- Coverage soundness: `decideTenant_faithful`, `decideOn_fetch`, `decideOn_congr`.
+- Coverage soundness: `problem_eq_via` (a written record's validity reads the other records only
+  through whether the records it references exist), `decideTenant_faithful`, `decideOn_fetch`,
+  `decideOn_congr`.
 - Invalidation: `InvSound` (the criterion), `touchedIn_sound` (a map meeting it, with unordered
   answers invalidated by any record change and ordered pages only by changes above their start).
 - Reads: `checkedRead_linearizes` (a checked single-key read returns the store's value, always),
@@ -162,14 +164,61 @@ def Store.set (s : Store) (x : TenantId) (t : Option Tenant) : Store :=
 inductive Delta where
   | create (id : RecordId) (r : Record)
   | replace (id : RecordId) (r : Record)
-  | remove (id : RecordId)
+  /-- Remove record `id` and clear the references to it held by the records named in `cleared`.
+      Like the Rust kernel's `StateDelta`, the delta names every record it writes. -/
+  | remove (id : RecordId) (cleared : List RecordId)
   | schema (s : Schema)
+
+/-- Remove record `id` and clear the references to it in the records named in `cleared`. -/
+def removeRecords (rs : Records) (id : RecordId) (cleared : List RecordId) : Records :=
+  (rs.filter (fun q => q.1 != id)).map
+    (fun q => if cleared.contains q.1 then (q.1, clearRef id q.2) else q)
 
 def Delta.apply (t : Tenant) : Delta → Tenant
   | .create id r => { t with records := (id, r) :: t.records, nextId := id + 1 }
   | .replace id r => { t with records := t.records.map (fun q => if q.1 == id then (q.1, r) else q) }
-  | .remove id => { t with records := t.records.filter (fun q => q.1 != id) }
+  | .remove id cleared => { t with records := removeRecords t.records id cleared }
   | .schema s => { t with schema := s }
+
+/-! ### Validity read through single records
+
+`problem` reads the record list only through `Records.has`: a written record is valid if every
+record it references exists. These are the same functions with existence given as a lookup, so a
+decision can be made from the referenced records alone. -/
+
+def resolvesVia (has : RecordId → Bool) : Val → Bool
+  | .ref id => has id
+  | _ => true
+
+def valueProblemVia (has : RecordId → Bool) (ty : Ty) (v : Val) : Option Err :=
+  if !v.hasType ty then some .invalid
+  else if !resolvesVia has v then some .danglingReference
+  else none
+
+def fieldProblemVia (has : RecordId → Bool) (fs : Fields) (fd : FieldId × FieldDef) : Option Err :=
+  if fd.2.required && (fs.valuesOf fd.1).isEmpty then some .invalid
+  else (fs.valuesOf fd.1).findSome? (valueProblemVia has fd.2.ty)
+
+def problemVia (schema : Schema) (has : RecordId → Bool) (r : Record) : Option Err :=
+  if r.fields.all (fun fv => (schema.lookup fv.1).isSome) then
+    schema.findSome? (fieldProblemVia has r.fields)
+  else some .invalid
+
+/-- The validity of a written record depends on the other records only through whether the records
+    it references exist. -/
+theorem problem_eq_via (schema : Schema) (rs : Records) (r : Record) :
+    problem schema rs r = problemVia schema (fun id => (rs.lookup id).isSome) r := by
+  have h0 : Val.resolves rs = resolvesVia (fun id => (rs.lookup id).isSome) := by
+    funext v; cases v <;> rfl
+  have h1 : valueProblem rs = valueProblemVia (fun id => (rs.lookup id).isSome) := by
+    funext ty v; simp only [valueProblem, valueProblemVia, h0]
+  have h2 : fieldProblem rs = fieldProblemVia (fun id => (rs.lookup id).isSome) := by
+    funext fs fd; simp only [fieldProblem, fieldProblemVia, h1]
+  simp only [problem, problemVia, h2]
+
+/-- The records that hold a reference to `id`: the ones a delete of `id` clears. -/
+def referrers (all : List (RecordId × Record)) (id : RecordId) : List RecordId :=
+  (all.filter (fun q => q.2.fields.any (fun fv => fv.2 == .ref id))).map Prod.fst
 
 def applyWorld (w : World) (x : TenantId) (d : Delta) : World :=
   upd w x ((w x).map (fun t => d.apply t))
@@ -178,14 +227,22 @@ def Store.applyDelta (s : Store) (x : TenantId) (d : Delta) : Store :=
   { world := applyWorld s.world x d, gen := upd s.gen x (s.gen x + 1) }
 
 /-- The kernel's decision for one tenant from its header, its counter, single records and the
-    record list; each intent reads only what `needs` would name. -/
+    record list. What each intent reads:
+    - create: the header, the counter, and the record of every id the new record references
+      (only whether it exists);
+    - update: the header, the record itself, and the record of every id the new value references;
+    - delete: the header, the record itself, and the whole record list (to find records that
+      forbid the delete and records whose references to it are cleared);
+    - a strict schema change: the header and the whole record list. -/
 def decideTenant (h : Header) (n : Nat) (look : RecordId → Option Record)
     (all : List (RecordId × Record)) (p : PrincipalId) : Intent → Except Err Delta
   | .create fs =>
     if !canCreate h.asTenant p then .error .unauthorized
     else
       let r : Record := { owner := p, fields := normalise fs }
-      if conforms h.schema r then .ok (.create n r) else .error .invalid
+      match problemVia h.schema (fun id => (look id).isSome) r with
+      | some e => .error e
+      | none => .ok (.create n r)
   | .update id fs =>
     match look id with
     | none => .error (missingRecord h.asTenant p)
@@ -193,13 +250,16 @@ def decideTenant (h : Header) (n : Nat) (look : RecordId → Option Record)
       if !canEdit h.asTenant p old then .error .unauthorized
       else
         let r : Record := { owner := old.owner, fields := normalise fs }
-        if conforms h.schema r then .ok (.replace id r) else .error .invalid
+        match problemVia h.schema (fun id => (look id).isSome) r with
+        | some e => .error e
+        | none => .ok (.replace id r)
   | .delete id =>
     match look id with
     | none => .error (missingRecord h.asTenant p)
     | some old =>
       if !canEdit h.asTenant p old then .error .unauthorized
-      else .ok (.remove id)
+      else if all.any (blocks h.schema id) then .error .stillReferenced
+      else .ok (.remove id (referrers all id))
   | .setRequired f strict =>
     if p != h.owner then .error .unauthorized
     else
@@ -230,6 +290,39 @@ theorem decideOn_congr (get get' : Key → Payload) (x : TenantId) (p : Principa
   have hr : ∀ id, get (.record x id) = get' (.record x id) := fun id => h _ rfl
   simp only [decideOn, hh, hc, ha, hr]
 
+private theorem clearRef_none (id : RecordId) (r : Record)
+    (h : r.fields.any (fun fv => fv.2 == .ref id) = false) : clearRef id r = r := by
+  cases r with
+  | mk o fs =>
+    simp only [clearRef, Record.mk.injEq, true_and]
+    apply List.filter_eq_self.mpr
+    intro fv hfv
+    have := List.any_eq_false.mp h fv hfv
+    simpa using this
+
+/-- Clearing only the records `referrers` names is clearing every record: the others hold no
+    reference to clear. -/
+private theorem remove_map_eq (rs : Records) (id : RecordId) :
+    (rs.filter (fun q => q.1 != id)).map
+      (fun q => if (referrers rs id).contains q.1 then (q.1, clearRef id q.2) else q)
+    = (rs.filter (fun q => q.1 != id)).map (fun q => (q.1, clearRef id q.2)) := by
+  apply List.map_congr_left
+  intro q hq
+  have hq' := (List.mem_filter.mp hq).1
+  by_cases hc : (referrers rs id).contains q.1 = true
+  · have hc' : q.1 ∈ referrers rs id := by simpa using hc
+    simp [hc']
+  · simp only [hc, Bool.false_eq_true, ite_false]
+    have hn : q.2.fields.any (fun fv => fv.2 == .ref id) = false := by
+      cases hq2 : q.2.fields.any (fun fv => fv.2 == .ref id) with
+      | false => rfl
+      | true =>
+        exfalso
+        apply hc
+        have : q.1 ∈ referrers rs id := List.mem_map.mpr ⟨q, List.mem_filter.mpr ⟨hq', hq2⟩, rfl⟩
+        simpa using this
+    rw [clearRef_none id q.2 hn]
+
 @[simp] private theorem header_schema (t : Tenant) : t.header.schema = t.schema := rfl
 @[simp] private theorem header_owner (t : Tenant) : t.header.owner = t.owner := rfl
 @[simp] private theorem canCreate_asTenant (t : Tenant) (p : PrincipalId) :
@@ -250,29 +343,37 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
       (Delta.apply t) = stepTenant t p i := by
   cases i with
   | create fs =>
-    simp only [decideTenant, stepTenant, canCreate_asTenant, header_schema]
+    simp only [decideTenant, stepTenant, canCreate_asTenant, header_schema, problem_eq_via]
     by_cases hc : canCreate t p = true
-    · by_cases hk : conforms t.schema { owner := p, fields := normalise fs } = true
-      · simp [hc, hk, Delta.apply, Except.map]
-      · simp [hc, hk, Except.map]
+    · cases hk : problemVia t.schema (fun id => (t.records.lookup id).isSome)
+        { owner := p, fields := normalise fs } with
+      | none => simp [hc, Delta.apply, Except.map]
+      | some e => simp [hc, Except.map]
     · simp [hc, Except.map]
   | update id fs =>
+    simp only [decideTenant, stepTenant, canEdit_asTenant, missingRecord_asTenant, header_schema,
+      problem_eq_via]
+    cases hl : t.records.lookup id with
+    | none => simp [Except.map]
+    | some old =>
+      by_cases hc : canEdit t p old = true
+      · cases hk : problemVia t.schema (fun id => (t.records.lookup id).isSome)
+          { owner := old.owner, fields := normalise fs } with
+        | none => simp [hc, hk, Delta.apply, Except.map]
+        | some e => simp [hc, hk, Except.map]
+      · simp [hc, Except.map]
+  | delete id =>
     simp only [decideTenant, stepTenant, canEdit_asTenant, missingRecord_asTenant, header_schema]
     cases hl : t.records.lookup id with
     | none => simp [Except.map]
     | some old =>
       by_cases hc : canEdit t p old = true
-      · by_cases hk : conforms t.schema { owner := old.owner, fields := normalise fs } = true
-        · simp [hc, hk, Delta.apply, Except.map]
-        · simp [hc, hk, Except.map]
-      · simp [hc, Except.map]
-  | delete id =>
-    simp only [decideTenant, stepTenant, canEdit_asTenant, missingRecord_asTenant]
-    cases hl : t.records.lookup id with
-    | none => simp [Except.map]
-    | some old =>
-      by_cases hc : canEdit t p old = true
-      · simp [hc, Delta.apply, Except.map]
+      · by_cases hb : t.records.any (blocks t.schema id) = true
+        · simp [hc, hb, Except.map]
+        · have hb' : t.records.any (blocks t.schema id) = false := by simpa using hb
+          simp only [hc, hb', Bool.not_true, Bool.false_eq_true, ite_false, Except.map,
+            Delta.apply, Except.ok.injEq]
+          simp only [removeRecords, remove_map_eq]
       · simp [hc, Except.map]
   | setRequired f strict =>
     simp only [decideTenant, stepTenant, header_owner, header_schema]
@@ -325,8 +426,9 @@ theorem fetch_applyWorld_other (w : World) (x : TenantId) (d : Delta) (k : Key)
   fetch_upd_other w x _ k h
 
 /-- One map: a create moves the counter, adds a record and changes every answer and the list; a
-    replacement or removal changes one record, every answer and the list; a schema change changes
-    the header only. Answers are invalidated by any record change of their tenant, the granularity
+    replacement changes one record, every answer and the list; a removal changes the removed record,
+    every record it names as cleared (references to the removed record are cleared there), every
+    answer and the list; a schema change changes the header only. Answers are invalidated by any record change of their tenant, the granularity
     of the per-object-type change counters (D-5064). -/
 def touchedIn : Delta → Key → Bool
   | .schema _, .header _ => true
@@ -335,16 +437,16 @@ def touchedIn : Delta → Key → Bool
   | _, .counters _ => false
   | .create id' _, .record _ id => id == id'
   | .replace id' _, .record _ id => id == id'
-  | .remove id', .record _ id => id == id'
+  | .remove id' cl, .record _ id => id == id' || cl.contains id
   | .schema _, .record _ _ => false
   | .schema _, .all _ => false
   | _, .all _ => true
   | .schema _, .answer _ _ _ => false
   | .create _ _, .answer _ _ _ => true
   | .replace _ _, .answer _ _ _ => true
-  | .remove _, .answer _ _ _ => true
+  | .remove _ _, .answer _ _ _ => true
   | .create id' _, .page _ a _ => decide (a < id')
-  | .remove id', .page _ a _ => decide (a < id')
+  | .remove id' _, .page _ a _ => decide (a < id')
   | _, .page _ _ _ => false
 
 private theorem beq_false_of_ne {a b : Nat} (h : a ≠ b) : (a == b) = false := by simp [h]
@@ -367,6 +469,41 @@ private theorem lookup_map_replace (rs : List (RecordId × Record)) (id id' : Re
       · subst hik
         simp [List.lookup, hk]
       · simp [List.lookup, hk, beq_false_of_ne hik, ih]
+
+private theorem lookup_map_fixed (rs : Records) (id : RecordId)
+    (g : RecordId × Record → RecordId × Record) (hg1 : ∀ q, (g q).1 = q.1)
+    (hg2 : ∀ q, q.1 = id → g q = q) : (rs.map g).lookup id = rs.lookup id := by
+  induction rs with
+  | nil => rfl
+  | cons q rs ih =>
+    by_cases hq : q.1 = id
+    · rw [List.map_cons, hg2 q hq]
+      obtain ⟨k, v⟩ := q
+      simp only at hq
+      subst hq
+      simp [List.lookup]
+    · obtain ⟨k, v⟩ := q
+      simp only at hq
+      have h1 := hg1 (k, v)
+      simp only [List.map_cons]
+      generalize g (k, v) = q' at h1 ⊢
+      obtain ⟨k', v'⟩ := q'
+      simp only at h1
+      subst h1
+      simp [List.lookup, beq_false_of_ne (Ne.symm hq), ih]
+
+private theorem page_map_fst (rs : Records) (a : RecordId)
+    (g : RecordId × Record → RecordId × Record) (hg : ∀ q, (g q).1 = q.1) :
+    ((rs.map g).filter (fun q => decide (a < q.1))).map Prod.fst
+      = (rs.filter (fun q => decide (a < q.1))).map Prod.fst := by
+  induction rs with
+  | nil => rfl
+  | cons q rs ih =>
+    have h1 := hg q
+    by_cases ha : a < q.1
+    · simp [List.filter, ha, ih, h1]
+    · have ha' : ¬ a < (g q).1 := by rw [h1]; exact ha
+      simp [List.filter, ha, ha', ih]
 
 private theorem lookup_filter_remove (rs : List (RecordId × Record)) (id id' : RecordId)
     (h : id ≠ id') : (rs.filter (fun q => q.1 != id')).lookup id = rs.lookup id := by
@@ -440,10 +577,15 @@ theorem touchedIn_sound : InvSound touchedIn := by
       have hne : id ≠ id' := by simpa [touchedIn] using hin
       simp only [fetch, applyWorld, upd_same]
       cases w t <;> simp [Delta.apply, lookup_map_replace _ _ _ _ hne]
-    | remove id' =>
-      have hne : id ≠ id' := by simpa [touchedIn] using hin
+    | remove id' cl =>
+      have hne : id ≠ id' ∧ ¬ id ∈ cl := by simpa [touchedIn] using hin
       simp only [fetch, applyWorld, upd_same]
-      cases w t <;> simp [Delta.apply, lookup_filter_remove _ _ _ hne]
+      cases w t with
+      | none => rfl
+      | some tn =>
+        simp only [Option.map_some, Option.bind_some, Delta.apply, removeRecords]
+        rw [lookup_map_fixed _ id _ (fun q => by split <;> rfl) (fun q hq => by simp [hq, hne.2]),
+          lookup_filter_remove _ _ _ hne.1]
     | schema s =>
       simp only [fetch, applyWorld, upd_same]
       cases w t <;> simp [Delta.apply]
@@ -465,10 +607,14 @@ theorem touchedIn_sound : InvSound touchedIn := by
     | replace id' r =>
       simp only [fetch, applyWorld, upd_same]
       cases w t <;> simp [Delta.apply, pageOf, page_map_replace]
-    | remove id' =>
+    | remove id' cl =>
       have hne : ¬ a < id' := by simpa [touchedIn] using hin
       simp only [fetch, applyWorld, upd_same]
-      cases w t <;> simp [Delta.apply, pageOf, page_filter_remove _ _ _ hne]
+      cases w t with
+      | none => rfl
+      | some tn =>
+        simp only [Option.map_some, Delta.apply, pageOf, removeRecords]
+        rw [page_map_fst _ _ _ (fun q => by split <;> rfl), page_filter_remove _ _ _ hne]
     | schema sc =>
       simp only [fetch, applyWorld, upd_same]
       cases w t <;> simp [Delta.apply, pageOf]

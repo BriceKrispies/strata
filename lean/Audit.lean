@@ -43,6 +43,7 @@ import Strata
 #print axioms Strata.Evolution.rewrite_chain
 #print axioms Strata.Evolution.pinned_breaking_change_accepted
 
+#print axioms Strata.WorkingSet.problem_eq_via
 #print axioms Strata.WorkingSet.decideTenant_faithful
 #print axioms Strata.WorkingSet.decideOn_fetch
 #print axioms Strata.WorkingSet.decideOn_congr
