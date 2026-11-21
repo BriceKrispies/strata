@@ -193,7 +193,7 @@
       "tier": "full",
       "seconds": 24.12,
       "unmeasured": true,
-      "reason": "correspondence: Runs the Lean build and compares it with the kernel (needs lake); the gate also runs lake build"
+      "reason": "correspondence: Runs the Lean build and compares it with the kernel, including 400 seeded random sequences through one Lean process (needs lake); the gate also runs lake build"
     },
     {
       "package": "strata-spec-compiler-language-fixture",
@@ -205,62 +205,6 @@
     {
       "package": "strata-model-core",
       "target": "dependencies",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-model-core",
-      "target": "function_examples_1",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-model-core",
-      "target": "function_examples_2",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-model-core",
-      "target": "function_examples_3",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-model-core",
-      "target": "function_examples_4",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-model-core",
-      "target": "function_examples_5",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-model-core",
-      "target": "function_examples_6",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-model-core",
-      "target": "function_examples_7",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-model-core",
-      "target": "function_examples_8",
       "tier": "routine",
       "seconds": null,
       "unmeasured": true

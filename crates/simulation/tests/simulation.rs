@@ -4,13 +4,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use strata_backend::simulated::Backend;
 use strata_kernel::*;
 use strata_protocol::tenants::load_all;
-use strata_simulation::engine::{run, Faults, Outcome, Scenario, Trace};
+use strata_simulation::engine::{run, Faults, Outcome, Scenario, Scheduled, Trace};
 use strata_simulation::journal::{replay_journal, Recorded};
 use strata_simulation::project::{project, Proposal};
+use strata_simulation::shell::{
+    run_shell, Answer as ShellAnswer, Faults as ShellFaults, ShellScenario,
+};
 use strata_simulation::workload::generate;
-use strata_substrate::bundle::{install, install_into};
+use strata_substrate::bundle::install_into;
 use strata_verification::evidence::Class;
 
 fn tenant() -> TenantId {
@@ -274,28 +278,6 @@ fn a_branch_with_a_change_that_changes_nothing_equals_its_baseline() {
     }
 }
 
-/// Run an intent and, when the kernel accepts it, add it to the journal the way the store does.
-fn record(
-    world: &mut World,
-    journal: &mut Vec<Recorded>,
-    context: Context,
-    intent: Intent,
-) -> bool {
-    let Ok((next, transition)) = world.step(&intent, &context) else {
-        return false;
-    };
-    *world = next;
-    journal.push(Recorded {
-        revision: transition.delta.new_revision,
-        kernel_version: KERNEL_VERSION.into(),
-        intent,
-        context,
-        delta_hash: canon::hash_of(&transition.delta),
-        events_hash: canon::hash_of(&transition.events),
-    });
-    true
-}
-
 /// The first step whose outcome differs between two traces, worked out here from the traces
 /// and not read from the comparison: the same step of the schedule, accepted with another
 /// result or refused for another reason.
@@ -447,32 +429,9 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
 /// Verifies: SIM-004
 #[test]
 fn a_journal_of_real_commits_replays_to_the_live_state() {
-    // Build a journal the way the store does: record each accepted intent with its hashes.
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tenants");
-    let loaded = load_all(&root).unwrap();
-    let bundle = &loaded
-        .iter()
-        .find(|l| l.bundle.id == tenant())
-        .unwrap()
-        .bundle;
-    let mut world = World::default();
-    let mut journal = Vec::new();
-    install(bundle, &mut |context, intent| {
-        let (next, transition) = world.step(&intent, &context)?;
-        world = next;
-        journal.push(Recorded {
-            revision: transition.delta.new_revision,
-            kernel_version: KERNEL_VERSION.into(),
-            intent,
-            context,
-            delta_hash: canon::hash_of(&transition.delta),
-            events_hash: canon::hash_of(&transition.events),
-        });
-        Ok::<_, DomainError>(transition.output)
-    })
-    .unwrap();
-    // Then the tenant lives: a generated editorial workload and role and schema changes, all
-    // recorded the way the store records them, so the journal holds every kind of intent.
+    // The journal is the one the backend's store writes: the tenant installed by the backend as a
+    // deployed process installs it, then a generated editorial workload and role and schema
+    // changes sent through the backend's request path, so the journal holds every kind of intent.
     let admin = |now: i64| Context {
         tenant: tenant(),
         principal: Principal::User(PrincipalId::new("user:admin").unwrap()),
@@ -485,27 +444,37 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
         hop: None,
     };
     let role_of = |name: &str| RoleId::new(name).unwrap();
-    let mut work: Vec<(Context, Intent)> =
-        generate(&world, &tenant(), 17, 80, 1_800_000_000_000, 60_000)
-            .into_iter()
-            .map(|s| (s.context, s.intent))
-            .collect();
+    let mut work: Vec<Scheduled> =
+        generate(&seeded(), &tenant(), 17, 80, 1_800_000_000_000, 60_000);
+    fn add(work: &mut Vec<Scheduled>, label: &str, context: Context, intent: Intent) {
+        work.push(Scheduled {
+            label: label.to_string(),
+            context,
+            intent,
+        })
+    }
     let mirela = PrincipalId::new("user:mirela").unwrap();
-    work.push((
+    add(
+        &mut work,
+        "revoke",
         admin(1_900_000_000_000),
         Intent::RevokeRole {
             principal: mirela.clone(),
             role: role_of("author"),
         },
-    ));
-    work.push((
+    );
+    add(
+        &mut work,
+        "assign",
         admin(1_900_000_000_001),
         Intent::AssignRole {
             principal: mirela,
             role: role_of("author"),
         },
-    ));
-    work.push((
+    );
+    add(
+        &mut work,
+        "define role",
         admin(1_900_000_000_002),
         Intent::ChangeSchema {
             changes: vec![SchemaChange::DefineRole(RoleDef {
@@ -515,12 +484,10 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
             expected_version: None,
             existing: ExistingData::Reject,
         },
-    ));
-    for (context, intent) in work {
-        record(&mut world, &mut journal, context, intent);
-    }
+    );
     // A record made and deleted again, so that a delete is in the journal whatever the workload
-    // happened to do.
+    // happened to do. Its id is the one the kernel gives it after the work above: the inputs are
+    // worked out on a scratch world, the outcomes come from the backend.
     let category = ObjectTypeId::new("category").unwrap();
     let scratch = Intent::CreateRecord {
         object: category.clone(),
@@ -532,24 +499,48 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
             ),
         ]),
     };
-    let id = RecordId(world.tenants[&tenant()].next_record);
-    assert!(record(
-        &mut world,
-        &mut journal,
-        admin(1_900_000_000_003),
-        scratch
-    ));
-    let delete = Intent::DeleteRecord {
-        object: category,
-        id,
-        expected_version: None,
-    };
-    assert!(record(
-        &mut world,
-        &mut journal,
+    let mut scratch_world = seeded();
+    for step in &work {
+        if let Ok((next, _)) = scratch_world.step(&step.intent, &step.context) {
+            scratch_world = next;
+        }
+    }
+    let id = RecordId(scratch_world.tenants[&tenant()].next_record);
+    add(&mut work, "scratch", admin(1_900_000_000_003), scratch);
+    add(
+        &mut work,
+        "delete scratch",
         admin(1_900_000_000_004),
-        delete
+        Intent::DeleteRecord {
+            object: category,
+            id,
+            expected_version: None,
+        },
+    );
+    let shell = run_shell(
+        &Backend::new(Some(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tenants"),
+        )),
+        &ShellScenario {
+            name: "journal".into(),
+            seed: 17,
+            start: 1_800_000_000_000 - 3_600_000,
+            schedule: work,
+            faults: ShellFaults::default(),
+            listen: vec![tenant()],
+            keys: false,
+            start_faults: Default::default(),
+            operations: Vec::new(),
+        },
+    )
+    .unwrap();
+    let last = shell.trace.last_answers();
+    let answers: Vec<&ShellAnswer> = last.values().copied().collect();
+    assert!(matches!(
+        answers[answers.len() - 2..],
+        [ShellAnswer::Committed { .. }, ShellAnswer::Committed { .. }]
     ));
+    let journal = shell.recordings[&tenant()].entries.clone();
     let kinds: BTreeSet<&str> = journal.iter().map(|e| e.intent.name()).collect();
     assert_eq!(
         kinds,
@@ -567,7 +558,11 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
         ]),
         "the journal does not hold every kind of intent"
     );
-    let live = world.tenants[&tenant()].clone();
+    // The backend's own replay of its journal, as the Impact Lab's replay runs it, agrees.
+    let own = &shell.trace.journal[0];
+    assert!(own.matches_live && own.first_mismatch.is_none());
+    assert_eq!((own.agreed, own.entries), (journal.len(), journal.len()));
+    let live = shell.world.tenants[&tenant()].clone();
     let report = replay_journal(&tenant(), &journal, Some(&live));
     assert_eq!(
         (report.agreed, report.entries),

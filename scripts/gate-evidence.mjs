@@ -9,8 +9,13 @@
 //   - for a requirement realised by `construction`: the Exegra verdicts of the `m-` claims that model it,
 //     all `verified` (var/exegra-verdicts.json, which the gate writes from `exegra claims`).
 //
-// The check fails when a requirement of a started milestone has no passing proof, and when a `Verifies:`
-// line names a ref the specification does not have. A requirement of a milestone that is not started is
+// A requirement may declare the check that holds it (`check`, `checkedBy`; specifications/README.md, "What holds a
+// requirement"). The declaration is read against the code: a test it names must exist and carry a `Verifies:` line
+// for the requirement, an m- claim it names must model the requirement, a contract it names must exist. A statement
+// declared `documentation` is outside the counts.
+//
+// The check fails when a requirement of a started milestone has no passing proof, when a declared check does not
+// stand, and when a `Verifies:` line names a ref the specification does not have. A requirement of a milestone that is not started is
 // counted as planned and is not held to the code.
 //
 // Only the pure functions below read nothing from disk; `collectEvidence` and the command line do.
@@ -498,7 +503,7 @@ export function leanOutcome(site, lake, leanRoot = 'lean') {
 
 /**
  * Judge every requirement.
- *   requirements  claims of kind requirement: `{id, ref, milestone, realisation}`
+ *   requirements  claims of kind requirement: `{id, ref, milestone, realisation, check, checkedBy}`; those with check `documentation` are left out of every count
  *   knownRefs     every ref the specification defines (contracts too), upper-case; defaults to the requirements' refs.
  *                 A `Verifies:` line naming a ref outside it is reported; one naming a known ref that is not a
  *                 requirement (a contract) is accepted and proves nothing.
@@ -507,10 +512,11 @@ export function leanOutcome(site, lake, leanRoot = 'lean') {
  *   rustTests     `indexRust` results, with `rustResults` from `parseCargo`
  *   leanTheorems  `indexLean` results, with `lake` from `parseLake`
  *   started       the started milestone numbers
- * Returns `{ok, proven, unproven, unknownRefs, trivial, counts}`. `unproven` lists the started requirements with no passing proof.
+ * Returns `{ok, proven, unproven, unknownRefs, checkProblems, trivial, counts}`. `unproven` lists the started requirements with no passing proof.
  */
-export function evaluateEvidence({ requirements, knownRefs = null, modelClaims = [], verdicts = null, rustTests = [], rustResults = [], leanTheorems = [], lake = null, started }) {
+export function evaluateEvidence({ requirements: allRequirements, knownRefs = null, modelClaims = [], verdicts = null, rustTests = [], rustResults = [], leanTheorems = [], lake = null, started }) {
   const startedSet = new Set(started);
+  let requirements = allRequirements;
   const byRef = new Map();
   for (const r of requirements) if (r.ref) byRef.set(String(r.ref).toUpperCase(), r);
 
@@ -545,6 +551,32 @@ export function evaluateEvidence({ requirements, knownRefs = null, modelClaims =
   const verdictOf = new Map((verdicts ?? []).map((v) => [v.claimId, v.status]));
   const modellers = (r) => modelClaims.filter((c) => c.models === r.id || (r.ref && String(c.models).toUpperCase() === String(r.ref).toUpperCase()));
 
+  // a declared check must exist and name the requirement back
+  const checkProblems = [];
+  for (const r of requirements) {
+    if (!r.check || r.check === 'documentation') continue;
+    const ref = String(r.ref ?? '').toUpperCase();
+    const where = r.ref ?? r.id;
+    for (const name of r.checkedBy ?? []) {
+      if (r.check === 'test' || r.check === 'differential') {
+        const at = name.indexOf('::');
+        const file = name.slice(0, at);
+        const fn = name.slice(at + 2);
+        const rust = rustTests.find((s) => s.file === file && (s.name === fn || (s.names ?? []).some((n) => n.name === fn)));
+        const lean = leanTheorems.find((s) => s.file === file && s.name === fn);
+        const site = rust ?? lean;
+        if (!site) checkProblems.push(`${where}: ${r.check} ${name} is not a test or theorem with a Verifies: line`);
+        else if (!site.refs.includes(ref)) checkProblems.push(`${where}: ${name} carries no Verifies: line for ${where}`);
+      } else if (r.check === 'model-claim') {
+        if (!modelClaims.some((c) => c.id === name && (c.models === r.id || String(c.models).toUpperCase() === ref))) checkProblems.push(`${where}: ${name} is not an m- claim that models it`);
+      } else if (r.check === 'conformance') {
+        if (!known.has(name.toUpperCase())) checkProblems.push(`${where}: ${name} is not a contract of the specification`);
+      }
+    }
+  }
+
+  const documentation = requirements.filter((r) => r.check === 'documentation').length;
+  requirements = requirements.filter((r) => r.check !== 'documentation');
   const proven = [];
   const unproven = [];
   const judge = (r) => {
@@ -579,8 +611,8 @@ export function evaluateEvidence({ requirements, knownRefs = null, modelClaims =
       unproven.push({ id: r.id, ref: r.ref, milestone: r.milestone, reason: verdict.reason });
     }
   }
-  const counts = { requirements: requirements.length, proven: proven.length, started: startedCount, startedProven, planned, sites };
-  return { ok: unproven.length === 0 && unknownRefs.length === 0, proven, unproven, unknownRefs, trivial, counts };
+  const counts = { requirements: requirements.length, documentation, proven: proven.length, started: startedCount, startedProven, planned, sites };
+  return { ok: unproven.length === 0 && unknownRefs.length === 0 && checkProblems.length === 0, proven, unproven, unknownRefs, checkProblems, trivial, counts };
 }
 
 /** The report as lines, for the gate's output: the counts first, then each problem. */
@@ -594,6 +626,7 @@ export function reportLines(report, limit = 30) {
   if (report.unproven.length > limit) lines.push(`... and ${report.unproven.length - limit} more unproven`);
   for (const u of report.unknownRefs.slice(0, limit)) lines.push(`unknown ref: ${u.ref} in ${u.where}`);
   if (report.unknownRefs.length > limit) lines.push(`... and ${report.unknownRefs.length - limit} more unknown refs`);
+  for (const p of (report.checkProblems ?? []).slice(0, limit)) lines.push(`declared check does not stand: ${p}`);
   for (const t of report.trivial) lines.push(`not counted: theorem states True: ${t}`);
   return lines;
 }

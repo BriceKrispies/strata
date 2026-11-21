@@ -180,7 +180,7 @@ test('a started requirement needs a passing proof; refs of contracts are known, 
   assert.deepEqual(report.unproven.map((u) => u.ref), ['AAA-002', 'AAA-003', 'AAA-004', 'AAA-006']);
   assert.match(report.unproven[3].reason, /m-6 violated/);
   assert.deepEqual(report.unknownRefs.map((u) => u.ref), ['ZZZ-009']);
-  assert.deepEqual(report.counts, { requirements: 7, proven: 3, started: 6, startedProven: 2, planned: 1, sites: { rust: 6, rustPassed: 2, lean: 0, leanPassed: 0 } });
+  assert.deepEqual(report.counts, { requirements: 7, documentation: 0, proven: 3, started: 6, startedProven: 2, planned: 1, sites: { rust: 6, rustPassed: 2, lean: 0, leanPassed: 0 } });
   assert.ok(reportLines(report)[0].startsWith('2 of 6 started requirements proven'));
 });
 
@@ -192,4 +192,33 @@ test('a theorem that states True is reported and does not prove the requirement'
   assert.deepEqual(report.trivial, ['lean/A.lean:1 hollow']);
   assert.match(report.unproven[0].reason, /trivial/);
   assert.equal(evaluateEvidence({ ...base, leanTheorems: [{ ...lean, trivial: false }] }).ok, true);
+});
+
+test('a declared check must exist and name the requirement back, and documentation is outside the counts', () => {
+  const site = (name, refs, file = 'crates/k/tests/t.rs') => ({ file, line: 1, name, names: [{ name, binaries: ['t'] }], refs });
+  const base = {
+    modelClaims: [{ id: 'm-1', models: 'a-1' }],
+    rustResults: [{ name: 'held', outcome: 'passed', binary: 't' }],
+    started: [1],
+  };
+  const standing = [
+    { id: 'a-1', ref: 'AAA-001', milestone: 1, check: 'test', checkedBy: ['crates/k/tests/t.rs::held'] },
+    { id: 'a-2', ref: 'AAA-002', milestone: 1, check: 'documentation' },
+  ];
+  const ok = evaluateEvidence({ ...base, requirements: standing, rustTests: [site('held', ['AAA-001'])] });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.counts.documentation, 1);
+  assert.equal(ok.counts.started, 1);
+  assert.equal(ok.counts.requirements, 1);
+
+  const named = (check, checkedBy, tests = [site('held', ['AAA-001'])]) =>
+    evaluateEvidence({ ...base, requirements: [{ ...standing[0], check, checkedBy }], knownRefs: ['AAA-001', 'CT-001'], rustTests: tests });
+  assert.match(named('test', ['crates/k/tests/t.rs::missing']).checkProblems[0], /not a test or theorem/);
+  assert.match(named('test', ['crates/k/tests/other.rs::held']).checkProblems[0], /not a test or theorem/);
+  assert.match(named('test', ['crates/k/tests/t.rs::held'], [site('held', ['AAA-009'])]).checkProblems[0], /no Verifies: line for AAA-001/);
+  assert.match(named('model-claim', ['m-2']).checkProblems[0], /not an m- claim that models it/);
+  assert.equal(named('model-claim', ['m-1']).checkProblems.length, 0);
+  assert.match(named('conformance', ['CT-404']).checkProblems[0], /not a contract/);
+  assert.equal(named('conformance', ['CT-001']).checkProblems.length, 0);
+  assert.equal(named('test', ['crates/k/tests/t.rs::missing']).ok, false);
 });

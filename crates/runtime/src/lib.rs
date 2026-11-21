@@ -29,6 +29,7 @@
 
 pub mod client;
 pub mod clock;
+pub mod entropy;
 pub mod host;
 pub mod jobs;
 pub mod limits;

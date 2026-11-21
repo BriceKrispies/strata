@@ -1020,11 +1020,15 @@ fn start_once(
     )
 }
 
-/// Replay the tenant's journal of committed transitions from nothing and compare with the live
-/// state.
-pub fn replay_live(app: &App, identity: &Identity) -> Result<Json, ApiError> {
-    let live = complete(app, &identity.tenant)?;
-    let entries: Vec<Recorded> = journal_through(app, &identity.tenant, u64::MAX)?
+/// The tenant's whole journal, as the store holds it, replayed from nothing as the sealed store
+/// wrote it and compared with the live state: the report, and the live state it was compared
+/// with. [`replay_live`] answers with it; a simulation of the backend checks its runs with it.
+pub fn replay_tenant(
+    app: &App,
+    tenant: &TenantId,
+) -> Result<(JournalReplay, Arc<TenantState>), ApiError> {
+    let live = complete(app, tenant)?;
+    let entries: Vec<Recorded> = journal_through(app, tenant, u64::MAX)?
         .into_iter()
         .map(|e| Recorded {
             revision: e.revision,
@@ -1035,7 +1039,14 @@ pub fn replay_live(app: &App, identity: &Identity) -> Result<Json, ApiError> {
             events_hash: e.events_hash,
         })
         .collect();
-    let report = replay_sealed(app, &identity.tenant, &entries, Some(&live));
+    let report = replay_sealed(app, tenant, &entries, Some(&live));
+    Ok((report, live))
+}
+
+/// Replay the tenant's journal of committed transitions from nothing and compare with the live
+/// state.
+pub fn replay_live(app: &App, identity: &Identity) -> Result<Json, ApiError> {
+    let (report, live) = replay_tenant(app, &identity.tenant)?;
     LOG.info(
         "lab.replayed",
         &identity.correlation,

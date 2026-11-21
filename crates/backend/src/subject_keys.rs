@@ -125,7 +125,7 @@ fn corrupt(what: &str) -> impl Fn(serde_json::Error) -> StoreError + '_ {
 
 fn random<const N: usize>() -> StoreResult<[u8; N]> {
     let mut bytes = [0u8; N];
-    getrandom::getrandom(&mut bytes)
+    strata_runtime::entropy::fill(&mut bytes)
         .map_err(|error| StoreError::Unavailable(format!("no randomness: {error}")))?;
     Ok(bytes)
 }

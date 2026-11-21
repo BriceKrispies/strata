@@ -20,6 +20,38 @@
 //! the rustfmt version (the repository pins its toolchain in `rust-toolchain.toml`):
 //! everything is emitted in declaration order, nothing iterates a hash map, and nothing records
 //! a time.
+//!
+//! # What specc generates
+//!
+//! specc is narrowing toward generating the boundary only (`docs/assurance.md`, principles 3 to
+//! 5): what other code and other processes must agree on. Each output is one of two kinds.
+//!
+//! **Boundary** (kept):
+//!
+//! - types: the declared types, records and representation types, `backend::types`,
+//!   `backend::records`, `backend::prelude`, `model_core`.
+//! - serialisation: the serde derives on the types that cross a boundary ([`boundary`]) and the
+//!   wire representation ([`wire`]).
+//! - routes: one `Contract` per implemented contract, its route, typed client and authorizer,
+//!   `backend::routes`, `backend::access_model`.
+//! - contract stubs: request and response types, validations, policies and dependency wiring,
+//!   `backend::contracts`, `backend::validations`, `backend::policies`, `backend::deps`.
+//! - declarative tables read at run time: quotas, retention, retries, telemetry and audits.
+//! - the conformance suite: `conformance`, checked against the shipped contracts' routes.
+//! - deploy files: `deploy`.
+//! - the capability catalogue: `catalogue`.
+//! - web modules: `web`, `web_kernel`, `web_screens`, the browser side of the client machines.
+//! - e2e journeys: `e2e`, from the specification's UI scenarios.
+//!
+//! **Slated for retirement** (kept only until the Lean differential covers them):
+//!
+//! - function bodies: [`function`] writes each specification function as a Rust function in the
+//!   pure crate's `functions` module. It no longer writes the examples as tests: Exegra evaluates
+//!   every example.
+//! - derived contract implementations: `backend::derived`, built from those function bodies.
+//!
+//! **Not yet classified**: implementation machines and their handlers (`backend::machines`,
+//! `backend::handlers`) and the per-scenario Rust tests of `specc scenarios` ([`scenarios`]).
 
 pub mod backend;
 pub mod boundary;

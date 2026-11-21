@@ -20,6 +20,8 @@
 //! | `lint.budget-row` | a `budget` requirement with no row in the budget measurement case table (silent when the specification has no such table) |
 //! | `lint.untraced` | a goal or constraint that no active requirement traces |
 //! | `lint.milestone` | a milestone that is not a positive integer, or a seam that is not one or is later than the milestone |
+//! | `lint.no-check` | a requirement of a started milestone that declares no `check`: neither the mechanical check that holds it nor `documentation` (only when the started milestones are given, from `gate.json`) |
+//! | `lint.check-declaration` | a `check` that is not in the vocabulary, a `checkedBy` that does not fit its check (a test is `<path>::<function>`, a contract ref, an `m-` claim, a budget row), or a `checkedBy` with no `check`; any requirement |
 //!
 //! Findings are keyed `<rule>:<entity id>`. Any finding fails the lint.
 
@@ -48,8 +50,12 @@ pub const BUDGET_ROW: &str = "lint.budget-row";
 pub const UNTRACED: &str = "lint.untraced";
 /// The rule of a missing or inconsistent milestone.
 pub const MILESTONE: &str = "lint.milestone";
+/// The rule of a requirement of a started milestone that names no check and is not documentation.
+pub const NO_CHECK: &str = "lint.no-check";
+/// The rule of a check declaration that is not well formed.
+pub const CHECK_DECLARATION: &str = "lint.check-declaration";
 /// Every rule, in the order they are documented.
-pub const RULES: [&str; 8] = [
+pub const RULES: [&str; 10] = [
     ONE_SHALL,
     BOUNDARY,
     VAGUE_WORD,
@@ -58,6 +64,18 @@ pub const RULES: [&str; 8] = [
     BUDGET_ROW,
     UNTRACED,
     MILESTONE,
+    NO_CHECK,
+    CHECK_DECLARATION,
+];
+
+/// The checks a requirement may declare (`check`), and `documentation`, which declares none.
+pub const CHECKS: [&str; 6] = [
+    "test",
+    "conformance",
+    "differential",
+    "model-claim",
+    "budget",
+    "documentation",
 ];
 
 /// Words that are not outcomes: a requirement states what a caller can observe.
@@ -289,6 +307,83 @@ fn universal_claim(statement: &str) -> Option<&'static str> {
     hit.map(|h| h.1)
 }
 
+/// The refusal of one `check` and `checkedBy`, or none when they are well formed.
+fn check_problem(claim: &Value) -> Option<String> {
+    let check = claim.get("check");
+    let names = claim.get("checkedBy");
+    let Some(check) = check else {
+        return names.map(|_| {
+            "\"checkedBy\" is given with no \"check\"; name the check (test, conformance, differential, model-claim, budget)".to_string()
+        });
+    };
+    let Some(kind) = check.as_str().filter(|k| CHECKS.contains(k)) else {
+        return Some(format!(
+            "\"check\": {check} is not one of {}",
+            CHECKS.join(", ")
+        ));
+    };
+    let names: Vec<&str> = match names {
+        None => Vec::new(),
+        Some(Value::Array(items)) => {
+            let strings: Vec<&str> = items.iter().filter_map(Value::as_str).collect();
+            if strings.len() != items.len() {
+                return Some("\"checkedBy\" must list strings".to_string());
+            }
+            strings
+        }
+        Some(_) => return Some("\"checkedBy\" must be a list of strings".to_string()),
+    };
+    if kind == "documentation" {
+        return (!names.is_empty()).then(|| {
+            "a documentation statement is held by no check; remove \"checkedBy\", or name the check".to_string()
+        });
+    }
+    if names.is_empty() {
+        return Some(format!(
+            "\"check\": \"{kind}\" names nothing; list in \"checkedBy\" what holds the requirement"
+        ));
+    }
+    let bad = names.iter().find(|name| !name_fits(kind, name))?;
+    Some(format!(
+        "\"{bad}\" is not a name a {kind} check takes ({})",
+        match kind {
+            "test" | "differential" => "<path from the repository root>::<test function>",
+            "conformance" => "a contract ref such as CT-004",
+            "model-claim" => "the id of an m- claim",
+            _ => "a ref of the budget measurement table",
+        }
+    ))
+}
+
+fn name_fits(kind: &str, name: &str) -> bool {
+    match kind {
+        "test" | "differential" => name.split_once("::").is_some_and(|(path, test)| {
+            path.contains('/') && path.contains('.') && !test.is_empty()
+        }),
+        "conformance" => name.split_once('-').is_some_and(|(tag, number)| {
+            !tag.is_empty()
+                && tag.bytes().all(|b| b.is_ascii_uppercase())
+                && !number.is_empty()
+                && number.bytes().all(|b| b.is_ascii_digit())
+        }),
+        "model-claim" => name.starts_with("m-") && name.len() > 2,
+        _ => !name.trim().is_empty(),
+    }
+}
+
+fn check_declaration(claim: &Value, id: &str, started: bool, sink: &mut Sink<'_>) {
+    if let Some(message) = check_problem(claim) {
+        sink.add(CHECK_DECLARATION, "claims", id, message);
+    } else if started && claim.get("check").is_none() {
+        sink.add(
+            NO_CHECK,
+            "claims",
+            id,
+            "the requirement is of a started milestone and names no \"check\"; state the mechanical check that holds it (test, conformance, differential, model-claim or budget, with \"checkedBy\"), or mark the statement \"check\": \"documentation\" if no check can hold it".to_string(),
+        );
+    }
+}
+
 fn positive(value: &Value) -> Option<u64> {
     value.as_u64().filter(|n| *n >= 1)
 }
@@ -341,6 +436,16 @@ fn milestone(claim: &Value, id: &str, sink: &mut Sink<'_>) {
 /// Applies every rule to the specification in `text`, named `path` in the findings. A text that is
 /// not JSONC is refused with the diagnostic of the loader.
 pub fn lint(path: &str, text: &str) -> Result<Vec<Finding>, Vec<Diagnostic>> {
+    lint_started(path, text, &BTreeSet::new())
+}
+
+/// [`lint`], and `lint.no-check` for the requirements of the milestones in `started` (the
+/// `startedMilestones` of `gate.json`). With no started milestone that rule has nothing to apply to.
+pub fn lint_started(
+    path: &str,
+    text: &str,
+    started: &BTreeSet<u64>,
+) -> Result<Vec<Finding>, Vec<Diagnostic>> {
     let top = jsonc::parse(text).map_err(|e| {
         vec![Diagnostic::new(
             e.code(crate::load::SYNTAX),
@@ -441,6 +546,11 @@ pub fn lint(path: &str, text: &str) -> Result<Vec<Finding>, Vec<Diagnostic>> {
             }
         }
         milestone(claim, id, &mut sink);
+        let is_started = claim
+            .get("milestone")
+            .and_then(positive)
+            .is_some_and(|m| started.contains(&m));
+        check_declaration(claim, id, is_started, &mut sink);
     }
     for (section, what) in [("goals", "goal"), ("constraints", "constraint")] {
         for entity in array(&top, section) {

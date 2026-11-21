@@ -1,8 +1,17 @@
-//! The discrete-event engine. Single-threaded, logical time, no wall clock.
+//! The kernel-level discrete-event engine. Single-threaded, logical time, no wall clock.
 //!
 //! It executes `strata_kernel::World::step`, the same composition of `transition` and
-//! `apply_delta` that production commits. There is no second copy of any rule here: the engine
-//! only decides *when* an intent runs and what the simulated environment does around it.
+//! `apply_delta` that production commits, on an in-memory `World`. It is what the Impact Lab's
+//! counterfactual branches run on ([`crate::project`]), where only the kernel's verdicts are
+//! compared, and the verdicts and deltas it reports are the kernel's.
+//!
+//! It is not the deployment. Its [`Faults`] are imitations kept for the Impact Lab's `faults`
+//! option (CT-391): a "commit conflict" decides the same intent again on the same world, and the
+//! "outbox" is a queue of this module's own that drops and retries deliveries, so its conflict
+//! counts, its deliveries and its `events_delivered_once_in_order` invariant are properties of
+//! this module, not of Strata. What the deployment does under those faults is
+//! [`crate::shell`]'s: the backend's own request path, worker and publisher over the store
+//! contract. See `crates/simulation/README.md`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
@@ -38,7 +47,7 @@ impl Rng {
 /// A decision of the simulated environment, as a pure function of the seed and of what the
 /// decision is about. Because it does not depend on how many decisions came before, a branch
 /// that runs one extra intent still sees the same faults at the same places as its baseline.
-fn decide(seed: u64, kind: u64, subject: u64, attempt: u64, per_million: u32) -> bool {
+pub(crate) fn decide(seed: u64, kind: u64, subject: u64, attempt: u64, per_million: u32) -> bool {
     let mut rng = Rng(seed
         ^ kind.wrapping_mul(0xa24b_aed4_963e_e407)
         ^ subject.wrapping_mul(0x9fb2_1c65_1e98_df25)

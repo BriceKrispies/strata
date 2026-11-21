@@ -4145,8 +4145,10 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "strata-backend",
  "strata-kernel",
  "strata-protocol",
+ "strata-storage-api",
  "strata-substrate",
  "strata-verification",
 ]

@@ -16,6 +16,12 @@ import Strata
 #print axioms Strata.step_local
 #print axioms Strata.step_deterministic
 #print axioms Strata.lax_change_can_break_wf
+#print axioms Strata.problem_none
+#print axioms Strata.stepTenant_preserves_refs
+#print axioms Strata.step_preserves_refs
+#print axioms Strata.delete_refused_while_referenced
+#print axioms Strata.delete_leaves_no_reference
+#print axioms Strata.conforms_afterDelete
 
 #print axioms Strata.Evolution.closure
 #print axioms Strata.Evolution.locality

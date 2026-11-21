@@ -309,9 +309,15 @@ pub struct App {
     pub files: crate::files::FileService,
     /// The platform level of the settings, as the control database holds it, for a bounded age.
     pub platform_settings: crate::settings::PlatformCache,
+    /// The clock [`App::now`] reads instead of the system clock, when one is set
+    /// ([`App::set_clock`]): only in a deterministic simulation.
+    clock: std::sync::OnceLock<Clock>,
 }
 
 pub type Shared = Arc<App>;
+
+/// A clock that stands in for the system clock in [`App::now`].
+pub type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
 
 impl App {
     pub fn new(cfg: Config, store: Arc<dyn Store>) -> Shared {
@@ -343,6 +349,7 @@ impl App {
             outbound: std::sync::OnceLock::new(),
             files: crate::files::FileService::new(),
             platform_settings: Default::default(),
+            clock: std::sync::OnceLock::new(),
         })
     }
 
@@ -461,7 +468,18 @@ impl App {
 
     /// The one place the backend reads the clock for domain purposes.
     pub fn now(&self) -> Timestamp {
-        Timestamp(now_ms() + self.clock_skew_ms.load(Ordering::Relaxed))
+        match self.clock.get() {
+            Some(clock) => clock(),
+            None => Timestamp(now_ms() + self.clock_skew_ms.load(Ordering::Relaxed)),
+        }
+    }
+
+    /// Make [`App::now`] read `clock` instead of the system clock, for good. Only a deterministic
+    /// simulation of the backend does this (`crate::simulated`); a deployed process never sets it,
+    /// so its [`App::now`] is the system clock plus the development skew. Returns false, and
+    /// changes nothing, when a clock was set already.
+    pub fn set_clock(&self, clock: Clock) -> bool {
+        self.clock.set(clock).is_ok()
     }
 
     /// Run store work off the async threads.
