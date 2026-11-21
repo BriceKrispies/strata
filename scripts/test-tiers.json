@@ -906,6 +906,13 @@
       "seconds": 0.06
     },
     {
+      "package": "strata-substrate",
+      "target": "ui_definition",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
       "package": "strata-system-differential",
       "target": "exegra",
       "tier": "full",

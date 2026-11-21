@@ -1790,6 +1790,9 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
         SchemaChange::RecordProduct(_) | SchemaChange::RemoveProduct(_) => {
             crate::products::apply(schema, change)?
         }
+        SchemaChange::DefineUiElement { .. } | SchemaChange::RemoveUiElement(_) => {
+            crate::ui::apply(schema, change)?
+        }
     })
 }
 

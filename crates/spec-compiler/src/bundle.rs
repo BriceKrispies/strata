@@ -32,6 +32,10 @@
 //!   unit's `unit`, a template's `template`, a token's `name`) takes it from the item's id; one
 //!   whose type has no name (a segment, a ledger limit) loses the id, which is only the product's
 //!   name for it (the key of `segments`).
+//! - The screens, forms, actions, live bindings and error messages of the file are its interface:
+//!   each becomes an interface element (`ui-element`) of the section `ui`, bound to the product's
+//!   views and operations by [`crate::bundle_ui`], which refuses what it cannot bind (D-8250,
+//!   INT-3250, INT-3251). The five sections share one id space.
 //! - The claims, scenarios and journeys of the file (`claims`, `scenarios`, `uiScenarios`,
 //!   `evidence`) are statements about the product, not tenant metadata, and are not in the bundle.
 //! - The finished bundle is checked against `tenant-bundle` as a typed section of its own, so a
@@ -43,7 +47,9 @@
 //!   joined by dots and a `platform` that is not a range `{ "min": "<release>", "below": "<release>" }`
 //!   are refused by the layer checks, `layer.header-invalid`, which run first.)
 //! - `bundle.section-no-place`: a section of the file that `bundle-sections` has no place for;
-//! - `bundle.id-collision`: two entities of the product that would be one entity of the bundle.
+//! - `bundle.id-collision`: two entities of the product that would be one entity of the bundle;
+//! - `bundle.ui-unresolved`, `bundle.ui-unsupported`: an interface element that names what the
+//!   product does not declare, or uses what the interpreter does not draw ([`crate::bundle_ui`]).
 //!
 //! Anything the layer checks refuse (`layer.*`) is refused first and unchanged.
 
@@ -52,6 +58,7 @@ use std::path::Path;
 
 use serde_json::{json, Map, Value};
 
+use crate::bundle_ui;
 use crate::diagnostic::Diagnostic;
 use crate::emit::GeneratedFile;
 use crate::jsonc;
@@ -82,6 +89,7 @@ const MAP_SECTIONS: &[&str] = &[
     "views",
     "workflows",
     "segments",
+    "ui",
 ];
 
 /// Where a section of a product file lands in a tenant bundle.
@@ -116,6 +124,8 @@ fn place(section: &str) -> Option<Place> {
         "automations" => ("automations", "workflow"),
         "operations" => ("operations", "operation"),
         "eventKinds" => ("event-kinds", "event-kind"),
+        // The interface entities are one kind of tenant entity, the interface element (D-8250).
+        "screens" | "forms" | "actions" | "liveBindings" | "errorMessages" => ("ui", "ui-element"),
         _ => return None,
     };
     Some(Place {
@@ -141,7 +151,6 @@ fn no_place_hint(section: &str) -> &'static str {
     match section {
         "records" => "Declare the record type as an object type in \"objects\" (a value of object-type-def).",
         "types" => "A tenant has no value types of its own: the types of a field are the kernel's field types, written in \"objects\".",
-        "screens" | "forms" | "actions" | "liveBindings" | "errorMessages" => "A bundle holds views as values of view-def: declare the page in \"views\" (a route, a title and the queries it shows) and what it shows in \"queries\".",
         "behaviors" => "A bundle holds the states of a field as values of workflow-def: declare them in \"workflows\"; declare a sequence of steps in \"automations\".",
         "events" => "The events of the platform are the platform's: a trigger names one of them in \"triggers\"; remove the event.",
         "contracts" => "A product operation is a composite operation: declare it in \"operations\" (a value of tenant-operation-def).",
@@ -244,6 +253,7 @@ pub fn build(
     let mut entries: BTreeMap<&'static str, Vec<(String, Value)>> = BTreeMap::new();
     // (id space, id) -> the section that first declared it.
     let mut seen: BTreeMap<(&'static str, String), String> = BTreeMap::new();
+    let mut has_ui = false;
     for (section, value) in top {
         if section == PRODUCT_HEADER {
             continue;
@@ -254,7 +264,9 @@ pub fn build(
             continue;
         }
         let Some(place) = place(section) else {
-            let allowed = placed_sections().join(", ");
+            let mut allowed = placed_sections();
+            allowed.extend_from_slice(bundle_ui::UI_SECTIONS);
+            let allowed = allowed.join(", ");
             diagnostics.push(Diagnostic::new(
                 SECTION_NO_PLACE,
                 section,
@@ -262,6 +274,8 @@ pub fn build(
             ));
             continue;
         };
+        let interface = bundle_ui::UI_SECTIONS.contains(&section.as_str());
+        has_ui |= interface;
         let typed = layer_values::typed_section(section);
         for item in items {
             let (Some(map), Some(item_id)) =
@@ -279,6 +293,10 @@ pub fn build(
                 continue;
             }
             seen.insert(key, section.clone());
+            if interface {
+                // Written once every section is read, since an element names others.
+                continue;
+            }
             match (typed, section.as_str()) {
                 (Some(typed), _) => entries
                     .entry(place.section)
@@ -323,6 +341,10 @@ pub fn build(
                 }
             }
         }
+    }
+    if has_ui {
+        let elements = bundle_ui::ui_section(id, top, &mut diagnostics);
+        entries.entry("ui").or_default().extend(elements);
     }
     if !diagnostics.is_empty() {
         return Err(diagnostics);

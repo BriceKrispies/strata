@@ -465,6 +465,7 @@ pub fn classify(change: &SchemaChange, schema: &TenantSchema) -> ChangeClass {
         | RemoveMailTemplate(_)
         | RemoveNoticeTemplate(_)
         | RemoveToken(_)
+        | RemoveUiElement(_)
         | RemoveProduct(_) => ChangeClass::Breaking,
         DefineObject { .. }
         | DefineConstraint { .. }
@@ -494,6 +495,7 @@ pub fn classify(change: &SchemaChange, schema: &TenantSchema) -> ChangeClass {
         | DefineMailTemplate(_)
         | DefineNoticeTemplate(_)
         | DefineToken(_)
+        | DefineUiElement { .. }
         | RecordProduct(_)
         | SetSearchable { .. }
         | ClearSearchable { .. } => ChangeClass::Compatible,

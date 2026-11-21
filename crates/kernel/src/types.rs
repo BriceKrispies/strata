@@ -68,6 +68,13 @@ pub use strata_model_core::types::{
     LedgerPeriodTotal, LedgerPoolDecl, LedgerPoolName, LedgerPostingRequest, LedgerPostingResult,
     LedgerScope, LedgerState, LedgerUnit, LedgerUnitDecl,
 };
+/// The interface elements of [`crate::ui`]: the screens, forms, actions, live bindings and error
+/// messages a tenant's products installed, held in the schema (D-8250).
+pub use strata_model_core::types::{
+    UiAction, UiAuth, UiControl, UiElement, UiErrorDisplay, UiErrorField, UiErrorMessage,
+    UiErrorOn, UiField, UiForm, UiLiveBinding, UiLiveEvent, UiOption, UiOutcome, UiScreen,
+    UiScreenKind,
+};
 
 /// The text types of a template and of a token (`structured-blocks`, `expression`).
 pub use strata_model_core::types::Expression;

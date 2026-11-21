@@ -13,6 +13,7 @@
 //! - [`proposal`]: proposed schema changes written as text.
 //! - [`theme`]: the token schema tenant themes select from.
 //! - [`subscribe`]: what a subscriber is told about an event.
+//! - [`ui`]: the interface definition of a tenant, in parts named by their hashes.
 
 pub mod bundle;
 pub mod markdown;
@@ -22,4 +23,5 @@ pub mod project;
 pub mod proposal;
 pub mod subscribe;
 pub mod theme;
+pub mod ui;
 pub mod view_needs;

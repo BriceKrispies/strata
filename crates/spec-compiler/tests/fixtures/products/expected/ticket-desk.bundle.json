@@ -1,0 +1,165 @@
+{
+  "content": {
+    "objects": {
+      "ticket_desk__ticket": {
+        "constraints": {},
+        "fields": {
+          "status": {
+            "id": "status",
+            "label": "Status",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          },
+          "title": {
+            "id": "title",
+            "label": "Title",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          }
+        },
+        "id": "ticket_desk__ticket",
+        "label": "Ticket"
+      }
+    },
+    "operations": [
+      {
+        "conditions": [],
+        "id": "ticket_desk__open_ticket",
+        "inputs": [
+          {
+            "label": "Title",
+            "name": "title",
+            "required": true,
+            "ty": "Str"
+          }
+        ],
+        "invokers": {
+          "roles": [],
+          "signed-in": true
+        },
+        "label": "Open a ticket",
+        "steps": [
+          {
+            "CreateRecord": {
+              "fields": {
+                "status": "'open'",
+                "title": "param.title"
+              },
+              "id": "ticket",
+              "object": "ticket_desk__ticket"
+            }
+          }
+        ]
+      }
+    ],
+    "queries": {
+      "ticket_desk__open": {
+        "filter": "record.status == 'open'",
+        "id": "ticket_desk__open",
+        "limit": 50,
+        "object": "ticket_desk__ticket",
+        "order": [
+          {
+            "descending": false,
+            "field": "title"
+          }
+        ],
+        "params": []
+      }
+    },
+    "ui": {
+      "ticket_desk__board_live": {
+        "LiveBinding": {
+          "event": "notice",
+          "kinds": [
+            "membership"
+          ],
+          "objects": true,
+          "screen": "ticket_desk__board_screen"
+        }
+      },
+      "ticket_desk__board_screen": {
+        "Screen": {
+          "auth": "session",
+          "kind": "list",
+          "query": [],
+          "route": "/tickets",
+          "title": "Open tickets",
+          "view": "ticket_desk__board"
+        }
+      },
+      "ticket_desk__open_again": {
+        "Action": {
+          "arguments": {
+            "title": "form.title"
+          },
+          "form": "ticket_desk__open_form",
+          "label": "Open it again",
+          "on-error": "toast",
+          "on-success": {
+            "toast": "Opened again."
+          },
+          "operation": "ticket_desk__open_ticket",
+          "screen": "ticket_desk__board_screen"
+        }
+      },
+      "ticket_desk__open_form": {
+        "Form": {
+          "fields": [
+            {
+              "control": "text",
+              "input": "title",
+              "label": "Title",
+              "name": "title",
+              "trim": true
+            }
+          ],
+          "on-error": "inline",
+          "on-success": {
+            "toast": "Ticket opened."
+          },
+          "operation": "ticket_desk__open_ticket",
+          "screen": "ticket_desk__board_screen",
+          "submit-label": "Open the ticket"
+        }
+      },
+      "ticket_desk__title_needed": {
+        "ErrorMessage": {
+          "applies-to": [
+            "ticket_desk__open_form"
+          ],
+          "field": "name",
+          "kinds": [
+            "required"
+          ],
+          "on": "check",
+          "text": "A ticket needs a title."
+        }
+      }
+    },
+    "views": {
+      "ticket_desk__board": {
+        "id": "ticket_desk__board",
+        "route": "/tickets",
+        "sections": {
+          "open": {
+            "args": {},
+            "include": [],
+            "markdown": [],
+            "query": "ticket_desk__open",
+            "single": false
+          }
+        },
+        "title": "Tickets"
+      }
+    }
+  },
+  "name": "Ticket desk",
+  "platform": {
+    "min": "0.2"
+  },
+  "product": "ticket-desk",
+  "version": "1.0.0"
+}

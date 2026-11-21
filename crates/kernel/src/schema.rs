@@ -163,6 +163,7 @@ impl TenantSchemaExt for TenantSchema {
             notice_templates: None,
             tokens: None,
             products: None,
+            ui: None,
         }
     }
 
@@ -596,6 +597,7 @@ impl TenantSchemaExt for TenantSchema {
         crate::search::problems(self, &mut problems);
         crate::templates::problems(self, &mut problems);
         crate::products::problems(self, &mut problems);
+        crate::ui::problems(self, &mut problems);
         problems
     }
 }
