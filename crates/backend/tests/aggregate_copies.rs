@@ -1,8 +1,8 @@
-//! Stored aggregate results (D-5064, D-5065, AGG-030 to AGG-034, CT-310, CT-311): a result is kept
+//! Stored aggregate results (D-5064, D-5065, AGG-030 to AGG-034, CT-310, D-8262): a result is kept
 //! for an audience class that the kernel derives from the policies of the tenant, served to the
 //! readers of that class and to nobody else, never served after a commit to an object type it
 //! depends on, and never kept when the class is one reader alone. Also the tenant a request names
-//! (contract aggregate-run-signed-in).
+//! (contract aggregate-run, a signed-in caller, D-8262).
 //!
 //! The backend is driven in process: the tests build an `App` on a memory store and call
 //! `strata_backend::aggregates::run` with an identity, so they can read what the copies hold.

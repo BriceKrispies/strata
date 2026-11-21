@@ -3080,7 +3080,6 @@ pub const COVERED: &[&str] = &[
     "setting-set-team",
     "setting-set-person",
     "aggregate-run",
-    "aggregate-run-signed-in",
     "send-message",
     "set-notice-read",
     "remove-notices",
@@ -3415,11 +3414,6 @@ pub const SKIPPED: &[(&str, &str, &str)] = &[
         "aggregate-run",
         "quota",
         "its limit 120 is above the 100 calls the suite makes",
-    ),
-    (
-        "aggregate-run-signed-in",
-        "success",
-        "it has required inputs and no conformanceExample",
     ),
     (
         "send-message",
@@ -7354,48 +7348,6 @@ pub const AGGREGATE_RUN: Contract = Contract {
 #[tokio::test]
 async fn aggregate_run() {
     conform(&SPEC, &AGGREGATE_RUN).await;
-}
-
-/// Contract `aggregate-run-signed-in` (CT-311): GET /api/aggregate.
-pub const AGGREGATE_RUN_SIGNED_IN: Contract = Contract {
-    id: "aggregate-run-signed-in",
-    method: "GET",
-    shape: Shape::Json,
-    scheme: Scheme::Session,
-    requires: &["aggregate-read"],
-    roles: &[],
-    origin: false,
-    csrf: false,
-    step_up: false,
-    read_only: true,
-    tenant_input: Some("tenant"),
-    probe: Request {
-        path: "/api/aggregate",
-        query: &[],
-        body: None,
-    },
-    success: None,
-    setup: &[],
-    reply: Reply::Members(&[Field {
-        wire: "result",
-        ty: Ty::Named("aggregate-result"),
-        optional: false,
-    }]),
-    errors: &[
-        "unauthenticated",
-        "forbidden",
-        "not_found",
-        "invalid",
-        "throttled",
-        "unavailable",
-    ],
-    step_up_error: None,
-    quota: None,
-};
-
-#[tokio::test]
-async fn aggregate_run_signed_in() {
-    conform(&SPEC, &AGGREGATE_RUN_SIGNED_IN).await;
 }
 
 /// Contract `send-message` (CT-820): POST /api/mail/send.

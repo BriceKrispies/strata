@@ -1689,23 +1689,15 @@ async fn view(
 /// A `tenant` that is not the one of the host and session is refused by the backend as
 /// `tenant-mismatch`.
 ///
-/// Implements: CT-310, CT-311
+/// Implements: CT-310
 async fn aggregate_run(
     State(bff): State<Shared>,
     headers: HeaderMap,
     Query(mut query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<Json_>, Failure> {
+    // Anyone may ask: a visitor counts what the public may read, a signed-in caller what the
+    // tenant's policies let them read (D-8262); the backend's kernel decides from the visit.
     let visit = visit(&bff, &headers)?;
-    // A session that may read aggregates, before the request is looked at (contract
-    // aggregate-run-signed-in).
-    Admission {
-        capabilities: &["aggregate-read"],
-        any: false,
-        roles: &[],
-        step_up: false,
-    }
-    .admit(&bff, &visit)
-    .await?;
     let invalid = |why: &str| Failure::new(ErrorCode::Invalid, why, &visit.correlation);
     let name = |query: &mut BTreeMap<String, String>, key: &str| {
         query

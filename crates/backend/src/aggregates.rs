@@ -31,7 +31,7 @@
 //! read or written is a miss, never an error (CPY-011). Concurrent first requests may each compute
 //! the result.
 //!
-//! Implements: CT-310, CT-311
+//! Implements: CT-310
 
 use crate::app::{ApiError, App};
 use crate::auth::Identity;
@@ -167,7 +167,7 @@ pub fn copy_key(
 }
 
 /// A request that names a tenant other than the one it is made at is refused, and the refusal is an
-/// audit entry (TEN-1140, contract aggregate-run-signed-in).
+/// audit entry (TEN-1140, contract aggregate-run, D-8262).
 fn same_tenant(app: &App, identity: &Identity, named: &Option<String>) -> Result<(), ApiError> {
     match named {
         Some(tenant) if tenant != identity.tenant.as_str() => {
