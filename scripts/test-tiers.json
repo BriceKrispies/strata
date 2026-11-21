@@ -201,6 +201,13 @@
       "tier": "routine",
       "seconds": null,
       "unmeasured": true
+    },
+    {
+      "package": "strata-model-core",
+      "target": "dependencies",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
     }
   ]
 }
