@@ -1,8 +1,10 @@
 // Tests for scripts/test-tiers.mjs. Run with: node --test scripts/test-tiers.test.mjs
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { resolve } from 'node:path';
-import { applyTimes, parseCargoLog, readTiers, routineArgs, routineSeconds, tierProblems } from './test-tiers.mjs';
+import { join, resolve } from 'node:path';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { applyTimes, main, measuredRecord, parseCargoLog, readTiers, routineArgs, routineSeconds, suiteVerdict, tierProblems } from './test-tiers.mjs';
 import { readWorkspace } from './test-select.mjs';
 
 const GRAPH = {
@@ -96,4 +98,86 @@ test('measured times are recorded per name (the largest of binaries sharing it) 
 test('the committed tier list covers every test binary of this workspace and fits its budget', () => {
   const problems = tierProblems(readWorkspace(resolve(import.meta.dirname, '..')), readTiers());
   assert.deepEqual(problems, []);
+});
+
+const BUDGETS = { budgetSeconds: 120, fullBudgetSeconds: 600, binaryCapSeconds: 90 };
+const steps = (total) => [
+  { name: 'cargo build of the test binaries', seconds: 40 },
+  { name: 'cargo test run', seconds: total - 40 },
+];
+const fixtureRecord = (total, binaries) => measuredRecord({
+  steps: steps(total),
+  binaries: binaries.map(([label, seconds]) => ({ label, name: label, seconds, status: 'ok', tests: 1 })),
+  date: '2026-11-21T00:00:00.000Z',
+  machine: 'fixture',
+});
+
+test('a suite over its total budget, or a binary over its cap, fails with the offenders named', () => {
+  const overTotal = suiteVerdict(BUDGETS, fixtureRecord(700, [['fast', 1]]));
+  assert.equal(overTotal.ok, false);
+  assert.equal(overTotal.detail, 'suite 700 s of 600 s');
+  assert.ok(overTotal.lines.includes('  cargo test run  660 s'));
+
+  const overCap = suiteVerdict(BUDGETS, fixtureRecord(300, [['spec_compiler_slow', 91]]));
+  assert.equal(overCap.ok, false);
+  assert.equal(overCap.detail, '1 binary over the 90 s cap');
+  assert.deepEqual(overCap.lines, ['binary over the 90 s cap: spec_compiler_slow  91 s']);
+
+  assert.equal(suiteVerdict(BUDGETS, fixtureRecord(300, [['fast', 90]])).ok, true);
+  assert.equal(suiteVerdict(BUDGETS, null).ok, false);
+  assert.equal(suiteVerdict(BUDGETS, fixtureRecord(300, [])).ok, false);
+});
+
+// A tier file with the given `measured` record, written where `check` can read it.
+function tierFile(measured) {
+  const dir = mkdtempSync(join(tmpdir(), 'tiers-'));
+  const path = join(dir, 'test-tiers.json');
+  writeFileSync(path, JSON.stringify({ ...readTiers(), measured }, null, 2));
+  return path;
+}
+
+function checkOutput(path) {
+  const lines = [];
+  const log = console.log;
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    const code = main(['check'], path);
+    return { code, text: lines.join('\n') };
+  } finally {
+    console.log = log;
+  }
+}
+
+test('check refuses a tier file whose recorded suite total is over the full budget', () => {
+  const { code, text } = checkOutput(tierFile(fixtureRecord(700, [['fast', 1]])));
+  assert.equal(code, 1);
+  assert.match(text, /FAIL {2}the test suite fits its budget: suite 700 s of 600 s/);
+});
+
+test('check refuses a tier file with a recorded binary over the per-binary cap', () => {
+  const { code, text } = checkOutput(tierFile(fixtureRecord(300, [['spec_compiler_slow', 91]])));
+  assert.equal(code, 1);
+  assert.match(text, /binary over the 90 s cap: spec_compiler_slow  91 s/);
+});
+
+test('check passes a tier file whose recorded suite fits both budgets', () => {
+  const { code, text } = checkOutput(tierFile(fixtureRecord(500, [['fast', 30], ['slow', 89]])));
+  assert.equal(code, 0);
+  assert.match(text, /pass {2}the test suite fits its budget: suite 500 s of 600 s/);
+});
+
+test('times --write records the measured run, and its steps and total, in the tier file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tiers-'));
+  const path = join(dir, 'test-tiers.json');
+  const log = join(dir, 'cargo.txt');
+  writeFileSync(path, JSON.stringify(readTiers(), null, 2));
+  writeFileSync(log, LOG);
+  const stepsFile = join(dir, 'steps.json');
+  writeFileSync(stepsFile, JSON.stringify([{ name: 'cargo test run', seconds: 710 }, { name: 'lake build', seconds: 5 }]));
+  assert.equal(main(['times', log, '--write', '--steps', stepsFile, '--machine', 'fixture'], path), 0);
+  const written = JSON.parse(readFileSync(path, 'utf8'));
+  assert.equal(written.measured.totalSeconds, 715);
+  assert.equal(written.measured.machine, 'fixture');
+  assert.equal(written.measured.binaries.find((b) => b.name === 'slow').seconds, 700);
+  assert.equal(checkOutput(path).code, 1, 'a 700 s binary is over the 90 s cap, so the recorded run is refused');
 });
