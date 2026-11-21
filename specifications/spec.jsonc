@@ -192431,7 +192431,7 @@
     },
     {
       "id": "ledger-change-needs",
-      "description": "ledger.rs schema_change_needs: the needs of the ledger changes of a schema change: whether an account names a unit or a pool being removed (LDG-1549).",
+      "description": "ledger.rs schema_change_needs: the needs of the ledger changes of a schema change: whether an account names a unit or a pool being removed (LDG-1549), the limit of the one account a removed account limit names (D-6554), and every limit of single accounts when an account limit is set, to count them against the ceiling (D-7881, LDG-1550).",
       "params": [
         {
           "name": "changes",
@@ -192439,7 +192439,7 @@
         }
       ],
       "returns": "list<need>",
-      "body": "fold(c in changes, acc = [], match c { remove-ledger-definition(r) => match r { unit{unit} => concat(acc, [need.ledger(ledger-need.unit-used{unit})]), pool{pool} => concat(acc, [need.ledger(ledger-need.pool-used{pool})]), limit => acc }, _ => acc })",
+      "body": "fold(c in changes, acc = [], match c { remove-ledger-definition(r) => match r { unit{unit} => concat(acc, [need.ledger(ledger-need.unit-used{unit})]), pool{pool} => concat(acc, [need.ledger(ledger-need.pool-used{pool})]), limit{unit, owner, scope} => match owner { Some(o) => concat(acc, [need.ledger(ledger-need.limit{owner: o, unit, scope: match scope { Some(s) => s, None => '' }})]), None => acc } }, set-ledger-limit(l) => match l.owner { Some(o) => concat(acc, [need.ledger(ledger-need.limits)]), None => acc }, _ => acc })",
       "examples": [
         {
           "args": {
@@ -192491,6 +192491,95 @@
               "ledger": {
                 "pool-used": {
                   "pool": "promo"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "description": "Setting the limit of one account asks for every limit of single accounts; setting the limit of a unit asks for nothing.",
+          "args": {
+            "changes": [
+              {
+                "set-ledger-limit": {
+                  "unit": "credits",
+                  "owner": {
+                    "principal": {
+                      "principal": "user:ines"
+                    }
+                  },
+                  "cap": 100
+                }
+              },
+              {
+                "set-ledger-limit": {
+                  "unit": "credits",
+                  "floor": 0
+                }
+              }
+            ]
+          },
+          "result": [
+            {
+              "ledger": "limits"
+            }
+          ]
+        },
+        {
+          "description": "Removing the limit of one account asks for that account's limit, in its scope or in none; removing the limit of a unit asks for nothing.",
+          "args": {
+            "changes": [
+              {
+                "remove-ledger-definition": {
+                  "limit": {
+                    "unit": "credits",
+                    "owner": {
+                      "principal": {
+                        "principal": "user:ines"
+                      }
+                    },
+                    "scope": "spring"
+                  }
+                }
+              },
+              {
+                "remove-ledger-definition": {
+                  "limit": {
+                    "unit": "credits",
+                    "owner": {
+                      "pool": {
+                        "pool": "promo"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "result": [
+            {
+              "ledger": {
+                "limit": {
+                  "owner": {
+                    "principal": {
+                      "principal": "user:ines"
+                    }
+                  },
+                  "unit": "credits",
+                  "scope": "spring"
+                }
+              }
+            },
+            {
+              "ledger": {
+                "limit": {
+                  "owner": {
+                    "pool": {
+                      "pool": "promo"
+                    }
+                  },
+                  "unit": "credits",
+                  "scope": ""
                 }
               }
             }
