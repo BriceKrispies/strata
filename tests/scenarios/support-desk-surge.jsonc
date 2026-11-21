@@ -1,0 +1,40 @@
+// Support desk surge. A product incident makes case creation spike. Agents read queue pages
+// and the same few macros all day, and SLA clocks are updated by agents and by a background job
+// writing through another handle.
+{
+  "name": "support-desk-surge",
+  "description": "Service and CRM under an incident: a case-creation spike, queue page reads, SLA clock updates and macro use.",
+  "modules": ["service", "crm"],
+  "scale": 2000,
+  "length": 4000,
+  "clients": 6,
+  "skew": 0.9,
+  "mix": [
+    { "op": "create", "object": "service__case", "weight": 18, "actor": "reader" },
+    { "op": "page", "object": "service__case", "weight": 12, "page_size": 25, "actor": "editor" },
+    { "op": "query", "query": "service__queue_backlog", "weight": 8, "actor": "editor" },
+    { "op": "get", "object": "service__case", "weight": 15, "actor": "editor" },
+    { "op": "update", "object": "service__case", "weight": 8, "actor": "editor", "contended": true },
+    { "op": "update", "object": "service__sla_clock", "weight": 12, "actor": "editor", "contended": true },
+    { "op": "get", "object": "service__macro", "weight": 6, "within": "hot", "skew": 1.6, "actor": "editor" },
+    { "op": "get", "object": "service__knowledge_article", "weight": 6, "actor": "editor" },
+    { "op": "get", "object": "crm__contact", "weight": 8, "actor": "editor" },
+    { "op": "scan", "object": "service__queue", "weight": 2, "actor": "editor" },
+    { "op": "header", "weight": 5 }
+  ],
+  "faults": [
+    { "kind": "foreign-commit", "every": 150, "object": "service__sla_clock" }
+  ],
+  "measures": [
+    "timing.by_kind.page",
+    "timing.by_kind.create",
+    "wrapper.hit_rate_by_cost",
+    "wrapper.resident_bytes",
+    "conflicts",
+    "coherence.divergences"
+  ],
+  "refutation": {
+    "criterion": "The cost-aware TinyLFU and GDSF combination not beating CLOCK clearly on SQLCipher and PostgreSQL: use CLOCK.",
+    "result": "Under the spike of new cases (written once, read rarely), the policy's hit rate by cost on the macro and queue reads is not clearly above CLOCK's at the same budget: the admission filter is not keeping the spike out."
+  }
+}

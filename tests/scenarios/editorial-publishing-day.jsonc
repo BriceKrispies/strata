@@ -1,0 +1,42 @@
+// Editorial publishing day. Editors, approvers and the publishing schedule work on one tenant.
+// Many reads of a few hot articles (a front page is a hot set), edits, approval chains moving
+// requests through their stages, and scheduled publish jobs. A second CMS node writes in the
+// background, so the first node's working set is touched by commits it did not make.
+{
+  "name": "editorial-publishing-day",
+  "description": "Content, approvals and publishing on one tenant: hot-article reads, edits, approval chains and scheduled publishes, with a second node committing in the background.",
+  "modules": ["content", "approvals", "publishing", "taxonomy"],
+  "scale": 2000,
+  "length": 4000,
+  "clients": 4,
+  "skew": 1.1,
+  "mix": [
+    { "op": "get", "object": "content__article", "weight": 45, "within": "hot", "actor": "reader" },
+    { "op": "page", "object": "content__article", "weight": 8, "page_size": 20, "actor": "reader" },
+    { "op": "query", "query": "content__live_articles", "weight": 10, "actor": "reader" },
+    { "op": "update", "object": "content__article", "weight": 8, "actor": "editor", "contended": true },
+    { "op": "create", "object": "content__revision", "weight": 5, "actor": "editor" },
+    { "op": "get", "object": "approvals__approval_request", "weight": 6, "actor": "editor" },
+    { "op": "update", "object": "approvals__approval_request", "weight": 4, "actor": "editor", "contended": true },
+    { "op": "get", "object": "approvals__approval_stage", "weight": 4, "actor": "editor" },
+    { "op": "update", "object": "publishing__publish_job", "weight": 4, "actor": "editor" },
+    { "op": "page", "object": "publishing__publish_job", "weight": 3, "page_size": 10, "actor": "editor" },
+    { "op": "get", "object": "taxonomy__category", "weight": 5, "actor": "reader" },
+    { "op": "header", "weight": 4 }
+  ],
+  "faults": [
+    { "kind": "foreign-commit", "every": 200, "object": "content__article" }
+  ],
+  "measures": [
+    "timing.by_kind.get",
+    "timing.overall",
+    "store_side.loads_by_need",
+    "wrapper.hit_rate_by_cost",
+    "conflicts",
+    "coherence.divergences"
+  ],
+  "refutation": {
+    "criterion": "Header residency alone reaching most of the cost-weighted saving: build the header and stop.",
+    "result": "In mode full, the hit rate by cost on the get and page operations is not clearly above mode header's, and the p50 and p99 of get are within noise of mode header: the record cache adds nothing a resident header does not."
+  }
+}

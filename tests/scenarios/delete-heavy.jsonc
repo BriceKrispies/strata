@@ -1,0 +1,35 @@
+// Delete-heavy. Redemptions and returns are created and deleted at a high rate while the same
+// records are read. Absent records are answers too (a read of a deleted record), so stale
+// negative entries and records that outlive their deletion are the failure to look for.
+{
+  "name": "delete-heavy",
+  "description": "Commerce redemptions and returns created and deleted at a high rate while their ids are read.",
+  "modules": ["commerce"],
+  "scale": 2000,
+  "length": 4000,
+  "clients": 4,
+  "skew": 0.8,
+  "mix": [
+    { "op": "delete", "object": "commerce__redemption", "weight": 22, "actor": "editor" },
+    { "op": "create", "object": "commerce__redemption", "weight": 18, "actor": "editor" },
+    { "op": "get", "object": "commerce__redemption", "weight": 25, "actor": "editor" },
+    { "op": "delete", "object": "commerce__return_request", "weight": 8, "actor": "editor" },
+    { "op": "get", "object": "commerce__return_request", "weight": 12, "actor": "editor" },
+    { "op": "page", "object": "commerce__redemption", "weight": 10, "page_size": 20, "actor": "editor" },
+    { "op": "query", "query": "commerce__open_returns", "weight": 5, "actor": "editor" }
+  ],
+  "faults": [
+    { "kind": "foreign-commit", "every": 300, "object": "commerce__redemption" }
+  ],
+  "measures": [
+    "coherence.divergences",
+    "coherence.first",
+    "wrapper.hit_rate_by_count",
+    "store_side.commits",
+    "timing.by_kind.delete"
+  ],
+  "refutation": {
+    "criterion": "Coherence runs: a delete and re-create; any divergence refutes.",
+    "result": "A read of a deleted record, a page or a scan that still lists it, or a created record missing from a page, in any mode but none."
+  }
+}

@@ -1,0 +1,33 @@
+// Many small tenants. The primary tenant and a population of small tenants share one budget.
+// Tenant popularity is skewed, so a few small tenants are hot and most are touched rarely. Each
+// tenant has its own file and header, so header residency and per-tenant overhead show up here.
+{
+  "name": "many-small-tenants",
+  "description": "One large tenant and two hundred small ones under one budget, tenant popularity skewed.",
+  "modules": ["content", "crm"],
+  "scale": 1000,
+  "small-tenants": { "count": 200, "scale": 40, "skew": 1.0 },
+  "length": 6000,
+  "clients": 4,
+  "skew": 1.0,
+  "mix": [
+    { "op": "get", "object": "content__article", "weight": 40, "actor": "reader" },
+    { "op": "get", "object": "crm__contact", "weight": 20, "actor": "editor" },
+    { "op": "header", "weight": 15 },
+    { "op": "update", "object": "content__article", "weight": 8, "actor": "editor" },
+    { "op": "create", "object": "crm__contact", "weight": 5, "actor": "editor" },
+    { "op": "page", "object": "content__article", "weight": 12, "page_size": 10, "actor": "reader" }
+  ],
+  "faults": [],
+  "measures": [
+    "store_side.schema_decodes",
+    "store_side.loads_by_need",
+    "wrapper.resident_bytes",
+    "wrapper.hit_rate_by_count",
+    "timing.overall"
+  ],
+  "refutation": {
+    "criterion": "The arbiter not beating a static split: static budgets with ceilings.",
+    "result": "A static equal split of the budget over the tenants reaches the same hit rate by cost and the same p99 as the arbiter, at 200 small tenants and one large."
+  }
+}

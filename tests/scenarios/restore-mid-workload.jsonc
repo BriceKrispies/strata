@@ -1,0 +1,35 @@
+// Restore mid-workload. The tenant is restored to the snapshot taken before the run, through
+// another handle, after commits the snapshot does not hold. Nothing answered afterwards may
+// reflect what the working set learned before the restore.
+{
+  "name": "restore-mid-workload",
+  "description": "A snapshot restore of the tenant lands through a second handle mid-run; afterwards no answer reflects pre-restore cache state.",
+  "modules": ["content", "people"],
+  "scale": 1500,
+  "length": 3000,
+  "clients": 3,
+  "skew": 1.2,
+  "mix": [
+    { "op": "get", "object": "content__article", "weight": 40, "within": "hot", "actor": "reader" },
+    { "op": "update", "object": "content__article", "weight": 10, "actor": "editor" },
+    { "op": "create", "object": "content__revision", "weight": 8, "actor": "editor" },
+    { "op": "get", "object": "people__employee", "weight": 20, "actor": "editor" },
+    { "op": "page", "object": "content__article", "weight": 10, "page_size": 20, "actor": "reader" },
+    { "op": "scan", "object": "people__department", "weight": 4, "actor": "editor" },
+    { "op": "header", "weight": 8 }
+  ],
+  "faults": [
+    { "kind": "foreign-commit", "at": 0.3, "object": "content__article" },
+    { "kind": "restore", "at": 0.6, "object": "content__article" }
+  ],
+  "measures": [
+    "coherence.post_fault_divergences",
+    "coherence.divergences",
+    "coherence.first",
+    "timing.by_kind.get"
+  ],
+  "refutation": {
+    "criterion": "Coherence runs: a restore to an earlier snapshot, unfenced through a second handle; any divergence refutes.",
+    "result": "Any answer after the restore differs from the unwrapped handle's at the same generation, including a record, a page or a header the restore changed or removed."
+  }
+}

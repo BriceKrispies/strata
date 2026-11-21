@@ -215,6 +215,13 @@
       "tier": "routine",
       "seconds": null,
       "unmeasured": true
+    },
+    {
+      "package": "strata-ws-bench",
+      "target": "ws_bench_it",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
     }
   ]
 }

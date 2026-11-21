@@ -1,0 +1,33 @@
+// Cold start after idle. The process restarts twice (an empty working set and a fresh handle
+// on the same data) and the first reads after each pay for everything. Read the max and p99 of
+// get; the steady-state p50 should barely move.
+{
+  "name": "cold-start-after-idle",
+  "description": "Two restarts (reopen: new handle, empty working set) in a read-mostly content workload: the cost of the first reads after idle.",
+  "modules": ["content", "taxonomy"],
+  "scale": 3000,
+  "length": 3000,
+  "clients": 2,
+  "skew": 1.2,
+  "mix": [
+    { "op": "get", "object": "content__article", "weight": 55, "within": "hot", "actor": "reader" },
+    { "op": "get", "object": "content__page", "weight": 15, "within": "hot", "actor": "reader" },
+    { "op": "get", "object": "content__block", "weight": 10, "actor": "reader" },
+    { "op": "get", "object": "taxonomy__tag", "weight": 10, "actor": "reader" },
+    { "op": "header", "weight": 10 }
+  ],
+  "faults": [
+    { "kind": "reopen", "at": 0.25 },
+    { "kind": "reopen", "at": 0.65 }
+  ],
+  "measures": [
+    "timing.by_kind.get",
+    "timing.overall",
+    "store_side.schema_decodes",
+    "wrapper.hit_rate_by_count"
+  ],
+  "refutation": {
+    "criterion": "Header residency alone reaching most of the cost-weighted saving: build the header and stop.",
+    "result": "The slowdown of the first reads after a reopen (get max and p99 against p50) is the same in mode header as in mode full: a warmed record cache does not help a cold start, so only the header, which is cheap to refill, is worth keeping."
+  }
+}

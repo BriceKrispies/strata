@@ -1,0 +1,40 @@
+// Commerce flash sale. A hot product set is read by many clients while order bursts arrive,
+// stock is posted to the ledger and prices are read. Writes are frequent, so invalidation work
+// and the cost of confirming a generation on every read show up here.
+{
+  "name": "commerce-flash-sale",
+  "description": "Commerce flash sale: a hot product and price set, order creation bursts, ledger stock postings and price reads from eight clients.",
+  "modules": ["commerce"],
+  "scale": 3000,
+  "length": 5000,
+  "clients": 8,
+  "skew": 1.4,
+  "mix": [
+    { "op": "get", "object": "commerce__product", "weight": 28, "within": "hot", "actor": "reader" },
+    { "op": "get", "object": "commerce__sku", "weight": 14, "within": "hot", "actor": "reader" },
+    { "op": "by-field", "object": "commerce__sku", "weight": 8, "actor": "reader" },
+    { "op": "get", "object": "commerce__price_list", "weight": 10, "within": "hot", "actor": "reader" },
+    { "op": "ledger-read", "weight": 10, "actor": "reader" },
+    { "op": "create", "object": "commerce__order", "weight": 8, "actor": "reader" },
+    { "op": "create", "object": "commerce__order_line", "weight": 8, "actor": "reader" },
+    { "op": "post-ledger", "weight": 8, "actor": "system" },
+    { "op": "update", "object": "commerce__promotion", "weight": 4, "actor": "editor", "contended": true },
+    { "op": "get", "object": "commerce__order", "weight": 2, "actor": "editor" }
+  ],
+  "faults": [
+    { "kind": "foreign-commit", "every": 250, "object": "commerce__product" }
+  ],
+  "measures": [
+    "timing.by_kind.get",
+    "timing.by_kind.create",
+    "timing.by_kind.post-ledger",
+    "store_side.loads_by_need",
+    "wrapper.hit_rate_by_count",
+    "conflicts",
+    "coherence.divergences"
+  ],
+  "refutation": {
+    "criterion": "The generation read costing a large share of the saving in checked mode: leases become a prerequisite.",
+    "result": "With a write every few operations, the time a checked hit spends reading the generation is a large share of the time a hit saves, so mode full's get p50 is not clearly below mode none's."
+  }
+}

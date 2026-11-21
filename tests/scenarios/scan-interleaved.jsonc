@@ -1,0 +1,30 @@
+// Scan interleaved with point reads. A report job scans whole object types while users read
+// hot records. A scan touches every record once and should not push the hot set out: this is
+// what an admission filter is for.
+{
+  "name": "scan-interleaved",
+  "description": "Whole-type scans and long pages interleaved with hot point reads, to see whether the scan evicts the hot set.",
+  "modules": ["content", "assets"],
+  "scale": 4000,
+  "length": 4000,
+  "clients": 3,
+  "skew": 1.3,
+  "mix": [
+    { "op": "get", "object": "content__article", "weight": 60, "within": "hot", "actor": "reader" },
+    { "op": "scan", "object": "content__revision", "weight": 3, "actor": "reader" },
+    { "op": "scan", "object": "assets__asset", "weight": 3, "actor": "reader" },
+    { "op": "page", "object": "content__block", "weight": 14, "page_size": 100, "skew": 0.0, "actor": "reader" },
+    { "op": "get", "object": "assets__rendition", "weight": 20, "within": "hot", "actor": "reader" }
+  ],
+  "faults": [],
+  "measures": [
+    "timing.by_kind.get",
+    "wrapper.hit_rate_by_cost",
+    "wrapper.resident_bytes",
+    "store_side.loads_by_need"
+  ],
+  "refutation": {
+    "criterion": "The cost-aware TinyLFU and GDSF combination not beating CLOCK clearly on SQLCipher and PostgreSQL: use CLOCK.",
+    "result": "The hit rate by cost of the hot gets after the scans is not clearly higher under the admission policy than under CLOCK at the same budget: the scans evict the hot set in both."
+  }
+}

@@ -1,0 +1,37 @@
+// Erasure mid-workload. A data subject's erasure request is carried out through another handle
+// (the operator tool) while readers keep reading CRM contacts and form submissions. After it no
+// read through the store under test may return the subject's plaintext, and every answer must
+// equal the unwrapped handle's.
+{
+  "name": "erasure-mid-workload",
+  "description": "A data-subject erasure lands through a second handle in the middle of CRM and forms reads; afterwards no read returns the subject's plaintext.",
+  "modules": ["crm", "forms", "service"],
+  "scale": 2000,
+  "length": 3000,
+  "clients": 4,
+  "skew": 1.0,
+  "mix": [
+    { "op": "get", "object": "crm__contact", "weight": 30, "actor": "editor" },
+    { "op": "by-field", "object": "crm__contact", "weight": 10, "actor": "editor" },
+    { "op": "page", "object": "crm__consent_record", "weight": 10, "page_size": 20, "actor": "editor" },
+    { "op": "get", "object": "crm__lead", "weight": 15, "actor": "editor" },
+    { "op": "update", "object": "crm__contact", "weight": 10, "actor": "editor", "contended": true },
+    { "op": "get", "object": "forms__form_submission", "weight": 10, "actor": "editor" },
+    { "op": "get", "object": "crm__account", "weight": 10, "actor": "editor" },
+    { "op": "get", "object": "service__case", "weight": 5, "actor": "editor" }
+  ],
+  "faults": [
+    { "kind": "erasure", "at": 0.5 }
+  ],
+  "measures": [
+    "coherence.plaintext_leaks",
+    "coherence.erasure_probes_read",
+    "coherence.post_fault_divergences",
+    "coherence.divergences",
+    "timing.by_kind.get"
+  ],
+  "refutation": {
+    "criterion": "Coherence runs: a key destruction in the middle of reads of the subject's records; any divergence refutes.",
+    "result": "coherence.plaintext_leaks is above 0, or any read after the erasure differs from the unwrapped handle's. For tenants with sealed fields, a hit costing a large share of a miss (key-document reads, unwrap) refutes residency of their records: they keep only the header."
+  }
+}

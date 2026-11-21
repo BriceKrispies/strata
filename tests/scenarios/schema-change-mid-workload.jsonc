@@ -1,0 +1,34 @@
+// Schema change mid-workload. A product upgrade changes the tenant's schema twice while
+// readers and writers run. The resident header (schema, members, setting values) must refresh at
+// each change, and the schema must be decoded once per generation, not once per read.
+{
+  "name": "schema-change-mid-workload",
+  "description": "A product upgrade changes the schema twice mid-run through a second handle; the resident header must refresh and answers must match.",
+  "modules": ["people", "content"],
+  "scale": 1500,
+  "length": 3000,
+  "clients": 3,
+  "skew": 1.0,
+  "mix": [
+    { "op": "header", "weight": 20 },
+    { "op": "get", "object": "people__employee", "weight": 25, "actor": "editor" },
+    { "op": "get", "object": "content__article", "weight": 25, "actor": "reader" },
+    { "op": "update", "object": "people__employee", "weight": 10, "actor": "editor" },
+    { "op": "create", "object": "people__leave_request", "weight": 8, "actor": "editor" },
+    { "op": "get", "object": "people__department", "weight": 12, "within": "hot", "actor": "editor" }
+  ],
+  "faults": [
+    { "kind": "schema-change", "at": 0.4 },
+    { "kind": "schema-change", "at": 0.7 }
+  ],
+  "measures": [
+    "store_side.schema_decodes",
+    "coherence.post_fault_divergences",
+    "coherence.divergences",
+    "timing.by_kind.header"
+  ],
+  "refutation": {
+    "criterion": "Header residency (WG-5390): one schema decode per tenant per generation, and a header equal to the unwrapped one after every commit.",
+    "result": "A header read after a schema change returns the old schema, or schema_decodes in mode header grows with the number of reads and not with the number of generations (two changes plus the first load)."
+  }
+}

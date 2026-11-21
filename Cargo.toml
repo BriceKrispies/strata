@@ -32,6 +32,7 @@ members = [
     "crates/model/routes",
     "crates/model-core",
     "crates/system-differential",
+    "crates/ws-bench",
 ]
 
 [workspace.package]

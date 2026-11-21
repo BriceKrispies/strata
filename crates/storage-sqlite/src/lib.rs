@@ -760,6 +760,15 @@ fn corrupt_id(e: strata_kernel::IdError) -> StoreError {
     StoreError::Corrupt(e.to_string())
 }
 
+/// How many times a tenant header's schema document was decoded in this process. A measurement
+/// hook for the working-set harness (`crates/ws-bench`): a counter outside the store, no behaviour.
+static SCHEMA_DECODES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The number of schema decodes since the process started.
+pub fn schema_decodes() -> u64 {
+    SCHEMA_DECODES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The header of the tenant in an open tenant file, without records.
 fn header(tx: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantState>> {
     let row = tx
@@ -782,6 +791,7 @@ fn header(tx: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantState>
     let Some((name, revision, next_record, event_seq, schema, members)) = row else {
         return Ok(None);
     };
+    SCHEMA_DECODES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let schema: TenantSchema = decode(&schema, "tenant schema")?;
     let members: BTreeMap<PrincipalId, BTreeSet<RoleId>> = decode(&members, "tenant members")?;
     Ok(Some(TenantState {

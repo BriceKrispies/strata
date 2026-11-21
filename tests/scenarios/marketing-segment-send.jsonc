@@ -1,0 +1,38 @@
+// Marketing segment send. A campaign evaluates a segment over many contacts and sends email to
+// the members. The workload is mostly reads over a large population with a long tail (low
+// skew), so most of it does not fit a small budget; the send writes one email-send record per
+// member.
+{
+  "name": "marketing-segment-send",
+  "description": "Marketing and CRM: segment evaluation over many contacts, email sends and a mostly-read workload with a long tail.",
+  "modules": ["marketing", "crm"],
+  "scale": 6000,
+  "length": 5000,
+  "clients": 3,
+  "skew": 0.6,
+  "mix": [
+    { "op": "query", "query": "marketing__members_by_tier", "weight": 6, "actor": "editor" },
+    { "op": "page", "object": "marketing__audience_member", "weight": 22, "page_size": 50, "actor": "editor" },
+    { "op": "get", "object": "marketing__audience_member", "weight": 20, "actor": "editor" },
+    { "op": "get", "object": "crm__contact", "weight": 15, "actor": "editor" },
+    { "op": "by-field", "object": "crm__contact", "weight": 6, "actor": "editor" },
+    { "op": "get", "object": "crm__account", "weight": 6, "within": "hot", "actor": "editor" },
+    { "op": "create", "object": "marketing__email_send", "weight": 15, "actor": "system" },
+    { "op": "update", "object": "marketing__campaign", "weight": 3, "actor": "editor", "contended": true },
+    { "op": "get", "object": "marketing__campaign", "weight": 5, "within": "hot", "actor": "editor" },
+    { "op": "get", "object": "marketing__journey", "weight": 2, "actor": "editor" }
+  ],
+  "faults": [],
+  "measures": [
+    "wrapper.hit_rate_by_count",
+    "wrapper.hit_rate_by_cost",
+    "wrapper.resident_bytes",
+    "store_side.bytes_read",
+    "timing.by_kind.page",
+    "timing.throughput_ops_per_s"
+  ],
+  "refutation": {
+    "criterion": "Whole-tenant residency matching the design within the same budget: choose it.",
+    "result": "With a long tail and a budget below the tenant's size, a whole-tenant resident set at the same budget reaches the same hit rate by cost and the same p99 as the record cache."
+  }
+}

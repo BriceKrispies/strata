@@ -1,0 +1,38 @@
+// Analytics dashboards. Dashboards and tiles are read over and over by many viewers, aggregate
+// queries are repeated, and almost nothing is written. The best case for a resident set: if the
+// design does not pay here it does not pay.
+{
+  "name": "analytics-dashboards",
+  "description": "Analytics: read-heavy dashboard, tile and aggregate reads with very few writes.",
+  "modules": ["analytics"],
+  "scale": 1500,
+  "length": 6000,
+  "clients": 3,
+  "skew": 1.2,
+  "mix": [
+    { "op": "query", "query": "analytics__published_executive_dashboards", "weight": 20, "actor": "reader" },
+    { "op": "query", "query": "analytics__breached_thresholds", "weight": 8, "actor": "reader" },
+    { "op": "query", "query": "analytics__regional_dashboards", "weight": 8, "actor": "reader" },
+    { "op": "get", "object": "analytics__dashboard", "weight": 20, "within": "hot", "actor": "reader" },
+    { "op": "get", "object": "analytics__tile", "weight": 22, "actor": "reader" },
+    { "op": "get", "object": "analytics__metric_definition", "weight": 8, "actor": "reader" },
+    { "op": "scan", "object": "analytics__kpi_threshold", "weight": 3, "actor": "reader" },
+    { "op": "header", "weight": 6 },
+    { "op": "update", "object": "analytics__metric_definition", "weight": 3, "actor": "editor" },
+    { "op": "update", "object": "analytics__report_schedule", "weight": 2, "actor": "editor" }
+  ],
+  "faults": [
+    { "kind": "foreign-commit", "every": 1000, "object": "analytics__metric_definition" }
+  ],
+  "measures": [
+    "timing.overall",
+    "wrapper.hit_rate_by_count",
+    "wrapper.resident_bytes",
+    "store_side.loads",
+    "store_side.schema_decodes"
+  ],
+  "refutation": {
+    "criterion": "Measured RSS exceeding accounted bytes plus reserves by more than the calibrated tolerance.",
+    "result": "Process RSS after the run exceeds the wrapper's resident_bytes plus the adapter's own cache and the reserves by more than the calibrated tolerance, in the one workload where nearly everything stays resident."
+  }
+}
