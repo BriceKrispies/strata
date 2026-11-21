@@ -116,18 +116,9 @@ fn a_fleet_migration_reports_each_tenant_and_refuses_a_file_from_a_newer_version
     let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
     let report = store.migrate_fleet(100).unwrap();
     assert!(!report.stopped);
-    let status = |name: &str| {
-        report
-            .tenants
-            .iter()
-            .find(|(t, _)| t.as_str() == name)
-            .unwrap()
-            .1
-            .clone()
-    };
-    assert_eq!(status("alpha"), TenantStatus::Ready);
-    assert_eq!(status("charlie"), TenantStatus::Ready);
-    match status("bravo") {
+    assert_eq!(status_of(&report, "alpha"), TenantStatus::Ready);
+    assert_eq!(status_of(&report, "charlie"), TenantStatus::Ready);
+    match status_of(&report, "bravo") {
         TenantStatus::Failed(why) => assert!(why.contains("newer version"), "{why}"),
         other => panic!("a file of a newer version was opened: {other:?}"),
     }

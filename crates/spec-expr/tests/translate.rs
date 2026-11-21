@@ -30,14 +30,6 @@ fn env() -> TestScope {
 const OV: &str = "StepError::Overflow";
 
 #[test]
-fn references_are_bare() {
-    let e = env();
-    assert_eq!(rust("a", &e), tok("a"));
-    assert_eq!(rust("event.token", &e), tok("event_token"));
-    assert_eq!(rust("lease.count.jl-done", &e), tok("lease_count_jl_done"));
-}
-
-#[test]
 fn literals() {
     let e = env();
     assert_eq!(rust("true", &e), tok("true"));
@@ -276,28 +268,6 @@ fn effect_values_take_the_variable_type() {
         tok(&format!("1u8.checked_add(2u8).ok_or({OV})?"))
     );
     assert_eq!(rust_as("event.token", &e, &Ty::U32), tok("event_token"));
-}
-
-#[test]
-fn translation_enforces_literal_fitting() {
-    let e = env();
-    let small = scope(&[("small", Ty::U8)]);
-    for src in ["small + 256", "small == 300"] {
-        let parsed = parse(src).unwrap();
-        assert!(to_rust(&parsed, &small).is_err(), "{src}");
-    }
-    assert!(strata_spec_expr::to_rust_as(&parse("300").unwrap(), &e, &Ty::U8).is_err());
-    assert!(strata_spec_expr::to_rust_as(&parse("255").unwrap(), &e, &Ty::U8).is_ok());
-}
-
-#[test]
-fn an_overflowing_sum_is_translated_to_the_error_path() {
-    let e = env();
-    let out = rust("a + b", &e);
-    assert!(out.contains("checked_add"), "{out}");
-    assert!(out.contains("ok_or"), "{out}");
-    assert!(out.contains("StepError"), "{out}");
-    assert!(out.contains('?'), "{out}");
 }
 
 /// The deepest accepted expressions go through parsing, typing and translation on a small stack

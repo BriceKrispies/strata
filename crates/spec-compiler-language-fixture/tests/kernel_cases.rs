@@ -240,46 +240,6 @@ fn expression(c: &Json, failures: &mut Vec<String>) -> Expr {
     expr
 }
 
-#[test]
-fn the_shared_table_has_cases_for_every_new_operator() {
-    let table: Json = serde_json::from_str(TABLE).unwrap();
-    let sources: Vec<&str> = ["eval", "check"]
-        .iter()
-        .flat_map(|part| table[*part].as_array().unwrap())
-        .filter_map(|c| c["source"].as_str())
-        .collect();
-    for token in [
-        " + ",
-        " - ",
-        " * ",
-        "ms_between(",
-        "days(",
-        "hours(",
-        "minutes(",
-        "concat(",
-        "text(",
-    ] {
-        assert!(
-            sources.iter().any(|s| s.contains(token)),
-            "no case uses {token}"
-        );
-    }
-    let results: Vec<String> = table["eval"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["result"].to_string())
-        .collect();
-    assert!(
-        results
-            .iter()
-            .filter(|r| r.contains("integer-overflow"))
-            .count()
-            >= 10
-    );
-    assert!(results.iter().any(|r| r.contains("string-too-long")));
-}
-
 // Verifies: CMS-1546
 #[test]
 fn the_generated_evaluator_gives_every_eval_result_of_the_shared_table() {

@@ -74,15 +74,11 @@ fn equal_ids_are_two_instances<S: RecordStore>(acme: &S, globex: &S) {
 }
 
 #[test]
-fn memory_stores_of_two_tenants_share_no_instance_state() {
+fn stores_of_two_tenants_share_no_instance_state() {
     equal_ids_are_two_instances(
         &MemoryStore::new(tenant("acme")),
         &MemoryStore::new(tenant("globex")),
     );
-}
-
-#[test]
-fn sqlite_stores_of_two_tenants_share_no_instance_state() {
     let open = |name: &str, who: &str| {
         SqliteMachineStore::open(
             tenant(who),

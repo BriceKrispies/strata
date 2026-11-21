@@ -1,10 +1,10 @@
 //! Delayed emits on the in-memory store and on a SQLite file. The cases themselves are in
-//! `common/delayed_cases.rs`, shared with the storage-api adapter's tests.
+//! `common/delayed_cases.rs`, shared with the storage-api adapter's tests. Each test runs its case
+//! on both stores in turn.
 
 #[path = "common/delayed_cases.rs"]
 mod cases;
 
-use cases::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -38,31 +38,19 @@ fn sqlite(name: &str) -> impl Fn() -> Arc<SqliteMachineStore> {
 }
 
 #[tokio::test]
-async fn memory_waits_for_its_delay() {
-    waits_for_its_delay(memory()).await;
+async fn waits_for_its_delay() {
+    cases::waits_for_its_delay(memory()).await;
+    cases::waits_for_its_delay(sqlite("waits")).await;
 }
 
 #[tokio::test]
-async fn sqlite_waits_for_its_delay() {
-    waits_for_its_delay(sqlite("waits")).await;
+async fn retries_only_at_least_once() {
+    cases::retries_only_at_least_once(memory()).await;
+    cases::retries_only_at_least_once(sqlite("retries")).await;
 }
 
 #[tokio::test]
-async fn memory_retries_only_at_least_once() {
-    retries_only_at_least_once(memory()).await;
-}
-
-#[tokio::test]
-async fn sqlite_retries_only_at_least_once() {
-    retries_only_at_least_once(sqlite("retries")).await;
-}
-
-#[tokio::test]
-async fn memory_two_hosts_dispatch_once() {
-    two_hosts_dispatch_once(memory()).await;
-}
-
-#[tokio::test]
-async fn sqlite_two_hosts_dispatch_once() {
-    two_hosts_dispatch_once(sqlite("two-hosts")).await;
+async fn two_hosts_dispatch_once() {
+    cases::two_hosts_dispatch_once(memory()).await;
+    cases::two_hosts_dispatch_once(sqlite("two-hosts")).await;
 }

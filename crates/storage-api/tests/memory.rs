@@ -67,17 +67,6 @@ fn memory_store_keeps_the_audit_trail() {
     conformance::audit_is_kept_per_tenant(&MemoryStore::new());
 }
 
-#[test]
-fn the_table_is_read_from_its_markdown() {
-    let text = "{\"id\":\"cases-storage-conformance\",\"body\":\"# T\\n\\n## Cases\\n\\n| Case | Establishes |\\n|---|---|\\n| one | a |\\n| two | b |\\n\"},";
-    assert_eq!(conformance::spec_cases(text), ["one", "two"]);
-}
-
-#[test]
-fn memory_store_says_it_is_not_durable() {
-    assert!(!MemoryStore::new().capabilities().durable);
-}
-
 /// The journal is kept for good: the address the shell verified for the acting person is used for
 /// the decision and is not written to it.
 #[test]

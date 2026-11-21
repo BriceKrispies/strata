@@ -553,13 +553,16 @@ fn a_panic_while_holding_the_connection_does_not_disable_the_database() {
     assert_eq!(rows, vec![2], "the panicked transaction left nothing");
 }
 
-/// More tenants than any bound on open files, each read and written, and read again in the
-/// opposite order, with every tenant seeing only its own data. Uses the public store only.
+/// More tenants than the open-file bound, each read and written, and read again in the opposite
+/// order, with every tenant seeing only its own data. The bound is set low so that the tenants
+/// are opened and closed as they are used. Uses the public store only.
 #[test]
 fn many_tenants_each_read_and_write_their_own_data() {
-    const TENANTS: usize = 160;
+    const TENANTS: usize = 12;
     let path = fresh_path("many");
-    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    let store = SqliteStore::open(&path, Timestamp(1))
+        .unwrap()
+        .with_max_open(3);
     let name = |i: usize| format!("tenant{i}");
     for i in 0..TENANTS {
         tenant_with_a_note(&store, &name(i), 10);
@@ -584,7 +587,9 @@ fn many_tenants_each_read_and_write_their_own_data() {
         assert_eq!(store.journal_after(&tenant, 0, 100).unwrap().len(), 4);
     }
     drop(store);
-    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    let store = SqliteStore::open(&path, Timestamp(2))
+        .unwrap()
+        .with_max_open(3);
     for i in 0..TENANTS {
         let state = store
             .load_complete(&tenant_id(&name(i)))

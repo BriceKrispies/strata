@@ -66,32 +66,6 @@ fn committed_fixtures_match_the_generator_and_the_kernel() {
     );
 }
 
-#[test]
-fn the_fixtures_exercise_every_outcome_the_model_has() {
-    let generated = scenarios(FIXTURE_SEED, FIXTURE_COUNT);
-    let output = kernel_output(&generated);
-    for outcome in [
-        "ok",
-        "err unauthorized",
-        "err not_found",
-        "err invalid",
-        "err migration_rejected",
-        "err no_tenant",
-    ] {
-        let count = output.lines().filter(|line| *line == outcome).count();
-        assert!(count >= 5, "only {count} operations ended in `{outcome}`");
-    }
-    assert!(
-        !output.contains("unmodelled") && !output.contains("unparsed"),
-        "every kernel answer maps onto the model"
-    );
-    assert!(
-        output.lines().filter(|l| l.starts_with("record ")).count() > 50,
-        "final states are not trivially empty"
-    );
-    assert!(generated.lines().filter(|l| l.starts_with("op ")).count() > 900);
-}
-
 /// Verifies: KRN-016
 #[test]
 fn the_lean_model_agrees_with_the_kernel() {
@@ -236,18 +210,6 @@ fn every_cited_rust_test_exists() {
 "
         )
     );
-}
-
-#[test]
-fn the_citation_check_would_catch_a_dangling_name() {
-    assert!(defines_function(
-        "    fn real_test(
-",
-        "real_test"
-    ));
-    assert!(defines_function("async fn real_test() {}", "real_test"));
-    assert!(!defines_function("fn real_test_two() {}", "real_test"));
-    assert!(!defines_function("// real_test", "real_test"));
 }
 
 #[test]

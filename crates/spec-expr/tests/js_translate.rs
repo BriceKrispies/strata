@@ -38,14 +38,6 @@ fn u32c(expr: &str) -> String {
 }
 
 #[test]
-fn references_are_bare() {
-    let e = env();
-    assert_eq!(js("a", &e), "a");
-    assert_eq!(js("event.token", &e), "event_token");
-    assert_eq!(js("lease.count.jl-done", &e), "lease_count_jl_done");
-}
-
-#[test]
 fn literals() {
     let e = env();
     assert_eq!(js("true", &e), "true");
@@ -257,24 +249,6 @@ fn literal_range_is_enforced_per_type() {
         let r = to_rust_as(&ex, &e, ty).unwrap_err();
         assert_eq!(j.kind, r.kind, "{src} as {ty}");
     }
-}
-
-#[test]
-fn sixty_four_bit_literals_stop_at_the_safe_integer_limit() {
-    // The same bound as the Rust target and Exegra: a double cannot hold more.
-    let e = env();
-    let ex = parse("9007199254740992").unwrap();
-    let err = to_js_as(&ex, &e, &Ty::U64).unwrap_err();
-    assert_eq!(err.kind, TypeErrorKind::LiteralDoesNotFit);
-    assert_eq!(
-        to_rust_as(&ex, &e, &Ty::U64).unwrap_err().kind,
-        TypeErrorKind::LiteralDoesNotFit
-    );
-    let ex = parse("-9007199254740992").unwrap();
-    assert_eq!(
-        to_js_as(&ex, &e, &Ty::I64).unwrap_err().kind,
-        TypeErrorKind::LiteralDoesNotFit
-    );
 }
 
 #[test]

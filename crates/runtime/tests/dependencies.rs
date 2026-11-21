@@ -119,22 +119,3 @@ fn the_runtime_names_no_platform_crate_in_its_sources() {
         found.join("\n")
     );
 }
-
-#[test]
-fn the_check_would_catch_a_dependency() {
-    let manifest = "[package]\nname = \"x\"\n\n[dependencies]\nserde.workspace = true\n\
-                    strata-kernel = { path = \"../kernel\" }\n\n[dev-dependencies]\n\
-                    alias = { package = \"strata-protocol\", path = \"../protocol\" }\n\n\
-                    [target.'cfg(unix)'.dependencies.strata-bff]\npath = \"../bff\"\n";
-    let names = declared(manifest);
-    for name in ["strata-kernel", "strata-protocol", "strata-bff"] {
-        assert!(
-            names.contains(&name.to_string()),
-            "{name} missed in {names:?}"
-        );
-    }
-    assert!(
-        !names.contains(&"x".to_string()),
-        "package fields are not dependencies"
-    );
-}

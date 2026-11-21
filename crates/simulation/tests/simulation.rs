@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use strata_kernel::*;
 use strata_protocol::tenants::load_all;
 use strata_simulation::engine::{
@@ -18,15 +19,21 @@ fn tenant() -> TenantId {
     TenantId::new("fieldnotes").unwrap()
 }
 
-/// Both seeded tenants, installed through the kernel.
+/// Both seeded tenants, installed through the kernel. Loaded and installed once per binary: every
+/// scenario starts from a clone of the same world.
 fn seeded() -> World {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tenants");
-    load_all(&root)
-        .unwrap()
-        .iter()
-        .fold(World::default(), |world, loaded| {
-            install_into(&world, &loaded.bundle).unwrap()
+    static SEEDED: OnceLock<World> = OnceLock::new();
+    SEEDED
+        .get_or_init(|| {
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tenants");
+            load_all(&root)
+                .unwrap()
+                .iter()
+                .fold(World::default(), |world, loaded| {
+                    install_into(&world, &loaded.bundle).unwrap()
+                })
         })
+        .clone()
 }
 
 fn scenario(seed: u64, steps: usize, faults: Faults) -> Scenario {
@@ -451,6 +458,15 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
                 by_hand.is_none_or(|step| step >= before_step),
                 "seed {seed}, change before step {before_step}: {by_hand:?}"
             );
+            // A change applied midway leaves the steps before it alone: no outcome differs there.
+            assert!(
+                projection
+                    .comparison
+                    .outcome_changes
+                    .iter()
+                    .all(|change| change.step >= before_step),
+                "seed {seed}, change before step {before_step}: an earlier step differs"
+            );
             diverged += usize::from(by_hand.is_some());
         }
     }
@@ -543,22 +559,6 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
         )
     );
     assert_eq!(again.comparison, projection.comparison);
-}
-
-#[test]
-fn a_change_applied_midway_leaves_earlier_steps_alone() {
-    let scenario = scenario(5, 80, Faults::default());
-    let projection = project(
-        &scenario,
-        &require_excerpt(ExistingData::Grandfather, 40),
-        &mut |_, _, _| true,
-    )
-    .unwrap();
-    assert!(projection
-        .comparison
-        .outcome_changes
-        .iter()
-        .all(|change| change.step >= 40));
 }
 
 #[test]

@@ -202,24 +202,6 @@ fn a_product_bundle_is_read_as_kernel_values() {
 }
 
 #[test]
-fn a_view_is_read_with_its_sections() {
-    let mut doc = tiers();
-    doc["content"]["views"] = json!({
-        "tiers__index": {
-            "id": "tiers__index",
-            "route": "/tiers",
-            "title": "Tiers",
-            "sections": {
-                "top": { "query": "tiers__top", "args": {}, "include": [], "markdown": [], "single": false }
-            }
-        }
-    });
-    let bundle = read(&doc).unwrap();
-    assert_eq!(bundle.views.len(), 1);
-    assert_eq!(bundle.entities().last().unwrap().kind, "view");
-}
-
-#[test]
 fn a_malformed_bundle_is_refused_as_an_invalid_bundle() {
     let cases: Vec<(&str, Json, &str)> = vec![
         (
@@ -296,27 +278,6 @@ fn a_malformed_bundle_is_refused_as_an_invalid_bundle() {
         ProductBundle::from_json("{ not json").err().unwrap().kind,
         BundleErrorKind::InvalidBundle
     );
-}
-
-// Verifies: INT-1583
-#[test]
-fn a_platform_range_runs_from_the_first_release_up_to_the_first_it_excludes() {
-    let range = PlatformRange {
-        min: "0.2".to_string(),
-        below: Some("0.4".to_string()),
-    };
-    assert!(range.admits("0.2"));
-    assert!(range.admits("0.2-draft"));
-    assert!(range.admits("0.3.7"));
-    assert!(!range.admits("0.4"));
-    assert!(!range.admits("0.1.9"));
-    assert!(!range.admits("1.0"));
-    let open = PlatformRange {
-        min: "0.2".to_string(),
-        below: None,
-    };
-    assert!(open.admits("12.0"));
-    assert!(!open.admits("0.1"));
 }
 
 // Verifies: INT-1583

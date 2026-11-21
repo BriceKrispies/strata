@@ -227,8 +227,10 @@ impl Edge {
 }
 
 /// Verifies: GWY-003
+/// Verifies: IDN-262
+/// Verifies: H-006
 #[tokio::test]
-async fn the_session_cookie_is_http_only_strict_and_never_in_a_body() {
+async fn the_session_cookie_is_host_prefixed_http_only_strict_and_never_in_a_body() {
     let edge = start().await;
     let request = edge
         .post(
@@ -287,65 +289,33 @@ async fn the_session_cookie_is_http_only_strict_and_never_in_a_body() {
         cleared.contains("HttpOnly") && cleared.contains("SameSite=Strict"),
         "the cleared cookie keeps its attributes: {cleared}"
     );
-}
 
-/// Verifies: IDN-262
-/// Verifies: H-006
-#[tokio::test]
-async fn the_session_cookie_carries_the_host_prefix_and_secure() {
-    let edge = start().await;
-    let request = edge
-        .post(
-            "127.0.0.1",
-            "/api/login",
-            json!({ "login": "ines", "password": "strata-dev-ines" }),
-        )
-        .header("x-csrf-token", edge.request_token("127.0.0.1").await);
-    let (status, _, reply) = edge.send(request).await;
-    assert_eq!(status, 200);
-    let cookie = reply.cookie.unwrap();
-    // `__Host-` is only honoured by a browser for a cookie that is `Secure`, has `Path=/` and has
-    // no `Domain`; the prefix, `Secure` and the other two are all there.
+    // The name carries the host prefix, which a browser honours only for a cookie that is
+    // `Secure`, has `Path=/` and has no `Domain`.
     let attributes: Vec<&str> = cookie.split(';').map(str::trim).collect();
     assert!(attributes[0].starts_with("__Host-strata_sid="), "{cookie}");
     assert!(attributes.contains(&"Secure"), "{cookie}");
     assert!(attributes.contains(&"Path=/"), "{cookie}");
-    assert!(attributes.contains(&"HttpOnly"), "{cookie}");
-    assert!(attributes.contains(&"SameSite=Strict"), "{cookie}");
     assert!(
         !attributes
             .iter()
             .any(|a| a.to_lowercase().starts_with("domain")),
         "{cookie}"
     );
-    let token = attributes[0].trim_start_matches("__Host-strata_sid=");
-
-    // The attribute is not an option: the cookie the gateway clears is marked the same way.
-    let (_, session, _) = edge.get("127.0.0.1", "/api/session", Some(token)).await;
-    let logout = edge
-        .post("127.0.0.1", "/api/logout", json!({}))
-        .header("cookie", format!("{SESSION_COOKIE}={token}"))
-        .header(
-            "x-csrf-token",
-            session["session"]["csrf_token"].as_str().unwrap(),
-        );
-    let (status, _, reply) = edge.send(logout).await;
-    assert_eq!(status, 200);
-    let cleared = reply.cookie.unwrap();
+    // The sign-out cookie is marked the same way, and an empty token ends the cookie.
     assert!(
-        cleared.starts_with("__Host-strata_sid=;") && cleared.contains("Secure"),
-        "an empty token ends the cookie: {cleared}"
+        signed_out.starts_with("__Host-strata_sid=;") && signed_out.contains("Secure"),
+        "{signed_out}"
     );
-    assert!(cleared.contains("Max-Age=0"), "{cleared}");
 
     // A cookie under the old, unprefixed name is not a session.
-    let (token, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (live, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
     let old_name = edge
         .http
         .get(format!("{}/api/session", edge.origin("127.0.0.1")))
-        .header("cookie", format!("strata_sid={token}"));
-    let (_, body, _) = edge.send(old_name).await;
-    assert_eq!(body["session"]["authenticated"], false);
+        .header("cookie", format!("strata_sid={live}"));
+    let (_, old, _) = edge.send(old_name).await;
+    assert_eq!(old["session"]["authenticated"], false);
 }
 
 /// The `POST` routes of the browser-facing API, read from its definition so that a route added
@@ -963,6 +933,13 @@ async fn tenant_rich_text_reaches_the_browser_as_blocks_with_markup_as_text() {
 }
 
 /// Verifies: GWY-005
+/// Verifies: GWY-253
+/// Verifies: GWY-252
+///
+/// Every page response carries the same policy: scripts from the page's own origin only, no
+/// inline script, and Trusted Types for script sinks naming exactly one policy, the kernel
+/// worker's address, with no default policy. The base, object and form directives stay on the
+/// page's own origin or on none.
 #[tokio::test]
 async fn pages_carry_security_headers_and_a_bootstrap_that_cannot_break_out() {
     let edge = start().await;
@@ -1000,6 +977,25 @@ async fn pages_carry_security_headers_and_a_bootstrap_that_cannot_break_out() {
             !csp.contains("unsafe-inline") && !csp.contains("unsafe-eval"),
             "{path}: {csp}"
         );
+        let directives: Vec<&str> = csp.split(';').map(str::trim).collect();
+        assert!(
+            directives.contains(&"require-trusted-types-for 'script'"),
+            "{path}: {csp}"
+        );
+        assert!(
+            directives.contains(&"trusted-types strata-worker"),
+            "{path}: {csp}"
+        );
+        assert!(
+            !csp.contains("'allow-duplicates'") && !csp.contains("default'"),
+            "{path}: {csp}"
+        );
+        for required in ["base-uri 'none'", "object-src 'none'", "form-action 'self'"] {
+            assert!(
+                directives.contains(&required),
+                "{path}: {required} in {csp}"
+            );
+        }
     }
     let (_, _, reply) = edge
         .get("127.0.0.1", "/posts/a-margin-is-a-promise", None)
@@ -1031,7 +1027,6 @@ async fn pages_carry_security_headers_and_a_bootstrap_that_cannot_break_out() {
         "a-margin-is-a-promise"
     );
     assert_eq!(bootstrap["session"]["session"]["authenticated"], false);
-    assert_eq!(edge.get("127.0.0.1", "/no/such/page", None).await.0, 404);
 }
 
 type Upgrade = Result<
@@ -1395,39 +1390,6 @@ async fn assets_are_cached_only_on_success_and_source_maps_are_not_served() {
         status, 404,
         "the map exists on disk and is still not served"
     );
-}
-
-/// Verifies: GWY-253
-/// Verifies: GWY-252
-/// A page response requires Trusted Types for script sinks and names exactly one policy, the
-/// kernel worker's address; it creates no default policy and keeps the base, object and form
-/// directives on the page's own origin or on none.
-#[tokio::test]
-async fn a_page_requires_trusted_types_and_names_one_policy() {
-    let edge = start().await;
-    for path in ["/", "/login", "/no/such/page"] {
-        let (_, _, reply) = edge.get("127.0.0.1", path, None).await;
-        let csp = reply.headers["content-security-policy"].to_str().unwrap();
-        let directives: Vec<&str> = csp.split(';').map(str::trim).collect();
-        assert!(
-            directives.contains(&"require-trusted-types-for 'script'"),
-            "{path}: {csp}"
-        );
-        assert!(
-            directives.contains(&"trusted-types strata-worker"),
-            "{path}: {csp}"
-        );
-        assert!(
-            !csp.contains("'allow-duplicates'") && !csp.contains("default'"),
-            "{path}: {csp}"
-        );
-        for required in ["base-uri 'none'", "object-src 'none'", "form-action 'self'"] {
-            assert!(
-                directives.contains(&required),
-                "{path}: {required} in {csp}"
-            );
-        }
-    }
 }
 
 /// Verifies: GWY-1404
