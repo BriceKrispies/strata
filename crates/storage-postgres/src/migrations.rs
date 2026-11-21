@@ -46,17 +46,25 @@ pub(crate) fn migrate(
     steps: &[Migration],
     now: i64,
 ) -> StoreResult<()> {
-    if ledger.is_empty() || !ledger.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
-        return Err(StoreError::Invalid(format!("bad ledger name {ledger:?}")));
-    }
-    t.batch_execute(&format!(
-        "CREATE TABLE IF NOT EXISTS {ledger} (
-            version    BIGINT PRIMARY KEY,
-            name       TEXT NOT NULL,
-            applied_at BIGINT NOT NULL
-        )"
-    ))
-    .map_err(db)?;
+    // One literal statement per ledger table, so that each table is visible in the source.
+    let create = match ledger {
+        CONTROL_LEDGER => {
+            "CREATE TABLE IF NOT EXISTS control_migrations (
+                version    BIGINT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                applied_at BIGINT NOT NULL
+            )"
+        }
+        TENANT_LEDGER => {
+            "CREATE TABLE IF NOT EXISTS tenant_migrations (
+                version    BIGINT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                applied_at BIGINT NOT NULL
+            )"
+        }
+        _ => return Err(StoreError::Invalid(format!("bad ledger name {ledger:?}"))),
+    };
+    t.batch_execute(create).map_err(db)?;
     let row = t
         .query_one(
             &*format!("SELECT COALESCE(MAX(version), 0)::bigint FROM {ledger}"),

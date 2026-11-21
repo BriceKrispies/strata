@@ -169,21 +169,30 @@ impl Database {
 
     /// Apply the steps of `migrations` whose version is above the highest one recorded in the
     /// ledger table `ledger` (created if missing), in one `IMMEDIATE` transaction, recording each
-    /// with `now` (milliseconds since the epoch). `ledger` must be a plain identifier.
+    /// with `now` (milliseconds since the epoch). `ledger` must be one of the three ledger tables,
+    /// `runtime_migrations`, `control_migrations` or `tenant_migrations`.
     pub fn migrate(&self, ledger: &str, migrations: &[Migration], now: i64) -> Result<(), DbError> {
-        if ledger.is_empty()
-            || !ledger
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            return Err(DbError::BadLedger(ledger.to_string()));
-        }
         let mut conn = self.lock()?;
-        conn.execute_batch(&format!(
-            "CREATE TABLE IF NOT EXISTS {ledger} (
-                version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL
-            );"
-        ))?;
+        // One literal statement per ledger table, so that each table is visible in the source.
+        let create = match ledger {
+            "runtime_migrations" => {
+                "CREATE TABLE IF NOT EXISTS runtime_migrations (
+                    version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL
+                );"
+            }
+            "control_migrations" => {
+                "CREATE TABLE IF NOT EXISTS control_migrations (
+                    version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL
+                );"
+            }
+            "tenant_migrations" => {
+                "CREATE TABLE IF NOT EXISTS tenant_migrations (
+                    version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL
+                );"
+            }
+            _ => return Err(DbError::BadLedger(ledger.to_string())),
+        };
+        conn.execute_batch(create)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let applied: u32 = tx.query_row(
             &format!("SELECT COALESCE(MAX(version), 0) FROM {ledger}"),
