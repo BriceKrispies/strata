@@ -1,0 +1,27 @@
+{
+  "actions": {},
+  "forms": {},
+  "id": "service_desk__asset_screen",
+  "kind": "screen",
+  "live": {
+    "service_desk__asset_live": {
+      "event": "notice",
+      "kinds": [
+        "membership",
+        "remove",
+        "schema",
+        "upsert"
+      ],
+      "objects": true,
+      "screen": "service_desk__asset_screen"
+    }
+  },
+  "screen": {
+    "auth": "session",
+    "kind": "detail",
+    "query": [],
+    "route": "/assets",
+    "title": "Assets",
+    "view": "service_desk__asset_detail"
+  }
+}

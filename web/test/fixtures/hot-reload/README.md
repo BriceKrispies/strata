@@ -30,7 +30,7 @@ done
 Then write the golden files:
 
 ```
-STRATA_BLESS=1 cargo test -p strata-substrate --test hot_reload_fixtures
+STRATA_BLESS=1 cargo test -p strata-substrate --test substrate_it hot_reload_fixtures::
 ```
 
 Without `STRATA_BLESS=1` the same test compares every file byte for byte and fails on a difference

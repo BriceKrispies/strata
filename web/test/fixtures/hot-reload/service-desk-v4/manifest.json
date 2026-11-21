@@ -1,0 +1,66 @@
+{
+  "hash": "721f5770683c3f416844ecaf0e371386dbd876d2b60aec6ab01490969df9c819",
+  "parts": [
+    {
+      "auth": "anyone",
+      "hash": "bb754f726dfe613046a1555caa4631302cd1341287c79e3366419a63553dd804",
+      "id": "knowledge_base__articles_screen",
+      "kind": "screen",
+      "layout": "list",
+      "query": [],
+      "route": "/kb",
+      "title": "Articles",
+      "view": "knowledge_base__articles"
+    },
+    {
+      "auth": "session",
+      "hash": "ebe41aacf52a6709ea75cc23844fb7031e284bfedade9bf9a830dcbe3c365b0e",
+      "id": "service_desk__asset_screen",
+      "kind": "screen",
+      "layout": "detail",
+      "query": [],
+      "route": "/assets",
+      "title": "Assets",
+      "view": "service_desk__asset_detail"
+    },
+    {
+      "auth": "session",
+      "hash": "2f2a7cf4e19f56c9fe1e92ce4f01440c5b7d96dd485c88c892d00f690a563339",
+      "id": "service_desk__board_screen",
+      "kind": "screen",
+      "layout": "list",
+      "query": [],
+      "route": "/desk/tickets",
+      "title": "Tickets",
+      "view": "service_desk__board"
+    },
+    {
+      "auth": "session",
+      "hash": "2802485853daabc5f280dc399c3ad10fe1a7559f89c323418ebd8a41b625ac2a",
+      "id": "service_desk__customer_screen",
+      "kind": "screen",
+      "layout": "detail",
+      "query": [],
+      "route": "/customers/detail",
+      "title": "Customer",
+      "view": "service_desk__customer_detail"
+    },
+    {
+      "auth": "anyone",
+      "hash": "de8f295eb08ff3325c65b525658344af76bf56e256448c6b8e4ccdf8d74a2077",
+      "id": "service_desk__customers_screen",
+      "kind": "screen",
+      "layout": "list",
+      "query": [],
+      "route": "/customers",
+      "title": "Customers",
+      "view": "service_desk__customer_list"
+    },
+    {
+      "hash": "48a0689457b9ad7321b71c1dc605e5da5e2d15e1e9056e1642789c539d24688a",
+      "id": "errors",
+      "kind": "errors"
+    }
+  ],
+  "schema_version": 6
+}

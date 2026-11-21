@@ -9,3 +9,6 @@ mod publication_template;
 
 #[path = "ui_definition.rs"]
 mod ui_definition;
+
+#[path = "hot_reload_fixtures.rs"]
+mod hot_reload_fixtures;

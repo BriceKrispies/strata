@@ -1,0 +1,28 @@
+{
+  "id": "errors",
+  "kind": "errors",
+  "messages": {
+    "service_desk__open_failed": {
+      "applies_to": [
+        "service_desk__open_again"
+      ],
+      "field": "name",
+      "kinds": [
+        "required"
+      ],
+      "on": "check",
+      "text": "The ticket could not be opened."
+    },
+    "service_desk__title_needed": {
+      "applies_to": [
+        "service_desk__open_form"
+      ],
+      "field": "name",
+      "kinds": [
+        "required"
+      ],
+      "on": "check",
+      "text": "A ticket needs a title."
+    }
+  }
+}

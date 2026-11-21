@@ -1,0 +1,83 @@
+{
+  "content": {
+    "objects": {
+      "knowledge_base__article": {
+        "constraints": {},
+        "fields": {
+          "body": {
+            "id": "body",
+            "label": "Body",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          },
+          "status": {
+            "id": "status",
+            "label": "Status",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          },
+          "title": {
+            "id": "title",
+            "label": "Title",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          }
+        },
+        "id": "knowledge_base__article",
+        "label": "Article"
+      }
+    },
+    "queries": {
+      "knowledge_base__published": {
+        "filter": "record.status == 'published'",
+        "id": "knowledge_base__published",
+        "limit": 100,
+        "object": "knowledge_base__article",
+        "order": [
+          {
+            "descending": false,
+            "field": "title"
+          }
+        ],
+        "params": []
+      }
+    },
+    "ui": {
+      "knowledge_base__articles_screen": {
+        "Screen": {
+          "auth": "anyone",
+          "kind": "list",
+          "query": [],
+          "route": "/kb",
+          "title": "Articles",
+          "view": "knowledge_base__articles"
+        }
+      }
+    },
+    "views": {
+      "knowledge_base__articles": {
+        "id": "knowledge_base__articles",
+        "route": "/kb",
+        "sections": {
+          "published": {
+            "args": {},
+            "include": [],
+            "markdown": [],
+            "query": "knowledge_base__published",
+            "single": false
+          }
+        },
+        "title": "Articles"
+      }
+    }
+  },
+  "name": "Knowledge base",
+  "platform": {
+    "min": "0.2"
+  },
+  "product": "knowledge-base",
+  "version": "1.0.0"
+}

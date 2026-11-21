@@ -1,0 +1,74 @@
+{
+  "actions": {
+    "service_desk__open_again": {
+      "arguments": {
+        "priority": "form.priority",
+        "reason": "form.reason",
+        "subject": "form.subject"
+      },
+      "form": "service_desk__open_form",
+      "label": "Open it again",
+      "on_error": "toast",
+      "on_success": {
+        "toast": "Opened again."
+      },
+      "operation": "service_desk__open_ticket",
+      "screen": "service_desk__board_screen"
+    }
+  },
+  "forms": {
+    "service_desk__open_form": {
+      "fields": [
+        {
+          "control": "text",
+          "input": "subject",
+          "label": "Subject",
+          "name": "subject",
+          "trim": true
+        },
+        {
+          "control": "text",
+          "input": "priority",
+          "label": "Priority",
+          "name": "priority",
+          "trim": true
+        },
+        {
+          "control": "textarea",
+          "input": "reason",
+          "label": "Reason",
+          "name": "reason",
+          "trim": true
+        }
+      ],
+      "on_error": "inline",
+      "on_success": {
+        "toast": "Ticket opened."
+      },
+      "operation": "service_desk__open_ticket",
+      "screen": "service_desk__board_screen",
+      "submit_label": "Open the ticket"
+    }
+  },
+  "id": "service_desk__board_screen",
+  "kind": "screen",
+  "live": {
+    "service_desk__board_live": {
+      "event": "notice",
+      "kinds": [
+        "remove",
+        "upsert"
+      ],
+      "objects": true,
+      "screen": "service_desk__board_screen"
+    }
+  },
+  "screen": {
+    "auth": "session",
+    "kind": "list",
+    "query": [],
+    "route": "/desk/tickets",
+    "title": "Tickets",
+    "view": "service_desk__board"
+  }
+}
