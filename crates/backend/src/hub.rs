@@ -384,7 +384,7 @@ mod tests {
         // names the one that fired, and a value comparison could not.
         let mut fired = BTreeMap::new();
         fired.insert(
-            WorkflowId::new("post-lifecycle").unwrap(),
+            WorkflowId::new("post_lifecycle").unwrap(),
             "publish-urgent".to_string(),
         );
         assert_eq!(fired_transition(&Some(fired)), Some("publish-urgent"));

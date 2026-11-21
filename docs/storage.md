@@ -94,7 +94,9 @@ database.
   the SQLite test runs against the server named by `STRATA_PG_URL` (for example
   `postgres://strata:strata@127.0.0.1:55432/strata`; the role must be allowed to create
   databases). Each case gets a fresh database `strata_conf_*`; the ones a previous run left are
-  dropped first. Without the variable the test fails and names it. It is in the full tier.
+  dropped first. The test is `#[ignore]`d, so the gate reports it as ignored without a server. To
+  run it: `STRATA_PG_URL=... cargo test -p strata-storage-postgres --test storage_postgres_slow -- --ignored`.
+  Run with `--ignored` and no variable, it fails and names the variable.
 
 ## Adding a database
 

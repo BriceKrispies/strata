@@ -656,6 +656,28 @@ fn test(
             quote! { #[doc = #line] }
         }
     };
+    // An example that builds a large value inline (hundreds of object types, say) has a frame that
+    // a debug build makes larger than the default stack of a test thread, so it runs on a thread
+    // with a stack of its own and hands its panic back to the test.
+    let size = quote! { #(#lets)* #check }.to_string().len();
+    if size > LARGE_EXAMPLE_CHARS {
+        return Ok(quote! {
+            #doc
+            #[test]
+            fn #test_name() {
+                let run = std::thread::Builder::new()
+                    .stack_size(#LARGE_EXAMPLE_STACK_BYTES)
+                    .spawn(move || {
+                        #(#lets)*
+                        #check
+                    })
+                    .expect("a thread for the example");
+                if let Err(panic) = run.join() {
+                    std::panic::resume_unwind(panic);
+                }
+            }
+        });
+    }
     Ok(quote! {
         #doc
         #[test]
@@ -665,6 +687,13 @@ fn test(
         }
     })
 }
+
+/// The size, in characters of generated code, past which an example runs on a thread with a
+/// stack of its own.
+const LARGE_EXAMPLE_CHARS: usize = 100_000;
+
+/// The stack of that thread: 256 MiB, which is address space the test only touches as it uses it.
+const LARGE_EXAMPLE_STACK_BYTES: usize = 256 * 1024 * 1024;
 
 /// A fixture reference: the fixture's id and its overrides.
 struct FixtureRef<'a> {

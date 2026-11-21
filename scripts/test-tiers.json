@@ -146,7 +146,7 @@
       "tier": "full",
       "seconds": null,
       "unmeasured": true,
-      "reason": "postgres: Needs STRATA_PG_URL, a PostgreSQL server whose role may create databases, and fails without it; the tiers cannot state an environment requirement, so it is not in the routine tier beside the SQLite conformance test. Runs the whole conformance suite with a fresh database per case"
+      "reason": "postgres: Needs STRATA_PG_URL, a PostgreSQL server whose role may create databases, and fails without it; the tiers cannot state an environment requirement, so it is not in the routine tier beside the SQLite conformance test. Its test is #[ignore]d, so the full tier reports it as ignored unless run with --ignored. Runs the whole conformance suite with a fresh database per case"
     },
     {
       "package": "strata-storage-sqlite",

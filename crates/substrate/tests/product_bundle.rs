@@ -330,13 +330,7 @@ fn installed(world: &mut World, doc: &Json) -> InstalledRecord {
 
 /// The product that reacts to the ledger: its object type, templates, trigger and automation.
 fn badge_milestones() -> Json {
-    let mut doc: Json = serde_json::from_str(BADGE_MILESTONES).unwrap();
-    // The ledger declarations are the one section the kernel cannot take yet.
-    doc["content"]
-        .as_object_mut()
-        .unwrap()
-        .remove("ledger-units");
-    doc
+    serde_json::from_str(BADGE_MILESTONES).unwrap()
 }
 
 // Verifies: INT-1921

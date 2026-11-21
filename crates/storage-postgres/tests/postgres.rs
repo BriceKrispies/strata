@@ -2,7 +2,8 @@
 //!
 //! The server is named by `STRATA_PG_URL`, such as
 //! `postgres://strata:strata@127.0.0.1:55432/strata`; the role must be allowed to create
-//! databases. Without the variable every test here fails and says so: it never passes silently.
+//! databases. The test is ignored by default and runs with `--ignored`; without the variable that
+//! run fails and says so: it never passes silently.
 //!
 //! Each store a test makes gets a database of its own, `strata_conf_<process>_<n>`, created for it,
 //! so that no case sees another's data. The databases a previous run left are dropped before the
@@ -115,6 +116,7 @@ fn fresh_store() -> PostgresStore {
 /// Every row of the table in the specification has a check and every check has a row, and each
 /// check runs on a database of its own.
 #[test]
+#[ignore = "needs PostgreSQL: set STRATA_PG_URL and run with --ignored"]
 fn postgres_store_conforms() {
     let ran = conformance::run(&|| Box::new(fresh_store()) as Box<dyn Store>);
     let spec = std::fs::read_to_string(concat!(

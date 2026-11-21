@@ -275,6 +275,7 @@ fn kinds(entities: &Json) -> Vec<String> {
 // Verifies: INT-2342
 // Verifies: INT-2345
 // Verifies: INT-2346
+// Verifies: WFL-2201
 #[tokio::test]
 async fn an_owner_installs_upgrades_and_removes_a_product() {
     let backend = start().await;

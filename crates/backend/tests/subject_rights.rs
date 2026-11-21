@@ -604,20 +604,6 @@ fn the_export_holds_what_the_erasure_clears_and_goes_to_two_people_only(store: A
     let exported = field_names(document);
     assert!(exported.contains("profile.name") && exported.contains("diary.entry"));
 
-    // The export and the erasure read the same fields.
-    let receipt = erase_subject(&app, &as_owner(&app, &alpha), &ada).expect("the erasure");
-    let cleared: BTreeSet<String> = receipt
-        .changed
-        .iter()
-        .flat_map(|record| {
-            record
-                .fields
-                .iter()
-                .map(move |field| format!("{}.{}", record.object, field))
-        })
-        .collect();
-    assert_eq!(exported, cleared);
-
     // Who may fetch it: nobody else, and an owner only with a fresh step-up.
     let grace_id = identity(&app, &alpha, "alpha:grace", 0);
     let refused = error_of(fetched(&app, &grace_id, &first_id, "t-f3"));
@@ -672,6 +658,21 @@ fn the_export_holds_what_the_erasure_clears_and_goes_to_two_people_only(store: A
     let owner = identity(&app, &alpha, "alpha:owner", 0);
     let gone = error_of(fetched(&app, &owner, &first_id, "t-f9"));
     assert!(matches!(gone.0.code, ErrorCode::NotFound));
+
+    // The export and the erasure read the same fields. The erasure removes the exports of the
+    // subject with the data, so it comes after the checks that fetch one (PRV-2741).
+    let receipt = erase_subject(&app, &as_owner(&app, &alpha), &ada).expect("the erasure");
+    let cleared: BTreeSet<String> = receipt
+        .changed
+        .iter()
+        .flat_map(|record| {
+            record
+                .fields
+                .iter()
+                .map(move |field| format!("{}.{}", record.object, field))
+        })
+        .collect();
+    assert_eq!(exported, cleared);
 }
 
 // Verifies: PRV-350

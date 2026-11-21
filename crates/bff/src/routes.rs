@@ -393,6 +393,61 @@ async fn guard_request(bff: &Bff, visit: &Visit, headers: &HeaderMap) -> Result<
     }
 }
 
+/// Read a JSON body as the type a route takes, after the route's checks: one that does not fit
+/// is an `invalid` refusal in the error body type, not axum's plain-text rejection.
+fn typed_body<T: DeserializeOwned>(body: Json_, visit: &Visit) -> Result<T, Failure> {
+    serde_json::from_value(body).map_err(|why| {
+        Failure::new(
+            ErrorCode::Invalid,
+            &format!("The request body does not fit: {why}."),
+            &visit.correlation,
+        )
+    })
+}
+
+/// The most of a JSON body the gateway reads before the handler does (axum's own default).
+const JSON_BODY_LIMIT: usize = 2 * 1024 * 1024;
+
+/// Refuse a body that is not JSON only after the checks that come before the input: our origin,
+/// then the request token. axum's `Json` extractor would read the body first and answer with a
+/// plain-text rejection, to a caller who had not even shown it comes from the site. A body that
+/// is JSON goes on to the handler unchanged; one that is not is answered here, once the origin
+/// and the token are good, with the specification's `invalid` error body.
+async fn json_after_guards(State(bff): State<Shared>, request: Request, next: Next) -> Response {
+    let writes = !matches!(
+        *request.method(),
+        Method::GET | Method::HEAD | Method::OPTIONS
+    );
+    let json = text(request.headers(), CONTENT_TYPE).is_some_and(|kind| kind.contains("json"));
+    if !(writes && json) {
+        return next.run(request).await;
+    }
+    let (parts, body) = request.into_parts();
+    let bytes = match axum::body::to_bytes(body, JSON_BODY_LIMIT).await {
+        Ok(bytes) => bytes,
+        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+    };
+    if bytes.is_empty() || serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_ok() {
+        return next
+            .run(Request::from_parts(parts, axum::body::Body::from(bytes)))
+            .await;
+    }
+    let outcome = async {
+        let visit = visit(&bff, &parts.headers)?;
+        guard_request(&bff, &visit, &parts.headers).await?;
+        Err::<Response, Failure>(Failure::new(
+            ErrorCode::Invalid,
+            "The request body is not JSON.",
+            &visit.correlation,
+        ))
+    }
+    .await;
+    match outcome {
+        Ok(response) => response,
+        Err(failure) => failure.into_response(),
+    }
+}
+
 /// Require a state-changing request to come from our own pages with the session's CSRF token.
 pub(crate) async fn guard_write(
     bff: &Bff,
@@ -1585,10 +1640,11 @@ async fn search_run(
 async fn records(
     State(bff): State<Shared>,
     headers: HeaderMap,
-    Json(mutation): Json<Mutation>,
+    Json(mutation): Json<Json_>,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
+    let mutation: Mutation = typed_body(mutation, &visit)?;
     // The browser's key, if it sent one, was checked by `visit` and goes to the backend with the call.
     backend(&bff, &visit, "/internal/mutate", &json!(mutation))
         .await
@@ -1710,10 +1766,11 @@ async fn setting_set_person(
 async fn operations_invoke(
     State(bff): State<Shared>,
     headers: HeaderMap,
-    Json(request): Json<OperationRequest>,
+    Json(request): Json<Json_>,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
+    let request: OperationRequest = typed_body(request, &visit)?;
     let key = headers
         .get(HEADER_IDEMPOTENCY)
         .and_then(|value| value.to_str().ok())
@@ -3121,7 +3178,11 @@ pub fn router(bff: Shared) -> Router {
         )
         .route("/files/uploads/:upload/finish", post(crate::files::finish))
         .route("/files/sign", post(crate::files::sign))
-        .fallback(api_not_found);
+        .fallback(api_not_found)
+        .layer(middleware::from_fn_with_state(
+            bff.clone(),
+            json_after_guards,
+        ));
     Router::new()
         .nest("/api", api)
         .route("/ws", get(socket))
