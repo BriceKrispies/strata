@@ -41,6 +41,7 @@ pub mod seed;
 pub mod segments;
 pub mod service;
 pub mod settings;
+pub mod simulated;
 pub mod signin;
 pub mod subject_export;
 pub mod subject_keys;

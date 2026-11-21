@@ -34,7 +34,7 @@ use strata_machine_store::StorageApiMachineStore;
 use strata_model::machines::arc_outbox_delivery_flow_impl::ArcOutboxDeliveryFlowImpl;
 use strata_runtime::telemetry::{Field, JsonLines, Level, Telemetry};
 use strata_runtime::{
-    DispatchError, Dispatcher, Envelope, HostError, Machine, Member, PurgeReport, Retention,
+    Clock, DispatchError, Dispatcher, Envelope, HostError, Machine, Member, PurgeReport, Retention,
     RouteTable, Router, Routing, System, SystemClock,
 };
 use strata_storage_api::memory::MemoryStore;
@@ -173,12 +173,18 @@ pub struct Outbox {
 }
 
 impl Outbox {
-    /// The machine on a System of its own, dispatching into `app`.
+    /// The machine on a System of its own, dispatching into `app`, on the system clock.
     pub fn new(app: &Shared) -> Result<Outbox, String> {
+        Outbox::with_clock(app, Arc::new(SystemClock))
+    }
+
+    /// [`Outbox::new`] with the machine's timers and retries read from `clock`. The backend
+    /// passes the system clock; a deterministic simulation passes its logical one.
+    pub fn with_clock(app: &Shared, clock: Arc<dyn Clock>) -> Result<Outbox, String> {
         let store = Arc::new(StorageApiMachineStore::new(
             Arc::new(MemoryStore::new()),
             TenantId::new("outbox_machine").map_err(|e| e.to_string())?,
-            Arc::new(SystemClock),
+            clock.clone(),
         ));
         let router = Router::new(vec![Member::of::<ArcOutboxDeliveryFlowImpl>()], ROUTES);
         let beat = Arc::new(Beat {
@@ -186,14 +192,9 @@ impl Outbox {
             errors: AtomicU64::new(0),
             last_error_at: AtomicI64::new(0),
         });
-        let system = System::new(
-            store,
-            router,
-            Arc::new(Publisher::new(app)),
-            Arc::new(SystemClock),
-        )
-        .map_err(|e| e.to_string())?
-        .with_telemetry(beat.clone());
+        let system = System::new(store, router, Arc::new(Publisher::new(app)), clock)
+            .map_err(|e| e.to_string())?
+            .with_telemetry(beat.clone());
         Ok(Outbox {
             inner: Arc::new(Inner {
                 system,
@@ -293,6 +294,15 @@ impl Outbox {
         };
         let this = self.clone();
         runtime.spawn(async move { this.on_commit().await });
+    }
+
+    /// One turn of the host, as [`Outbox::run`] makes every [`TICK`]: deliver the timers that are
+    /// due by the machine's clock and hand what the machine emits to the dispatcher. A
+    /// deterministic simulation calls this at the logical times it chooses instead of running
+    /// the host.
+    pub async fn sweep(&self) -> Result<(), HostError> {
+        let _turn = self.inner.turn.lock().await;
+        self.inner.system.tick().await.map(|_| ())
     }
 
     /// Offer the machine the commit and the kick, and deliver what follows.
