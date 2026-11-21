@@ -240,10 +240,14 @@ pub fn step_outputs(action: &AutomationStep) -> &'static [&'static str] {
 
 /// The parameters the expressions of an automation may read: every parameter an event binds,
 /// `member` inside a fan-out, and `<step>_<output>` for each output of each of its steps
-/// (D-6523, D-6535).
+/// (D-6523, D-6535), and the three an inbound webhook delivery hands a run it starts directly
+/// (receive-inbound-webhook, CT-172).
 pub fn automation_params(def: &AutomationDef) -> BTreeSet<String> {
     let mut params = any_event_params();
     params.insert("member".to_string());
+    for name in ["webhook_event", "webhook_endpoint", "webhook_body"] {
+        params.insert(name.to_string());
+    }
     for (name, step) in &def.steps {
         for output in step_outputs(&step.action) {
             params.insert(format!("{name}_{output}"));
