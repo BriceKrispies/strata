@@ -12,7 +12,7 @@
   "skew": 0.6,
   "mix": [
     { "op": "query", "query": "marketing__members_by_tier", "weight": 6, "actor": "editor" },
-    { "op": "page", "object": "marketing__audience_member", "weight": 22, "page_size": 50, "actor": "editor" },
+    { "op": "page", "object": "marketing__audience_member", "weight": 22, "page-size": 50, "actor": "editor" },
     { "op": "get", "object": "marketing__audience_member", "weight": 20, "actor": "editor" },
     { "op": "get", "object": "crm__contact", "weight": 15, "actor": "editor" },
     { "op": "by-field", "object": "crm__contact", "weight": 6, "actor": "editor" },

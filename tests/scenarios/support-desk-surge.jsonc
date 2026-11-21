@@ -11,7 +11,7 @@
   "skew": 0.9,
   "mix": [
     { "op": "create", "object": "service__case", "weight": 18, "actor": "reader" },
-    { "op": "page", "object": "service__case", "weight": 12, "page_size": 25, "actor": "editor" },
+    { "op": "page", "object": "service__case", "weight": 12, "page-size": 25, "actor": "editor" },
     { "op": "query", "query": "service__queue_backlog", "weight": 8, "actor": "editor" },
     { "op": "get", "object": "service__case", "weight": 15, "actor": "editor" },
     { "op": "update", "object": "service__case", "weight": 8, "actor": "editor", "contended": true },

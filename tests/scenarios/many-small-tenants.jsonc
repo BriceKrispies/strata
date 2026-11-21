@@ -16,7 +16,7 @@
     { "op": "header", "weight": 15 },
     { "op": "update", "object": "content__article", "weight": 8, "actor": "editor" },
     { "op": "create", "object": "crm__contact", "weight": 5, "actor": "editor" },
-    { "op": "page", "object": "content__article", "weight": 12, "page_size": 10, "actor": "reader" }
+    { "op": "page", "object": "content__article", "weight": 12, "page-size": 10, "actor": "reader" }
   ],
   "faults": [],
   "measures": [

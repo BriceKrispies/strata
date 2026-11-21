@@ -13,7 +13,7 @@
     { "op": "get", "object": "content__article", "weight": 60, "within": "hot", "actor": "reader" },
     { "op": "scan", "object": "content__revision", "weight": 3, "actor": "reader" },
     { "op": "scan", "object": "assets__asset", "weight": 3, "actor": "reader" },
-    { "op": "page", "object": "content__block", "weight": 14, "page_size": 100, "skew": 0.0, "actor": "reader" },
+    { "op": "page", "object": "content__block", "weight": 14, "page-size": 100, "skew": 0.0, "actor": "reader" },
     { "op": "get", "object": "assets__rendition", "weight": 20, "within": "hot", "actor": "reader" }
   ],
   "faults": [],

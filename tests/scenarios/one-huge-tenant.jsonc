@@ -13,7 +13,7 @@
     { "op": "get", "object": "assets__asset", "weight": 25, "actor": "reader" },
     { "op": "get", "object": "assets__rendition", "weight": 15, "actor": "reader" },
     { "op": "get", "object": "commerce__sku", "weight": 15, "actor": "reader" },
-    { "op": "page", "object": "assets__asset", "weight": 6, "page_size": 50, "actor": "reader" },
+    { "op": "page", "object": "assets__asset", "weight": 6, "page-size": 50, "actor": "reader" },
     { "op": "scan", "object": "assets__collection", "weight": 2, "actor": "reader" },
     { "op": "update", "object": "assets__asset", "weight": 5, "actor": "editor" },
     { "op": "header", "weight": 2 }

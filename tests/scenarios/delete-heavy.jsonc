@@ -15,7 +15,7 @@
     { "op": "get", "object": "commerce__redemption", "weight": 25, "actor": "editor" },
     { "op": "delete", "object": "commerce__return_request", "weight": 8, "actor": "editor" },
     { "op": "get", "object": "commerce__return_request", "weight": 12, "actor": "editor" },
-    { "op": "page", "object": "commerce__redemption", "weight": 10, "page_size": 20, "actor": "editor" },
+    { "op": "page", "object": "commerce__redemption", "weight": 10, "page-size": 20, "actor": "editor" },
     { "op": "query", "query": "commerce__open_returns", "weight": 5, "actor": "editor" }
   ],
   "faults": [

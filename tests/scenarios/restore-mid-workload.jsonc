@@ -14,7 +14,7 @@
     { "op": "update", "object": "content__article", "weight": 10, "actor": "editor" },
     { "op": "create", "object": "content__revision", "weight": 8, "actor": "editor" },
     { "op": "get", "object": "people__employee", "weight": 20, "actor": "editor" },
-    { "op": "page", "object": "content__article", "weight": 10, "page_size": 20, "actor": "reader" },
+    { "op": "page", "object": "content__article", "weight": 10, "page-size": 20, "actor": "reader" },
     { "op": "scan", "object": "people__department", "weight": 4, "actor": "editor" },
     { "op": "header", "weight": 8 }
   ],

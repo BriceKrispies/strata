@@ -13,7 +13,7 @@
   "mix": [
     { "op": "get", "object": "crm__contact", "weight": 30, "actor": "editor" },
     { "op": "by-field", "object": "crm__contact", "weight": 10, "actor": "editor" },
-    { "op": "page", "object": "crm__consent_record", "weight": 10, "page_size": 20, "actor": "editor" },
+    { "op": "page", "object": "crm__consent_record", "weight": 10, "page-size": 20, "actor": "editor" },
     { "op": "get", "object": "crm__lead", "weight": 15, "actor": "editor" },
     { "op": "update", "object": "crm__contact", "weight": 10, "actor": "editor", "contended": true },
     { "op": "get", "object": "forms__form_submission", "weight": 10, "actor": "editor" },

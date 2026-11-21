@@ -12,7 +12,7 @@
   "skew": 1.1,
   "mix": [
     { "op": "get", "object": "content__article", "weight": 45, "within": "hot", "actor": "reader" },
-    { "op": "page", "object": "content__article", "weight": 8, "page_size": 20, "actor": "reader" },
+    { "op": "page", "object": "content__article", "weight": 8, "page-size": 20, "actor": "reader" },
     { "op": "query", "query": "content__live_articles", "weight": 10, "actor": "reader" },
     { "op": "update", "object": "content__article", "weight": 8, "actor": "editor", "contended": true },
     { "op": "create", "object": "content__revision", "weight": 5, "actor": "editor" },
@@ -20,7 +20,7 @@
     { "op": "update", "object": "approvals__approval_request", "weight": 4, "actor": "editor", "contended": true },
     { "op": "get", "object": "approvals__approval_stage", "weight": 4, "actor": "editor" },
     { "op": "update", "object": "publishing__publish_job", "weight": 4, "actor": "editor" },
-    { "op": "page", "object": "publishing__publish_job", "weight": 3, "page_size": 10, "actor": "editor" },
+    { "op": "page", "object": "publishing__publish_job", "weight": 3, "page-size": 10, "actor": "editor" },
     { "op": "get", "object": "taxonomy__category", "weight": 5, "actor": "reader" },
     { "op": "header", "weight": 4 }
   ],
