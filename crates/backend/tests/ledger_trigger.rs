@@ -45,7 +45,7 @@ const LEDGER_TRIGGER: &str = include_str!(
 const UNIT: &str = "ledger_trigger__points";
 
 /// The steps of the automation ledger_trigger__record_crossing that run before its wait of seven days.
-const BEFORE_THE_WAIT: [&str; 3] = ["record", "notify", "mail"];
+const BEFORE_THE_WAIT: [&str; 3] = ["crossing", "notify", "mail"];
 
 fn config(addr: std::net::SocketAddr) -> Config {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -414,7 +414,7 @@ async fn points_that_cross_the_threshold_record_the_crossing_once() {
         .store
         .automation_steps(&tenant(), &run.run, None, 100)
         .unwrap();
-    assert_eq!(steps[0].step.as_str(), "record");
+    assert_eq!(steps[0].step.as_str(), "crossing");
     assert_eq!(steps[0].state, StepState::Completed);
     assert_waiting_after_the_mail(run, &steps);
 
@@ -433,7 +433,7 @@ async fn points_that_cross_the_threshold_record_the_crossing_once() {
         backend.notices(&mirela).await,
         vec![(
             "ledger_trigger__crossing_notice".to_string(),
-            "Your points reached 500.".to_string()
+            "The balance reached 500.".to_string()
         )]
     );
     assert!(backend.notices(&tomasz).await.is_empty());

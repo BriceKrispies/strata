@@ -127,9 +127,9 @@
       "run-as": { "roles": ["ledger_trigger__recorder"] },
       // Once per person, for as long as the automation exists (SCH-1536).
       "run-key": "param.owner",
-      "start": "record",
+      "start": "crossing",
       "steps": {
-        "record": {
+        "crossing": {
           "action": { "CreateRecord": { "object": "ledger_trigger__crossing", "fields": { "person": "param.owner", "threshold": "500", "crossed_at": "param.at" } } },
           "next": "notify",
           "retry": { "attempts": 5 }

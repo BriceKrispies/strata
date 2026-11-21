@@ -31,7 +31,9 @@ const fn rule(path: &'static str, requires: &'static [&'static str]) -> Rule {
     Rule { path, requires }
 }
 
-/// The operations, by the path the gateway calls them at.
+/// The operations, by the path the gateway calls them at. The reads of the ledger are not here:
+/// whoever owns an account reads it with or without a capability, and a ledger policy can grant a
+/// read (D-6550, LDG-1540), so only the kernel can decide them.
 const RULES: &[Rule] = &[
     // Segments (CT-290 to CT-293, CT-813 to CT-815).
     rule("/internal/segments/define", &["segments-define"]),
@@ -43,12 +45,6 @@ const RULES: &[Rule] = &[
     rule("/internal/segments/mine", &["segments-read-own"]),
     // The ledger.
     rule("/internal/ledger/post", &["ledger-post"]),
-    rule("/internal/ledger/balance", &["ledger-read"]),
-    rule("/internal/ledger/entries", &["ledger-read"]),
-    rule("/internal/ledger/accounts", &["ledger-read"]),
-    rule("/internal/ledger/definitions", &["ledger-read"]),
-    rule("/internal/ledger/my-balance", &["ledger-read-own"]),
-    rule("/internal/ledger/my-entries", &["ledger-read-own"]),
     rule("/internal/ledger/declare-unit", &["ledger-configure"]),
     rule("/internal/ledger/declare-pool", &["ledger-configure"]),
     rule("/internal/ledger/set-limit", &["ledger-configure"]),

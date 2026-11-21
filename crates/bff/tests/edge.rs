@@ -420,7 +420,12 @@ async fn every_request_that_changes_state_needs_our_origin_and_the_sessions_toke
     // Every other route that changes state: the lab, the development fixtures, sign-in and
     // sign-out as well. Each is sent from our own origin with the session cookie, without the
     // token and with a wrong one, and must be refused before anything happens.
-    let routes = post_routes();
+    // A signed address is its own credential and carries no session token (CT-827, scheme
+    // signed-address), so the route that takes one is not among them.
+    let routes: Vec<String> = post_routes()
+        .into_iter()
+        .filter(|path| path != "/api/mail/subscription")
+        .collect();
     assert!(
         routes.len() >= 8,
         "the routes were not read from the router: {routes:?}"
@@ -635,17 +640,25 @@ async fn the_site_comes_from_the_host_and_nothing_the_client_says() {
     );
     assert_eq!(tidewater["theme"]["accent"], "ink");
 
-    // Internal headers and parameters from a browser are not a way in.
+    // Internal headers and parameters from a browser are not a way in: the host alone names the
+    // tenant (GWY-001).
     let spoof = edge
         .http
         .get(format!(
-            "{}/api/view?path=/&site=tidewater&tenant=tidewater",
+            "{}/api/view?path=/&site=tidewater",
             edge.origin("127.0.0.1")
         ))
         .header("x-strata-site", "tidewater")
         .header("x-strata-service", TOKEN);
     let (_, spoofed, _) = edge.send(spoof).await;
     assert_eq!(spoofed["data"]["site"]["fields"]["name"], "Fieldnotes");
+    // A view request that names another tenant is refused, not served from it (read-view's tenant
+    // scope is the request's).
+    let (status, named, _) = edge
+        .get("127.0.0.1", "/api/view?path=/&tenant=tidewater", None)
+        .await;
+    assert_eq!(status, 403, "{named}");
+    assert_eq!(named["code"], "forbidden");
 
     // A fieldnotes session cookie replayed against the tidewater host is nobody there.
     let (token, _) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
@@ -684,7 +697,7 @@ async fn the_site_comes_from_the_host_and_nothing_the_client_says() {
         let request = edge
             .http
             .get(format!(
-                "{}/api/view?path=/&host=localhost&tenant=tidewater",
+                "{}/api/view?path=/&host=localhost",
                 edge.origin("127.0.0.1")
             ))
             .header(name, value);

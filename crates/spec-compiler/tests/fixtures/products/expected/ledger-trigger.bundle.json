@@ -10,8 +10,24 @@
           ]
         },
         "run-key": "param.owner",
-        "start": "record",
+        "start": "crossing",
         "steps": {
+          "crossing": {
+            "action": {
+              "CreateRecord": {
+                "fields": {
+                  "crossed_at": "param.at",
+                  "person": "param.owner",
+                  "threshold": "500"
+                },
+                "object": "ledger_trigger__crossing"
+              }
+            },
+            "next": "notify",
+            "retry": {
+              "attempts": 5
+            }
+          },
           "done": {
             "action": "End"
           },
@@ -40,22 +56,6 @@
               }
             },
             "next": "mail"
-          },
-          "record": {
-            "action": {
-              "CreateRecord": {
-                "fields": {
-                  "crossed_at": "param.at",
-                  "person": "param.owner",
-                  "threshold": "500"
-                },
-                "object": "ledger_trigger__crossing"
-              }
-            },
-            "next": "notify",
-            "retry": {
-              "attempts": 5
-            }
           },
           "wait": {
             "action": {
