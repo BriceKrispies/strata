@@ -140873,7 +140873,7 @@
         }
       ]
     },
-    {"id":"ui-of","description":"The interface elements of a schema by id, none when it holds no table of them (TenantSchema.ui, an optional map, D-8250).","params":[{"name":"schema","type":"tenant-schema"}],"returns":"map<string, ui-element>","body":"match schema.ui { Some(m) => m, None => {} }","examples":[{"args":{"schema":{"fixture":"fx-tenant-schema-6"}},"result":{}}]},
+    {"id":"ui-of","description":"The interface elements of a schema by id, none when it holds no table of them (TenantSchema.ui, an optional map, D-8250).","params":[{"name":"schema","type":"tenant-schema"}],"returns":"map<string, ui-element>","body":"match schema.ui { Some(m) => m, None => {} }","examples":[{"args":{"schema":{"fixture":"fx-tenant-schema-6"}},"result":{}},{"args":{"schema":{"fixture":"fx-tenant-schema-6","with":{"ui":{"name-taken":{"error-message":{"on":"error","kinds":["taken"],"text":"That name is taken.","applies-to":[]}}}}}},"result":{"name-taken":{"error-message":{"on":"error","kinds":["taken"],"text":"That name is taken.","applies-to":[]}}}}]},
     {
       "id": "products-of",
       "description": "The installed products of a schema by id, none when it holds no table of them (TenantSchema.products, an optional map).",
@@ -148896,6 +148896,985 @@
           },
           "error": {
             "problem": "no product badges"
+          }
+        },
+        {
+          "description": "An interface element is defined on a schema that holds none.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-6"
+            },
+            "change": {
+              "define-ui-element": {
+                "id": "name-taken",
+                "element": {
+                  "error-message": {
+                    "on": "error",
+                    "kinds": [
+                      "taken"
+                    ],
+                    "text": "That name is taken.",
+                    "applies-to": []
+                  }
+                }
+              }
+            }
+          },
+          "result": {
+            "schema": {
+              "version": 2,
+              "objects": {
+                "note": {
+                  "id": "note",
+                  "label": "Note",
+                  "fields": {
+                    "author": {
+                      "id": "author",
+                      "label": "Author",
+                      "ty": {
+                        "ref": {
+                          "target": "person",
+                          "on-delete": "set-null"
+                        }
+                      },
+                      "required": false,
+                      "unique": false
+                    },
+                    "body": {
+                      "id": "body",
+                      "label": "body",
+                      "ty": "str",
+                      "required": false,
+                      "unique": false
+                    },
+                    "published_at": {
+                      "id": "published_at",
+                      "label": "published_at",
+                      "ty": "time",
+                      "required": false,
+                      "unique": false
+                    },
+                    "rank": {
+                      "id": "rank",
+                      "label": "rank",
+                      "ty": "int",
+                      "required": false,
+                      "unique": false
+                    },
+                    "slug": {
+                      "id": "slug",
+                      "label": "slug",
+                      "ty": "str",
+                      "required": true,
+                      "unique": true
+                    },
+                    "status": {
+                      "id": "status",
+                      "label": "status",
+                      "ty": "str",
+                      "required": true,
+                      "unique": false,
+                      "default": {
+                        "lit": {
+                          "str": "draft"
+                        }
+                      }
+                    },
+                    "title": {
+                      "id": "title",
+                      "label": "title",
+                      "ty": "str",
+                      "required": true,
+                      "unique": false
+                    }
+                  },
+                  "constraints": {
+                    "title_length": {
+                      "id": "title_length",
+                      "expr": {
+                        "cmp": {
+                          "op": "le",
+                          "left": {
+                            "len": {
+                              "var": {
+                                "scope": "new",
+                                "field": "title"
+                              }
+                            }
+                          },
+                          "right": {
+                            "lit": {
+                              "int": 24
+                            }
+                          }
+                        }
+                      },
+                      "message": "A title has at most 24 characters"
+                    }
+                  }
+                },
+                "person": {
+                  "id": "person",
+                  "label": "Person",
+                  "fields": {
+                    "name": {
+                      "id": "name",
+                      "label": "name",
+                      "ty": "str",
+                      "required": true,
+                      "unique": false
+                    }
+                  },
+                  "constraints": {}
+                }
+              },
+              "roles": {
+                "editor": {
+                  "id": "editor",
+                  "label": "Editor"
+                },
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                },
+                "writer": {
+                  "id": "writer",
+                  "label": "Writer"
+                }
+              },
+              "policies": {
+                "editors_manage_notes": {
+                  "id": "editors_manage_notes",
+                  "role": "editor",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "read",
+                    "create",
+                    "update",
+                    "delete"
+                  ],
+                  "condition": null
+                },
+                "editors_manage_people": {
+                  "id": "editors_manage_people",
+                  "role": "editor",
+                  "resource": {
+                    "object": "person"
+                  },
+                  "actions": [
+                    "read",
+                    "create",
+                    "update",
+                    "delete"
+                  ],
+                  "condition": null
+                },
+                "public_reads_people": {
+                  "id": "public_reads_people",
+                  "role": "public",
+                  "resource": {
+                    "object": "person"
+                  },
+                  "actions": [
+                    "read"
+                  ],
+                  "condition": null
+                },
+                "public_reads_published": {
+                  "id": "public_reads_published",
+                  "role": "public",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "read"
+                  ],
+                  "condition": {
+                    "cmp": {
+                      "op": "eq",
+                      "left": {
+                        "var": {
+                          "scope": "record",
+                          "field": "status"
+                        }
+                      },
+                      "right": {
+                        "lit": {
+                          "str": "published"
+                        }
+                      }
+                    }
+                  }
+                },
+                "writers_add_people": {
+                  "id": "writers_add_people",
+                  "role": "writer",
+                  "resource": {
+                    "object": "person"
+                  },
+                  "actions": [
+                    "create"
+                  ],
+                  "condition": null
+                },
+                "writers_edit_own": {
+                  "id": "writers_edit_own",
+                  "role": "writer",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "update",
+                    "delete"
+                  ],
+                  "condition": {
+                    "cmp": {
+                      "op": "eq",
+                      "left": {
+                        "var": {
+                          "scope": "record",
+                          "field": "$created_by"
+                        }
+                      },
+                      "right": "principal"
+                    }
+                  }
+                },
+                "writers_read_notes": {
+                  "id": "writers_read_notes",
+                  "role": "writer",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "read",
+                    "create"
+                  ],
+                  "condition": null
+                }
+              },
+              "workflows": {
+                "note_status": {
+                  "id": "note_status",
+                  "object": "note",
+                  "field": "status",
+                  "initial": [
+                    "draft"
+                  ],
+                  "transitions": [
+                    {
+                      "name": "publish",
+                      "from": "draft",
+                      "to": "published",
+                      "guard": {
+                        "cmp": {
+                          "op": "eq",
+                          "left": "principal",
+                          "right": {
+                            "lit": {
+                              "str": "alpha:editor"
+                            }
+                          }
+                        }
+                      },
+                      "set": {
+                        "published_at": "now"
+                      }
+                    },
+                    {
+                      "name": "unpublish",
+                      "from": "published",
+                      "to": "draft",
+                      "guard": null,
+                      "set": {
+                        "published_at": {
+                          "lit": "null"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "queries": {},
+              "views": {},
+              "ui": {
+                "name-taken": {
+                  "error-message": {
+                    "on": "error",
+                    "kinds": [
+                      "taken"
+                    ],
+                    "text": "That name is taken.",
+                    "applies-to": []
+                  }
+                }
+              }
+            },
+            "line": "define interface element name-taken"
+          }
+        },
+        {
+          "description": "The last interface element is removed, and the schema holds no table of them again.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-6",
+              "with": {
+                "ui": {
+                  "name-taken": {
+                    "error-message": {
+                      "on": "error",
+                      "kinds": [
+                        "taken"
+                      ],
+                      "text": "That name is taken.",
+                      "applies-to": []
+                    }
+                  }
+                }
+              }
+            },
+            "change": {
+              "remove-ui-element": "name-taken"
+            }
+          },
+          "result": {
+            "schema": {
+              "version": 2,
+              "objects": {
+                "note": {
+                  "id": "note",
+                  "label": "Note",
+                  "fields": {
+                    "author": {
+                      "id": "author",
+                      "label": "Author",
+                      "ty": {
+                        "ref": {
+                          "target": "person",
+                          "on-delete": "set-null"
+                        }
+                      },
+                      "required": false,
+                      "unique": false
+                    },
+                    "body": {
+                      "id": "body",
+                      "label": "body",
+                      "ty": "str",
+                      "required": false,
+                      "unique": false
+                    },
+                    "published_at": {
+                      "id": "published_at",
+                      "label": "published_at",
+                      "ty": "time",
+                      "required": false,
+                      "unique": false
+                    },
+                    "rank": {
+                      "id": "rank",
+                      "label": "rank",
+                      "ty": "int",
+                      "required": false,
+                      "unique": false
+                    },
+                    "slug": {
+                      "id": "slug",
+                      "label": "slug",
+                      "ty": "str",
+                      "required": true,
+                      "unique": true
+                    },
+                    "status": {
+                      "id": "status",
+                      "label": "status",
+                      "ty": "str",
+                      "required": true,
+                      "unique": false,
+                      "default": {
+                        "lit": {
+                          "str": "draft"
+                        }
+                      }
+                    },
+                    "title": {
+                      "id": "title",
+                      "label": "title",
+                      "ty": "str",
+                      "required": true,
+                      "unique": false
+                    }
+                  },
+                  "constraints": {
+                    "title_length": {
+                      "id": "title_length",
+                      "expr": {
+                        "cmp": {
+                          "op": "le",
+                          "left": {
+                            "len": {
+                              "var": {
+                                "scope": "new",
+                                "field": "title"
+                              }
+                            }
+                          },
+                          "right": {
+                            "lit": {
+                              "int": 24
+                            }
+                          }
+                        }
+                      },
+                      "message": "A title has at most 24 characters"
+                    }
+                  }
+                },
+                "person": {
+                  "id": "person",
+                  "label": "Person",
+                  "fields": {
+                    "name": {
+                      "id": "name",
+                      "label": "name",
+                      "ty": "str",
+                      "required": true,
+                      "unique": false
+                    }
+                  },
+                  "constraints": {}
+                }
+              },
+              "roles": {
+                "editor": {
+                  "id": "editor",
+                  "label": "Editor"
+                },
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                },
+                "writer": {
+                  "id": "writer",
+                  "label": "Writer"
+                }
+              },
+              "policies": {
+                "editors_manage_notes": {
+                  "id": "editors_manage_notes",
+                  "role": "editor",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "read",
+                    "create",
+                    "update",
+                    "delete"
+                  ],
+                  "condition": null
+                },
+                "editors_manage_people": {
+                  "id": "editors_manage_people",
+                  "role": "editor",
+                  "resource": {
+                    "object": "person"
+                  },
+                  "actions": [
+                    "read",
+                    "create",
+                    "update",
+                    "delete"
+                  ],
+                  "condition": null
+                },
+                "public_reads_people": {
+                  "id": "public_reads_people",
+                  "role": "public",
+                  "resource": {
+                    "object": "person"
+                  },
+                  "actions": [
+                    "read"
+                  ],
+                  "condition": null
+                },
+                "public_reads_published": {
+                  "id": "public_reads_published",
+                  "role": "public",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "read"
+                  ],
+                  "condition": {
+                    "cmp": {
+                      "op": "eq",
+                      "left": {
+                        "var": {
+                          "scope": "record",
+                          "field": "status"
+                        }
+                      },
+                      "right": {
+                        "lit": {
+                          "str": "published"
+                        }
+                      }
+                    }
+                  }
+                },
+                "writers_add_people": {
+                  "id": "writers_add_people",
+                  "role": "writer",
+                  "resource": {
+                    "object": "person"
+                  },
+                  "actions": [
+                    "create"
+                  ],
+                  "condition": null
+                },
+                "writers_edit_own": {
+                  "id": "writers_edit_own",
+                  "role": "writer",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "update",
+                    "delete"
+                  ],
+                  "condition": {
+                    "cmp": {
+                      "op": "eq",
+                      "left": {
+                        "var": {
+                          "scope": "record",
+                          "field": "$created_by"
+                        }
+                      },
+                      "right": "principal"
+                    }
+                  }
+                },
+                "writers_read_notes": {
+                  "id": "writers_read_notes",
+                  "role": "writer",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "read",
+                    "create"
+                  ],
+                  "condition": null
+                }
+              },
+              "workflows": {
+                "note_status": {
+                  "id": "note_status",
+                  "object": "note",
+                  "field": "status",
+                  "initial": [
+                    "draft"
+                  ],
+                  "transitions": [
+                    {
+                      "name": "publish",
+                      "from": "draft",
+                      "to": "published",
+                      "guard": {
+                        "cmp": {
+                          "op": "eq",
+                          "left": "principal",
+                          "right": {
+                            "lit": {
+                              "str": "alpha:editor"
+                            }
+                          }
+                        }
+                      },
+                      "set": {
+                        "published_at": "now"
+                      }
+                    },
+                    {
+                      "name": "unpublish",
+                      "from": "published",
+                      "to": "draft",
+                      "guard": null,
+                      "set": {
+                        "published_at": {
+                          "lit": "null"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "queries": {},
+              "views": {}
+            },
+            "line": "remove interface element name-taken"
+          }
+        },
+        {
+          "description": "An interface element is removed while others remain.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-6",
+              "with": {
+                "ui": {
+                  "name-taken": {
+                    "error-message": {
+                      "on": "error",
+                      "kinds": [
+                        "taken"
+                      ],
+                      "text": "That name is taken.",
+                      "applies-to": []
+                    }
+                  },
+                  "name-required": {
+                    "error-message": {
+                      "on": "check",
+                      "kinds": [
+                        "required"
+                      ],
+                      "text": "A name is needed.",
+                      "applies-to": []
+                    }
+                  }
+                }
+              }
+            },
+            "change": {
+              "remove-ui-element": "name-taken"
+            }
+          },
+          "result": {
+            "schema": {
+              "version": 2,
+              "objects": {
+                "note": {
+                  "id": "note",
+                  "label": "Note",
+                  "fields": {
+                    "author": {
+                      "id": "author",
+                      "label": "Author",
+                      "ty": {
+                        "ref": {
+                          "target": "person",
+                          "on-delete": "set-null"
+                        }
+                      },
+                      "required": false,
+                      "unique": false
+                    },
+                    "body": {
+                      "id": "body",
+                      "label": "body",
+                      "ty": "str",
+                      "required": false,
+                      "unique": false
+                    },
+                    "published_at": {
+                      "id": "published_at",
+                      "label": "published_at",
+                      "ty": "time",
+                      "required": false,
+                      "unique": false
+                    },
+                    "rank": {
+                      "id": "rank",
+                      "label": "rank",
+                      "ty": "int",
+                      "required": false,
+                      "unique": false
+                    },
+                    "slug": {
+                      "id": "slug",
+                      "label": "slug",
+                      "ty": "str",
+                      "required": true,
+                      "unique": true
+                    },
+                    "status": {
+                      "id": "status",
+                      "label": "status",
+                      "ty": "str",
+                      "required": true,
+                      "unique": false,
+                      "default": {
+                        "lit": {
+                          "str": "draft"
+                        }
+                      }
+                    },
+                    "title": {
+                      "id": "title",
+                      "label": "title",
+                      "ty": "str",
+                      "required": true,
+                      "unique": false
+                    }
+                  },
+                  "constraints": {
+                    "title_length": {
+                      "id": "title_length",
+                      "expr": {
+                        "cmp": {
+                          "op": "le",
+                          "left": {
+                            "len": {
+                              "var": {
+                                "scope": "new",
+                                "field": "title"
+                              }
+                            }
+                          },
+                          "right": {
+                            "lit": {
+                              "int": 24
+                            }
+                          }
+                        }
+                      },
+                      "message": "A title has at most 24 characters"
+                    }
+                  }
+                },
+                "person": {
+                  "id": "person",
+                  "label": "Person",
+                  "fields": {
+                    "name": {
+                      "id": "name",
+                      "label": "name",
+                      "ty": "str",
+                      "required": true,
+                      "unique": false
+                    }
+                  },
+                  "constraints": {}
+                }
+              },
+              "roles": {
+                "editor": {
+                  "id": "editor",
+                  "label": "Editor"
+                },
+                "owner": {
+                  "id": "owner",
+                  "label": "Owner"
+                },
+                "public": {
+                  "id": "public",
+                  "label": "Everyone"
+                },
+                "writer": {
+                  "id": "writer",
+                  "label": "Writer"
+                }
+              },
+              "policies": {
+                "editors_manage_notes": {
+                  "id": "editors_manage_notes",
+                  "role": "editor",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "read",
+                    "create",
+                    "update",
+                    "delete"
+                  ],
+                  "condition": null
+                },
+                "editors_manage_people": {
+                  "id": "editors_manage_people",
+                  "role": "editor",
+                  "resource": {
+                    "object": "person"
+                  },
+                  "actions": [
+                    "read",
+                    "create",
+                    "update",
+                    "delete"
+                  ],
+                  "condition": null
+                },
+                "public_reads_people": {
+                  "id": "public_reads_people",
+                  "role": "public",
+                  "resource": {
+                    "object": "person"
+                  },
+                  "actions": [
+                    "read"
+                  ],
+                  "condition": null
+                },
+                "public_reads_published": {
+                  "id": "public_reads_published",
+                  "role": "public",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "read"
+                  ],
+                  "condition": {
+                    "cmp": {
+                      "op": "eq",
+                      "left": {
+                        "var": {
+                          "scope": "record",
+                          "field": "status"
+                        }
+                      },
+                      "right": {
+                        "lit": {
+                          "str": "published"
+                        }
+                      }
+                    }
+                  }
+                },
+                "writers_add_people": {
+                  "id": "writers_add_people",
+                  "role": "writer",
+                  "resource": {
+                    "object": "person"
+                  },
+                  "actions": [
+                    "create"
+                  ],
+                  "condition": null
+                },
+                "writers_edit_own": {
+                  "id": "writers_edit_own",
+                  "role": "writer",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "update",
+                    "delete"
+                  ],
+                  "condition": {
+                    "cmp": {
+                      "op": "eq",
+                      "left": {
+                        "var": {
+                          "scope": "record",
+                          "field": "$created_by"
+                        }
+                      },
+                      "right": "principal"
+                    }
+                  }
+                },
+                "writers_read_notes": {
+                  "id": "writers_read_notes",
+                  "role": "writer",
+                  "resource": {
+                    "object": "note"
+                  },
+                  "actions": [
+                    "read",
+                    "create"
+                  ],
+                  "condition": null
+                }
+              },
+              "workflows": {
+                "note_status": {
+                  "id": "note_status",
+                  "object": "note",
+                  "field": "status",
+                  "initial": [
+                    "draft"
+                  ],
+                  "transitions": [
+                    {
+                      "name": "publish",
+                      "from": "draft",
+                      "to": "published",
+                      "guard": {
+                        "cmp": {
+                          "op": "eq",
+                          "left": "principal",
+                          "right": {
+                            "lit": {
+                              "str": "alpha:editor"
+                            }
+                          }
+                        }
+                      },
+                      "set": {
+                        "published_at": "now"
+                      }
+                    },
+                    {
+                      "name": "unpublish",
+                      "from": "published",
+                      "to": "draft",
+                      "guard": null,
+                      "set": {
+                        "published_at": {
+                          "lit": "null"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "queries": {},
+              "views": {},
+              "ui": {
+                "name-required": {
+                  "error-message": {
+                    "on": "check",
+                    "kinds": [
+                      "required"
+                    ],
+                    "text": "A name is needed.",
+                    "applies-to": []
+                  }
+                }
+              }
+            },
+            "line": "remove interface element name-taken"
+          }
+        },
+        {
+          "description": "An interface element that does not exist is not removed.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-6"
+            },
+            "change": {
+              "remove-ui-element": "name-taken"
+            }
+          },
+          "error": {
+            "problem": "no interface element name-taken"
           }
         },
         {
