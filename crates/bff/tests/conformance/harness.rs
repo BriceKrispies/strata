@@ -1130,12 +1130,24 @@ impl Run<'_> {
                 &answer,
                 &["unauthenticated"],
             ),
-            Scheme::Other(scheme) => self.expect_refusal(
-                "no-credential",
-                &format!("a call without the {scheme} credential"),
-                &answer,
-                &["unauthenticated"],
-            ),
+            Scheme::Other(scheme) => {
+                // An address that does not verify is not found, not refused for lack of a
+                // credential, when the contract declares that: the answer does not say whether
+                // the address was never ours or its signature is wrong.
+                let signed_address_not_found = scheme == "signed-address"
+                    && self.contract.errors.contains(&"not_found");
+                let codes: &[&str] = if signed_address_not_found {
+                    &["unauthenticated", "not_found"]
+                } else {
+                    &["unauthenticated"]
+                };
+                self.expect_refusal(
+                    "no-credential",
+                    &format!("a call without the {scheme} credential"),
+                    &answer,
+                    codes,
+                )
+            }
         }
     }
 
