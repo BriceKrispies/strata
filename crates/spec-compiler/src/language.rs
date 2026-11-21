@@ -5800,7 +5800,15 @@ mod js_tests {
         assert!(
             js.contains("Number.isSafeInteger(value) && value >= -SAFE_INT && value <= SAFE_INT")
         );
-        assert!(!js.contains("BigInt"), "checked arithmetic is on numbers");
+        // The module's own comments explain why it does not use BigInt; the code must not.
+        let code: Vec<&str> = js
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect();
+        assert!(
+            !code.iter().any(|line| line.contains("BigInt")),
+            "checked arithmetic is on numbers"
+        );
     }
 
     #[test]
