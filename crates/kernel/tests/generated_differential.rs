@@ -99,12 +99,17 @@
 //!      Also not mirrored, for the same reason (WG-5168, WG-5169, WG-5172): a policy over the
 //!      ledger resource (the generated `policy-problems` checks its condition against no fields
 //!      and has no arm for the fields of an account), the buckets of credit of an account header
-//!      and the expiry of a unit, the limits of single accounts that live in the ledger's state
-//!      and not in the schema, and the intent `ExpireLedger`, which the generated
+//!      and the expiry of a unit, and the intent `ExpireLedger`, which the generated
 //!      `intent-decision` refuses with `ledger:decided_by_the_ledger_module`. Guarded:
 //!      `assert_no_input_of_a_known_difference` fails on a snapshot whose state holds a ledger
-//!      (an account or an entry) and on a policy that names the ledger, and `compare_transition`
+//!      account or entry and on a policy that names the ledger, and `compare_transition`
 //!      on an expiry and on a posting that the kernel decides after reading its account.
+//!      Mirrored, and compared on the schema changes the generator draws: the limits of single
+//!      accounts, which live in the ledger's state and not in the schema (WG-5172, LDG-1550,
+//!      D-6554): the checks of a change (`ledger-limit-checks`: the need, the ceiling, the
+//!      removal of a limit that is not set, the evidence `ledger:account-limits`), the line and
+//!      the refusal of the limit of an account in `apply-change`, and the operations that put or
+//!      remove it (`ledger-limit-ops`). A snapshot that holds only limits is not a difference.
 //!  12. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
 //!      templates, tokens and product records of the tenant schema that the hand-written
 //!      `schema.problems` makes through `object_meta::problems`, `templates::problems` and
@@ -1379,7 +1384,10 @@ fn assert_no_input_of_a_known_difference(state: &State) {
         );
     }
     assert!(
-        tenant.ledger.is_none(),
+        tenant
+            .ledger
+            .as_ref()
+            .is_none_or(|ledger| ledger.accounts.is_empty() && ledger.entries.is_empty()),
         "{} holds ledger accounts or entries; the generated functions do not mirror them (difference 11)",
         tenant.id
     );
