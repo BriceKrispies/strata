@@ -2,7 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
-use std::sync::OnceLock;
 use strata_kernel::rules::Lookup;
 use strata_kernel::segment_flow;
 use strata_kernel::segments::{self as seg, Segment, SegmentDirection, SegmentEvent, SegmentId};
@@ -31,9 +30,8 @@ pub use strata_model_core::types::Selector;
 /// They are read from the generated type itself: deserializing a body under a name no variant has
 /// makes serde list every variant it knows. A variant added to the specification therefore has a
 /// kind here with nothing to remember.
-pub fn emitted_kinds() -> &'static [String] {
-    static KINDS: OnceLock<Vec<String>> = OnceLock::new();
-    KINDS.get_or_init(|| {
+pub fn emitted_kinds() -> Vec<String> {
+    {
         let refusal = serde_json::from_value::<EventBody>(serde_json::json!({ "?": null }))
             .err()
             .map(|e| e.to_string())
@@ -47,7 +45,7 @@ pub fn emitted_kinds() -> &'static [String] {
             .skip(1)
             .map(kebab)
             .collect()
-    })
+    }
 }
 
 /// `RecordUpdated` as `record-updated`.
@@ -792,7 +790,7 @@ mod tests {
             kinds.len() >= 9,
             "the variants were not read from the generated type: {kinds:?}"
         );
-        for kind in kinds {
+        for kind in &kinds {
             assert!(
                 EventKind::new(kind.as_str()).is_ok() && !kind.starts_with("app."),
                 "{kind:?} is not a platform event kind"
