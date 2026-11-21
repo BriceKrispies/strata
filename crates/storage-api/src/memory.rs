@@ -400,6 +400,30 @@ impl Store for MemoryStore {
         })
     }
 
+    fn load_at_held(
+        &self,
+        tenant: &TenantId,
+        needs: &[Need],
+        _held: Option<&crate::resident::HeldHeader>,
+    ) -> StoreResult<crate::resident::HeldLoad> {
+        // The header is kept decoded and shared: there is nothing to skip.
+        Ok(crate::resident::HeldLoad {
+            loaded: self.load_at(tenant, needs)?,
+            header_decoded: false,
+        })
+    }
+
+    fn load_complete_at_held(
+        &self,
+        tenant: &TenantId,
+        _held: Option<&crate::resident::HeldHeader>,
+    ) -> StoreResult<crate::resident::HeldLoad> {
+        Ok(crate::resident::HeldLoad {
+            loaded: self.load_complete_at(tenant)?,
+            header_decoded: false,
+        })
+    }
+
     fn generation(&self, tenant: &TenantId) -> StoreResult<Option<Generation>> {
         Ok(self.lock()?.generations.get(tenant).copied())
     }

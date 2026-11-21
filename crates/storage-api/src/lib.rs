@@ -51,6 +51,7 @@ pub mod covering;
 pub mod generation;
 pub mod jobs;
 pub mod memory;
+pub mod resident;
 pub mod schedules;
 pub mod sealed;
 pub mod search;
@@ -66,6 +67,7 @@ use jobs::{
     ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported, RunRecord,
     RunState, Settled, StepRecord, WorkerWrites,
 };
+pub use resident::{HeldHeader, HeldLoad, ResidentStats, ResidentStore};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -887,6 +889,37 @@ pub trait Store: Send + Sync {
     /// A complete snapshot of one tenant, with the generation read in the same read transaction.
     /// Implements: CT-013
     fn load_complete_at(&self, tenant: &TenantId) -> StoreResult<Loaded>;
+
+    /// [`Store::load_at`] for a caller that may hold the tenant's header already (see
+    /// [`resident`]). When `held` carries the generation the tenant is at, read in the same read
+    /// transaction as the rows, an adapter may leave the header's stored documents (schema,
+    /// members, settings) undecoded and take them from `held`; the counters always come from the
+    /// store. The state returned is the one `load_at` returns. The default ignores `held`.
+    fn load_at_held(
+        &self,
+        tenant: &TenantId,
+        needs: &[Need],
+        held: Option<&resident::HeldHeader>,
+    ) -> StoreResult<resident::HeldLoad> {
+        let _ = held;
+        Ok(resident::HeldLoad {
+            loaded: self.load_at(tenant, needs)?,
+            header_decoded: true,
+        })
+    }
+
+    /// [`Store::load_complete_at`] with a held header, as [`Store::load_at_held`].
+    fn load_complete_at_held(
+        &self,
+        tenant: &TenantId,
+        held: Option<&resident::HeldHeader>,
+    ) -> StoreResult<resident::HeldLoad> {
+        let _ = held;
+        Ok(resident::HeldLoad {
+            loaded: self.load_complete_at(tenant)?,
+            header_decoded: true,
+        })
+    }
 
     /// The state of [`Store::load_at`].
     fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {

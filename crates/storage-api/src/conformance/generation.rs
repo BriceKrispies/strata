@@ -285,6 +285,14 @@ fn cases<'a>() -> Vec<Case<'a>> {
     case!("load_complete_at", Expect::Same, |f| {
         f.store.load_complete_at(&f.alpha).unwrap();
     });
+    case!("load_at_held", Expect::Same, |f| {
+        f.store
+            .load_at_held(&f.alpha, &[Need::AllOf(object("note"))], None)
+            .unwrap();
+    });
+    case!("load_complete_at_held", Expect::Same, |f| {
+        f.store.load_complete_at_held(&f.alpha, None).unwrap();
+    });
     case!("load", Expect::Same, |f| {
         f.store.load(&f.alpha, &[]).unwrap();
     });

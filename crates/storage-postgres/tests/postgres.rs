@@ -206,3 +206,33 @@ fn the_generation_is_read_from_a_tenant_with_an_unreadable_schema() {
     );
     assert_eq!(store.generation(&alpha).unwrap(), Some(held));
 }
+
+/// Verifies: STO-002
+///
+/// Header residency over PostgreSQL (WG-5390): the conformance suite passes through a
+/// `ResidentStore`, the schema is decoded once per tenant per generation, a commit that does and
+/// one that does not touch the header each leave it current, and a commit from a second
+/// connection to the same database makes the next load refresh.
+#[test]
+#[ignore = "needs PostgreSQL: set STRATA_PG_URL and run with --ignored"]
+fn resident_store_over_postgres_keeps_the_header_current() {
+    use std::sync::Arc;
+    use strata_storage_api::ResidentStore;
+    let resident =
+        || Box::new(ResidentStore::header_only(Arc::new(fresh_store()))) as Box<dyn Store>;
+    let ran = conformance::run(&resident);
+    assert!(ran.len() >= 13, "the suite ran: {ran:?}");
+    conformance::generation_follows_every_store_method(&resident);
+    let fresh = || Arc::new(fresh_store()) as Arc<dyn Store>;
+    conformance::resident_header_is_decoded_once_per_generation(&fresh);
+    conformance::a_commit_leaves_the_resident_header_current(&fresh);
+
+    let url = fresh_database();
+    let connect = || {
+        PostgresStore::connect(&url, Timestamp(1))
+            .unwrap_or_else(|e| panic!("could not connect a store to {url}: {e}"))
+    };
+    let first = Arc::new(connect());
+    let second = connect();
+    conformance::a_foreign_commit_refreshes_the_resident_header(first, &second);
+}

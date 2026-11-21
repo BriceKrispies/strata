@@ -15,10 +15,15 @@ use strata_kernel::testkit::*;
 use strata_kernel::*;
 
 mod generation;
+mod resident;
 pub use generation::{
     a_commit_names_the_generation_it_was_decided_on, generation_follows_every_store_method,
     generations_are_reproducible_from_the_seed,
     interleaved_commits_and_loads_keep_each_revision_with_one_generation,
+};
+pub use resident::{
+    a_commit_leaves_the_resident_header_current, a_foreign_commit_refreshes_the_resident_header,
+    resident_header_is_decoded_once_per_generation,
 };
 
 /// A store and a world that have received exactly the same accepted intents.

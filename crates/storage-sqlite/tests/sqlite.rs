@@ -680,3 +680,29 @@ fn a_tenant_file_from_before_the_generation_gets_one() {
     .unwrap();
     assert_eq!(executed.receipt.generation, held.raised());
 }
+
+/// Header residency over SQLite (WG-5390): the conformance suite passes through a
+/// `ResidentStore`, the schema is decoded once per tenant per generation, a commit that does and
+/// one that does not touch the header each leave it current, and a commit from a second handle on
+/// the same files makes the next load refresh.
+// Verifies: STO-001
+#[test]
+fn resident_store_over_sqlite_keeps_the_header_current() {
+    use std::sync::Arc;
+    use strata_storage_api::ResidentStore;
+    let resident = || {
+        let inner = Arc::new(SqliteStore::open_in_memory(Timestamp(1)).unwrap());
+        Box::new(ResidentStore::header_only(inner)) as Box<dyn Store>
+    };
+    let ran = conformance::run(&resident);
+    assert!(ran.len() >= 13, "the suite ran: {ran:?}");
+    conformance::generation_follows_every_store_method(&resident);
+    let fresh = || Arc::new(SqliteStore::open_in_memory(Timestamp(1)).unwrap()) as Arc<dyn Store>;
+    conformance::resident_header_is_decoded_once_per_generation(&fresh);
+    conformance::a_commit_leaves_the_resident_header_current(&fresh);
+
+    let path = fresh_path("resident-foreign");
+    let first = Arc::new(SqliteStore::open(&path, Timestamp(1)).unwrap());
+    let second = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    conformance::a_foreign_commit_refreshes_the_resident_header(first, &second);
+}
