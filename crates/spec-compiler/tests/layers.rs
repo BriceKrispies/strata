@@ -1296,21 +1296,28 @@ fn exegra_has_the_same_typed_sections() {
     assert_eq!(theirs, Value::Array(ours));
 }
 
-/// Exegra refuses a sample of the refused products with the same rule: the first fixture of the
-/// [`REFUSED`] table for each refusal code. Every Exegra validation analyses the whole platform, so
-/// running all of the table costs one platform analysis per fixture; full parity with Exegra for
-/// every fixture is checked in Exegra's own tests (a follow-up task).
+/// Exegra refuses a few of the refused products with the same rule as specc: one from each kind of
+/// layering rule (an import, an expression, the header, a record rule). Every Exegra validation
+/// analyses the whole platform, so the parity of every fixture is checked in Exegra's own tests
+/// (WG-5350), not here.
+const EXEGRA_SAMPLE: [&str; 4] = [
+    "import-missing",
+    "expression-type",
+    "header-missing",
+    "retention-missing",
+];
+
 #[test]
 fn exegra_refuses_each_refused_product_with_the_same_rule() {
     let Some(cli) = support::exegra_cli("the layered refusals") else {
         return;
     };
-    let mut seen = std::collections::BTreeSet::new();
+    let mut checked = 0;
     for (name, code, _) in REFUSED {
-        // Every code is `layer.<name>`, so the prefix up to the second dot is the code itself.
-        if !seen.insert(*code) {
+        if !EXEGRA_SAMPLE.contains(name) {
             continue;
         }
+        checked += 1;
         let file = format!("refused/{name}.jsonc");
         let specs = exegra_specs(&format!("exegra-{name}"), &[file.as_str()]);
         let out = exegra_validate(&cli, &specs, "layered");
@@ -1327,4 +1334,9 @@ fn exegra_refuses_each_refused_product_with_the_same_rule() {
             "{file}: Exegra refused with {codes:?}, not {code}"
         );
     }
+    assert_eq!(
+        checked,
+        EXEGRA_SAMPLE.len(),
+        "a sampled fixture is missing from REFUSED"
+    );
 }
