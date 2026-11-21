@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-storage-api"
 description = "The persistence contract of Strata, a reference in-memory adapter, and the adapter conformance suite."
 version.workspace = true
@@ -18,6 +19,14 @@ serde_json.workspace = true
 
 [dev-dependencies]
 strata-storage-api = { path = ".", features = ["conformance"] }
+
+[[test]]
+name = "storage_api_it"
+path = "tests/storage_api_it.rs"
+
+[[test]]
+name = "storage_api_slow"
+path = "tests/storage_api_slow.rs"
 
 [lints]
 workspace = true

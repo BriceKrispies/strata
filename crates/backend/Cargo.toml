@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-backend"
 description = "The Strata backend service: sessions, kernel execution, atomic commits, outbox publication, subscriptions, simulation runs."
 version.workspace = true
@@ -58,11 +59,13 @@ strata-model-core.workspace = true
 
 # These drive the running service through the development routes.
 [[test]]
-name = "service"
+name = "backend_it"
+path = "tests/backend_it.rs"
 required-features = ["development"]
 
 [[test]]
-name = "tokens"
+name = "backend_slow"
+path = "tests/backend_slow.rs"
 required-features = ["development"]
 
 [lints]

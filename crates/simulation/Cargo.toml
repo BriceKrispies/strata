@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-simulation"
 description = "Deterministic discrete-event simulation over the real kernel: traces, replay, counterfactual branching, comparison, minimisation."
 version.workspace = true
@@ -17,6 +18,10 @@ serde_json.workspace = true
 strata-kernel = { workspace = true, features = ["testkit"] }
 strata-substrate.workspace = true
 strata-protocol.workspace = true
+
+[[test]]
+name = "simulation_slow"
+path = "tests/simulation_slow.rs"
 
 [lints]
 workspace = true

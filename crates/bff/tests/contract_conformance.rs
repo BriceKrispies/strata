@@ -10,7 +10,7 @@
 //! roles, the teams' roles and members).
 //!
 //!   specc conformance --spec specifications/spec.jsonc --out crates/bff/tests/conformance/generated
-//!   cargo test -p strata-bff --test contract_conformance -- --nocapture   (the skips are printed)
+//!   cargo test -p strata-bff --test bff_slow contract_conformance:: -- --nocapture   (the skips are printed)
 
 #[allow(dead_code)]
 #[path = "conformance/harness.rs"]

@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-spec-expr-cases"
 description = "The shared case table of expression and value semantics (WG-4902), compiled through strata-spec-expr to Rust and JavaScript and checked against the outcomes Exegra's simulator gives."
 version.workspace = true
@@ -16,6 +17,10 @@ strata-spec-expr.workspace = true
 serde_json.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
+
+[[test]]
+name = "spec_expr_cases_it"
+path = "tests/spec_expr_cases_it.rs"
 
 [lints]
 workspace = true

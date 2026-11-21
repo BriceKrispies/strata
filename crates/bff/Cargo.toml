@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-bff"
 description = "The Strata backend-for-frontend: the browser's only entry point. Cookies, CSRF, origin checks, view-model projection, WebSocket relay, static assets."
 version.workspace = true
@@ -27,6 +28,14 @@ sha2.workspace = true
 strata-backend = { path = "../backend" }
 strata-storage-api.workspace = true
 strata-storage-sqlite.workspace = true
+
+[[test]]
+name = "bff_it"
+path = "tests/bff_it.rs"
+
+[[test]]
+name = "bff_slow"
+path = "tests/bff_slow.rs"
 
 [lints]
 workspace = true

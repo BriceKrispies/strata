@@ -1,7 +1,7 @@
 //! The hand-written half of the contract conformance suite (WG-5182). `specc conformance` writes,
 //! from the specification, one test per shipped contract that names a `bffRoute`
 //! (`conformance/generated/contracts.rs`); each test hands its contract to [`conform`], which
-//! starts a target (`crate::start_target`: the real BFF and backend for
+//! starts a target (`super::start_target`: the real BFF and backend for
 //! `contract_conformance.rs`, a stand-in with broken handlers for `contract_conformance_fixtures.rs`),
 //! makes the calls the declaration implies and compares every answer with it.
 //!
@@ -740,7 +740,7 @@ struct Run<'a> {
 /// Checks one contract against a fresh target and panics with every failure, each as
 /// `[rule] what happened`.
 pub async fn conform(spec: &Spec, contract: &Contract) {
-    let target = crate::start_target().await;
+    let target = super::start_target().await;
     let mut run = Run {
         spec,
         contract,
@@ -1491,7 +1491,7 @@ impl Run<'_> {
             return self.skip("quota", "it has no call that succeeds to repeat".into());
         };
         // A target of its own, so the calls of the other checks do not count.
-        let fresh = crate::start_target().await;
+        let fresh = super::start_target().await;
         let (session, csrf) = match self.contract.scheme {
             Scheme::Session => {
                 let Some(persona) = self.able() else {

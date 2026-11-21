@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-protocol"
 description = "Wire types shared by the Strata backend and BFF: internal API, WebSocket protocol v1, log lines, tenant bundle loading."
 version.workspace = true
@@ -12,6 +13,10 @@ strata-kernel.workspace = true
 strata-substrate.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[[test]]
+name = "protocol_it"
+path = "tests/protocol_it.rs"
 
 [lints]
 workspace = true

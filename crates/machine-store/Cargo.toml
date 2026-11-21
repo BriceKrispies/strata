@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-machine-store"
 description = "The runtime's machine store on the persistence contract: machine records, outbox and timers committed through strata-storage-api."
 version.workspace = true
@@ -17,6 +18,10 @@ serde_json.workspace = true
 strata-storage-sqlite.workspace = true
 serde.workspace = true
 tokio.workspace = true
+
+[[test]]
+name = "machine_store_it"
+path = "tests/machine_store_it.rs"
 
 [lints]
 workspace = true

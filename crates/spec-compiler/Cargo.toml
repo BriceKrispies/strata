@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-spec-compiler"
 description = "specc: compiles the structural parts of the Strata specification (types, records, contracts) into Rust."
 version.workspace = true
@@ -37,6 +38,14 @@ strata-spec-compiler-machines-fixture = { path = "../spec-compiler-machines-fixt
 strata-spec-compiler-wiring-fixture = { path = "../spec-compiler-wiring-fixture" }
 strata-substrate.workspace = true
 tokio.workspace = true
+
+[[test]]
+name = "spec_compiler_it"
+path = "tests/spec_compiler_it.rs"
+
+[[test]]
+name = "spec_compiler_slow"
+path = "tests/spec_compiler_slow.rs"
 
 [lints]
 workspace = true

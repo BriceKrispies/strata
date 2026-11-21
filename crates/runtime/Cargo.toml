@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "strata-runtime"
 description = "The hand-written runtime generated Strata code plugs into: machine host, transactional records, outbox, timers, contract routes and clients, clock, telemetry."
 version.workspace = true
@@ -19,6 +20,10 @@ reqwest.workspace = true
 rusqlite.workspace = true
 getrandom.workspace = true
 sha2.workspace = true
+
+[[test]]
+name = "runtime_it"
+path = "tests/runtime_it.rs"
 
 [lints]
 workspace = true
