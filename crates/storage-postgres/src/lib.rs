@@ -68,12 +68,12 @@ use strata_storage_api::schedules::{
 use strata_storage_api::segments::{write_conflict, SegmentCommit};
 use strata_storage_api::{
     check_event_sequence, field_matches, random_nonces, throttle_refund, throttle_step, Account,
-    AuditEntry, Capabilities, Commit, FederatedIdentity, Generation, Health, IdempotentResult,
-    JournalEntry, Loaded, NonceSource, OidcFlow, OutboxEntry, OutboxFault, PasskeyCeremony,
-    PasskeyChallenge, PasskeyRecord, PendingSignIn, PlatformSetting, PlatformWrite,
-    PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
-    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
-    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    AuditEntry, Capabilities, Commit, FederatedIdentity, Generation, Health, HeldHeader, HeldLoad,
+    IdempotentResult, JournalEntry, Loaded, NonceSource, OidcFlow, OutboxEntry, OutboxFault,
+    PasskeyCeremony, PasskeyChallenge, PasskeyRecord, PendingSignIn, PlatformSetting,
+    PlatformWrite, PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest, SessionRecord,
+    SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary,
+    ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -285,6 +285,44 @@ fn header(t: &mut Transaction<'_>, tenant: &TenantId) -> StoreResult<Option<Tena
     }))
 }
 
+/// The header for a load, and whether its documents were decoded. When `held` is the header at
+/// the generation this transaction read, the schema, the members and the settings are not read or
+/// decoded: only the counters of the tenant row are, and the held documents are used. Otherwise
+/// the header is decoded as always.
+fn header_for_load(
+    t: &mut Transaction<'_>,
+    tenant: &TenantId,
+    generation: Option<Generation>,
+    held: Option<&HeldHeader>,
+) -> StoreResult<Option<(TenantState, bool)>> {
+    if let (Some(held), Some(generation)) = (held, generation) {
+        if held.generation == generation {
+            let Some(row) = t
+                .query_opt(
+                    "SELECT revision, next_record, event_seq FROM tenant WHERE id = $1",
+                    &[&tenant.as_str()],
+                )
+                .map_err(db)?
+            else {
+                return Ok(None);
+            };
+            let revision: i64 = get(&row, 0)?;
+            let next_record: i64 = get(&row, 1)?;
+            let event_seq: i64 = get(&row, 2)?;
+            return Ok(Some((
+                held.state(
+                    tenant,
+                    StateRevision(revision as u64),
+                    next_record as u64,
+                    event_seq as u64,
+                ),
+                false,
+            )));
+        }
+    }
+    Ok(header(t, tenant)?.map(|state| (state, true)))
+}
+
 /// Whether the tenant's row is in its schema.
 fn tenant_present(t: &mut Transaction<'_>, tenant: &TenantId) -> StoreResult<bool> {
     let row = t
@@ -481,14 +519,19 @@ fn by_fields(
 
 /// The complete state of the tenant in its schema.
 fn complete(t: &mut Transaction<'_>, tenant: &TenantId) -> StoreResult<Option<TenantState>> {
-    let Some(mut state) = header(t, tenant)? else {
+    let Some(state) = header(t, tenant)? else {
         return Ok(None);
     };
+    complete_from(t, state).map(Some)
+}
+
+/// The complete state that grows from a header: every record and the ledger.
+fn complete_from(t: &mut Transaction<'_>, mut state: TenantState) -> StoreResult<TenantState> {
     let rows = select_strings(t, "SELECT data FROM records ORDER BY object, id", &[])?;
     put_records(&mut state, rows)?;
     ledger::load_all(t, &mut state)?;
     ledger::tidy(&mut state);
-    Ok(Some(state))
+    Ok(state)
 }
 
 fn write_record(t: &mut Transaction<'_>, record: &Record) -> StoreResult<()> {
@@ -2275,19 +2318,36 @@ impl Store for PostgresStore {
     }
 
     fn load_at(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<Loaded> {
+        Ok(self.load_at_held(tenant, needs, None)?.loaded)
+    }
+
+    fn load_at_held(
+        &self,
+        tenant: &TenantId,
+        needs: &[Need],
+        held: Option<&HeldHeader>,
+    ) -> StoreResult<HeldLoad> {
         let Some(scope) = self.tenant_db(tenant)? else {
-            return Ok(Loaded {
-                state: State::absent(tenant.clone()),
-                generation: None,
+            return Ok(HeldLoad {
+                loaded: Loaded {
+                    state: State::absent(tenant.clone()),
+                    generation: None,
+                },
+                header_decoded: false,
             });
         };
         scope.read(|t| {
             // The generation and the rows are read in this one REPEATABLE READ transaction.
             let generation = read_generation(t)?;
-            let Some(mut state) = header(t, tenant)? else {
-                return Ok(Loaded {
-                    state: State::absent(tenant.clone()),
-                    generation: None,
+            let Some((mut state, header_decoded)) =
+                header_for_load(t, tenant, generation, held)?
+            else {
+                return Ok(HeldLoad {
+                    loaded: Loaded {
+                        state: State::absent(tenant.clone()),
+                        generation: None,
+                    },
+                    header_decoded: false,
                 });
             };
             for need in needs {
@@ -2385,34 +2445,54 @@ impl Store for PostgresStore {
                 put_records(&mut state, rows)?;
             }
             ledger::tidy(&mut state);
-            Ok(Loaded {
-                state: State {
-                    tenant_id: tenant.clone(),
-                    tenant: Some(Arc::new(state)),
-                    coverage: Coverage::Partial(needs.iter().cloned().collect()),
+            Ok(HeldLoad {
+                loaded: Loaded {
+                    state: State {
+                        tenant_id: tenant.clone(),
+                        tenant: Some(Arc::new(state)),
+                        coverage: Coverage::Partial(needs.iter().cloned().collect()),
+                    },
+                    generation,
                 },
-                generation,
+                header_decoded,
             })
         })
     }
 
     fn load_complete_at(&self, tenant: &TenantId) -> StoreResult<Loaded> {
+        Ok(self.load_complete_at_held(tenant, None)?.loaded)
+    }
+
+    fn load_complete_at_held(
+        &self,
+        tenant: &TenantId,
+        held: Option<&HeldHeader>,
+    ) -> StoreResult<HeldLoad> {
         let Some(scope) = self.tenant_db(tenant)? else {
-            return Ok(Loaded {
-                state: State::absent(tenant.clone()),
-                generation: None,
+            return Ok(HeldLoad {
+                loaded: Loaded {
+                    state: State::absent(tenant.clone()),
+                    generation: None,
+                },
+                header_decoded: false,
             });
         };
         scope.read(|t| {
             let generation = read_generation(t)?;
-            Ok(match complete(t, tenant)? {
-                Some(state) => Loaded {
-                    state: State::complete(Arc::new(state)),
-                    generation,
+            Ok(match header_for_load(t, tenant, generation, held)? {
+                Some((state, header_decoded)) => HeldLoad {
+                    loaded: Loaded {
+                        state: State::complete(Arc::new(complete_from(t, state)?)),
+                        generation,
+                    },
+                    header_decoded,
                 },
-                None => Loaded {
-                    state: State::absent(tenant.clone()),
-                    generation: None,
+                None => HeldLoad {
+                    loaded: Loaded {
+                        state: State::absent(tenant.clone()),
+                        generation: None,
+                    },
+                    header_decoded: false,
                 },
             })
         })

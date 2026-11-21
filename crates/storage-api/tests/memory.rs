@@ -89,3 +89,29 @@ fn seeded_nonces_are_a_function_of_the_seed_the_tenant_and_the_draw() {
     );
     assert!(serde_json::from_str::<Generation>("{\"nonce\":\"12\",\"counter\":1}").is_err());
 }
+
+/// Header residency over the memory adapter: the conformance suite passes through a
+/// `ResidentStore`, and the header is decoded once per generation, follows commits and refreshes
+/// after a commit that bypasses the wrapper (WG-5390).
+// Verifies: STO-001
+#[test]
+fn resident_store_over_memory_conforms() {
+    use std::sync::Arc;
+    use strata_storage_api::ResidentStore;
+    let resident =
+        || Box::new(ResidentStore::header_only(Arc::new(MemoryStore::new()))) as Box<dyn Store>;
+    let ran = conformance::run(&resident);
+    let (mut ran, mut rows) = (ran, table());
+    ran.sort();
+    rows.sort();
+    assert_eq!(
+        ran, rows,
+        "the checks that ran are not the rows of the table"
+    );
+    conformance::generation_follows_every_store_method(&resident);
+    let fresh = || Arc::new(MemoryStore::new()) as Arc<dyn Store>;
+    conformance::resident_header_is_decoded_once_per_generation(&fresh);
+    conformance::a_commit_leaves_the_resident_header_current(&fresh);
+    let inner = fresh();
+    conformance::a_foreign_commit_refreshes_the_resident_header(inner.clone(), inner.as_ref());
+}
