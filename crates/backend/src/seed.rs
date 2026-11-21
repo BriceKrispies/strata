@@ -54,7 +54,7 @@ pub fn seed(app: &App) -> Result<Vec<String>, String> {
 }
 
 /// Install a bundle into a store that has no such tenant, through the same `execute` path as any
-/// request. The directory marks the tenant `provisioning` from the first commit (creating it)
+/// request. The directory marks the tenant `provisioning` from the first commit (which creates it)
 /// until the last, so a crash in between leaves a state that the next start rolls back. A step
 /// that fails removes what was installed, so a tenant is either whole or absent. Returns the
 /// number of intents issued.
@@ -64,20 +64,20 @@ pub fn install_bundle(app: &App, bundle: &Bundle) -> Result<usize, String> {
     let result = install::<String>(bundle, &mut |ctx, intent| {
         let creates = matches!(intent, Intent::CreateTenant { .. });
         if creates {
-            // The creating commit may be durable although its answer is lost, and the directory
-            // row that `begin_provisioning` marks does not exist until that commit. So from here
-            // a failure may have left a tenant, and the failure branch removes it. The tenant is
-            // absent when this is called (both callers check), so nothing else is removed.
+            // The store is told first, so that the creating commit itself writes the directory
+            // row as `provisioning`: a crash after that commit leaves a row the next start rolls
+            // back, and there is no moment where a half-made tenant looks whole. The commit may
+            // also be durable although its answer is lost, so from here a failure may have left
+            // a tenant, and the failure branch removes it. The tenant is absent when this is
+            // called (both callers check), so nothing else is removed.
             begun = true;
-        }
-        let output = run_intent_unaudited(app, &ctx, &intent, false)
-            .map(|done| done.transition.output)
-            .map_err(|e| e.describe())?;
-        if creates {
             app.store
                 .begin_provisioning(&ctx.tenant)
                 .map_err(|e| e.to_string())?;
         }
+        let output = run_intent_unaudited(app, &ctx, &intent, false)
+            .map(|done| done.transition.output)
+            .map_err(|e| e.describe())?;
         Ok(output)
     });
     match result {

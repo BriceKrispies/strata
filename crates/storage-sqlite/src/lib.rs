@@ -728,6 +728,9 @@ pub struct SqliteStore {
     faults: Mutex<Vec<OutboxFault>>,
     /// When the store was opened: recorded in the ledger of the tenant files it lays out.
     opened_at: Timestamp,
+    /// Tenants an install announced ([`Store::begin_provisioning`]) whose creating commit has not
+    /// happened yet: that commit writes their directory row as `provisioning`.
+    announced: Mutex<BTreeSet<TenantId>>,
 }
 
 fn db(error: rusqlite::Error) -> StoreError {
@@ -1579,6 +1582,7 @@ impl SqliteStore {
             clock: AtomicU64::new(0),
             max_open: DEFAULT_MAX_OPEN,
             opening: Mutex::new(BTreeMap::new()),
+            announced: Mutex::new(BTreeSet::new()),
             sweep: AtomicUsize::new(0),
             faults: Mutex::new(Vec::new()),
             opened_at: now,
@@ -1871,6 +1875,16 @@ impl SqliteStore {
             open = self.lock_open()?;
         }
         let file = tenant_file_name(tenant);
+        let state = if self
+            .announced
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(tenant)
+        {
+            "provisioning"
+        } else {
+            "active"
+        };
         // The directory is the authority: a file left behind without a row is stale.
         if let Place::Disk(dir) = &self.place {
             remove_files(&dir.join(&file))?;
@@ -1878,8 +1892,8 @@ impl SqliteStore {
         self.control
             .write(dbe, |tx| {
                 tx.execute(
-                    "INSERT INTO tenant_directory (id, state, file, created_at) VALUES (?1, 'active', ?2, ?3)",
-                    params![tenant.as_str(), file, now.0],
+                    "INSERT INTO tenant_directory (id, state, file, created_at) VALUES (?1, ?4, ?2, ?3)",
+                    params![tenant.as_str(), file, now.0, state],
                 )
                 .map_err(db)
             })?;
@@ -1891,6 +1905,10 @@ impl SqliteStore {
     /// Remove a tenant: mark it deleting, close and remove its file, then drop its directory
     /// rows (the session directory follows by cascade). A tenant that is not there is fine.
     fn remove_tenant(&self, tenant: &TenantId) -> StoreResult<()> {
+        self.announced
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(tenant);
         let mut open = self.lock_open()?;
         let file: Option<String> = self
             .control
@@ -5435,7 +5453,11 @@ impl Store for SqliteStore {
     }
 
     fn begin_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {
-        self.set_directory_state(tenant, "active", "provisioning")
+        self.announced
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(tenant.clone());
+        Ok(())
     }
 
     fn finish_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {

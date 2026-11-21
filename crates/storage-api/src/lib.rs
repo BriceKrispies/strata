@@ -1444,9 +1444,11 @@ pub trait Store: Send + Sync {
         at: Timestamp,
     ) -> StoreResult<PlatformWrite>;
 
-    /// Mark a tenant as being installed: the directory lists it as `provisioning`, which no
-    /// request reaches, until [`Store::finish_provisioning`]. Called after the install's first
-    /// commit. An adapter whose state cannot outlive the process has nothing to mark.
+    /// Announce the install of a tenant, before the commit that creates it: that commit writes the
+    /// directory row as `provisioning`, which no request reaches, until
+    /// [`Store::finish_provisioning`]. So no moment exists where a half-installed tenant is listed
+    /// as whole. Called once, before the install's first commit. An adapter whose state cannot
+    /// outlive the process has nothing to mark.
     fn begin_provisioning(&self, _tenant: &TenantId) -> StoreResult<()> {
         Ok(())
     }
