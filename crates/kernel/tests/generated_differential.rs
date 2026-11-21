@@ -1774,9 +1774,13 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
 
     // The state each side plans to load before deciding.
     let schema = state.tenant.as_ref().map(|t| (*t.schema).clone());
+    // The generated needs can fault (checked arithmetic, plan-intent-needs); the hand-written
+    // planner has no such outcome, so a fault is a difference.
+    let generated_needs = spec::needs(&schema, intent)
+        .unwrap_or_else(|fault| panic!("{label}: the generated needs faulted: {fault:?}"));
     assert_eq!(
         needs(schema.as_ref(), intent),
-        spec::needs(&schema, intent),
+        generated_needs,
         "needs differ on {label}"
     );
     tally.needs += 1;
