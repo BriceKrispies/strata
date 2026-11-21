@@ -199174,6 +199174,7 @@
         "team"
       ],
       "capabilities": [
+        "self-data-export",
         "content-read",
         "content-draft-read",
         "content-write",
@@ -199210,6 +199211,7 @@
         "team"
       ],
       "capabilities": [
+        "self-data-export",
         "content-read",
         "content-draft-read",
         "content-write",
