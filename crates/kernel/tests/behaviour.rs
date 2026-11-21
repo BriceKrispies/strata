@@ -727,10 +727,30 @@ fn a_grandfathered_migration_is_accepted_and_bites_on_the_next_write() {
     );
 }
 
+/// The notes world without the query `notes_by_rank`, the one dependent that reads `note.rank`.
+/// The migration tests below are about records: with that query present, changing the type of
+/// `rank` is a breaking change with a reader and is refused before any record is examined
+/// (MIG-592), which `a_type_change_a_query_reads_is_refused_naming_the_query` checks.
+fn unread_notes_world() -> World {
+    must(
+        &notes_world(),
+        "alpha",
+        "owner",
+        4_999,
+        Intent::ChangeSchema {
+            changes: vec![SchemaChange::RemoveQuery(
+                QueryId::new("notes_by_rank").unwrap(),
+            )],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    )
+}
+
 /// Note 1 has a short title and a rank, note 2 has a long title and no rank.
 fn mixed_notes() -> World {
     let world = must(
-        &notes_world(),
+        &unread_notes_world(),
         "alpha",
         "writer1",
         5_000,
@@ -831,7 +851,35 @@ fn a_strict_migration_is_refused_for_every_kind_of_change_that_a_record_breaks()
             .collect();
         assert_eq!(listed_existing(&error.evidence), expected, "{name}");
         // Where every record conforms, the same change is accepted.
-        must(&notes_world(), "alpha", "owner", 5_003, intent);
+        must(&unread_notes_world(), "alpha", "owner", 5_003, intent);
+    }
+}
+
+/// Verifies: MIG-592
+///
+/// Changing the type of a field that a query reads is a breaking change with a reader: it is
+/// refused naming the query, under either migration mode, before any record is examined.
+#[test]
+fn a_type_change_a_query_reads_is_refused_naming_the_query() {
+    let retype = SchemaChange::DefineField {
+        object: object("note"),
+        field: field_def("rank", FieldType::Str, false),
+    };
+    for mode in [ExistingData::Reject, ExistingData::Grandfather] {
+        let error = step(
+            &notes_world(),
+            "alpha",
+            "owner",
+            5_003,
+            change_in(mode, retype.clone()),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::InvalidSchema);
+        assert!(
+            error.message.contains("notes_by_rank"),
+            "the refusal names the query: {}",
+            error.message
+        );
     }
 }
 
