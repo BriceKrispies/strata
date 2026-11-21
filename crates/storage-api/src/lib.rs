@@ -17,6 +17,15 @@
 //! - **Isolation.** Commits to one tenant are serialisable: each sees the state left by the
 //!   previous one. A load returns a state that some commit actually produced, never a mixture.
 //!   Adapters may serialise all writers; they may not expose a partially applied commit.
+//! - **Generation.** Each tenant has a [`Generation`] in a row of its own, which changes, to a value
+//!   never used before, with every change to what [`Store::load`] or [`Store::load_complete`]
+//!   returns. A load returns it with its rows ([`Store::load_at`]); a commit names the generation of
+//!   the load it was decided on ([`Commit::expected_generation`]) and is a conflict when the tenant
+//!   holds another. The counter is raised by [`Store::commit`], [`Store::commit_with_segments`],
+//!   [`Store::anonymise_ledger_principal`] (when it clears anything) and
+//!   [`Store::restore_snapshot`] (which also draws a nonce), and by nothing else: key documents,
+//!   sessions, credentials, jobs, audit lines and the like change no load result. See
+//!   [`generation`].
 //! - **Tenant scope.** Every read and write names a tenant. Data of one tenant is never
 //!   returned for, or changed through, another.
 //! - **Ordering.** Events have a per-tenant sequence that continues without gaps, and an outbox

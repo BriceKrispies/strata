@@ -12,8 +12,9 @@
 use postgres::{Client, NoTls};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
-use strata_kernel::Timestamp;
-use strata_storage_api::{conformance, Store};
+use strata_kernel::testkit::*;
+use strata_kernel::{ExistingData, Intent, Principal, Timestamp};
+use strata_storage_api::{conformance, execute, SeededNonces, Store};
 use strata_storage_postgres::PostgresStore;
 
 /// The variable that names the server.
@@ -91,6 +92,13 @@ fn clear_old_databases(url: &str) {
 
 /// A fresh database on the server, and a store connected to it.
 fn fresh_store() -> PostgresStore {
+    let url = fresh_database();
+    PostgresStore::connect(&url, Timestamp(1))
+        .unwrap_or_else(|e| panic!("could not connect a store to {url}: {e}"))
+}
+
+/// A fresh database on the server: its connection string.
+fn fresh_database() -> String {
     let url = server_url();
     let name = {
         let _turn = ADMIN
@@ -107,8 +115,7 @@ fn fresh_store() -> PostgresStore {
             .unwrap_or_else(|e| panic!("could not create the database {name}: {e}"));
         name
     };
-    PostgresStore::connect(&url_of_database(&url, &name), Timestamp(1))
-        .unwrap_or_else(|e| panic!("could not connect a store to {name}: {e}"))
+    url_of_database(&url, &name)
 }
 
 /// Verifies: STO-002
@@ -132,4 +139,70 @@ fn postgres_store_conforms() {
         ran, rows,
         "the checks that ran are not the rows of the conformance table"
     );
+}
+
+/// Verifies: STO-002
+///
+/// The tenant generation of the contract holds on PostgreSQL: it follows what a load returns for
+/// every method of the trait, a commit is accepted only at the generation its decision was made
+/// on, a load's generation is the generation of its rows under concurrent commits, and a seeded
+/// store is reproducible.
+#[test]
+#[ignore = "needs PostgreSQL: set STRATA_PG_URL and run with --ignored"]
+fn postgres_store_keeps_the_tenant_generation() {
+    conformance::generation_follows_every_store_method(&|| {
+        Box::new(fresh_store()) as Box<dyn Store>
+    });
+    conformance::a_commit_names_the_generation_it_was_decided_on(&fresh_store());
+    conformance::interleaved_commits_and_loads_keep_each_revision_with_one_generation(
+        &fresh_store(),
+    );
+    conformance::generations_are_reproducible_from_the_seed(&|seed| {
+        Box::new(fresh_store().with_nonces(SeededNonces::shared(seed))) as Box<dyn Store>
+    });
+}
+
+/// Verifies: STO-002
+///
+/// The generation is one small row: it is read from a tenant whose schema document cannot be read.
+#[test]
+#[ignore = "needs PostgreSQL: set STRATA_PG_URL and run with --ignored"]
+fn the_generation_is_read_from_a_tenant_with_an_unreadable_schema() {
+    let url = fresh_database();
+    let store = PostgresStore::connect(&url, Timestamp(1)).expect("a store");
+    let alpha = tenant_id("alpha");
+    execute(
+        &store,
+        &Intent::CreateTenant {
+            name: "alpha".into(),
+            owner: principal_id("alpha:owner"),
+        },
+        &ctx("alpha", Principal::System, 10),
+    )
+    .unwrap();
+    execute(
+        &store,
+        &Intent::ChangeSchema {
+            changes: notes_schema(),
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+        &ctx("alpha", Principal::User(principal_id("alpha:owner")), 11),
+    )
+    .unwrap();
+    let held = store.generation(&alpha).unwrap().expect("alpha has one");
+    let schema = store
+        .tenant_schema_of(&alpha)
+        .unwrap()
+        .expect("the tenant has a schema");
+    admin(&url)
+        .batch_execute(&format!(
+            "UPDATE \"{schema}\".tenant SET schema = 'not json'"
+        ))
+        .expect("the schema document is damaged");
+    assert!(
+        store.load(&alpha, &[]).is_err(),
+        "the schema document is unreadable"
+    );
+    assert_eq!(store.generation(&alpha).unwrap(), Some(held));
 }

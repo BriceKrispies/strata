@@ -205,6 +205,28 @@ fn the_same_shell_scenario_gives_the_same_trace() {
     assert!(!first.trace.injected.is_empty());
 }
 
+/// The nonces of the tenant generations come from the scenario's seed (D19): two runs of one
+/// scenario end at the same generations, and another seed ends at others.
+#[test]
+fn the_same_seed_gives_the_same_generations() {
+    let scenario = editorial(11, 20, Faults::default());
+    let first = run(&backend(), &scenario);
+    let second = run(&backend(), &scenario);
+    assert!(
+        first.generations.contains_key(&fieldnotes()),
+        "the run ends with the tenant's generation"
+    );
+    assert_eq!(first.generations, second.generations);
+    assert_eq!(first.trace.hash(), second.trace.hash());
+
+    let other = run(&backend(), &editorial(12, 20, Faults::default()));
+    assert_ne!(
+        first.generations[&fieldnotes()].nonce,
+        other.generations[&fieldnotes()].nonce,
+        "another seed draws another nonce"
+    );
+}
+
 #[test]
 fn a_commit_that_loses_a_race_is_decided_again() {
     // fm: a store conflict. The store refuses the commit; the backend decides again on fresh

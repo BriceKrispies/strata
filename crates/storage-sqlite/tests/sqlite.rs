@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
-use strata_storage_api::{conformance, execute, idempotency_scope, Account, SessionRecord, Store};
+use strata_storage_api::{
+    conformance, execute, idempotency_scope, Account, SeededNonces, SessionRecord, Store,
+    StoreError,
+};
 use strata_storage_sqlite::{default_tenants_dir, tenant_migration_steps, SqliteStore};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -447,4 +450,233 @@ fn open_tenant_files_are_bounded() {
         assert!(store.load(&tenant_id(name), &[]).unwrap().tenant.is_some());
         assert!(store.open_count() <= 2);
     }
+}
+
+/// The tenant generation of the contract holds on SQLite: it follows what a load returns for
+/// every method of the trait, a commit is accepted only at the generation its decision was made
+/// on, a load's generation is the generation of its rows under concurrent commits, and a seeded
+/// store is reproducible.
+// Verifies: STO-001
+#[test]
+fn sqlite_keeps_the_tenant_generation() {
+    let fresh = || Box::new(SqliteStore::open_in_memory(Timestamp(1)).unwrap()) as Box<dyn Store>;
+    conformance::generation_follows_every_store_method(&fresh);
+    conformance::a_commit_names_the_generation_it_was_decided_on(fresh().as_ref());
+    conformance::interleaved_commits_and_loads_keep_each_revision_with_one_generation(
+        fresh().as_ref(),
+    );
+    conformance::generations_are_reproducible_from_the_seed(&|seed| {
+        Box::new(
+            SqliteStore::open_in_memory(Timestamp(1))
+                .unwrap()
+                .with_nonces(SeededNonces::shared(seed)),
+        ) as Box<dyn Store>
+    });
+}
+
+/// A handle cycle (the open file is closed to make room and opened again) leaves the generation
+/// as it was: opening draws no nonce and raises no counter.
+// Verifies: STO-001
+#[test]
+fn a_handle_cycle_leaves_the_generation_unchanged() {
+    let path = fresh_path("handle-cycle");
+    let (alpha, beta) = (tenant_id("alpha"), tenant_id("beta"));
+    let (held_alpha, held_beta) = {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        tenant_with_a_note(&store, "alpha", 10);
+        tenant_with_a_note(&store, "beta", 20);
+        (
+            store.generation(&alpha).unwrap().expect("alpha has one"),
+            store.generation(&beta).unwrap().expect("beta has one"),
+        )
+    };
+    assert_ne!(
+        held_alpha.nonce, held_beta.nonce,
+        "each tenant has a nonce of its own"
+    );
+    // A store that keeps one file open: each tenant read closes the other's file, which the next
+    // call opens again.
+    let store = SqliteStore::open(&path, Timestamp(2))
+        .unwrap()
+        .with_max_open(1);
+    for _ in 0..3 {
+        assert_eq!(store.generation(&alpha).unwrap(), Some(held_alpha));
+        assert_eq!(store.open_count(), 1);
+        assert_eq!(
+            store.load_at(&beta, &[]).unwrap().generation,
+            Some(held_beta)
+        );
+        assert_eq!(store.open_count(), 1, "alpha's file was closed for beta's");
+    }
+    // A commit after the cycles raises the counter by one, under the nonce the tenant had.
+    let executed = execute(
+        &store,
+        &new_note("After", "after"),
+        &ctx("alpha", Principal::User(principal_id("alpha:owner")), 100),
+    )
+    .unwrap();
+    assert_eq!(executed.receipt.generation, held_alpha.raised());
+}
+
+/// A second store over the same files commits to the tenant between a load and the commit decided
+/// on it: the commit is a conflict that carries the newer generation, and nothing changes.
+// Verifies: STO-001
+#[test]
+fn a_second_handle_that_commits_moves_the_generation() {
+    let path = fresh_path("second-handle");
+    let first = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    tenant_with_a_note(&first, "alpha", 10);
+    let alpha = tenant_id("alpha");
+    let intent = new_note("Decided", "decided");
+    let schema = first
+        .load(&alpha, &[])
+        .unwrap()
+        .tenant
+        .unwrap()
+        .schema
+        .clone();
+    let loaded = first
+        .load_at(&alpha, &needs(Some(&schema), &intent))
+        .unwrap();
+    let context = ctx("alpha", Principal::User(principal_id("alpha:owner")), 100);
+    let decided = transition(&loaded.state, &intent, &context).unwrap();
+
+    let second = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    let foreign = execute(
+        &second,
+        &new_note("Foreign", "foreign"),
+        &ctx("alpha", Principal::User(principal_id("alpha:owner")), 101),
+    )
+    .unwrap();
+    let newer = foreign.receipt.generation;
+    assert_eq!(first.generation(&alpha).unwrap(), Some(newer));
+    let revision = first.load(&alpha, &[]).unwrap().tenant.unwrap().revision;
+
+    let error = first
+        .commit(&strata_storage_api::Commit::of(
+            &intent,
+            &context,
+            &decided,
+            loaded.generation,
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(&error, StoreError::Conflict { found_generation, .. } if *found_generation == Some(newer)),
+        "{error:?}"
+    );
+    assert_eq!(first.generation(&alpha).unwrap(), Some(newer));
+    assert_eq!(
+        first.load(&alpha, &[]).unwrap().tenant.unwrap().revision,
+        revision
+    );
+}
+
+/// A file put back from an older copy while the store was closed has a generation the store held
+/// before; the control plane's step after the restore (rotating the nonce) gives one it never
+/// held.
+// Verifies: STO-001
+#[test]
+fn an_out_of_band_restore_followed_by_the_restore_step_gives_a_new_generation() {
+    let path = fresh_path("out-of-band");
+    let alpha = tenant_id("alpha");
+    let mut observed = Vec::new();
+    let (file, backup) = {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        tenant_with_a_note(&store, "alpha", 10);
+        observed.push(store.generation(&alpha).unwrap().unwrap());
+        let file = store.tenant_file(&alpha).unwrap().expect("a file on disk");
+        let backup = file.with_extension("backup");
+        (file, backup)
+    };
+    std::fs::copy(&file, &backup).unwrap();
+    {
+        let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+        execute(
+            &store,
+            &new_note("Later", "later"),
+            &ctx("alpha", Principal::User(principal_id("alpha:owner")), 100),
+        )
+        .unwrap();
+        observed.push(store.generation(&alpha).unwrap().unwrap());
+    }
+    // The older copy goes back in place of the file, as a restore from outside the cell does.
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", file.display()));
+    }
+    std::fs::copy(&backup, &file).unwrap();
+
+    let store = SqliteStore::open(&path, Timestamp(3)).unwrap();
+    let restored = store.generation(&alpha).unwrap().unwrap();
+    assert_eq!(
+        restored, observed[0],
+        "without the control plane's step the old copy shows an old generation"
+    );
+    let stepped = store.rotate_nonce(&alpha).unwrap();
+    assert!(
+        !observed.contains(&stepped),
+        "the restore step yields a generation never observed before: {stepped}"
+    );
+    assert_eq!(store.generation(&alpha).unwrap(), Some(stepped));
+    assert_eq!(
+        store.load_at(&alpha, &[]).unwrap().generation,
+        Some(stepped)
+    );
+}
+
+/// The generation is one small row: it is read from a tenant whose schema document cannot be read.
+// Verifies: STO-001
+#[test]
+fn the_generation_is_read_from_a_tenant_with_an_unreadable_schema() {
+    let path = fresh_path("unreadable");
+    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    tenant_with_a_note(&store, "alpha", 10);
+    let alpha = tenant_id("alpha");
+    let held = store.generation(&alpha).unwrap().unwrap();
+    let file = store.tenant_file(&alpha).unwrap().expect("a file on disk");
+    rusqlite::Connection::open(&file)
+        .unwrap()
+        .execute("UPDATE tenant SET schema = 'not json'", [])
+        .unwrap();
+    assert!(
+        store.load(&alpha, &[]).is_err(),
+        "the schema document is unreadable"
+    );
+    assert_eq!(store.generation(&alpha).unwrap(), Some(held));
+}
+
+/// A tenant file made before the generation row existed is given one by the step that adds the
+/// table: a nonce of its own and counter 1, in a file that holds a tenant.
+// Verifies: STO-001
+#[test]
+fn a_tenant_file_from_before_the_generation_gets_one() {
+    let path = fresh_path("migrated");
+    let alpha = tenant_id("alpha");
+    let file = {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        tenant_with_a_note(&store, "alpha", 10);
+        store.tenant_file(&alpha).unwrap().expect("a file on disk")
+    };
+    // Put the file back at the level before the generation step.
+    {
+        let conn = rusqlite::Connection::open(&file).unwrap();
+        conn.execute_batch(
+            "DROP TABLE generation;
+             DELETE FROM tenant_migrations WHERE version = 24;",
+        )
+        .unwrap();
+    }
+    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    let held = store
+        .generation(&alpha)
+        .unwrap()
+        .expect("the step wrote one");
+    assert_eq!(held.counter, 1);
+    // The tenant commits from there.
+    let executed = execute(
+        &store,
+        &new_note("After", "after"),
+        &ctx("alpha", Principal::User(principal_id("alpha:owner")), 100),
+    )
+    .unwrap();
+    assert_eq!(executed.receipt.generation, held.raised());
 }
