@@ -3,7 +3,7 @@
 What a Strata runtime should hold in memory in front of its store, how it decides, and exactly when
 holding it changes no answer. This is a design, with its safety properties proved in Lean
 (`lean/Strata/WorkingSet.lean`). Nothing here is implemented yet; the follow-up work is listed at
-the end, ordered by what unblocks what. The design has been revised after three adversarial
+the end, ordered by what unblocks what. The design has been revised after four adversarial
 reviews; the answers are collected in the last section, and everything above it is the current
 design.
 
@@ -88,7 +88,7 @@ worse. Plainly:
 | The command path | `crates/storage-api/src/lib.rs:1876-2030` (`execute_guarded`) | Load header, compute needs, load, refine, decide, commit guarded by base revision; on conflict decide again, up to `MAX_CONFLICT_RETRIES` (8, line 1797) |
 | The read path | `crates/backend/src/ops.rs:31` (`header`), `:496` (`read_loaded`), `view_load.rs:29` | Header, then the read's needs, then what the kernel reports missing, up to 32 rounds |
 | Whole-tenant loads | `crates/backend/src/lab.rs:530`, `products.rs:139`, `product_segments.rs:88`, `subject_export.rs:458` | `load_complete` |
-| Writes outside commits | `storage-sqlite/src/lib.rs:4583-4590` (`anonymise_ledger_principal`), `:4594` (`remove_principal`), `restore_snapshot`; `memory.rs:1335-1345` (mutates in place) | Change what a load returns without a commit or a revision bump |
+| Writes outside commits | `storage-sqlite/src/lib.rs:4583-4590` (`anonymise_ledger_principal`), `restore_snapshot`, `reset_tenant`, provisioning (directory state); `memory.rs:1335-1345` (mutates in place) | Change what a load returns without a commit or a revision bump |
 | Summary read | `crates/storage-sqlite/src/lib.rs:2740-2758` (`tenant_summary`) | Calls `header()` (full schema decode) and `COUNT(*)`: no cheap way to read a tenant's revision exists |
 | Existing in-process copies | `crates/backend/src/aggregates.rs:1-35`, `settings.rs:37-40` (`PlatformCache`) | Aggregate results keyed by object-type counters; platform settings for a bounded age |
 | Open tenant files | `crates/storage-sqlite/src/lib.rs:704`, `:1694-1770` | An LRU of open databases by count |
@@ -182,8 +182,13 @@ than the saved read.
 
 **Excluded from residency.** A lookup of a searchable personal field also matches the plain value
 for rows written before sealing (`sealed.rs:20-25`), so its need names a plaintext personal value.
-Such needs are never answer keys and never appear in the hot-set manifest; they are answered from
-the store every time.
+That applies to every need kind that sealing translates: `ByField`, `ByFields`, `IndexPage` and
+`PairPage` (`sealed.rs:772-880`). The rule is decided with the personal-field plan sealing already
+builds for the tenant: a need whose fields include a personal field is resident only in its
+translated, blind-hash form, and the legacy plain-value part is never an answer key and never in
+the hot-set manifest; it is answered from the store every time. Blind hashes are keyed by the tenant
+key, and no tenant-key rotation exists today, so blind-hash keys are stable; adding tenant-key
+rotation would have to drop or re-key those answers.
 
 Placing the working set above sealing is rejected: it would hold opened values, and a key
 destruction raises no generation, so an opened entry stays current and goes on being served after
@@ -232,24 +237,45 @@ pub struct Generation {
   the path after an LRU handle eviction (`storage-sqlite/src/lib.rs:1694-1768`, 256 handles by
   default), and a reopen keeps the nonce, the counter and the working set. A read-only open writes
   nothing. PostgreSQL has no open; there the events are row updates by the acquiring process.
-- **The counter** is raised by every write transaction that changes load results: commits,
-  `anonymise_ledger_principal`, `remove_principal`, setting writes, index rebuilds that change
-  answers. Writes outside load results raise nothing: key documents, the hot-set manifest,
-  sessions, throttle rows, jobs.
-- **Fencing every writer is an API-wide change.** Each method that raises the counter takes the
-  writer's expected generation (at least its nonce) and compares it in its write transaction:
-  `commit`, `remove_principal`, `anonymise_ledger_principal`, setting writes, index rebuilds. On
-  PostgreSQL that is one more row updated in a transaction that already serialises on the tenant's
-  advisory lock (`docs/storage.md`), so it adds no new point of contention; on SQLite it is in the
-  same `BEGIN IMMEDIATE` transaction.
-- **Processes other than the lease holder** (a migration job, an admin tool, the subject-rights
-  service): they may read freely and open without rotating anything. A write that raises the
-  generation either goes through the lease holder's API or is made under the lease (the control
-  plane revokes it from the cell first, the tool acquires it, which rotates the nonce, and the cell
-  reacquires afterwards). A write from anyone else is refused by the fence. There is no alternation:
-  only a lease acquisition rotates.
+- **The counter** is raised by every write transaction that changes what `load` or
+  `load_complete` returns for the tenant, and by nothing else. Which `Store` methods those are is
+  not written by hand: the conformance case below decides it for every method of the trait. Read
+  from the code today, the methods that change load results within the tenant's storage are
+  `commit`, `commit_with_segments`, `commit_segments` (if the differential case shows it changes
+  load results), `anonymise_ledger_principal` and `restore_snapshot` (which also rotates).
+  `remove_principal` deletes sign-in rows only (`storage-sqlite/src/lib.rs:4594-4616`) and raises
+  nothing; nor do key documents (`doc_put`, `doc_remove`), sessions, accounts, throttle rows, jobs,
+  automation records, audit lines or the hot-set manifest. Tenant setting values change only
+  through commits and restores. Index maintenance on open (`index_page::rebuild_if_marked`,
+  `pair_index::sync_stored`) is a layout step, not a `Store` method, and changes no answer.
+- **Directory state is outside the tenant's generation.** Whether `load` finds a tenant at all
+  depends on its control-directory row being `active` (`directory_file`,
+  `storage-sqlite/src/lib.rs:1648-1659`), which `begin_provisioning`, `finish_provisioning`,
+  `rollback_provisioning`, `reset_tenant`, `reset` and tenant removal change
+  (`storage-sqlite/src/lib.rs:1885-1940`), outside any tenant-file transaction. **Decision**: the
+  working set holds nothing for a tenant that is not active (an absent tenant is never cached), and
+  every directory-state change of a tenant is a control-plane event that first revokes the
+  tenant's lease; a tenant that becomes active again is acquired afresh, which rotates its nonce.
+  So a directory change never meets a resident entry.
+- **Fencing writes is an API-wide change.** Each counter-raising method takes the writer's expected
+  generation and, under a lease, the lease's fence token (below), and compares both in its write
+  transaction. On PostgreSQL that is one more row updated in a transaction that already serialises
+  on the tenant's advisory lock (`docs/storage.md`), so no new point of contention; on SQLite it is
+  in the same `BEGIN IMMEDIATE` transaction.
+- **Processes other than the lease holder** may read freely and open without rotating or
+  migrating. They make no counter-raising write except through the lease holder's API (the plan for
+  platform-wide data migrations: they run as operations submitted to each tenant's holder, so no
+  per-tenant revocation is needed) or, exceptionally, under the lease itself (the control plane
+  revokes it, the tool acquires it, which rotates the nonce and issues a new fence token, and the
+  cell reacquires afterwards; this drops the cell's working set for that tenant). Layout migrations
+  (`open_file` runs them, `storage-sqlite/src/lib.rs:1674-1688`) run only in the lease holder; a
+  non-holder that finds a layout it does not support refuses to open the file. In a cell of several
+  processes (D-8300 allows a cell to be a host), exactly one process holds a tenant's lease and is
+  its writer.
 - **`generation(tenant) -> StoreResult<Option<Generation>>`** reads the generation row.
-- **`Commit` gains `expected_generation: Option<Generation>`**, compared with the stored generation
+- **`Commit` gains `expected_generation: Option<Generation>`**. `None` is accepted only when
+  `base_revision` is also `None` (a commit that creates the tenant); the store refuses a `None`
+  with a base revision as `StoreError::Invalid`. A `Some` is compared with the stored generation
   in the write transaction that compares the base revision (under the tenant lock on PostgreSQL, in
   the `BEGIN IMMEDIATE` transaction on SQLite, under the lock in `MemoryStore`'s `commit_in`,
   `memory.rs:2123`). A mismatch is `StoreError::Conflict`, extended with the generation found. The
@@ -257,13 +283,19 @@ pub struct Generation {
 - **`Receipt` gains `generation: Generation`**, the generation the commit produced. The runtime
   checks it equals `expected` with the counter raised by one; anything else drops the tenant's
   entries and is logged as a contract violation.
-- **Conformance cases**: every counter-raising method raises the generation of the tenant it names
-  and changes no other's; writes outside load results (key documents, sessions) change no
-  generation; a commit with a stale expected generation conflicts and changes nothing; an **LRU
-  handle cycle** (open, evict the handle, reopen) leaves the generation unchanged; an
-  **out-of-band restore** (replace the file with an older copy while the store is closed, then run
-  the restore's control-plane step) yields a generation never observed before; a lease acquisition
-  rotates the nonce and fences the previous holder's writes.
+- **Conformance cases**:
+  - **differential and exhaustive over the trait**: for every method of `Store`, on a populated
+    tenant and a second tenant, take `load_complete` and the ledger of both before and after the
+    call, and require each tenant's generation to change exactly when its load result changed. A
+    method added to the trait without a case fails the suite (the case list is checked against the
+    trait's methods);
+  - a commit with a stale expected generation, or with a wrong fence token under a lease, conflicts
+    and changes nothing; a `None` expected generation with a base revision is refused;
+  - an **LRU handle cycle** (open, evict the handle, reopen) leaves the generation unchanged;
+  - an **out-of-band restore** (replace the file with an older copy while the store is closed,
+    then run the restore's control-plane step) yields a generation never observed before;
+  - a lease acquisition rotates the nonce and issues a new fence token, after which the previous
+    holder's counter-raising writes are refused.
 
 In the Lean model the generation is a counter that every store change raises (assumption W4,
 `Advances`). The Rust pair realises the only property the proofs use: a changed state never shows a
@@ -285,10 +317,11 @@ its end. Guarantees, under W4:
 
 - a single-key read returns the store's value as of its generation read (`checkedRead_linearizes`),
   however stale the runtime was;
-- a read request over several keys and up to 32 rounds returns, key by key, the store's value at
-  the moment it finishes (`request_snapshot`, with `runWS_reqOk`): a round that finds the
-  generation changed rereads everything the request has read at the new state, so the snapshot is
-  never a mix of generations;
+- a read request over several keys and up to 32 rounds returns a snapshot consistent at one point
+  inside the request's interval: every key's value at one generation. In the model that point is
+  the finish (`request_snapshot`, with `runWS_reqOk`); in Rust each round's load returns its own
+  generation, which the runtime compares with the request's, and a round that finds it changed
+  rereads everything the request has read at the new generation;
 - a refusal linearizes at its confirming generation read (`decideWS_refusal`);
 - an accepted commit is the kernel's step on the state it was applied to (`submitWS_world`). This is
   safety only: the claim that staleness costs at most one conflict per request is argued, not
@@ -297,11 +330,13 @@ its end. Guarantees, under W4:
 There is no uncovered path for reads in checked mode. W4 is still assumed: it is the store's
 obligation, not a condition on the environment.
 
-**Leased mode**. The cell holds a lease per tenant and makes no generation read on the read path:
+**Leased mode**. The cell holds a lease per tenant (with its fence token, below) and makes no
+generation read on the read path:
 a request's rounds compare against the generation the runtime knows. A refusal is still confirmed
 by one generation read, and a commit is still guarded by the store. Guarantees: commits and
 refusals as in checked mode; reads and request snapshots return the store's value as long as every
-writer to the tenant is fenced, which is what the lease provides (`runWS_reads` under `covered`);
+counter-raising write to the tenant is made by the holder, which the fence token enforces for
+writers using the `Store` API (`runWS_reads` under `covered`);
 when a writer is not fenced (the lease was lost without the cell knowing), reads are stale for at
 most the renewal interval, and the first commit or renewal discovers it (`unfenced_breaks_reads`
 shows the staleness is real without the lease). The model's request rounds use generation reads,
@@ -309,30 +344,38 @@ that is checked mode; the leased variant is argued from `covered`, not modelled 
 
 ### Leases (follow-up item 13)
 
-- **Record**: in the control directory, per tenant: holder cell, lease number, term end.
-- **Acquire**: a cell takes the lease when it is free or its term ended more than a drift margin ago
-  by the directory's clock. Having acquired, it rotates the nonce in its first write to the tenant,
-  before serving.
-- **Fence**: the nonce is the fence token. Every write that raises the generation, commits and
-  out-of-commit writes alike, carries the writer's expected generation and is refused in the write
-  transaction if the stored nonce is not the writer's. A cell whose nonce was replaced can make no
-  such write. Key-document writes are not fenced (they raise no generation); a fenced-out cell can
-  still create a subject key, which is harmless.
+The nonce is not a fence: `generation(tenant)` returns it, so anyone can present it. It refuses
+stale writers, not unauthorised ones. The fence is a separate **fence token**.
+
+- **Record**: in the control directory, per tenant: holder (cell and process), lease number, term
+  end.
+- **Fence token**: the lease number, issued by the control directory to the acquirer, written into
+  the tenant's storage at acquisition, and **not returned by `generation()`** or any other read of
+  the `Store` API. Every counter-raising write made under a lease presents it, and the store
+  compares it in the write transaction; a write with another token, or none, is refused. This holds
+  against any process using the `Store` API; a process with raw access to the database file or
+  server is outside the guarantee, as it is for every other store guarantee.
+- **Acquire**: a cell process takes the lease when it is free or its term ended more than a drift
+  margin ago by the directory's clock. In its first write to the tenant, before serving, it writes
+  the new fence token and rotates the nonce.
 - **Renew**: every renewal interval R (shorter than the term T) the holder renews in the directory
-  and makes a generation read; if the nonce is no longer its own, it has lost the tenant.
-- **Expiry**: a cell that has not renewed stops serving the tenant at its local term end minus the
-  drift margin. A request in flight at expiry may finish a commit (fenced anyway), but a read it
-  would answer from resident entries after expiry is answered by a checked read instead, or
-  refused with a retryable error naming the tenant's new cell.
-- **Revocation**: by notification (the fast path: the cell acknowledges, closes its handles and
-  stops serving), or by timeout: the control plane hands the tenant to another cell, restores it or
-  moves it only after an acknowledgement or after the term end plus the margin.
-- **Two cells believing they hold it** (a restored or lost directory, a partition): only the one
-  whose nonce is in the storage can write; the other's first write or renewal fails, and it drops
-  the tenant and gives up the lease. Its reads in the meantime are stale by at most R.
-- **Move** (D-8302): revoke at the old cell; the old cell stops serving at acknowledgement or
-  expiry; export and import (accepted on matching hashes); the import rotates the nonce; the new
-  cell acquires.
+  and makes a generation read; a nonce other than its own means it has lost the tenant.
+- **Expiry**: a holder that has not renewed stops serving the tenant at its local term end minus
+  the drift margin. A request in flight at expiry may finish a commit (fenced anyway); a read it
+  would answer from resident entries after expiry is answered by a checked read instead, or refused
+  with a retryable error naming the tenant's new cell.
+- **Revocation**: by notification (the holder acknowledges, closes its handles and stops serving),
+  or by timeout (the control plane acts only after an acknowledgement or after the term end plus
+  the margin). Every directory-state change of the tenant starts with a revocation.
+- **Two processes believing they hold it** (a restored or lost directory, a partition): only the one
+  whose fence token is in the storage can make counter-raising writes; the other's first such write
+  or renewal fails, and it drops the tenant. Its reads in the meantime are stale by at most R.
+- **Move** (D-8302): revoke at the old cell; it stops serving at acknowledgement or expiry; export
+  and import (accepted on matching hashes); the import rotates the nonce; the new cell acquires.
+
+What leased-mode reads rest on, then: every counter-raising write to the tenant is made by the
+lease holder, which the fence token enforces for every writer using the `Store` API. Writes outside
+the API (raw database access) are outside the guarantee.
 
 ### The commit path
 
@@ -343,9 +386,10 @@ Rust already decides above the store and commits separately, guarded by the base
    as many rounds as the kernel's needs take. The decision's expected generation is the one its
    first round read. Rounds may mix generations if something changes in between; the commit guard
    then refuses, since the tenant is no longer at the first round's generation.
-2. A refusal is confirmed by a generation read before it is returned; if the runtime was behind, it
-   refreshes and decides again (`decideWS`). In checked mode the request's own generation read
-   serves as the confirmation.
+2. A refusal is confirmed by a generation read before it is returned: the store's generation is
+   compared with the generation the decision's **first round** read, and if they differ the
+   runtime refreshes and decides again. In the model `decideWS` is a single step, so the
+   multi-round form of this rule is argued, not proved.
 3. An acceptance is committed with `expected_generation`. The store applies it only if the tenant
    is still at that generation, in the same transaction that raises it (`submitWS`). An out-of-commit
    write landing between the decision and the commit (the reviewer's `old + 2` case) changes the
@@ -607,43 +651,193 @@ manifests; schema changes and erasures in the middle.
 
 ## Follow-up work, by dependency
 
-1. **Tenant generation** in the store contract, specified above: `Generation` (nonce, counter) in
-   a row of its own; nonce rotation only on create, lease acquisition, `restore_snapshot`, archive
-   restore and import, never on a handle open; the counter raised by every write that changes load
-   results and by nothing else (not key documents); the expected generation on every
-   counter-raising method (`commit`, `remove_principal`, `anonymise_ledger_principal`, setting
-   writes, index rebuilds); `generation(tenant)`; `Commit.expected_generation`; `Receipt.generation`;
-   `Conflict` reporting the generation found; the conformance cases, including the LRU handle cycle
-   and the out-of-band restore. Depends on nothing; everything below depends on it.
-2. **Header residency** (CPY-014), counters split out. Depends on 1.
-3. **`ResidentStore` below sealing**: record entries (key documents never resident), stamps,
-   request rounds that reread on a generation change, refresh, refusal confirmation, guarded commit and receipt check, carry-forward,
-   lost-receipt drop, miss coalescing; legacy plain-value lookups excluded; passes the storage
-   conformance suite. Depends on 1 and 2.
-4. **Invalidation map in Rust** with a property test of its criterion against `apply_delta`, per
-   key kind. Depends on 3.
-5. **Answer, page, all and ledger entries**. Depends on 4.
-6. **Size accounting and calibration**, including the in-flight reserve. Depends on 3.
-7. **Policies**: CLOCK, then cost-aware TinyLFU with GDSF. Depends on 3 and 6.
-8. **Differential check** of the Lean model, as a program, against `ResidentStore` on generated
-   schedules with the fault kinds above. Depends on 3.
-9. **Simulator drives the store path**, with the fault schedule. Independent of 1 to 8.
-10. **Corpus loader and population generator**. Independent.
-11. **Sampled read trace**. Depends on 3.
-12. **The experiments**. Depends on 5, 7, 9 and 10; real-trace runs also on 11.
-13. **Leases**, as specified above: directory records, the nonce as fence token on every write,
-    renewal with a generation read, expiry, revocation by notification and timeout, the move
-    sequence. Depends on 1 and on directory routing (D-8301).
-14. **Hot-set manifest and warmup**, with the exclusions and erasure rule above. Depends on 3.
-15. **Cell arbiter**, floors, ceilings, the over-placement rule. Depends on 7, and on 12 showing
-    it beats a static split.
-16. **Restore runbook** (OPS-3121): revoke the lease and close handles before replacing a file, then
-    the rotation step. Depends on 1 and 13.
-17. **Specification changes**: a copy class row for the working set (CPY-001); the generation
-    obligation as a storage requirement; the per-tenant memory ceiling as a proposed decision.
-    Can proceed alongside 1.
+Each item is written to be filed as a task: title, scope, what it depends on, and acceptance
+criteria that a test or a check can fail. Items are ordered by dependency; none carries an estimate.
+
+### 1. Tenant generation and guarded commits in the store contract
+
+- **Scope**: `crates/storage-api` (trait, `Commit`, `Receipt`, `StoreError::Conflict`,
+  `MemoryStore`, conformance suite), `crates/storage-sqlite`, `crates/storage-postgres`,
+  `crates/backend` callers of `commit`. Adds `Generation { nonce, counter }` in a row of its own per
+  tenant; `generation(tenant)`; nonce rotation at create, `restore_snapshot`, import and lease
+  acquisition (the acquisition entry point is a store method item 13 calls); the counter raised by
+  every write that changes load results and by nothing else; `Commit.expected_generation`
+  (`None` only with `base_revision: None`); `Receipt.generation`; `Conflict` carrying the
+  generation found; the fence-token column and its comparison (unused until item 13). No working
+  set yet.
+- **Depends on**: nothing.
+- **Acceptance**:
+  - the exhaustive differential conformance case passes on memory, SQLite and PostgreSQL: for every
+    `Store` method, each tenant's generation changes exactly when its `load_complete` result or
+    ledger changed; the case list is checked against the trait's methods, so a new method without a
+    case fails;
+  - a commit with a stale `expected_generation` returns `Conflict` with the found generation and
+    changes nothing; a `None` with a base revision returns `Invalid`;
+  - `Receipt.generation` equals the expected generation with the counter raised by one;
+  - an LRU handle cycle leaves the generation unchanged; an out-of-band restore followed by the
+    restore step yields a generation never observed before;
+  - `generation()` reads one small row: no schema decode (checked by a test that it succeeds on a
+    tenant whose schema document is unreadable);
+  - existing conformance and backend tests pass unchanged apart from the new fields.
+
+### 2. Header residency (CPY-014)
+
+- **Scope**: a `ResidentStore` wrapper in `crates/storage-api` holding, per tenant, the decoded
+  header (schema, members, name, setting values) and compiled schema keyed by generation, schema
+  version and schema hash; counters always from the store or the receipt.
+- **Depends on**: 1.
+- **Acceptance**: the storage conformance suite passes with `ResidentStore` over each adapter; a
+  test counts schema decodes and shows one per tenant per generation across repeated loads; a
+  commit that changes the schema, and one that does not, each leave the header current (compared
+  with an unwrapped store's `load`).
+
+### 3. `ResidentStore` below sealing
+
+- **Scope**: record entries (present and absent), stamps, request rounds that compare each load's
+  generation with the request's and reread on a change, refusal confirmation against the first
+  round's generation, guarded commit and receipt check, carry-forward with an invalidation map,
+  lost-receipt drop, miss coalescing (CPY-012); key documents never resident; the plaintext
+  exclusion for `ByField`, `ByFields`, `IndexPage` and `PairPage` from the sealing plan; placement
+  under `SealedStore` in `App::new`.
+- **Depends on**: 1, 2.
+- **Acceptance**: the storage conformance suite passes through `ResidentStore` under
+  `SealedStore`; a test destroys a subject key in a second store handle and shows the next read
+  through the first returns the erased token; a commit naming a new data subject succeeds with no
+  conflict; a property test interleaving commits from a second handle between request rounds shows
+  every returned snapshot equals an unwrapped `load` at one generation; no plaintext personal value
+  appears in any resident key (checked by scanning keys in a test with legacy plain rows).
+
+### 4. Invalidation map with its criterion
+
+- **Scope**: the map from a `StateDelta` to invalidated keys, per key kind (record, answer, page,
+  all, ledger, header, counters).
+- **Depends on**: 3.
+- **Acceptance**: a property test over generated tenants and deltas: for every key the map does not
+  invalidate, an unwrapped `load` of that key is equal before and after `apply_delta`; one case per
+  key kind, including updates that leave pages untouched.
+
+### 5. Answer, page, all and ledger entries
+
+- **Scope**: resident set-valued answers, invalidated by item 4's map.
+- **Depends on**: 4.
+- **Acceptance**: conformance suite passes; item 3's interleaving property test extended to every
+  need kind passes.
+
+### 6. Accounting and calibration
+
+- **Scope**: the size function, the in-flight reserve, adapter memory (`cache_size`, open handles),
+  a calibration harness over the corpus tenant.
+- **Depends on**: 3, 10.
+- **Acceptance**: the harness reports accounted bytes against measured process memory per key kind;
+  a test shows accounted bytes never exceed the budget across a generated schedule; the calibrated
+  tolerance is recorded in the harness output.
+
+### 7. Policies
+
+- **Scope**: a policy trait; CLOCK; cost-aware TinyLFU admission with GreedyDual-Size-Frequency
+  eviction.
+- **Depends on**: 3, 6.
+- **Acceptance**: unit tests that pinned keys are never chosen as victims and that the budget check
+  refuses an entry that does not fit whatever the policy returns; both policies pass the
+  conformance suite through `ResidentStore`.
+
+### 8. Differential check against the Lean model
+
+- **Scope**: the working-set model as a program, run beside `ResidentStore` on generated schedules
+  with the fault kinds of the experiments (extending `crates/verification/src/lean.rs`).
+- **Depends on**: 3.
+- **Acceptance**: the Lean program and the Rust run print the same outcomes for every generated
+  schedule; a mutant that skips the commit guard is caught.
+
+### 9. Simulator drives the store path
+
+- **Scope**: `crates/simulation` runs `execute_guarded` and the read path through a `Store`, with the
+  fault schedule (unfenced write, fenced and unfenced restore, recreate, out-of-commit write between
+  decision and commit, key destruction, ambiguous commit, lost lease, LRU handle cycle).
+- **Depends on**: nothing for the store path; 3 for working-set runs.
+- **Acceptance**: existing simulator traces are unchanged on the store path without faults; each
+  fault kind is injectable from a seed and appears in the trace.
+
+### 10. Corpus loader and population generator
+
+- **Scope**: install the 14 enterprise products into a tenant; populate records from a seed.
+- **Depends on**: nothing.
+- **Acceptance**: the loaded tenant's schema contains every corpus entity; a fixed seed gives a
+  byte-identical populated tenant hash on two runs.
+
+### 11. Sampled read trace
+
+- **Scope**: `ResidentStore` emits tenant, need kind, hit or miss, no values, at a sampling rate.
+- **Depends on**: 3.
+- **Acceptance**: a test shows no field value appears in the trace; the simulator can replay a
+  recorded trace.
+
+### 12. The experiments
+
+- **Scope**: the coherence runs and cost runs of the experiments section, with their refutation
+  criteria.
+- **Depends on**: 5, 7, 9, 10; real-trace runs also on 11.
+- **Acceptance**: a report per run with the measures listed; zero divergences and zero budget
+  violations in the coherence runs; each refutation criterion evaluated and recorded as met or not.
+
+### 13. Leases and the fence token
+
+- **Scope**: lease records in the control directory (holder process, lease number, term end);
+  acquisition writing the fence token and rotating the nonce; fence-token comparison on every
+  counter-raising write; renewal with a generation read; expiry at local term end minus a margin;
+  revocation by notification and by timeout; revocation before every directory-state change; the
+  move sequence; layout migrations only in the holder; holder APIs for platform migrations.
+- **Depends on**: 1, and directory routing (D-8301).
+- **Acceptance**: a test with two store handles shows the non-holder's counter-raising write is
+  refused even when it presents the current generation; a holder that misses renewal stops serving
+  from resident entries at its term end; a revocation followed by a restore leaves no resident
+  entry in the old holder; a directory-state change of a tenant is refused unless its lease was
+  revoked first.
+
+### 14. Hot-set manifest and warmup
+
+- **Scope**: the manifest table outside load results, the exclusions, the erasure rule, rate-limited
+  prefetch.
+- **Depends on**: 3.
+- **Acceptance**: writing the manifest leaves the generation unchanged (item 1's differential case);
+  an erasure removes the erased subject's record ids from it; a restart prefetch never exceeds the
+  floor plus the warmup allowance.
+
+### 15. Cell arbiter
+
+- **Scope**: miss-cost curve sampling, floors, ceilings, the over-placement rule.
+- **Depends on**: 7, and item 12 showing it beats a static split.
+- **Acceptance**: a test that the arbiter never grants below a tenant's pinned bytes while the
+  cell's floors fit, and raises the placement alarm when they do not; the sum of grants never
+  exceeds the arbiter's total.
+
+### 16. Restore runbook
+
+- **Scope**: OPS-3121 procedure: revoke the lease, close handles, replace the file, run the rotation
+  step, route.
+- **Depends on**: 1, 13.
+- **Acceptance**: a scripted restore in a test environment leaves no process holding the old file,
+  and the restored tenant's generation was never observed before.
+
+### 17. Specification changes
+
+- **Scope**: a copy class row for the working set (CPY-001); the generation obligation as a storage
+  requirement; the per-tenant memory ceiling as a proposed decision; the directory-state decision.
+- **Depends on**: nothing.
+- **Acceptance**: the specification passes its lint with the new entries; each new requirement
+  names the check that holds it (item 1's conformance case, item 13's tests).
 
 ## Answers to the reviews
+
+### Fourth review
+
+| # | Point | Answer |
+|---|---|---|
+| 1 | The nonce is not a fence | **Fixed.** A separate fence token (the lease number), stored in the tenant's storage, not returned by `generation()`, compared on every counter-raising write under a lease. The leased-mode claims now rest on "every counter-raising write is made by the holder", enforced for writers using the `Store` API |
+| 2 | Method list hand-written | **Fixed.** Confirmed: `remove_principal` touches sign-in rows only (`storage-sqlite/src/lib.rs:4594-4616`); `reset`, `reset_tenant` and provisioning change load results through the directory. The list is now decided by an exhaustive differential conformance case over the trait; the reading from the code is given as a starting point; directory-state changes are handled by a decision (revoke before, acquire afresh after) |
+| 3 | `expected_generation: None` | **Fixed.** Accepted only with `base_revision: None`, refused otherwise |
+| 4 | Multi-round refusals; request prose | **Fixed.** The refusal confirmation compares with the first round's generation (argued, not proved); the request claim is "consistent at one point inside the request interval" |
+| - | Migrations per tenant, `open_file` migrations, multi-process cells, the plaintext exclusion's scope, tenant-key rotation | **Addressed in text** |
 
 ### Third review
 
