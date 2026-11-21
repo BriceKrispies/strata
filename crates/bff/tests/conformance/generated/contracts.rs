@@ -6235,7 +6235,7 @@ pub const DELETE_ARTICLE: Contract = Contract {
     probe: Request {
         path: "/api/records",
         query: &[],
-        body: Some("{\"expected_version\":1,\"id\":1,\"object\":\"post\",\"op\":\"delete\"}"),
+        body: Some("{\"expected_version\":1,\"id\":9,\"object\":\"post\",\"op\":\"delete\"}"),
     },
     success: None,
     setup: &[],
@@ -8618,7 +8618,7 @@ pub const START_PASSKEY_REGISTRATION: Contract = Contract {
         },
         Field {
             wire: "options",
-            ty: Ty::Bytes,
+            ty: Ty::Any,
             optional: false,
         },
     ]),
