@@ -9,12 +9,29 @@ E2. A dependent is a read set plus a function of the values read. What the funct
     them is arbitrary; nothing is assumed about it, so the theorems hold for every expression
     language that reads only what it declares.
 E3. Data is a context of one record per object. Whether records conform to their field types
-    is not part of the model; the migration says what a changed cell becomes.
-E4. `accepted` is the local checks (`pre`) plus an empty impact for a breaking change. It is
-    deliberately not "the result is well-formed": closure is a theorem about it, not a
-    restatement of it. Pins and projections (WG-5327) and concurrency (WG-5330) are absent.
+    is not part of the model; the migration says what a changed cell becomes. A move along a
+    reference reads the context as a record of the source object together with the record of the
+    target object it references: the value is copied across, which is meaningful when many
+    sources do not disagree (the move is "from the referrer to the referenced"). Nothing proves
+    that the sources agree; the model fixes one context.
+E4. `accepted` is the local checks (`pre`) plus, for a breaking change, that every dependent it
+    reaches is pinned and the change has a left inverse (`hasLeftInverse`). It is deliberately
+    not "the result is well-formed": closure is a theorem about it, not a restatement of it.
+    With no pins a breaking change is accepted exactly when its impact is empty.
 E5. Locality needs `WF s`: in a schema whose dependents already read missing cells there is
-    nothing to be local about.
+    nothing to be local about. Compatibility, rewrite correctness and composition need the
+    dependents of the schema to be valid.
+E6. A pin is an id in `Schema.pins`. The pinned dependent stays in the schema (every change that
+    has a left inverse and reaches a dependent loses no cell, so it stays valid); it reads the
+    new data through `project`. The end of a pin (the dependent migrates, or the deprecation
+    window closes) is not a schema change and is not modelled. The projection of a chain of
+    breaking changes is not composed.
+E7. Dependents rewrite by substitution of reads (`Read`), so a rewrite never changes a
+    dependent's function. A view reads readers by id and is never rewritten.
+E8. Changes commute when `ents` (what they touch, with the impact sets) are disjoint. The
+    granularity is the cell, plus the object type for a change that edits its field list or
+    deletes it. Two changes on one object that edit different cells commute; two that append to
+    one object's fields do not count as disjoint.
 
 `Audit.lean` prints the axioms each theorem depends on: only Lean's standard three.
 -/
@@ -320,9 +337,7 @@ theorem impact_nil_of_acc (c : Change) (s : Schema) (hacc : accepted c s) (hm : 
     acceptance rule is only local checks, and for a breaking change that every dependent it
     reaches is pinned and the change has a left inverse; it does not itself mention
     well-formedness of the result. A pinned dependent that a breaking change reaches stays valid
-    because the changes that have a left inverse lose no cell.
-
-    Verifies: MIG-605. -/
+    because the changes that have a left inverse lose no cell. -/
 theorem closure (c : Change) (s : Schema) (hwf : WF s) (hacc : accepted c s) :
     WF (apply c s) := by
   have hpre := hacc.1
