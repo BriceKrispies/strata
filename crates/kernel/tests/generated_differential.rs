@@ -135,6 +135,11 @@
 //!      Guarded: `compare_read` fails on a read of a query that has an index plan (a pair plan is
 //!      one), and `compare_transition` fails on a schema change whose evidence would hold a scan
 //!      warning.
+//!  15. Not mirrored: the class and the impact set of a schema change (D-8212, MIG-589,
+//!      MIG-592) and the refusal of a breaking change that reaches a dependent
+//!      (`strata_kernel::dependencies`). The hand-written kernel writes a `schema:class` check for
+//!      each change, which is dropped before the comparison (`drop_evolution_evidence`); the
+//!      refusal by impact is not drawn by the generator, and the comparison fails on one.
 //!  14. Not exercised, and not mirrored: the erasure of a data subject (`EraseSubject`,
 //!      `crates/kernel/src/erasure.rs`, D-7460). The generated `intent-decision` refuses it with
 //!      `erasure:decided_by_the_kernel` and the generated `needs` plans nothing for it. The
@@ -1482,6 +1487,23 @@ fn assert_not_planned(state: &State, request: &ReadRequest) {
     }
 }
 
+/// Difference 15 of the header: the class and the impact of each schema change (D-8212) are
+/// written to the evidence of the hand-written kernel as `schema:class` checks, and a breaking
+/// change that reaches a dependent is refused with `schema:impact` checks. The generated
+/// `change-schema` states neither yet, so the class checks are dropped before the comparison, and
+/// a refusal by impact fails the test: the generator draws no such change.
+fn drop_evolution_evidence(label: &str, hand: &mut Result<Transition, DomainError>) {
+    let evidence = match hand {
+        Ok(transition) => &mut transition.evidence,
+        Err(error) => &mut error.evidence,
+    };
+    assert!(
+        !evidence.iter().any(|check| check.rule == "schema:impact"),
+        "{label}: refused for a breaking change that reaches a dependent; the generated change-schema accepts it (difference 15)"
+    );
+    evidence.retain(|check| check.rule != "schema:class");
+}
+
 /// Difference 13 of the header: a schema change whose evidence holds a scan warning is not
 /// compared, because the generated `change-schema` writes no such warning.
 fn assert_no_scan_warning(state: &State, intent: &Intent, hand: &Result<Transition, DomainError>) {
@@ -1708,6 +1730,7 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         );
     }
     assert_no_scan_warning(state, intent, &hand);
+    drop_evolution_evidence(&label, &mut hand);
     let mut generated = match spec::kernel_transition(state, intent, context) {
         Ok(result) => Ok(result),
         Err(failure) => Err(domain_error(failure).unwrap_or_else(|fault| {
