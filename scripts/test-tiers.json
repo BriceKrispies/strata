@@ -6,6 +6,13 @@
   "doctestSeconds": 0.77,
   "tests": [
     {
+      "package": "strata-spec-parts",
+      "target": "spec_parts",
+      "tier": "routine",
+      "seconds": 0.5,
+      "unmeasured": true
+    },
+    {
       "package": "strata-backend",
       "target": "backend_it",
       "tier": "routine",
