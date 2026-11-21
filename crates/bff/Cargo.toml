@@ -37,5 +37,14 @@ path = "tests/bff_it.rs"
 name = "bff_slow"
 path = "tests/bff_slow.rs"
 
+# The conformance suites stay crate roots: their generated code addresses `crate::harness`.
+[[test]]
+name = "contract_conformance"
+path = "tests/contract_conformance.rs"
+
+[[test]]
+name = "contract_conformance_fixtures"
+path = "tests/contract_conformance_fixtures.rs"
+
 [lints]
 workspace = true
