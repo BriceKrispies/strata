@@ -3147,6 +3147,9 @@ const PRODUCT_WRITES: &[(&str, &str)] = &[
 /// Implements: CT-837
 async fn products_list(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
+    // The contract asks for our origin and the session's request token, though the call reads
+    // (list-installed-products).
+    guard_write(&bff, &visit, &headers).await?;
     let reply: Json_ = backend(&bff, &visit, "/internal/products", &json!({})).await?;
     Ok(uncached(reply))
 }
