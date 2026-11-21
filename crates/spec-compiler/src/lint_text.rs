@@ -77,7 +77,9 @@ pub fn find_no_ever(s: &str) -> Option<usize> {
     None
 }
 
-const TIME_UNITS: &[&str] = &[
+/// Units of the time an operation takes. Minutes, hours and days are left out: "within seven
+/// days" is a window or an expiry, which an example at its bound shows, not a response time.
+const RESPONSE_TIME_UNITS: &[&str] = &[
     "ns",
     "us",
     "\u{b5}s",
@@ -87,14 +89,6 @@ const TIME_UNITS: &[&str] = &[
     "secs",
     "second",
     "seconds",
-    "min",
-    "mins",
-    "minute",
-    "minutes",
-    "hour",
-    "hours",
-    "day",
-    "days",
     "nanosecond",
     "nanoseconds",
     "microsecond",
@@ -155,7 +149,7 @@ pub fn find_performance_bound(s: &str) -> Option<(usize, String)> {
         }
         if w == "within" {
             if let (Some((_, n)), Some((_, u))) = (toks.get(k + 1), toks.get(k + 2)) {
-                if is_number(n) && TIME_UNITS.contains(&u.as_str()) {
+                if is_number(n) && RESPONSE_TIME_UNITS.contains(&u.as_str()) {
                     return Some((*off, format!("within {n} {u}")));
                 }
             }
@@ -194,6 +188,7 @@ mod tests {
         assert_eq!(b("SHALL refuse a read that names more than 200 ids"), None);
         assert_eq!(b("keep an idempotency key for 24 hours"), None);
         assert_eq!(b("within the bounds that the platform defines"), None);
+        assert_eq!(b("a key seen within seven days is refused"), None);
     }
 
     #[test]
