@@ -12,83 +12,7 @@
     }
   },
 
-  "records": [
-    { "id": "automation__connector_rec", "name": "Connector", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "name", "type": "string" },
-        { "name": "status", "type": "automation__connector_status" },
-        { "name": "auth_scheme", "type": "automation__auth_scheme" },
-        { "name": "owner_name", "type": "string", "personal": "name" },
-        { "name": "contact_email", "type": "string", "personal": "contact" },
-        { "name": "retry", "type": "automation__retry_policy" },
-        { "name": "subscription", "type": "u64", "refersTo": "automation__webhook_subscription_rec", "onDelete": "set-null", "optional": true } ],
-      "retention": "Until the connector is retired and its run history has expired.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "automation__webhook_subscription_rec", "name": "Webhook subscription", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "target_url", "type": "string" },
-        { "name": "endpoint", "type": "automation__endpoint" },
-        { "name": "state", "type": "string" },
-        { "name": "secret_version", "type": "u32" },
-        { "name": "rotated_at", "type": "timestamp", "optional": true },
-        { "name": "connector", "type": "u64", "refersTo": "automation__connector_rec", "onDelete": "set-null", "optional": true } ],
-      "retention": "Until the subscription is retired and its delivery log has expired.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "automation__schedule_rec", "name": "Schedule", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "name", "type": "string" },
-        { "name": "cadence", "type": "automation__cadence" },
-        { "name": "next_run", "type": "timestamp" },
-        { "name": "paused", "type": "bool" },
-        { "name": "connector", "type": "u64", "refersTo": "automation__connector_rec", "onDelete": "restrict", "optional": true } ],
-      "retention": "Until the schedule is deleted by its owner.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "automation__run_log_rec", "name": "Run log", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "schedule", "type": "u64", "refersTo": "automation__schedule_rec", "onDelete": "restrict", "optional": true },
-        { "name": "started_at", "type": "timestamp" },
-        { "name": "finished_at", "type": "timestamp", "optional": true },
-        { "name": "outcome", "type": "automation__run_outcome" },
-        { "name": "calls", "type": "u32" },
-        { "name": "last_error", "type": "automation__run_error", "optional": true } ],
-      "retention": "Ninety days after the run finished, then removed by the run-log retention rule.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "automation__budget_grant_rec", "name": "Budget grant", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "budget_owner_name", "type": "string", "personal": "name" },
-        { "name": "units", "type": "u64" },
-        { "name": "period", "type": "automation__budget_period" },
-        { "name": "granted_at", "type": "timestamp" } ],
-      "retention": "One year after the grant, then removed.",
-      "schemaVersion": 1, "realisation": "target" }
-  ],
 
-  "types": [
-    { "id": "automation__connector_status", "name": "Connector status", "kind": "enum",
-      "values": ["pending", "active", "paused", "failing", "retired"], "description": "Where a connector is in its life." },
-    { "id": "automation__auth_scheme", "name": "Auth scheme", "kind": "enum",
-      "values": ["api_key", "oauth2", "mutual_tls", "hmac_signature", "basic", "none"], "description": "How the connector signs its requests." },
-    { "id": "automation__run_outcome", "name": "Run outcome", "kind": "enum",
-      "values": ["scheduled", "queued", "running", "succeeded", "failed", "skipped", "timed_out", "cancelled"], "description": "How a run ended, or where it stands." },
-    { "id": "automation__cadence", "name": "Cadence", "kind": "enum",
-      "values": ["hourly", "daily", "weekly", "monthly", "cron"], "description": "How often a schedule fires." },
-    { "id": "automation__budget_period", "name": "Budget period", "kind": "enum",
-      "values": ["hourly", "daily", "monthly", "quarterly", "annual"], "description": "The period an API budget grant covers." },
-    { "id": "automation__retry_policy", "name": "Retry policy", "kind": "struct",
-      "fields": [ { "name": "max_attempts", "type": "u32" }, { "name": "backoff_seconds", "type": "u32" } ],
-      "description": "How a connector call is retried after a failure." },
-    { "id": "automation__run_error", "name": "Run error", "kind": "struct",
-      "fields": [ { "name": "code", "type": "string" }, { "name": "message", "type": "string" }, { "name": "at", "type": "timestamp" } ],
-      "description": "The last error a run recorded." },
-    { "id": "automation__endpoint", "name": "Endpoint", "kind": "struct",
-      "fields": [ { "name": "url", "type": "string" }, { "name": "method", "type": "string" }, { "name": "timeout_ms", "type": "u32" } ],
-      "description": "Where and how a subscription delivers." }
-  ],
 
   "roles": [
     { "id": "automation__automation_operator", "name": "Automation operator", "description": "Runs and watches connector automations day to day.", "level": "tenant",
@@ -174,7 +98,13 @@
 
   "views": [
     { "id": "automation__connector_board", "route": "/automation/board", "title": "Connector board",
-      "sections": { "main": { "query": "automation__active_connector_list", "args": {}, "include": [], "markdown": [], "single": false } } }
+      "sections": { "main": { "query": "automation__active_connector_list", "args": {}, "include": [], "markdown": [], "single": false } } },
+    {"id":"automation__connector_list_view","route":"/automation/connectors","title":"Connectors","sections":{"main":{"query":"automation__active_connector_list","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"automation__connector_detail_view","route":"/automation/connectors/:slug","title":"Connector","sections":{"main":{"query":"automation__active_connector_list","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"automation__connector_editor_view","route":"/automation/connectors/:slug/edit","title":"Edit connector","sections":{"main":{"query":"automation__active_connector_list","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"automation__subscription_list_view","route":"/automation/subscriptions","title":"Subscriptions","sections":{"main":{"query":"automation__active_connector_list","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"automation__schedule_list_view","route":"/automation/schedules","title":"Schedules","sections":{"main":{"query":"automation__active_connector_list","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"automation__budget_settings_view","route":"/automation/budget","title":"API budget","sections":{"main":{"query":"automation__active_connector_list","args":{},"include":[],"markdown":[],"single":false}}}
   ],
 
   "workflows": [
@@ -186,82 +116,20 @@
   ],
 
   "screens": [
-    { "id": "automation__connector_list", "name": "Connector list", "route": "/automation/connectors", "viewModel": "automation__read_connector_board",
+    { "id": "automation__connector_list", "name": "Connector list", "route": "/automation/connectors", "viewModel": "automation__connector_list_view",
       "kind": "automation.list", "auth": "session", "description": "The connectors of the tenant, by status.", "viewName": "automation_connector_list", "title": "Connectors" },
-    { "id": "automation__connector_detail", "name": "Connector detail", "route": "/automation/connectors/:slug", "viewModel": "automation__read_connector_detail",
+    { "id": "automation__connector_detail", "name": "Connector detail", "route": "/automation/connectors/:slug", "viewModel": "automation__connector_detail_view",
       "kind": "automation.detail", "auth": "session", "description": "One connector, its subscription and its recent runs.", "viewName": "automation_connector_detail", "title": "Connector" },
-    { "id": "automation__connector_editor", "name": "Connector editor", "route": "/automation/connectors/:slug/edit", "viewModel": "automation__read_connector_detail",
+    { "id": "automation__connector_editor", "name": "Connector editor", "route": "/automation/connectors/:slug/edit", "viewModel": "automation__connector_editor_view",
       "kind": "automation.editor", "auth": "session", "description": "Edit a connector's contact, authentication and status.", "viewName": "automation_connector_editor", "title": "Edit connector" },
-    { "id": "automation__subscription_list", "name": "Subscription list", "route": "/automation/subscriptions", "viewModel": "automation__read_subscription_board",
+    { "id": "automation__subscription_list", "name": "Subscription list", "route": "/automation/subscriptions", "viewModel": "automation__subscription_list_view",
       "kind": "automation.list", "auth": "session", "description": "Webhook subscriptions and their secret rotation state.", "viewName": "automation_subscription_list", "title": "Subscriptions" },
-    { "id": "automation__schedule_list", "name": "Schedule list", "route": "/automation/schedules", "viewModel": "automation__read_schedule_board",
+    { "id": "automation__schedule_list", "name": "Schedule list", "route": "/automation/schedules", "viewModel": "automation__schedule_list_view",
       "kind": "automation.list", "auth": "session", "description": "Schedules and when each one next runs.", "viewName": "automation_schedule_list", "title": "Schedules" },
-    { "id": "automation__budget_settings", "name": "Budget settings", "route": "/automation/budget", "viewModel": "automation__read_budget_summary",
+    { "id": "automation__budget_settings", "name": "Budget settings", "route": "/automation/budget", "viewModel": "automation__budget_settings_view",
       "kind": "automation.settings", "auth": "session", "description": "The API call budget and the grants drawn from it.", "viewName": "automation_budget_settings", "title": "API budget" }
   ],
 
-  "contracts": [
-    { "id": "automation__read_connector_board", "name": "Read the connector board", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in automation operator", "requires": ["automations-read"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "status", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the connector board for the status named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "automation__read_connector_detail", "name": "Read one connector", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in automation operator", "requires": ["automations-read"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "slug", "type": "string" } ],
-      "outputs": [ { "name": "connector", "type": "json" }, { "name": "runs", "type": "json" } ],
-      "postconditions": ["The answer is the connector named, with its most recent runs."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "automation__read_subscription_board", "name": "Read the subscription board", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in connector admin", "requires": ["webhooks-manage"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "state", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the subscriptions in the state named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "automation__read_schedule_board", "name": "Read the schedule board", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in automation operator", "requires": ["automations-read"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "cadence", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the schedules on the cadence named, in next-run order."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "automation__read_budget_summary", "name": "Read the budget summary", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in budget owner", "requires": ["ledger-read"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "period", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the remaining API call budget for the period named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "automation__submit_connector", "name": "Save a connector", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in connector admin", "requires": ["webhooks-manage"] },
-      "idempotent": false, "timeoutMs": 5000,
-      "inputs": [
-        { "name": "name", "type": "string" }, { "name": "status", "type": "string" }, { "name": "contact_email", "type": "string" },
-        { "name": "auth_scheme", "type": "string" }, { "name": "api_key", "type": "string" }, { "name": "notes", "type": "string" } ],
-      "outputs": [ { "name": "connector_id", "type": "u64" } ],
-      "postconditions": ["The connector holds the values submitted, and its name is unique in the tenant."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "automation__submit_rotation", "name": "Rotate a subscription secret", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in connector admin", "requires": ["automation__rotate_subscriptions"] },
-      "idempotent": false, "timeoutMs": 5000,
-      "inputs": [ { "name": "subscription", "type": "string" }, { "name": "target_url", "type": "string" }, { "name": "confirm", "type": "bool" } ],
-      "outputs": [ { "name": "state", "type": "string" } ],
-      "postconditions": ["The subscription is rotating and its secret version has been advanced."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "automation__submit_budget", "name": "Grant API budget", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in budget owner", "requires": ["automation__manage_budget"] },
-      "idempotent": false, "timeoutMs": 5000,
-      "inputs": [
-        { "name": "owner_name", "type": "string" }, { "name": "units", "type": "u64" },
-        { "name": "period", "type": "string" }, { "name": "note", "type": "string" } ],
-      "outputs": [ { "name": "grant_id", "type": "u64" } ],
-      "postconditions": ["A grant records the units drawn from the budget pool for the period named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
-  ],
 
   "forms": [
     { "id": "automation__form_connector_editor", "screen": "automation__connector_editor", "contract": "automation__submit_connector",
@@ -310,38 +178,30 @@
 
   "liveBindings": [
     { "id": "automation__live_connector_list", "screen": "automation__connector_list", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'automation-run'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "automation__live_connector_list_ended", "screen": "automation__connector_list", "event": "ui-session-ended", "refresh": "whole" },
     { "id": "automation__live_connector_detail", "screen": "automation__connector_detail", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'automation-run'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "automation__live_connector_detail_ended", "screen": "automation__connector_detail", "event": "ui-session-ended", "refresh": "whole" },
     { "id": "automation__live_connector_editor", "screen": "automation__connector_editor", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'automation-run'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "automation__live_connector_editor_ended", "screen": "automation__connector_editor", "event": "ui-session-ended", "refresh": "whole" },
     { "id": "automation__live_subscription_list", "screen": "automation__subscription_list", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'automation-run'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "automation__live_subscription_list_ended", "screen": "automation__subscription_list", "event": "ui-session-ended", "refresh": "whole" },
     { "id": "automation__live_schedule_list", "screen": "automation__schedule_list", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'automation-run'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "automation__live_schedule_list_ended", "screen": "automation__schedule_list", "event": "ui-session-ended", "refresh": "whole" },
     { "id": "automation__live_budget_settings", "screen": "automation__budget_settings", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'automation-run'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "automation__live_budget_settings_ended", "screen": "automation__budget_settings", "event": "ui-session-ended", "refresh": "whole" }
   ],
 
   "errorMessages": [
-    { "id": "automation__error_name_taken", "on": "check", "kinds": ["unique"], "text": "Another connector already uses this name.", "field": "name" },
+    { "id": "automation__error_name_taken", "on": "check", "kinds": ["unique"], "text": "Another connector already uses this name.", "field": { "name": "name" } },
     { "id": "automation__error_conflict", "on": "error", "kinds": ["conflict"], "text": "This was changed elsewhere. Reload to see the latest version." }
   ],
 
-  "events": [
-    { "id": "automation__connector_synced_event", "name": "Connector synced", "description": "A connector completed a sync through its webhook.",
-      "payload": [ { "name": "connector", "type": "string" } ] },
-    { "id": "automation__subscription_rotated_event", "name": "Subscription rotated", "description": "A webhook subscription began secret rotation.",
-      "payload": [ { "name": "subscription", "type": "string" }, { "name": "at", "type": "timestamp" } ] },
-    { "id": "automation__budget_exhausted_event", "name": "API budget exhausted", "description": "The API call budget reached its floor.",
-      "payload": [ { "name": "unit", "type": "string" } ] }
-  ],
 
   "eventKinds": [
     { "id": "automation__run_finished", "kind": "app.automation-run-finished",
@@ -461,6 +321,10 @@
       "subject": { "object": "automation__webhook_subscription", "input": "subscription" },
       "conditions": [ { "id": "is_active", "expr": "record.state == 'active'", "error": "not-active", "message": "Only an active subscription can be rotated." } ],
       "steps": [
-        { "UpdateRecord": { "id": "rotate", "object": "automation__webhook_subscription", "record": "record.$id", "fields": { "state": "'rotating'", "rotated_at": "now" } } } ] }
+        { "UpdateRecord": { "id": "rotate", "object": "automation__webhook_subscription", "record": "record.$id", "fields": { "state": "'rotating'", "rotated_at": "now" } } } ] },
+    {"id":"automation__submit_connector","label":"Save a connector","inputs":[{"name":"name","ty":"Str","required":false,"label":"name"},{"name":"status","ty":"Str","required":false,"label":"status"},{"name":"contact_email","ty":"Str","required":false,"label":"contact email"},{"name":"auth_scheme","ty":"Str","required":false,"label":"auth scheme"},{"name":"api_key","ty":"Str","required":false,"label":"api key"},{"name":"notes","ty":"Str","required":false,"label":"notes"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"automation__submit_rotation","label":"Rotate a subscription secret","inputs":[{"name":"subscription","ty":"Str","required":false,"label":"subscription"},{"name":"target_url","ty":"Str","required":false,"label":"target url"},{"name":"confirm","ty":"Bool","required":false,"label":"confirm"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"automation__submit_budget","label":"Grant API budget","inputs":[{"name":"owner_name","ty":"Str","required":false,"label":"owner name"},{"name":"units","ty":"Int","required":false,"label":"units"},{"name":"period","ty":"Str","required":false,"label":"period"},{"name":"note","ty":"Str","required":false,"label":"note"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"automation__read_connector_board","label":"Read the connector board","inputs":[{"name":"status","ty":"Str","required":false,"label":"status"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]}
   ]
 }

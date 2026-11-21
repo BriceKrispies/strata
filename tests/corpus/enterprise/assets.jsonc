@@ -13,90 +13,8 @@
   },
 
   // Data model. Asset and rendition refer to each other; collections form a tree; licences are personal.
-  "records": [
-    { "id": "assets__asset_rec", "name": "Asset", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "primary_rendition", "type": "u64", "refersTo": "assets__rendition_rec", "onDelete": "restrict", "optional": true },
-        { "name": "title", "type": "string" },
-        { "name": "kind", "type": "assets__asset_kind" },
-        { "name": "status", "type": "assets__upload_status" },
-        { "name": "colour", "type": "assets__colour_space", "optional": true },
-        { "name": "dims", "type": "assets__dimensions", "optional": true },
-        { "name": "collection", "type": "u64", "refersTo": "assets__collection_rec", "onDelete": "set-null", "optional": true },
-        { "name": "licence", "type": "u64", "refersTo": "assets__licence_rec", "onDelete": "restrict", "optional": true },
-        { "name": "uploader_name", "type": "string", "personal": "name" },
-        { "name": "checksum", "type": "string" },
-        { "name": "created_at", "type": "timestamp" } ],
-      "retention": "Until the asset and its licence are removed by their retention rules.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "assets__rendition_rec", "name": "Rendition", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "asset", "type": "u64", "refersTo": "assets__asset_rec", "onDelete": "restrict" },
-        { "name": "profile", "type": "assets__rendition_profile" },
-        { "name": "width", "type": "u32" },
-        { "name": "height", "type": "u32" },
-        { "name": "bytes", "type": "u64" },
-        { "name": "video_codec", "type": "assets__video_codec", "optional": true },
-        { "name": "created_at", "type": "timestamp" } ],
-      "retention": "Removed with its asset.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "assets__licence_rec", "name": "Licence", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "name", "type": "string" },
-        { "name": "licence_type", "type": "assets__licence_type" },
-        { "name": "licensor_name", "type": "string", "personal": "name" },
-        { "name": "licensor_contact", "type": "string", "personal": "contact" },
-        { "name": "territory", "type": "string" },
-        { "name": "starts_at", "type": "timestamp" },
-        { "name": "ends_at", "type": "timestamp", "optional": true } ],
-      "retention": "Seven years after the licence ends, then removed with its personal fields.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "assets__usage_right_rec", "name": "Usage right", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "licence", "type": "u64", "refersTo": "assets__licence_rec", "onDelete": "restrict" },
-        { "name": "asset", "type": "u64", "refersTo": "assets__asset_rec", "onDelete": "restrict" },
-        { "name": "window", "type": "assets__rights_window" },
-        { "name": "scope", "type": "assets__usage_scope" } ],
-      "retention": "Removed with its licence.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "assets__collection_rec", "name": "Collection", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "name", "type": "string" },
-        { "name": "parent", "type": "u64", "refersTo": "assets__collection_rec", "onDelete": "restrict", "optional": true },
-        { "name": "path_note", "type": "string" } ],
-      "retention": "Kept until its owner deletes the collection.",
-      "schemaVersion": 1, "realisation": "target" }
-  ],
 
   // Value types: asset, licence, rendition and usage enums, and structs for dimensions and rights windows.
-  "types": [
-    { "id": "assets__asset_kind", "name": "Asset kind", "kind": "enum",
-      "values": ["image", "video", "audio", "document"], "description": "The kind of a media asset." },
-    { "id": "assets__licence_type", "name": "Licence type", "kind": "enum",
-      "values": ["perpetual", "term", "editorial"], "description": "How long and for what use a licence runs." },
-    { "id": "assets__rendition_profile", "name": "Rendition profile", "kind": "enum",
-      "values": ["thumbnail", "web_small", "web_large", "print", "social_square", "video_720p", "video_1080p", "audio_mp3", "poster_frame"],
-      "description": "The output a rendition is made for." },
-    { "id": "assets__usage_scope", "name": "Usage scope", "kind": "enum",
-      "values": ["web", "app", "print", "social", "broadcast", "internal"], "description": "Where an asset may be used." },
-    { "id": "assets__colour_space", "name": "Colour space", "kind": "enum",
-      "values": ["srgb", "adobe_rgb", "cmyk", "greyscale"], "description": "The colour space of an image." },
-    { "id": "assets__upload_status", "name": "Upload status", "kind": "enum",
-      "values": ["pending", "scanning", "ready", "quarantined", "rejected"], "description": "Where an upload is in its checks." },
-    { "id": "assets__video_codec", "name": "Video codec", "kind": "enum",
-      "values": ["h264", "h265", "vp9", "av1", "prores"], "description": "The codec of a video rendition." },
-    { "id": "assets__dimensions", "name": "Dimensions", "kind": "struct",
-      "fields": [ { "name": "width", "type": "u32" }, { "name": "height", "type": "u32" }, { "name": "dpi", "type": "u32" } ],
-      "description": "Pixel size and resolution of an image." },
-    { "id": "assets__rights_window", "name": "Rights window", "kind": "struct",
-      "fields": [ { "name": "territory", "type": "string" }, { "name": "starts_at", "type": "timestamp" }, { "name": "ends_at", "type": "timestamp" }, { "name": "exclusive", "type": "bool" } ],
-      "description": "The territory and dates a usage right holds for." }
-  ],
 
   // Roles: librarians and licence managers are people; the media processor is an agent.
   "roles": [
@@ -208,7 +126,13 @@
   // The asset board page, presenting the ready images query.
   "views": [
     { "id": "assets__asset_board", "route": "/assets/board", "title": "Ready assets",
-      "sections": { "main": { "query": "assets__ready_images", "args": {}, "include": [], "markdown": [], "single": false } } }
+      "sections": { "main": { "query": "assets__ready_images", "args": {}, "include": [], "markdown": [], "single": false } } },
+    {"id":"assets__library_view","route":"/assets/library","title":"Media library","sections":{"main":{"query":"assets__collection_assets","args":{"collection":{"Const":{"Str":"x"}}},"include":[],"markdown":[],"single":false}}},
+    {"id":"assets__asset_detail_view","route":"/assets/library/:slug","title":"Asset","sections":{"main":{"query":"assets__collection_assets","args":{"collection":{"Const":{"Str":"x"}}},"include":[],"markdown":[],"single":false}}},
+    {"id":"assets__asset_upload_view","route":"/assets/upload","title":"Upload asset","sections":{"main":{"query":"assets__collection_assets","args":{"collection":{"Const":{"Str":"x"}}},"include":[],"markdown":[],"single":false}}},
+    {"id":"assets__collections_view","route":"/assets/collections","title":"Collections","sections":{"main":{"query":"assets__collection_assets","args":{"collection":{"Const":{"Str":"x"}}},"include":[],"markdown":[],"single":false}}},
+    {"id":"assets__licences_view","route":"/assets/licences","title":"Licences","sections":{"main":{"query":"assets__expiring_licences","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"assets__usage_settings_view","route":"/assets/settings","title":"Usage settings","sections":{"main":{"query":"assets__collection_assets","args":{"collection":{"Const":{"Str":"x"}}},"include":[],"markdown":[],"single":false}}}
   ],
 
   // Asset life cycle on the status field: scan, then accept or quarantine; or reject before scanning.
@@ -223,22 +147,22 @@
 
   // Screens. Each has one ui-notice-received binding and one ui-session-ended binding (see liveBindings).
   "screens": [
-    { "id": "assets__library", "name": "Media library", "route": "/assets/library", "viewModel": "assets__read_library",
+    { "id": "assets__library", "name": "Media library", "route": "/assets/library", "viewModel": "assets__library_view",
       "kind": "assets.list", "auth": "session", "description": "The assets of the library, by kind, collection and keyword.",
       "viewName": "assets_library", "title": "Media library", "query": ["kind", "collection", "keyword"] },
-    { "id": "assets__asset_detail", "name": "Asset detail", "route": "/assets/library/:slug", "viewModel": "assets__read_asset_detail",
+    { "id": "assets__asset_detail", "name": "Asset detail", "route": "/assets/library/:slug", "viewModel": "assets__asset_detail_view",
       "kind": "assets.detail", "auth": "session", "description": "One asset with its renditions, licence and usage rights.",
       "viewName": "assets_asset_detail", "title": "Asset" },
-    { "id": "assets__asset_upload", "name": "Asset upload", "route": "/assets/upload", "viewModel": "assets__read_library",
+    { "id": "assets__asset_upload", "name": "Asset upload", "route": "/assets/upload", "viewModel": "assets__asset_upload_view",
       "kind": "assets.editor", "auth": "session", "description": "Add an asset with its credit, rights and technical details.",
       "viewName": "assets_asset_upload", "title": "Upload asset" },
-    { "id": "assets__collections", "name": "Collections", "route": "/assets/collections", "viewModel": "assets__read_library",
+    { "id": "assets__collections", "name": "Collections", "route": "/assets/collections", "viewModel": "assets__collections_view",
       "kind": "assets.list", "auth": "session", "description": "The collection tree of the library.",
       "viewName": "assets_collections", "title": "Collections" },
-    { "id": "assets__licences", "name": "Licences", "route": "/assets/licences", "viewModel": "assets__read_licences",
+    { "id": "assets__licences", "name": "Licences", "route": "/assets/licences", "viewModel": "assets__licences_view",
       "kind": "assets.list", "auth": "session", "description": "Licences and their end dates, with expiry actions.",
       "viewName": "assets_licences", "title": "Licences" },
-    { "id": "assets__usage_settings", "name": "Usage settings", "route": "/assets/settings", "viewModel": "assets__read_usage_settings",
+    { "id": "assets__usage_settings", "name": "Usage settings", "route": "/assets/settings", "viewModel": "assets__usage_settings_view",
       "kind": "assets.settings", "auth": "session", "description": "Default licence term and watermarking for the library.",
       "viewName": "assets_usage_settings", "title": "Usage settings" }
   ],
@@ -329,90 +253,15 @@
 
   // Messages shown for failed checks and errors.
   "errorMessages": [
-    { "id": "assets__error_checksum_duplicate", "on": "check", "kinds": ["unique"], "text": "This file is already in the library.", "field": "checksum" },
-    { "id": "assets__error_title_required", "on": "check", "kinds": ["required"], "text": "An asset needs a title.", "field": "title" },
+    { "id": "assets__error_checksum_duplicate", "on": "check", "kinds": ["unique"], "text": "This file is already in the library.", "field": { "name": "checksum" } },
+    { "id": "assets__error_title_required", "on": "check", "kinds": ["required"], "text": "An asset needs a title.", "field": { "name": "title" } },
     { "id": "assets__error_file_refused", "on": "error", "kinds": ["policy"], "text": "This file type is not accepted by the library." },
     { "id": "assets__error_licence_ended", "on": "error", "kinds": ["workflow"], "text": "This licence has already ended." }
   ],
 
   // Domain facts this module reports.
-  "events": [
-    { "id": "assets__asset_ingested_event", "name": "Asset ingested", "description": "An asset passed its upload checks and joined the library.",
-      "payload": [ { "name": "asset", "type": "string" }, { "name": "at", "type": "timestamp" } ] },
-    { "id": "assets__renditions_ready_event", "name": "Renditions ready", "description": "The renditions of an asset were made.",
-      "payload": [ { "name": "asset", "type": "string" } ] },
-    { "id": "assets__licence_expired_event", "name": "Licence expired", "description": "A licence reached its end date or was expired early.",
-      "payload": [ { "name": "licence", "type": "string" }, { "name": "at", "type": "timestamp" } ] }
-  ],
 
   // The contracts the screens, forms and actions call. All are facades.
-  "contracts": [
-    { "id": "assets__read_library", "name": "Read the media library", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["media-deliver"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "kind", "type": "string" }, { "name": "collection", "type": "string" }, { "name": "keyword", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the library view for the kind, collection and keyword named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "assets__read_asset_detail", "name": "Read an asset", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["media-deliver"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "slug", "type": "string" } ],
-      "outputs": [ { "name": "asset", "type": "json" } ],
-      "postconditions": ["The answer is the asset with the slug named, with its renditions."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "assets__upload_asset", "name": "Upload an asset", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in librarian", "requires": ["self-file-upload", "upload-scan"] },
-      "idempotent": false, "timeoutMs": 10000,
-      "inputs": [
-        { "name": "title", "type": "string" }, { "name": "slug", "type": "string" }, { "name": "kind", "type": "string" },
-        { "name": "alt_text", "type": "string" }, { "name": "caption", "type": "string" }, { "name": "long_description", "type": "string" },
-        { "name": "keywords", "type": "string" }, { "name": "collection", "type": "string" }, { "name": "subject_tags", "type": "string" },
-        { "name": "photographer", "type": "string" }, { "name": "credit_line", "type": "string" }, { "name": "licence_ref", "type": "string" },
-        { "name": "licence_type", "type": "string" }, { "name": "territory", "type": "string" }, { "name": "rights_expiry_text", "type": "string" },
-        { "name": "usage_scope", "type": "string" }, { "name": "colour_space", "type": "string" }, { "name": "dpi", "type": "string" },
-        { "name": "width_px", "type": "string" }, { "name": "height_px", "type": "string" }, { "name": "duration_text", "type": "string" },
-        { "name": "codec", "type": "string" }, { "name": "original_filename", "type": "string" }, { "name": "checksum", "type": "string" },
-        { "name": "public_visible", "type": "bool" } ],
-      "outputs": [ { "name": "asset_id", "type": "u64" } ],
-      "postconditions": ["The asset is recorded in the library with status pending until its checks finish."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "assets__read_licences", "name": "Read the licences", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in licence manager", "requires": ["records-read"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "status", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the licence list for the status named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "assets__request_licence_expiry", "name": "Expire a licence", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in licence manager", "requires": ["assets__licence_manage"] },
-      "idempotent": false, "timeoutMs": 5000,
-      "inputs": [ { "name": "licence", "type": "string" }, { "name": "reason", "type": "string" } ],
-      "outputs": [ { "name": "state", "type": "string" } ],
-      "postconditions": ["The licence ends at the time the expiry was accepted."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "assets__sign_preview", "name": "Sign a preview link", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["media-sign"] },
-      "idempotent": true, "timeoutMs": 1000,
-      "inputs": [ { "name": "asset", "type": "string" } ],
-      "outputs": [ { "name": "url", "type": "string" } ],
-      "postconditions": ["The answer is a short-lived link to the preview image of the asset."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "assets__read_usage_settings", "name": "Read the usage settings", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["setting-read"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the default licence term and the watermark default."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "assets__save_usage_settings", "name": "Save the usage settings", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in tenant administrator", "requires": ["setting-write-tenant"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "default_term_days", "type": "string" }, { "name": "watermark_default", "type": "bool" } ],
-      "outputs": [ { "name": "saved", "type": "bool" } ],
-      "postconditions": ["The tenant usage settings hold the values saved."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
-  ],
 
   // Claims about what the module promises.
   "claims": [
@@ -452,7 +301,11 @@
       "subject": { "object": "assets__licence", "input": "licence" },
       "conditions": [ { "id": "not_ended", "expr": "record.ends_at > now", "error": "already-ended", "message": "This licence has already ended." } ],
       "steps": [
-        { "UpdateRecord": { "id": "expire", "object": "assets__licence", "record": "record.$id", "fields": { "ends_at": "now" } } } ] }
+        { "UpdateRecord": { "id": "expire", "object": "assets__licence", "record": "record.$id", "fields": { "ends_at": "now" } } } ] },
+    {"id":"assets__upload_asset","label":"Upload an asset","inputs":[{"name":"title","ty":"Str","required":false,"label":"title"},{"name":"slug","ty":"Str","required":false,"label":"slug"},{"name":"kind","ty":"Str","required":false,"label":"kind"},{"name":"alt_text","ty":"Str","required":false,"label":"alt text"},{"name":"caption","ty":"Str","required":false,"label":"caption"},{"name":"long_description","ty":"Str","required":false,"label":"long description"},{"name":"keywords","ty":"Str","required":false,"label":"keywords"},{"name":"collection","ty":"Str","required":false,"label":"collection"},{"name":"subject_tags","ty":"Str","required":false,"label":"subject tags"},{"name":"photographer","ty":"Str","required":false,"label":"photographer"},{"name":"credit_line","ty":"Str","required":false,"label":"credit line"},{"name":"licence_ref","ty":"Str","required":false,"label":"licence ref"},{"name":"licence_type","ty":"Str","required":false,"label":"licence type"},{"name":"territory","ty":"Str","required":false,"label":"territory"},{"name":"rights_expiry_text","ty":"Str","required":false,"label":"rights expiry text"},{"name":"usage_scope","ty":"Str","required":false,"label":"usage scope"},{"name":"colour_space","ty":"Str","required":false,"label":"colour space"},{"name":"dpi","ty":"Str","required":false,"label":"dpi"},{"name":"width_px","ty":"Str","required":false,"label":"width px"},{"name":"height_px","ty":"Str","required":false,"label":"height px"},{"name":"duration_text","ty":"Str","required":false,"label":"duration text"},{"name":"codec","ty":"Str","required":false,"label":"codec"},{"name":"original_filename","ty":"Str","required":false,"label":"original filename"},{"name":"checksum","ty":"Str","required":false,"label":"checksum"},{"name":"public_visible","ty":"Bool","required":false,"label":"public visible"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"assets__request_licence_expiry","label":"Expire a licence","inputs":[{"name":"licence","ty":"Str","required":false,"label":"licence"},{"name":"reason","ty":"Str","required":false,"label":"reason"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"assets__save_usage_settings","label":"Save the usage settings","inputs":[{"name":"default_term_days","ty":"Str","required":false,"label":"default term days"},{"name":"watermark_default","ty":"Bool","required":false,"label":"watermark default"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"assets__read_library","label":"Read the media library","inputs":[{"name":"kind","ty":"Str","required":false,"label":"kind"},{"name":"collection","ty":"Str","required":false,"label":"collection"},{"name":"keyword","ty":"Str","required":false,"label":"keyword"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]}
   ],
 
   // Mail and notice text. Bodies are JSON held in a string.

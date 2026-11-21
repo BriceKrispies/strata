@@ -13,100 +13,8 @@
   },
 
   // Data model. Article and revision refer to each other; pages refer to their parent page.
-  "records": [
-    { "id": "content__article_rec", "name": "Article", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "current_revision", "type": "u64", "refersTo": "content__article_revision_rec", "onDelete": "restrict", "optional": true },
-        { "name": "title", "type": "string" },
-        { "name": "slug", "type": "string" },
-        { "name": "state", "type": "content__article_state" },
-        { "name": "region", "type": "string", "optional": true },
-        { "name": "owner_name", "type": "string", "personal": "name" },
-        { "name": "contact_email", "type": "string", "personal": "contact", "optional": true },
-        { "name": "published_at", "type": "timestamp", "optional": true },
-        { "name": "embargo", "type": "u64", "refersTo": "content__embargo_rec", "onDelete": "restrict", "optional": true } ],
-      "retention": "Until the article is removed by its retention rule.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "content__article_revision_rec", "name": "Article revision", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "article", "type": "u64", "refersTo": "content__article_rec", "onDelete": "restrict" },
-        { "name": "number", "type": "u32" },
-        { "name": "body", "type": "string" },
-        { "name": "note", "type": "content__revision_note" },
-        { "name": "created_at", "type": "timestamp" } ],
-      "retention": "Kept with its article until the article is removed.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "content__page_rec", "name": "Page", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "parent", "type": "u64", "refersTo": "content__page_rec", "onDelete": "restrict", "optional": true },
-        { "name": "slug", "type": "string" },
-        { "name": "title", "type": "string" },
-        { "name": "template", "type": "content__page_template" },
-        { "name": "hero_block", "type": "u64", "refersTo": "content__block_rec", "onDelete": "set-null", "optional": true } ],
-      "retention": "Until the page is deleted by its editor.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "content__block_rec", "name": "Block", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "page", "type": "u64", "refersTo": "content__page_rec", "onDelete": "restrict" },
-        { "name": "position", "type": "u32" },
-        { "name": "kind", "type": "content__block_kind" },
-        { "name": "body", "type": "string" },
-        { "name": "variant", "type": "u64", "refersTo": "content__variant_rec", "onDelete": "set-null", "optional": true } ],
-      "retention": "Removed with its page.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "content__variant_rec", "name": "Variant", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "article", "type": "u64", "refersTo": "content__article_rec", "onDelete": "restrict" },
-        { "name": "channel", "type": "content__variant_channel" },
-        { "name": "locale", "type": "content__locale" },
-        { "name": "headline", "type": "string" },
-        { "name": "seo", "type": "content__seo_block" },
-        { "name": "slot", "type": "content__publish_slot", "optional": true } ],
-      "retention": "Removed with its article.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "content__embargo_rec", "name": "Embargo", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "article", "type": "u64", "refersTo": "content__article_rec", "onDelete": "restrict" },
-        { "name": "scope", "type": "content__embargo_scope" },
-        { "name": "starts_at", "type": "timestamp" },
-        { "name": "ends_at", "type": "timestamp" },
-        { "name": "note", "type": "string", "optional": true } ],
-      "retention": "Kept for two years after the embargo ends.",
-      "schemaVersion": 1, "realisation": "target" }
-  ],
 
   // Value types: article and block enums, structs for revision notes, SEO and publish slots.
-  "types": [
-    { "id": "content__article_state", "name": "Article state", "kind": "enum",
-      "values": ["draft", "in_review", "scheduled", "published", "retired"], "description": "Where an article is in its life." },
-    { "id": "content__block_kind", "name": "Block kind", "kind": "enum",
-      "values": ["paragraph", "heading", "quote", "image", "video_embed", "table", "callout", "list", "divider", "code"],
-      "description": "The kind of a content block on a page." },
-    { "id": "content__revision_note", "name": "Revision note", "kind": "struct",
-      "fields": [ { "name": "author", "type": "string" }, { "name": "at", "type": "timestamp" }, { "name": "summary", "type": "string" } ],
-      "description": "Who changed an article revision, when, and why." },
-    { "id": "content__embargo_scope", "name": "Embargo scope", "kind": "enum",
-      "values": ["global", "region", "channel"], "description": "Which readers an embargo holds back." },
-    { "id": "content__variant_channel", "name": "Variant channel", "kind": "enum",
-      "values": ["web", "app", "syndication", "print"], "description": "The channel a variant of an article is written for." },
-    { "id": "content__locale", "name": "Locale", "kind": "enum",
-      "values": ["en_gb", "en_ie", "en_us", "en_ca", "en_au", "de_de", "fr_fr", "fr_ca", "es_es", "it_it", "nl_nl", "pt_br"],
-      "description": "The locales a variant can be written in." },
-    { "id": "content__seo_block", "name": "SEO block", "kind": "struct",
-      "fields": [ { "name": "meta_title", "type": "string" }, { "name": "meta_description", "type": "string" }, { "name": "canonical_url", "type": "string" } ],
-      "description": "Search metadata for a variant." },
-    { "id": "content__publish_slot", "name": "Publish slot", "kind": "struct",
-      "fields": [ { "name": "at", "type": "timestamp" }, { "name": "zone", "type": "string" } ],
-      "description": "A scheduled publishing time and its time zone." },
-    { "id": "content__page_template", "name": "Page template", "kind": "enum",
-      "values": ["landing", "article", "index", "campaign", "legal"], "description": "The layout a page is built on." }
-  ],
 
   // Roles: one editor role per region, plus publisher, page designer and a generic editor.
   "roles": [
@@ -217,7 +125,13 @@
   // The article board page, presenting the live articles query.
   "views": [
     { "id": "content__article_board", "route": "/content/board", "title": "Article board",
-      "sections": { "main": { "query": "content__live_articles", "args": {}, "include": [], "markdown": [], "single": false } } }
+      "sections": { "main": { "query": "content__live_articles", "args": {}, "include": [], "markdown": [], "single": false } } },
+    {"id":"content__article_list_view","route":"/content/articles","title":"Articles","sections":{"main":{"query":"content__live_articles","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"content__article_detail_view","route":"/content/articles/:slug","title":"Article","sections":{"main":{"query":"content__live_articles","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"content__article_editor_view","route":"/content/articles/:slug/edit","title":"Edit article","sections":{"main":{"query":"content__live_articles","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"content__page_editor_view","route":"/content/pages/:slug/edit","title":"Edit page","sections":{"main":{"query":"content__live_articles","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"content__landing_preview_view","route":"/content/preview/:slug","title":"Landing preview","sections":{"main":{"query":"content__live_articles","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"content__embargo_settings_view","route":"/content/embargoes","title":"Embargoes","sections":{"main":{"query":"content__embargoes_by_scope","args":{"scope":{"Const":{"Str":"x"}}},"include":[],"markdown":[],"single":false}}}
   ],
 
   // Article life cycle on the state field. Publishing sets the published time.
@@ -234,22 +148,22 @@
 
   // Screens. Each has one ui-notice-received binding and one ui-session-ended binding (see liveBindings).
   "screens": [
-    { "id": "content__article_list", "name": "Article list", "route": "/content/articles", "viewModel": "content__read_article_board",
+    { "id": "content__article_list", "name": "Article list", "route": "/content/articles", "viewModel": "content__article_list_view",
       "kind": "content.list", "auth": "session", "description": "The articles of the tenant, by status and locale.",
       "viewName": "content_article_list", "title": "Articles", "query": ["status", "locale"] },
-    { "id": "content__article_detail", "name": "Article detail", "route": "/content/articles/:slug", "viewModel": "content__read_article_detail",
+    { "id": "content__article_detail", "name": "Article detail", "route": "/content/articles/:slug", "viewModel": "content__article_detail_view",
       "kind": "content.detail", "auth": "session", "description": "One article with its revisions, variants and embargo.",
       "viewName": "content_article_detail", "title": "Article" },
-    { "id": "content__article_editor", "name": "Article editor", "route": "/content/articles/:slug/edit", "viewModel": "content__read_article_detail",
+    { "id": "content__article_editor", "name": "Article editor", "route": "/content/articles/:slug/edit", "viewModel": "content__article_editor_view",
       "kind": "content.editor", "auth": "session", "description": "Edit an article and its body parts, SEO, topics, credits and rights.",
       "viewName": "content_article_editor", "title": "Edit article" },
-    { "id": "content__page_editor", "name": "Page editor", "route": "/content/pages/:slug/edit", "viewModel": "content__read_landing_preview",
+    { "id": "content__page_editor", "name": "Page editor", "route": "/content/pages/:slug/edit", "viewModel": "content__page_editor_view",
       "kind": "content.editor", "auth": "session", "description": "Build and change a landing or campaign page.",
       "viewName": "content_page_editor", "title": "Edit page" },
-    { "id": "content__landing_preview", "name": "Landing preview", "route": "/content/preview/:slug", "viewModel": "content__read_landing_preview",
+    { "id": "content__landing_preview", "name": "Landing preview", "route": "/content/preview/:slug", "viewModel": "content__landing_preview_view",
       "kind": "content.detail", "auth": "session", "description": "Preview a landing page as readers will see it.",
       "viewName": "content_landing_preview", "title": "Landing preview" },
-    { "id": "content__embargo_settings", "name": "Embargo settings", "route": "/content/embargoes", "viewModel": "content__read_embargo_settings",
+    { "id": "content__embargo_settings", "name": "Embargo settings", "route": "/content/embargoes", "viewModel": "content__embargo_settings_view",
       "kind": "content.settings", "auth": "session", "description": "Embargoes on articles and the default embargo length.",
       "viewName": "content_embargo_settings", "title": "Embargoes" }
   ],
@@ -396,117 +310,15 @@
 
   // Messages shown for failed checks and errors.
   "errorMessages": [
-    { "id": "content__error_title_taken", "on": "check", "kinds": ["unique"], "text": "Another article already uses this title.", "field": "title" },
-    { "id": "content__error_slug_required", "on": "check", "kinds": ["required"], "text": "An article needs a URL slug before it can be saved.", "field": "slug" },
+    { "id": "content__error_title_taken", "on": "check", "kinds": ["unique"], "text": "Another article already uses this title.", "field": { "name": "title" } },
+    { "id": "content__error_slug_required", "on": "check", "kinds": ["required"], "text": "An article needs a URL slug before it can be saved.", "field": { "name": "slug" } },
     { "id": "content__error_conflict", "on": "error", "kinds": ["conflict"], "text": "This was changed elsewhere. Reload to see the latest version." },
     { "id": "content__error_not_in_review", "on": "error", "kinds": ["workflow"], "text": "Only an article in review can be published." }
   ],
 
   // Domain facts this module reports.
-  "events": [
-    { "id": "content__article_published_event", "name": "Article published", "description": "An article went live.",
-      "payload": [ { "name": "article", "type": "string" }, { "name": "at", "type": "timestamp" } ] },
-    { "id": "content__revision_created_event", "name": "Revision created", "description": "A new revision of an article was stored.",
-      "payload": [ { "name": "article", "type": "string" }, { "name": "number", "type": "number" } ] },
-    { "id": "content__embargo_lifted_event", "name": "Embargo lifted", "description": "An embargo on an article ended.",
-      "payload": [ { "name": "embargo", "type": "string" } ] }
-  ],
 
   // The contracts the screens, forms and actions call. All are facades.
-  "contracts": [
-    { "id": "content__read_article_board", "name": "Read the article board", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["content-read"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "status", "type": "string" }, { "name": "locale", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the article board for the status and locale named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "content__read_article_detail", "name": "Read an article", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["content-read"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "slug", "type": "string" } ],
-      "outputs": [ { "name": "article", "type": "json" } ],
-      "postconditions": ["The answer is the article with the slug named, with its current revision."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "content__submit_article", "name": "Submit an article", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in editor", "requires": ["content-write", "content__edit"] },
-      "idempotent": false, "timeoutMs": 5000,
-      "inputs": [
-        { "name": "title", "type": "string" }, { "name": "slug", "type": "string" }, { "name": "summary", "type": "string" },
-        { "name": "standfirst", "type": "string" }, { "name": "byline", "type": "string" }, { "name": "headline_alt", "type": "string" },
-        { "name": "kicker", "type": "string" }, { "name": "dek", "type": "string" }, { "name": "lede_image_caption", "type": "string" },
-        { "name": "lede_image_alt", "type": "string" }, { "name": "body_intro", "type": "string" },
-        { "name": "body_part_1", "type": "string" }, { "name": "body_part_2", "type": "string" }, { "name": "body_part_3", "type": "string" },
-        { "name": "body_part_4", "type": "string" }, { "name": "body_part_5", "type": "string" }, { "name": "body_part_6", "type": "string" },
-        { "name": "body_part_7", "type": "string" }, { "name": "body_part_8", "type": "string" }, { "name": "body_part_9", "type": "string" },
-        { "name": "body_part_10", "type": "string" }, { "name": "body_closing", "type": "string" },
-        { "name": "seo_meta_title", "type": "string" }, { "name": "seo_meta_description", "type": "string" },
-        { "name": "seo_canonical_url", "type": "string" }, { "name": "seo_keywords", "type": "string" },
-        { "name": "seo_og_title", "type": "string" }, { "name": "seo_og_description", "type": "string" },
-        { "name": "seo_og_image_alt", "type": "string" }, { "name": "seo_no_index", "type": "bool" },
-        { "name": "topic_primary", "type": "string" }, { "name": "topic_secondary", "type": "string" }, { "name": "topic_tertiary", "type": "string" },
-        { "name": "category_primary", "type": "string" }, { "name": "category_secondary", "type": "string" }, { "name": "category_section", "type": "string" },
-        { "name": "vertical", "type": "string" }, { "name": "sub_vertical", "type": "string" }, { "name": "audience_segment", "type": "string" },
-        { "name": "tag_list", "type": "string" },
-        { "name": "published_date_text", "type": "string" }, { "name": "scheduled_date_text", "type": "string" },
-        { "name": "embargo_until_text", "type": "string" }, { "name": "expires_date_text", "type": "string" },
-        { "name": "review_due_text", "type": "string" }, { "name": "last_reviewed_text", "type": "string" },
-        { "name": "created_date_text", "type": "string" }, { "name": "updated_date_text", "type": "string" },
-        { "name": "event_date_text", "type": "string" }, { "name": "timezone_text", "type": "string" },
-        { "name": "embargo", "type": "bool" }, { "name": "featured", "type": "bool" }, { "name": "sponsored", "type": "bool" },
-        { "name": "paid_content", "type": "bool" }, { "name": "updates_available", "type": "bool" },
-        { "name": "requires_legal_review", "type": "bool" }, { "name": "translation_ready", "type": "bool" },
-        { "name": "accessibility_checked", "type": "bool" },
-        { "name": "credit_photographer", "type": "string" }, { "name": "credit_illustrator", "type": "string" },
-        { "name": "credit_source", "type": "string" }, { "name": "credit_agency", "type": "string" },
-        { "name": "credit_line_text", "type": "string" }, { "name": "credit_licence_ref", "type": "string" },
-        { "name": "rights_notes", "type": "string" }, { "name": "rights_territory", "type": "string" },
-        { "name": "rights_expiry_text", "type": "string" }, { "name": "rights_holder", "type": "string" },
-        { "name": "rights_clearance_ref", "type": "string" }, { "name": "rights_legal_note", "type": "string" } ],
-      "outputs": [ { "name": "article_id", "type": "u64" } ],
-      "postconditions": ["A new revision of the article is stored and the article keeps its state."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "content__request_publish", "name": "Request publication of an article", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in publisher", "requires": ["content__publish"] },
-      "idempotent": false, "timeoutMs": 5000,
-      "inputs": [ { "name": "article", "type": "string" } ],
-      "outputs": [ { "name": "state", "type": "string" } ],
-      "postconditions": ["The article is in the published state if its workflow allowed the change."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "content__save_page", "name": "Save a page", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in page designer", "requires": ["content__page_design"] },
-      "idempotent": true, "timeoutMs": 5000,
-      "inputs": [
-        { "name": "slug", "type": "string" }, { "name": "title", "type": "string" }, { "name": "template", "type": "string" },
-        { "name": "hero_text", "type": "string" }, { "name": "meta_title", "type": "string" }, { "name": "meta_description", "type": "string" },
-        { "name": "published", "type": "bool" }, { "name": "layout_notes", "type": "string" } ],
-      "outputs": [ { "name": "saved", "type": "bool" } ],
-      "postconditions": ["The page holds the values saved."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "content__read_landing_preview", "name": "Read a landing page preview", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member with draft access", "requires": ["content-draft-read"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "slug", "type": "string" } ],
-      "outputs": [ { "name": "preview", "type": "json" } ],
-      "postconditions": ["The answer is the draft page with the slug named, as readers would see it."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "content__set_embargo", "name": "Set an embargo", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in publisher", "requires": ["content__embargo_manage"] },
-      "idempotent": false, "timeoutMs": 5000,
-      "inputs": [
-        { "name": "article", "type": "string" }, { "name": "scope", "type": "string" }, { "name": "starts_at", "type": "string" },
-        { "name": "ends_at", "type": "string" }, { "name": "note", "type": "string" }, { "name": "active", "type": "bool" } ],
-      "outputs": [ { "name": "embargo_id", "type": "u64" } ],
-      "postconditions": ["The embargo on the article is stored for the window named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "content__read_embargo_settings", "name": "Read the embargo settings", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["content-read"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the list of embargoes and the default embargo length."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
-  ],
 
   // Claims about what the module promises.
   "claims": [
@@ -554,7 +366,12 @@
       "subject": { "object": "content__article", "input": "article" },
       "conditions": [ { "id": "is_published", "expr": "record.state == 'published'", "error": "not-published", "message": "Only a published article can be retired." } ],
       "steps": [
-        { "UpdateRecord": { "id": "retire", "object": "content__article", "record": "record.$id", "fields": { "state": "'retired'" } } } ] }
+        { "UpdateRecord": { "id": "retire", "object": "content__article", "record": "record.$id", "fields": { "state": "'retired'" } } } ] },
+    {"id":"content__submit_article","label":"Submit an article","inputs":[{"name":"title","ty":"Str","required":false,"label":"title"},{"name":"slug","ty":"Str","required":false,"label":"slug"},{"name":"summary","ty":"Str","required":false,"label":"summary"},{"name":"standfirst","ty":"Str","required":false,"label":"standfirst"},{"name":"byline","ty":"Str","required":false,"label":"byline"},{"name":"headline_alt","ty":"Str","required":false,"label":"headline alt"},{"name":"kicker","ty":"Str","required":false,"label":"kicker"},{"name":"dek","ty":"Str","required":false,"label":"dek"},{"name":"lede_image_caption","ty":"Str","required":false,"label":"lede image caption"},{"name":"lede_image_alt","ty":"Str","required":false,"label":"lede image alt"},{"name":"body_intro","ty":"Str","required":false,"label":"body intro"},{"name":"body_part_1","ty":"Str","required":false,"label":"body part 1"},{"name":"body_part_2","ty":"Str","required":false,"label":"body part 2"},{"name":"body_part_3","ty":"Str","required":false,"label":"body part 3"},{"name":"body_part_4","ty":"Str","required":false,"label":"body part 4"},{"name":"body_part_5","ty":"Str","required":false,"label":"body part 5"},{"name":"body_part_6","ty":"Str","required":false,"label":"body part 6"},{"name":"body_part_7","ty":"Str","required":false,"label":"body part 7"},{"name":"body_part_8","ty":"Str","required":false,"label":"body part 8"},{"name":"body_part_9","ty":"Str","required":false,"label":"body part 9"},{"name":"body_part_10","ty":"Str","required":false,"label":"body part 10"},{"name":"body_closing","ty":"Str","required":false,"label":"body closing"},{"name":"seo_meta_title","ty":"Str","required":false,"label":"seo meta title"},{"name":"seo_meta_description","ty":"Str","required":false,"label":"seo meta description"},{"name":"seo_canonical_url","ty":"Str","required":false,"label":"seo canonical url"},{"name":"seo_keywords","ty":"Str","required":false,"label":"seo keywords"},{"name":"seo_og_title","ty":"Str","required":false,"label":"seo og title"},{"name":"seo_og_description","ty":"Str","required":false,"label":"seo og description"},{"name":"seo_og_image_alt","ty":"Str","required":false,"label":"seo og image alt"},{"name":"seo_no_index","ty":"Bool","required":false,"label":"seo no index"},{"name":"topic_primary","ty":"Str","required":false,"label":"topic primary"},{"name":"topic_secondary","ty":"Str","required":false,"label":"topic secondary"},{"name":"topic_tertiary","ty":"Str","required":false,"label":"topic tertiary"},{"name":"category_primary","ty":"Str","required":false,"label":"category primary"},{"name":"category_secondary","ty":"Str","required":false,"label":"category secondary"},{"name":"category_section","ty":"Str","required":false,"label":"category section"},{"name":"vertical","ty":"Str","required":false,"label":"vertical"},{"name":"sub_vertical","ty":"Str","required":false,"label":"sub vertical"},{"name":"audience_segment","ty":"Str","required":false,"label":"audience segment"},{"name":"tag_list","ty":"Str","required":false,"label":"tag list"},{"name":"published_date_text","ty":"Str","required":false,"label":"published date text"},{"name":"scheduled_date_text","ty":"Str","required":false,"label":"scheduled date text"},{"name":"embargo_until_text","ty":"Str","required":false,"label":"embargo until text"},{"name":"expires_date_text","ty":"Str","required":false,"label":"expires date text"},{"name":"review_due_text","ty":"Str","required":false,"label":"review due text"},{"name":"last_reviewed_text","ty":"Str","required":false,"label":"last reviewed text"},{"name":"created_date_text","ty":"Str","required":false,"label":"created date text"},{"name":"updated_date_text","ty":"Str","required":false,"label":"updated date text"},{"name":"event_date_text","ty":"Str","required":false,"label":"event date text"},{"name":"timezone_text","ty":"Str","required":false,"label":"timezone text"},{"name":"embargo","ty":"Bool","required":false,"label":"embargo"},{"name":"featured","ty":"Bool","required":false,"label":"featured"},{"name":"sponsored","ty":"Bool","required":false,"label":"sponsored"},{"name":"paid_content","ty":"Bool","required":false,"label":"paid content"},{"name":"updates_available","ty":"Bool","required":false,"label":"updates available"},{"name":"requires_legal_review","ty":"Bool","required":false,"label":"requires legal review"},{"name":"translation_ready","ty":"Bool","required":false,"label":"translation ready"},{"name":"accessibility_checked","ty":"Bool","required":false,"label":"accessibility checked"},{"name":"credit_photographer","ty":"Str","required":false,"label":"credit photographer"},{"name":"credit_illustrator","ty":"Str","required":false,"label":"credit illustrator"},{"name":"credit_source","ty":"Str","required":false,"label":"credit source"},{"name":"credit_agency","ty":"Str","required":false,"label":"credit agency"},{"name":"credit_line_text","ty":"Str","required":false,"label":"credit line text"},{"name":"credit_licence_ref","ty":"Str","required":false,"label":"credit licence ref"},{"name":"rights_notes","ty":"Str","required":false,"label":"rights notes"},{"name":"rights_territory","ty":"Str","required":false,"label":"rights territory"},{"name":"rights_expiry_text","ty":"Str","required":false,"label":"rights expiry text"},{"name":"rights_holder","ty":"Str","required":false,"label":"rights holder"},{"name":"rights_clearance_ref","ty":"Str","required":false,"label":"rights clearance ref"},{"name":"rights_legal_note","ty":"Str","required":false,"label":"rights legal note"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"content__save_page","label":"Save a page","inputs":[{"name":"slug","ty":"Str","required":false,"label":"slug"},{"name":"title","ty":"Str","required":false,"label":"title"},{"name":"template","ty":"Str","required":false,"label":"template"},{"name":"hero_text","ty":"Str","required":false,"label":"hero text"},{"name":"meta_title","ty":"Str","required":false,"label":"meta title"},{"name":"meta_description","ty":"Str","required":false,"label":"meta description"},{"name":"published","ty":"Bool","required":false,"label":"published"},{"name":"layout_notes","ty":"Str","required":false,"label":"layout notes"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"content__set_embargo","label":"Set an embargo","inputs":[{"name":"article","ty":"Str","required":false,"label":"article"},{"name":"scope","ty":"Str","required":false,"label":"scope"},{"name":"starts_at","ty":"Str","required":false,"label":"starts at"},{"name":"ends_at","ty":"Str","required":false,"label":"ends at"},{"name":"note","ty":"Str","required":false,"label":"note"},{"name":"active","ty":"Bool","required":false,"label":"active"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"content__read_article_board","label":"Read the article board","inputs":[{"name":"status","ty":"Str","required":false,"label":"status"},{"name":"locale","ty":"Str","required":false,"label":"locale"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"content__request_publish","label":"Request publication of an article","inputs":[{"name":"article","ty":"Str","required":false,"label":"article"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]}
   ],
 
   // Mail and notice text sent when an article is published. Bodies are JSON held in a string.

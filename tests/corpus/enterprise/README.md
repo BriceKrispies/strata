@@ -2,8 +2,9 @@
 
 A scale corpus for WG-5292: one large enterprise CMS and automation tenant, written as 14 product files, one per
 module. Each file is tenant metadata on the Strata platform (ARC-113, D-6546), imports the platform specification
-`specifications/spec.jsonc` and declares only its own namespaced entities. Together the files declare 1,290 entities,
-above the 500 the corpus is for.
+`specifications/spec.jsonc` and declares only its own namespaced entities. Together the files declare 1,074 entities,
+above the 500 the corpus is for. `crates/corpus` (WG-5398) installs all 14 into one tenant on any store and fills it with
+seeded records; every file passes `specc bundle`, the platform's own check for installing a product.
 
 ## Modules
 
@@ -25,28 +26,29 @@ above the 500 the corpus is for.
 ## Entity counts
 
 Counted by a node one-liner over the parsed files (JSONC with whole-line comments stripped). Every entry of every
-section counts once. Records and objects are separate kinds, so a module's data model appears in both.
+section counts once. The sections are the ones a tenant bundle has a place for, plus `claims` (statements about the
+product, not tenant metadata: specc leaves them out of the bundle, so they are not installed). The files declared 1,290
+entities before they were made installable (see "Made installable" below); the four sections that have no place in a
+tenant (`records` 76, `types` 120, `contracts` 126, `events` 42) were removed, and 87 views and 61 operations were
+added for the interface to bind to, so the files declare 1,074 now, still above the 500 the corpus is for.
 
-|module|records|types|roles|capabilities|objects|policies|queries|views|workflows|segments|settings|ledgerUnits|ledgerPools|ledgerLimits|screens|forms|actions|liveBindings|contracts|events|errorMessages|claims|mailTemplates|noticeTemplates|triggers|automations|operations|eventKinds|total|
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-|analytics|5|8|6|6|5|11|3|2|1|0|2|0|0|0|6|4|3|12|9|3|2|2|1|0|1|1|1|0|94|
-|approvals|5|8|6|4|5|6|2|1|1|0|2|0|0|0|6|4|3|12|8|3|2|2|1|1|1|1|2|0|86|
-|assets|5|9|3|3|5|5|3|1|1|0|2|0|0|0|6|4|3|12|8|3|4|2|1|1|1|1|1|1|85|
-|automation|5|8|3|3|5|5|3|1|1|1|2|1|1|1|6|4|3|12|8|3|2|2|1|2|4|5|2|1|95|
-|commerce|8|8|4|2|9|8|2|1|1|0|1|2|1|2|6|4|4|12|8|3|2|2|1|1|1|1|3|1|98|
-|content|6|9|5|7|5|6|3|1|1|1|2|0|0|0|6|4|4|12|8|3|4|2|1|1|1|1|2|1|96|
-|crm|5|9|4|5|5|5|2|1|1|0|2|0|0|0|6|4|5|12|11|3|2|2|1|1|1|1|2|1|91|
-|forms|6|8|3|3|5|5|2|1|1|0|2|0|0|0|6|4|3|12|11|3|2|2|1|1|2|1|2|1|87|
-|localisation|5|8|6|4|5|6|2|1|1|0|2|0|0|0|7|4|4|14|8|3|2|2|1|1|1|1|1|0|89|
-|marketing|5|9|3|3|5|5|2|1|1|3|2|0|0|0|6|4|4|12|9|3|2|2|3|1|3|3|2|1|94|
-|people|6|9|6|5|6|6|3|1|1|0|2|0|0|0|7|5|5|14|13|3|3|2|2|1|1|1|2|1|105|
-|publishing|5|8|3|4|4|4|2|1|1|1|0|0|0|0|6|4|3|12|6|3|2|2|1|1|3|3|2|1|82|
-|service|5|10|4|4|5|6|3|1|1|0|2|0|0|0|7|4|4|14|11|3|3|2|2|1|1|1|2|1|97|
-|taxonomy|5|9|4|3|4|5|8|1|1|3|2|0|0|0|6|4|3|12|8|3|2|2|1|1|1|1|2|0|91|
-|**total**|76|120|60|56|73|83|40|15|14|9|25|3|2|3|87|57|51|174|126|42|34|28|18|14|22|22|26|10|**1290**|
-
-Kinds the brief named, against the totals: 120 types, 76 records, 60 roles, 87 screens, 57 forms, 174 live bindings,
-51 actions, 42 events. Behaviours are not produced (see below).
+|module|roles|capabilities|objects|policies|queries|views|workflows|segments|settings|ledgerUnits|ledgerPools|ledgerLimits|screens|forms|actions|liveBindings|errorMessages|claims|mailTemplates|noticeTemplates|triggers|automations|operations|eventKinds|total|
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|analytics|6|6|5|11|3|8|1|0|2|0|0|0|6|4|3|12|2|2|1|0|1|1|5|0|79|
+|approvals|6|4|5|6|2|7|1|0|2|0|0|0|6|4|3|12|2|2|1|1|1|1|6|0|72|
+|assets|3|3|5|5|3|7|1|0|2|0|0|0|6|4|3|12|4|2|1|1|1|1|5|1|70|
+|automation|3|3|5|5|3|7|1|1|2|1|1|1|6|4|3|12|2|2|1|2|4|5|6|1|81|
+|commerce|4|2|9|8|2|7|1|0|1|2|1|2|6|4|4|12|2|2|1|1|1|1|7|1|81|
+|content|5|7|5|6|3|7|1|1|2|0|0|0|6|4|4|12|4|2|1|1|1|1|7|1|81|
+|crm|4|5|5|5|2|7|1|0|2|0|0|0|6|4|5|12|2|2|1|1|1|1|7|1|74|
+|forms|3|3|5|5|2|7|1|0|2|0|0|0|6|4|3|12|2|2|1|1|2|1|7|1|70|
+|localisation|6|4|5|6|2|8|1|0|2|0|0|0|7|4|4|14|2|2|1|1|1|1|5|0|76|
+|marketing|3|3|5|5|2|7|1|3|2|0|0|0|6|4|4|12|2|2|3|1|3|3|6|1|78|
+|people|6|5|6|6|3|8|1|0|2|0|0|0|7|5|5|14|3|2|2|1|1|1|8|1|87|
+|publishing|3|4|4|4|2|7|1|1|0|0|0|0|6|4|3|12|2|2|1|1|3|3|6|1|70|
+|service|4|4|5|6|3|8|1|0|2|0|0|0|7|4|4|14|3|2|2|1|1|1|6|1|79|
+|taxonomy|4|3|4|5|8|7|1|3|2|0|0|0|6|4|3|12|2|2|1|1|1|1|6|0|76|
+|**total**|60|56|73|83|40|102|14|9|25|3|2|3|87|57|51|174|34|28|18|14|22|22|87|10|**1074**|
 
 ## Could not express
 
@@ -75,9 +77,9 @@ From `crates/spec-compiler/src/layers.rs`, as the checker reads them:
   (`../../../specifications/spec.jsonc`), with `imports.entities` listing every platform id the file names.
 - Namespace: every entity id is the product id with hyphens as underscores, then `__`, then a local name
   (`content__article`). Ids are unique across the file, across sections.
-- Sections: only the product sections and typed sections (records, types, roles, capabilities, objects, policies,
-  queries, views, workflows, segments, settings, ledger units, pools and limits, mail and notice templates, triggers,
-  automations, operations, eventKinds, screens, forms, actions, live bindings, contracts, events, error messages, claims).
+- Sections: only those a tenant bundle has a place for (roles, capabilities, objects, policies, queries, views,
+  workflows, segments, settings, ledger units, pools and limits, mail and notice templates, triggers, automations,
+  operations, eventKinds, screens, forms, actions, live bindings, error messages) and claims, which the bundle leaves out.
 - Platform power: no platform-level roles, no anonymous, service or external holders, no contract with realisation
   other than facade, no implementedBy, no public anonymous contract, no core capability, no domain, elapsed or
   delivery event, no implementation-level behaviour.
@@ -93,13 +95,12 @@ From `crates/spec-compiler/src/layers.rs`, as the checker reads them:
 
 - Every file parses as JSONC (node, whole-line `//` comments stripped, trailing commas removed).
 - Totals above are counted by node over the parsed files.
-- Ids: every id carries its file's namespace, and no id appears twice in a file. The first pass had record and object
-  ids in common (for example `content__article` as both); the records were renamed with a `_rec` suffix (`refersTo`
-  updated to match), and the four cross-section clashes (three screens in localisation, publishing and service, and one
-  contract in approvals) were renamed with `_screen` and `_contract` suffixes.
-- References resolve: every `refersTo`, `screen`, `contract`, `viewModel`, `form`, `automation`, template, `unit`,
-  `policy`, `operation`, and `object` names an entity of the same file. The only exceptions are two expression field
-  names (`segment` in a fields map), which are not references.
+- Ids: every id carries its file's namespace, and no id appears twice in a file.
+- References resolve: every `screen`, `viewModel`, `contract` (now an operation), `form`, `automation`, template, `unit`,
+  `policy`, `operation`, and `object` names an entity of the same file. `specc bundle` checks this for every file.
+- Installable: each file passes `specc bundle --spec specifications/spec.jsonc --product <file> --out <dir>` with no
+  diagnostic (WG-5398), and `node` mirrors of the kernel's interface and view rules (routes, names, inputs, route
+  parameters) find nothing.
 
 ## specc findings
 
@@ -117,14 +118,40 @@ place, with no entity removed, so the total stays at 1,290:
 - `layer.expr-unknown-param` (6) and `layer.expr-type` (1): trigger conditions now read `param.hop < 4`, which every
   trigger's scope binds. The policy comparison is above.
 
-specc is not run again here. The coordinator re-runs it.
+### Made installable (WG-5398)
+
+The platform installs a product as a tenant bundle (`specc bundle`), which refused every file: 44 `bundle.section-no-place`,
+154 `bundle.ui-unresolved`, 24 `bundle.ui-unsupported`. No check was relaxed; the files were changed:
+
+- `bundle.section-no-place` (44): the sections `records`, `types`, `contracts` and `events` were removed from all 14 files
+  (76 records, 120 types, 126 contracts, 42 events). A tenant has no place for them: each `records` entry duplicated an
+  object of `objects` (the object is the tenant's record type), a `types` entry is a value type the tenant has no
+  section for (the objects spell their field types out), a `contracts` entry is realised as an operation, and the
+  platform's events are the platform's (a trigger names one). Nothing a tenant could hold was dropped.
+- `bundle.ui-unresolved` (screens, 87): every screen answers a route that some view of the product must answer. The 15
+  views the files had answered none of the 87 routes, so 87 views were added, one per screen (`<screen id>_view`, the
+  screen's route and title, one section on the product's query that best matches the screen's name, or its first query),
+  and each screen's `viewModel` now names its view instead of a contract.
+- `bundle.ui-unresolved` (forms and actions, 108 references): a form or action submits to an operation of the product,
+  and 61 of the contracts they named were not operations. 61 operations were added under the contract's id, with the
+  inputs the contract declared and the inputs the forms and actions fill (types from the contract's types and the
+  form controls), open to any signed-in person, with no conditions and no steps. They keep the interface bindable; they
+  do nothing when invoked.
+- `bundle.ui-unsupported` (24): live bindings whose `when` named a domain notice kind (`event.kind == 'approval'`)
+  now name `upsert`, one of the four kinds of the live protocol (upsert, remove, schema, membership).
+- `layer.value-invalid` (18): the `field` of an error message is a `ui-error-field` (`{ "name": "email" }`), not a string.
+- Route parameters are lower-case names in the kernel (`:category_id`, not `:categoryId`): five routes in localisation and
+  taxonomy were renamed, with the `route.<param>` arguments that read them.
+
+What the files still cannot show is whether the kernel accepts the installed schema as a whole (`TenantSchema::problems`:
+expressions against the field types, trigger and automation shapes, the segment predicates). `specc` does not run that
+check; the install does. Run the loader (`strata-corpus load`) to find out.
 
 ## Not verified
 
-The shapes beyond specc's first run are unchecked. Known points to check first when WG-5292 runs it:
+specc passes every file. What only the kernel decides at install is unchecked until `strata-corpus load` has run:
 
 - Operation input references (`param.<name>`) and the `record.$id` scope in fan-out CreateRecord steps.
 - FanOut steps (`next` key) and the `timeout` on RequestApproval, which has no timed-out branch.
-- Form field `input` names against contract input names.
-- Object `Ref` with `"on-delete": "Restrict"` only; records use `restrict` or `set-null`.
-- Several contract `requires` lists name the module's own capabilities, which the brief allows.
+- Object `Ref` with `"on-delete": "Restrict"` only.
+- The 61 added operations have no steps.
