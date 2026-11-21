@@ -136,13 +136,27 @@ The gate also fails when a test binary exists that is in neither tier, or an ent
 not, so a new test file has to be given a tier in the same change. Run builds with
 `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2`: the machine has 16 GB.
 
+### The test suite budget
+
+The whole test phase of the gate (`cargo test --workspace` build and run, `lake build`, the web and script
+node tests, `tsc`) has a budget of `fullBudgetSeconds` (600) in `scripts/test-tiers.json`, and every test
+binary's run has a cap of `binaryCapSeconds` (90). The gate times each step by wall clock and each binary
+from cargo's `finished in` line, from the run it makes. The check "the test suite fits its budget" fails when
+the phase total passes the budget or any binary passes the cap, and it names the steps and binaries over.
+No flag skips or waives it. `--no-test --allow-recorded` judges the measurement stored in the gate record,
+and fails if there is none. `node scripts/test-tiers.mjs check` judges the `measured` record in the tier list.
+
+The way under the budget is to make tests faster, fold test binaries together, or remove tests that do not
+prove a requirement. Raising `fullBudgetSeconds` or `binaryCapSeconds` needs a recorded owner decision, written
+into the tier list with the reason; a change to either number is not a fix for a slow suite.
+
 | Command | What runs |
 |---|---|
 | `npm run test:routine` | The routine tier: `cargo test --workspace` on the unit tests and the routine binaries (with the backend's `development` feature), then the web tests. Fails when its test time passes the budget |
 | `npm run test:changed` | Only what the change touches: the files `git diff --name-only` names against the base (`--base <ref>`, default `integration`, else `main`) select the packages that own them and every package that depends on those, and their test binaries from both tiers run; the web tests and type check run when `web/` changed, the script tests when `scripts/` changed, Exegra validation and the specc freshness checks when `specifications/` changed. The very slow binaries are skipped unless `--slow`; `--dry-run` prints the plan |
 | `npm run test:module -- <module>` | One module of the specification (a component id such as `kernel` or `mail-dispatcher`; `--list` names them): Exegra evaluates the module's claims in one process, the specc freshness checks run, the system-differential test runs the module's scenarios only (`STRATA_MODULE_SCENARIOS_FILE`), and the generated journeys of the uiScenarios that verify its claims run. Sets `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2`, fails when any step fails or is killed or the run passes 120 s (`--budget`), and records the step times and the machine's peak used memory in `var/module-runs/<module>.json`. `--dry-run` prints the plan |
 | `npm run test:tiers` | The tier check alone: every test binary is in a tier. Reads manifests, builds nothing |
-| `node scripts/test-tiers.mjs times <cargo test log> --write` | Records the measured time of every binary in a `cargo test --workspace` log in the tier list, and marks the very slow ones |
+| `node scripts/test-tiers.mjs times <cargo test log> [--write] [--steps <json>] [--machine <note>]` | Times every binary in a `cargo test --workspace` log (the log must keep cargo's `Running` lines, which the gate's `var/test-results/cargo-test.txt` does). `--write` records the times, the marks on the very slow ones, and a `measured` record (date, machine, total, per-step seconds from `--steps`, per-binary seconds) in the tier list |
 
 The two whole-specification comparisons with Exegra (`crates/system-differential/tests/exegra.rs`
 and `crates/spec-compiler/tests/strata_differential.rs`) get their traces from one Exegra process per

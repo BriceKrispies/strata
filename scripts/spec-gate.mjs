@@ -21,6 +21,9 @@
 //      share tests (scripts/generated-share.test.mjs), tsc, cargo fmt --check, cargo clippy with
 //      warnings denied on the hand-written crates, cargo audit and npm audit, recorded under
 //      var/test-results (at most two jobs). Not run with --no-test.
+//      The test phase is timed by step and by test binary, from the run it makes. "The test suite fits
+//      its budget" fails when the phase passes fullBudgetSeconds or a binary passes binaryCapSeconds
+//      (scripts/test-tiers.json). No flag waives it; --no-test judges the recorded measurement.
 //   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata): validate the
 //      specification, evaluate its claims.
 //   3. Evidence (scripts/gate-evidence.mjs): every requirement of a started milestone (gate.json) has a
@@ -59,7 +62,7 @@ import { GENERATED as CONFORMANCE_SUITE, conformanceCoverage, conformanceVerdict
 import { evidenceSources, realisationReport, realisationVerdict } from './gate-realisation.mjs';
 import { readGateConfig, reportLines, runEvidence } from './gate-evidence.mjs';
 import { readWorkspace } from './test-select.mjs';
-import { readTiers, routineSeconds, tierProblems } from './test-tiers.mjs';
+import { measuredRecord, parseCargoLog, readTiers, routineSeconds, suiteVerdict, tierProblems } from './test-tiers.mjs';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
 import { readSpecValue, specSha256 } from './spec-parts.mjs';
 import { envelopeProblems, productArgs, savedTraces, semanticHashDetail, traceFreshness } from './spec-hash.mjs';
@@ -111,6 +114,7 @@ function run(command, commandArgs, options = {}) {
     env: { ...process.env, ...options.env },
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     shell: options.shell === true,
+    interleaved: options.interleaved === true,
   });
 }
 
@@ -366,39 +370,60 @@ const shareTestFile = 'scripts/generated-share.test.mjs';
 const scriptTestFiles = [shareTestFile, ...readdirSync(resolve(root, 'scripts')).filter((f) => /^(gate|test)-.*\.test\.mjs$/.test(f)).sort().map((f) => `scripts/${f}`)];
 const tscCli = join(root, 'node_modules', 'typescript', 'bin', 'tsc');
 
+// The full test phase is timed by step (wall clock) and by test binary (cargo's `finished in` time).
+// The budget is judged on this run's measurement, or on the recorded one under --no-test.
+const testBudget = readTiers();
+const testSteps = [];
+const timedStep = (name, action) => {
+  const began = Date.now();
+  const result = action();
+  testSteps.push({ name, seconds: (Date.now() - began) / 1000 });
+  return result;
+};
+let suiteMeasured = null;
+
 if (!noTest) {
   console.log('running tests (--no-test would reuse the recorded results instead)');
+  // The build and the run are separate steps, so each has its own time. The run's output keeps the
+  // `Running` lines (stderr) in order with the results (stdout): that is what gives each binary its time.
+  const testArgs = ['test', '--workspace', '--features', 'strata-backend/development'];
   // A private build directory, so a running development stack does not hold the binaries.
-  const cargo = run('cargo', ['test', '--workspace', '--no-fail-fast', '--features', 'strata-backend/development'], { env: cargoEnv, timeoutMs: LONG_TIMEOUT_MS });
+  const build = timedStep('cargo build of the test binaries', () => run('cargo', [...testArgs, '--no-run'], { env: cargoEnv, timeoutMs: LONG_TIMEOUT_MS, interleaved: true }));
+  const cargo = build.ok ? timedStep('cargo test run', () => run('cargo', [...testArgs, '--no-fail-fast'], { env: cargoEnv, timeoutMs: LONG_TIMEOUT_MS, interleaved: true })) : build;
   writeFileSync(join(resultsDir, 'cargo-test.txt'), cargo.out);
   const cargoRead = readCargo(cargo.out, cargo.ok);
   const cargoOk = cargoRead.ok;
   check('cargo test --workspace', cargoOk, cargoOk ? `${cargoRead.passed} passed, 0 failed` : `${exitText(cargo)}, ${cargoRead.passed} passed, ${cargoRead.failed} failed, ${cargoRead.binaries} test binaries reported`);
 
-  const lake = run('lake', ['build', '-v'], { cwd: resolve(root, 'lean'), timeoutMs: LONG_TIMEOUT_MS });
+  const lake = timedStep('lake build', () => run('lake', ['build', '-v'], { cwd: resolve(root, 'lean'), timeoutMs: LONG_TIMEOUT_MS }));
   writeFileSync(join(resultsDir, 'lake-build.txt'), lake.out);
   const lakeRead = readLake(lake.out, lake.ok);
   const lakeOk = lakeRead.ok;
   check('lake build', lakeOk, lakeOk ? 'no sorry' : `${exitText(lake)}${lakeRead.sorry ? ', sorry found' : ''}${lakeRead.completed ? '' : ', no completion line'}`);
 
-  const web = run(process.execPath, ['--test', ...nodeTestFiles]);
+  const web = timedStep('web tests (node --test)', () => run(process.execPath, ['--test', ...nodeTestFiles]));
   writeFileSync(join(resultsDir, 'web-test.txt'), web.out);
   const webRead = readNodeTest(web.out, web.ok);
   const webOk = webRead.ok;
   check('web tests: kernel and client (node --test)', webOk, webOk ? `${webRead.passed} passed` : `${exitText(web)}, pass ${webRead.passed}, fail ${webRead.failed}`);
 
-  const share = run(process.execPath, ['--test', ...scriptTestFiles]);
+  const share = timedStep('script tests (node --test)', () => run(process.execPath, ['--test', ...scriptTestFiles]));
   writeFileSync(join(resultsDir, 'share-test.txt'), share.out);
   const shareRead = readNodeTest(share.out, share.ok);
   const shareOk = shareRead.ok;
   check('script tests (generated share and audit checks, node --test)', shareOk, shareOk ? `${shareRead.passed} passed` : `${exitText(share)}, pass ${shareRead.passed}, fail ${shareRead.failed}`);
 
-  const tsc = run(process.execPath, [tscCli, '-p', 'web/jsconfig.json']);
+  const tsc = timedStep('type check (tsc)', () => run(process.execPath, [tscCli, '-p', 'web/jsconfig.json']));
   writeFileSync(join(resultsDir, 'check.txt'), tsc.out);
   const tscOk = readTsc(tsc.out, tsc.ok).ok;
   check('type check (tsc -p web/jsconfig.json)', tscOk, tscOk ? '' : `${exitText(tsc)}: ${lastLine(tsc.out)}`);
 
   testsPassed = cargoOk && lakeOk && webOk && shareOk && tscOk;
+
+  suiteMeasured = measuredRecord({ steps: testSteps, binaries: parseCargoLog(cargo.out) });
+  const budget = suiteVerdict(testBudget, suiteMeasured);
+  check('the test suite fits its budget (scripts/test-tiers.json)', budget.ok, budget.detail);
+  detail(budget.lines);
 
   // Lints and audits. They are not recorded: a --no-test run does not repeat them.
   const packages = workspacePackages();
@@ -443,8 +468,12 @@ if (!noTest) {
   skipCheck('cargo fmt --check, cargo clippy, cargo audit, npm audit', '--no-test does not repeat them');
   if (!existsSync(recordPath)) {
     check('recorded test results exist', false, 'no gate record; run the gate without --no-test first');
+    check('the test suite fits its budget (scripts/test-tiers.json)', false, 'no gate record, so no recorded measurement');
   } else {
     const record = JSON.parse(readFileSync(recordPath, 'utf8'));
+    const budget = suiteVerdict(testBudget, record.measured);
+    check('the test suite fits its budget (scripts/test-tiers.json)', budget.ok, `${budget.detail} (recorded run)`);
+    detail(budget.lines);
     const specChanged = record.specSha256 !== specSha;
     check('recorded test results match the specification', !specChanged, specChanged ? 'the specification changed after the recorded run' : `spec hash ${specSha.slice(0, 12)} unchanged`);
     const recorded = record.sourceHashes ?? null;
@@ -658,7 +687,7 @@ console.log(passed ? (notRun.length ? `GATE PASSED, with ${notRun.length} not ru
 if (passed && !noTest) {
   writeFileSync(
     recordPath,
-    JSON.stringify({ recordedAt: new Date(startedAtMs).toISOString(), specSha256: specSha, sourceHashes: snapshot, resultHashes: resultHashes(), testsPassed: true, counts }, null, 2) + '\n',
+    JSON.stringify({ recordedAt: new Date(startedAtMs).toISOString(), specSha256: specSha, sourceHashes: snapshot, resultHashes: resultHashes(), testsPassed: true, counts, measured: suiteMeasured }, null, 2) + '\n',
   );
 } else if (passed && noTest && previous) {
   // The recorded run still holds; only the counts are refreshed. Its tests and hashes are kept.
