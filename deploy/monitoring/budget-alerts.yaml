@@ -146,6 +146,18 @@ groups:
           summary: "A tenant database SHALL keep a restorable window of at least 14 days."
           metric_placeholder: "true"
           threshold: "seconds < 1209600"
+      # PLACEHOLDER metric strata_b_101_backup_archive: derived from the boundary detail, not yet an instrument that exists.
+      - alert: Budget_OPS_3124
+        expr: "histogram_quantile(0.99, sum by (le) (rate(strata_b_101_backup_archive_duration_seconds_bucket[5m]))) > 5"
+        for: 5m
+        labels:
+          requirement: "OPS-3124"
+          boundary: "b-101"
+          severity: warning
+        annotations:
+          summary: "The acknowledged commits of a SQLite cell SHALL reach the backup archive within 5 seconds at the 99th percentile."
+          metric_placeholder: "true"
+          threshold: "p99 latency above 5 s"
       # PLACEHOLDER metric strata_b_9_delivery_interface: derived from the boundary detail, not yet an instrument that exists.
       - alert: Budget_OPS_331
         expr: "strata_b_9_delivery_interface_ratio < 0.9995"
@@ -227,7 +239,7 @@ groups:
           boundary: "b-9"
           severity: warning
         annotations:
-          summary: "A request waiting in the queue of a cluster SHALL start within 1 second at the 99th percentile, or be refused."
+          summary: "A request waiting in the queue of a cell SHALL start within 1 second at the 99th percentile, or be refused."
           metric_placeholder: "true"
           threshold: "p99 latency above 1 s"
       # PLACEHOLDER metric strata_b_12_alert: derived from the boundary detail, not yet an instrument that exists.
