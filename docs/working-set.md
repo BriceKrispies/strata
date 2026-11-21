@@ -273,6 +273,30 @@ pub struct Generation {
   processes (D-8300 allows a cell to be a host), exactly one process holds a tenant's lease and is
   its writer.
 - **`generation(tenant) -> StoreResult<Option<Generation>>`** reads the generation row.
+- **Where a commit's expected generation comes from.** A load returns the generation in the same
+  read transaction as the rows: a new trait method `load_at(tenant, needs) -> StoreResult<Loaded>`
+  with `Loaded { state: State, generation: Option<Generation> }` (`None` when the tenant does not
+  exist), and `load_complete_at` likewise; `load` and `load_complete` stay, defined as the state
+  of these. The kernel's `State` type is not changed: the generation is a fact about the store, and
+  keeping it out of the kernel keeps the kernel free of storage concepts (K1) and the Lean–Rust
+  differential unaffected. The expected generation of a commit is the generation of the state the
+  decision was made on: the generation the first load of the decision attempt returned. Every
+  later load of the same attempt (the needs rounds of `execute_guarded`, `lib.rs:1924-1964`) must
+  return the same generation; if one does not, the attempt starts again from a fresh load, as a
+  conflict does today. `execute_guarded` passes the attempt's generation to `Commit::of`, which sets
+  `expected_generation`. Reading the generation separately after loading is wrong and is what the
+  acceptance tests below refuse: a commit decided on older rows would carry a newer generation and
+  be accepted.
+- **A tenant-creating commit** (`base_revision: None`, `expected_generation: None`) creates the
+  generation row with a freshly drawn nonce and counter 1; its `Receipt.generation` is that.
+- **Where the nonce comes from.** The store takes a `NonceSource` at construction
+  (`fn draw(&self, tenant: &TenantId) -> u128`). In deployment it is the operating system's random
+  source. In tests and in the simulator it is seeded: a pure function of the seed, the tenant and
+  the number of draws for that tenant so far, in the manner of D19, so a run is reproduced from its
+  seed. The generation never enters a hash or a journalled form: `delta_hash` and `events_hash` are
+  computed from the delta and the events (`lib.rs:134-137`, `:294-295`), which carry no generation;
+  `JournalEntry` gains no generation field; `expected_generation` and `Receipt.generation` are kept
+  out of the journal entry and out of the idempotency request hash.
 - **`Commit` gains `expected_generation: Option<Generation>`**. `None` is accepted only when
   `base_revision` is also `None` (a commit that creates the tenant); the store refuses a `None`
   with a base revision as `StoreError::Invalid`. A `Some` is compared with the stored generation
@@ -390,7 +414,7 @@ Rust already decides above the store and commits separately, guarded by the base
 
 1. Decide on what the working set serves, at the generation the runtime knows for the tenant, over
    as many rounds as the kernel's needs take. The decision's expected generation is the one its
-   first round read. Rounds may mix generations if something changes in between; the commit guard
+   first round read: the generation `load_at` returned with the rows, never one read separately. Rounds may mix generations if something changes in between; the commit guard
    then refuses, since the tenant is no longer at the first round's generation.
 2. A refusal is confirmed by a generation read before it is returned: the store's generation is
    compared with the generation the decision's **first round** read, and if they differ the
@@ -415,10 +439,17 @@ Rust already decides above the store and commits separately, guarded by the base
 
 Concurrency inside a runtime is in the model: requests live in slots and interleave freely, and
 the theorems hold under every interleaving. What the Rust must provide is that each operation of
-the model is atomic: one round of a request, one refresh, one decision step, one commit with its
-carry-forward is each one critical section of the tenant runtime (W2). Nothing larger needs to be
-serialised. Simultaneous misses on one key are coalesced (CPY-012): one load per key per
-generation.
+the model is atomic (W2), and those operations contain store I/O: a round contains its miss load,
+a decision step its loads, a commit its store write and its carry-forward. **Lock scope (item 3)**:
+each tenant runtime has one lock, held for the whole of each such operation, the store I/O
+included: across a round with its miss load, across a decision step with its loads, across a
+refresh, and across a commit with its store write and carry-forward. Between operations it is
+released, so requests interleave at operation boundaries exactly as the model's slots do. The cost
+is that one tenant's operations wait for each other's store I/O; different tenants never share a
+lock. A finer scheme (load outside the lock, then re-check the generation before admitting what was
+loaded) would shorten the lock but is not modelled, and is left as a measured refinement after the
+experiments. Simultaneous misses on one key are coalesced (CPY-012): one load per key per
+generation, under the same lock.
 
 ### What a decision reads, now that records reference records
 
@@ -532,19 +563,30 @@ budget never goes below the pinned bytes. Under the arbiter's floor rule (each g
 tenant's pinned bytes), grants that sum to the arbiter's total keep the cell within it
 (`machine_resize`); a grant below the floor is exceeded by at most the floor (`resize_budget_le`).
 
-The arbiter is modelled in `lean/Strata/WorkingSet/Arbiter.lean`: each tenant has a floor and a
-want (from any policy). It grants every floor, then shares the rest by the wants in order. When the
-floors fit the total, every grant meets its floor (`arbiter_floors`) and the grants never exceed
-the total (`arbiter_within`). The over-placement alarm is raised exactly when the floors do not fit
-(`arbiter_alarm`). Then the arbiter grants floors in order until the memory runs out, no tenant gets
-more than its floor (`arbiter_overplaced_le_floors`), the grants still never exceed the total, and
-the control plane moves tenants out. The tenants left short have their pinned keys still pinned but
-not resident (the cliff above). Correctness is unaffected: every read and commit still goes through
-the store when nothing is resident.
+The arbiter is modelled in `lean/Strata/WorkingSet/Arbiter.lean` as a floor allocator: each
+tenant has a floor (its pinned bytes) and a want (from any policy). It grants every floor, then
+shares the rest by the wants in order. When the floors fit the total, every grant meets its floor
+(`arbiter_floors`) and the grants never exceed the total (`arbiter_within`). The over-placement
+alarm is raised exactly when the floors do not fit (`arbiter_alarm`); then the arbiter grants
+floors in order until the memory runs out, no tenant gets more than its floor
+(`arbiter_overplaced_le_floors`), and the grants still never exceed the total.
 
-Each tenant runtime estimates its miss-cost curve by sampling its access stream into small ghost
-caches; the arbiter gives memory in chunks to the tenant whose curve shows the largest saving per
-byte, between its floor and its ceiling. **Proposed decision**: a per-tenant memory ceiling derived
+**Grants are applied exactly.** `resize` never drops a pinned entry, so applying a grant below a
+tenant's floor with it would leave the tenant above its grant and the cell above its total
+(STO-013). Grants are therefore applied with `resizeHard`: at or above the floor it is `resize`
+(`resizeHard_eq_resize`); below the floor it drops pinned entries that do not fit, in order, while
+their keys stay pinned. With every grant applied that way the cell is within the arbiter's total
+whatever the grants (`machine_hard`), and in particular under the arbiter's grants, over-placed or
+not (`machine_arbiter`). The consequence is the performance cliff: an over-placed tenant left
+below its floor serves its dropped pinned keys from the store on every request until its grant
+grows or the control plane moves it. Correctness is unaffected: every read and commit still goes
+through the store when nothing is resident.
+
+**Not modelled: the utility allocation.** Which wants the arbiter is given is design, not model:
+each tenant runtime estimates its miss-cost curve by sampling its access stream into small ghost
+caches, and the want is the memory its curve says saves the most per byte, between its floor and
+its ceiling. The proofs hold for any wants; whether this choice beats a static split is measured in
+item 15. **Proposed decision**: a per-tenant memory ceiling derived
 from the plan (BIL-150), as a new requirement beside STO-013.
 
 ## What is proved
@@ -559,7 +601,7 @@ generation reads, and request rounds, for any number of requests in slots, in an
 Assumptions W1 to W4 are at the head of the file: W2 is now only that each operation is atomic,
 and W4 (every change raises the generation) is the store obligation the contract above has to
 deliver. No `sorry`, `admit` or added axiom; `lake env lean Audit.lean` lists only `propext`,
-`Classical.choice` and `Quot.sound` for all 58 audited working-set theorems.
+`Classical.choice` and `Quot.sound` for all 63 audited working-set theorems.
 
 | Property | Theorem |
 |---|---|
@@ -584,6 +626,7 @@ deliver. No `sorry`, `admit` or added axiom; `lake env lean Audit.lean` lists on
 | Accounted bytes never exceed the budget | `stepWS_within`, `runWS_within` |
 | Pins change only when asked; pinned keys survive admission, eviction, resize | `stepWS_pins`, `admit_keeps_pinned`, `evict_keeps_pinned`, `resize_keeps_pinned`, `pin_resident` |
 | Budgets on one machine, under the floor rule | `resize_budget_exact`, `resize_budget_le`, `machine_resize` |
+| Grants applied exactly: equal to `resize` at or above the floor; the cell within the total for any grants, and under the arbiter's grants, over-placed or not | `resizeHard_eq_resize`, `resizeHard_within`, `machine_hard`, `machine_arbiter` |
 | The arbiter: floors met and the total respected when the floors fit; the alarm exactly when they do not; never more than the total | `arbiter_floors`, `arbiter_within`, `arbiter_alarm`, `arbiter_overplaced_le_floors`, `arbiter_length` |
 | Placement against sealing, on schedules of admissions, value writes, key destructions and reads | `below_sealing_erasure_safe`, `above_sealing_serves_erased` |
 
@@ -761,29 +804,65 @@ criteria that a test or a check can fail. Items are ordered by dependency; none 
 
 ### 1. Tenant generation and guarded commits in the store contract
 
-- **Scope**: `crates/storage-api` (trait, `Commit`, `Receipt`, `StoreError::Conflict`,
-  `MemoryStore`, conformance suite), `crates/storage-sqlite`, `crates/storage-postgres`,
-  `crates/backend` callers of `commit`. Adds `Generation { nonce, counter }` in a row of its own per
-  tenant; `generation(tenant)`; nonce rotation at create, `restore_snapshot`, import and lease
-  acquisition (the acquisition entry point is a store method item 13 calls); the counter raised by
-  every write that changes load results and by nothing else; `Commit.expected_generation`
-  (`None` only with `base_revision: None`); `Receipt.generation`; `Conflict` carrying the
-  generation found; the fence-token column and its comparison (unused until item 13). No working
-  set yet.
+- **Scope**:
+  - `crates/storage-api`: the `Store` trait, `Commit`, `Receipt`, `StoreError::Conflict`,
+    `MemoryStore`, `execute_guarded`, the conformance suite; `crates/storage-sqlite`;
+    `crates/storage-postgres`; the `crates/backend` callers of `commit`.
+  - `Generation { nonce: u128, counter: u64 }` in a row of its own per tenant (not in the tenant
+    row with the schema and member JSON).
+  - `generation(tenant) -> StoreResult<Option<Generation>>`, reading that row only.
+  - `load_at` and `load_complete_at`, returning `Loaded { state, generation }` with the generation
+    read in the same read transaction as the rows; `load` and `load_complete` defined from them.
+    The kernel's `State` type is not changed.
+  - The counter raised by every write transaction that changes what `load` or `load_complete`
+    returns for the tenant, and by nothing else; the nonce drawn only at create, `restore_snapshot`,
+    import and lease acquisition (the acquisition entry point is a store method item 13 calls),
+    never on opening a handle.
+  - A `NonceSource` injected at store construction: random in deployment, seeded in tests and in
+    the simulator.
+  - `Commit.expected_generation: Option<Generation>`, compared in the write transaction that
+    compares the base revision; `None` accepted only with `base_revision: None`;
+    `execute_guarded` sets it to the generation of the attempt's first load and restarts the
+    attempt if a later load of the attempt returns another.
+  - `Receipt.generation`, including for a tenant-creating commit (the new tenant's first
+    generation, counter 1).
+  - `StoreError::Conflict` carrying the generation found.
+  - The expected generation (and, under a lease, the fence token) on every other method that
+    raises the counter.
+  - The fence-token column and its comparison, unused until item 13.
+  - The generation kept out of `delta_hash`, `events_hash`, `JournalEntry` and the idempotency
+    request hash.
+  - No working set yet.
 - **Depends on**: nothing.
 - **Acceptance**:
-  - the exhaustive differential conformance case passes on memory, SQLite and PostgreSQL: for every
-    `Store` method, each tenant's generation changes exactly when its `load_complete` result or
-    ledger changed; the case list is checked against the trait's methods, so a new method without a
-    case fails;
+  - the exhaustive differential conformance case passes: for every `Store` method, on a populated
+    tenant and a second tenant, each tenant's generation changes exactly when its
+    `load_complete` result or ledger changed; the case list is checked against the trait's
+    methods, so a method added without a case fails;
+  - **load and decide at one generation**: a test loads with `load_at`, lets a second handle commit
+    to the tenant, then commits a transition decided on the first load with that load's
+    generation, and the commit returns `Conflict` with the newer generation and changes nothing;
+  - **the generation belongs to the rows**: across a run of interleaved commits and loads, every
+    `load_at` result's generation is the one `generation()` reports for the state it returned (each
+    returned revision is always paired with the same generation, and never with an earlier one);
   - a commit with a stale `expected_generation` returns `Conflict` with the found generation and
     changes nothing; a `None` with a base revision returns `Invalid`;
-  - `Receipt.generation` equals the expected generation with the counter raised by one;
+  - `Receipt.generation` equals the expected generation with the counter raised by one; for a
+    tenant-creating commit it equals what `generation()` then returns;
+  - **reproducible from the seed**: two runs of the same seeded schedule (the conformance schedule
+    and a simulator run) with seeded nonce sources give identical traces and identical
+    generations; `delta_hash` and `events_hash` of a transition are the same whatever the nonce;
   - an LRU handle cycle leaves the generation unchanged; an out-of-band restore followed by the
     restore step yields a generation never observed before;
-  - `generation()` reads one small row: no schema decode (checked by a test that it succeeds on a
-    tenant whose schema document is unreadable);
+  - `generation()` reads one small row: it succeeds on a tenant whose schema document is
+    unreadable;
   - existing conformance and backend tests pass unchanged apart from the new fields.
+- **How the PostgreSQL run is run**: the memory and SQLite runs need nothing and run in the normal
+  suite. The PostgreSQL run uses the existing setup in `crates/storage-postgres/tests/postgres.rs`
+  (test target `storage_postgres_slow`): it is `#[ignore]`d without a server, and is run with
+  `STRATA_PG_URL=postgres://... cargo test -p strata-storage-postgres --test storage_postgres_slow -- --ignored`
+  against a role allowed to create databases (`docs/storage.md`). The criterion counts as met when
+  that run passes on such a server.
 
 ### 2. Header residency (CPY-014)
 
@@ -798,8 +877,10 @@ criteria that a test or a check can fail. Items are ordered by dependency; none 
 
 ### 3. `ResidentStore` below sealing
 
-- **Scope**: record entries (present and absent), stamps, request rounds that compare each load's
-  generation with the request's and reread on a change, refusal confirmation against the first
+- **Scope**: the tenant runtime lock, held across each operation with its store I/O (a round with
+  its miss load, a decision step with its loads, a refresh, a commit with its store write and
+  carry-forward) and released between operations; record entries (present and absent), stamps,
+  request rounds that compare each load's generation with the request's and reread on a change, refusal confirmation against the first
   round's generation, guarded commit and receipt check, carry-forward with an invalidation map,
   lost-receipt drop, miss coalescing (CPY-012); key documents never resident; the plaintext
   exclusion for `ByField`, `ByFields`, `IndexPage` and `PairPage` from the sealing plan; placement
@@ -810,7 +891,9 @@ criteria that a test or a check can fail. Items are ordered by dependency; none 
   through the first returns the erased token; a commit naming a new data subject succeeds with no
   conflict; a property test interleaving commits from a second handle between request rounds shows
   every returned snapshot equals an unwrapped `load` at one generation; no plaintext personal value
-  appears in any resident key (checked by scanning keys in a test with legacy plain rows).
+  appears in any resident key (checked by scanning keys in a test with legacy plain rows); an
+  instrumented lock shows that no round or read of a tenant runs between that tenant's commit
+  write and the end of its carry-forward.
 
 ### 4. Invalidation map with its criterion
 
@@ -910,11 +993,16 @@ criteria that a test or a check can fail. Items are ordered by dependency; none 
 
 ### 15. Cell arbiter
 
-- **Scope**: miss-cost curve sampling, floors, ceilings, the over-placement rule.
+- **Scope**: the floor allocator of the model, grants applied exactly (`resizeHard`, dropping
+  pinned entries below the floor), the over-placement alarm, ceilings; the utility allocation
+  (miss-cost curve sampling into ghost caches, wants by saving per byte), which the model does not
+  cover and this item measures.
 - **Depends on**: 7, and item 12 showing it beats a static split.
 - **Acceptance**: a test that the arbiter never grants below a tenant's pinned bytes while the
   cell's floors fit, and raises the placement alarm when they do not; the sum of grants never
-  exceeds the arbiter's total.
+  exceeds the arbiter's total; after applying grants, the sum of the working sets' accounted bytes
+  never exceeds the total, over-placed or not; a measurement of the utility allocation against a
+  static split on the experiment workloads, recorded.
 
 ### 16. Restore runbook
 
@@ -933,6 +1021,16 @@ criteria that a test or a check can fail. Items are ordered by dependency; none 
   names the check that holds it (item 1's conformance case, item 13's tests).
 
 ## Answers to the reviews
+
+### Fifth review
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | Where the commit's expected generation comes from | **Fixed.** `load_at` returns the generation in the same read transaction as the rows; the expected generation is the first load's of the decision attempt; `execute_guarded` passes it and restarts if a later load disagrees; `Receipt.generation` for a creating commit is specified; two acceptance tests added. **Disputed in part**: the kernel `State` type is not changed; the generation travels beside the state in `Loaded`, which keeps storage out of the kernel |
+| 2 | The nonce's source and D19 | **Fixed.** A `NonceSource` injected at construction, seeded in tests and the simulator, random in deployment; the generation kept out of every hash and journalled form; an acceptance test that two seeded runs give identical traces |
+| 3 | Over-placement against `resize` | **Fixed in model and doc.** Grants are applied with `resizeHard`, equal to `resize` at or above the floor and dropping pinned entries below it; `machine_hard` and `machine_arbiter` prove the cell within the total for any grants, over-placed or not; the cliff is stated |
+| 4 | W2 against "nothing larger needs to be serialised" | **Fixed.** The lock scope is stated in item 3: one lock per tenant runtime, held across each operation with its store I/O, released between operations; validated admission is named as an unmodelled refinement |
+| - | Utility allocation unmodelled; PostgreSQL run | **Addressed**: the utility allocation is labelled as design measured by item 15; the PostgreSQL criterion names its existing test target and how it runs |
 
 ### Closing the open obligations (WG-5406)
 

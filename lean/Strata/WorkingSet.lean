@@ -63,6 +63,7 @@ No `sorry`, no added axioms. `Audit.lean` prints the axioms each theorem depends
 -/
 
 import Strata.Model
+import Strata.WorkingSet.Arbiter
 
 namespace Strata.WorkingSet
 
@@ -2719,6 +2720,109 @@ theorem machine_resize (st : σ) (cs : List (Cache × Nat)) (m : Nat)
     rw [Within, resize_budget_exact pol size st cb.1 cb.2 (hfloor cb List.mem_cons_self)] at hw
     have := ih ((cs.map (·.2)).sum) (fun c h => hfloor c (List.mem_cons_of_mem _ h)) (Nat.le_refl _)
     omega
+
+/-! ### Applying a grant below the floor -/
+
+/-- Keep entries, in order, while they fit in `b`; an entry that does not fit is dropped, pinned or
+    not. -/
+def fitTo : List Entry → Nat → List Entry
+  | [], _ => []
+  | e :: es, b => if size e.key e.val ≤ b then e :: fitTo es (b - size e.key e.val) else fitTo es b
+
+theorem bytes_fitTo_le (es : List Entry) (b : Nat) : bytes size (fitTo size es b) ≤ b := by
+  induction es generalizing b with
+  | nil => simp [fitTo, bytes]
+  | cons e es ih =>
+    unfold fitTo
+    split
+    · rename_i h
+      have := ih (b - size e.key e.val)
+      simp only [bytes, List.map_cons, List.sum_cons] at this ⊢
+      omega
+    · exact ih b
+
+theorem fitTo_id (es : List Entry) (b : Nat) (h : bytes size es ≤ b) : fitTo size es b = es := by
+  induction es generalizing b with
+  | nil => rfl
+  | cons e es ih =>
+    simp only [bytes, List.map_cons, List.sum_cons] at h
+    unfold fitTo
+    rw [ite_eq_left (by omega)]
+    rw [ih (b - size e.key e.val) (by simp only [bytes]; omega)]
+
+theorem fitTo_sub (es : List Entry) (b : Nat) : ∀ e ∈ fitTo size es b, e ∈ es := by
+  induction es generalizing b with
+  | nil => intro e he; simp [fitTo] at he
+  | cons x es ih =>
+    intro e he
+    unfold fitTo at he
+    split at he
+    · rcases List.mem_cons.mp he with h | h
+      · exact h ▸ List.mem_cons_self
+      · exact List.mem_cons_of_mem _ (ih _ e h)
+    · exact List.mem_cons_of_mem _ (ih _ e he)
+
+/-- Apply a grant exactly. At or above the floor this is `resize`; below it, pinned entries that
+    do not fit are dropped too (their keys stay pinned; reads of them go to the store until the
+    grant grows again). -/
+def resizeHard (st : σ) (c : Cache) (b : Nat) : Cache :=
+  { c with entries := fitTo size (resize pol size st c b).entries b, budget := b }
+
+theorem resizeHard_within (st : σ) (c : Cache) (b : Nat) :
+    Within size (resizeHard pol size st c b) :=
+  bytes_fitTo_le size _ b
+
+theorem resizeHard_sub (st : σ) (c : Cache) (b : Nat) :
+    ∀ e ∈ (resizeHard pol size st c b).entries, e ∈ c.entries :=
+  fun e he => resize_sub pol size st c b e (fitTo_sub size _ b e he)
+
+theorem resizeHard_pins (st : σ) (c : Cache) (b : Nat) :
+    (resizeHard pol size st c b).pins = c.pins := rfl
+
+/-- At or above the floor, applying a grant exactly is `resize`: same entries, same budget. -/
+theorem resizeHard_eq_resize (st : σ) (c : Cache) (b : Nat) (hb : pinnedBytes size c ≤ b) :
+    (resizeHard pol size st c b).entries = (resize pol size st c b).entries ∧
+    (resizeHard pol size st c b).budget = (resize pol size st c b).budget := by
+  have hbud := resize_budget_exact pol size st c b hb
+  have hw := resize_within pol size st c b
+  rw [Within, hbud] at hw
+  exact ⟨fitTo_id size _ b hw, hbud.symm⟩
+
+/-- **One machine, any grants.** Grants applied exactly, summing to at most the machine's memory,
+    keep the working sets together within it, floors met or not. -/
+theorem machine_hard (st : σ) (cbs : List (Cache × Nat)) (m : Nat)
+    (hm : (cbs.map (·.2)).sum ≤ m) :
+    (cbs.map (fun cb => bytes size (resizeHard pol size st cb.1 cb.2).entries)).sum ≤ m := by
+  induction cbs generalizing m with
+  | nil => simp
+  | cons cb cbs ih =>
+    simp only [List.map_cons, List.sum_cons] at hm ⊢
+    have hw : bytes size (resizeHard pol size st cb.1 cb.2).entries ≤ cb.2 :=
+      resizeHard_within pol size st cb.1 cb.2
+    have := ih ((cbs.map (·.2)).sum) (Nat.le_refl _)
+    omega
+
+private theorem map_snd_zip_eq {α β : Type} (l₁ : List α) (l₂ : List β) (h : l₂.length = l₁.length) :
+    (l₁.zip l₂).map Prod.snd = l₂ := by
+  induction l₁ generalizing l₂ with
+  | nil => cases l₂ <;> simp_all
+  | cons a l₁ ih =>
+    cases l₂ with
+    | nil => simp at h
+    | cons b l₂ => simp only [List.zip_cons_cons, List.map_cons, ih l₂ (by simpa using h)]
+
+/-- **The cell's memory under the arbiter**, over-placed or not: each tenant's floor is its pinned
+    bytes, the arbiter grants from the floors and any wants, each grant is applied exactly, and the
+    working sets together stay within the arbiter's total. -/
+theorem machine_arbiter (st : σ) (cs : List Cache) (wants : List Nat) (total : Nat)
+    (hl : wants.length = cs.length) :
+    ((cs.zip (Arbiter.arbiter ((cs.map (pinnedBytes size)).zip wants) total).1).map
+      (fun cg => bytes size (resizeHard pol size st cg.1 cg.2).entries)).sum ≤ total := by
+  apply machine_hard pol size st
+  have hlen : (Arbiter.arbiter ((cs.map (pinnedBytes size)).zip wants) total).1.length = cs.length := by
+    rw [Arbiter.arbiter_length]; simp [hl]
+  rw [map_snd_zip_eq _ _ hlen]
+  exact Arbiter.arbiter_within _ _
 
 /-! ## Erasure: where the working set sits against sealing
 

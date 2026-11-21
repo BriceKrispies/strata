@@ -101,3 +101,8 @@ import Strata
 #print axioms Strata.WorkingSet.Arbiter.arbiter_floors
 #print axioms Strata.WorkingSet.Arbiter.arbiter_length
 #print axioms Strata.WorkingSet.Arbiter.arbiter_overplaced_le_floors
+#print axioms Strata.WorkingSet.bytes_fitTo_le
+#print axioms Strata.WorkingSet.resizeHard_within
+#print axioms Strata.WorkingSet.resizeHard_eq_resize
+#print axioms Strata.WorkingSet.machine_hard
+#print axioms Strata.WorkingSet.machine_arbiter
