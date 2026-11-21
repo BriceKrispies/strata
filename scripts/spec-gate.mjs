@@ -61,6 +61,7 @@ import { readGateConfig, reportLines, runEvidence } from './gate-evidence.mjs';
 import { readWorkspace } from './test-select.mjs';
 import { readTiers, routineSeconds, tierProblems } from './test-tiers.mjs';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
+import { readSpecValue, specSha256 } from './spec-parts.mjs';
 import { envelopeProblems, productArgs, savedTraces, semanticHashDetail, traceFreshness } from './spec-hash.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -127,48 +128,6 @@ function exitText(r) {
 
 function lastLine(text) {
   return text.trim().split('\n').filter(Boolean).pop() ?? '';
-}
-
-// JSON with comments and trailing commas (the specification's format), as a plain value.
-function parseJsonc(src) {
-  const BS = String.fromCharCode(92);
-  let out = '';
-  let i = 0;
-  let inString = false;
-  while (i < src.length) {
-    const c = src[i];
-    const n = src[i + 1];
-    if (inString) {
-      out += c;
-      if (c === BS) {
-        out += n;
-        i += 2;
-        continue;
-      }
-      if (c === '"') inString = false;
-      i += 1;
-      continue;
-    }
-    if (c === '"') {
-      inString = true;
-      out += c;
-      i += 1;
-      continue;
-    }
-    if (c === '/' && n === '/') {
-      while (i < src.length && src[i] !== '\n') i += 1;
-      continue;
-    }
-    if (c === '/' && n === '*') {
-      i += 2;
-      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i += 1;
-      i += 2;
-      continue;
-    }
-    out += c;
-    i += 1;
-  }
-  return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'));
 }
 
 function sha256(path) {
@@ -263,7 +222,7 @@ mkdirSync(resultsDir, { recursive: true });
 // ---------------------------------------------------------------------------------------------
 // The expected counts come from the specification and the gate config (gate.json).
 // ---------------------------------------------------------------------------------------------
-const spec = parseJsonc(readFileSync(specPath, 'utf8'));
+const spec = readSpecValue(specPath);
 const requirements = spec.claims.filter((claim) => claim.kind === 'requirement');
 const modelClaims = spec.claims.filter((claim) => String(claim.id).startsWith('m-'));
 const requirementIds = new Set(requirements.map((claim) => claim.id));
@@ -388,7 +347,7 @@ if (started.size === 0) check('gate.json names started milestones', false, 'star
 // ---------------------------------------------------------------------------------------------
 // 1. Tests
 // ---------------------------------------------------------------------------------------------
-const specSha = sha256(specPath);
+const specSha = specSha256(specPath);
 const testFiles = ['cargo-test.txt', 'lake-build.txt', 'web-test.txt', 'share-test.txt', 'check.txt'];
 let testsPassed = false;
 const startedAtMs = Date.now();

@@ -1,0 +1,18 @@
+[package]
+name = "strata-spec-parts"
+description = "Resolves specifications/spec.jsonc, a manifest of part files, to the single specification text the tools read."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+
+[[test]]
+name = "spec_parts"
+path = "tests/spec_parts.rs"
+
+[lints]
+workspace = true

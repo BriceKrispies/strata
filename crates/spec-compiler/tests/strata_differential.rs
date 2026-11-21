@@ -525,7 +525,7 @@ fn info_of(spec: &Value, b: &Value) -> Info {
 
 fn read_specification(root: &Path) -> Specification {
     let path = "specifications/spec.jsonc";
-    let text = std::fs::read_to_string(root.join(path)).unwrap();
+    let text = strata_spec_parts::read_spec_text(&root.join(path)).unwrap();
     let json = jsonc::parse(&text).unwrap();
     let typed = load::load(path, &text).unwrap_or_else(|d| {
         panic!(
@@ -1293,7 +1293,7 @@ fn the_generated_machines_step_as_exegra_runs_the_specification() {
 fn every_server_implementation_machine_is_in_the_registry() {
     let root = clean(&support::repo_root());
     let path = "specifications/spec.jsonc";
-    let text = std::fs::read_to_string(root.join(path)).unwrap();
+    let text = strata_spec_parts::read_spec_text(&root.join(path)).unwrap();
     let json = jsonc::parse(&text).unwrap();
     let (typed, client) = load::load_with_client_machines(path, &text).unwrap_or_else(|d| {
         panic!(

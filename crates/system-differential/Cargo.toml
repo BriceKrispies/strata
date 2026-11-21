@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 
 [dev-dependencies]
+strata-spec-parts.workspace = true
 strata-runtime.workspace = true
 strata-model = { path = "../model", features = ["target-models"] }
 strata-spec-compiler = { path = "../spec-compiler" }

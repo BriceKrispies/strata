@@ -25,6 +25,7 @@ syn.workspace = true
 prettyplease.workspace = true
 regex.workspace = true
 strata-spec-expr.workspace = true
+strata-spec-parts.workspace = true
 
 [dev-dependencies]
 axum.workspace = true

@@ -31,7 +31,7 @@ fn root() -> PathBuf {
 }
 
 fn platform_text() -> String {
-    fs::read_to_string(root().join(PLATFORM)).unwrap()
+    strata_spec_parts::read_spec_text(&root().join(PLATFORM)).unwrap()
 }
 
 fn product(relative: &str) -> ProductFile {

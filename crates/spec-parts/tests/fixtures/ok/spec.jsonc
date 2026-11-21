@@ -1,0 +1,2 @@
+// A manifest and two parts.
+{ "specParts": ["a.jsonc", "b.jsonc"] }

@@ -30,11 +30,11 @@
 // in var/module-runs/<module>.json. `--dry-run` prints the plan and runs nothing. `--list` prints
 // the module names.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { freemem, totalmem } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { parseJsonc } from './jsonc.mjs';
+import { readSpecValue } from './spec-parts.mjs';
 import { productArgs, semanticHashDetail } from './spec-hash.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -212,7 +212,7 @@ export function describePlan(scope, steps) {
 
 async function main(argv) {
   const options = parseArgs(argv);
-  const spec = parseJsonc(readFileSync(join(root, 'specifications', 'spec.jsonc'), 'utf8'));
+  const spec = readSpecValue(join(root, 'specifications', 'spec.jsonc'));
   if (options.list) {
     for (const c of spec.components) console.log(`${c.id}\t${c.name}`);
     return 0;

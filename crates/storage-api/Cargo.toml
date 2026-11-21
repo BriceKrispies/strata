@@ -18,6 +18,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+strata-spec-parts.workspace = true
 strata-storage-api = { path = ".", features = ["conformance"] }
 
 [[test]]

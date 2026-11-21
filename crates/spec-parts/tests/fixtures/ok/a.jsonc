@@ -1,0 +1,7 @@
+{
+  "system": { "id": "s" },
+  "claims": [
+    {"id":"m-1","kind":"invariant"}
+  ],
+  "goals": []
+}

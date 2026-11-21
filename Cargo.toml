@@ -22,6 +22,7 @@ members = [
     "crates/spec-compiler-functions-fixture",
     "crates/spec-compiler-derived-fixture",
     "crates/spec-expr",
+    "crates/spec-parts",
     "crates/spec-expr-cases",
     "crates/model",
     "crates/model/records",
@@ -52,6 +53,7 @@ strata-protocol = { path = "crates/protocol" }
 strata-simulation = { path = "crates/simulation" }
 strata-verification = { path = "crates/verification" }
 strata-spec-expr = { path = "crates/spec-expr" }
+strata-spec-parts = { path = "crates/spec-parts" }
 strata-model = { path = "crates/model" }
 strata-model-core = { path = "crates/model-core" }
 

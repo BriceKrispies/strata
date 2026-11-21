@@ -1,0 +1,7 @@
+// requirements
+{
+  "claims": [
+    {"id":"r-1","kind":"requirement"},
+    {"id":"r-2","kind":"requirement"}
+  ]
+}

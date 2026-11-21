@@ -119,10 +119,10 @@ fn fresh_store() -> PostgresStore {
 #[ignore = "needs PostgreSQL: set STRATA_PG_URL and run with --ignored"]
 fn postgres_store_conforms() {
     let ran = conformance::run(&|| Box::new(fresh_store()) as Box<dyn Store>);
-    let spec = std::fs::read_to_string(concat!(
+    let spec = strata_spec_parts::read_spec_text(std::path::Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../specifications/spec.jsonc"
-    ))
+    )))
     .expect("the specification file");
     let (mut ran, mut rows) = (ran, conformance::spec_cases(&spec));
     assert!(rows.len() >= 13, "the table was not read: {rows:?}");

@@ -17,10 +17,10 @@
 // of its function, so that it does not replace the lists of examples other changes add to. It prints the
 // size of the function examples before and after, and the number of fixtures and references.
 // Apply the file with fast-apply (see C:/dev/audit-wave/RULES.md).
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { parseJsonc } from './jsonc.mjs';
+import { readSpecValue } from './spec-parts.mjs';
 
 export const MIN_BYTES = 200;
 const REF_OVERHEAD = 40;
@@ -177,7 +177,7 @@ function main(argv) {
     else if (argv[i] === '--min-bytes') opts.minBytes = Number(argv[i + 1]);
     else throw new Error(`unknown argument ${argv[i]}`);
   }
-  const spec = parseJsonc(readFileSync(resolve(opts.spec), 'utf8'));
+  const spec = readSpecValue(opts.spec);
   const plan = planFixtures(spec, { minBytes: opts.minBytes });
   for (const line of report(plan)) console.log(line);
   if (opts.ops) {

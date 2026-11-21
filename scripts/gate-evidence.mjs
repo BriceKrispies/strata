@@ -22,7 +22,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseJsonc } from './jsonc.mjs';
+import { readSpecValue } from './spec-parts.mjs';
 
 // ---------------------------------------------------------------------------------------------
 // Refs and `Verifies:` lines
@@ -717,7 +717,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const root = resolve(flag('--root', resolve(dirname(fileURLToPath(import.meta.url)), '..')));
   const resultsDir = resolve(flag('--results-dir', join(root, 'var/test-results')));
   const verdictsPath = resolve(flag('--verdicts', join(root, 'var/exegra-verdicts.json')));
-  const spec = parseJsonc(readFileSync(resolve(flag('--spec', join(root, 'specifications/spec.jsonc'))), 'utf8'));
+  const spec = readSpecValue(flag('--spec', join(root, 'specifications/spec.jsonc')));
   const verdicts = existsSync(verdictsPath) ? JSON.parse(readFileSync(verdictsPath, 'utf8')).results ?? null : null;
   const started = readGateConfig(root, flag('--config', 'gate.json')).startedMilestones;
   const report = runEvidence({ root, spec, resultsDir, verdicts, started });

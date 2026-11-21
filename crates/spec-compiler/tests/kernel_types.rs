@@ -51,7 +51,8 @@ impl Types {
                 .get_or_init(|| {
                     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                         .join("../../specifications/spec.jsonc");
-                    let text = fs::read_to_string(path).expect("read the specification");
+                    let text =
+                        strata_spec_parts::read_spec_text(&path).expect("read the specification");
                     let spec = jsonc::parse(&text).expect("parse the specification");
                     let types = spec["types"].as_array().expect("types").iter();
                     types
