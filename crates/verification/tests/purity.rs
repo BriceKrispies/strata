@@ -145,11 +145,24 @@ fn shipped_lines(text: &str) -> Vec<(usize, String)> {
     out
 }
 
+/// Whether `code` names `token`: a token that starts with a letter must not be the tail of a longer
+/// identifier, so `rand::` is not found in `Operand::` nor `Cell<` in `RefCell<`' own text twice.
+fn names(code: &str, token: &str) -> bool {
+    let word = token.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
+    code.match_indices(token).any(|(at, _)| {
+        !word
+            || !code[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
 fn violations_in(name: &str, text: &str) -> Vec<String> {
     let mut found = Vec::new();
     for (number, code) in shipped_lines(text) {
         for (token, what) in FORBIDDEN {
-            if code.contains(token) {
+            if names(&code, token) {
                 found.push(format!("{name}:{number}: `{token}` ({what})"));
             }
         }
@@ -243,15 +256,16 @@ fn the_substrate_names_no_ambient_capability() {
 
 #[test]
 fn the_kernel_depends_only_on_serialisation_hashing_and_its_generated_types() {
-    // strata-model-core holds the kernel's data types, generated from the specification; its
-    // own dependency test (crates/model-core/tests/dependencies.rs) keeps it pure.
+    // strata-model-core holds the kernel's data types, generated from the specification, and the
+    // substrate names them too; its own dependency test (crates/model-core/tests/dependencies.rs)
+    // keeps it pure (KRN-012).
     assert_eq!(
         dependencies("kernel"),
         ["serde", "serde_json", "sha2", "strata-model-core"]
     );
     assert_eq!(
         dependencies("substrate"),
-        ["strata-kernel", "serde", "serde_json"]
+        ["strata-kernel", "strata-model-core", "serde", "serde_json"]
     );
 }
 

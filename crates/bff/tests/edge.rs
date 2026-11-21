@@ -338,10 +338,28 @@ fn post_routes() -> Vec<String> {
         })
         .map(|line| line.split('"').nth(1).expect("a route path").to_string())
         .flat_map(|path| {
+            // A route with an action in its path answers an action it does not know with 404
+            // before it asks for the token, so each is sent the actions that change state there.
+            let actions: &[&str] = if path.starts_with("/dev/") {
+                &["expire-session", "reset"]
+            } else if path.starts_with("/segments/") {
+                &["define", "remove", "test"]
+            } else if path.starts_with("/inbox/") {
+                &["read", "remove", "preferences", "templates"]
+            } else if path.starts_with("/automation/commands/") {
+                &["start-run", "approve", "activate"]
+            } else if path.starts_with("/jobs/") {
+                &["schedule", "cancel", "retry"]
+            } else if path.starts_with("/products/") {
+                &["install", "upgrade", "remove"]
+            } else {
+                &[]
+            };
             if path.contains(":action") {
-                ["expire-session", "reset"]
+                actions
+                    .iter()
                     .map(|action| path.replace(":action", action))
-                    .to_vec()
+                    .collect::<Vec<_>>()
             } else {
                 vec![path]
             }
@@ -402,7 +420,12 @@ async fn every_request_that_changes_state_needs_our_origin_and_the_sessions_toke
     // Every other route that changes state: the lab, the development fixtures, sign-in and
     // sign-out as well. Each is sent from our own origin with the session cookie, without the
     // token and with a wrong one, and must be refused before anything happens.
-    let routes = post_routes();
+    // A signed address is its own credential and carries no session token (CT-827, scheme
+    // signed-address), so the route that takes one is not among them.
+    let routes: Vec<String> = post_routes()
+        .into_iter()
+        .filter(|path| path != "/api/mail/subscription")
+        .collect();
     assert!(
         routes.len() >= 8,
         "the routes were not read from the router: {routes:?}"
@@ -592,12 +615,30 @@ async fn sign_in_and_sign_out_carry_a_request_token_the_gateway_issued() {
             "anonymous sign-out with {what}"
         );
     }
+    // With the token, a browser that has no session has none to end: `unauthenticated`
+    // (contract sign-out-of-site).
     assert_eq!(
         edge.send(anonymous_out(Some(("x-csrf-token", issued.as_str()))))
             .await
             .0,
-        200
+        401
     );
+}
+
+/// Verifies: CT-245
+///
+/// The view model of the search page repeats the words asked for as its output `q`, and leaves the
+/// member out when the request carried none.
+#[tokio::test]
+async fn the_search_page_repeats_the_words_asked_for() {
+    let edge = start().await;
+    let (status, page, _) = edge
+        .get("127.0.0.1", "/api/view?path=/search&q=kiln", None)
+        .await;
+    assert_eq!(status, 200, "{page}");
+    assert_eq!(page["q"], "kiln");
+    let (_, bare, _) = edge.get("127.0.0.1", "/api/view?path=/search", None).await;
+    assert!(bare.get("q").is_none(), "{bare}");
 }
 
 /// Verifies: GWY-001
@@ -617,26 +658,37 @@ async fn the_site_comes_from_the_host_and_nothing_the_client_says() {
     );
     assert_eq!(tidewater["theme"]["accent"], "ink");
 
-    // Internal headers and parameters from a browser are not a way in.
+    // Internal headers and parameters from a browser are not a way in: the host alone names the
+    // tenant (GWY-001).
     let spoof = edge
         .http
         .get(format!(
-            "{}/api/view?path=/&site=tidewater&tenant=tidewater",
+            "{}/api/view?path=/&site=tidewater",
             edge.origin("127.0.0.1")
         ))
         .header("x-strata-site", "tidewater")
         .header("x-strata-service", TOKEN);
     let (_, spoofed, _) = edge.send(spoof).await;
     assert_eq!(spoofed["data"]["site"]["fields"]["name"], "Fieldnotes");
+    // A view request that names another tenant is refused, not served from it (read-view's tenant
+    // scope is the request's).
+    let (status, named, _) = edge
+        .get("127.0.0.1", "/api/view?path=/&tenant=tidewater", None)
+        .await;
+    assert_eq!(status, 403, "{named}");
+    assert_eq!(named["code"], "forbidden");
 
     // A fieldnotes session cookie replayed against the tidewater host is nobody there.
     let (token, _) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
     let (_, there, _) = edge.get("localhost", "/api/session", Some(&token)).await;
     assert_eq!(there["session"]["authenticated"], false);
-    let (_, desk, _) = edge
+    // The desk is the signed-in's (contract read-desk-view): the cookie is no session there, so
+    // the view is refused and shows nothing.
+    let (desk_status, desk, _) = edge
         .get("localhost", "/api/view?path=/desk", Some(&token))
         .await;
-    assert_eq!(desk["data"]["posts"], json!([]));
+    assert_eq!(desk_status, 401, "{desk}");
+    assert_eq!(desk["code"], "unauthenticated");
     assert!(!edge
         .get("127.0.0.1", "/api/view?path=/desk", Some(&token))
         .await
@@ -666,7 +718,7 @@ async fn the_site_comes_from_the_host_and_nothing_the_client_says() {
         let request = edge
             .http
             .get(format!(
-                "{}/api/view?path=/&host=localhost&tenant=tidewater",
+                "{}/api/view?path=/&host=localhost",
                 edge.origin("127.0.0.1")
             ))
             .header(name, value);

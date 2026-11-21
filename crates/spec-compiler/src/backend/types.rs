@@ -779,6 +779,16 @@ pub fn core_uses_shared(spec: &Spec) -> bool {
 
 /// The `types` module for the selection.
 pub fn emit(spec: &Spec, selection: Selection<'_>) -> TokenStream {
+    emit_with(spec, selection, None)
+}
+
+/// As [`emit`]; with `boundary`, only the types that cross it derive the serde traits
+/// ([`crate::boundary`]), and the others have no serde derive, attribute or decoder.
+pub fn emit_with(
+    spec: &Spec,
+    selection: Selection<'_>,
+    boundary: Option<&crate::boundary::Boundary>,
+) -> TokenStream {
     let mut uses = Uses::default();
     let cases = wire::type_cases(spec);
     let chosen: Vec<&TypeDecl> = spec
@@ -791,11 +801,19 @@ pub fn emit(spec: &Spec, selection: Selection<'_>) -> TokenStream {
         })
         .collect();
     let mut decoders = Decoders::default();
+    let mut read = 0usize;
     let items: Vec<TokenStream> = chosen
         .iter()
         .map(|t| {
             let case = cases.get(&t.id).copied().unwrap_or_default();
-            type_item(spec, t, case, &mut uses, &mut decoders)
+            if boundary.is_none_or(|b| b.has_type(&t.id)) {
+                read += 1;
+                type_item(spec, t, case, &mut uses, &mut decoders)
+            } else {
+                // A type nothing reads needs no decoder for a set either.
+                let mut unused = Decoders::default();
+                crate::boundary::strip_deserialize(type_item(spec, t, case, &mut uses, &mut unused))
+            }
         })
         .collect();
     let decoders = decoders.tokens();
@@ -803,6 +821,8 @@ pub fn emit(spec: &Spec, selection: Selection<'_>) -> TokenStream {
     let patterns = chosen.iter().any(|t| t.constraints.pattern.is_some());
     let serde = if items.is_empty() {
         TokenStream::new()
+    } else if read == 0 {
+        quote! { use serde::Serialize; }
     } else {
         quote! { use serde::{Deserialize, Serialize}; }
     };

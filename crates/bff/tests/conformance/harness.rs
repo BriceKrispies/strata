@@ -26,6 +26,9 @@
 //! - `read-only`: a `readOnly` contract's route refuses a state-changing method.
 //! - `success`: with the example inputs (or none, when none is required) a person who holds what
 //!   the contract asks for gets a success.
+//!   `setup`: the steps the contract declares (`conformanceSetup`) are taken first as that
+//!   person: a read whose reply member is copied into an input, or a named step; one that fails
+//!   is reported under this rule.
 //! - `quota`: on a fresh target, `limit` calls are answered and the next one is `throttled`.
 //! - Every answer: `reply-shape` (a success is exactly the declared outputs with their types),
 //!   `refusal-shape` (a refusal is the error body type, with the status of its code) and
@@ -39,6 +42,7 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
+use totp_rs::{Algorithm, Secret, TOTP};
 
 /// The session cookie of the BFF (and of the fixtures' stand-in).
 pub const SESSION_COOKIE: &str = "__Host-strata_sid";
@@ -164,6 +168,19 @@ pub struct Request {
     pub body: Option<&'static str>,
 }
 
+/// A step taken as the caller before a success call (the contract's `conformanceSetup`).
+#[derive(Debug, Clone, Copy)]
+pub enum Setup {
+    /// A `GET` of the path; each `(wire name, member path)` copies the reply's member (a dotted
+    /// path) into the input of that name in the success call.
+    Read {
+        path: &'static str,
+        set: &'static [(&'static str, &'static str)],
+    },
+    /// A step implemented here by name: `enrol-authenticator`.
+    Step(&'static str),
+}
+
 /// Where an output of a records reply is.
 #[derive(Debug, Clone, Copy)]
 pub enum RecordFrom {
@@ -205,10 +222,13 @@ pub struct Contract {
     pub read_only: bool,
     /// The wire name of the input of type `tenant-id`.
     pub tenant_input: Option<&'static str>,
-    /// The request of the refusal checks: the example's, or placeholders.
+    /// The request of the refusal checks: the contract's probe inputs, else the example's, else
+    /// placeholders.
     pub probe: Request,
     /// The request that must succeed, when there is one.
     pub success: Option<Request>,
+    /// The steps taken as the caller before the success call.
+    pub setup: &'static [Setup],
     pub reply: Reply,
     /// The kinds of the declared errors.
     pub errors: &'static [&'static str],
@@ -484,6 +504,142 @@ async fn sign_in(target: &Target, persona: &Persona) -> Result<Session, String> 
             text.chars().take(200).collect::<String>()
         )),
     }
+}
+
+// ---- the setup of a success call -------------------------------------------------------------
+
+/// The code an authenticator with the base32 `secret` shows `steps` time steps from now.
+fn totp_code(secret: &str, steps: i64) -> Result<String, String> {
+    let bytes = Secret::Encoded(secret.to_string())
+        .to_bytes()
+        .map_err(|e| format!("the authenticator secret is not base32: {e:?}"))?;
+    let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, bytes)
+        .map_err(|e| format!("no authenticator from the secret: {e:?}"))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or_default();
+    Ok(totp.generate((now + steps * 30) as u64))
+}
+
+/// A call as the caller of the success call makes it: our origin, the session and its token.
+fn caller_call(
+    method: Method,
+    path: &str,
+    session: Option<&Session>,
+    body: Option<String>,
+) -> Call {
+    Call {
+        method,
+        site: 0,
+        path: path.to_string(),
+        origin: OriginHeader::Own,
+        csrf: session.map(|s| s.csrf.clone()),
+        cookie: session.map(|s| s.cookie.clone()),
+        body,
+    }
+}
+
+/// Puts `value` in the input `name` of a call: a POST's JSON body, a GET's query.
+fn set_input(call: &mut Call, name: &str, value: &Value) -> Result<(), String> {
+    if call.method == Method::POST {
+        let mut body: Value = call
+            .body
+            .as_deref()
+            .and_then(|b| serde_json::from_str(b).ok())
+            .unwrap_or_else(|| json!({}));
+        let map = body
+            .as_object_mut()
+            .ok_or_else(|| format!("the body of the call is not an object, for {name}"))?;
+        map.insert(name.to_string(), value.clone());
+        call.body = Some(body.to_string());
+    } else {
+        let text = match value {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        call.path
+            .push(if call.path.contains('?') { '&' } else { '?' });
+        call.path
+            .push_str(&format!("{}={}", encode(name), encode(&text)));
+    }
+    Ok(())
+}
+
+/// Takes the steps of the contract's setup as `session`, and puts what they read in `call`.
+async fn run_setup(
+    target: &Target,
+    contract: &Contract,
+    session: Option<&Session>,
+    call: &mut Call,
+) -> Result<(), String> {
+    for step in contract.setup {
+        match step {
+            Setup::Read { path, set } => {
+                let answer = send(target, &caller_call(Method::GET, path, session, None)).await;
+                if !(200..300).contains(&answer.status) {
+                    return Err(format!("the setup read of {path}: {}", answer.summary()));
+                }
+                for (input, member) in *set {
+                    let mut value = answer.json.as_ref();
+                    for part in member.split('.') {
+                        value = value.and_then(|v| v.get(part));
+                    }
+                    let Some(value) = value else {
+                        return Err(format!(
+                            "the reply of {path} has no {member}: {}",
+                            answer.summary()
+                        ));
+                    };
+                    set_input(call, input, value)?;
+                }
+            }
+            // Contract regenerate-recovery-codes (CT-1022): recovery codes stand in for an
+            // authenticator, so the caller has one set up first, through the routes the desk uses
+            // (`POST /api/factors/totp/start` then `/confirm` with a code of the secret).
+            Setup::Step("enrol-authenticator") => {
+                let Some(session) = session else {
+                    return Err("enrol-authenticator needs a signed-in caller".to_string());
+                };
+                let started = send(
+                    target,
+                    &caller_call(
+                        Method::POST,
+                        "/api/factors/totp/start",
+                        Some(session),
+                        Some("{}".into()),
+                    ),
+                )
+                .await;
+                let secret = started
+                    .json
+                    .as_ref()
+                    .and_then(|j| j["secret"].as_str())
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("no secret to enrol: {}", started.summary()))?;
+                // The code one step back, as a person's app would show it before the page loads.
+                let body = json!({ "code": totp_code(&secret, -1)? }).to_string();
+                let confirmed = send(
+                    target,
+                    &caller_call(
+                        Method::POST,
+                        "/api/factors/totp/confirm",
+                        Some(session),
+                        Some(body),
+                    ),
+                )
+                .await;
+                if !(200..300).contains(&confirmed.status) {
+                    return Err(format!(
+                        "the authenticator was not confirmed: {}",
+                        confirmed.summary()
+                    ));
+                }
+            }
+            Setup::Step(name) => return Err(format!("the setup step {name} is not implemented")),
+        }
+    }
+    Ok(())
 }
 
 // ---- checking values against the declared types ---------------------------------------------
@@ -822,6 +978,16 @@ impl Run<'_> {
         holdings(self.spec, &persona.roles, true).contains(capability)
     }
 
+    /// Whether the person holds what the contract requires: every capability when it names one,
+    /// and any one of them when it names several (D-6591).
+    fn holds_required(&self, persona: &Persona) -> bool {
+        match self.contract.requires {
+            [] => true,
+            [only] => self.holds(persona, only),
+            several => several.iter().any(|c| self.holds(persona, c)),
+        }
+    }
+
     fn holds_role(&self, persona: &Persona) -> bool {
         self.contract.roles.is_empty()
             || persona
@@ -831,11 +997,7 @@ impl Run<'_> {
     }
 
     fn admitted(&self, persona: &Persona) -> bool {
-        self.contract
-            .requires
-            .iter()
-            .all(|c| self.holds(persona, c))
-            && self.holds_role(persona)
+        self.holds_required(persona) && self.holds_role(persona)
     }
 
     /// A person of the site who holds everything the contract asks for; the owner first.
@@ -1130,12 +1292,24 @@ impl Run<'_> {
                 &answer,
                 &["unauthenticated"],
             ),
-            Scheme::Other(scheme) => self.expect_refusal(
-                "no-credential",
-                &format!("a call without the {scheme} credential"),
-                &answer,
-                &["unauthenticated"],
-            ),
+            Scheme::Other(scheme) => {
+                // An address that does not verify is not found, not refused for lack of a
+                // credential, when the contract declares that: the answer does not say whether
+                // the address was never ours or its signature is wrong.
+                let signed_address_not_found =
+                    scheme == "signed-address" && self.contract.errors.contains(&"not_found");
+                let codes: &[&str] = if signed_address_not_found {
+                    &["unauthenticated", "not_found"]
+                } else {
+                    &["unauthenticated"]
+                };
+                self.expect_refusal(
+                    "no-credential",
+                    &format!("a call without the {scheme} credential"),
+                    &answer,
+                    codes,
+                )
+            }
         }
     }
 
@@ -1227,22 +1401,23 @@ impl Run<'_> {
     }
 
     async fn capabilities(&mut self) {
-        for capability in self.contract.requires {
+        // A contract that names several capabilities is met by any one of them (D-6591), so the
+        // refused person lacks all of them; one that names a single capability is checked alone.
+        let groups: Vec<&[&str]> = match self.contract.requires {
+            [] => Vec::new(),
+            requires => vec![requires],
+        };
+        for group in groups {
+            let capability = group.join(" or ");
+            let capability = capability.as_str();
             let mut lacking: Vec<Persona> = self
                 .home_personas()
                 .into_iter()
-                .filter(|p| !self.holds(p, capability))
+                .filter(|p| group.iter().all(|c| !self.holds(p, c)))
                 .cloned()
                 .collect();
-            // One who holds everything else is refused for this capability alone.
-            lacking.sort_by_key(|p| {
-                !(self
-                    .contract
-                    .requires
-                    .iter()
-                    .all(|c| c == capability || self.holds(p, c))
-                    && self.holds_role(p))
-            });
+            // One who holds the role the contract names is refused for the capability alone.
+            lacking.sort_by_key(|p| !self.holds_role(p));
             let Some(persona) = lacking.first().cloned() else {
                 self.skip(
                     "capability",
@@ -1274,7 +1449,7 @@ impl Run<'_> {
             .filter(|p| !self.holds_role(p))
             .cloned()
             .collect();
-        lacking.sort_by_key(|p| !self.contract.requires.iter().all(|c| self.holds(p, c)));
+        lacking.sort_by_key(|p| !self.holds_required(p));
         let Some(persona) = lacking.first().cloned() else {
             self.skip(
                 "role",
@@ -1469,7 +1644,10 @@ impl Run<'_> {
             },
             Scheme::Other(_) => return,
         };
-        let call = self.call(&request, &self.home(), session.as_ref(), Some(csrf));
+        let mut call = self.call(&request, &self.home(), session.as_ref(), Some(csrf));
+        if let Err(why) = run_setup(self.target, self.contract, session.as_ref(), &mut call).await {
+            return self.fail("setup", why);
+        }
         let answer = self.answer(&call).await;
         let what = "a call with the example inputs by one who may make it";
         self.judge(what, &answer);
@@ -1510,7 +1688,10 @@ impl Run<'_> {
                 Err(why) => return self.fail("quota", why),
             },
         };
-        let call = self.call(&request, &self.home(), session.as_ref(), Some(csrf));
+        let mut call = self.call(&request, &self.home(), session.as_ref(), Some(csrf));
+        if let Err(why) = run_setup(&fresh, self.contract, session.as_ref(), &mut call).await {
+            return self.fail("setup", why);
+        }
         for n in 1..=limit {
             let answer = send(&fresh, &call).await;
             if answer.code() == Some("throttled") || answer.status == 429 {

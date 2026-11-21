@@ -1,6 +1,6 @@
 //! An owner installs, upgrades and removes a product through the backend routes (the contracts
 //! install-bundle, upgrade-bundle, remove-bundle and list-installed-products): the bundle that
-//! specc writes from `badge-milestones.jsonc` goes in as one schema change that also records which
+//! specc writes from `ledger-trigger.jsonc` goes in as one schema change that also records which
 //! product owns what, a dry run shows the projection and changes nothing, a retry changes nothing,
 //! an upgrade applies the difference of the two versions, and a removal deletes exactly what the
 //! product owns. Real sockets, the in-memory store.
@@ -28,9 +28,9 @@ const TOKEN: &str = "test-service-token-0123456789abcdef";
 const SOURCE: &str = "203.0.113.7";
 const SITE: &str = "fieldnotes";
 
-/// The bundle specc writes for `badge-milestones.jsonc` (the golden file of its tests).
-const BADGE_MILESTONES: &str = include_str!(
-    "../../spec-compiler/tests/fixtures/products/expected/badge-milestones.bundle.json"
+/// The bundle specc writes for `ledger-trigger.jsonc` (the golden file of its tests).
+const LEDGER_TRIGGER: &str = include_str!(
+    "../../spec-compiler/tests/fixtures/products/expected/ledger-trigger.bundle.json"
 );
 
 struct Backend {
@@ -231,23 +231,23 @@ fn give_the_tenant_a_member_role(backend: &Backend) {
     .unwrap_or_else(|e| panic!("the owner's change was refused: {e}"));
 }
 
-/// The bundle of `badge-milestones` as specc writes it: its ledger unit is declared by the product,
+/// The bundle of `ledger-trigger` as specc writes it: its ledger unit is declared by the product,
 /// in the same schema change as the trigger that names it.
-fn badge_milestones() -> Json {
-    serde_json::from_str(BADGE_MILESTONES).unwrap()
+fn ledger_trigger() -> Json {
+    serde_json::from_str(LEDGER_TRIGGER).unwrap()
 }
 
 /// Version 1.1.0: the retention is a year, and an inbox notice more.
-fn badge_milestones_1_1() -> Json {
-    let mut bundle = badge_milestones();
+fn ledger_trigger_1_1() -> Json {
+    let mut bundle = ledger_trigger();
     bundle["version"] = json!("1.1.0");
-    bundle["content"]["objects"]["badge_milestones__award"]["retention"] =
+    bundle["content"]["objects"]["ledger_trigger__crossing"]["retention"] =
         json!({ "days": 365, "from": "Created" });
     bundle["content"]["notice-templates"]
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "template": "badge_milestones__extra_notice",
+            "template": "ledger_trigger__extra_notice",
             "title": "Another notice",
             "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Another.\"}]}]"
         }));
@@ -275,6 +275,7 @@ fn kinds(entities: &Json) -> Vec<String> {
 // Verifies: INT-2342
 // Verifies: INT-2345
 // Verifies: INT-2346
+// Verifies: WFL-2201
 #[tokio::test]
 async fn an_owner_installs_upgrades_and_removes_a_product() {
     let backend = start().await;
@@ -287,7 +288,7 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
     let (status, dry) = backend
         .install(
             &owner,
-            &badge_milestones(),
+            &ledger_trigger(),
             json!({ "dry_run": true }),
             None,
         )
@@ -297,11 +298,11 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
     assert_eq!(dry["schema_version"], json!(before.version.0));
     let created = kinds(&dry["projection"]["created"]);
     for wanted in [
-        "object:badge_milestones__award",
-        "mail-template:badge_milestones__silver_mail",
-        "notice-template:badge_milestones__silver_notice",
-        "trigger:badge_milestones__silver_on_points",
-        "automation:badge_milestones__silver",
+        "object:ledger_trigger__crossing",
+        "mail-template:ledger_trigger__crossing_mail",
+        "notice-template:ledger_trigger__crossing_notice",
+        "trigger:ledger_trigger__on_crossing",
+        "automation:ledger_trigger__record_crossing",
     ] {
         assert!(
             created.contains(&wanted.to_string()),
@@ -314,7 +315,7 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
 
     // The install is one schema change, and the record of what the product owns is in it.
     let (status, first) = backend
-        .install(&owner, &badge_milestones(), json!({}), Some("install-1"))
+        .install(&owner, &ledger_trigger(), json!({}), Some("install-1"))
         .await;
     assert_eq!(status, 200, "{first}");
     assert_eq!(first["unchanged"], json!(false));
@@ -322,7 +323,7 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
     assert_eq!(version, before.version.0 + 1, "one schema change");
     let schema = backend.schema();
     assert_eq!(schema.version.0, version);
-    let award = &schema.objects[&ObjectTypeId::new("badge_milestones__award").unwrap()];
+    let award = &schema.objects[&ObjectTypeId::new("ledger_trigger__crossing").unwrap()];
     assert_eq!(award.retention.as_ref().map(|r| r.days), Some(730));
     // The personal declaration of the field is stored with it and read back.
     let person = award
@@ -333,17 +334,17 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
         .unwrap();
     assert!(person.personal.is_some());
     let products = backend.installed(&owner).await;
-    assert_eq!(products[0]["product"], "badge-milestones");
+    assert_eq!(products[0]["product"], "ledger-trigger");
     assert_eq!(products[0]["version"], "1.0.0");
     assert_eq!(products[0]["schema-version"], json!(version));
     let owns = kinds(&products[0]["owns"]);
-    assert!(owns.contains(&"mail-template:badge_milestones__silver_mail".to_string()));
+    assert!(owns.contains(&"mail-template:ledger_trigger__crossing_mail".to_string()));
 
     // Installing the same product and version again, with or without the key, changes nothing and
     // answers the schema version of the first install.
     for key in [Some("install-1"), None] {
         let (status, again) = backend
-            .install(&owner, &badge_milestones(), json!({}), key)
+            .install(&owner, &ledger_trigger(), json!({}), key)
             .await;
         assert_eq!(status, 200, "{again}");
         assert_eq!(again["unchanged"], json!(true));
@@ -356,8 +357,8 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
         .call(
             Some(&owner),
             "/internal/mutate",
-            json!({ "op": "create", "object": "badge_milestones__award",
-                    "fields": { "person": "user:ines", "badge": "silver", "awarded_at": "2026-01-01T00:00:00Z" } }),
+            json!({ "op": "create", "object": "ledger_trigger__crossing",
+                    "fields": { "person": "user:ines", "threshold": 500, "crossed_at": "2026-01-01T00:00:00Z" } }),
             None,
         )
         .await;
@@ -365,29 +366,29 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
 
     // An upgrade applies the difference of the two versions, as one schema change.
     let (status, dry) = backend
-        .upgrade(&owner, &badge_milestones_1_1(), json!({ "dry_run": true }))
+        .upgrade(&owner, &ledger_trigger_1_1(), json!({ "dry_run": true }))
         .await;
     assert_eq!(status, 200, "{dry}");
     assert_eq!(
         kinds(&dry["projection"]["created"]),
-        vec!["notice-template:badge_milestones__extra_notice"]
+        vec!["notice-template:ledger_trigger__extra_notice"]
     );
     assert_eq!(
         kinds(&dry["projection"]["changed"]),
-        vec!["object:badge_milestones__award"]
+        vec!["object:ledger_trigger__crossing"]
     );
     assert_eq!(dry["projection"]["removed"], json!([]));
     let (status, upgraded) = backend
         .upgrade(
             &owner,
-            &badge_milestones_1_1(),
+            &ledger_trigger_1_1(),
             json!({ "expected_version": version }),
         )
         .await;
     assert_eq!(status, 200, "{upgraded}");
     assert_eq!(upgraded["schema_version"], json!(version + 1));
     let schema = backend.schema();
-    let award = &schema.objects[&ObjectTypeId::new("badge_milestones__award").unwrap()];
+    let award = &schema.objects[&ObjectTypeId::new("ledger_trigger__crossing").unwrap()];
     assert_eq!(award.retention.as_ref().map(|r| r.days), Some(365));
     assert_eq!(
         strata_kernel::templates::list(&schema)
@@ -400,10 +401,10 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
 
     // A version that is not greater is refused, and so is an upgrade from a stale schema version.
     let (status, refused) = backend
-        .upgrade(&owner, &badge_milestones_1_1(), json!({}))
+        .upgrade(&owner, &ledger_trigger_1_1(), json!({}))
         .await;
     assert_eq!((status, refused["kind"].as_str()), (422, Some("invalid")));
-    let mut later = badge_milestones_1_1();
+    let mut later = ledger_trigger_1_1();
     later["version"] = json!("1.2.0");
     let (status, stale) = backend
         .upgrade(&owner, &later, json!({ "expected_version": 1 }))
@@ -415,14 +416,14 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
     // changes nothing.
     let schema_before = backend.schema();
     let (status, refused) = backend
-        .remove(&owner, "badge-milestones", false, json!({}))
+        .remove(&owner, "ledger-trigger", false, json!({}))
         .await;
     assert_eq!(status, 422, "{refused}");
     assert!(
         refused["message"]
             .as_str()
             .unwrap()
-            .contains("badge_milestones__award has 1 record(s)"),
+            .contains("ledger_trigger__crossing has 1 record(s)"),
         "{refused}"
     );
     assert_eq!(backend.schema(), schema_before);
@@ -430,19 +431,19 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
     // A dry run of the removal that deletes them counts them; the removal deletes exactly what the
     // product owns.
     let (status, dry) = backend
-        .remove(&owner, "badge-milestones", true, json!({ "dry_run": true }))
+        .remove(&owner, "ledger-trigger", true, json!({ "dry_run": true }))
         .await;
     assert_eq!(status, 200, "{dry}");
     assert_eq!(dry["projection"]["records_deleted"], json!(1));
     let (status, removed) = backend
-        .remove(&owner, "badge-milestones", true, json!({}))
+        .remove(&owner, "ledger-trigger", true, json!({}))
         .await;
     assert_eq!(status, 200, "{removed}");
     assert_eq!(removed["projection"]["records_deleted"], json!(1));
     let schema = backend.schema();
     assert!(!schema
         .objects
-        .contains_key(&ObjectTypeId::new("badge_milestones__award").unwrap()));
+        .contains_key(&ObjectTypeId::new("ledger_trigger__crossing").unwrap()));
     assert!(schema.products.is_none() && schema.mail_templates.is_none());
     assert!(schema.triggers.is_none() && schema.automations.is_none());
     assert_eq!(backend.installed(&owner).await, json!([]));
@@ -453,7 +454,7 @@ async fn an_owner_installs_upgrades_and_removes_a_product() {
 
     // Removing a product that is not installed changes nothing.
     let (status, none) = backend
-        .remove(&owner, "badge-milestones", false, json!({}))
+        .remove(&owner, "ledger-trigger", false, json!({}))
         .await;
     assert_eq!(status, 200, "{none}");
     assert_eq!(none["unchanged"], json!(true));

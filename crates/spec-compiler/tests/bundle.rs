@@ -1,7 +1,7 @@
 //! `specc bundle`: a product file turned into the tenant bundle a tenant installs
 //! (`strata_spec_compiler::bundle`, D-6580, WG-5063).
 //!
-//! - The bundles of `badge-milestones.jsonc`, `promotions.jsonc`, `bundle/member-tiers.jsonc` and
+//! - The bundles of `ledger-trigger.jsonc`, `promotions.jsonc`, `bundle/member-tiers.jsonc` and
 //!   `bundle/ticket-board.jsonc` (a query, a view and a workflow) are golden files
 //!   (`tests/fixtures/products/expected`, rewritten by `SPECC_BLESS=1`). Every fixture states its
 //!   version and platform range in its header, which the layer checks take and validate.
@@ -115,11 +115,11 @@ fn check_golden(output: &bundle::Output) {
 
 // Verifies: INT-1580
 #[test]
-fn golden_bundle_of_badge_milestones() {
-    let output = bundle_of(&product("badge-milestones.jsonc"));
-    assert_eq!(output.product, "badge-milestones");
+fn golden_bundle_of_ledger_trigger() {
+    let output = bundle_of(&product("ledger-trigger.jsonc"));
+    assert_eq!(output.product, "ledger-trigger");
     assert_eq!(output.files.len(), 1);
-    assert_eq!(output.files[0].path, "badge-milestones.bundle.json");
+    assert_eq!(output.files[0].path, "ledger-trigger.bundle.json");
     check_golden(&output);
 }
 
@@ -236,7 +236,7 @@ fn reversed_sections(file: &ProductFile) -> ProductFile {
 
 #[test]
 fn the_same_product_gives_the_same_bytes_whatever_the_order_of_its_file() {
-    for relative in ["badge-milestones.jsonc", "promotions.jsonc"] {
+    for relative in ["ledger-trigger.jsonc", "promotions.jsonc"] {
         let file = product(relative);
         let first = bundle_of(&file);
         assert_eq!(first, bundle_of(&file), "{relative}: twice");
@@ -272,7 +272,7 @@ fn a_product_with_no_version_is_refused() {
         "{message}"
     );
     // A product file that states none is refused the same way, whatever else it holds.
-    let plain = generate(&with_release(product("badge-milestones.jsonc"), None, None)).unwrap_err();
+    let plain = generate(&with_release(product("ledger-trigger.jsonc"), None, None)).unwrap_err();
     assert_eq!(codes(&plain), [bundle::VERSION_MISSING]);
 }
 

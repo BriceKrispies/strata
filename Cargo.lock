@@ -3996,6 +3996,7 @@ dependencies = [
  "strata-substrate",
  "tokio",
  "tokio-tungstenite",
+ "totp-rs",
  "tower-http",
 ]
 
@@ -4028,10 +4029,22 @@ dependencies = [
 name = "strata-model"
 version = "0.1.0"
 dependencies = [
+ "strata-model-contracts",
+ "strata-model-machines",
+ "strata-model-records",
+ "strata-model-routes",
+ "strata-model-target-machines",
+]
+
+[[package]]
+name = "strata-model-contracts"
+version = "0.1.0"
+dependencies = [
  "regex",
  "serde",
  "serde_json",
  "strata-model-core",
+ "strata-model-records",
  "strata-runtime",
  "uuid",
 ]
@@ -4043,6 +4056,59 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "strata-model-machines"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "strata-model-core",
+ "strata-model-records",
+ "strata-runtime",
+ "uuid",
+]
+
+[[package]]
+name = "strata-model-records"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "strata-model-core",
+ "strata-runtime",
+ "uuid",
+]
+
+[[package]]
+name = "strata-model-routes"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "strata-model-contracts",
+ "strata-model-core",
+ "strata-model-records",
+ "strata-runtime",
+ "uuid",
+]
+
+[[package]]
+name = "strata-model-target-machines"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "strata-model-core",
+ "strata-model-machines",
+ "strata-model-records",
+ "strata-runtime",
  "uuid",
 ]
 

@@ -75,7 +75,6 @@ use crate::types::{
     CmpOp, Expr, FieldId, FieldTypeExt, ObjectTypeId, OrderKey, PageCursor, QueryId, RecordId,
     RoleId, Value,
 };
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -1231,7 +1230,7 @@ fn followed(expr: &Expr, out: &mut BTreeSet<String>) {
 struct Collector {
     /// The reference fields of the object type those expressions follow.
     fields: BTreeSet<String>,
-    found: RefCell<BTreeSet<Need>>,
+    found: BTreeSet<Need>,
 }
 
 impl Collector {
@@ -1266,16 +1265,15 @@ impl Collector {
         }
         Collector {
             fields,
-            found: RefCell::new(BTreeSet::new()),
+            found: BTreeSet::new(),
         }
     }
 
     /// The records `record` refers to through the followed fields that the snapshot lacks.
-    fn note(&self, lookup: Lookup<'_>, record: &Record) {
+    fn note(&mut self, lookup: Lookup<'_>, record: &Record) {
         let Some(def) = lookup.tenant.schema.objects.get(&record.object) else {
             return;
         };
-        let mut found = self.found.borrow_mut();
         for name in &self.fields {
             let Ok(id) = FieldId::new(name.as_str()) else {
                 continue;
@@ -1292,7 +1290,7 @@ impl Collector {
                 id: *target,
             };
             if !lookup.coverage.covers(&need) {
-                found.insert(need);
+                self.found.insert(need);
             }
         }
     }
@@ -1306,19 +1304,19 @@ struct Reader<'a> {
     params: &'a BTreeMap<String, Value>,
     /// Set when [`read_missing`] runs the read: a row that lacks a record it refers to is noted
     /// and passed over instead of ending the read.
-    collect: Option<&'a Collector>,
+    collect: Option<&'a mut Collector>,
 }
 
 impl<'a> Reader<'a> {
     /// The outcome of a step on `record`, or, when collecting, `instead` for a step that lacks a
     /// record the row refers to, after noting the row's missing records.
     fn absorb<T>(
-        &self,
+        &mut self,
         record: &Record,
         outcome: Result<T, DomainError>,
         instead: impl FnOnce() -> T,
     ) -> Result<T, DomainError> {
-        let Some(collector) = self.collect else {
+        let Some(collector) = self.collect.as_deref_mut() else {
             return outcome;
         };
         match outcome {
@@ -1333,12 +1331,12 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn visible(&self, record: &Record) -> Result<bool, DomainError> {
+    fn visible(&mut self, record: &Record) -> Result<bool, DomainError> {
         let outcome = visible_in(self.lookup, &self.ctx.principal, record, self.ctx.now);
         self.absorb(record, outcome, || false)
     }
 
-    fn shown(&self, record: &Arc<Record>) -> Result<Arc<Record>, DomainError> {
+    fn shown(&mut self, record: &Arc<Record>) -> Result<Arc<Record>, DomainError> {
         let outcome = redact(
             self.lookup,
             &self.ctx.principal,
@@ -1352,7 +1350,7 @@ impl<'a> Reader<'a> {
     /// Whether the filter holds of the record as the reader receives it (KRN-2522). A record the
     /// filter cannot be evaluated on is left out; a reference the snapshot lacks is
     /// `InsufficientState`.
-    fn passes(&self, filter: Option<&Expr>, record: &Record) -> Result<bool, DomainError> {
+    fn passes(&mut self, filter: Option<&Expr>, record: &Record) -> Result<bool, DomainError> {
         let outcome = self.evaluate(filter, record);
         self.absorb(record, outcome, || false)
     }
@@ -1382,7 +1380,7 @@ impl<'a> Reader<'a> {
 
     /// A window of the object type in id order (KRN-1286).
     fn window(
-        &self,
+        &mut self,
         def: &QueryDef,
         after: Option<RecordId>,
         size: u32,
@@ -1418,7 +1416,7 @@ impl<'a> Reader<'a> {
     /// Every row of the query, sorted: the scan (KRN-1287, KRN-1288). The filter and the order
     /// see each record as the reader receives it.
     fn keyed(
-        &self,
+        &mut self,
         def: &QueryDef,
         query: &QueryId,
     ) -> Result<Vec<(Vec<Value>, Arc<Record>)>, DomainError> {
@@ -1478,7 +1476,7 @@ impl<'a> Reader<'a> {
     }
 
     fn scan(
-        &self,
+        &mut self,
         def: &QueryDef,
         query: &QueryId,
         offset: usize,
@@ -1502,7 +1500,7 @@ impl<'a> Reader<'a> {
     /// (KRN-2522). The scan's rows are in the plan's order, so those at or before the position
     /// are a prefix of them.
     fn scan_from(
-        &self,
+        &mut self,
         def: &QueryDef,
         query: &QueryId,
         plan: &IndexPlan,
@@ -1533,7 +1531,7 @@ impl<'a> Reader<'a> {
     /// order, and keep each candidate the reader may see and the filter holds of, until the page
     /// is full, the candidates end or the bound is reached.
     fn index(
-        &self,
+        &mut self,
         def: &QueryDef,
         query: &QueryId,
         plan: &IndexPlan,
@@ -1663,7 +1661,7 @@ fn read_named_with(
     asked: Option<u32>,
     cursor: Option<&PageCursor>,
     ctx: &Context,
-    collect: Option<&Collector>,
+    collect: Option<&mut Collector>,
 ) -> Result<ReadResult, DomainError> {
     let tenant = lookup.tenant;
     let schema = &tenant.schema;
@@ -1679,7 +1677,7 @@ fn read_named_with(
     }
     let size = page_size(def, asked)?;
     let roles = roles_of(tenant, &ctx.principal);
-    let reader = Reader {
+    let mut reader = Reader {
         lookup,
         ctx,
         roles: &roles,
@@ -1755,7 +1753,7 @@ pub fn read_missing(state: &State, request: &ReadRequest, ctx: &Context) -> Vec<
             let Some(def) = tenant.schema.queries.get(query) else {
                 return Vec::new();
             };
-            let collector =
+            let mut collector =
                 Collector::new(&tenant.schema, &def.object, &roles, def.filter.as_ref());
             let outcome = read_named_with(
                 lookup,
@@ -1764,7 +1762,7 @@ pub fn read_missing(state: &State, request: &ReadRequest, ctx: &Context) -> Vec<
                 *page_size,
                 cursor.as_ref(),
                 ctx,
-                Some(&collector),
+                Some(&mut collector),
             );
             if let Err(DomainError {
                 kind: ErrorKind::InsufficientState,
@@ -1774,10 +1772,10 @@ pub fn read_missing(state: &State, request: &ReadRequest, ctx: &Context) -> Vec<
             {
                 found.insert(need);
             }
-            found.extend(collector.found.into_inner());
+            found.extend(collector.found);
         }
         ReadRequest::Records { object, ids } => {
-            let collector = Collector::new(&tenant.schema, object, &roles, None);
+            let mut collector = Collector::new(&tenant.schema, object, &roles, None);
             for id in ids.iter().take(limits::MAX_READ_IDS) {
                 match lookup.record(object, *id) {
                     Err(error) => found.extend(error.missing),
@@ -1793,7 +1791,7 @@ pub fn read_missing(state: &State, request: &ReadRequest, ctx: &Context) -> Vec<
                     }
                 }
             }
-            found.extend(collector.found.into_inner());
+            found.extend(collector.found);
         }
     }
     found.into_iter().collect()

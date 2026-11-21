@@ -185,7 +185,7 @@ fn committed_data_survives_a_reopen() {
     assert_eq!(store.snapshots(&alpha).unwrap(), vec![snapshot]);
     assert_eq!(store.journal_after(&alpha, 0, 10).unwrap().len(), 3);
     let migrations = store.migrations().unwrap();
-    assert_eq!(migrations.len(), 3, "the control database's steps");
+    assert_eq!(migrations.len(), 5, "the control database's steps");
     assert_eq!(
         migrations[0].applied_at,
         Timestamp(1),

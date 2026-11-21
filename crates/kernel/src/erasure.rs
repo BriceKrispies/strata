@@ -161,13 +161,22 @@ pub fn needs(schema: &TenantSchema, intent: &Intent) -> Vec<Need> {
             });
         }
     }
-    if let Some(d) = scan_from(&declared, resume_object.as_ref()) {
-        let after = if resume_object.as_ref() == Some(&d.object.id) {
+    // The page of the type the cursor names, and the first page of each type after it: a decision
+    // that changes nothing in one type goes on to the next, so that a repeat of a finished erasure
+    // ends in one decision (PRV-2461).
+    if let Some(first) = scan_from(&declared, resume_object.as_ref()) {
+        let after = if resume_object.as_ref() == Some(&first.object.id) {
             *resume_after
         } else {
             None
         };
-        out.insert(page_need(&d.object.id, after));
+        out.insert(page_need(&first.object.id, after));
+        for d in declared
+            .iter()
+            .filter(|d| d.creator && d.object.id > first.object.id)
+        {
+            out.insert(page_need(&d.object.id, None));
+        }
     }
     out.into_iter().collect()
 }
@@ -484,30 +493,41 @@ pub fn decide(
                 None
             };
         }
-    } else if let Some(d) = scan_from(&declared, resume_object) {
-        // Phase two: one page of records of one type, for the ones the subject created.
-        let after = if resume_object == Some(&d.object.id) {
-            resume_after
-        } else {
-            None
-        };
-        let page = lookup.page_of(&d.object.id, after, BATCH as u32)?;
-        for record in &page {
-            if record.created_by.as_ref() == Some(subject) {
-                take(d, &***record, &mut plan, &mut held);
+    } else {
+        // Phase two: one page of records of one type, for the ones the subject created. A type
+        // with nothing to change hands over to the next one in the same decision.
+        let mut cursor = scan_from(&declared, resume_object);
+        while let Some(d) = cursor {
+            let after = if resume_object == Some(&d.object.id) {
+                resume_after
+            } else {
+                None
+            };
+            let page = lookup.page_of(&d.object.id, after, BATCH as u32)?;
+            for record in &page {
+                if record.created_by.as_ref() == Some(subject) {
+                    take(d, &***record, &mut plan, &mut held);
+                }
             }
-        }
-        if page.len() == BATCH {
-            more = true;
-            next_object = Some(d.object.id.clone());
-            next_after = page.last().map(|record| record.id);
-        } else if let Some(following) = declared
-            .iter()
-            .find(|other| other.creator && other.object.id > d.object.id)
-        {
-            more = true;
-            next_object = Some(following.object.id.clone());
-            next_after = None;
+            let following = declared
+                .iter()
+                .find(|other| other.creator && other.object.id > d.object.id);
+            if page.len() == BATCH {
+                more = true;
+                next_object = Some(d.object.id.clone());
+                next_after = page.last().map(|record| record.id);
+                break;
+            }
+            match following {
+                Some(next) if plan.is_empty() => cursor = Some(next),
+                Some(next) => {
+                    more = true;
+                    next_object = Some(next.object.id.clone());
+                    next_after = None;
+                    break;
+                }
+                None => break,
+            }
         }
     }
     not_erased.extend(held);

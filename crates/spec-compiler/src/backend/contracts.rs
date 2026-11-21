@@ -67,35 +67,56 @@ impl Backend for ContractsBackend {
     }
 
     fn emit(&self, spec: &Spec) -> TokenStream {
-        let mut uses = Uses::default();
-        let items: Vec<TokenStream> = spec
-            .contracts
-            .iter()
-            .map(|c| contract_items(spec, c, &mut uses))
-            .collect();
-        let traits: Vec<TokenStream> = implementing_components(spec)
-            .into_iter()
-            .map(|component| component_trait(spec, component))
-            .collect();
-        let meta = meta_module(spec);
-        let serde = if items.is_empty() {
-            TokenStream::new()
-        } else {
-            quote! {
-                use std::fmt;
+        emit_with(spec, None)
+    }
+}
 
-                use serde::{Deserialize, Serialize};
+/// The contracts module; with `boundary`, only the types of the contracts that cross it derive the
+/// serde traits ([`crate::boundary`]), and the others have no serde derive or attribute.
+pub fn emit_with(spec: &Spec, boundary: Option<&crate::boundary::Boundary>) -> TokenStream {
+    let mut uses = Uses::default();
+    let mut read = 0usize;
+    let items: Vec<TokenStream> = spec
+        .contracts
+        .iter()
+        .map(|c| {
+            let items = contract_items(spec, c, &mut uses);
+            if boundary.is_none_or(|b| b.has_contract(c)) {
+                read += 1;
+                items
+            } else {
+                crate::boundary::strip_deserialize(items)
             }
-        };
-        let crate_uses = uses.import();
+        })
+        .collect();
+    let traits: Vec<TokenStream> = implementing_components(spec)
+        .into_iter()
+        .map(|component| component_trait(spec, component))
+        .collect();
+    let meta = meta_module(spec);
+    let serde = if items.is_empty() {
+        TokenStream::new()
+    } else if read == 0 {
         quote! {
-            #![doc = " The contracts of the specification: request, response and error types, one trait per implementing component, and what the specification states about each contract."]
-            #serde
-            #crate_uses
-            #(#items)*
-            #(#traits)*
-            #meta
+            use std::fmt;
+
+            use serde::Serialize;
         }
+    } else {
+        quote! {
+            use std::fmt;
+
+            use serde::{Deserialize, Serialize};
+        }
+    };
+    let crate_uses = uses.import();
+    quote! {
+        #![doc = " The contracts of the specification: request, response and error types, one trait per implementing component, and what the specification states about each contract."]
+        #serde
+        #crate_uses
+        #(#items)*
+        #(#traits)*
+        #meta
     }
 }
 

@@ -37,15 +37,13 @@ use crate::types::{
     ObjectTypeId, RecordId, Timestamp, Value,
 };
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
 
 /// The name of the record type a ledger account and entry stand for in a condition.
 const RECORD_TYPE: &str = "ledger";
 
 /// The fields a condition of a ledger policy may read, for the check of the schema.
-pub fn fields() -> &'static BTreeMap<FieldId, FieldDef> {
-    static FIELDS: OnceLock<BTreeMap<FieldId, FieldDef>> = OnceLock::new();
-    FIELDS.get_or_init(|| {
+pub fn fields() -> BTreeMap<FieldId, FieldDef> {
+    {
         let field = |name: &str, ty: FieldType| {
             let id = FieldId::new(name).expect("a field name of the ledger is a valid id");
             (
@@ -72,7 +70,7 @@ pub fn fields() -> &'static BTreeMap<FieldId, FieldDef> {
             field("caused_by", FieldType::Str),
             field("at", FieldType::Time),
         ])
-    })
+    }
 }
 
 /// The problems of a policy over the ledger: it permits `read` and nothing else, and the unit it

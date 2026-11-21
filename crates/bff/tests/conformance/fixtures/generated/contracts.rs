@@ -169,6 +169,7 @@ pub const CONFORMS_READ_NOTE: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "note",
         ty: Ty::Named("note"),
@@ -207,6 +208,7 @@ pub const VIOLATES_REPLY_SHAPE: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "note",
         ty: Ty::Named("note"),
@@ -246,6 +248,7 @@ pub const VIOLATES_NO_SESSION: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "note",
         ty: Ty::Named("note"),
@@ -285,6 +288,7 @@ pub const VIOLATES_DECLARED_ERROR: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "note",
         ty: Ty::Named("note"),
@@ -324,6 +328,7 @@ pub const CONFORMS_WRITE_NOTE: Contract = Contract {
         query: &[],
         body: Some("{\"tenant\":\"alpha\",\"title\":\"A note\",\"word_count\":3}"),
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "note",
         ty: Ty::Named("note-id"),
@@ -362,6 +367,7 @@ pub const VIOLATES_CSRF: Contract = Contract {
         query: &[],
         body: Some("{\"tenant\":\"alpha\",\"title\":\"A note\",\"word_count\":3}"),
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "note",
         ty: Ty::Named("note-id"),
@@ -401,6 +407,7 @@ pub const VIOLATES_CAPABILITY: Contract = Contract {
         query: &[],
         body: Some("{\"tenant\":\"alpha\",\"title\":\"A note\",\"word_count\":3}"),
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "note",
         ty: Ty::Named("note-id"),
@@ -440,6 +447,7 @@ pub const VIOLATES_OTHER_TENANT_INPUT: Contract = Contract {
         query: &[],
         body: Some("{\"tenant\":\"alpha\",\"title\":\"A note\",\"word_count\":3}"),
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "note",
         ty: Ty::Named("note-id"),
@@ -479,6 +487,7 @@ pub const VIOLATES_STEP_UP: Contract = Contract {
         query: &[],
         body: Some("{\"tenant\":\"alpha\",\"title\":\"A note\",\"word_count\":3}"),
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "note",
         ty: Ty::Named("note-id"),
@@ -518,6 +527,7 @@ pub const CONFORMS_DELETE_NOTE: Contract = Contract {
         query: &[],
         body: Some("{\"note\":1}"),
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "deleted",
         ty: Ty::Bool,
@@ -556,6 +566,7 @@ pub const CONFORMS_PING: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "ok",
         ty: Ty::Bool,
@@ -594,6 +605,7 @@ pub const VIOLATES_QUOTA: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "ok",
         ty: Ty::Bool,
@@ -633,6 +645,7 @@ pub const VIOLATES_READ_ONLY: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "ok",
         ty: Ty::Bool,

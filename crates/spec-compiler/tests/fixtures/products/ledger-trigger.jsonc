@@ -1,0 +1,155 @@
+{
+  // The minimal product that exercises the ledger trigger (WG-5031, WG-5364): "when a person's balance
+  // crosses 500, record the crossing once, notify them in-app and by mail, and wait seven days". It is an
+  // example of the platform's primitives, not a feature, and it is named after them. It is complete: it
+  // declares everything it names, in its own namespace ledger_trigger__ (D-6582), so a tenant can install
+  // it from this file alone (WG-5046).
+  //
+  // Each typed section holds values of a platform type (src/layer_values.rs, src/core/layer-values.js).
+  // The trigger event is a variant of trigger-event and every step action a variant of automation-step
+  // (D-6522); the automation acts as its automation principal with the roles of its run-as (D-6525).
+  // Unions are externally tagged in PascalCase, durations are in milliseconds, and an expression is
+  // tenant rule language text (D-6546); param.balance_before is the balance before the posting (D-6523),
+  // so a crossing needs no arithmetic and fires once for each crossing. The run key makes the record once
+  // for the person however often the balance crosses 500. The steps create-notice and send-mail act as
+  // the automation principal, so the recorder role holds messages-send, and the mail step names the
+  // category "transactional", which the tenant declares (define-message-category).
+  "product": {
+    "id": "ledger-trigger",
+    "name": "Ledger trigger",
+    "description": "Records once when a person's balance crosses 500, tells the person in the inbox and by mail, and waits seven days.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../../../specifications/spec.jsonc",
+      "entities": ["content-read", "content-write", "messages-send"]
+    }
+  },
+  "roles": [
+    {
+      "id": "ledger_trigger__recorder",
+      "name": "Crossing recorder",
+      "description": "The role the automation principal of ledger_trigger__record_crossing holds (its run-as): it creates and reads crossings and sends the notice and the mail.",
+      "level": "tenant",
+      "holders": ["person", "team", "agent"],
+      "capabilities": ["content-read", "content-write", "messages-send"]
+    }
+  ],
+  "objects": [
+    {
+      "id": "ledger_trigger__crossing",
+      "label": "Crossing",
+      "fields": {
+        "person": {
+          "id": "person",
+          "label": "Person",
+          "ty": "Str",
+          "required": true,
+          "unique": false,
+          // The principal whose balance crossed: personal data of that person, sealed under their key (D-6584).
+          "personal": { "kind": "identifier", "subject": { "Field": { "field": "person" } }, "searchable": false }
+        },
+        "threshold": { "id": "threshold", "label": "Threshold", "ty": "Int", "required": true, "unique": false },
+        "crossed_at": { "id": "crossed_at", "label": "Crossed at", "ty": "Time", "required": true, "unique": false }
+      },
+      "constraints": {},
+      // A type with a personal field carries a retention rule (D-6584).
+      "retention": { "days": 730, "from": "Created" }
+    }
+  ],
+  "policies": [
+    {
+      "id": "ledger_trigger__recorder_crossings",
+      "role": "ledger_trigger__recorder",
+      "resource": { "Object": "ledger_trigger__crossing" },
+      "actions": ["Create", "Read"]
+    },
+    {
+      "id": "ledger_trigger__member_own_crossings",
+      "role": "member",
+      "resource": { "Object": "ledger_trigger__crossing" },
+      "actions": ["Read"],
+      "condition": "record.person == principal"
+    }
+  ],
+  "ledgerUnits": [
+    {
+      "id": "ledger_trigger__points",
+      "description": "Points a person earns; a crossing is recorded when a person's balance reaches 500."
+    }
+  ],
+  "mailTemplates": [
+    {
+      "id": "ledger_trigger__crossing_mail",
+      "subject": "The balance reached 500",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"The balance reached 500.\"}]}]"
+    }
+  ],
+  "noticeTemplates": [
+    {
+      "id": "ledger_trigger__crossing_notice",
+      "title": "The balance reached 500",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"The balance reached 500.\"}]}]"
+    }
+  ],
+  "queries": [
+    {
+      // Every crossing the reader may read: a member reads their own only, by the policy ledger_trigger__member_own_crossings.
+      "id": "ledger_trigger__crossings",
+      "object": "ledger_trigger__crossing",
+      "params": [],
+      "order": [{ "field": "crossed_at", "descending": true }],
+      "limit": 50
+    }
+  ],
+  "views": [
+    {
+      "id": "ledger_trigger__crossings_view",
+      "route": "/crossings",
+      "title": "Crossings",
+      "sections": {
+        "crossings": { "query": "ledger_trigger__crossings", "args": {}, "include": [], "markdown": [], "single": false }
+      }
+    }
+  ],
+  "triggers": [
+    {
+      "id": "ledger_trigger__on_crossing",
+      "on": { "LedgerPosted": { "unit": "ledger_trigger__points" } },
+      "condition": "not is_null(param.owner) and param.balance_before < 500 and param.balance >= 500",
+      "automation": "ledger_trigger__record_crossing"
+    }
+  ],
+  "automations": [
+    {
+      "id": "ledger_trigger__record_crossing",
+      "label": "Record the crossing of 500",
+      "run-as": { "roles": ["ledger_trigger__recorder"] },
+      // Once per person, for as long as the automation exists (SCH-1536).
+      "run-key": "param.owner",
+      "start": "crossing",
+      "steps": {
+        "crossing": {
+          "action": { "CreateRecord": { "object": "ledger_trigger__crossing", "fields": { "person": "param.owner", "threshold": "500", "crossed_at": "param.at" } } },
+          "next": "notify",
+          "retry": { "attempts": 5 }
+        },
+        "notify": {
+          "action": { "CreateNotice": { "template": "ledger_trigger__crossing_notice", "to": "param.owner", "record": "param.crossing_record" } },
+          "next": "mail"
+        },
+        "mail": {
+          "action": { "SendMail": { "template": "ledger_trigger__crossing_mail", "to": "param.owner", "category": "transactional" } },
+          "next": "wait",
+          "retry": { "attempts": 8, "first-delay": 60000, "max-delay": 3600000 },
+          "timeout": 30000
+        },
+        "wait": {
+          "action": { "WaitFor": { "duration": 604800000 } },
+          "next": "done"
+        },
+        "done": { "action": "End" }
+      }
+    }
+  ]
+}

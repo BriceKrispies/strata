@@ -34,11 +34,11 @@
 //! Provisioning (`ops::run_intent_unaudited`) leaves none: a tenant that is being installed has
 //! no earlier configuration to change.
 
-use strata_kernel::ext::IntentExt;
 use crate::app::App;
 use serde_json::{json, Map, Value as Json};
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use strata_kernel::ext::IntentExt;
 use strata_kernel::settings::override_of;
 use strata_kernel::{
     Context, EventBody, Intent, Principal, PrincipalId, RoleId, SchemaChange, SettingLevel,

@@ -181,6 +181,23 @@ pub async fn inbound(
     // A delivery acts for nobody: whatever session cookie came along is not passed on.
     visit.token = None;
     visit.idempotency_key = None;
+    // A delivery that names another tenant than the one of its host is refused before the
+    // endpoint or the signature is looked at (the tenant input of receive-inbound-webhook).
+    let named = serde_json::from_slice::<Json_>(&body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("tenant")
+                .and_then(Json_::as_str)
+                .map(str::to_string)
+        });
+    if named.is_some_and(|named| named != visit.site.as_str()) {
+        return Err(Failure::new(
+            ErrorCode::Forbidden,
+            "The request names another tenant than the one it is made at.",
+            &visit.correlation,
+        ));
+    }
     if body.len() > MAX_INBOUND_BODY {
         let mut failure = Failure::new(
             ErrorCode::Invalid,

@@ -1,0 +1,226 @@
+{
+  "content": {
+    "automations": [
+      {
+        "id": "ledger_trigger__record_crossing",
+        "label": "Record the crossing of 500",
+        "run-as": {
+          "roles": [
+            "ledger_trigger__recorder"
+          ]
+        },
+        "run-key": "param.owner",
+        "start": "crossing",
+        "steps": {
+          "crossing": {
+            "action": {
+              "CreateRecord": {
+                "fields": {
+                  "crossed_at": "param.at",
+                  "person": "param.owner",
+                  "threshold": "500"
+                },
+                "object": "ledger_trigger__crossing"
+              }
+            },
+            "next": "notify",
+            "retry": {
+              "attempts": 5
+            }
+          },
+          "done": {
+            "action": "End"
+          },
+          "mail": {
+            "action": {
+              "SendMail": {
+                "category": "transactional",
+                "template": "ledger_trigger__crossing_mail",
+                "to": "param.owner"
+              }
+            },
+            "next": "wait",
+            "retry": {
+              "attempts": 8,
+              "first-delay": 60000,
+              "max-delay": 3600000
+            },
+            "timeout": 30000
+          },
+          "notify": {
+            "action": {
+              "CreateNotice": {
+                "record": "param.crossing_record",
+                "template": "ledger_trigger__crossing_notice",
+                "to": "param.owner"
+              }
+            },
+            "next": "mail"
+          },
+          "wait": {
+            "action": {
+              "WaitFor": {
+                "duration": 604800000
+              }
+            },
+            "next": "done"
+          }
+        }
+      }
+    ],
+    "ledger-units": [
+      {
+        "description": "Points a person earns; a crossing is recorded when a person's balance reaches 500.",
+        "unit": "ledger_trigger__points"
+      }
+    ],
+    "mail-templates": [
+      {
+        "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"The balance reached 500.\"}]}]",
+        "subject": "The balance reached 500",
+        "template": "ledger_trigger__crossing_mail"
+      }
+    ],
+    "notice-templates": [
+      {
+        "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"The balance reached 500.\"}]}]",
+        "template": "ledger_trigger__crossing_notice",
+        "title": "The balance reached 500"
+      }
+    ],
+    "objects": {
+      "ledger_trigger__crossing": {
+        "constraints": {},
+        "fields": {
+          "crossed_at": {
+            "id": "crossed_at",
+            "label": "Crossed at",
+            "required": true,
+            "ty": "Time",
+            "unique": false
+          },
+          "person": {
+            "id": "person",
+            "label": "Person",
+            "personal": {
+              "kind": "identifier",
+              "searchable": false,
+              "subject": {
+                "Field": {
+                  "field": "person"
+                }
+              }
+            },
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          },
+          "threshold": {
+            "id": "threshold",
+            "label": "Threshold",
+            "required": true,
+            "ty": "Int",
+            "unique": false
+          }
+        },
+        "id": "ledger_trigger__crossing",
+        "label": "Crossing",
+        "retention": {
+          "days": 730,
+          "from": "Created"
+        }
+      }
+    },
+    "policies": {
+      "ledger_trigger__member_own_crossings": {
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.person == principal",
+        "id": "ledger_trigger__member_own_crossings",
+        "resource": {
+          "Object": "ledger_trigger__crossing"
+        },
+        "role": "member"
+      },
+      "ledger_trigger__recorder_crossings": {
+        "actions": [
+          "Create",
+          "Read"
+        ],
+        "id": "ledger_trigger__recorder_crossings",
+        "resource": {
+          "Object": "ledger_trigger__crossing"
+        },
+        "role": "ledger_trigger__recorder"
+      }
+    },
+    "queries": {
+      "ledger_trigger__crossings": {
+        "id": "ledger_trigger__crossings",
+        "limit": 50,
+        "object": "ledger_trigger__crossing",
+        "order": [
+          {
+            "descending": true,
+            "field": "crossed_at"
+          }
+        ],
+        "params": []
+      }
+    },
+    "role-permissions": {
+      "ledger_trigger__recorder": [
+        {
+          "Capability": "content-read"
+        },
+        {
+          "Capability": "content-write"
+        },
+        {
+          "Capability": "messages-send"
+        }
+      ]
+    },
+    "roles": {
+      "ledger_trigger__recorder": {
+        "id": "ledger_trigger__recorder",
+        "label": "Crossing recorder"
+      }
+    },
+    "triggers": [
+      {
+        "automation": "ledger_trigger__record_crossing",
+        "condition": "not is_null(param.owner) and param.balance_before < 500 and param.balance >= 500",
+        "id": "ledger_trigger__on_crossing",
+        "on": {
+          "LedgerPosted": {
+            "unit": "ledger_trigger__points"
+          }
+        }
+      }
+    ],
+    "views": {
+      "ledger_trigger__crossings_view": {
+        "id": "ledger_trigger__crossings_view",
+        "route": "/crossings",
+        "sections": {
+          "crossings": {
+            "args": {},
+            "include": [],
+            "markdown": [],
+            "query": "ledger_trigger__crossings",
+            "single": false
+          }
+        },
+        "title": "Crossings"
+      }
+    }
+  },
+  "name": "Ledger trigger",
+  "platform": {
+    "min": "0.2"
+  },
+  "product": "ledger-trigger",
+  "version": "1.0.0"
+}

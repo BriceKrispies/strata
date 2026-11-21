@@ -407,6 +407,7 @@ impl TenantSchemaExt for TenantSchema {
             if policy.role == owner_role() {
                 problems.push(format!("{at}: the owner role needs no policy"));
             }
+            let ledger_fields;
             let fields = match &policy.resource {
                 Resource::Object(id) => match self.objects.get(id) {
                     Some(object) => Some(&object.fields),
@@ -416,7 +417,10 @@ impl TenantSchemaExt for TenantSchema {
                     }
                 },
                 // D-6550: a policy over the ledger reads the fields of an account and an entry.
-                Resource::Ledger { .. } => Some(crate::ledger_policy::fields()),
+                Resource::Ledger { .. } => {
+                    ledger_fields = crate::ledger_policy::fields();
+                    Some(&ledger_fields)
+                }
                 _ => None,
             };
             crate::ledger_policy::policy_problems(self, policy, &at, &mut problems);

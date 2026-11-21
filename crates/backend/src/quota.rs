@@ -334,7 +334,25 @@ pub async fn admit(app: &Shared, path: &str, headers: &HeaderMap) -> Result<(), 
     let Ok(caller) = auth::caller(headers) else {
         return Ok(());
     };
+    // A quota of a tenant or of a principal counts the calls of the tenant's signed-in callers
+    // only: a call without a session of this tenant is refused by the operation itself, and
+    // counting it would let anyone spend a tenant's allowance (a visitor flooding the route would
+    // shut its owner out). A quota of a source address counts every call.
+    let personal = limits
+        .iter()
+        .any(|quota| matches!(quota.scope, Scope::Tenant | Scope::Principal));
+    let signed_in = personal && {
+        let resolving = caller.clone();
+        app.blocking_for(caller.site.as_str(), move |app| {
+            auth::identify(app, &resolving).is_ok_and(|identity| !identity.anonymous())
+        })
+        .await
+        .unwrap_or(false)
+    };
     for quota in limits {
+        if matches!(quota.scope, Scope::Tenant | Scope::Principal) && !signed_in {
+            continue;
+        }
         let key = scope_key(
             quota,
             Some(&caller.site),

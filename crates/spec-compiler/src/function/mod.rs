@@ -349,7 +349,7 @@ fn diag(f: &str, r: Refusal) -> Diagnostic {
 
 /// The readiness checks of the functions: every reason specc would not compile one.
 pub fn check(spec: &Spec) -> Vec<Diagnostic> {
-    match compile(spec) {
+    match compile(spec, None) {
         Ok(_) => Vec::new(),
         Err(d) => d,
     }
@@ -360,9 +360,195 @@ pub fn wanted(spec: &Spec) -> bool {
     !spec.functions.is_empty()
 }
 
-/// The `functions` module. Assumes [`check`] passed.
+/// The `functions` module, with each example as a unit test in it. Assumes [`check`] passed.
 pub fn emit(spec: &Spec) -> TokenStream {
-    compile(spec).unwrap_or_default()
+    compile(spec, None)
+        .map(|(module, _)| module)
+        .unwrap_or_default()
+}
+
+/// The number of integration test files the examples are split into by [`emit_tests_apart`]. It is
+/// fixed, so the test targets of the crate do not come and go as examples are added.
+pub const EXAMPLE_TEST_FILES: usize = 8;
+
+/// The `functions` module without its examples, and the examples as integration test files of the
+/// pure crate `core_crate`: `(file stem, tokens)`, at most [`EXAMPLE_TEST_FILES`] of them, each
+/// holding the examples of a run of functions in declaration order, of roughly even size, with the
+/// example fixtures its tests use. The library then compiles with no tests in it, and the test
+/// files compile one by one. Assumes [`check`] passed.
+pub fn emit_tests_apart(
+    spec: &Spec,
+    core_crate: &str,
+) -> (TokenStream, Vec<(String, TokenStream)>) {
+    compile(spec, Some(core_crate)).unwrap_or_default()
+}
+
+/// The examples of one function as tests, and the fixtures they use.
+struct FunctionTests {
+    id: String,
+    tests: Vec<TokenStream>,
+    fixtures: BTreeSet<String>,
+    size: usize,
+}
+
+/// The lints the functions module allows, which its tests share.
+fn allowed_lints() -> TokenStream {
+    quote! {
+        #![allow(
+            clippy::ptr_arg,
+            clippy::bool_comparison,
+            clippy::collapsible_else_if,
+            clippy::if_same_then_else,
+            clippy::match_like_matches_macro,
+            clippy::needless_bool,
+            clippy::nonminimal_bool,
+            clippy::redundant_clone,
+            clippy::single_match,
+            clippy::unnecessary_fold,
+            clippy::float_cmp,
+            clippy::unit_arg,
+            clippy::unit_cmp,
+            clippy::let_unit_value,
+            clippy::unused_unit
+        )]
+    }
+}
+
+/// Every identifier in `tokens`, at any depth.
+fn idents(tokens: &TokenStream, out: &mut BTreeSet<String>) {
+    for tree in tokens.clone() {
+        match tree {
+            proc_macro2::TokenTree::Ident(i) => {
+                out.insert(i.to_string());
+            }
+            proc_macro2::TokenTree::Group(g) => idents(&g.stream(), out),
+            _ => {}
+        }
+    }
+}
+
+/// The size of generated code, as its tokens' text without spaces.
+fn code_size(tokens: &TokenStream) -> usize {
+    tokens
+        .to_string()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .count()
+}
+
+/// The example tests split into integration test files: runs of functions in declaration order,
+/// each function's size its tests' and the fixtures' they use, cut at the function boundary
+/// nearest each even share of the total.
+fn test_files(
+    spec: &Spec,
+    core_crate: &str,
+    per_function: Vec<FunctionTests>,
+) -> Vec<(String, TokenStream)> {
+    let mut fixture_sizes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut per_function: Vec<FunctionTests> = per_function
+        .into_iter()
+        .filter(|f| !f.tests.is_empty())
+        .collect();
+    for f in &mut per_function {
+        for id in &f.fixtures {
+            let size = *fixture_sizes.entry(id.clone()).or_insert_with(|| {
+                let one = BTreeSet::from([id.clone()]);
+                examples::fixtures(spec, &one)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(code_size)
+                    .sum()
+            });
+            f.size += size;
+        }
+    }
+    // The smallest capacity with which filling files in order needs no more than the fixed
+    // number of them: the split whose largest file is smallest.
+    let sizes: Vec<usize> = per_function.iter().map(|f| f.size).collect();
+    let files_needed = |capacity: usize| {
+        let mut files = 0usize;
+        let mut running = 0usize;
+        for &size in &sizes {
+            if files == 0 || running + size > capacity {
+                files += 1;
+                running = 0;
+            }
+            running += size;
+        }
+        files
+    };
+    let mut low = sizes.iter().copied().max().unwrap_or(0);
+    let mut high = sizes.iter().sum::<usize>().max(low);
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if files_needed(mid) <= EXAMPLE_TEST_FILES {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    let capacity = low;
+    let mut chunks: Vec<Vec<FunctionTests>> = Vec::new();
+    let mut running = 0usize;
+    for f in per_function {
+        if chunks.is_empty() || running + f.size > capacity {
+            chunks.push(Vec::new());
+            running = 0;
+        }
+        running += f.size;
+        chunks.last_mut().expect("a chunk").push(f);
+    }
+    let krate = proc_macro2::Ident::new(
+        &core_crate.replace('-', "_"),
+        proc_macro2::Span::call_site(),
+    );
+    let count = chunks.len();
+    let lints = allowed_lints();
+    chunks
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            // The fixtures the file's tests call: an example whose overrides cannot be applied in
+            // code writes the fixture's value out, and calls no fixture function.
+            let mut called = BTreeSet::new();
+            for f in &chunk {
+                for t in &f.tests {
+                    idents(t, &mut called);
+                }
+            }
+            let used: BTreeSet<String> = chunk
+                .iter()
+                .flat_map(|f| f.fixtures.iter().cloned())
+                .filter(|id| called.contains(&examples::fixture_fn(id).to_string()))
+                .collect();
+            // Every fixture was checked with the whole set in `compile`.
+            let fixtures = examples::fixtures(spec, &used).unwrap_or_default();
+            let first = &chunk[0].id;
+            let last = &chunk[chunk.len() - 1].id;
+            let summary = format!(
+                " The examples of the specification's functions `{first}` to `{last}`, in declaration order, one test each: part {} of {count}.",
+                i + 1
+            );
+            let tests: Vec<TokenStream> = chunk.into_iter().flat_map(|f| f.tests).collect();
+            let stem = format!("function_examples_{}", i + 1);
+            (
+                stem,
+                quote! {
+                    #![doc = #summary]
+                    #lints
+
+                    #[allow(unused_imports)]
+                    use #krate::{prelude, types};
+                    #[allow(unused_imports)]
+                    use #krate::functions::*;
+
+                    #(#fixtures)*
+
+                    #(#tests)*
+                },
+            )
+        })
+        .collect()
 }
 
 /// A function parsed and typed.
@@ -697,9 +883,14 @@ fn analyse(spec: &Spec) -> Result<Analysis, Vec<Diagnostic>> {
     })
 }
 
-fn compile(spec: &Spec) -> Result<TokenStream, Vec<Diagnostic>> {
+/// The module, and with `apart` (the pure crate's name) its examples as test files instead of a
+/// test module in it.
+fn compile(
+    spec: &Spec,
+    apart: Option<&str>,
+) -> Result<(TokenStream, Vec<(String, TokenStream)>), Vec<Diagnostic>> {
     if !wanted(spec) {
-        return Ok(TokenStream::new());
+        return Ok((TokenStream::new(), Vec::new()));
     }
     let Analysis {
         reserved,
@@ -712,6 +903,7 @@ fn compile(spec: &Spec) -> Result<TokenStream, Vec<Diagnostic>> {
     let reserved: BTreeSet<String> = reserved.into_keys().collect();
     let mut items = Vec::new();
     let mut tests = Vec::new();
+    let mut per_function = Vec::new();
     let mut used_fixtures = BTreeSet::new();
     let mut helpers: BTreeSet<&'static str> = BTreeSet::new();
     for f in &spec.functions {
@@ -728,15 +920,31 @@ fn compile(spec: &Spec) -> Result<TokenStream, Vec<Diagnostic>> {
                 continue;
             }
         }
-        match examples::tests(spec, f, sig, &mut used_fixtures) {
-            Ok(mut ts) => tests.append(&mut ts),
+        let mut used = BTreeSet::new();
+        match examples::tests(spec, f, sig, &mut used) {
+            Ok(ts) => {
+                used_fixtures.extend(used.iter().cloned());
+                if apart.is_some() {
+                    let size = ts.iter().map(code_size).sum();
+                    per_function.push(FunctionTests {
+                        id: f.id.clone(),
+                        tests: ts,
+                        fixtures: used,
+                        size,
+                    });
+                } else {
+                    tests.extend(ts);
+                }
+            }
             Err(r) => diags.push(diag(&f.id, r)),
         }
     }
     match examples::fixtures(spec, &used_fixtures) {
         Ok(mut fixtures) => {
-            fixtures.append(&mut tests);
-            tests = fixtures;
+            if apart.is_none() {
+                fixtures.append(&mut tests);
+                tests = fixtures;
+            }
         }
         Err((id, r)) => diags.push(Diagnostic::new(
             r.code,
@@ -747,7 +955,14 @@ fn compile(spec: &Spec) -> Result<TokenStream, Vec<Diagnostic>> {
     if !diags.is_empty() {
         return Err(diags);
     }
-    Ok(assemble(spec, &sigs, items, tests, &helpers, &bridges))
+    let files = match apart {
+        Some(core_crate) => test_files(spec, core_crate, per_function),
+        None => Vec::new(),
+    };
+    Ok((
+        assemble(spec, &sigs, items, tests, &helpers, &bridges),
+        files,
+    ))
 }
 
 fn diagnostic_entity(spec: &Spec) -> &str {
@@ -888,27 +1103,12 @@ fn assemble(
             }
         }
     };
+    let lints = allowed_lints();
     quote! {
         #![doc = #summary]
         #![doc = ""]
         #![doc = #overflow]
-        #![allow(
-            clippy::ptr_arg,
-            clippy::bool_comparison,
-            clippy::collapsible_else_if,
-            clippy::if_same_then_else,
-            clippy::match_like_matches_macro,
-            clippy::needless_bool,
-            clippy::nonminimal_bool,
-            clippy::redundant_clone,
-            clippy::single_match,
-            clippy::unnecessary_fold,
-            clippy::float_cmp,
-            clippy::unit_arg,
-            clippy::unit_cmp,
-            clippy::let_unit_value,
-            clippy::unused_unit
-        )]
+        #lints
 
         #types_use
 
@@ -1486,6 +1686,27 @@ mod tests {
 
     const ALPHA: &str =
         r#"{ "id": "alpha-tenant", "type": "tenant", "value": { "members": { "a": ["owner"] } } }"#;
+
+    #[test]
+    fn examples_apart_leave_the_module_and_carry_their_fixtures() {
+        let spec = crate::load::load(
+            "s.jsonc",
+            &fixture_spec(ALPHA, r#"{ "fixture": "alpha-tenant" }"#),
+        )
+        .expect("loads");
+        assert!(check(&spec).is_empty());
+        let (module, files) = emit_tests_apart(&spec, "my-core");
+        let module = module.to_string();
+        assert!(!module.contains("cfg (test)"), "{module}");
+        assert!(!module.contains("held_example_1"), "{module}");
+        assert_eq!(files.len(), 1);
+        let (stem, file) = &files[0];
+        assert_eq!(stem, "function_examples_1");
+        let file = file.to_string();
+        assert!(file.contains("use my_core :: functions :: *"), "{file}");
+        assert!(file.contains("fn fixture_alpha_tenant ()"), "{file}");
+        assert!(file.contains("fn held_example_1 ()"), "{file}");
+    }
 
     #[test]
     fn a_fixture_is_written_once_and_an_example_calls_it() {

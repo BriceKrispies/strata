@@ -393,6 +393,119 @@ async fn guard_request(bff: &Bff, visit: &Visit, headers: &HeaderMap) -> Result<
     }
 }
 
+/// Read a JSON body as the type a route takes, after the route's checks: one that does not fit
+/// is an `invalid` refusal in the error body type, not axum's plain-text rejection.
+fn typed_body<T: DeserializeOwned>(body: Json_, visit: &Visit) -> Result<T, Failure> {
+    serde_json::from_value(body).map_err(|why| {
+        Failure::new(
+            ErrorCode::Invalid,
+            &format!("The request body does not fit: {why}."),
+            &visit.correlation,
+        )
+    })
+}
+
+/// The most of a JSON body the gateway reads before the handler does (axum's own default).
+const JSON_BODY_LIMIT: usize = 2 * 1024 * 1024;
+
+/// The refusal of a request that names another tenant than the one of its host, once the checks
+/// that come before the input have passed: our origin and the request token for a request that
+/// changes state.
+async fn another_tenant(bff: &Bff, parts: &axum::http::request::Parts, writes: bool) -> Response {
+    let outcome = async {
+        let visit = visit(bff, &parts.headers)?;
+        if writes {
+            guard_request(bff, &visit, &parts.headers).await?;
+        }
+        Err::<Response, Failure>(Failure::new(
+            ErrorCode::Forbidden,
+            "The request names another tenant than the one it is made at.",
+            &visit.correlation,
+        ))
+    }
+    .await;
+    match outcome {
+        Ok(response) => response,
+        Err(failure) => failure.into_response(),
+    }
+}
+
+/// Whether `named` is a tenant other than the one `headers` address. A host that serves no site is
+/// left to the handler, which refuses it.
+fn names_another_tenant(bff: &Bff, headers: &HeaderMap, named: Option<&str>) -> bool {
+    match (named, visit(bff, headers)) {
+        (Some(named), Ok(visit)) => named != visit.site.as_str(),
+        _ => false,
+    }
+}
+
+/// Two checks that come before a handler reads its input, which the handlers cannot make
+/// themselves because they take their input typed.
+///
+/// A tenant that a request names (the `tenant` input of a contract, in the query of a read or the
+/// body of a write) must be the tenant of the host it is made at; another is refused `forbidden`
+/// before anything else about the input is looked at, once the origin and the request token of a
+/// write are good (the contracts of tenant scope `request`).
+///
+/// A body that is not JSON is refused only after the checks that come before the input: our
+/// origin, then the request token. axum's `Json` extractor would read the body first and answer
+/// with a plain-text rejection, to a caller who had not even shown it comes from the site. A body
+/// that is JSON goes on to the handler unchanged; one that is not is answered here, once the
+/// origin and the token are good, with the specification's `invalid` error body.
+async fn json_after_guards(State(bff): State<Shared>, request: Request, next: Next) -> Response {
+    let writes = !matches!(
+        *request.method(),
+        Method::GET | Method::HEAD | Method::OPTIONS
+    );
+    if !writes {
+        let named = Query::<BTreeMap<String, String>>::try_from_uri(request.uri())
+            .ok()
+            .and_then(|query| query.0.get("tenant").cloned());
+        if names_another_tenant(&bff, request.headers(), named.as_deref()) {
+            let (parts, _) = request.into_parts();
+            return another_tenant(&bff, &parts, false).await;
+        }
+        return next.run(request).await;
+    }
+    let json = text(request.headers(), CONTENT_TYPE).is_some_and(|kind| kind.contains("json"));
+    if !json {
+        return next.run(request).await;
+    }
+    let (parts, body) = request.into_parts();
+    let bytes = match axum::body::to_bytes(body, JSON_BODY_LIMIT).await {
+        Ok(bytes) => bytes,
+        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+    };
+    if bytes.is_empty() {
+        return next
+            .run(Request::from_parts(parts, axum::body::Body::from(bytes)))
+            .await;
+    }
+    if let Ok(value) = serde_json::from_slice::<Json_>(&bytes) {
+        let named = value.get("tenant").and_then(Json_::as_str);
+        if names_another_tenant(&bff, &parts.headers, named) {
+            return another_tenant(&bff, &parts, true).await;
+        }
+        return next
+            .run(Request::from_parts(parts, axum::body::Body::from(bytes)))
+            .await;
+    }
+    let outcome = async {
+        let visit = visit(&bff, &parts.headers)?;
+        guard_request(&bff, &visit, &parts.headers).await?;
+        Err::<Response, Failure>(Failure::new(
+            ErrorCode::Invalid,
+            "The request body is not JSON.",
+            &visit.correlation,
+        ))
+    }
+    .await;
+    match outcome {
+        Ok(response) => response,
+        Err(failure) => failure.into_response(),
+    }
+}
+
 /// Require a state-changing request to come from our own pages with the session's CSRF token.
 pub(crate) async fn guard_write(
     bff: &Bff,
@@ -424,6 +537,36 @@ pub(crate) async fn guard_write(
         ));
     }
     Ok(reply.session)
+}
+
+/// What a contract asks of its caller beyond the origin and the request token, decided by the
+/// backend before the route reads its input: a session, the capabilities (`any` of them, or every
+/// one), a role and a fresh authentication. A caller who may not make the call is told so, and not
+/// that its input is wrong (`unauthenticated`, `forbidden`, or `forbidden` of kind
+/// `step_up_required`).
+pub(crate) struct Admission<'a> {
+    pub capabilities: &'a [&'a str],
+    pub any: bool,
+    pub roles: &'a [&'a str],
+    pub step_up: bool,
+}
+
+impl Admission<'_> {
+    pub(crate) async fn admit(&self, bff: &Bff, visit: &Visit) -> Result<(), Failure> {
+        let _: Json_ = backend(
+            bff,
+            visit,
+            "/internal/admit",
+            &json!({
+                "capabilities": self.capabilities,
+                "any": self.any,
+                "roles": self.roles,
+                "step_up": self.step_up,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 async fn session(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
@@ -1092,6 +1235,15 @@ async fn subject_erase(
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
+    // An owner holding subject-rights, with a fresh authentication (contract erase-subject).
+    Admission {
+        capabilities: &["subject-rights"],
+        any: false,
+        roles: &["owner"],
+        step_up: true,
+    }
+    .admit(&bff, &visit)
+    .await?;
     let Some(principal) = body.get("principal").and_then(Json_::as_str) else {
         return Err(Failure::new(
             ErrorCode::Invalid,
@@ -1161,6 +1313,19 @@ async fn subject_rights(
             "No such endpoint.",
             &visit.correlation,
         ));
+    }
+    // The person the data concerns, or an owner, asks for a fresh authentication before the
+    // body is looked at (contracts export-subject-data and fetch-subject-export). Whether the
+    // caller is the person or an owner depends on the input and is decided by the backend.
+    if matches!(operation.as_str(), "export" | "export-fetch") {
+        Admission {
+            capabilities: &[],
+            any: false,
+            roles: &[],
+            step_up: true,
+        }
+        .admit(&bff, &visit)
+        .await?;
     }
     backend(
         &bff,
@@ -1252,6 +1417,15 @@ async fn logout(State(bff): State<Shared>, headers: HeaderMap) -> Result<Respons
             .insert(SET_COOKIE, session_cookie("", 0));
         response
     };
+    // A call with no session to end is `unauthenticated` (contract sign-out-of-site); the cookie
+    // that named no session is cleared with the refusal.
+    if !live {
+        return Ok(cleared(Failure::new(
+            ErrorCode::Unauthenticated,
+            "Sign in to do this.",
+            &visit.correlation,
+        )));
+    }
     if live {
         let ended: Result<Json_, Failure> =
             backend(&bff, &visit, "/internal/session/logout", &json!({})).await;
@@ -1288,6 +1462,20 @@ struct Paging {
     limit: Option<u32>,
 }
 
+/// The capability a view of the desk or the lab requires, by the address of its screen: the
+/// contracts read-desk-view, read-new-article-view, read-edit-article-view, read-settings-view and
+/// read-lab-view.
+fn desk_capability(path: &str) -> Option<&'static str> {
+    let address = path.split(['?', '#']).next().unwrap_or(path);
+    let address = address.trim_end_matches('/');
+    match address {
+        "/desk/settings" => Some("site-configure"),
+        "/desk" | "/desk/new" | "/lab" => Some("content-draft-read"),
+        _ if address.starts_with("/desk/edit/") => Some("content-draft-read"),
+        _ => None,
+    }
+}
+
 /// Fetch a view from the backend and project it into the browser's view model.
 async fn view_model(
     bff: &Bff,
@@ -1296,6 +1484,7 @@ async fn view_model(
     request: BTreeMap<String, String>,
     paging: Paging,
 ) -> Result<Json_, Failure> {
+    let asked = request.clone();
     let data: ViewData = backend(
         bff,
         visit,
@@ -1326,6 +1515,7 @@ async fn view_model(
     }
     model["theme"] = json!(resolved);
     model["path"] = json!(path);
+    echo_request(&mut model, data.view.as_str(), &asked);
     if let Some(info) = screens::view_info(data.view.as_str()) {
         // The outputs the screen's view model states beyond the sections (for the writing desk:
         // each article as its per-row actions name it, the topic and author choices, the record
@@ -1336,6 +1526,21 @@ async fn view_model(
         model["title"] = json!(title);
     }
     Ok(model)
+}
+
+/// The request parameters a view's model repeats as members of its own: (view, parameter). The
+/// search page shows the words searched for beside the results (read-search-page, CT-245, whose
+/// output `q` is the request's `q`).
+const ECHOED_PARAMETERS: &[(&str, &str)] = &[("search", "q")];
+
+/// Add to the model the parameters of the request that the view repeats (`ECHOED_PARAMETERS`); one
+/// the request did not carry is left out.
+fn echo_request(model: &mut Json_, view: &str, request: &BTreeMap<String, String>) {
+    for (_, parameter) in ECHOED_PARAMETERS.iter().filter(|(v, _)| *v == view) {
+        if let Some(value) = request.get(*parameter) {
+            model[*parameter] = json!(value);
+        }
+    }
 }
 
 /// The value at a dotted path of a record; null when there is none.
@@ -1435,6 +1640,18 @@ async fn view(
         .remove("path")
         .filter(|p| p.starts_with('/') && p.len() <= 300)
         .unwrap_or_else(|| "/".into());
+    // The screens of the desk and the lab are the signed-in's, and need what their view models
+    // require (read-desk-view and its siblings): the refusal comes before the view is read.
+    if let Some(capability) = desk_capability(&path) {
+        Admission {
+            capabilities: &[capability],
+            any: false,
+            roles: &[],
+            step_up: false,
+        }
+        .admit(&bff, &visit)
+        .await?;
+    }
     // `fields`, `cursor` and `limit` are the delivery interface's own (CMS-163, CMS-164) and are
     // never a view's request parameters. The backend checks the names against the view's fields.
     let refuse = |why: &str| Failure::new(ErrorCode::Invalid, why, &visit.correlation);
@@ -1472,12 +1689,14 @@ async fn view(
 /// A `tenant` that is not the one of the host and session is refused by the backend as
 /// `tenant-mismatch`.
 ///
-/// Implements: CT-310, CT-311
+/// Implements: CT-310
 async fn aggregate_run(
     State(bff): State<Shared>,
     headers: HeaderMap,
     Query(mut query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<Json_>, Failure> {
+    // Anyone may ask: a visitor counts what the public may read, a signed-in caller what the
+    // tenant's policies let them read (D-8262); the backend's kernel decides from the visit.
     let visit = visit(&bff, &headers)?;
     let invalid = |why: &str| Failure::new(ErrorCode::Invalid, why, &visit.correlation);
     let name = |query: &mut BTreeMap<String, String>, key: &str| {
@@ -1585,10 +1804,11 @@ async fn search_run(
 async fn records(
     State(bff): State<Shared>,
     headers: HeaderMap,
-    Json(mutation): Json<Mutation>,
+    Json(mutation): Json<Json_>,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
+    let mutation: Mutation = typed_body(mutation, &visit)?;
     // The browser's key, if it sent one, was checked by `visit` and goes to the backend with the call.
     backend(&bff, &visit, "/internal/mutate", &json!(mutation))
         .await
@@ -1617,6 +1837,22 @@ async fn members(
             "No such endpoint.",
             &visit.correlation,
         ));
+    }
+    // What the contract asks of the caller comes before the body is looked at: members-manage,
+    // and a fresh authentication for the operations that change who may do what (IDN-019). The
+    // redemption of an invitation is the invitee's and asks for neither.
+    if op != "redeem" {
+        Admission {
+            capabilities: &["members-manage"],
+            any: false,
+            roles: &[],
+            step_up: matches!(
+                op.as_str(),
+                "assign_role" | "add_team_member" | "invite" | "revoke_invitation"
+            ),
+        }
+        .admit(&bff, &visit)
+        .await?;
     }
     let invalid = || {
         Failure::new(
@@ -1710,10 +1946,11 @@ async fn setting_set_person(
 async fn operations_invoke(
     State(bff): State<Shared>,
     headers: HeaderMap,
-    Json(request): Json<OperationRequest>,
+    Json(request): Json<Json_>,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
+    let request: OperationRequest = typed_body(request, &visit)?;
     let key = headers
         .get(HEADER_IDEMPOTENCY)
         .and_then(|value| value.to_str().ok())
@@ -1871,7 +2108,22 @@ async fn lab_replay(State(bff): State<Shared>, headers: HeaderMap) -> Result<Jso
 }
 
 async fn lab_verify(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
-    guarded(&bff, &headers, "/internal/lab/verify", json!({})).await
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    // The owner, who may change the schema (contract verify-lab-proofs), is decided before the
+    // call reaches the backend, so a refused call spends none of the tenant's one verification a
+    // minute.
+    Admission {
+        capabilities: &["change-project"],
+        any: false,
+        roles: &["owner"],
+        step_up: false,
+    }
+    .admit(&bff, &visit)
+    .await?;
+    backend(&bff, &visit, "/internal/lab/verify", &json!({}))
+        .await
+        .map(Json)
 }
 
 async fn diagnostics(
@@ -1879,6 +2131,14 @@ async fn diagnostics(
     headers: HeaderMap,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
+    Admission {
+        capabilities: &["diagnostics-run"],
+        any: false,
+        roles: &[],
+        step_up: false,
+    }
+    .admit(&bff, &visit)
+    .await?;
     let backend_report: Json_ = backend(&bff, &visit, "/internal/diagnostics", &json!({})).await?;
     // The gateway's own socket and in-flight counts span every tenant, so a tenant is not shown
     // them.
@@ -2911,6 +3171,9 @@ const PRODUCT_WRITES: &[(&str, &str)] = &[
 /// Implements: CT-837
 async fn products_list(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
+    // The contract asks for our origin and the session's request token, though the call reads
+    // (list-installed-products).
+    guard_write(&bff, &visit, &headers).await?;
     let reply: Json_ = backend(&bff, &visit, "/internal/products", &json!({})).await?;
     Ok(uncached(reply))
 }
@@ -3121,7 +3384,11 @@ pub fn router(bff: Shared) -> Router {
         )
         .route("/files/uploads/:upload/finish", post(crate::files::finish))
         .route("/files/sign", post(crate::files::sign))
-        .fallback(api_not_found);
+        .fallback(api_not_found)
+        .layer(middleware::from_fn_with_state(
+            bff.clone(),
+            json_after_guards,
+        ));
     Router::new()
         .nest("/api", api)
         .route("/ws", get(socket))

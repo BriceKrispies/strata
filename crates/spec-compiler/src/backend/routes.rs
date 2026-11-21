@@ -762,103 +762,109 @@ impl Backend for RoutesBackend {
     }
 
     fn emit(&self, spec: &Spec) -> TokenStream {
-        let mut uses = Uses::default();
-        let body = spec
-            .system
-            .error_wire
-            .body
-            .as_ref()
-            .map(|b| BodyNames::new(spec, b, &mut uses));
-        let served = served(spec);
-        let wire: Vec<TokenStream> = served
-            .iter()
-            .map(|c| wire_type(spec, c, body.as_ref()))
-            .collect();
-        let mut used = Used::default();
-        let contracts: Vec<TokenStream> = served
-            .iter()
-            .map(|c| contract_items(spec, c, &mut uses, &mut used))
-            .collect();
-        let components: Vec<TokenStream> = implementing_components(spec)
-            .into_iter()
-            .map(|component| component_items(spec, component))
-            .collect();
-        let principal = if used.principal {
-            quote! {
-                /// The caller the specification's policies and audits read: the runtime caller's
-                /// subject is the principal's id, its attributes `kind`, `tenant` and `role` the rest.
-                fn principal(caller: &strata_runtime::Caller) -> crate::support::Caller {
-                    let attribute = |name: &str| caller.attributes.get(name).cloned();
-                    crate::support::Caller {
-                        kind: attribute("kind").unwrap_or_default(),
-                        id: caller.subject.clone().unwrap_or_default(),
-                        tenant: attribute("tenant"),
-                        role: attribute("role"),
-                    }
-                }
-            }
-        } else {
-            TokenStream::new()
-        };
-        let refusal = if used.refusal {
-            quote! {
-                /// A refusal of the runtime rather than of the contract.
-                fn refusal<E>(code: strata_runtime::FailureCode, message: impl Into<String>) -> strata_runtime::Failure<E> {
-                    strata_runtime::Failure::Runtime { code, message: message.into() }
-                }
-            }
-        } else {
-            TokenStream::new()
-        };
-        let call_retry = if used.retry {
-            quote! {
-                /// The runtime's form of a retry policy of the specification.
-                fn call_retry(policy: &crate::retries::RetryPolicy) -> strata_runtime::CallRetry {
-                    strata_runtime::CallRetry {
-                        attempts: policy.attempts,
-                        backoff: match policy.backoff {
-                            crate::retries::Backoff::Fixed { base } => strata_runtime::CallBackoff::Fixed(base),
-                            crate::retries::Backoff::Exponential { base, cap } => {
-                                strata_runtime::CallBackoff::Exponential { base, cap }
-                            }
-                        },
-                        timeout: policy.timeout,
-                    }
-                }
-            }
-        } else {
-            TokenStream::new()
-        };
-        let fixed_hooks = fixed_hook_traits(&used);
-        let body_items = body
-            .as_ref()
-            .map(|b| body_items(spec, b))
-            .unwrap_or_default();
-        let crate_uses = uses.import();
-        let authorizer = authorizer_items();
-        let capabilities = access_model::items(spec);
-        let catalogue = access_model::catalogue_items(spec, &served);
-        let gateway = gateway_items(spec);
+        emit_with(spec, true)
+    }
+}
+
+/// The routes module; with `error_impls` false, without the `ContractError` impls
+/// ([`contract_error_impls`]), which a model split by area writes into the contracts module.
+pub fn emit_with(spec: &Spec, error_impls: bool) -> TokenStream {
+    let mut uses = Uses::default();
+    let body = spec
+        .system
+        .error_wire
+        .body
+        .as_ref()
+        .map(|b| BodyNames::new(spec, b, &mut uses));
+    let served = served(spec);
+    let wire: Vec<TokenStream> = served
+        .iter()
+        .map(|c| wire_type(spec, c, body.as_ref(), error_impls))
+        .collect();
+    let mut used = Used::default();
+    let contracts: Vec<TokenStream> = served
+        .iter()
+        .map(|c| contract_items(spec, c, &mut uses, &mut used))
+        .collect();
+    let components: Vec<TokenStream> = implementing_components(spec)
+        .into_iter()
+        .map(|component| component_items(spec, component))
+        .collect();
+    let principal = if used.principal {
         quote! {
-            #![doc = " The contracts on the wire: one `strata_runtime::Contract` per contract a component implements, the route of each contract with the handler and hooks it needs, and per implementing component the routes of all its contracts and a typed client."]
-            #![doc = ""]
-            #![doc = " A contract is served at its `binding.path` when the specification states one, otherwise at `/<implementing component>/<contract id>`, always as a POST of a JSON body."]
-            #![doc = ""]
-            #![doc = " Who may call is decided by `SpecAuthorizer`, generated from the auth schemes; `GATEWAY_ROUTES` lists the public contracts, the only ones routed through the gateway."]
-            #crate_uses
-            #authorizer
-            #capabilities
-            #catalogue
-            #gateway
-            #fixed_hooks
-            #body_items
-            #(#wire)*
-            #(#contracts)*
-            #(#components)*
-            #principal
-            #refusal
-            #call_retry
+            /// The caller the specification's policies and audits read: the runtime caller's
+            /// subject is the principal's id, its attributes `kind`, `tenant` and `role` the rest.
+            fn principal(caller: &strata_runtime::Caller) -> crate::support::Caller {
+                let attribute = |name: &str| caller.attributes.get(name).cloned();
+                crate::support::Caller {
+                    kind: attribute("kind").unwrap_or_default(),
+                    id: caller.subject.clone().unwrap_or_default(),
+                    tenant: attribute("tenant"),
+                    role: attribute("role"),
+                }
+            }
         }
+    } else {
+        TokenStream::new()
+    };
+    let refusal = if used.refusal {
+        quote! {
+            /// A refusal of the runtime rather than of the contract.
+            fn refusal<E>(code: strata_runtime::FailureCode, message: impl Into<String>) -> strata_runtime::Failure<E> {
+                strata_runtime::Failure::Runtime { code, message: message.into() }
+            }
+        }
+    } else {
+        TokenStream::new()
+    };
+    let call_retry = if used.retry {
+        quote! {
+            /// The runtime's form of a retry policy of the specification.
+            fn call_retry(policy: &crate::retries::RetryPolicy) -> strata_runtime::CallRetry {
+                strata_runtime::CallRetry {
+                    attempts: policy.attempts,
+                    backoff: match policy.backoff {
+                        crate::retries::Backoff::Fixed { base } => strata_runtime::CallBackoff::Fixed(base),
+                        crate::retries::Backoff::Exponential { base, cap } => {
+                            strata_runtime::CallBackoff::Exponential { base, cap }
+                        }
+                    },
+                    timeout: policy.timeout,
+                }
+            }
+        }
+    } else {
+        TokenStream::new()
+    };
+    let fixed_hooks = fixed_hook_traits(&used);
+    let body_items = body
+        .as_ref()
+        .map(|b| body_items(spec, b))
+        .unwrap_or_default();
+    let crate_uses = uses.import();
+    let authorizer = authorizer_items();
+    let capabilities = access_model::items(spec);
+    let catalogue = access_model::catalogue_items(spec, &served);
+    let gateway = gateway_items(spec);
+    quote! {
+        #![doc = " The contracts on the wire: one `strata_runtime::Contract` per contract a component implements, the route of each contract with the handler and hooks it needs, and per implementing component the routes of all its contracts and a typed client."]
+        #![doc = ""]
+        #![doc = " A contract is served at its `binding.path` when the specification states one, otherwise at `/<implementing component>/<contract id>`, always as a POST of a JSON body."]
+        #![doc = ""]
+        #![doc = " Who may call is decided by `SpecAuthorizer`, generated from the auth schemes; `GATEWAY_ROUTES` lists the public contracts, the only ones routed through the gateway."]
+        #crate_uses
+        #authorizer
+        #capabilities
+        #catalogue
+        #gateway
+        #fixed_hooks
+        #body_items
+        #(#wire)*
+        #(#contracts)*
+        #(#components)*
+        #principal
+        #refusal
+        #call_retry
     }
 }
 
@@ -1109,10 +1115,9 @@ fn body_items(spec: &Spec, names: &BodyNames) -> TokenStream {
     }
 }
 
-/// The unit type of a served contract, its `Contract` and `ContractError` impls, and with an
-/// error body its `BodyError` impl.
-fn wire_type(spec: &Spec, c: &Contract, body: Option<&BodyNames>) -> TokenStream {
-    let wire = &spec.system.error_wire;
+/// The unit type of a served contract, its `Contract` impl, with `error_impl` its error's
+/// `ContractError` impl ([`contract_error_impl`]), and with an error body its `BodyError` impl.
+fn wire_type(spec: &Spec, c: &Contract, body: Option<&BodyNames>, error_impl: bool) -> TokenStream {
     let name = view::pascal_ident(&c.id);
     let request = view::request_path(&c.id);
     let response = view::response_path(&c.id);
@@ -1131,31 +1136,10 @@ fn wire_type(spec: &Spec, c: &Contract, body: Option<&BodyNames>) -> TokenStream
         " Contract `{}` ({}) on the wire: `POST {path}`.",
         c.id, c.name
     );
-    // The statuses, each with the variants that travel with it, in order of first appearance.
-    let mut statuses: Vec<(u16, Vec<TokenStream>)> = Vec::new();
-    for e in &c.errors {
-        let status = wire.status_of(e).unwrap_or(500);
-        let variant = view::pascal_ident(&e.name);
-        let pattern = quote! { Self::#variant { .. } };
-        match statuses.iter_mut().find(|(s, _)| *s == status) {
-            Some((_, patterns)) => patterns.push(pattern),
-            None => statuses.push((status, vec![pattern])),
-        }
-    }
-    // An error enum with no variants has no value to answer for.
-    let status_body = match statuses.as_slice() {
-        [] => quote! { match *self {} },
-        [(status, _)] => {
-            let status = Literal::u16_unsuffixed(*status);
-            quote! { #status }
-        }
-        _ => {
-            let arms = statuses.iter().map(|(status, patterns)| {
-                let status = Literal::u16_unsuffixed(*status);
-                quote! { #(#patterns)|* => #status }
-            });
-            quote! { match self { #(#arms,)* } }
-        }
+    let error_impl = if error_impl {
+        contract_error_impl(spec, c)
+    } else {
+        TokenStream::new()
     };
     let body_ty = match body {
         Some(_) => quote! { ErrorBody },
@@ -1183,14 +1167,61 @@ fn wire_type(spec: &Spec, c: &Contract, body: Option<&BodyNames>) -> TokenStream
             type Body = #body_ty;
         }
 
+        #error_impl
+
+        #body_impl
+    }
+}
+
+/// The `strata_runtime::ContractError` impl of served contract `c`'s error type: the status each
+/// error is answered with. It names only the error type and the runtime, so a model split into
+/// crates by area ([`crate::emit::split_crate_files`]) writes it beside the error type, in the
+/// contracts module, where the orphan rule allows it.
+pub fn contract_error_impl(spec: &Spec, c: &Contract) -> TokenStream {
+    let wire = &spec.system.error_wire;
+    let error_name = naming::ident(&format!("{}Error", pascal(&c.id)));
+    // The statuses, each with the variants that travel with it, in order of first appearance.
+    let mut statuses: Vec<(u16, Vec<TokenStream>)> = Vec::new();
+    for e in &c.errors {
+        let status = wire.status_of(e).unwrap_or(500);
+        let variant = view::pascal_ident(&e.name);
+        let pattern = quote! { Self::#variant { .. } };
+        match statuses.iter_mut().find(|(s, _)| *s == status) {
+            Some((_, patterns)) => patterns.push(pattern),
+            None => statuses.push((status, vec![pattern])),
+        }
+    }
+    // An error enum with no variants has no value to answer for.
+    let status_body = match statuses.as_slice() {
+        [] => quote! { match *self {} },
+        [(status, _)] => {
+            let status = Literal::u16_unsuffixed(*status);
+            quote! { #status }
+        }
+        _ => {
+            let arms = statuses.iter().map(|(status, patterns)| {
+                let status = Literal::u16_unsuffixed(*status);
+                quote! { #(#patterns)|* => #status }
+            });
+            quote! { match self { #(#arms,)* } }
+        }
+    };
+    quote! {
         impl strata_runtime::ContractError for crate::contracts::#error_name {
             fn status(&self) -> u16 {
                 #status_body
             }
         }
-
-        #body_impl
     }
+}
+
+/// The `ContractError` impls of every served contract, in the order the routes module writes
+/// them.
+pub fn contract_error_impls(spec: &Spec) -> TokenStream {
+    let impls = served(spec)
+        .into_iter()
+        .map(|c| contract_error_impl(spec, c));
+    quote! { #(#impls)* }
 }
 
 /// The `strata_runtime::Access` of served contract `c`. `check_access` refuses a contract without

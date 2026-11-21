@@ -235,7 +235,9 @@ fn a_condition_that_needs_a_record_the_snapshot_lacks_asks_for_it() {
     };
     let (world, _) = must(&world, "writer1", 6_102, note);
     let (world, _) = must(&world, "editor", 6_103, set_status(3, "published"));
-    // A trigger on any update of a note, whose condition reads the author the note had before.
+    // A trigger on any update of a note, whose condition reads the author the note had before. Its
+    // automation runs as an editor, who may read people: with public only, the condition could not
+    // observe the author at all (WFL-2200), and there would be nothing to ask for.
     let was_ada = eq(
         Expr::Through(Scope::Old, "author".into(), "name".into()),
         lit("Ada"),
@@ -249,7 +251,7 @@ fn a_condition_that_needs_a_record_the_snapshot_lacks_asks_for_it() {
         "owner",
         6_200,
         change(vec![
-            SchemaChange::DefineAutomation(flow(&[])),
+            SchemaChange::DefineAutomation(flow(&["editor"])),
             SchemaChange::DefineTrigger(trigger("on_update", on_update, Some(was_ada))),
         ]),
     );

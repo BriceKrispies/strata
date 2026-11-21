@@ -10,8 +10,8 @@ mod approvals;
 #[path = "audit_log.rs"]
 mod audit_log;
 
-#[path = "badge_milestones.rs"]
-mod badge_milestones;
+#[path = "ledger_trigger.rs"]
+mod ledger_trigger;
 
 #[path = "dispatch.rs"]
 mod dispatch;

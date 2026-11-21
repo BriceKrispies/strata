@@ -24,9 +24,18 @@
 //!   [`EXAMPLE_PROPERTY`], a JSON object as text), or with none when it has no required input, a
 //!   person who holds what it asks for gets a reply that is exactly the declared outputs with their
 //!   types.
+//! - **Probe input** ([`PROBE_PROPERTY`]): the refusal probes send the contract's probe inputs
+//!   when it has them, else its example. A probe names what the kernel needs to reach its own
+//!   refusal (a real operation, object and field), which would make a success call fail when the
+//!   example is the one that must succeed.
+//! - **Setup** ([`SETUP_PROPERTY`]): the steps taken as the caller before the success call: a
+//!   `GET` of a path whose reply members are copied into inputs of the call (the revision the
+//!   tenant is at), or a step the harness implements by name ([`SETUP_STEPS`]).
 //! - **Every reply**: a refusal is the `errorBody` type with a `code` that is the `kind` of one of
 //!   the contract's declared errors and the status `system.generation.errorKinds` gives it; a
-//!   success is the declared outputs.
+//!   success is the declared outputs. A view contract whose one output is the backend's result
+//!   (`view-data`, the derived `read-view`) is held to the projection the route answers
+//!   ([`VIEW_PROJECTION`]) instead.
 //!
 //! A check that applies but cannot be made (no example, a quota too large to exhaust, a scheme the
 //! suite holds no credential of) is listed in `SKIPPED` with its reason, which the gate counts and
@@ -78,6 +87,17 @@ pub const ERROR_KIND: &str = "conformance.error-kind-unknown";
 pub const PATH: &str = "contracts.rs";
 /// The vocabulary property of a contract that holds its example inputs.
 pub const EXAMPLE_PROPERTY: &str = "conformanceExample";
+/// The vocabulary property of a contract that holds the inputs of its refusal probes, when they
+/// are not the example's: the probe names what the kernel needs to reach its own refusal (a real
+/// operation, object and field), where the example is what makes a success call succeed.
+pub const PROBE_PROPERTY: &str = "conformanceProbe";
+/// The vocabulary property of a contract that holds the steps taken before its success call.
+pub const SETUP_PROPERTY: &str = "conformanceSetup";
+/// Code of a setup that is not a JSON list of steps the harness knows.
+pub const SETUP: &str = "conformance.setup-invalid";
+/// The named steps of a setup that the harness implements itself: a step that no read of a route
+/// expresses. `enrol-authenticator` sets up a time-based authenticator for the caller.
+pub const SETUP_STEPS: &[&str] = &["enrol-authenticator"];
 /// The largest quota limit the suite exhausts; a quota above it is skipped with its reason.
 pub const QUOTA_CALLS: u64 = 100;
 /// The type of an input that names a tenant.
@@ -86,6 +106,27 @@ pub const TENANT_TYPE: &str = "tenant-id";
 pub const SOCKET_TYPE: &str = "event-stream";
 /// The name of the declared error a refusal for a stale authentication is.
 pub const STEP_UP_ERROR: &str = "step-up-required";
+/// The output type of a derived view contract (`read-view`): what the backend hands the BFF.
+pub const VIEW_RESULT_TYPE: &str = "view-data";
+/// The members of the view model the BFF answers at a view route in place of the backend's result
+/// (`strata_substrate::project::project` and the `view` route of the BFF): the contracts of the
+/// facade views declare the same members as their outputs. The sections of `view-data` are the
+/// `data` member, and the route adds the address `path` and the resolved `theme`; `next` is there
+/// only when a section has a further page, and `record_rules` only for the editor.
+/// (wire name, type, optional).
+pub const VIEW_PROJECTION: &[(&str, &str, bool)] = &[
+    ("view", "string", false),
+    ("title", "string", false),
+    ("path", "string", false),
+    ("params", "json", false),
+    ("data", "json", false),
+    ("depends_on", "list<string>", false),
+    ("revision", "state-revision", false),
+    ("schema_version", "schema-version", false),
+    ("theme", "view-theme", false),
+    ("next", "json", true),
+    ("record_rules", "json", true),
+];
 /// The value a route parameter takes when no example gives one.
 pub const PLACEHOLDER: &str = "conformance-probe";
 
@@ -123,9 +164,28 @@ pub struct ConformanceOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Shape {
     Json,
+    /// The generic records endpoint (`records` with no operation): the body is the one input of
+    /// type `mutation`, whole, not wrapped in a member of that name.
+    Mutation,
     View,
-    Records { op: String, object: String },
+    Records {
+        op: String,
+        object: String,
+    },
     Socket,
+}
+
+/// One step taken before a success call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Setup {
+    /// A `GET` of `path` as the caller of the success call; each `(wire name, member path)` of
+    /// `set` copies the member of the reply (a dotted path) into the input of that wire name.
+    Read {
+        path: String,
+        set: Vec<(String, String)>,
+    },
+    /// A step the harness implements by name ([`SETUP_STEPS`]).
+    Step(String),
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +234,7 @@ struct Plan {
     tenant_input: Option<String>,
     probe: Request,
     success: Option<Request>,
+    setup: Vec<Setup>,
     reply: Reply,
     errors: Vec<String>,
     step_up_error: Option<String>,
@@ -474,7 +535,7 @@ fn parse_route(route: &str) -> Result<(String, String, Shape), String> {
         [] => Shape::Json,
         ["view"] if method == "GET" => Shape::View,
         // The generic records endpoint (mutate-record): its inputs are the body.
-        ["records"] if method == "POST" => Shape::Json,
+        ["records"] if method == "POST" => Shape::Mutation,
         ["records", op, object] if method == "POST" => Shape::Records {
             op: (*op).to_string(),
             object: (*object).to_string(),
@@ -593,7 +654,11 @@ fn plan(
     };
     let auth = c.get("auth").cloned().unwrap_or(Value::Null);
     let scheme = text(&auth, "scheme").unwrap_or("anonymous").to_string();
-    let tenant_input = if matches!(shape, Shape::Records { .. } | Shape::Socket) {
+    // A records or mutation body has no member that names a tenant: the host decides it.
+    let tenant_input = if matches!(
+        shape,
+        Shape::Records { .. } | Shape::Mutation | Shape::Socket
+    ) {
         None
     } else {
         inputs
@@ -601,48 +666,10 @@ fn plan(
             .find(|i| i.ty == TENANT_TYPE)
             .map(|i| i.wire.clone())
     };
-    // The example, checked against the inputs.
-    let example: Option<Map<String, Value>> = match c.get(EXAMPLE_PROPERTY) {
-        None => None,
-        Some(Value::String(json)) => match serde_json::from_str::<Value>(json) {
-            Ok(Value::Object(map)) => Some(map),
-            _ => {
-                out.push(Diagnostic::new(
-                    EXAMPLE,
-                    &id,
-                    format!("Contract \"{id}\" has a {EXAMPLE_PROPERTY} that is not a JSON object written as text."),
-                ));
-                None
-            }
-        },
-        Some(_) => {
-            out.push(Diagnostic::new(
-                EXAMPLE,
-                &id,
-                format!("Contract \"{id}\" has a {EXAMPLE_PROPERTY} that is not a string holding a JSON object."),
-            ));
-            None
-        }
-    };
+    // The example, checked against the inputs: it gives every required input.
+    let example = object_property(c, EXAMPLE_PROPERTY, &id, &mut out);
     if let Some(example) = &example {
-        for (name, v) in example {
-            match inputs.iter().find(|i| i.name == *name) {
-                None => out.push(Diagnostic::new(
-                    EXAMPLE,
-                    &id,
-                    format!("The {EXAMPLE_PROPERTY} of contract \"{id}\" gives \"{name}\", which is not one of its inputs."),
-                )),
-                Some(input) => {
-                    if let Err(why) = check_value(world, &TypeRef::parse(&input.ty), v, name) {
-                        out.push(Diagnostic::new(
-                            EXAMPLE,
-                            &id,
-                            format!("The {EXAMPLE_PROPERTY} of contract \"{id}\" gives \"{name}\" a value that is not a {}: {why}.", input.ty),
-                        ));
-                    }
-                }
-            }
-        }
+        check_object(world, &inputs, example, EXAMPLE_PROPERTY, &id, &mut out);
         for input in inputs.iter().filter(|i| !i.optional) {
             if shape != Shape::Socket && !example.contains_key(&input.name) {
                 out.push(Diagnostic::new(
@@ -653,6 +680,12 @@ fn plan(
             }
         }
     }
+    // The probe's inputs, checked the same way; it may give only the inputs a refusal needs.
+    let probe_values = object_property(c, PROBE_PROPERTY, &id, &mut out);
+    if let Some(values) = &probe_values {
+        check_object(world, &inputs, values, PROBE_PROPERTY, &id, &mut out);
+    }
+    let setup = setup_property(c, &id, &inputs, &case, &mut out);
     // Errors: the kinds the contract declares, and the step-up refusal by name.
     let mut errors: Vec<String> = Vec::new();
     let mut step_up_error = None;
@@ -750,8 +783,21 @@ fn plan(
                 }
                 fill_path(&path, &given)
             }
+            Shape::Mutation => {
+                // The body is the mutation itself, with its own wire names.
+                if let Some(input) = inputs.iter().find(|i| i.ty == "mutation") {
+                    if let Some(v) = values.and_then(|m| m.get(&input.name)) {
+                        body = Some(wire_value(world, &input.ty, v).to_string());
+                    }
+                }
+                fill_path(&path, &given)
+            }
             Shape::Records { op, object } => {
-                if let Some(values) = values {
+                // The operation and the object come from the route, whatever the inputs: a body
+                // without them is refused as malformed before anything is decided.
+                {
+                    let empty = Map::new();
+                    let values = values.unwrap_or(&empty);
                     let id_input = inputs
                         .iter()
                         .find(|i| i.ty == "record-id" && i.name != "expected-version");
@@ -791,12 +837,13 @@ fn plan(
             body,
         }
     };
-    let probe = request(example.as_ref());
+    // The refusal probes send the probe's inputs when the contract gives them, else the example's.
+    let probe = request(probe_values.as_ref().or(example.as_ref()));
     // A success call needs every required input: from the example, or none required (a tenant
     // input is the site's own, which the harness fills; a socket's inputs travel after the
     // upgrade).
     let success = if example.is_some() {
-        Some(probe.clone())
+        Some(request(example.as_ref()))
     } else if shape == Shape::Socket || inputs.iter().all(|i| i.optional || i.ty == TENANT_TYPE) {
         Some(request(None))
     } else {
@@ -804,6 +851,14 @@ fn plan(
     };
     let reply = match &shape {
         Shape::Socket => Reply::Socket,
+        // A derived view contract declares the backend's result as its one output; the route
+        // answers the BFF's projection of it.
+        Shape::View if outputs.len() == 1 && outputs[0].ty == VIEW_RESULT_TYPE => Reply::Members(
+            VIEW_PROJECTION
+                .iter()
+                .map(|(name, ty, optional)| (name.to_string(), ty.to_string(), *optional))
+                .collect(),
+        ),
         Shape::Records { .. } => Reply::Records(
             outputs
                 .iter()
@@ -852,6 +907,7 @@ fn plan(
         tenant_input,
         probe,
         success,
+        setup,
         reply,
         errors,
         step_up_error,
@@ -859,6 +915,144 @@ fn plan(
         expect_fail,
         id,
     })
+}
+
+/// The JSON object, written as text, that the contract's `property` holds; `None` when it has
+/// none, and a diagnostic when it is not one.
+fn object_property(
+    c: &Value,
+    property: &str,
+    id: &str,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Map<String, Value>> {
+    match c.get(property) {
+        None => None,
+        Some(Value::String(json)) => match serde_json::from_str::<Value>(json) {
+            Ok(Value::Object(map)) => Some(map),
+            _ => {
+                out.push(Diagnostic::new(
+                    EXAMPLE,
+                    id,
+                    format!("Contract \"{id}\" has a {property} that is not a JSON object written as text."),
+                ));
+                None
+            }
+        },
+        Some(_) => {
+            out.push(Diagnostic::new(
+                EXAMPLE,
+                id,
+                format!("Contract \"{id}\" has a {property} that is not a string holding a JSON object."),
+            ));
+            None
+        }
+    }
+}
+
+/// Every member of `values` is an input of the contract with a value of its type.
+fn check_object(
+    world: &World<'_>,
+    inputs: &[Input],
+    values: &Map<String, Value>,
+    property: &str,
+    id: &str,
+    out: &mut Vec<Diagnostic>,
+) {
+    for (name, v) in values {
+        match inputs.iter().find(|i| i.name == *name) {
+            None => out.push(Diagnostic::new(
+                EXAMPLE,
+                id,
+                format!("The {property} of contract \"{id}\" gives \"{name}\", which is not one of its inputs."),
+            )),
+            Some(input) => {
+                if let Err(why) = check_value(world, &TypeRef::parse(&input.ty), v, name) {
+                    out.push(Diagnostic::new(
+                        EXAMPLE,
+                        id,
+                        format!("The {property} of contract \"{id}\" gives \"{name}\" a value that is not a {}: {why}.", input.ty),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// The steps of the contract's [`SETUP_PROPERTY`]: JSON text of a list whose members are
+/// `{"read": "/api/path", "set": {"<input>": "<member.path>"}}` (a `GET` of the path as the caller,
+/// its reply's member copied into the input of the success call) or `{"step": "<name>"}`, a name
+/// of [`SETUP_STEPS`].
+fn setup_property(
+    c: &Value,
+    id: &str,
+    inputs: &[Input],
+    case: &WireCase,
+    out: &mut Vec<Diagnostic>,
+) -> Vec<Setup> {
+    let Some(raw) = c.get(SETUP_PROPERTY) else {
+        return Vec::new();
+    };
+    let bad = |why: String, out: &mut Vec<Diagnostic>| {
+        out.push(Diagnostic::new(
+            SETUP,
+            id,
+            format!("The {SETUP_PROPERTY} of contract \"{id}\" {why}."),
+        ));
+        Vec::new()
+    };
+    let Some(Value::Array(steps)) = raw
+        .as_str()
+        .and_then(|json| serde_json::from_str::<Value>(json).ok())
+    else {
+        return bad("is not a string holding a JSON list".to_string(), out);
+    };
+    let mut setup = Vec::new();
+    for step in &steps {
+        if let Some(name) = text(step, "step") {
+            if !SETUP_STEPS.contains(&name) {
+                return bad(
+                    format!(
+                        "names the step \"{name}\", which the harness does not implement (it implements {})",
+                        SETUP_STEPS.join(", ")
+                    ),
+                    out,
+                );
+            }
+            setup.push(Setup::Step(name.to_string()));
+        } else if let Some(path) = text(step, "read") {
+            if !path.starts_with('/') {
+                return bad(format!("reads \"{path}\", which is not a path"), out);
+            }
+            let mut set = Vec::new();
+            if let Some(Value::Object(map)) = step.get("set") {
+                for (name, member) in map {
+                    let Some(member) = member.as_str() else {
+                        return bad(
+                            format!("sets \"{name}\" from something that is not a member path"),
+                            out,
+                        );
+                    };
+                    if !inputs.iter().any(|i| i.name == *name) {
+                        return bad(
+                            format!("sets \"{name}\", which is not one of its inputs"),
+                            out,
+                        );
+                    }
+                    set.push((case.name(name), member.to_string()));
+                }
+            }
+            setup.push(Setup::Read {
+                path: path.to_string(),
+                set,
+            });
+        } else {
+            return bad(
+                "has a step that is neither a read nor a named step".to_string(),
+                out,
+            );
+        }
+    }
+    setup
 }
 
 /// `Ok` when every name in the type resolves, else the first that does not.
@@ -1356,6 +1550,31 @@ fn request_expr(r: &Request) -> String {
     )
 }
 
+fn setup_expr(steps: &[Setup]) -> String {
+    format!(
+        "&[{}]",
+        steps
+            .iter()
+            .map(|s| match s {
+                Setup::Read { path, set } => format!(
+                    "Setup::Read {{ path: {}, set: &[{}] }}",
+                    rust::string(path),
+                    set.iter()
+                        .map(|(input, member)| format!(
+                            "({}, {})",
+                            rust::string(input),
+                            rust::string(member)
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                Setup::Step(name) => format!("Setup::Step({})", rust::string(name)),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 fn option_str(v: Option<&str>) -> String {
     match v {
         Some(s) => format!("Some({})", rust::string(s)),
@@ -1469,7 +1688,8 @@ fn render(
         let name = const_name(&p.id);
         let mut reached = Vec::new();
         let shape = match &p.shape {
-            Shape::Json => "Shape::Json",
+            // The harness tells a mutation's body from a JSON body by the request it is given.
+            Shape::Json | Shape::Mutation => "Shape::Json",
             Shape::View => "Shape::View",
             Shape::Records { .. } => "Shape::Records",
             Shape::Socket => "Shape::Socket",
@@ -1526,7 +1746,7 @@ fn render(
         ));
         let _ = writeln!(
             out,
-            "pub const {name}: Contract = Contract {{ id: {}, method: {}, shape: {shape}, scheme: {scheme}, requires: {}, roles: {}, origin: {}, csrf: {}, step_up: {}, read_only: {}, tenant_input: {}, probe: {}, success: {}, reply: {reply}, errors: {}, step_up_error: {}, quota: {} }};\n",
+            "pub const {name}: Contract = Contract {{ id: {}, method: {}, shape: {shape}, scheme: {scheme}, requires: {}, roles: {}, origin: {}, csrf: {}, step_up: {}, read_only: {}, tenant_input: {}, probe: {}, success: {}, setup: {}, reply: {reply}, errors: {}, step_up_error: {}, quota: {} }};\n",
             rust::string(&p.id),
             rust::string(&p.method),
             strings(&p.requires),
@@ -1541,6 +1761,7 @@ fn render(
                 Some(r) => format!("Some({})", request_expr(r)),
                 None => "None".to_string(),
             },
+            setup_expr(&p.setup),
             strings(&p.errors),
             option_str(p.step_up_error.as_deref()),
             // Only a quota the suite can exhaust with a call that succeeds; the others are in
@@ -1617,7 +1838,7 @@ mod tests {
         assert_eq!(parse_route("GET /api/view view").unwrap().2, Shape::View);
         assert_eq!(
             parse_route("POST /api/records records").unwrap().2,
-            Shape::Json
+            Shape::Mutation
         );
         assert_eq!(
             parse_route("POST /api/records records create post")
@@ -1688,6 +1909,65 @@ mod tests {
     }
 
     #[test]
+    fn a_probe_is_sent_to_the_refusals_and_the_example_to_the_success() {
+        let with_probe = WRITE.replace(
+            r#""conformanceExample""#,
+            r#""conformanceProbe": "{\"slug\": \"probe\"}", "conformanceExample""#,
+        );
+        let text = run(&with_probe, None).unwrap().files[0].contents.clone();
+        // The suite is formatted across lines; compare it with its whitespace taken out.
+        let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            flat.contains(r#"probe:Request{path:"/api/notes/probe""#),
+            "{text}"
+        );
+        assert!(
+            flat.contains(r#"success:Some(Request{path:"/api/notes/a%20b""#),
+            "{text}"
+        );
+        // A probe may leave out inputs, but not name one the contract lacks.
+        let unknown = with_probe.replace(r#"{\"slug\": \"probe\"}"#, r#"{\"nothing\": 1}"#);
+        assert_eq!(run(&unknown, None).unwrap_err()[0].code, EXAMPLE);
+    }
+
+    #[test]
+    fn a_records_probe_always_names_its_operation_and_object() {
+        let delete = r#"{ "id": "delete-note", "deployment": "shipped", "bffRoute": "POST /api/records records delete note",
+          "auth": { "scheme": "session", "requires": ["notes-write"] },
+          "inputs": [{ "name": "note-id", "type": "record-id" }, { "name": "expected-version", "type": "u64" }],
+          "outputs": [], "errors": [{ "name": "unauthenticated", "kind": "unauthenticated" }],
+          "conformanceProbe": "{\"note-id\": 1, \"expected-version\": 1}" }"#;
+        let text = run(delete, None).unwrap().files[0].contents.clone();
+        assert!(text.contains(r#"\"op\":\"delete\""#), "{text}");
+        assert!(text.contains(r#"\"object\":\"note\""#), "{text}");
+        assert!(text.contains(r#"\"id\":1"#), "{text}");
+        let bare = delete.replace(
+            r#""conformanceProbe": "{\"note-id\": 1, \"expected-version\": 1}""#,
+            r#""readOnly": false"#,
+        );
+        let text = run(&bare, None).unwrap().files[0].contents.clone();
+        assert!(text.contains(r#"\"op\":\"delete\""#), "{text}");
+    }
+
+    #[test]
+    fn a_setup_is_a_list_of_reads_and_named_steps() {
+        let read = WRITE.replace(
+            r#""conformanceExample""#,
+            r#""conformanceSetup": "[{\"read\": \"/api/overview\", \"set\": {\"slug\": \"tenant.revision\"}}, {\"step\": \"enrol-authenticator\"}]", "conformanceExample""#,
+        );
+        let text = run(&read, None).unwrap().files[0].contents.clone();
+        let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            flat.contains(r#"setup:&[Setup::Read{path:"/api/overview",set:&[("slug","tenant.revision")],},Setup::Step("enrol-authenticator"),]"#),
+            "{text}"
+        );
+        let unknown = read.replace("enrol-authenticator", "nothing");
+        assert_eq!(run(&unknown, None).unwrap_err()[0].code, SETUP);
+        let input = read.replace(r#"{\"slug\": \"tenant"#, r#"{\"other\": \"tenant"#);
+        assert_eq!(run(&input, None).unwrap_err()[0].code, SETUP);
+    }
+
+    #[test]
     fn unknown_types_kinds_and_parameters_are_refused() {
         let ty = WRITE.replace(r#""type": "record-id" }]"#, r#""type": "nothing" }]"#);
         assert!(run(&ty, None).unwrap_err().iter().any(|d| d.code == TYPE));
@@ -1743,6 +2023,36 @@ mod tests {
         assert!(
             text.contains(r#"#[should_panic(expected = "[reply-shape]")]"#),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn a_derived_view_contract_is_held_to_the_projection_the_route_answers() {
+        let derived = r#"{ "id": "read-any", "deployment": "shipped", "bffRoute": "GET /api/view view",
+          "auth": { "scheme": "anonymous" }, "inputs": [],
+          "outputs": [{ "name": "view", "type": "view-data" }], "errors": [] }"#;
+        let spec = spec(derived).replace(
+            r#""types": ["#,
+            r#""types": [
+    { "id": "view-data", "kind": "struct", "fields": [{ "name": "title", "type": "string" }] },
+    { "id": "state-revision", "kind": "id", "repr": "u64" },
+    { "id": "schema-version", "kind": "id", "repr": "u32" },
+    { "id": "view-theme", "kind": "struct", "fields": [{ "name": "accent", "type": "string" }] },"#,
+        );
+        let text = generate("fixture.jsonc", &spec, &Options::default())
+            .unwrap()
+            .files[0]
+            .contents
+            .clone();
+        for member in ["depends_on", "schema_version", "theme", "path"] {
+            assert!(
+                text.contains(&format!(r#"wire: "{member}""#)),
+                "{member}: {text}"
+            );
+        }
+        assert!(
+            !text.contains("view-data"),
+            "the backend's result is not what the route answers: {text}"
         );
     }
 

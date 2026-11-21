@@ -186,7 +186,7 @@ async fn hosts_are_bound_to_one_tenant_and_listed_to_the_service() {
         let (status, _) = backend
             .hosts(json!({ "bind": { "tenant": "fieldnotes", "origin": bad } }))
             .await;
-        assert_eq!(status, 400, "{bad:?}");
+        assert_eq!(status, 422, "{bad:?}");
     }
     let (_, listed) = backend.hosts(json!({})).await;
     assert_eq!(listed["hosts"].as_array().unwrap().len(), 1);
@@ -226,7 +226,7 @@ async fn an_owner_invitation_sets_the_first_password_once_in_any_browser() {
 
     // What is wrong with an attempt: a short password, a wrong token, another site's origin.
     let (status, _) = backend.accept(&link, "short", ORIGIN, "10.0.0.3").await;
-    assert_eq!(status, 400);
+    assert_eq!(status, 422);
     let wrong_token = link.replace(&token, &"0".repeat(64));
     let (status, _) = backend
         .accept(&wrong_token, "a-brand-new-password", ORIGIN, "10.0.0.3")

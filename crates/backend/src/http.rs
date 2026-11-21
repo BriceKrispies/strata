@@ -562,6 +562,7 @@ async fn members(
         if matches!(
             request,
             MembersRequest::AssignRole { .. }
+                | MembersRequest::AddTeamMember { .. }
                 | MembersRequest::Invite { .. }
                 | MembersRequest::RevokeInvitation { .. }
         ) && identity.session.is_some()
@@ -1039,6 +1040,34 @@ async fn socket(
         }))
 }
 
+/// The refusal of an input that does not fit, in the error body type. axum's extractors answer a
+/// body that lacks a member or has one of the wrong type with a plain-text 4xx, which the gateway
+/// cannot read as an error; it is answered here as `invalid`.
+async fn as_error_body(response: Response, correlation: &str) -> Response {
+    let plain = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|kind| kind.starts_with("text/plain"));
+    let rejection = matches!(response.status().as_u16(), 400 | 415 | 422);
+    if !(plain && rejection) {
+        return response;
+    }
+    let bytes = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap_or_default();
+    let why = String::from_utf8_lossy(&bytes);
+    ApiError::new(
+        ErrorCode::Invalid,
+        format!(
+            "The request body does not fit: {}.",
+            why.trim_end_matches('.')
+        ),
+    )
+    .with_correlation(correlation)
+    .into_response()
+}
+
 /// Refuse anything that does not carry the service token. The backend listens on loopback, and
 /// this keeps other local processes and stray browser requests out as well.
 async fn gate(State(app): State<Shared>, request: Request, next: Next) -> Response {
@@ -1052,10 +1081,15 @@ async fn gate(State(app): State<Shared>, request: Request, next: Next) -> Respon
         .to_string();
     let open = path == "/internal/health";
     let response = if open || has_service_token(&app, request.headers()) {
-        // The one enforcement point of the quotas of the specification (EDG-013).
-        match crate::quota::admit(&app, &path, request.headers()).await {
-            Ok(()) => next.run(request).await,
-            Err(refused) => refused,
+        // What the operation asks of its caller comes first, before its input is read and before
+        // the call is counted: a call the operation refuses spends no quota.
+        match crate::precheck::admit(&app, &path, request.headers()).await {
+            // The one enforcement point of the quotas of the specification (EDG-013).
+            Ok(()) => match crate::quota::admit(&app, &path, request.headers()).await {
+                Ok(()) => as_error_body(next.run(request).await, &correlation).await,
+                Err(refused) => refused,
+            },
+            Err(refused) => refused.with_correlation(&correlation).into_response(),
         }
     } else {
         ApiError::new(ErrorCode::Unauthenticated, "service token required").into_response()
@@ -1125,6 +1159,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/aggregate", post(aggregate))
         .route("/internal/search", post(search))
         .route("/internal/mutate", post(mutate))
+        .route("/internal/admit", post(crate::precheck::route))
         .route("/internal/members", post(members))
         .route("/internal/erasure/erase", post(erasure_erase))
         .route("/internal/erasure/receipts", post(erasure_receipts))

@@ -9,7 +9,7 @@
 //!
 //! The browser's uploader is not built (WG-5226); these routes are what it will call.
 
-use crate::routes::{guard_write, visit, Failure, Visit};
+use crate::routes::{guard_write, visit, Admission, Failure, Visit};
 use crate::{Shared, LOG};
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Query, State};
@@ -134,6 +134,16 @@ pub async fn upload(
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
+    // Either capability suffices (D-6591); the caller is refused before anything about the
+    // upload is looked at.
+    Admission {
+        capabilities: &["content-write", "self-file-upload"],
+        any: true,
+        roles: &[],
+        step_up: false,
+    }
+    .admit(&bff, &visit)
+    .await?;
     let path = "/internal/files/upload";
     let request = backend_request(&bff, &visit, path)
         .query(&upload_query(&query))
@@ -153,6 +163,16 @@ pub async fn start(
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
+    // Either capability suffices (D-6591); the caller is refused before anything about the
+    // upload is looked at.
+    Admission {
+        capabilities: &["content-write", "self-file-upload"],
+        any: true,
+        roles: &[],
+        step_up: false,
+    }
+    .admit(&bff, &visit)
+    .await?;
     let path = "/internal/files/uploads/start";
     let request = backend_request(&bff, &visit, path).json(&body);
     answer(&visit, path, request).await
@@ -170,6 +190,16 @@ pub async fn put_chunk(
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
+    // Either capability suffices (D-6591); the caller is refused before anything about the
+    // upload is looked at.
+    Admission {
+        capabilities: &["content-write", "self-file-upload"],
+        any: true,
+        roles: &[],
+        step_up: false,
+    }
+    .admit(&bff, &visit)
+    .await?;
     let path = "/internal/files/uploads/chunk";
     let request = backend_request(&bff, &visit, path)
         .query(&[("upload", upload.as_str()), ("index", index.as_str())])
@@ -188,6 +218,16 @@ pub async fn finish(
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
+    // Either capability suffices (D-6591); the caller is refused before anything about the
+    // upload is looked at.
+    Admission {
+        capabilities: &["content-write", "self-file-upload"],
+        any: true,
+        roles: &[],
+        step_up: false,
+    }
+    .admit(&bff, &visit)
+    .await?;
     let path = "/internal/files/uploads/finish";
     let request = backend_request(&bff, &visit, path).json(&json!({ "upload": upload }));
     answer(&visit, path, request).await

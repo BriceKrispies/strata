@@ -22,6 +22,7 @@
 //! a time.
 
 pub mod backend;
+pub mod boundary;
 pub mod budget;
 pub mod bundle;
 pub mod bundle_ui;
@@ -128,7 +129,8 @@ pub fn check_ready(spec_path: &str, text: &str) -> Result<(), Vec<Diagnostic>> {
 
 /// The files of a generation split into two crates: the model crate (`options`), and the pure
 /// crate `core` names ([`model_core`]), which the model crate depends on. Returns the model crate's
-/// files, then the pure crate's, or refuses with every diagnostic.
+/// files, then the pure crate's, or refuses with every diagnostic. The examples of the functions
+/// are integration test files of the pure crate ([`model_core::crate_files_with`]).
 pub fn generate_with_core(
     spec_path: &str,
     text: &str,
@@ -162,8 +164,11 @@ pub fn generate_with_core(
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
-    let model = emit::crate_files_with(&spec, options, Some(core))?;
-    let pure = model_core::crate_files(&spec, &core.crate_name)?;
+    // The model crate is a facade over crates by area, each compiled on its own (WG-5371).
+    let model = emit::split_crate_files(&spec, options, core)?;
+    // The examples of the functions are integration test files of the pure crate, not a test
+    // module of its library (WG-5371).
+    let pure = model_core::crate_files_with(&spec, &core.crate_name, true)?;
     Ok((model, pure))
 }
 
