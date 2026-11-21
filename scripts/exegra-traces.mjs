@@ -46,27 +46,24 @@ async function main() {
   const a = args(process.argv.slice(2));
   for (const k of ['exegra', 'spec', 'out', 'ids']) if (!a[k]) throw new Error(`--${k} is required`);
   const load = (rel) => import(pathToFileURL(path.join(a.exegra, rel)).href);
-  const { Project } = await load('src/core/project.js');
+  const { parseSpec } = await load('src/core/parse.js');
   const { runScenario } = await load('src/core/engine.js');
   const { stableStringify } = await load('src/core/stable-json.js');
   const [index, count] = parseShard(a.shard);
   const ids = shardOf(JSON.parse(fs.readFileSync(a.ids, 'utf8')), index, count);
-  const project = new Project({
-    name: null,
-    specText: readSpec(a.spec).text,
-    layoutText: null,
-    layers: [],
-  });
-  if (!project.model) throw new Error('the specification has syntax errors');
+  // The model alone: a trace reads nothing a validation adds (the engine input holds no diagnostics),
+  // so this skips the validation and the semantic hash that `new Project(...)` derives besides.
+  const model = parseSpec(readSpec(a.spec).text).model;
+  if (!model) throw new Error('the specification has syntax errors');
   fs.mkdirSync(a.out, { recursive: true });
   const written = [];
   const failed = [];
   for (const id of ids) {
     try {
-      if (!project.model.entities.get(id) || project.model.entities.get(id).kind !== 'scenario') {
+      if (!model.entities.get(id) || model.entities.get(id).kind !== 'scenario') {
         throw new Error(`${id} is not a scenario`);
       }
-      const trace = runScenario(project.model, id, {});
+      const trace = runScenario(model, id, {});
       fs.writeFileSync(path.join(a.out, `${id}.trace.json`), `${stableStringify(trace, 2)}\n`, 'utf8');
       written.push(id);
     } catch (e) {
