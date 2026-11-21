@@ -30,6 +30,7 @@ pub mod definitions;
 pub mod dependencies;
 pub mod editor_rules;
 pub mod erasure;
+pub mod evolution;
 pub mod expr;
 pub mod intent;
 pub mod ledger;
@@ -42,6 +43,7 @@ pub mod products;
 pub mod query_plan;
 pub mod read;
 pub mod retention;
+pub mod rewrite;
 pub mod rule_reads;
 pub mod rules;
 pub mod schema;
@@ -65,8 +67,8 @@ pub use read::{read, read_needs, visible, visible_in};
 pub use schema::*;
 pub use state::*;
 pub use transition::{
-    apply_delta, assess_changes, needs, plan_migration, refine_needs, transition, Migration,
-    Violation,
+    apply_delta, assess_changes, needs, plan_migration, refine_needs, transition,
+    transition_pinned, Migration, Violation,
 };
 pub use types::*;
 pub use world::World;

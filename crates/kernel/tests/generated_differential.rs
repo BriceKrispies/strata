@@ -139,7 +139,7 @@
 //!      MIG-592) and the refusal of a breaking change that reaches a dependent
 //!      (`strata_kernel::dependencies`). The hand-written kernel writes a `schema:class` check for
 //!      each change, which is dropped before the comparison (`drop_evolution_evidence`); the
-//!      refusal by impact is not drawn by the generator, and the comparison fails on one.
+//!      refusal by impact is not drawn by the generator, and the comparison fails on one. The three changes of D-8212..D-8217 (`rename-field`, `move-field`, `retype-field`) are decided by the hand-written kernel alone: the generated `apply-change` ends in a wildcard arm that refuses them as not a change of a declaration, and the generator draws none (the evidence `schema:rewrite`, `schema:pin` and `schema:projection` they write is dropped with `schema:class`).
 //!  14. Not exercised, and not mirrored: the erasure of a data subject (`EraseSubject`,
 //!      `crates/kernel/src/erasure.rs`, D-7460). The generated `intent-decision` refuses it with
 //!      `erasure:decided_by_the_kernel` and the generated `needs` plans nothing for it. The
@@ -1501,7 +1501,12 @@ fn drop_evolution_evidence(label: &str, hand: &mut Result<Transition, DomainErro
         !evidence.iter().any(|check| check.rule == "schema:impact"),
         "{label}: refused for a breaking change that reaches a dependent; the generated change-schema accepts it (difference 15)"
     );
-    evidence.retain(|check| check.rule != "schema:class");
+    evidence.retain(|check| {
+        !matches!(
+            check.rule.as_str(),
+            "schema:class" | "schema:rewrite" | "schema:pin" | "schema:projection"
+        )
+    });
 }
 
 /// Difference 13 of the header: a schema change whose evidence holds a scan warning is not
