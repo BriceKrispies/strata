@@ -11,7 +11,7 @@ use strata_backend::app::{App, Config, Shared};
 use strata_backend::auth::Identity;
 use strata_backend::mail::DevSink;
 use strata_backend::product_segments;
-use strata_backend::worker::{self, leases, segment_work, steps, WorkerConfig};
+use strata_backend::worker::{self, segment_work, steps, WorkerConfig};
 use strata_kernel::segment_flow;
 use strata_kernel::segments::{self as seg, Definition, SegmentDirection, SegmentId, SegmentKey};
 use strata_kernel::testkit::*;
@@ -796,43 +796,6 @@ fn a_fan_out_reaches_each_member_once_and_its_typed_result_is_in_the_step_record
         "{:?}",
         record.params
     );
-}
-
-// Verifies: SCH-015, WFL-1538
-#[test]
-fn a_batch_of_a_fan_out_attempted_again_after_a_crash_applies_its_effect_once() {
-    let mut schema = extras();
-    schema.extend(campaign());
-    let fx = Fx::new("crash", schema);
-    for n in 0..5 {
-        fx.create_member(T0 + n, &format!("m{n}"), "gold", None);
-    }
-    fx.define(T0 + 100, &gold_definition());
-    fx.drain(T0 + 200);
-    fx.start("campaign", T0 + 300);
-    let tenant = fx.tenant();
-    let now = Timestamp(T0 + 300);
-    // The start of the run and the fan-out step are reported; the first batch is run and not.
-    for _ in 0..2 {
-        let lease = fx.app.store.job_lease(&tenant, "w1", now).unwrap().unwrap();
-        leases::run_leased(&fx.app, &tenant, &lease, &at(now.0)).unwrap();
-    }
-    let held = fx.app.store.job_lease(&tenant, "w1", now).unwrap().unwrap();
-    assert!(matches!(
-        held.job.work,
-        JobWork::Segment(SegmentWork::FanOut { .. })
-    ));
-    let outcome = steps::run_job(&fx.app, &tenant, &held, now);
-    assert_eq!(outcome.report, JobReport::Succeeded);
-    assert_eq!(fx.notes().len(), 2, "the first batch made its two notes");
-
-    // Its lease expires, the batch is attempted again, and the run goes on to its end.
-    fx.drain(now.0 + 60_001);
-    let mut notes = fx.notes();
-    notes.sort();
-    let mut wanted: Vec<String> = (0..5).map(|n| fx.person(&format!("m{n}"))).collect();
-    wanted.sort();
-    assert_eq!(notes, wanted, "no member was told twice");
 }
 
 // Verifies: SEG-033

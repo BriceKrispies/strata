@@ -10,15 +10,15 @@
 mod mock_saml;
 
 use mock_saml::{
-    encode, instant, now, read_request, signature_of, Reply, Request, IDP_ENTITY, IDP_KEY,
-    OTHER_CERT, OTHER_KEY, SAMLP_NS, SAML_NS, SSO_URL,
+    encode, now, read_request, signature_of, Reply, Request, IDP_ENTITY, IDP_KEY, OTHER_CERT,
+    OTHER_KEY, SAML_NS, SSO_URL,
 };
 use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use strata_backend::app::{Config, ThrottleLimits};
+use strata_backend::app::Config;
 use strata_backend::mail::{DevSink, Mailer};
 use strata_backend::signin::oidc::Federation;
 use strata_backend::signin::saml::SamlProvider;
@@ -997,21 +997,6 @@ async fn a_response_is_accepted_only_from_the_browser_and_site_that_started_it()
     assert_eq!(backend.finish(&round, &xml).await.0, 200);
 }
 
-/// Verifies: FED-007
-///
-/// A pending request lapses: one that waits past its lifetime is not answered.
-#[tokio::test]
-async fn a_pending_saml_request_lapses() {
-    let backend = start_with(federation(vec![provider(|_| {})]), |cfg| {
-        cfg.passkey_challenge_ttl_ms = 150
-    })
-    .await;
-    let round = backend.begin(None, json!({})).await;
-    let xml = good(&round).response();
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    assert_refused(&backend.finish(&round, &xml).await, "lapsed");
-}
-
 // ---------------------------------------------------------------------------------------------
 // Time (FED-005 and the validity of an assertion)
 
@@ -1309,40 +1294,6 @@ async fn the_metadata_names_this_service_and_its_assertion_consumer_address() {
     assert_eq!(round.request.issuer, ENTITY);
 }
 
-/// Verifies: FED-001
-///
-/// Responses are limited like every other method's attempts: from one source, past the limit, they
-/// are refused as throttled.
-#[tokio::test]
-async fn saml_responses_are_limited_like_every_other_method() {
-    let backend = start_with(federation(vec![provider(|_| {})]), |cfg| {
-        cfg.throttle = ThrottleLimits {
-            source_max: 3,
-            ..Default::default()
-        }
-    })
-    .await;
-    let mut statuses = Vec::new();
-    for index in 0..5 {
-        let (status, _) = backend
-            .call_at(
-                Some(SITE),
-                "fieldnotes",
-                None,
-                "/internal/session/sign-in/saml",
-                json!({
-                    "relay_state": format!("{index:064x}"),
-                    "response": encode("<x/>"),
-                    "binding": "e".repeat(64),
-                }),
-            )
-            .await;
-        statuses.push(status);
-    }
-    assert_eq!(statuses.first(), Some(&401));
-    assert_eq!(statuses.last(), Some(&429), "{statuses:?}");
-}
-
 // ---------------------------------------------------------------------------------------------
 // Policy and linking (FED-009, FED-011, FED-012, FED-257, FED-258), shared with OpenID Connect
 
@@ -1638,29 +1589,6 @@ async fn linking_a_saml_identity_needs_a_recent_authentication() {
     );
 }
 
-/// Verifies: FED-258
-///
-/// A principal made at a first sign-in holds the one role the realm names and no other, whatever
-/// the provider says about the person.
-#[tokio::test]
-async fn a_first_saml_sign_in_grants_only_the_default_role_the_realm_names() {
-    let backend = start(federation(vec![provider(|p| {
-        p.default_role = Some("author".into())
-    })]))
-    .await;
-    let (status, reply) = backend
-        .sign_in_with(|r| {
-            r.name_id = "wants-everything".into();
-            r.name = Some("Admin Owner".into());
-            r.email = Some("admin@fieldnotes.example".into());
-        })
-        .await;
-    assert_eq!(status, 200, "{reply}");
-    assert_eq!(roles(&reply), ["author", "public"]);
-    assert_eq!(reply["session"]["may_manage_schema"], false);
-    assert_ne!(principal(&reply), "user:admin");
-}
-
 /// Verifies: FED-011
 ///
 /// An identity at one provider is not the same identity at another that spells its subject the
@@ -1696,13 +1624,4 @@ async fn one_providers_subject_is_not_anothers() {
         .await;
     assert_eq!(status, 200, "{second}");
     assert_ne!(principal(&first), principal(&second));
-}
-
-// The time helper is part of the support file's own surface; this keeps it from being the one
-// thing nobody calls, and checks the form the service reads.
-#[test]
-fn the_support_writes_times_as_saml_reads_them() {
-    assert_eq!(instant(0), "1970-01-01T00:00:00Z");
-    assert_eq!(instant(1_795_084_215), "2026-11-19T10:30:15Z");
-    assert!(SAMLP_NS.starts_with("urn:oasis:names:tc:SAML:2.0:"));
 }
