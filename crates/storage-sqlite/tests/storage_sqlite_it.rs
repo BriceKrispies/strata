@@ -3,3 +3,6 @@
 
 #[path = "sqlite.rs"]
 mod sqlite;
+
+#[path = "bounded_reads.rs"]
+mod bounded_reads;
