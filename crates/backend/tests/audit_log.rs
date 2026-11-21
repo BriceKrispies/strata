@@ -226,7 +226,7 @@ fn a_configuration_change_is_an_entry_with_the_previous_and_the_new_value() {
         &owner.context(&app),
         &Intent::ChangeSchema {
             changes: vec![SchemaChange::DefineRolePermissions {
-                role: role("no-such-role"),
+                role: role("no_such_role"),
                 permissions: vec![Permission::Capability("audit-read".into())],
             }],
             expected_version: None,
