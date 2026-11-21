@@ -280,7 +280,7 @@ impl Backend {
             .jobs_list(&tenant(), None, 500)
             .unwrap()
             .iter()
-            .filter(|job| matches!(&job.work, JobWork::StartRun { automation, .. } if *automation == automation()))
+            .filter(|job| matches!(&job.work, JobWork::StartRun { automation: started, .. } if *started == automation()))
             .count()
     }
 
