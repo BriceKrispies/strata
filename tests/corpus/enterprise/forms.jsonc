@@ -410,10 +410,5 @@
     {"id":"forms__record_consent","label":"Record a consent capture","inputs":[{"name":"submission","ty":"Str","required":false,"label":"submission"},{"name":"purpose","ty":"Str","required":false,"label":"purpose"},{"name":"granted","ty":"Bool","required":false,"label":"granted"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
     {"id":"forms__manage_webhook_subscription","label":"Manage a webhook subscription","inputs":[{"name":"endpoint","ty":"Str","required":false,"label":"endpoint"},{"name":"target_url","ty":"Str","required":false,"label":"target url"},{"name":"enabled","ty":"Bool","required":false,"label":"enabled"},{"name":"secret_hint","ty":"Str","required":false,"label":"secret hint"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
     {"id":"forms__publish_form_definition","label":"Publish a form definition","inputs":[],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]}
-  ],
-  "eventKinds": [
-    { "id": "forms__submission_received", "kind": "app.forms-submission-received",
-      "fields": [ { "name": "definition", "type": "string" }, { "name": "submitted_at", "type": "timestamp" }, { "name": "channel", "type": "string" } ],
-      "readers": ["forms__form_owner"] }
   ]
 }

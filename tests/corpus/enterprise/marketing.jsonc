@@ -145,17 +145,12 @@
       "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"The campaign has started sending.\"}]}]" }
   ],
 
-  "eventKinds": [
-    { "id": "marketing__member_opted_out", "kind": "app.marketing-member-opted-out",
-      "fields": [ { "name": "member", "type": "string" }, { "name": "at", "type": "timestamp" } ],
-      "readers": ["marketing__marketing_lead"] }
-  ],
 
 
   "triggers": [
-    { "id": "marketing__on_opt_in", "on": { "SegmentEntered": { "segment": "marketing__opted_in_members" } }, "automation": "marketing__welcome_journey" },
-    { "id": "marketing__on_high_value", "on": { "SegmentEntered": { "segment": "marketing__high_value_members" } }, "automation": "marketing__reminder_journey" },
-    { "id": "marketing__on_lapsed", "on": { "SegmentEntered": { "segment": "marketing__lapsed_members" } }, "automation": "marketing__winback_fanout" }
+    { "id": "marketing__on_opt_in", "on": { "SegmentEntered": { "segment": "36e002ad-7049-8823-b89e-ec00ea9dafb1" } }, "automation": "marketing__welcome_journey" },
+    { "id": "marketing__on_high_value", "on": { "SegmentEntered": { "segment": "863d1a73-129b-89ae-8473-5bc5fa841e50" } }, "automation": "marketing__reminder_journey" },
+    { "id": "marketing__on_lapsed", "on": { "SegmentEntered": { "segment": "dc998259-97c8-83ab-9e50-a790dcc6b029" } }, "automation": "marketing__winback_fanout" }
   ],
 
   "automations": [
@@ -178,7 +173,7 @@
       "run-as": { "roles": ["marketing__marketing_lead"] },
       "start": "fan",
       "steps": {
-        "fan": { "action": { "FanOut": { "segment": "marketing__lapsed_members", "batch": 100, "each": "mail" } }, "next": "done" },
+        "fan": { "action": { "FanOut": { "segment": "dc998259-97c8-83ab-9e50-a790dcc6b029", "batch": 100, "each": "mail" } }, "next": "done" },
         "mail": { "action": { "SendMail": { "template": "marketing__winback_mail", "to": "param.member", "category": "promotional" } }, "next": "done", "retry": { "attempts": 5 } },
         "done": { "action": "End" } } }
   ],

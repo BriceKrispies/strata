@@ -323,11 +323,6 @@
   "settings": [
     { "id": "assets__default_term_days", "label": "Default licence term (days)", "type": "i64", "default": {"Int": 365}, "levels": ["tenant"] },
     { "id": "assets__watermark_default", "label": "Watermark by default", "type": "bool", "default": {"Bool": false}, "levels": ["tenant", "team"] }
-  ],
-
-  // An event kind the tenant can subscribe to.
-  "eventKinds": [
-    { "id": "assets__licence_expired", "kind": "app.assets-licence-expired",
-      "fields": [ { "name": "licence", "type": "string" }, { "name": "at", "type": "timestamp" } ], "readers": ["assets__licence_manager"] }
   ]
+
 }

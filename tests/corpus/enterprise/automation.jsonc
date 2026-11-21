@@ -205,11 +205,6 @@
   ],
 
 
-  "eventKinds": [
-    { "id": "automation__run_finished", "kind": "app.automation-run-finished",
-      "fields": [ { "name": "connector", "type": "string" }, { "name": "outcome", "type": "string" }, { "name": "finished_at", "type": "timestamp" } ],
-      "readers": ["automation__automation_operator"] }
-  ],
 
   "claims": [
     { "id": "automation__budget-never-negative", "kind": "structural",
@@ -274,7 +269,7 @@
       "run-as": { "roles": ["automation__connector_admin"] },
       "start": "fan",
       "steps": {
-        "fan": { "action": { "FanOut": { "segment": "automation__active_connectors", "batch": 50, "each": "sync" } }, "next": "fan_done" },
+        "fan": { "action": { "FanOut": { "segment": "cd83c514-f89b-8e90-8ecb-297fd84c0f61", "batch": 50, "each": "sync" } }, "next": "fan_done" },
         "sync": { "action": { "CallWebhook": { "subscription": "6f1c2a9e-3b4d-4e5f-8a9b-0c1d2e3f4a51", "body": { "connector": "record.$id", "requested_at": "now" } } }, "next": "sync_done", "retry": { "attempts": 3 } },
         "fan_done": { "action": "End" },
         "sync_done": { "action": "End" } } },
@@ -302,7 +297,7 @@
       "run-as": { "roles": ["automation__automation_operator"] }, "run-key": "param.seq",
       "start": "invoke",
       "steps": {
-        "invoke": { "action": { "InvokeOperation": { "operation": "automation__invoke_connector", "inputs": { "connector": "param.subject", "reason": "'run-finished'" } } }, "next": "invoke_done" },
+        "invoke": { "action": { "InvokeOperation": { "operation": "automation__invoke_connector", "inputs": { "connector": {"Param":"subject"}, "reason": {"Lit":{"Str":"run-finished"}} } } }, "next": "invoke_done" },
         "invoke_done": { "action": "End" } } }
   ],
 

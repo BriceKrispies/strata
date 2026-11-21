@@ -372,7 +372,4 @@
   ],
 
   // Declared events that other modules may subscribe to.
-  "eventKinds": [
-    { "id": "people__employee_onboarded", "kind": "app.people-employee-onboarded", "fields": [ { "name": "employee_number", "type": "string" }, { "name": "start_date", "type": "timestamp" } ], "readers": ["people__hr_admin"] }
-  ]
 }

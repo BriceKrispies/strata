@@ -395,11 +395,6 @@
   "segments": [
     { "id": "content__stale_drafts", "name": "Draft articles", "subject-type": "content__article", "principal-field": "slug",
       "predicate": "record.state == 'draft'" }
-  ],
-
-  // An event kind the tenant can subscribe to.
-  "eventKinds": [
-    { "id": "content__article_published", "kind": "app.content-article-published",
-      "fields": [ { "name": "article", "type": "string" }, { "name": "at", "type": "timestamp" } ], "readers": ["content__editor"] }
   ]
+
 }

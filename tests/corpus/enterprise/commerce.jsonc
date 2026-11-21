@@ -176,11 +176,6 @@
       "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"We have received your returned item.\"}]}]" }
   ],
 
-  "eventKinds": [
-    { "id": "commerce__low_stock", "kind": "app.commerce-low-stock",
-      "fields": [ { "name": "sku", "type": "string" }, { "name": "level", "type": "number" } ],
-      "readers": ["commerce__merchandiser_emea", "commerce__merchandiser_apac", "commerce__merchandiser_amer"] }
-  ],
 
 
   "triggers": [

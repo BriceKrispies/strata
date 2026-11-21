@@ -2,7 +2,7 @@
 
 A scale corpus for WG-5292: one large enterprise CMS and automation tenant, written as 14 product files, one per
 module. Each file is tenant metadata on the Strata platform (ARC-113, D-6546), imports the platform specification
-`specifications/spec.jsonc` and declares only its own namespaced entities. Together the files declare 1,074 entities,
+`specifications/spec.jsonc` and declares only its own namespaced entities. Together the files declare 1,071 entities,
 above the 500 the corpus is for. `crates/corpus` (WG-5398) installs all 14 into one tenant on any store and fills it with
 seeded records; every file passes `specc bundle`, the platform's own check for installing a product.
 
@@ -30,25 +30,25 @@ section counts once. The sections are the ones a tenant bundle has a place for, 
 product, not tenant metadata: specc leaves them out of the bundle, so they are not installed). The files declared 1,290
 entities before they were made installable (see "Made installable" below); the four sections that have no place in a
 tenant (`records` 76, `types` 120, `contracts` 126, `events` 42) were removed, and 87 views and 61 operations were
-added for the interface to bind to, so the files declare 1,074 now, still above the 500 the corpus is for.
+added (the 10 `eventKinds` entries were removed later, see below) for the interface to bind to, so the files declare 1,071 now, still above the 500 the corpus is for.
 
 |module|roles|capabilities|objects|policies|queries|views|workflows|segments|settings|ledgerUnits|ledgerPools|ledgerLimits|screens|forms|actions|liveBindings|errorMessages|claims|mailTemplates|noticeTemplates|triggers|automations|operations|eventKinds|total|
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 |analytics|6|6|5|11|3|8|1|0|2|0|0|0|6|4|3|12|2|2|1|0|1|1|5|0|79|
 |approvals|6|4|5|6|2|7|1|0|2|0|0|0|6|4|3|12|2|2|1|1|1|1|6|0|72|
-|assets|3|3|5|5|3|7|1|0|2|0|0|0|6|4|3|12|4|2|1|1|1|1|5|1|70|
-|automation|3|3|5|5|3|7|1|1|2|1|1|1|6|4|3|12|2|2|1|2|4|5|6|1|81|
-|commerce|4|2|9|8|2|7|1|0|1|2|1|2|6|4|4|12|2|2|1|1|1|1|7|1|81|
-|content|5|7|5|6|3|7|1|1|2|0|0|0|6|4|4|12|4|2|1|1|1|1|7|1|81|
-|crm|4|5|5|5|2|7|1|0|2|0|0|0|6|4|5|12|2|2|1|1|1|1|7|1|74|
-|forms|3|3|5|5|2|7|1|0|2|0|0|0|6|4|3|12|2|2|1|1|2|1|7|1|70|
+|assets|4|3|5|5|3|7|1|0|2|0|0|0|6|4|3|12|4|2|1|1|1|1|5|0|70|
+|automation|4|3|5|5|3|7|1|1|2|1|1|1|6|4|3|12|2|2|1|2|4|5|6|0|81|
+|commerce|4|2|9|8|2|7|1|0|1|2|1|2|6|4|4|12|2|2|1|1|1|1|7|0|80|
+|content|6|7|5|6|3|7|1|1|2|0|0|0|6|4|4|12|4|2|1|1|1|1|7|0|81|
+|crm|4|5|5|5|2|7|1|0|2|0|0|0|6|4|5|12|2|2|1|1|1|1|7|0|73|
+|forms|4|3|5|5|2|7|1|0|2|0|0|0|6|4|3|12|2|2|1|1|2|1|7|0|70|
 |localisation|6|4|5|6|2|8|1|0|2|0|0|0|7|4|4|14|2|2|1|1|1|1|5|0|76|
-|marketing|3|3|5|5|2|7|1|3|2|0|0|0|6|4|4|12|2|2|3|1|3|3|6|1|78|
-|people|6|5|6|6|3|8|1|0|2|0|0|0|7|5|5|14|3|2|2|1|1|1|8|1|87|
-|publishing|3|4|4|4|2|7|1|1|0|0|0|0|6|4|3|12|2|2|1|1|3|3|6|1|70|
-|service|4|4|5|6|3|8|1|0|2|0|0|0|7|4|4|14|3|2|2|1|1|1|6|1|79|
-|taxonomy|4|3|4|5|8|7|1|3|2|0|0|0|6|4|3|12|2|2|1|1|1|1|6|0|76|
-|**total**|60|56|73|83|40|102|14|9|25|3|2|3|87|57|51|174|34|28|18|14|22|22|87|10|**1074**|
+|marketing|4|3|5|5|2|7|1|3|2|0|0|0|6|4|4|12|2|2|3|1|3|3|6|0|78|
+|people|6|5|6|6|3|8|1|0|2|0|0|0|7|5|5|14|3|2|2|1|1|1|8|0|86|
+|publishing|4|4|4|4|2|7|1|1|0|0|0|0|6|4|3|12|2|2|1|1|3|3|6|0|70|
+|service|4|4|5|6|3|8|1|0|2|0|0|0|7|4|4|14|3|2|2|1|1|1|6|0|78|
+|taxonomy|5|3|4|5|8|7|1|3|2|0|0|0|6|4|3|12|2|2|1|1|1|1|6|0|77|
+|**total**|67|56|73|83|40|102|14|9|25|3|2|3|87|57|51|174|34|28|18|14|22|22|87|0|**1071**|
 
 ## Could not express
 
@@ -172,6 +172,28 @@ found these classes in the files. Fixed in place, nothing removed:
   (connector `name`, article `slug`, audience member `email`, channel `name`, audience `label`, made unique). A principal id is
   letters, digits and `_:.-`, so an email address is no principal and the three marketing segments hold no member until the field
   is a principal-shaped value.
+
+### Made to install on this release (WG-5398, third round)
+
+The first run of `strata-corpus check` failed on what the bundle reader does after specc, with three classes:
+
+- `eventKinds` (10 entries, one in each of ten files): this release does not install a bundle's `event-kinds`
+  (`ProductBundle::unbuilt`; the install is refused and names the section). Removed. The `DeclaredEvent` triggers that name an
+  `app.` kind stay, since the kernel does not check a declared kind against declarations (`definitions.rs`, SCH-1576).
+- A segment named in a trigger (`SegmentEntered`) or an automation step (`FanOut`) is a segment id, a uuid, not the key the
+  segment is declared under. The ids are now written out: `derive_segment_id(tenant, key)` for the tenant `enterprise`
+  (SHA-256 of `strata-segment <tenant> <key>`, version bits 8), which the loader's default tenant is. Load the corpus under another
+  tenant id and these six references name no segment.
+- The inputs of an `InvokeOperation` step are structured expressions in a bundle (`{"Param": "subject"}`,
+  `{"Lit": {"Str": "run-finished"}}`): `strata_substrate::product::expressions_of_action` turns the text of every other expression
+  position into an AST and has no case for `InvokeOperation`, so its inputs reach the kernel's deserialiser as the strings the
+  product file wrote. The one step in the corpus (`automation__invoke_connector_run`) now writes them structured.
+
+**specc gap, for the specc owner:** `specc bundle` should have refused both the string inputs of `InvokeOperation` and the key where
+a segment id belongs. It checks the finished bundle against `tenant-bundle`, whose `automation-step` type accepts a string for an
+expression and a name for a `segment-id`, while the kernel's types do not; and it does not know which sections this release
+installs. Closing it needs either the substrate to read the inputs like every other expression, or specc to refuse a text
+there, and the check that a bundle's sections are ones the release installs.
 
 Checked the same way and found clean: trigger and automation step shapes, reachable steps, mail and notice template bodies,
 settings, ledger declarations, capabilities, retention and personal-data subjects, workflow guards and sets, policy

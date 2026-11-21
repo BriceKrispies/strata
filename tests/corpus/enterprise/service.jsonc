@@ -296,7 +296,4 @@
   ],
 
   // Declared events that other modules may subscribe to.
-  "eventKinds": [
-    { "id": "service__case_escalated", "kind": "app.service-case-escalated", "fields": [ { "name": "case_reference", "type": "string" }, { "name": "escalated_at", "type": "timestamp" } ], "readers": ["service__queue_supervisor"] }
-  ]
 }

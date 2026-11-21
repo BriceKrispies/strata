@@ -195,16 +195,6 @@
       "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "publishing__live_schedule_settings_ended", "screen": "publishing__schedule_settings", "event": "ui-session-ended", "refresh": "whole" }
   ],
-  "eventKinds": [
-    { "id": "publishing__released_event", "kind": "app.publishing-released",
-      "fields": [
-        { "name": "release", "type": "string" },
-        { "name": "version", "type": "string" },
-        { "name": "channel", "type": "string" },
-        { "name": "locale", "type": "string" },
-        { "name": "at", "type": "timestamp" } ],
-      "readers": ["publishing__release_manager"] }
-  ],
   "errorMessages": [
     { "id": "publishing__error_channel_name_taken", "on": "check", "kinds": ["unique"], "text": "Another channel already uses this name.", "field": { "name": "channel_name" } },
     { "id": "publishing__error_job_not_cancellable", "on": "error", "kinds": ["workflow"], "text": "This job has already started publishing and cannot be cancelled." }
@@ -241,7 +231,7 @@
       "run-as": { "roles": ["publishing__release_manager"] }, "run-key": "param.seq",
       "start": "fan",
       "steps": {
-        "fan": { "action": { "FanOut": { "segment": "publishing__active_channels", "batch": 50, "each": "queue_channel" } }, "next": "done" },
+        "fan": { "action": { "FanOut": { "segment": "e23b11d1-cf5c-8761-b56d-b8f8cf9f9bf3", "batch": 50, "each": "queue_channel" } }, "next": "done" },
         "queue_channel": { "action": { "CreateRecord": { "object": "publishing__publish_job", "fields": { "channel": "record.$id", "release": "param.event_id", "status": "'queued'", "scheduled_at": "now", "attempts": "0", "requested_by": "principal" } } }, "next": "done" },
         "done": { "action": "End" } } },
     { "id": "publishing__syndicate_release", "label": "Send a release to a syndication partner",
