@@ -1168,7 +1168,7 @@ impl Recurrence {
 /// The state a tenant workflow gives a record; tenant-defined.
 ///
 /// Specification type `workflow-state`: a scalar represented as `string`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct WorkflowState(pub String);
 
@@ -1666,7 +1666,7 @@ impl ProviderProtocol {
 /// The kinds of identity provider behind the federation seam (D-8218, FED-2645), with the fields each kind requires and allows. The configuration file writes each field name with underscores for hyphens (issuer-template is issuer_template), and an entry of STRATA_OIDC_CONFIG that names no kind is oidc. Every entry also carries the fields common to all kinds: id, label, enabled, domains, create_on_first_sign_in, default_role and link_verified_email, and, for every kind but saml, client_id, client_secret_env and scopes. oidc: discovery at the issuer, which tokens must equal exactly; subject-claim defaults to sub (FED-2649); email-verification defaults to claim (FED-2654); domain-claim, when set, is the claim that must equal a bound domain (Google: hd, FED-2655); response-mode, client-secret-jwt and name-from-form-post are the options of Sign in with Apple (D-8219, FED-2656 to FED-2658), and client-secret-jwt excludes client_secret_env. oidc-issuer-template: issuer-template holds {tid} once; metadata-url is the discovery document, whose issuer is not compared; allowed-directories lists directory IDs or is exactly ["any"] (FED-2646); directory-claim defaults to tid and subject-claim to oid (FED-2648); email-verification defaults to never. oauth2-userinfo: there is no identity token; subject-claim names the field of the userinfo answer that is the stable subject (FED-2650); emails-url, when set, is the list whose primary verified entry is the verified address, and without it no address is verified (FED-2654); email-claim defaults to email and name-claim to name. saml: the fields of H-050.
 ///
 /// Specification type `identity-provider-kind`: a union, internally tagged by `kind`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(tag = "kind")]
 pub enum IdentityProviderKind {
     /// The variant `oidc`.
@@ -1852,7 +1852,7 @@ pub enum IdentityProviderKind {
 /// How a provider that takes a signed client secret is authenticated (Sign in with Apple, D-8219, FED-2658). team-id is the iss of the secret and key-id its kid; signing-key-env names the environment variable that holds the ES256 private key in PEM, read when the process starts. A name that is not set stops the process from starting.
 ///
 /// Specification type `client-secret-jwt`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ClientSecretJwt {
     /// Field `team-id`.
     #[serde(rename = "team-id")]
@@ -1868,8 +1868,7 @@ pub struct ClientSecretJwt {
 /// email-verification
 ///
 /// Specification type `email-verification`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum EmailVerification {
     /// The value `claim`.
     #[serde(rename = "claim")]
@@ -1892,8 +1891,7 @@ impl EmailVerification {
 /// oidc-response-mode
 ///
 /// Specification type `oidc-response-mode`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum OidcResponseMode {
     /// The value `query`.
     #[serde(rename = "query")]
@@ -2222,7 +2220,7 @@ impl EnvironmentKind {
 /// The grants made to the data of a tenant.
 ///
 /// Specification type `access-report`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AccessReport {
     /// Field `tenant`.
     pub tenant: TenantId,
@@ -2256,7 +2254,7 @@ pub struct Account {
 /// The preview of a pending action.
 ///
 /// Specification type `action-preview`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ActionPreview {
     /// Field `pending`.
     pub pending: PendingId,
@@ -2315,7 +2313,7 @@ pub struct AdapterHealth {
 /// One agent of the registry.
 ///
 /// Specification type `agent-entry`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AgentEntry {
     /// Field `agent`.
     pub agent: PrincipalId,
@@ -2355,7 +2353,7 @@ pub struct ApiError {
 /// The manifest of an archive.
 ///
 /// Specification type `archive-manifest`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ArchiveManifest {
     /// Field `files`.
     pub files: Vec<String>,
@@ -2392,7 +2390,7 @@ impl std::fmt::Display for ArchiveRef {
 /// One entry of the hash-chained audit log.
 ///
 /// Specification type `audit-entry`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AuditEntry {
     /// Field `seq`.
     pub seq: u64,
@@ -2416,7 +2414,7 @@ pub struct AuditEntry {
 /// One entry of the changelog.
 ///
 /// Specification type `changelog-entry`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ChangelogEntry {
     /// Field `version`.
     pub version: String,
@@ -2448,7 +2446,7 @@ pub struct Commit {
 /// The key of a stored copy; it begins with the tenant identifier.
 ///
 /// Specification type `copy-key`: a scalar represented as `string`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct CopyKey(pub String);
 
@@ -2464,7 +2462,7 @@ impl CopyKey {
 /// The certificate of a tenant deletion.
 ///
 /// Specification type `deletion-certificate`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeletionCertificate {
     /// Field `tenant`.
     pub tenant: TenantId,
@@ -2488,7 +2486,7 @@ pub struct DeletionCertificate {
 /// One article as the writing desk lists it: the identifier and version a change names, the fields a save repeats, and whether it is a draft or published.
 ///
 /// Specification type `desk-article`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeskArticle {
     /// Field `article-id`.
     pub article_id: RecordId,
@@ -2509,7 +2507,7 @@ pub struct DeskArticle {
 /// The fields of the publication record as the BFF projects them (object publication of the tenant template), under the names the JSON uses.
 ///
 /// Specification type `publication-fields`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PublicationFields {
     /// Field `key`.
     pub key: String,
@@ -2535,7 +2533,7 @@ pub struct PublicationFields {
 /// The fields of an author record as the BFF projects them (object author).
 ///
 /// Specification type `author-fields`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AuthorFields {
     /// Field `name`.
     pub name: String,
@@ -2557,7 +2555,7 @@ pub struct AuthorFields {
 /// The fields of a topic record as the BFF projects them (object category).
 ///
 /// Specification type `category-fields`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CategoryFields {
     /// Field `name`.
     pub name: String,
@@ -2573,7 +2571,7 @@ pub struct CategoryFields {
 /// The fields of an article record as the BFF projects them (object post). The specification names them in kebab-case like every other field; on the wire they are snake_case (published_at, cover_alt), as system.generation.wireCase says.
 ///
 /// Specification type `post-fields`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PostFields {
     /// Field `title`.
     pub title: String,
@@ -2613,7 +2611,7 @@ pub struct PostFields {
 /// An author record included in an article row (refs.author): the projection of a record without refs or blocks of its own (substrate project_record).
 ///
 /// Specification type `author-record`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AuthorRecord {
     /// Field `id`.
     pub id: RecordId,
@@ -2637,7 +2635,7 @@ pub struct AuthorRecord {
 /// A topic record included in an article row (refs.category).
 ///
 /// Specification type `category-record`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CategoryRecord {
     /// Field `id`.
     pub id: RecordId,
@@ -2661,7 +2659,7 @@ pub struct CategoryRecord {
 /// The records an article row includes through its reference fields (the view definition includes author and category); each is absent when the reference is empty.
 ///
 /// Specification type `post-refs`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PostRefs {
     /// Field `author`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2676,7 +2674,7 @@ pub struct PostRefs {
 /// One publication record as a view section holds it (substrate project_row): the record members, refs (an empty object here), blocks of its markdown fields and reading_minutes when it has any.
 ///
 /// Specification type `publication-row`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PublicationRow {
     /// Field `id`.
     pub id: RecordId,
@@ -2708,7 +2706,7 @@ pub struct PublicationRow {
 /// One author record as a view section holds it; the markdown field bio is in blocks.
 ///
 /// Specification type `author-row`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AuthorRow {
     /// Field `id`.
     pub id: RecordId,
@@ -2740,7 +2738,7 @@ pub struct AuthorRow {
 /// One topic record as a view section holds it.
 ///
 /// Specification type `category-row`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CategoryRow {
     /// Field `id`.
     pub id: RecordId,
@@ -2772,7 +2770,7 @@ pub struct CategoryRow {
 /// One article record as a view section holds it: its fields, the author and the topic it refers to (refs), and the blocks of its body with the reading time.
 ///
 /// Specification type `post-row`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PostRow {
     /// Field `id`.
     pub id: RecordId,
@@ -2804,7 +2802,7 @@ pub struct PostRow {
 /// The resolved theme of a view: the accent and paper names the publication settings give, or the defaults when a setting is not one of the theme tokens.
 ///
 /// Specification type `view-theme`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ViewTheme {
     /// Field `accent`.
     pub accent: String,
@@ -2817,7 +2815,7 @@ pub struct ViewTheme {
 /// One entry of a choice control: the value the form submits and the label it shows.
 ///
 /// Specification type `option-choice`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct OptionChoice {
     /// Field `value`.
     pub value: String,
@@ -2830,7 +2828,7 @@ pub struct OptionChoice {
 /// The sections of the front page view: the publication, the featured article, the recent articles and the topics.
 ///
 /// Specification type `front-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FrontPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2849,7 +2847,7 @@ pub struct FrontPageData {
 /// The sections of an article view: the publication, the article with this address (null when none) and the recent articles.
 ///
 /// Specification type `article-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ArticlePageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2866,7 +2864,7 @@ pub struct ArticlePageData {
 /// The sections of the topic index view.
 ///
 /// Specification type `topics-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TopicsPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2882,7 +2880,7 @@ pub struct TopicsPageData {
 /// The sections of a topic view.
 ///
 /// Specification type `topic-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TopicPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2901,7 +2899,7 @@ pub struct TopicPageData {
 /// The sections of the author index view.
 ///
 /// Specification type `authors-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AuthorsPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2915,7 +2913,7 @@ pub struct AuthorsPageData {
 /// The sections of an author view.
 ///
 /// Specification type `author-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AuthorPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2932,7 +2930,7 @@ pub struct AuthorPageData {
 /// The sections of the search view.
 ///
 /// Specification type `search-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SearchPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2946,7 +2944,7 @@ pub struct SearchPageData {
 /// The sections of the about view; the markdown fields about and colophon of the publication are in its blocks.
 ///
 /// Specification type `about-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AboutPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2960,7 +2958,7 @@ pub struct AboutPageData {
 /// The sections of a view that holds the publication alone (sign in, settings, the impact lab).
 ///
 /// Specification type `site-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SitePageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2972,7 +2970,7 @@ pub struct SitePageData {
 /// The sections of the writing desk view.
 ///
 /// Specification type `desk-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DeskPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2986,7 +2984,7 @@ pub struct DeskPageData {
 /// The sections of the view for a new article.
 ///
 /// Specification type `new-article-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NewArticlePageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3002,7 +3000,7 @@ pub struct NewArticlePageData {
 /// The sections of the view for editing an article.
 ///
 /// Specification type `edit-article-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EditArticlePageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3021,7 +3019,7 @@ pub struct EditArticlePageData {
 /// A domain name bound to a tenant.
 ///
 /// Specification type `domain-binding`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DomainBinding {
     /// Field `host`.
     pub host: Host,
@@ -3128,7 +3126,7 @@ pub struct EventStream {
 /// strata_storage_api::Executed.
 ///
 /// Specification type `executed-intent`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExecutedIntent {
     /// Field `transition`.
     pub transition: TransitionResult,
@@ -3143,7 +3141,7 @@ pub struct ExecutedIntent {
 /// One field that differs between a draft and its published version.
 ///
 /// Specification type `field-difference`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct FieldDifference {
     /// Field `field`.
     pub field: String,
@@ -3174,7 +3172,7 @@ impl HtmlPage {
 /// An assertion signed by the identity service about one session.
 ///
 /// Specification type `identity-assertion`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IdentityAssertion {
     /// Field `tenant`.
     pub tenant: TenantId,
@@ -3324,7 +3322,7 @@ pub struct JournalReplay {
 /// The outcome of a layout change for one tenant.
 ///
 /// Specification type `layout-outcome`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct LayoutOutcome {
     /// Field `tenant`.
     pub tenant: TenantId,
@@ -3340,8 +3338,7 @@ pub struct LayoutOutcome {
 /// The phases of a storage layout change.
 ///
 /// Specification type `layout-phase`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum LayoutPhase {
     /// The value `expanding`.
     #[serde(rename = "expanding")]
@@ -3398,7 +3395,7 @@ pub struct MailLogEntry {
 /// What an import mapped and could not map.
 ///
 /// Specification type `mapping-report`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct MappingReport {
     /// Field `mappings`.
     pub mappings: Vec<String>,
@@ -3428,7 +3425,7 @@ pub struct MigrationPlan {
 /// What a model request used.
 ///
 /// Specification type `model-usage`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ModelUsage {
     /// Field `input-tokens`.
     pub input_tokens: u64,
@@ -3441,7 +3438,7 @@ pub struct ModelUsage {
 /// A tenant-scoped notice: a reference to an event, a wake notice or a revocation.
 ///
 /// Specification type `notice`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct Notice {
     /// Field `tenant`.
     pub tenant: TenantId,
@@ -3459,7 +3456,7 @@ pub struct Notice {
 /// One entry of the operation catalogue.
 ///
 /// Specification type `operation-entry`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct OperationEntry {
     /// Field `name`.
     pub name: String,
@@ -3480,7 +3477,7 @@ pub struct OperationEntry {
 /// The result of invoking an operation.
 ///
 /// Specification type `operation-result`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct OperationResult {
     /// Field `state`.
     pub state: String,
@@ -3516,7 +3513,7 @@ pub struct OutboxEntry {
 /// The topology, configuration and health of the platform.
 ///
 /// Specification type `platform-description`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PlatformDescription {
     /// Field `components`.
     pub components: Vec<String>,
@@ -3613,7 +3610,7 @@ pub struct PublicKey {
 /// The sign-in policy of a realm. settings holds the numbers and switches of the realm (D-6594).
 ///
 /// Specification type `realm-policy`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RealmPolicy {
     /// Field `second-factor-required`.
     pub second_factor_required: bool,
@@ -3653,7 +3650,7 @@ pub struct Receipt {
 /// One published version of a record.
 ///
 /// Specification type `record-version`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RecordVersion {
     /// Field `version`.
     pub version: u64,
@@ -3668,7 +3665,7 @@ pub struct RecordVersion {
 /// The verification status of one requirement.
 ///
 /// Specification type `requirement-status`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RequirementStatus {
     /// Field `ref`.
     pub r#ref: String,
@@ -3684,7 +3681,7 @@ pub struct RequirementStatus {
 /// The trace of one agent run.
 ///
 /// Specification type `run-trace`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RunTrace {
     /// Field `run`.
     pub run: RequestId,
@@ -3738,7 +3735,7 @@ impl std::fmt::Display for SchemaVersion {
 /// A person as the provisioning endpoint exchanges it.
 ///
 /// Specification type `scim-user`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ScimUser {
     /// Field `external-id`.
     #[serde(rename = "external-id")]
@@ -3757,7 +3754,7 @@ pub struct ScimUser {
 /// One hit of a search.
 ///
 /// Specification type `search-hit`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SearchHit {
     /// Field `record`.
     pub record: RecordId,
@@ -3829,7 +3826,7 @@ pub struct SessionRecord {
 /// A session as its owner lists it.
 ///
 /// Specification type `session-summary`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SessionSummary {
     /// Field `id`.
     pub id: SessionId,
@@ -3937,7 +3934,7 @@ pub struct SnapshotInfo {
 /// The spend of one agent or tenant.
 ///
 /// Specification type `spend-entry`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SpendEntry {
     /// Field `agent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4078,7 +4075,7 @@ pub struct TenantBundle {
 /// A directory entry as the gateway holds it.
 ///
 /// Specification type `tenant-directory-entry`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TenantDirectoryEntry {
     /// Field `tenant`.
     pub tenant: TenantId,
@@ -4104,8 +4101,7 @@ pub struct TenantDirectoryEntry {
 /// Whether a tenant is production, staging, sandbox or a fork of another tenant.
 ///
 /// Specification type `tenant-kind`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum TenantKind {
     /// The value `production`.
     #[serde(rename = "production")]
@@ -4180,7 +4176,7 @@ pub struct Trace {
 /// A metered quantity counted for a period.
 ///
 /// Specification type `usage-count`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct UsageCount {
     /// Field `quantity`.
     pub quantity: String,
@@ -4234,7 +4230,7 @@ pub struct Violation {
 /// A wake index entry: a tenant and its next due time, with no content of a job.
 ///
 /// Specification type `wake-entry`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct WakeEntry {
     /// Field `tenant`.
     pub tenant: TenantId,
@@ -6347,7 +6343,7 @@ pub struct ReadResult {
 /// strata_kernel::rules::Subject: the records a policy condition may read; record is old, else new.
 ///
 /// Specification type `subject`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct Subject {
     /// Field `old`.
     pub old: Option<Record>,
@@ -6360,8 +6356,7 @@ pub struct Subject {
 /// Why a policy check of rules.rs authorize passed or failed; it fixes the kernel check detail: owner and unconditional "<what>"; held "<what> where <condition>"; is-false and is-null "<condition> is false" / "is null"; failed "<condition>: <evaluation error>"; no-policy "no policy grants <what>".
 ///
 /// Specification type `policy-outcome`: a union, externally tagged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum PolicyOutcome {
     /// The variant `owner`.
     Owner,
@@ -6384,7 +6379,7 @@ pub enum PolicyOutcome {
 /// One check of rules.rs authorize: the kernel Check (rule, passed) with the parts its detail is printed from (what, the outcome and the condition) instead of the printed detail; see policy-outcome.
 ///
 /// Specification type `policy-check`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PolicyCheck {
     /// Field `rule`.
     pub rule: String,
@@ -6403,7 +6398,7 @@ pub struct PolicyCheck {
 /// The state of the policy loop of rules.rs authorize: the check that granted, once one has, and the failed checks so far. needed is the first record a condition that failed to evaluate needs and the snapshot does not cover (rules.rs authorize_needing).
 ///
 /// Specification type `policy-progress`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PolicyProgress {
     /// Field `granted`.
     pub granted: Option<PolicyCheck>,
@@ -6418,7 +6413,7 @@ pub struct PolicyProgress {
 /// The (bool, Vec<Check>, Option<Need>) that rules.rs authorize_needing returns: whether the action is allowed, the checks, and the record a failed condition needs that the snapshot does not cover; authorize drops the need.
 ///
 /// Specification type `policy-decision`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PolicyDecision {
     /// Field `allowed`.
     pub allowed: bool,
@@ -6463,7 +6458,7 @@ impl TenantFileState {
 /// strata_kernel rules.rs Failure: a failed check together with the error it maps to.
 ///
 /// Specification type `validation-failure`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ValidationFailure {
     /// Field `check`.
     pub check: Check,
@@ -6476,7 +6471,7 @@ pub struct ValidationFailure {
 /// strata_kernel rules.rs Validation: the outcome of validating one record against a schema.
 ///
 /// Specification type `validation-outcome`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ValidationOutcome {
     /// Field `passed`.
     pub passed: Vec<Check>,
@@ -6489,7 +6484,7 @@ pub struct ValidationOutcome {
 /// A kernel DomainError as the failure of a function (functions fail with a union): Result<_, DomainError> is a function that fails with rejection.rejected.
 ///
 /// Specification type `rejection`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum Rejection {
     /// The variant `rejected`.
     Rejected(DomainError),
@@ -6500,7 +6495,7 @@ pub enum Rejection {
 /// strata_kernel expr.rs Env as the environment of eval(tenant-rule-language, ...): one field per scope of the language. record, old and new are a record's fields and system attributes ($id, $version, $created_by, $created_at, $updated_at), null when there is no record; param the supplied parameters; now a time value; principal the acting user's id as a string, or null; has_role the roles held. The kernel's lookup (following a reference) has no field: see the report of WG-4937.
 ///
 /// Specification type `expr-env`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExprEnv {
     /// Field `record`.
     pub record: Option<std::collections::BTreeMap<String, Value>>,
@@ -6523,7 +6518,7 @@ pub struct ExprEnv {
 /// strata_kernel expr.rs TypeEnv as the environment of check(tenant-rule-language, ...): the shape of each field at the definition site (str, int, bool, time, ref, list), the declared parameters and roles. TypeEnv.objects (for checking a reference hop) has no field: check gives a hop the any shape.
 ///
 /// Specification type `expr-check-env`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExprCheckEnv {
     /// Field `fields`.
     pub fields: std::collections::BTreeMap<String, String>,
@@ -6538,7 +6533,7 @@ pub struct ExprCheckEnv {
 /// The field values create_record goes on with after applying defaults (transition.rs), and the draft evidence with a default: check per applied default.
 ///
 /// Specification type `defaults-outcome`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DefaultsOutcome {
     /// Field `values`.
     pub values: std::collections::BTreeMap<FieldId, Value>,
@@ -6551,7 +6546,7 @@ pub struct DefaultsOutcome {
 /// schema.rs problems: the problems found so far over the views, and the routes already taken.
 ///
 /// Specification type `route-scan`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RouteScan {
     /// Field `problems`.
     pub problems: Vec<String>,
@@ -6600,7 +6595,7 @@ pub enum PlainJson {
 /// The Err(String) of substrate plain.rs coerce and coerce_fields.
 ///
 /// Specification type `plain-error`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum PlainError {
     /// The variant `message`.
     Message(String),
@@ -6611,7 +6606,7 @@ pub enum PlainError {
 /// transition.rs Draft: what one transition has gathered so far. The kernel's Lookup is the tenant with the coverage.
 ///
 /// Specification type `draft`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct Draft {
     /// Field `tenant`.
     pub tenant: TenantState,
@@ -6637,7 +6632,7 @@ pub struct Draft {
 /// What a per-intent function of transition.rs leaves: the draft it filled and the Output it answers.
 ///
 /// Specification type `decided`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct Decided {
     /// Field `draft`.
     pub draft: Draft,
@@ -6650,7 +6645,7 @@ pub struct Decided {
 /// transition.rs apply_change: the working copy after one change and the line that describes it.
 ///
 /// Specification type `schema-step`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SchemaStep {
     /// Field `schema`.
     pub schema: TenantSchema,
@@ -6663,7 +6658,7 @@ pub struct SchemaStep {
 /// The Err(String) of transition.rs apply_change.
 ///
 /// Specification type `schema-problem`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SchemaProblem {
     /// The variant `problem`.
     Problem(String),
@@ -6674,7 +6669,7 @@ pub enum SchemaProblem {
 /// transition.rs plan_migration, the loop over the changes: the working copy, the summary and the evidence so far.
 ///
 /// Specification type `migration-progress`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct MigrationProgress {
     /// Field `schema`.
     pub schema: TenantSchema,
@@ -6689,7 +6684,7 @@ pub struct MigrationProgress {
 /// transition.rs update_record, the loop over a workflow's transitions: the one that fired, if any, and why the others were refused.
 ///
 /// Specification type `workflow-search`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct WorkflowSearch {
     /// Field `fired`.
     pub fired: Option<WorkflowTransition>,
@@ -6702,7 +6697,7 @@ pub struct WorkflowSearch {
 /// transition.rs update_record after one workflow: the draft and the candidate with the fired transition's assignments.
 ///
 /// Specification type `workflow-outcome`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct WorkflowOutcome {
     /// Field `draft`.
     pub draft: Draft,
@@ -6715,7 +6710,7 @@ pub struct WorkflowOutcome {
 /// schema.rs TenantSchema::referrers: a reference field that points at an object type, with whether it is a list and what deleting the target does.
 ///
 /// Specification type `referrer`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct Referrer {
     /// Field `object`.
     pub object: ObjectTypeDef,
@@ -6734,7 +6729,7 @@ pub struct Referrer {
 /// transition.rs Draft::finish: the events numbered so far and the next sequence number.
 ///
 /// Specification type `event-numbering`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EventNumbering {
     /// Field `events`.
     pub events: Vec<DomainEvent>,
@@ -6827,7 +6822,7 @@ pub struct AcceptedIntent {
 /// Why a decision of execute-intent or execute-read did not go through: the kernel rejected it, or the snapshot lacked a need, which the derivation loads before deciding again (storage-api execute and query).
 ///
 /// Specification type `execute-failure`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ExecuteFailure {
     /// The variant `domain`.
     Domain(DomainError),
@@ -6840,7 +6835,7 @@ pub enum ExecuteFailure {
 /// Why a decision of mutate-record or read-view did not go through: a refusal answered with the error body (backend ApiError), or the snapshot lacked a need, which the derivation loads before deciding again.
 ///
 /// Specification type `api-failure`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ApiFailure {
     /// The variant `refused`.
     Refused(ApiError),
@@ -6866,7 +6861,7 @@ pub enum RouteSegment {
 /// substrate project.rs match_route: the view whose route matched, and the values of its :name segments.
 ///
 /// Specification type `route-match`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RouteMatch {
     /// Field `view`.
     pub view: ViewDef,
@@ -6879,7 +6874,7 @@ pub struct RouteMatch {
 /// match_route over one view: the segment reached, whether every segment so far matched, the literal segments matched, and the parameters read.
 ///
 /// Specification type `route-try`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RouteTry {
     /// Field `at`.
     pub at: u64,
@@ -6896,7 +6891,7 @@ pub struct RouteTry {
 /// match_route so far: the best view found and its number of literal segments.
 ///
 /// Specification type `route-pick`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RoutePick {
     /// Field `literal`.
     pub literal: u64,
@@ -6909,7 +6904,7 @@ pub struct RoutePick {
 /// substrate project.rs included_refs, one included field: the object type it refers to and the record ids the rows name, each once, in order.
 ///
 /// Specification type `included-target`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IncludedTarget {
     /// Field `object`.
     pub object: ObjectTypeId,
@@ -6942,7 +6937,7 @@ pub struct SectionData {
 /// backend ops.rs view so far: the single rows of the sections evaluated (for later sections), the section data, and the revision read at.
 ///
 /// Specification type `view-progress`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ViewProgress {
     /// Field `done`.
     pub done: std::collections::BTreeMap<String, Option<Record>>,
@@ -6957,7 +6952,7 @@ pub struct ViewProgress {
 /// What substrate markdown.rs gives for one Markdown source: the parsed blocks as JSON and word_count of them. The stand-in of parsing Markdown, which the function language cannot do (WG-4957).
 ///
 /// Specification type `markdown-summary`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MarkdownSummary {
     /// Field `blocks`.
     pub blocks: PlainJson,
@@ -6970,7 +6965,7 @@ pub struct MarkdownSummary {
 /// project.rs project_row over the markdown fields: the blocks by field and the words counted.
 ///
 /// Specification type `markdown-fold`: a struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MarkdownFold {
     /// Field `blocks`.
     pub blocks: std::collections::BTreeMap<String, PlainJson>,
@@ -7177,7 +7172,7 @@ impl ObjectAction {
 /// One permission of a tenant role (ADM-150): a capability, or actions on the records of an object type of the tenant's schema; exactly one of capability and object, and actions with object (kernel Permission).
 ///
 /// Specification type `tenant-permission`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TenantPermission {
     /// Field `capability`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -7195,7 +7190,7 @@ pub struct TenantPermission {
 /// A role of a tenant, held as tenant data (ADM-150): a named set of permissions over the capabilities and the object types of the tenant's schema. The template's roles (the tenant roles of this specification) are where a tenant starts.
 ///
 /// Specification type `tenant-role`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TenantRole {
     /// Field `id`.
     pub id: RoleId,
@@ -7210,7 +7205,7 @@ pub struct TenantRole {
 /// A tenant role assigned to a principal (a person, service or agent) or to a team; exactly one of principal and team (ADM-150). Refused unless the assigner holds a permission the role grants (ADM-152).
 ///
 /// Specification type `role-assignment`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RoleAssignment {
     /// Field `role`.
     pub role: RoleId,
@@ -7227,7 +7222,7 @@ pub struct RoleAssignment {
 /// A team of a tenant, held as tenant data: its members hold its roles (ADM-151). A principal holds exactly the permissions of its own roles and of its teams' roles.
 ///
 /// Specification type `tenant-team`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TenantTeam {
     /// Field `id`.
     pub id: TeamId,
@@ -7244,7 +7239,7 @@ pub struct TenantTeam {
 /// An invitation of a tenant: grants its roles to the one person who redeems it with the address it names, once (ADM-153).
 ///
 /// Specification type `tenant-invitation`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TenantInvitation {
     /// Field `id`.
     pub id: InvitationId,
@@ -7285,7 +7280,7 @@ pub enum Permission {
 /// strata_kernel::Grant: one indivisible permission; a Permission is the set of grants it expands to. Object(ObjectTypeId, ObjectAction) is a tuple variant.
 ///
 /// Specification type `grant`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum Grant {
     /// The variant `capability`.
     Capability(String),
@@ -8908,7 +8903,7 @@ static TIME_ZONE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 /// Specification type `time-zone`: an identifier represented as `string`.
 ///
 /// A value matches `^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$` and has a length of at most 64; decoding refuses one that does not, and [`TimeZone::new`] checks it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct TimeZone(pub String);
 
@@ -9082,7 +9077,7 @@ pub enum SendRecipient {
 /// The fields of the workflow step send-message: exactly the inputs of the contract send-message other than tenant. The step catalogue lists the step with these fields (INT-153). idempotency-key: When absent, the run identifier and the step identifier joined by a colon, so a replayed step sends once (EML-1560).
 ///
 /// Specification type `send-message-step`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SendMessageStep {
     /// Field `channel`.
     pub channel: SendChannel,
@@ -9125,7 +9120,7 @@ pub struct SendMessageStep {
 /// The fields of the workflow step send-digest: exactly the inputs of the contract send-digest other than tenant (NTF-1572). recipient: Absent means every person who holds a notice of the category in the window.
 ///
 /// Specification type `send-digest-step`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SendDigestStep {
     /// Field `category`.
     pub category: MessageCategoryId,
@@ -9155,7 +9150,7 @@ pub struct SendDigestStep {
 /// The fields of the workflow step emit-event: exactly the inputs of the contract emit-event other than tenant (SCH-1576).
 ///
 /// Specification type `emit-event-step`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EmitEventStep {
     /// Field `kind`.
     pub kind: EventKind,
@@ -10327,7 +10322,7 @@ pub struct PublicationDef {
 /// What a tenant declares beyond its schema: the products installed with the entities each owns, the capabilities, segments, setting definitions, ledger units, pools and limits, mail and notice templates and tokens (D-6580, D-6582). It is held beside the tenant schema and changes in the same commit as the schema, so a product installs, upgrades or removes as one change (D-6581). The tenant schema and schema-change are unchanged, so no schema hash changes and no kernel function over a schema change has to. Fields. products: The products installed in the tenant, each with the entities it owns (D-6582). capabilities: Capabilities of installed products (D-6590). Superseded for products, mail templates, notice templates and tokens by D-7341: the kernel holds them as members of tenant-schema, changed by schema changes of one change-schema intent; this type states the sections of the catalogue that a product may fill.
 ///
 /// Specification type `tenant-catalogue`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TenantCatalogue {
     /// Field `products`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -10386,7 +10381,7 @@ pub struct TenantCatalogue {
 /// The edits of the tenant catalogue that a bundle makes: capabilities, segments, settings, ledger units, pools and limits, mail and notice templates and tokens. They commit together with the schema-change edits of the same product change (D-6581). The platform session contracts define-segment, declare-ledger-unit, declare-ledger-pool, set-ledger-limit, setting-save-definition, define-mail-template and define-token stay and lower onto these edits.
 ///
 /// Specification type `tenant-config-change`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum TenantConfigChange {
     /// The variant `define-capability`.
     DefineCapability(CapabilityDef),
@@ -10432,7 +10427,7 @@ pub enum TenantConfigChange {
 /// The change that installs, upgrades or removes one product (D-6581). install and upgrade carry the schema edits and the catalogue edits of the bundle, with ids already namespaced; they are applied together or not at all, in one commit that raises the schema version once. upgrade names the entities of the earlier version that the new one drops. remove carries no edits: the kernel finds the entities the product owns in the catalogue (D-6582). Superseded for products, mail templates, notice templates and tokens by D-7341: the kernel holds them as members of tenant-schema, changed by schema changes of one change-schema intent; this type states the sections of the catalogue that a product may fill.
 ///
 /// Specification type `product-change`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ProductChange {
     /// The variant `install`.
     Install {
@@ -10479,8 +10474,7 @@ pub enum ProductChange {
 /// Who may change a configuration value. platform-fixed: only a platform release changes it. tightenable: the platform holds a default as data, and a realm or a tenant may set a value only on the stricter side of it, never the looser (D-535, D-6594). Each value below states which it is.
 ///
 /// Specification type `config-bound`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ConfigBound {
     /// The value `platform-fixed`.
     #[serde(rename = "platform-fixed")]
@@ -12037,7 +12031,7 @@ pub enum DurationUnit {
 /// definitions.rs operation_problems, the loop over the steps of a tenant operation: the problems found so far and the parameters the next step may read (the inputs and the ids of the create steps before it).
 ///
 /// Specification type `operation-scan`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct OperationScan {
     /// Field `problems`.
     pub problems: Vec<String>,
@@ -12050,7 +12044,7 @@ pub struct OperationScan {
 /// strata_kernel::aggregates::run: the request for one aggregate of a named query (AGG-003). params are the arguments of the query, and filter holds the fields the result is narrowed by, each to a value the field has: a field that the query does not declare is refused (AGG-004). It is a type of its own, not a variant of read-request, because the answer is an aggregate-result and not rows.
 ///
 /// Specification type `aggregate-request`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AggregateRequest {
     /// Field `query`.
     pub query: QueryId,
@@ -12228,7 +12222,7 @@ pub struct LedgerState {
 /// kernel ledger.rs check_limits: where the check of the account limits among a list of schema changes stands. evidence is the evidence of the draft and the checks written so far; held, once a change has needed them, the limits of single accounts the tenant holds as the changes before it leave them.
 ///
 /// Specification type `ledger-limit-walk`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct LedgerLimitWalk {
     /// Field `evidence`.
     pub evidence: Vec<Check>,
@@ -12381,7 +12375,7 @@ pub struct IndexPosition {
 /// transition.rs delete_record: a record whose field refers to the record being deleted, with the referrer (field) that does.
 ///
 /// Specification type `referrer-hit`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReferrerHit {
     /// Field `referrer`.
     pub referrer: Referrer,
@@ -12394,7 +12388,7 @@ pub struct ReferrerHit {
 /// transition.rs delete_record, the loop over the referrers of the deleted record: the draft with the evidence so far, and the records found that refer to it, one entry per referrer field and record.
 ///
 /// Specification type `delete-scan`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeleteScan {
     /// Field `draft`.
     pub draft: Draft,
@@ -12427,7 +12421,7 @@ pub struct SearchFound {
 /// One page of a search: the hits in ascending order of object type and record id, the cursor of the page after (absent when the candidates ended), the number of candidates the kernel examined to make the page (at most 1000, SRH-2787) and the revision and schema version it was decided at. strata_kernel::search::SearchResult.
 ///
 /// Specification type `search-page`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SearchPage {
     /// Field `hits`.
     pub hits: Vec<SearchFound>,
@@ -12509,8 +12503,7 @@ pub struct AutomationApprovalDecision {
 /// The type a template declares for a value it places: the shape of the value that the sender supplies (D-7900).
 ///
 /// Specification type `template-value-type`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum TemplateValueType {
     /// The value `str`.
     #[serde(rename = "str")]
@@ -12543,7 +12536,7 @@ impl TemplateValueType {
 /// An inline node of a template body (D-7900): the inlines of constrained Markdown, and token and value. text and code hold text; em, strong and link hold inlines, at most 8 deep. link: href is a web (http, https) or mail (mailto) address, a path of the site or a fragment, with no space or control character (CMS-250). token: name is the name of a content token the tenant defines (CTK-005); it is replaced when the template is rendered by a text node with the value of the token for the reader (CTK-015). value: name is a value the sender supplies, value-type its type; a name is placed with one type only. Checked by strata_kernel::blocks::analyse.
 ///
 /// Specification type `template-inline`: a union, internally tagged by `type`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(tag = "type")]
 pub enum TemplateInline {
     /// The variant `text`.
@@ -12600,7 +12593,7 @@ pub enum TemplateInline {
 /// A block of a template body (D-7900): the blocks of constrained Markdown. A body is a JSON list of them, the text of structured-blocks. heading: level is 2, 3 or 4. quote: quotes nest at most 8 deep. code: lang holds letters and digits only. figure: src is a path under /media/. A body holds at most 5000 nodes. Checked by strata_kernel::blocks::analyse and rendered by strata_kernel::blocks::render.
 ///
 /// Specification type `template-block`: a union, internally tagged by `type`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(tag = "type")]
 pub enum TemplateBlock {
     /// The variant `heading`.
@@ -12659,7 +12652,7 @@ pub enum TemplateBlock {
 /// What a rule may follow a reference into, as the kernel's Lookup gives it (crates/kernel/src/rules.rs Lookup): the tenant snapshot, its coverage, and the request's old and new records, whose single reference fields the rule follows.
 ///
 /// Specification type `rule-reach`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RuleReach {
     /// Field `tenant`.
     pub tenant: TenantState,
@@ -12674,7 +12667,7 @@ pub struct RuleReach {
 /// triggers.rs Scopes: the records an event binds for a condition and a run key (D-6523), as the automation principal may observe them: record-created binds record and new, record-updated old and new, record-deleted old.
 ///
 /// Specification type `trigger-scopes`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TriggerScopes {
     /// Field `record`.
     pub record: Option<Record>,
@@ -12689,7 +12682,7 @@ pub struct TriggerScopes {
 /// triggers.rs LostAuthority: an automation whose definer may no longer confer a role of its run-as, the first such role in id order, and what the conferral check says the definer lacks.
 ///
 /// Specification type `lost-authority`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct LostAuthority {
     /// Field `automation`.
     pub automation: WorkflowId,
@@ -12706,7 +12699,7 @@ pub struct LostAuthority {
 /// triggers.rs suspend_lost: the state after the change with its automations suspended, and the transition with the PutSchema and the AutomationSuspended events added.
 ///
 /// Specification type `trigger-suspension`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TriggerSuspension {
     /// Field `after`.
     pub after: TenantState,
@@ -12719,7 +12712,7 @@ pub struct TriggerSuspension {
 /// The leading Publish effects of a list of effects and the others: where triggers.rs append_events places the Publish effect of an event it appends.
 ///
 /// Specification type `lead-effects`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct LeadEffects {
     /// Field `lead`.
     pub lead: Vec<Effect>,
@@ -12734,7 +12727,7 @@ pub struct LeadEffects {
 /// settings.rs type_problem: why a value is not a value of a setting type, with the kind of the refusal.
 ///
 /// Specification type `setting-problem`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SettingProblem {
     /// Field `kind`.
     pub kind: ErrorKind,
@@ -12747,7 +12740,7 @@ pub struct SettingProblem {
 /// settings.rs resolve_definition: the level a value of a setting came from, the team when that level is team, and the value.
 ///
 /// Specification type `setting-found`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SettingFound {
     /// Field `source`.
     pub source: SettingSource,
@@ -12762,7 +12755,7 @@ pub struct SettingFound {
 /// settings.rs schema_change_effects, as a fold over the changes: the operations and events so far, the revision each setting reached, the type each setting has after the changes so far (the empty text for a removed one), the settings whose overrides a removal deleted, and the first problem.
 ///
 /// Specification type `setting-effects-acc`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SettingEffectsAcc {
     /// Field `ops`.
     pub ops: Vec<DeltaOp>,
@@ -12783,7 +12776,7 @@ pub struct SettingEffectsAcc {
 /// settings.rs SchemaEffects: what a change of setting definitions does to the overrides and the events, beyond the schema.
 ///
 /// Specification type `setting-effects`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SettingEffects {
     /// Field `ops`.
     pub ops: Vec<DeltaOp>,
@@ -12796,7 +12789,7 @@ pub struct SettingEffects {
 /// capabilities.rs split_once("__"): the text before the first two underscores in a row and the text after them.
 ///
 /// Specification type `capability-split`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CapabilitySplit {
     /// Field `namespace`.
     pub namespace: String,
@@ -12809,7 +12802,7 @@ pub struct CapabilitySplit {
 /// The state of the scan of an id for its first two underscores in a row: the text before, the text after, a lone underscore not yet placed, and whether the separator was seen.
 ///
 /// Specification type `split-scan`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SplitScan {
     /// Field `before`.
     pub before: String,
@@ -12826,7 +12819,7 @@ pub struct SplitScan {
 /// ledger.rs Limits: the limits that apply to one account: each of the account's own limits and, for each one it does not set, the limit of its unit (LDG-012).
 ///
 /// Specification type `ledger-limits-applying`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct LedgerLimitsApplying {
     /// Field `floor`.
     pub floor: Option<LedgerAmount>,
@@ -12842,7 +12835,7 @@ pub struct LedgerLimitsApplying {
 /// ledger.rs Limits.period_cap: a cap per period and its period, which are one limit.
 ///
 /// Specification type `ledger-period-cap`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct LedgerPeriodCap {
     /// Field `cap`.
     pub cap: u64,
@@ -12855,7 +12848,7 @@ pub struct LedgerPeriodCap {
 /// The civil year and month of a count of days since 1970-01-01 (proleptic Gregorian).
 ///
 /// Specification type `civil-month`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CivilMonth {
     /// Field `year`.
     pub year: i64,
@@ -12883,7 +12876,7 @@ pub struct EventKindDecl {
 /// One field of an object type that the reader may read, as strata_kernel::editor_rules::record_rules describes it to the editor: its identifier, label, shape as the rule language checker names it (bool, int, str, time, ref or list), the name of its declared type, whether it is required and whether it is unique.
 ///
 /// Specification type `editor-field-rule`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EditorFieldRule {
     /// Field `id`.
     pub id: String,
@@ -12904,7 +12897,7 @@ pub struct EditorFieldRule {
 /// The size limits the kernel holds every record to, in bytes or items: the longest string, the longest list, the longest unique value and the largest record.
 ///
 /// Specification type `editor-limits`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EditorLimits {
     /// Field `string-bytes`.
     pub string_bytes: u64,
@@ -12921,7 +12914,7 @@ pub struct EditorLimits {
 /// A constraint of an object type that the editor may evaluate: its identifier, its rule as printed text of the tenant rule language, and the message the kernel answers when the rule does not hold. A constraint that reads a field the reader may not read, or follows a reference, is not sent.
 ///
 /// Specification type `editor-constraint`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EditorConstraint {
     /// Field `id`.
     pub id: String,
@@ -12936,7 +12929,7 @@ pub struct EditorConstraint {
 /// A transition of a workflow that leaves the current state of the record: its name, the states it joins, its guard as printed text (absent when the server decides it: server-decides), and the readable fields it sets.
 ///
 /// Specification type `editor-transition`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EditorTransition {
     /// Field `name`.
     pub name: String,
@@ -12958,7 +12951,7 @@ pub struct EditorTransition {
 /// A workflow on a readable field of the object type: its identifier, its field, its initial state, the state the edited record is in (absent for a new record) and the transitions out of that state.
 ///
 /// Specification type `editor-workflow`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EditorWorkflow {
     /// Field `id`.
     pub id: String,
@@ -12978,7 +12971,7 @@ pub struct EditorWorkflow {
 /// What the kernel will check on a record of one object type, told to the editor for one reader (strata_kernel::editor_rules::record_rules, CMS-2960): the object type, its readable fields with their shapes, the size limits, the constraints with their rule text and messages, and the workflows. It names nothing of a field the reader may not read.
 ///
 /// Specification type `editor-record-rules`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EditorRecordRules {
     /// Field `object`.
     pub object: String,

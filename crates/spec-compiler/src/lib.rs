@@ -22,6 +22,7 @@
 //! a time.
 
 pub mod backend;
+pub mod boundary;
 pub mod budget;
 pub mod bundle;
 pub mod bundle_ui;

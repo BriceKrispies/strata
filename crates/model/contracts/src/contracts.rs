@@ -1304,7 +1304,7 @@ impl fmt::Display for ExecuteReadError {
 impl std::error::Error for ExecuteReadError {}
 
 /// The request of contract `provision-tenant`: Provision a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProvisionTenantRequest {
     /// Field `name`.
     pub name: String,
@@ -1320,7 +1320,7 @@ pub struct ProvisionTenantRequest {
 }
 
 /// The response of contract `provision-tenant`: Provision a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProvisionTenantResponse {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -1329,7 +1329,7 @@ pub struct ProvisionTenantResponse {
 }
 
 /// The errors of contract `provision-tenant`: Provision a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ProvisionTenantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1359,21 +1359,21 @@ impl fmt::Display for ProvisionTenantError {
 impl std::error::Error for ProvisionTenantError {}
 
 /// The request of contract `get-tenant`: Read a tenant directory entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetTenantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `get-tenant`: Read a tenant directory entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetTenantResponse {
     /// Field `tenant`.
     pub tenant: types::TenantDirectoryEntry,
 }
 
 /// The errors of contract `get-tenant`: Read a tenant directory entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum GetTenantError {
     /// The tenant named by the input does not exist.
     #[serde(rename = "not_found")]
@@ -1395,14 +1395,14 @@ impl fmt::Display for GetTenantError {
 impl std::error::Error for GetTenantError {}
 
 /// The request of contract `resolve-host`: Resolve a host name to a tenant and placement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ResolveHostRequest {
     /// Field `host`.
     pub host: types::Host,
 }
 
 /// The response of contract `resolve-host`: Resolve a host name to a tenant and placement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ResolveHostResponse {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -1411,7 +1411,7 @@ pub struct ResolveHostResponse {
 }
 
 /// The errors of contract `resolve-host`: Resolve a host name to a tenant and placement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ResolveHostError {
     /// The host name is bound to no tenant; no tenant database is contacted (EDG-011).
     #[serde(rename = "not_found")]
@@ -1429,7 +1429,7 @@ impl fmt::Display for ResolveHostError {
 impl std::error::Error for ResolveHostError {}
 
 /// The request of contract `suspend-tenant`: Suspend a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SuspendTenantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -1438,14 +1438,14 @@ pub struct SuspendTenantRequest {
 }
 
 /// The response of contract `suspend-tenant`: Suspend a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SuspendTenantResponse {
     /// Field `state`.
     pub state: types::TenantLifecycle,
 }
 
 /// The errors of contract `suspend-tenant`: Suspend a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SuspendTenantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1475,21 +1475,21 @@ impl fmt::Display for SuspendTenantError {
 impl std::error::Error for SuspendTenantError {}
 
 /// The request of contract `resume-tenant`: Resume a suspended tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ResumeTenantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `resume-tenant`: Resume a suspended tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ResumeTenantResponse {
     /// Field `state`.
     pub state: types::TenantLifecycle,
 }
 
 /// The errors of contract `resume-tenant`: Resume a suspended tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ResumeTenantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1519,21 +1519,21 @@ impl fmt::Display for ResumeTenantError {
 impl std::error::Error for ResumeTenantError {}
 
 /// The request of contract `export-tenant`: Export a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExportTenantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `export-tenant`: Export a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExportTenantResponse {
     /// Field `archive`.
     pub archive: types::ArchiveRef,
 }
 
 /// The errors of contract `export-tenant`: Export a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ExportTenantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1567,7 +1567,7 @@ impl fmt::Display for ExportTenantError {
 impl std::error::Error for ExportTenantError {}
 
 /// The request of contract `delete-tenant`: Delete a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeleteTenantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -1576,14 +1576,14 @@ pub struct DeleteTenantRequest {
 }
 
 /// The response of contract `delete-tenant`: Delete a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeleteTenantResponse {
     /// Field `certificate`.
     pub certificate: types::DeletionCertificate,
 }
 
 /// The errors of contract `delete-tenant`: Delete a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DeleteTenantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1625,21 +1625,21 @@ impl fmt::Display for DeleteTenantError {
 impl std::error::Error for DeleteTenantError {}
 
 /// The request of contract `cancel-tenant-deletion`: Cancel a pending tenant deletion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CancelTenantDeletionRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `cancel-tenant-deletion`: Cancel a pending tenant deletion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CancelTenantDeletionResponse {
     /// Field `state`.
     pub state: types::TenantLifecycle,
 }
 
 /// The errors of contract `cancel-tenant-deletion`: Cancel a pending tenant deletion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CancelTenantDeletionError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1673,7 +1673,7 @@ impl fmt::Display for CancelTenantDeletionError {
 impl std::error::Error for CancelTenantDeletionError {}
 
 /// The request of contract `restore-tenant`: Restore a tenant to a point in time.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RestoreTenantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -1682,7 +1682,7 @@ pub struct RestoreTenantRequest {
 }
 
 /// The response of contract `restore-tenant`: Restore a tenant to a point in time.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RestoreTenantResponse {
     /// Field `revision`.
     pub revision: u64,
@@ -1695,7 +1695,7 @@ pub struct RestoreTenantResponse {
 }
 
 /// The errors of contract `restore-tenant`: Restore a tenant to a point in time.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RestoreTenantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1733,7 +1733,7 @@ impl fmt::Display for RestoreTenantError {
 impl std::error::Error for RestoreTenantError {}
 
 /// The request of contract `start-sandbox`: Start a sandbox tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StartSandboxRequest {
     /// Field `template`.
     pub template: types::TemplateId,
@@ -1744,14 +1744,14 @@ pub struct StartSandboxRequest {
 }
 
 /// The response of contract `start-sandbox`: Start a sandbox tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StartSandboxResponse {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The errors of contract `start-sandbox`: Start a sandbox tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum StartSandboxError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1781,21 +1781,21 @@ impl fmt::Display for StartSandboxError {
 impl std::error::Error for StartSandboxError {}
 
 /// The request of contract `keep-sandbox`: Keep a sandbox tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct KeepSandboxRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `keep-sandbox`: Keep a sandbox tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct KeepSandboxResponse {
     /// Field `kind`.
     pub kind: types::TenantKind,
 }
 
 /// The errors of contract `keep-sandbox`: Keep a sandbox tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum KeepSandboxError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1825,7 +1825,7 @@ impl fmt::Display for KeepSandboxError {
 impl std::error::Error for KeepSandboxError {}
 
 /// The request of contract `bind-domain`: Bind a domain name to a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct BindDomainRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -1834,14 +1834,14 @@ pub struct BindDomainRequest {
 }
 
 /// The response of contract `bind-domain`: Bind a domain name to a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct BindDomainResponse {
     /// Field `binding`.
     pub binding: types::DomainBinding,
 }
 
 /// The errors of contract `bind-domain`: Bind a domain name to a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum BindDomainError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1879,7 +1879,7 @@ impl fmt::Display for BindDomainError {
 impl std::error::Error for BindDomainError {}
 
 /// The request of contract `remove-domain-binding`: Remove a domain binding.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RemoveDomainBindingRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -1888,11 +1888,11 @@ pub struct RemoveDomainBindingRequest {
 }
 
 /// The response of contract `remove-domain-binding`: Remove a domain binding.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RemoveDomainBindingResponse {}
 
 /// The errors of contract `remove-domain-binding`: Remove a domain binding.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RemoveDomainBindingError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1926,7 +1926,7 @@ impl fmt::Display for RemoveDomainBindingError {
 impl std::error::Error for RemoveDomainBindingError {}
 
 /// The request of contract `change-plan`: Change the plan of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ChangePlanRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -1935,14 +1935,14 @@ pub struct ChangePlanRequest {
 }
 
 /// The response of contract `change-plan`: Change the plan of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ChangePlanResponse {
     /// Field `plan`.
     pub plan: types::PlanId,
 }
 
 /// The errors of contract `change-plan`: Change the plan of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ChangePlanError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1984,7 +1984,7 @@ impl fmt::Display for ChangePlanError {
 impl std::error::Error for ChangePlanError {}
 
 /// The request of contract `find-due-tenants`: Find tenants that have due work.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct FindDueTenantsRequest {
     /// Field `now`.
     pub now: prelude::Timestamp,
@@ -1993,14 +1993,14 @@ pub struct FindDueTenantsRequest {
 }
 
 /// The response of contract `find-due-tenants`: Find tenants that have due work.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct FindDueTenantsResponse {
     /// Field `tenants`.
     pub tenants: Vec<types::WakeEntry>,
 }
 
 /// The errors of contract `find-due-tenants`: Find tenants that have due work.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum FindDueTenantsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2018,7 +2018,7 @@ impl fmt::Display for FindDueTenantsError {
 impl std::error::Error for FindDueTenantsError {}
 
 /// The request of contract `record-next-due`: Record when a tenant next has work.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RecordNextDueRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -2028,11 +2028,11 @@ pub struct RecordNextDueRequest {
 }
 
 /// The response of contract `record-next-due`: Record when a tenant next has work.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RecordNextDueResponse {}
 
 /// The errors of contract `record-next-due`: Record when a tenant next has work.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RecordNextDueError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2054,7 +2054,7 @@ impl fmt::Display for RecordNextDueError {
 impl std::error::Error for RecordNextDueError {}
 
 /// The request of contract `apply-layout-change`: Apply a storage layout change to one tenant database.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ApplyLayoutChangeRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -2065,14 +2065,14 @@ pub struct ApplyLayoutChangeRequest {
 }
 
 /// The response of contract `apply-layout-change`: Apply a storage layout change to one tenant database.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ApplyLayoutChangeResponse {
     /// Field `outcome`.
     pub outcome: types::LayoutOutcome,
 }
 
 /// The errors of contract `apply-layout-change`: Apply a storage layout change to one tenant database.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ApplyLayoutChangeError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2129,7 +2129,7 @@ impl fmt::Display for HealthCheckError {
 impl std::error::Error for HealthCheckError {}
 
 /// The request of contract `sign-in-with-password`: Sign in with a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignInWithPasswordRequest {
     /// Field `login`.
     pub login: String,
@@ -2138,7 +2138,7 @@ pub struct SignInWithPasswordRequest {
 }
 
 /// The response of contract `sign-in-with-password`: Sign in with a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignInWithPasswordResponse {
     /// Field `token`.
     pub token: types::Secret,
@@ -2147,7 +2147,7 @@ pub struct SignInWithPasswordResponse {
 }
 
 /// The errors of contract `sign-in-with-password`: Sign in with a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SignInWithPasswordError {
     /// The credentials do not match, the account does not exist or the factor is missing; the response does not say which (IDN-255, UXA-202).
     #[serde(rename = "unauthenticated")]
@@ -2173,18 +2173,18 @@ impl fmt::Display for SignInWithPasswordError {
 impl std::error::Error for SignInWithPasswordError {}
 
 /// The request of contract `request-sign-in-link`: Request an emailed sign-in link.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RequestSignInLinkRequest {
     /// Field `email`.
     pub email: types::EmailAddress,
 }
 
 /// The response of contract `request-sign-in-link`: Request an emailed sign-in link.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RequestSignInLinkResponse {}
 
 /// The errors of contract `request-sign-in-link`: Request an emailed sign-in link.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RequestSignInLinkError {
     /// The caller exceeded a limit that applies to it.
     #[serde(rename = "throttled")]
@@ -2206,7 +2206,7 @@ impl fmt::Display for RequestSignInLinkError {
 impl std::error::Error for RequestSignInLinkError {}
 
 /// The request of contract `sign-in-with-link`: Sign in with an emailed link.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignInWithLinkRequest {
     /// Field `challenge`.
     pub challenge: types::ChallengeId,
@@ -2215,7 +2215,7 @@ pub struct SignInWithLinkRequest {
 }
 
 /// The response of contract `sign-in-with-link`: Sign in with an emailed link.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignInWithLinkResponse {
     /// Field `token`.
     pub token: types::Secret,
@@ -2224,7 +2224,7 @@ pub struct SignInWithLinkResponse {
 }
 
 /// The errors of contract `sign-in-with-link`: Sign in with an emailed link.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SignInWithLinkError {
     /// The credentials do not match, the account does not exist or the factor is missing; the response does not say which (IDN-255, UXA-202).
     #[serde(rename = "unauthenticated")]
@@ -2246,7 +2246,7 @@ impl fmt::Display for SignInWithLinkError {
 impl std::error::Error for SignInWithLinkError {}
 
 /// The request of contract `sign-in-with-passkey`: Sign in with a passkey.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignInWithPasskeyRequest {
     /// Field `challenge`.
     pub challenge: types::ChallengeId,
@@ -2255,7 +2255,7 @@ pub struct SignInWithPasskeyRequest {
 }
 
 /// The response of contract `sign-in-with-passkey`: Sign in with a passkey.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignInWithPasskeyResponse {
     /// Field `token`.
     pub token: types::Secret,
@@ -2264,7 +2264,7 @@ pub struct SignInWithPasskeyResponse {
 }
 
 /// The errors of contract `sign-in-with-passkey`: Sign in with a passkey.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SignInWithPasskeyError {
     /// The credentials do not match, the account does not exist or the factor is missing; the response does not say which (IDN-255, UXA-202).
     #[serde(rename = "unauthenticated")]
@@ -2286,7 +2286,7 @@ impl fmt::Display for SignInWithPasskeyError {
 impl std::error::Error for SignInWithPasskeyError {}
 
 /// The request of contract `register-passkey`: Register a passkey.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RegisterPasskeyRequest {
     /// The challenge that start-passkey-registration answered, of this session.
     pub challenge: types::ChallengeId,
@@ -2298,14 +2298,14 @@ pub struct RegisterPasskeyRequest {
 }
 
 /// The response of contract `register-passkey`: Register a passkey.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RegisterPasskeyResponse {
     /// The passkey that was added: id, name, created_at and last_used_at.
     pub passkey: serde_json::Value,
 }
 
 /// The errors of contract `register-passkey`: Register a passkey.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RegisterPasskeyError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2335,7 +2335,7 @@ impl fmt::Display for RegisterPasskeyError {
 impl std::error::Error for RegisterPasskeyError {}
 
 /// The request of contract `verify-second-factor`: Verify a second factor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifySecondFactorRequest {
     /// Field `challenge`.
     pub challenge: types::ChallengeId,
@@ -2344,7 +2344,7 @@ pub struct VerifySecondFactorRequest {
 }
 
 /// The response of contract `verify-second-factor`: Verify a second factor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifySecondFactorResponse {
     /// Field `token`.
     pub token: types::Secret,
@@ -2353,7 +2353,7 @@ pub struct VerifySecondFactorResponse {
 }
 
 /// The errors of contract `verify-second-factor`: Verify a second factor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum VerifySecondFactorError {
     /// The credentials do not match, the account does not exist or the factor is missing; the response does not say which (IDN-255, UXA-202).
     #[serde(rename = "unauthenticated")]
@@ -2379,7 +2379,7 @@ impl fmt::Display for VerifySecondFactorError {
 impl std::error::Error for VerifySecondFactorError {}
 
 /// The request of contract `sign-up`: Sign up with a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignUpRequest {
     /// Field `email`.
     pub email: types::EmailAddress,
@@ -2390,11 +2390,11 @@ pub struct SignUpRequest {
 }
 
 /// The response of contract `sign-up`: Sign up with a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignUpResponse {}
 
 /// The errors of contract `sign-up`: Sign up with a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SignUpError {
     /// The password appears on the breached-password list of the realm (IDN-252).
     #[serde(rename = "invalid")]
@@ -2416,18 +2416,18 @@ impl fmt::Display for SignUpError {
 impl std::error::Error for SignUpError {}
 
 /// The request of contract `sign-out`: Sign out.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignOutRequest {
     /// Field `session-id`.
     pub session_id: types::SessionId,
 }
 
 /// The response of contract `sign-out`: Sign out.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignOutResponse {}
 
 /// The errors of contract `sign-out`: Sign out.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SignOutError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2445,7 +2445,7 @@ impl fmt::Display for SignOutError {
 impl std::error::Error for SignOutError {}
 
 /// The request of contract `look-up-session`: Look up a session.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct LookUpSessionRequest {
     /// Field `token`.
     pub token: types::Secret,
@@ -2454,14 +2454,14 @@ pub struct LookUpSessionRequest {
 }
 
 /// The response of contract `look-up-session`: Look up a session.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct LookUpSessionResponse {
     /// Field `assertion`.
     pub assertion: types::IdentityAssertion,
 }
 
 /// The errors of contract `look-up-session`: Look up a session.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum LookUpSessionError {
     /// The session is unknown, ended or revoked.
     #[serde(rename = "unauthenticated")]
@@ -2483,18 +2483,18 @@ impl fmt::Display for LookUpSessionError {
 impl std::error::Error for LookUpSessionError {}
 
 /// The request of contract `list-sessions`: List the sessions of the caller.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListSessionsRequest {}
 
 /// The response of contract `list-sessions`: List the sessions of the caller.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListSessionsResponse {
     /// Field `sessions`.
     pub sessions: Vec<types::SessionSummary>,
 }
 
 /// The errors of contract `list-sessions`: List the sessions of the caller.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ListSessionsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2512,18 +2512,18 @@ impl fmt::Display for ListSessionsError {
 impl std::error::Error for ListSessionsError {}
 
 /// The request of contract `revoke-session`: Revoke a session.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RevokeSessionRequest {
     /// Field `session-id`.
     pub session_id: types::SessionId,
 }
 
 /// The response of contract `revoke-session`: Revoke a session.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RevokeSessionResponse {}
 
 /// The errors of contract `revoke-session`: Revoke a session.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RevokeSessionError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2553,7 +2553,7 @@ impl fmt::Display for RevokeSessionError {
 impl std::error::Error for RevokeSessionError {}
 
 /// The request of contract `change-password`: Change a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ChangePasswordRequest {
     /// Field `current`.
     pub current: types::Secret,
@@ -2562,11 +2562,11 @@ pub struct ChangePasswordRequest {
 }
 
 /// The response of contract `change-password`: Change a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ChangePasswordResponse {}
 
 /// The errors of contract `change-password`: Change a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ChangePasswordError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2592,21 +2592,21 @@ impl fmt::Display for ChangePasswordError {
 impl std::error::Error for ChangePasswordError {}
 
 /// The request of contract `recover-account`: Recover an account.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RecoverAccountRequest {
     /// Field `email`.
     pub email: types::EmailAddress,
 }
 
 /// The response of contract `recover-account`: Recover an account.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RecoverAccountResponse {
     /// True for every well-formed request, whether or not the address has a recoverable account.
     pub requested: bool,
 }
 
 /// The errors of contract `recover-account`: Recover an account.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RecoverAccountError {
     /// The request did not come from one of the site's own pages.
     #[serde(rename = "forbidden")]
@@ -2628,7 +2628,7 @@ impl fmt::Display for RecoverAccountError {
 impl std::error::Error for RecoverAccountError {}
 
 /// The request of contract `accept-invitation`: Accept an invitation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AcceptInvitationRequest {
     /// Field `invitation`.
     pub invitation: types::Secret,
@@ -2637,14 +2637,14 @@ pub struct AcceptInvitationRequest {
 }
 
 /// The response of contract `accept-invitation`: Accept an invitation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AcceptInvitationResponse {
     /// Field `principal`.
     pub principal: types::PrincipalId,
 }
 
 /// The errors of contract `accept-invitation`: Accept an invitation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum AcceptInvitationError {
     /// The invitation is unknown, used or names another address.
     #[serde(rename = "invalid")]
@@ -2662,7 +2662,7 @@ impl fmt::Display for AcceptInvitationError {
 impl std::error::Error for AcceptInvitationError {}
 
 /// The request of contract `configure-realm`: Change the realm configuration.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConfigureRealmRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -2674,14 +2674,14 @@ pub struct ConfigureRealmRequest {
 }
 
 /// The response of contract `configure-realm`: Change the realm configuration.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConfigureRealmResponse {
     /// Field `projection`.
     pub projection: types::ProjectionSummary,
 }
 
 /// The errors of contract `configure-realm`: Change the realm configuration.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ConfigureRealmError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2715,7 +2715,7 @@ impl fmt::Display for ConfigureRealmError {
 impl std::error::Error for ConfigureRealmError {}
 
 /// The request of contract `end-principal-sessions`: End every session of a principal.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EndPrincipalSessionsRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -2724,14 +2724,14 @@ pub struct EndPrincipalSessionsRequest {
 }
 
 /// The response of contract `end-principal-sessions`: End every session of a principal.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EndPrincipalSessionsResponse {
     /// Field `ended`.
     pub ended: u64,
 }
 
 /// The errors of contract `end-principal-sessions`: End every session of a principal.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum EndPrincipalSessionsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2753,7 +2753,7 @@ impl fmt::Display for EndPrincipalSessionsError {
 impl std::error::Error for EndPrincipalSessionsError {}
 
 /// The request of contract `start-oidc-sign-in`: Start an OpenID Connect sign-in.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StartOidcSignInRequest {
     /// Field `provider`.
     pub provider: types::ProviderId,
@@ -2763,14 +2763,14 @@ pub struct StartOidcSignInRequest {
 }
 
 /// The response of contract `start-oidc-sign-in`: Start an OpenID Connect sign-in.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StartOidcSignInResponse {
     /// Field `redirect`.
     pub redirect: types::Url,
 }
 
 /// The errors of contract `start-oidc-sign-in`: Start an OpenID Connect sign-in.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum StartOidcSignInError {
     /// The provider is unknown or the return address is not a path on the host of the tenant (FED-250).
     #[serde(rename = "invalid")]
@@ -2792,7 +2792,7 @@ impl fmt::Display for StartOidcSignInError {
 impl std::error::Error for StartOidcSignInError {}
 
 /// The request of contract `complete-oidc-sign-in`: Complete an OpenID Connect sign-in.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CompleteOidcSignInRequest {
     /// Field `state`.
     pub state: types::Secret,
@@ -2801,7 +2801,7 @@ pub struct CompleteOidcSignInRequest {
 }
 
 /// The response of contract `complete-oidc-sign-in`: Complete an OpenID Connect sign-in.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CompleteOidcSignInResponse {
     /// Field `token`.
     pub token: types::Secret,
@@ -2810,7 +2810,7 @@ pub struct CompleteOidcSignInResponse {
 }
 
 /// The errors of contract `complete-oidc-sign-in`: Complete an OpenID Connect sign-in.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CompleteOidcSignInError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2836,21 +2836,21 @@ impl fmt::Display for CompleteOidcSignInError {
 impl std::error::Error for CompleteOidcSignInError {}
 
 /// The request of contract `serve-saml-metadata`: Serve SAML service provider metadata.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ServeSamlMetadataRequest {
     /// The identifier of an enabled SAML provider of this tenant, at most 32 bytes, as the last segment of the address.
     pub provider: String,
 }
 
 /// The response of contract `serve-saml-metadata`: Serve SAML service provider metadata.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ServeSamlMetadataResponse {
     /// The service provider metadata as XML, served as application/samlmetadata+xml: the entity identifier and the assertion consumer address of the site's published origin.
     pub metadata: Vec<u8>,
 }
 
 /// The errors of contract `serve-saml-metadata`: Serve SAML service provider metadata.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ServeSamlMetadataError {
     /// The provider does not exist, is not enabled for this tenant, or the site has no published origin to name.
     #[serde(rename = "not_found")]
@@ -2872,7 +2872,7 @@ impl fmt::Display for ServeSamlMetadataError {
 impl std::error::Error for ServeSamlMetadataError {}
 
 /// The request of contract `consume-saml-assertion`: Consume a SAML assertion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConsumeSamlAssertionRequest {
     /// Field `response`.
     pub response: Vec<u8>,
@@ -2882,7 +2882,7 @@ pub struct ConsumeSamlAssertionRequest {
 }
 
 /// The response of contract `consume-saml-assertion`: Consume a SAML assertion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConsumeSamlAssertionResponse {
     /// Field `token`.
     pub token: types::Secret,
@@ -2891,7 +2891,7 @@ pub struct ConsumeSamlAssertionResponse {
 }
 
 /// The errors of contract `consume-saml-assertion`: Consume a SAML assertion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ConsumeSamlAssertionError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2913,7 +2913,7 @@ impl fmt::Display for ConsumeSamlAssertionError {
 impl std::error::Error for ConsumeSamlAssertionError {}
 
 /// The request of contract `provision-user`: Provision a person by SCIM.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProvisionUserRequest {
     /// The login of the person (userName of the SCIM resource), at most 254 characters; the account is made under it.
     pub user_name: String,
@@ -2929,14 +2929,14 @@ pub struct ProvisionUserRequest {
 }
 
 /// The response of contract `provision-user`: Provision a person by SCIM.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProvisionUserResponse {
     /// The id of the SCIM resource that answers 201.
     pub principal: types::PrincipalId,
 }
 
 /// The errors of contract `provision-user`: Provision a person by SCIM.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ProvisionUserError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2966,18 +2966,18 @@ impl fmt::Display for ProvisionUserError {
 impl std::error::Error for ProvisionUserError {}
 
 /// The request of contract `deprovision-user`: Deactivate a person by SCIM.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeprovisionUserRequest {
     /// Field `principal`.
     pub principal: types::PrincipalId,
 }
 
 /// The response of contract `deprovision-user`: Deactivate a person by SCIM.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeprovisionUserResponse {}
 
 /// The errors of contract `deprovision-user`: Deactivate a person by SCIM.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DeprovisionUserError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -2999,7 +2999,7 @@ impl fmt::Display for DeprovisionUserError {
 impl std::error::Error for DeprovisionUserError {}
 
 /// The request of contract `map-group`: Change the roles of a principal through a SCIM group.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct MapGroupRequest {
     /// Field `group`.
     pub group: String,
@@ -3008,11 +3008,11 @@ pub struct MapGroupRequest {
 }
 
 /// The response of contract `map-group`: Change the roles of a principal through a SCIM group.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct MapGroupResponse {}
 
 /// The errors of contract `map-group`: Change the roles of a principal through a SCIM group.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum MapGroupError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -3034,7 +3034,7 @@ impl fmt::Display for MapGroupError {
 impl std::error::Error for MapGroupError {}
 
 /// The request of contract `issue-access-token`: Issue an access token by client credentials.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IssueAccessTokenRequest {
     /// Field `client`.
     pub client: types::PrincipalId,
@@ -3048,7 +3048,7 @@ pub struct IssueAccessTokenRequest {
 }
 
 /// The response of contract `issue-access-token`: Issue an access token by client credentials.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IssueAccessTokenResponse {
     /// Field `access-token`.
     pub access_token: types::Secret,
@@ -3059,7 +3059,7 @@ pub struct IssueAccessTokenResponse {
 }
 
 /// The errors of contract `issue-access-token`: Issue an access token by client credentials.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum IssueAccessTokenError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -3081,7 +3081,7 @@ impl fmt::Display for IssueAccessTokenError {
 impl std::error::Error for IssueAccessTokenError {}
 
 /// The request of contract `exchange-token`: Exchange a token for a delegated token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExchangeTokenRequest {
     /// Field `subject-token`.
     pub subject_token: types::Secret,
@@ -3094,7 +3094,7 @@ pub struct ExchangeTokenRequest {
 }
 
 /// The response of contract `exchange-token`: Exchange a token for a delegated token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExchangeTokenResponse {
     /// Field `access-token`.
     pub access_token: types::Secret,
@@ -3103,7 +3103,7 @@ pub struct ExchangeTokenResponse {
 }
 
 /// The errors of contract `exchange-token`: Exchange a token for a delegated token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ExchangeTokenError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -3129,14 +3129,14 @@ impl fmt::Display for ExchangeTokenError {
 impl std::error::Error for ExchangeTokenError {}
 
 /// The request of contract `introspect-token`: Introspect a token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IntrospectTokenRequest {
     /// Field `token`.
     pub token: types::Secret,
 }
 
 /// The response of contract `introspect-token`: Introspect a token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IntrospectTokenResponse {
     /// Field `active`.
     pub active: bool,
@@ -3152,7 +3152,7 @@ pub struct IntrospectTokenResponse {
 }
 
 /// The errors of contract `introspect-token`: Introspect a token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum IntrospectTokenError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -3170,18 +3170,18 @@ impl fmt::Display for IntrospectTokenError {
 impl std::error::Error for IntrospectTokenError {}
 
 /// The request of contract `list-signing-keys`: Publish the signing keys.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListSigningKeysRequest {}
 
 /// The response of contract `list-signing-keys`: Publish the signing keys.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListSigningKeysResponse {
     /// Field `keys`.
     pub keys: Vec<types::PublicKey>,
 }
 
 /// The errors of contract `list-signing-keys`: Publish the signing keys.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ListSigningKeysError {}
 
 impl fmt::Display for ListSigningKeysError {
@@ -3193,14 +3193,14 @@ impl fmt::Display for ListSigningKeysError {
 impl std::error::Error for ListSigningKeysError {}
 
 /// The request of contract `revoke-grant`: Revoke a grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RevokeGrantRequest {
     /// The identifier of the delegation, at most 96 bytes.
     pub grant: String,
 }
 
 /// The response of contract `revoke-grant`: Revoke a grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RevokeGrantResponse {
     /// Field `grant`.
     pub grant: String,
@@ -3209,7 +3209,7 @@ pub struct RevokeGrantResponse {
 }
 
 /// The errors of contract `revoke-grant`: Revoke a grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RevokeGrantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -3235,7 +3235,7 @@ impl fmt::Display for RevokeGrantError {
 impl std::error::Error for RevokeGrantError {}
 
 /// The request of contract `create-grant`: Create a grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CreateGrantRequest {
     /// The identifier of a live service account of the tenant that is to hold the delegation, at most 96 bytes. The principal that delegates is the signed-in caller; the body does not name one.
     pub agent: String,
@@ -3250,7 +3250,7 @@ pub struct CreateGrantRequest {
 }
 
 /// The response of contract `create-grant`: Create a grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CreateGrantResponse {
     /// The identifier of the delegation (grt_ and 16 hexadecimal digits).
     pub grant: String,
@@ -3261,7 +3261,7 @@ pub struct CreateGrantResponse {
 }
 
 /// The errors of contract `create-grant`: Create a grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CreateGrantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -3287,14 +3287,14 @@ impl fmt::Display for CreateGrantError {
 impl std::error::Error for CreateGrantError {}
 
 /// The request of contract `rotate-client-secret`: Rotate a client secret.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RotateClientSecretRequest {
     /// The identifier of the service account (svc: and 16 hexadecimal digits), at most 96 bytes.
     pub id: String,
 }
 
 /// The response of contract `rotate-client-secret`: Rotate a client secret.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RotateClientSecretResponse {
     /// The new secret, in this answer only.
     pub secret: types::Secret,
@@ -3309,7 +3309,7 @@ pub struct RotateClientSecretResponse {
 }
 
 /// The errors of contract `rotate-client-secret`: Rotate a client secret.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RotateClientSecretError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -3683,7 +3683,7 @@ impl fmt::Display for DefineScheduleError {
 impl std::error::Error for DefineScheduleError {}
 
 /// The request of contract `fire-trigger`: Create the jobs of the triggers subscribed to an event.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct FireTriggerRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -3694,14 +3694,14 @@ pub struct FireTriggerRequest {
 }
 
 /// The response of contract `fire-trigger`: Create the jobs of the triggers subscribed to an event.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct FireTriggerResponse {
     /// Field `jobs`.
     pub jobs: Vec<types::JobId>,
 }
 
 /// The errors of contract `fire-trigger`: Create the jobs of the triggers subscribed to an event.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum FireTriggerError {}
 
 impl fmt::Display for FireTriggerError {
@@ -3831,7 +3831,7 @@ impl fmt::Display for StartWorkflowRunError {
 impl std::error::Error for StartWorkflowRunError {}
 
 /// The request of contract `advance-workflow-run`: Advance a workflow run by one step.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AdvanceWorkflowRunRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -3840,7 +3840,7 @@ pub struct AdvanceWorkflowRunRequest {
 }
 
 /// The response of contract `advance-workflow-run`: Advance a workflow run by one step.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AdvanceWorkflowRunResponse {
     /// Field `state`.
     pub state: types::RunState,
@@ -3849,7 +3849,7 @@ pub struct AdvanceWorkflowRunResponse {
 }
 
 /// The errors of contract `advance-workflow-run`: Advance a workflow run by one step.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum AdvanceWorkflowRunError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -3936,7 +3936,7 @@ impl std::error::Error for ApproveWorkflowStepError {}
 /// The request of contract `deliver-view`: Deliver a view of published content.
 ///
 /// A facade (D-8140): the target change of this contract was to stop being a gateway operation of its own and become the address of the generic view contract read-view (CT-264). The browser reads a view with GET /api/view, which takes the path, the fields, cursor and limit parameters and the language beside it; the backend view operation (ops.rs view, assemble-view) reads each section as one page of its query and narrows the rows after the kernel has redacted them. The gateway resolves the tenant from the host name and passes it on, so host is not a parameter of the route. Every page read (CT-239..CT-253) is a facade onto the same contract.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeliverViewRequest {
     /// Field `host`.
     pub host: types::Host,
@@ -3960,7 +3960,7 @@ pub struct DeliverViewRequest {
 }
 
 /// The response of contract `deliver-view`: Deliver a view of published content.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DeliverViewResponse {
     /// Field `view`.
     pub view: String,
@@ -3986,7 +3986,7 @@ pub struct DeliverViewResponse {
 }
 
 /// The errors of contract `deliver-view`: Deliver a view of published content.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DeliverViewError {
     /// The host or the page does not exist for this tenant.
     #[serde(rename = "not_found")]
@@ -4016,7 +4016,7 @@ impl fmt::Display for DeliverViewError {
 impl std::error::Error for DeliverViewError {}
 
 /// The request of contract `run-named-query`: Run a named query.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RunNamedQueryRequest {
     /// Field `host`.
     pub host: types::Host,
@@ -4037,7 +4037,7 @@ pub struct RunNamedQueryRequest {
 }
 
 /// The response of contract `run-named-query`: Run a named query.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RunNamedQueryResponse {
     /// Field `rows`.
     pub rows: Vec<types::ValueMap>,
@@ -4047,7 +4047,7 @@ pub struct RunNamedQueryResponse {
 }
 
 /// The errors of contract `run-named-query`: Run a named query.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RunNamedQueryError {
     /// The query does not exist for this tenant.
     #[serde(rename = "not_found")]
@@ -4073,21 +4073,21 @@ impl fmt::Display for RunNamedQueryError {
 impl std::error::Error for RunNamedQueryError {}
 
 /// The request of contract `list-record-versions`: List the published versions of a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListRecordVersionsRequest {
     /// Field `record`.
     pub record: types::RecordId,
 }
 
 /// The response of contract `list-record-versions`: List the published versions of a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListRecordVersionsResponse {
     /// Field `versions`.
     pub versions: Vec<types::RecordVersion>,
 }
 
 /// The errors of contract `list-record-versions`: List the published versions of a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ListRecordVersionsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4113,7 +4113,7 @@ impl fmt::Display for ListRecordVersionsError {
 impl std::error::Error for ListRecordVersionsError {}
 
 /// The request of contract `restore-record-version`: Restore an earlier version of a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RestoreRecordVersionRequest {
     /// Field `record`.
     pub record: types::RecordId,
@@ -4122,14 +4122,14 @@ pub struct RestoreRecordVersionRequest {
 }
 
 /// The response of contract `restore-record-version`: Restore an earlier version of a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RestoreRecordVersionResponse {
     /// Field `version`.
     pub version: u64,
 }
 
 /// The errors of contract `restore-record-version`: Restore an earlier version of a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RestoreRecordVersionError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4155,7 +4155,7 @@ impl fmt::Display for RestoreRecordVersionError {
 impl std::error::Error for RestoreRecordVersionError {}
 
 /// The request of contract `show-preview`: Show a preview of unpublished content.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ShowPreviewRequest {
     /// Field `host`.
     pub host: types::Host,
@@ -4167,14 +4167,14 @@ pub struct ShowPreviewRequest {
 }
 
 /// The response of contract `show-preview`: Show a preview of unpublished content.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ShowPreviewResponse {
     /// Field `view`.
     pub view: types::ViewData,
 }
 
 /// The errors of contract `show-preview`: Show a preview of unpublished content.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ShowPreviewError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4239,21 +4239,21 @@ impl fmt::Display for SubscribeEventsError {
 impl std::error::Error for SubscribeEventsError {}
 
 /// The request of contract `serve-sitemap`: Serve the sitemap of a site.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ServeSitemapRequest {
     /// Field `host`.
     pub host: types::Host,
 }
 
 /// The response of contract `serve-sitemap`: Serve the sitemap of a site.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ServeSitemapResponse {
     /// Field `sitemap`.
     pub sitemap: Vec<u8>,
 }
 
 /// The errors of contract `serve-sitemap`: Serve the sitemap of a site.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ServeSitemapError {
     /// The site does not exist for this tenant.
     #[serde(rename = "not_found")]
@@ -4271,7 +4271,7 @@ impl fmt::Display for ServeSitemapError {
 impl std::error::Error for ServeSitemapError {}
 
 /// The request of contract `serve-feed`: Serve a syndication feed of a collection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ServeFeedRequest {
     /// Field `host`.
     pub host: types::Host,
@@ -4280,14 +4280,14 @@ pub struct ServeFeedRequest {
 }
 
 /// The response of contract `serve-feed`: Serve a syndication feed of a collection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ServeFeedResponse {
     /// Field `feed`.
     pub feed: Vec<u8>,
 }
 
 /// The errors of contract `serve-feed`: Serve a syndication feed of a collection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ServeFeedError {
     /// The collection does not exist for this tenant.
     #[serde(rename = "not_found")]
@@ -4305,7 +4305,7 @@ impl fmt::Display for ServeFeedError {
 impl std::error::Error for ServeFeedError {}
 
 /// The request of contract `record-consent`: Record a consent decision of a visitor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RecordConsentRequest {
     /// Field `host`.
     pub host: types::Host,
@@ -4320,14 +4320,14 @@ pub struct RecordConsentRequest {
 }
 
 /// The response of contract `record-consent`: Record a consent decision of a visitor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RecordConsentResponse {
     /// Field `consent`.
     pub consent: types::ConsentId,
 }
 
 /// The errors of contract `record-consent`: Record a consent decision of a visitor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RecordConsentError {
     /// The purpose is unknown.
     #[serde(rename = "invalid")]
@@ -4345,7 +4345,7 @@ impl fmt::Display for RecordConsentError {
 impl std::error::Error for RecordConsentError {}
 
 /// The request of contract `describe-delivery`: Describe the delivery interface.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DescribeDeliveryRequest {
     /// Field `version`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4353,14 +4353,14 @@ pub struct DescribeDeliveryRequest {
 }
 
 /// The response of contract `describe-delivery`: Describe the delivery interface.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DescribeDeliveryResponse {
     /// Field `description`.
     pub description: Vec<u8>,
 }
 
 /// The errors of contract `describe-delivery`: Describe the delivery interface.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DescribeDeliveryError {}
 
 impl fmt::Display for DescribeDeliveryError {
@@ -4372,18 +4372,18 @@ impl fmt::Display for DescribeDeliveryError {
 impl std::error::Error for DescribeDeliveryError {}
 
 /// The request of contract `purge-by-surrogate-key`: Purge edge copies by surrogate key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PurgeBySurrogateKeyRequest {
     /// Field `keys`.
     pub keys: Vec<String>,
 }
 
 /// The response of contract `purge-by-surrogate-key`: Purge edge copies by surrogate key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PurgeBySurrogateKeyResponse {}
 
 /// The errors of contract `purge-by-surrogate-key`: Purge edge copies by surrogate key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum PurgeBySurrogateKeyError {
     /// The control interface of the network did not answer.
     #[serde(rename = "unavailable")]
@@ -4401,18 +4401,18 @@ impl fmt::Display for PurgeBySurrogateKeyError {
 impl std::error::Error for PurgeBySurrogateKeyError {}
 
 /// The request of contract `purge-host`: Purge every edge copy of a host.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PurgeHostRequest {
     /// Field `host`.
     pub host: types::Host,
 }
 
 /// The response of contract `purge-host`: Purge every edge copy of a host.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PurgeHostResponse {}
 
 /// The errors of contract `purge-host`: Purge every edge copy of a host.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum PurgeHostError {
     /// The control interface of the network did not answer.
     #[serde(rename = "unavailable")]
@@ -4430,7 +4430,7 @@ impl fmt::Display for PurgeHostError {
 impl std::error::Error for PurgeHostError {}
 
 /// The request of contract `register-edge-domain`: Register or remove a tenant domain at the edge.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RegisterEdgeDomainRequest {
     /// Field `host`.
     pub host: types::Host,
@@ -4439,14 +4439,14 @@ pub struct RegisterEdgeDomainRequest {
 }
 
 /// The response of contract `register-edge-domain`: Register or remove a tenant domain at the edge.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RegisterEdgeDomainResponse {
     /// Field `certificate-state`.
     pub certificate_state: types::CertificateState,
 }
 
 /// The errors of contract `register-edge-domain`: Register or remove a tenant domain at the edge.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RegisterEdgeDomainError {
     /// The certificate authority record of the domain does not permit issuing (EDG-254).
     #[serde(rename = "invalid")]
@@ -4521,7 +4521,7 @@ impl fmt::Display for SignMediaAddressError {
 impl std::error::Error for SignMediaAddressError {}
 
 /// The request of contract `set-storability-directives`: Set the storability directives of a response.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SetStorabilityDirectivesRequest {
     /// Field `principal-dependent`.
     pub principal_dependent: bool,
@@ -4530,7 +4530,7 @@ pub struct SetStorabilityDirectivesRequest {
 }
 
 /// The response of contract `set-storability-directives`: Set the storability directives of a response.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SetStorabilityDirectivesResponse {
     /// Field `cache-control`.
     pub cache_control: String,
@@ -4541,7 +4541,7 @@ pub struct SetStorabilityDirectivesResponse {
 }
 
 /// The errors of contract `set-storability-directives`: Set the storability directives of a response.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SetStorabilityDirectivesError {
     /// A header value that a tenant supplies contains a line break (EDG-255).
     #[serde(rename = "invalid")]
@@ -4559,7 +4559,7 @@ impl fmt::Display for SetStorabilityDirectivesError {
 impl std::error::Error for SetStorabilityDirectivesError {}
 
 /// The request of contract `list-operations`: List the operations of the catalogue.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListOperationsRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -4572,7 +4572,7 @@ pub struct ListOperationsRequest {
 }
 
 /// The response of contract `list-operations`: List the operations of the catalogue.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListOperationsResponse {
     /// Field `operations`.
     pub operations: Vec<types::OperationEntry>,
@@ -4582,7 +4582,7 @@ pub struct ListOperationsResponse {
 }
 
 /// The errors of contract `list-operations`: List the operations of the catalogue.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ListOperationsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4604,7 +4604,7 @@ impl fmt::Display for ListOperationsError {
 impl std::error::Error for ListOperationsError {}
 
 /// The request of contract `describe-operation`: Describe one operation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DescribeOperationRequest {
     /// Field `name`.
     pub name: String,
@@ -4614,14 +4614,14 @@ pub struct DescribeOperationRequest {
 }
 
 /// The response of contract `describe-operation`: Describe one operation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DescribeOperationResponse {
     /// Field `operation`.
     pub operation: types::OperationEntry,
 }
 
 /// The errors of contract `describe-operation`: Describe one operation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DescribeOperationError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4643,7 +4643,7 @@ impl fmt::Display for DescribeOperationError {
 impl std::error::Error for DescribeOperationError {}
 
 /// The request of contract `invoke-operation`: Invoke an operation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct InvokeOperationRequest {
     /// Field `name`.
     pub name: String,
@@ -4661,14 +4661,14 @@ pub struct InvokeOperationRequest {
 }
 
 /// The response of contract `invoke-operation`: Invoke an operation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct InvokeOperationResponse {
     /// Field `result`.
     pub result: types::OperationResult,
 }
 
 /// The errors of contract `invoke-operation`: Invoke an operation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum InvokeOperationError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4706,14 +4706,14 @@ impl fmt::Display for InvokeOperationError {
 impl std::error::Error for InvokeOperationError {}
 
 /// The request of contract `get-operation-handle`: Read the state of a long operation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetOperationHandleRequest {
     /// Field `handle`.
     pub handle: String,
 }
 
 /// The response of contract `get-operation-handle`: Read the state of a long operation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetOperationHandleResponse {
     /// Field `state`.
     pub state: String,
@@ -4723,7 +4723,7 @@ pub struct GetOperationHandleResponse {
 }
 
 /// The errors of contract `get-operation-handle`: Read the state of a long operation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum GetOperationHandleError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4745,7 +4745,7 @@ impl fmt::Display for GetOperationHandleError {
 impl std::error::Error for GetOperationHandleError {}
 
 /// The request of contract `propose-change`: Propose a change.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProposeChangeRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -4754,7 +4754,7 @@ pub struct ProposeChangeRequest {
 }
 
 /// The response of contract `propose-change`: Propose a change.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProposeChangeResponse {
     /// Field `proposal`.
     pub proposal: types::ProposalId,
@@ -4763,7 +4763,7 @@ pub struct ProposeChangeResponse {
 }
 
 /// The errors of contract `propose-change`: Propose a change.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ProposeChangeError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4789,21 +4789,21 @@ impl fmt::Display for ProposeChangeError {
 impl std::error::Error for ProposeChangeError {}
 
 /// The request of contract `approve-proposal`: Approve a proposal.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ApproveProposalRequest {
     /// Field `proposal`.
     pub proposal: types::ProposalId,
 }
 
 /// The response of contract `approve-proposal`: Approve a proposal.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ApproveProposalResponse {
     /// Field `state`.
     pub state: types::ProposalState,
 }
 
 /// The errors of contract `approve-proposal`: Approve a proposal.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ApproveProposalError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4829,7 +4829,7 @@ impl fmt::Display for ApproveProposalError {
 impl std::error::Error for ApproveProposalError {}
 
 /// The request of contract `subscribe-agent-events`: Subscribe to domain events as an agent.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SubscribeAgentEventsRequest {
     /// Field `selector`.
     pub selector: types::Selector,
@@ -4839,14 +4839,14 @@ pub struct SubscribeAgentEventsRequest {
 }
 
 /// The response of contract `subscribe-agent-events`: Subscribe to domain events as an agent.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SubscribeAgentEventsResponse {
     /// Field `stream`.
     pub stream: types::EventStream,
 }
 
 /// The errors of contract `subscribe-agent-events`: Subscribe to domain events as an agent.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SubscribeAgentEventsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4868,18 +4868,18 @@ impl fmt::Display for SubscribeAgentEventsError {
 impl std::error::Error for SubscribeAgentEventsError {}
 
 /// The request of contract `get-platform-description`: Describe the platform topology and health.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetPlatformDescriptionRequest {}
 
 /// The response of contract `get-platform-description`: Describe the platform topology and health.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetPlatformDescriptionResponse {
     /// Field `description`.
     pub description: types::PlatformDescription,
 }
 
 /// The errors of contract `get-platform-description`: Describe the platform topology and health.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum GetPlatformDescriptionError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4897,7 +4897,7 @@ impl fmt::Display for GetPlatformDescriptionError {
 impl std::error::Error for GetPlatformDescriptionError {}
 
 /// The request of contract `list-records`: List records in pages.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListRecordsRequest {
     /// Field `object`.
     pub object: types::ObjectTypeId,
@@ -4910,7 +4910,7 @@ pub struct ListRecordsRequest {
 }
 
 /// The response of contract `list-records`: List records in pages.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListRecordsResponse {
     /// Field `rows`.
     pub rows: Vec<types::ValueMap>,
@@ -4920,7 +4920,7 @@ pub struct ListRecordsResponse {
 }
 
 /// The errors of contract `list-records`: List records in pages.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ListRecordsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4942,7 +4942,7 @@ impl fmt::Display for ListRecordsError {
 impl std::error::Error for ListRecordsError {}
 
 /// The request of contract `set-agent-state`: Disable, enable, halt or resume an agent.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SetAgentStateRequest {
     /// Field `agent`.
     pub agent: types::PrincipalId,
@@ -4951,11 +4951,11 @@ pub struct SetAgentStateRequest {
 }
 
 /// The response of contract `set-agent-state`: Disable, enable, halt or resume an agent.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SetAgentStateResponse {}
 
 /// The errors of contract `set-agent-state`: Disable, enable, halt or resume an agent.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SetAgentStateError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -4977,21 +4977,21 @@ impl fmt::Display for SetAgentStateError {
 impl std::error::Error for SetAgentStateError {}
 
 /// The request of contract `undo-change`: Undo an applied agent change.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct UndoChangeRequest {
     /// Field `change`.
     pub change: String,
 }
 
 /// The response of contract `undo-change`: Undo an applied agent change.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct UndoChangeResponse {
     /// Field `result`.
     pub result: types::OperationResult,
 }
 
 /// The errors of contract `undo-change`: Undo an applied agent change.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum UndoChangeError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5017,21 +5017,21 @@ impl fmt::Display for UndoChangeError {
 impl std::error::Error for UndoChangeError {}
 
 /// The request of contract `list-agents`: List the agent registry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListAgentsRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `list-agents`: List the agent registry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListAgentsResponse {
     /// Field `agents`.
     pub agents: Vec<types::AgentEntry>,
 }
 
 /// The errors of contract `list-agents`: List the agent registry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ListAgentsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5057,21 +5057,21 @@ impl fmt::Display for ListAgentsError {
 impl std::error::Error for ListAgentsError {}
 
 /// The request of contract `report-agent-spend`: Report spend by agent and tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReportAgentSpendRequest {
     /// Field `period`.
     pub period: String,
 }
 
 /// The response of contract `report-agent-spend`: Report spend by agent and tenant.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReportAgentSpendResponse {
     /// Field `spend`.
     pub spend: Vec<types::SpendEntry>,
 }
 
 /// The errors of contract `report-agent-spend`: Report spend by agent and tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReportAgentSpendError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5093,7 +5093,7 @@ impl fmt::Display for ReportAgentSpendError {
 impl std::error::Error for ReportAgentSpendError {}
 
 /// The request of contract `get-requirement-status`: Read the verification status of requirements.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetRequirementStatusRequest {
     /// Field `ref`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5101,14 +5101,14 @@ pub struct GetRequirementStatusRequest {
 }
 
 /// The response of contract `get-requirement-status`: Read the verification status of requirements.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetRequirementStatusResponse {
     /// Field `statuses`.
     pub statuses: Vec<types::RequirementStatus>,
 }
 
 /// The errors of contract `get-requirement-status`: Read the verification status of requirements.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum GetRequirementStatusError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5126,7 +5126,7 @@ impl fmt::Display for GetRequirementStatusError {
 impl std::error::Error for GetRequirementStatusError {}
 
 /// The request of contract `set-feature-flag`: Read or change a tenant switch of a feature flag.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SetFeatureFlagRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -5137,11 +5137,11 @@ pub struct SetFeatureFlagRequest {
 }
 
 /// The response of contract `set-feature-flag`: Read or change a tenant switch of a feature flag.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SetFeatureFlagResponse {}
 
 /// The errors of contract `set-feature-flag`: Read or change a tenant switch of a feature flag.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SetFeatureFlagError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5179,7 +5179,7 @@ impl fmt::Display for SetFeatureFlagError {
 impl std::error::Error for SetFeatureFlagError {}
 
 /// The request of contract `run-diagnostic`: Run a read-only diagnostic operation for one tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RunDiagnosticRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -5188,14 +5188,14 @@ pub struct RunDiagnosticRequest {
 }
 
 /// The response of contract `run-diagnostic`: Run a read-only diagnostic operation for one tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RunDiagnosticResponse {
     /// Field `report`.
     pub report: types::ValueMap,
 }
 
 /// The errors of contract `run-diagnostic`: Run a read-only diagnostic operation for one tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RunDiagnosticError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5225,18 +5225,18 @@ impl fmt::Display for RunDiagnosticError {
 impl std::error::Error for RunDiagnosticError {}
 
 /// The request of contract `list-releases`: List production releases.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListReleasesRequest {}
 
 /// The response of contract `list-releases`: List production releases.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListReleasesResponse {
     /// Field `releases`.
     pub releases: Vec<types::ReleaseId>,
 }
 
 /// The errors of contract `list-releases`: List production releases.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ListReleasesError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5254,7 +5254,7 @@ impl fmt::Display for ListReleasesError {
 impl std::error::Error for ListReleasesError {}
 
 /// The request of contract `append-audit-entry`: Append an audit entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AppendAuditEntryRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -5274,7 +5274,7 @@ pub struct AppendAuditEntryRequest {
 }
 
 /// The response of contract `append-audit-entry`: Append an audit entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AppendAuditEntryResponse {
     /// Field `seq`.
     pub seq: u64,
@@ -5283,7 +5283,7 @@ pub struct AppendAuditEntryResponse {
 }
 
 /// The errors of contract `append-audit-entry`: Append an audit entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum AppendAuditEntryError {
     /// The audit log could not be written.
     #[serde(rename = "unavailable")]
@@ -5309,7 +5309,7 @@ impl fmt::Display for AppendAuditEntryError {
 impl std::error::Error for AppendAuditEntryError {}
 
 /// The request of contract `query-audit-log`: Query the audit log.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct QueryAuditLogRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -5322,7 +5322,7 @@ pub struct QueryAuditLogRequest {
 }
 
 /// The response of contract `query-audit-log`: Query the audit log.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct QueryAuditLogResponse {
     /// Field `entries`.
     pub entries: Vec<types::AuditEntry>,
@@ -5334,7 +5334,7 @@ pub struct QueryAuditLogResponse {
 }
 
 /// The errors of contract `query-audit-log`: Query the audit log.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum QueryAuditLogError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5360,21 +5360,21 @@ impl fmt::Display for QueryAuditLogError {
 impl std::error::Error for QueryAuditLogError {}
 
 /// The request of contract `export-audit-log`: Export the audit log of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExportAuditLogRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `export-audit-log`: Export the audit log of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExportAuditLogResponse {
     /// Field `archive`.
     pub archive: types::ArchiveRef,
 }
 
 /// The errors of contract `export-audit-log`: Export the audit log of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ExportAuditLogError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5454,7 +5454,7 @@ impl fmt::Display for VerifyAuditChainError {
 impl std::error::Error for VerifyAuditChainError {}
 
 /// The request of contract `export-telemetry`: Export telemetry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExportTelemetryRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -5465,11 +5465,11 @@ pub struct ExportTelemetryRequest {
 }
 
 /// The response of contract `export-telemetry`: Export telemetry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExportTelemetryResponse {}
 
 /// The errors of contract `export-telemetry`: Export telemetry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ExportTelemetryError {
     /// The pipeline did not accept the batch.
     #[serde(rename = "unavailable")]
@@ -5487,7 +5487,7 @@ impl fmt::Display for ExportTelemetryError {
 impl std::error::Error for ExportTelemetryError {}
 
 /// The request of contract `query-telemetry`: Query metrics, logs and traces.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct QueryTelemetryRequest {
     /// Field `query`.
     pub query: String,
@@ -5497,14 +5497,14 @@ pub struct QueryTelemetryRequest {
 }
 
 /// The response of contract `query-telemetry`: Query metrics, logs and traces.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct QueryTelemetryResponse {
     /// Field `series`.
     pub series: Vec<types::ValueMap>,
 }
 
 /// The errors of contract `query-telemetry`: Query metrics, logs and traces.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum QueryTelemetryError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5530,7 +5530,7 @@ impl fmt::Display for QueryTelemetryError {
 impl std::error::Error for QueryTelemetryError {}
 
 /// The request of contract `raise-alert`: Raise an alert.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RaiseAlertRequest {
     /// Field `name`.
     pub name: String,
@@ -5541,14 +5541,14 @@ pub struct RaiseAlertRequest {
 }
 
 /// The response of contract `raise-alert`: Raise an alert.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RaiseAlertResponse {
     /// Field `alert`.
     pub alert: types::LogId,
 }
 
 /// The errors of contract `raise-alert`: Raise an alert.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RaiseAlertError {}
 
 impl fmt::Display for RaiseAlertError {
@@ -5560,21 +5560,21 @@ impl fmt::Display for RaiseAlertError {
 impl std::error::Error for RaiseAlertError {}
 
 /// The request of contract `get-access-report`: Receive the access report of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetAccessReportRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `get-access-report`: Receive the access report of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetAccessReportResponse {
     /// Field `report`.
     pub report: types::AccessReport,
 }
 
 /// The errors of contract `get-access-report`: Receive the access report of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum GetAccessReportError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5600,21 +5600,21 @@ impl fmt::Display for GetAccessReportError {
 impl std::error::Error for GetAccessReportError {}
 
 /// The request of contract `get-run-trace`: Read a run trace of an agent.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetRunTraceRequest {
     /// Field `run`.
     pub run: types::RequestId,
 }
 
 /// The response of contract `get-run-trace`: Read a run trace of an agent.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetRunTraceResponse {
     /// Field `trace`.
     pub trace: types::RunTrace,
 }
 
 /// The errors of contract `get-run-trace`: Read a run trace of an agent.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum GetRunTraceError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5640,21 +5640,21 @@ impl fmt::Display for GetRunTraceError {
 impl std::error::Error for GetRunTraceError {}
 
 /// The request of contract `report-fleet`: Report across tenants.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReportFleetRequest {
     /// Field `report`.
     pub report: String,
 }
 
 /// The response of contract `report-fleet`: Report across tenants.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReportFleetResponse {
     /// Field `report`.
     pub report: types::ValueMap,
 }
 
 /// The errors of contract `report-fleet`: Report across tenants.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReportFleetError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5676,7 +5676,7 @@ impl fmt::Display for ReportFleetError {
 impl std::error::Error for ReportFleetError {}
 
 /// The request of contract `notify-breach`: Report a breach of personal data to the owner.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct NotifyBreachRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -5685,11 +5685,11 @@ pub struct NotifyBreachRequest {
 }
 
 /// The response of contract `notify-breach`: Report a breach of personal data to the owner.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct NotifyBreachResponse {}
 
 /// The errors of contract `notify-breach`: Report a breach of personal data to the owner.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum NotifyBreachError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5782,7 +5782,7 @@ impl fmt::Display for ShowAuthoringViewError {
 impl std::error::Error for ShowAuthoringViewError {}
 
 /// The request of contract `save-draft`: Save a draft.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SaveDraftRequest {
     /// Field `record`.
     pub record: types::RecordId,
@@ -5795,14 +5795,14 @@ pub struct SaveDraftRequest {
 }
 
 /// The response of contract `save-draft`: Save a draft.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SaveDraftResponse {
     /// Field `version`.
     pub version: u64,
 }
 
 /// The errors of contract `save-draft`: Save a draft.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SaveDraftError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5828,21 +5828,21 @@ impl fmt::Display for SaveDraftError {
 impl std::error::Error for SaveDraftError {}
 
 /// The request of contract `show-review-diff`: Show the differences between a draft and the published version.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ShowReviewDiffRequest {
     /// Field `record`.
     pub record: types::RecordId,
 }
 
 /// The response of contract `show-review-diff`: Show the differences between a draft and the published version.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ShowReviewDiffResponse {
     /// Field `diff`.
     pub diff: Vec<types::FieldDifference>,
 }
 
 /// The errors of contract `show-review-diff`: Show the differences between a draft and the published version.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ShowReviewDiffError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -5868,7 +5868,7 @@ impl fmt::Display for ShowReviewDiffError {
 impl std::error::Error for ShowReviewDiffError {}
 
 /// The request of contract `preview-tokens`: Preview the tokens of a draft.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PreviewTokensRequest {
     /// Field `record`.
     pub record: types::RecordId,
@@ -5877,14 +5877,14 @@ pub struct PreviewTokensRequest {
 }
 
 /// The response of contract `preview-tokens`: Preview the tokens of a draft.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PreviewTokensResponse {
     /// Field `values`.
     pub values: types::ValueMap,
 }
 
 /// The errors of contract `preview-tokens`: Preview the tokens of a draft.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum PreviewTokensError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -6056,7 +6056,7 @@ impl fmt::Display for SignFileAddressError {
 impl std::error::Error for SignFileAddressError {}
 
 /// The request of contract `put-copy`: Store a view copy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PutCopyRequest {
     /// Field `key`.
     pub key: types::CopyKey,
@@ -6069,11 +6069,11 @@ pub struct PutCopyRequest {
 }
 
 /// The response of contract `put-copy`: Store a view copy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PutCopyResponse {}
 
 /// The errors of contract `put-copy`: Store a view copy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum PutCopyError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -6091,14 +6091,14 @@ impl fmt::Display for PutCopyError {
 impl std::error::Error for PutCopyError {}
 
 /// The request of contract `get-copy`: Read a view copy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetCopyRequest {
     /// Field `key`.
     pub key: types::CopyKey,
 }
 
 /// The response of contract `get-copy`: Read a view copy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetCopyResponse {
     /// Field `body`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -6108,7 +6108,7 @@ pub struct GetCopyResponse {
 }
 
 /// The errors of contract `get-copy`: Read a view copy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum GetCopyError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -6126,7 +6126,7 @@ impl fmt::Display for GetCopyError {
 impl std::error::Error for GetCopyError {}
 
 /// The request of contract `remove-copies-by-tag`: Remove copies by tag.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RemoveCopiesByTagRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -6135,14 +6135,14 @@ pub struct RemoveCopiesByTagRequest {
 }
 
 /// The response of contract `remove-copies-by-tag`: Remove copies by tag.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RemoveCopiesByTagResponse {
     /// Field `removed`.
     pub removed: u64,
 }
 
 /// The errors of contract `remove-copies-by-tag`: Remove copies by tag.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RemoveCopiesByTagError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -6160,7 +6160,7 @@ impl fmt::Display for RemoveCopiesByTagError {
 impl std::error::Error for RemoveCopiesByTagError {}
 
 /// The request of contract `publish-notice`: Publish a notice.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PublishNoticeRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -6172,14 +6172,14 @@ pub struct PublishNoticeRequest {
 }
 
 /// The response of contract `publish-notice`: Publish a notice.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PublishNoticeResponse {
     /// Field `notice`.
     pub notice: String,
 }
 
 /// The errors of contract `publish-notice`: Publish a notice.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum PublishNoticeError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -6197,7 +6197,7 @@ impl fmt::Display for PublishNoticeError {
 impl std::error::Error for PublishNoticeError {}
 
 /// The request of contract `receive-notices`: Receive notices.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReceiveNoticesRequest {
     /// Field `subscriber`.
     pub subscriber: String,
@@ -6206,14 +6206,14 @@ pub struct ReceiveNoticesRequest {
 }
 
 /// The response of contract `receive-notices`: Receive notices.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReceiveNoticesResponse {
     /// Field `notices`.
     pub notices: Vec<types::Notice>,
 }
 
 /// The errors of contract `receive-notices`: Receive notices.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReceiveNoticesError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -6231,7 +6231,7 @@ impl fmt::Display for ReceiveNoticesError {
 impl std::error::Error for ReceiveNoticesError {}
 
 /// The request of contract `acknowledge-notice`: Acknowledge a notice.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AcknowledgeNoticeRequest {
     /// Field `subscriber`.
     pub subscriber: String,
@@ -6240,11 +6240,11 @@ pub struct AcknowledgeNoticeRequest {
 }
 
 /// The response of contract `acknowledge-notice`: Acknowledge a notice.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AcknowledgeNoticeResponse {}
 
 /// The errors of contract `acknowledge-notice`: Acknowledge a notice.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum AcknowledgeNoticeError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -6262,21 +6262,21 @@ impl fmt::Display for AcknowledgeNoticeError {
 impl std::error::Error for AcknowledgeNoticeError {}
 
 /// The request of contract `create-data-key`: Create a data key for a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CreateDataKeyRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `create-data-key`: Create a data key for a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CreateDataKeyResponse {
     /// Field `key`.
     pub key: types::KeyId,
 }
 
 /// The errors of contract `create-data-key`: Create a data key for a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CreateDataKeyError {
     /// The key service does not answer; requests that need a data key are refused (SEC-250).
     #[serde(rename = "unavailable")]
@@ -6294,7 +6294,7 @@ impl fmt::Display for CreateDataKeyError {
 impl std::error::Error for CreateDataKeyError {}
 
 /// The request of contract `wrap-key`: Wrap a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct WrapKeyRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -6303,14 +6303,14 @@ pub struct WrapKeyRequest {
 }
 
 /// The response of contract `wrap-key`: Wrap a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct WrapKeyResponse {
     /// Field `wrapped`.
     pub wrapped: types::WrappedSecret,
 }
 
 /// The errors of contract `wrap-key`: Wrap a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum WrapKeyError {
     /// The key service does not answer.
     #[serde(rename = "unavailable")]
@@ -6328,7 +6328,7 @@ impl fmt::Display for WrapKeyError {
 impl std::error::Error for WrapKeyError {}
 
 /// The request of contract `unwrap-key`: Unwrap a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct UnwrapKeyRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -6337,14 +6337,14 @@ pub struct UnwrapKeyRequest {
 }
 
 /// The response of contract `unwrap-key`: Unwrap a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct UnwrapKeyResponse {
     /// Field `key`.
     pub key: Vec<u8>,
 }
 
 /// The errors of contract `unwrap-key`: Unwrap a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum UnwrapKeyError {
     /// The key service does not answer.
     #[serde(rename = "unavailable")]
@@ -6366,21 +6366,21 @@ impl fmt::Display for UnwrapKeyError {
 impl std::error::Error for UnwrapKeyError {}
 
 /// The request of contract `rotate-data-key`: Rotate a tenant data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RotateDataKeyRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `rotate-data-key`: Rotate a tenant data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RotateDataKeyResponse {
     /// Field `key`.
     pub key: types::KeyId,
 }
 
 /// The errors of contract `rotate-data-key`: Rotate a tenant data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RotateDataKeyError {
     /// The key service does not answer.
     #[serde(rename = "unavailable")]
@@ -6398,21 +6398,21 @@ impl fmt::Display for RotateDataKeyError {
 impl std::error::Error for RotateDataKeyError {}
 
 /// The request of contract `destroy-key`: Destroy a key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DestroyKeyRequest {
     /// Field `key`.
     pub key: types::KeyId,
 }
 
 /// The response of contract `destroy-key`: Destroy a key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DestroyKeyResponse {
     /// Field `destroyed-at`.
     pub destroyed_at: prelude::Timestamp,
 }
 
 /// The errors of contract `destroy-key`: Destroy a key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DestroyKeyError {
     /// The key service does not answer.
     #[serde(rename = "unavailable")]
@@ -6502,7 +6502,7 @@ impl fmt::Display for SubmitMessageError {
 impl std::error::Error for SubmitMessageError {}
 
 /// The request of contract `receive-delivery-report`: Receive a delivery report.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReceiveDeliveryReportRequest {
     /// Field `report`.
     pub report: Vec<u8>,
@@ -6513,11 +6513,11 @@ pub struct ReceiveDeliveryReportRequest {
 }
 
 /// The response of contract `receive-delivery-report`: Receive a delivery report.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReceiveDeliveryReportResponse {}
 
 /// The errors of contract `receive-delivery-report`: Receive a delivery report.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReceiveDeliveryReportError {
     /// The report carries no signature of the configured provider.
     #[serde(rename = "unauthenticated")]
@@ -6547,18 +6547,18 @@ impl fmt::Display for ReceiveDeliveryReportError {
 impl std::error::Error for ReceiveDeliveryReportError {}
 
 /// The request of contract `start-local-stack`: Start the local stack.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StartLocalStackRequest {}
 
 /// The response of contract `start-local-stack`: Start the local stack.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StartLocalStackResponse {
     /// Field `components`.
     pub components: Vec<String>,
 }
 
 /// The errors of contract `start-local-stack`: Start the local stack.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum StartLocalStackError {
     /// A component or a dependency does not start.
     #[serde(rename = "start_failed")]
@@ -6576,7 +6576,7 @@ impl fmt::Display for StartLocalStackError {
 impl std::error::Error for StartLocalStackError {}
 
 /// The request of contract `build-component-image`: Build a component image.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct BuildComponentImageRequest {
     /// Field `commit`.
     pub commit: String,
@@ -6585,7 +6585,7 @@ pub struct BuildComponentImageRequest {
 }
 
 /// The response of contract `build-component-image`: Build a component image.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct BuildComponentImageResponse {
     /// Field `digest`.
     pub digest: types::Hash,
@@ -6596,7 +6596,7 @@ pub struct BuildComponentImageResponse {
 }
 
 /// The errors of contract `build-component-image`: Build a component image.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum BuildComponentImageError {
     /// A dependency of the build carries a published vulnerability above the threshold (THR-257).
     #[serde(rename = "vulnerable_dependency")]
@@ -6618,7 +6618,7 @@ impl fmt::Display for BuildComponentImageError {
 impl std::error::Error for BuildComponentImageError {}
 
 /// The request of contract `apply-deployment-descriptor`: Apply a deployment descriptor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ApplyDeploymentDescriptorRequest {
     /// Field `environment`.
     pub environment: types::EnvironmentId,
@@ -6630,14 +6630,14 @@ pub struct ApplyDeploymentDescriptorRequest {
 }
 
 /// The response of contract `apply-deployment-descriptor`: Apply a deployment descriptor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ApplyDeploymentDescriptorResponse {
     /// Field `drift`.
     pub drift: Vec<String>,
 }
 
 /// The errors of contract `apply-deployment-descriptor`: Apply a deployment descriptor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ApplyDeploymentDescriptorError {
     /// A change freeze is in force (AGS-427).
     #[serde(rename = "forbidden")]
@@ -6659,7 +6659,7 @@ impl fmt::Display for ApplyDeploymentDescriptorError {
 impl std::error::Error for ApplyDeploymentDescriptorError {}
 
 /// The request of contract `declare-change-freeze`: Declare a change freeze.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeclareChangeFreezeRequest {
     /// Field `from`.
     pub from: prelude::Timestamp,
@@ -6668,11 +6668,11 @@ pub struct DeclareChangeFreezeRequest {
 }
 
 /// The response of contract `declare-change-freeze`: Declare a change freeze.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeclareChangeFreezeResponse {}
 
 /// The errors of contract `declare-change-freeze`: Declare a change freeze.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DeclareChangeFreezeError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -6694,18 +6694,18 @@ impl fmt::Display for DeclareChangeFreezeError {
 impl std::error::Error for DeclareChangeFreezeError {}
 
 /// The request of contract `inject-fault`: Inject a failure of the operations fault model.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct InjectFaultRequest {
     /// Field `failure`.
     pub failure: String,
 }
 
 /// The response of contract `inject-fault`: Inject a failure of the operations fault model.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct InjectFaultResponse {}
 
 /// The errors of contract `inject-fault`: Inject a failure of the operations fault model.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum InjectFaultError {
     /// The failure mode has no hook.
     #[serde(rename = "unknown_failure")]
@@ -6834,7 +6834,7 @@ impl fmt::Display for ReplayJournalError {
 impl std::error::Error for ReplayJournalError {}
 
 /// The request of contract `fork-tenant`: Fork a tenant for a projection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ForkTenantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -6844,7 +6844,7 @@ pub struct ForkTenantRequest {
 }
 
 /// The response of contract `fork-tenant`: Fork a tenant for a projection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ForkTenantResponse {
     /// Field `fork`.
     pub fork: types::TenantId,
@@ -6853,7 +6853,7 @@ pub struct ForkTenantResponse {
 }
 
 /// The errors of contract `fork-tenant`: Fork a tenant for a projection.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ForkTenantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -6887,7 +6887,7 @@ impl fmt::Display for ForkTenantError {
 impl std::error::Error for ForkTenantError {}
 
 /// The request of contract `count-request`: Count a request against a limit.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CountRequestRequest {
     /// Field `key`.
     pub key: String,
@@ -6898,7 +6898,7 @@ pub struct CountRequestRequest {
 }
 
 /// The response of contract `count-request`: Count a request against a limit.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CountRequestResponse {
     /// Field `allowed`.
     pub allowed: bool,
@@ -6910,7 +6910,7 @@ pub struct CountRequestResponse {
 }
 
 /// The errors of contract `count-request`: Count a request against a limit.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CountRequestError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -6928,7 +6928,7 @@ impl fmt::Display for CountRequestError {
 impl std::error::Error for CountRequestError {}
 
 /// The request of contract `count-agent-operation`: Count an agent operation against its budget.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CountAgentOperationRequest {
     /// Field `agent`.
     pub agent: types::PrincipalId,
@@ -6939,14 +6939,14 @@ pub struct CountAgentOperationRequest {
 }
 
 /// The response of contract `count-agent-operation`: Count an agent operation against its budget.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CountAgentOperationResponse {
     /// Field `allowed`.
     pub allowed: bool,
 }
 
 /// The errors of contract `count-agent-operation`: Count an agent operation against its budget.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CountAgentOperationError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -6964,7 +6964,7 @@ impl fmt::Display for CountAgentOperationError {
 impl std::error::Error for CountAgentOperationError {}
 
 /// The request of contract `write-backup`: Write a backup of a tenant database.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct WriteBackupRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -6973,14 +6973,14 @@ pub struct WriteBackupRequest {
 }
 
 /// The response of contract `write-backup`: Write a backup of a tenant database.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct WriteBackupResponse {
     /// Field `image`.
     pub image: types::Hash,
 }
 
 /// The errors of contract `write-backup`: Write a backup of a tenant database.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum WriteBackupError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -6998,7 +6998,7 @@ impl fmt::Display for WriteBackupError {
 impl std::error::Error for WriteBackupError {}
 
 /// The request of contract `read-backup`: Read a backup.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadBackupRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -7007,14 +7007,14 @@ pub struct ReadBackupRequest {
 }
 
 /// The response of contract `read-backup`: Read a backup.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadBackupResponse {
     /// Field `content`.
     pub content: Vec<u8>,
 }
 
 /// The errors of contract `read-backup`: Read a backup.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadBackupError {
     /// No such image for this tenant.
     #[serde(rename = "not_found")]
@@ -7036,21 +7036,21 @@ impl fmt::Display for ReadBackupError {
 impl std::error::Error for ReadBackupError {}
 
 /// The request of contract `remove-expired-backups`: Remove backups past their retention.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RemoveExpiredBackupsRequest {
     /// Field `now`.
     pub now: prelude::Timestamp,
 }
 
 /// The response of contract `remove-expired-backups`: Remove backups past their retention.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RemoveExpiredBackupsResponse {
     /// Field `removed`.
     pub removed: u64,
 }
 
 /// The errors of contract `remove-expired-backups`: Remove backups past their retention.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RemoveExpiredBackupsError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -7176,7 +7176,7 @@ impl fmt::Display for ListWebhookDeliveriesError {
 impl std::error::Error for ListWebhookDeliveriesError {}
 
 /// The request of contract `index-record`: Update the index from a commit.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IndexRecordRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -7185,11 +7185,11 @@ pub struct IndexRecordRequest {
 }
 
 /// The response of contract `index-record`: Update the index from a commit.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IndexRecordResponse {}
 
 /// The errors of contract `index-record`: Update the index from a commit.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum IndexRecordError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -7273,7 +7273,7 @@ impl fmt::Display for SearchError {
 impl std::error::Error for SearchError {}
 
 /// The request of contract `issue-submission-token`: Issue a submission token for a form.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IssueSubmissionTokenRequest {
     /// Field `host`.
     pub host: types::Host,
@@ -7282,14 +7282,14 @@ pub struct IssueSubmissionTokenRequest {
 }
 
 /// The response of contract `issue-submission-token`: Issue a submission token for a form.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IssueSubmissionTokenResponse {
     /// Field `token`.
     pub token: types::Secret,
 }
 
 /// The errors of contract `issue-submission-token`: Issue a submission token for a form.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum IssueSubmissionTokenError {
     /// The form does not exist for this tenant.
     #[serde(rename = "not_found")]
@@ -7307,7 +7307,7 @@ impl fmt::Display for IssueSubmissionTokenError {
 impl std::error::Error for IssueSubmissionTokenError {}
 
 /// The request of contract `submit-form`: Submit a form.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SubmitFormRequest {
     /// Field `host`.
     pub host: types::Host,
@@ -7320,14 +7320,14 @@ pub struct SubmitFormRequest {
 }
 
 /// The response of contract `submit-form`: Submit a form.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SubmitFormResponse {
     /// Field `submission`.
     pub submission: types::SubmissionId,
 }
 
 /// The errors of contract `submit-form`: Submit a form.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SubmitFormError {
     /// The submission token was not issued to this browser, or the values do not match the form.
     #[serde(rename = "invalid")]
@@ -7349,7 +7349,7 @@ impl fmt::Display for SubmitFormError {
 impl std::error::Error for SubmitFormError {}
 
 /// The request of contract `import-records`: Import records from an archive.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ImportRecordsRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -7358,14 +7358,14 @@ pub struct ImportRecordsRequest {
 }
 
 /// The response of contract `import-records`: Import records from an archive.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ImportRecordsResponse {
     /// Field `report`.
     pub report: types::MappingReport,
 }
 
 /// The errors of contract `import-records`: Import records from an archive.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ImportRecordsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -7395,7 +7395,7 @@ impl fmt::Display for ImportRecordsError {
 impl std::error::Error for ImportRecordsError {}
 
 /// The request of contract `export-form-submissions`: Export the submissions of a form.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExportFormSubmissionsRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -7404,14 +7404,14 @@ pub struct ExportFormSubmissionsRequest {
 }
 
 /// The response of contract `export-form-submissions`: Export the submissions of a form.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExportFormSubmissionsResponse {
     /// Field `document`.
     pub document: Vec<u8>,
 }
 
 /// The errors of contract `export-form-submissions`: Export the submissions of a form.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ExportFormSubmissionsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -7437,21 +7437,21 @@ impl fmt::Display for ExportFormSubmissionsError {
 impl std::error::Error for ExportFormSubmissionsError {}
 
 /// The request of contract `build-archive-manifest`: Build the manifest of an archive.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct BuildArchiveManifestRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `build-archive-manifest`: Build the manifest of an archive.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct BuildArchiveManifestResponse {
     /// Field `manifest`.
     pub manifest: types::ArchiveManifest,
 }
 
 /// The errors of contract `build-archive-manifest`: Build the manifest of an archive.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum BuildArchiveManifestError {}
 
 impl fmt::Display for BuildArchiveManifestError {
@@ -7463,7 +7463,7 @@ impl fmt::Display for BuildArchiveManifestError {
 impl std::error::Error for BuildArchiveManifestError {}
 
 /// The request of contract `subscribe-notifications`: Subscribe to notifications.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SubscribeNotificationsRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -7474,14 +7474,14 @@ pub struct SubscribeNotificationsRequest {
 }
 
 /// The response of contract `subscribe-notifications`: Subscribe to notifications.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SubscribeNotificationsResponse {
     /// Field `subscription`.
     pub subscription: String,
 }
 
 /// The errors of contract `subscribe-notifications`: Subscribe to notifications.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SubscribeNotificationsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -7593,7 +7593,7 @@ impl fmt::Display for SendNoticeError {
 impl std::error::Error for SendNoticeError {}
 
 /// The request of contract `count-usage`: Count the usage of a billing period.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CountUsageRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -7602,14 +7602,14 @@ pub struct CountUsageRequest {
 }
 
 /// The response of contract `count-usage`: Count the usage of a billing period.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CountUsageResponse {
     /// Field `usage`.
     pub usage: Vec<types::UsageCount>,
 }
 
 /// The errors of contract `count-usage`: Count the usage of a billing period.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CountUsageError {}
 
 impl fmt::Display for CountUsageError {
@@ -7621,7 +7621,7 @@ impl fmt::Display for CountUsageError {
 impl std::error::Error for CountUsageError {}
 
 /// The request of contract `export-usage`: Export usage to the billing system.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExportUsageRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -7630,7 +7630,7 @@ pub struct ExportUsageRequest {
 }
 
 /// The response of contract `export-usage`: Export usage to the billing system.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ExportUsageResponse {
     /// Field `document`.
     pub document: Vec<u8>,
@@ -7639,7 +7639,7 @@ pub struct ExportUsageResponse {
 }
 
 /// The errors of contract `export-usage`: Export usage to the billing system.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ExportUsageError {
     /// The billing system did not accept the document.
     #[serde(rename = "unavailable")]
@@ -7657,18 +7657,18 @@ impl fmt::Display for ExportUsageError {
 impl std::error::Error for ExportUsageError {}
 
 /// The request of contract `show-status`: Show the status page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ShowStatusRequest {}
 
 /// The response of contract `show-status`: Show the status page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ShowStatusResponse {
     /// Field `page`.
     pub page: types::HtmlPage,
 }
 
 /// The errors of contract `show-status`: Show the status page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ShowStatusError {}
 
 impl fmt::Display for ShowStatusError {
@@ -7680,18 +7680,18 @@ impl fmt::Display for ShowStatusError {
 impl std::error::Error for ShowStatusError {}
 
 /// The request of contract `show-changelog`: Show the changelog.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ShowChangelogRequest {}
 
 /// The response of contract `show-changelog`: Show the changelog.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ShowChangelogResponse {
     /// Field `entries`.
     pub entries: Vec<types::ChangelogEntry>,
 }
 
 /// The errors of contract `show-changelog`: Show the changelog.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ShowChangelogError {}
 
 impl fmt::Display for ShowChangelogError {
@@ -7703,7 +7703,7 @@ impl fmt::Display for ShowChangelogError {
 impl std::error::Error for ShowChangelogError {}
 
 /// The request of contract `show-service-objectives`: Show service objectives and results.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ShowServiceObjectivesRequest {
     /// Field `month`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -7711,14 +7711,14 @@ pub struct ShowServiceObjectivesRequest {
 }
 
 /// The response of contract `show-service-objectives`: Show service objectives and results.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ShowServiceObjectivesResponse {
     /// Field `objectives`.
     pub objectives: Vec<types::ValueMap>,
 }
 
 /// The errors of contract `show-service-objectives`: Show service objectives and results.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ShowServiceObjectivesError {}
 
 impl fmt::Display for ShowServiceObjectivesError {
@@ -7730,7 +7730,7 @@ impl fmt::Display for ShowServiceObjectivesError {
 impl std::error::Error for ShowServiceObjectivesError {}
 
 /// The request of contract `post-turn`: Post a turn to a conversation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PostTurnRequest {
     /// Field `conversation`.
     pub conversation: types::ConversationId,
@@ -7742,14 +7742,14 @@ pub struct PostTurnRequest {
 }
 
 /// The response of contract `post-turn`: Post a turn to a conversation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PostTurnResponse {
     /// Field `turn`.
     pub turn: types::TurnId,
 }
 
 /// The errors of contract `post-turn`: Post a turn to a conversation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum PostTurnError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -7775,7 +7775,7 @@ impl fmt::Display for PostTurnError {
 impl std::error::Error for PostTurnError {}
 
 /// The request of contract `stream-reply`: Stream a reply.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StreamReplyRequest {
     /// Field `conversation`.
     pub conversation: types::ConversationId,
@@ -7785,14 +7785,14 @@ pub struct StreamReplyRequest {
 }
 
 /// The response of contract `stream-reply`: Stream a reply.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StreamReplyResponse {
     /// Field `stream`.
     pub stream: types::EventStream,
 }
 
 /// The errors of contract `stream-reply`: Stream a reply.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum StreamReplyError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -7814,18 +7814,18 @@ impl fmt::Display for StreamReplyError {
 impl std::error::Error for StreamReplyError {}
 
 /// The request of contract `cancel-turn`: Cancel a turn.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CancelTurnRequest {
     /// Field `turn`.
     pub turn: types::TurnId,
 }
 
 /// The response of contract `cancel-turn`: Cancel a turn.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CancelTurnResponse {}
 
 /// The errors of contract `cancel-turn`: Cancel a turn.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CancelTurnError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -7847,21 +7847,21 @@ impl fmt::Display for CancelTurnError {
 impl std::error::Error for CancelTurnError {}
 
 /// The request of contract `get-pending-action`: Preview a pending action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetPendingActionRequest {
     /// Field `pending`.
     pub pending: types::PendingId,
 }
 
 /// The response of contract `get-pending-action`: Preview a pending action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetPendingActionResponse {
     /// Field `preview`.
     pub preview: types::ActionPreview,
 }
 
 /// The errors of contract `get-pending-action`: Preview a pending action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum GetPendingActionError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -7883,7 +7883,7 @@ impl fmt::Display for GetPendingActionError {
 impl std::error::Error for GetPendingActionError {}
 
 /// The request of contract `confirm-pending-action`: Confirm a pending action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConfirmPendingActionRequest {
     /// Field `pending`.
     pub pending: types::PendingId,
@@ -7892,14 +7892,14 @@ pub struct ConfirmPendingActionRequest {
 }
 
 /// The response of contract `confirm-pending-action`: Confirm a pending action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConfirmPendingActionResponse {
     /// Field `result`.
     pub result: types::OperationResult,
 }
 
 /// The errors of contract `confirm-pending-action`: Confirm a pending action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ConfirmPendingActionError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -7921,18 +7921,18 @@ impl fmt::Display for ConfirmPendingActionError {
 impl std::error::Error for ConfirmPendingActionError {}
 
 /// The request of contract `cancel-pending-action`: Cancel a pending action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CancelPendingActionRequest {
     /// Field `pending`.
     pub pending: types::PendingId,
 }
 
 /// The response of contract `cancel-pending-action`: Cancel a pending action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CancelPendingActionResponse {}
 
 /// The errors of contract `cancel-pending-action`: Cancel a pending action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CancelPendingActionError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -7954,21 +7954,21 @@ impl fmt::Display for CancelPendingActionError {
 impl std::error::Error for CancelPendingActionError {}
 
 /// The request of contract `undo-turn`: Undo the change of a turn.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct UndoTurnRequest {
     /// Field `turn`.
     pub turn: types::TurnId,
 }
 
 /// The response of contract `undo-turn`: Undo the change of a turn.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct UndoTurnResponse {
     /// Field `pending`.
     pub pending: types::PendingId,
 }
 
 /// The errors of contract `undo-turn`: Undo the change of a turn.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum UndoTurnError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -7990,21 +7990,21 @@ impl fmt::Display for UndoTurnError {
 impl std::error::Error for UndoTurnError {}
 
 /// The request of contract `get-conversation`: Read a conversation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetConversationRequest {
     /// Field `conversation`.
     pub conversation: types::ConversationId,
 }
 
 /// The response of contract `get-conversation`: Read a conversation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetConversationResponse {
     /// Field `turns`.
     pub turns: Vec<types::TurnId>,
 }
 
 /// The errors of contract `get-conversation`: Read a conversation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum GetConversationError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -8030,18 +8030,18 @@ impl fmt::Display for GetConversationError {
 impl std::error::Error for GetConversationError {}
 
 /// The request of contract `delete-conversation`: Delete a conversation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeleteConversationRequest {
     /// Field `conversation`.
     pub conversation: types::ConversationId,
 }
 
 /// The response of contract `delete-conversation`: Delete a conversation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeleteConversationResponse {}
 
 /// The errors of contract `delete-conversation`: Delete a conversation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DeleteConversationError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -8063,7 +8063,7 @@ impl fmt::Display for DeleteConversationError {
 impl std::error::Error for DeleteConversationError {}
 
 /// The request of contract `generate-reply`: Generate a reply.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GenerateReplyRequest {
     /// Field `messages`.
     pub messages: Vec<String>,
@@ -8074,7 +8074,7 @@ pub struct GenerateReplyRequest {
 }
 
 /// The response of contract `generate-reply`: Generate a reply.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GenerateReplyResponse {
     /// Field `reply`.
     pub reply: String,
@@ -8083,7 +8083,7 @@ pub struct GenerateReplyResponse {
 }
 
 /// The errors of contract `generate-reply`: Generate a reply.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum GenerateReplyError {
     /// The provider did not answer.
     #[serde(rename = "provider_unavailable")]
@@ -8105,21 +8105,21 @@ impl fmt::Display for GenerateReplyError {
 impl std::error::Error for GenerateReplyError {}
 
 /// The request of contract `report-model-usage`: Report the usage of a request.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReportModelUsageRequest {
     /// Field `request`.
     pub request: types::RequestId,
 }
 
 /// The response of contract `report-model-usage`: Report the usage of a request.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReportModelUsageResponse {
     /// Field `usage`.
     pub usage: types::ModelUsage,
 }
 
 /// The errors of contract `report-model-usage`: Report the usage of a request.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReportModelUsageError {
     /// No such request.
     #[serde(rename = "unknown_request")]
@@ -8137,7 +8137,7 @@ impl fmt::Display for ReportModelUsageError {
 impl std::error::Error for ReportModelUsageError {}
 
 /// The request of contract `save-record-edit`: Save an edit of a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SaveRecordEditRequest {
     /// Field `record`.
     pub record: types::RecordId,
@@ -8148,14 +8148,14 @@ pub struct SaveRecordEditRequest {
 }
 
 /// The response of contract `save-record-edit`: Save an edit of a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SaveRecordEditResponse {
     /// Field `version`.
     pub version: u64,
 }
 
 /// The errors of contract `save-record-edit`: Save an edit of a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SaveRecordEditError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -8181,21 +8181,21 @@ impl fmt::Display for SaveRecordEditError {
 impl std::error::Error for SaveRecordEditError {}
 
 /// The request of contract `announce-presence`: Announce presence on a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AnnouncePresenceRequest {
     /// Field `record`.
     pub record: types::RecordId,
 }
 
 /// The response of contract `announce-presence`: Announce presence on a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AnnouncePresenceResponse {
     /// Field `others`.
     pub others: Vec<types::DisplayName>,
 }
 
 /// The errors of contract `announce-presence`: Announce presence on a record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum AnnouncePresenceError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -8213,7 +8213,7 @@ impl fmt::Display for AnnouncePresenceError {
 impl std::error::Error for AnnouncePresenceError {}
 
 /// The request of contract `open-operator-console`: Open the operator console for a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct OpenOperatorConsoleRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -8222,14 +8222,14 @@ pub struct OpenOperatorConsoleRequest {
 }
 
 /// The response of contract `open-operator-console`: Open the operator console for a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct OpenOperatorConsoleResponse {
     /// Field `session`.
     pub session: types::SessionId,
 }
 
 /// The errors of contract `open-operator-console`: Open the operator console for a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum OpenOperatorConsoleError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -8395,7 +8395,7 @@ impl fmt::Display for DeliverFileError {
 impl std::error::Error for DeliverFileError {}
 
 /// The request of contract `call-external-address`: Call an external address.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CallExternalAddressRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -8416,7 +8416,7 @@ pub struct CallExternalAddressRequest {
 }
 
 /// The response of contract `call-external-address`: Call an external address.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CallExternalAddressResponse {
     /// Field `status`.
     pub status: u16,
@@ -8427,7 +8427,7 @@ pub struct CallExternalAddressResponse {
 }
 
 /// The errors of contract `call-external-address`: Call an external address.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CallExternalAddressError {
     /// The address resolves to a private, link-local or loopback network, or is outside the outbound rule (WFL-008, WFL-252).
     #[serde(rename = "address_refused")]
@@ -8457,21 +8457,21 @@ impl fmt::Display for CallExternalAddressError {
 impl std::error::Error for CallExternalAddressError {}
 
 /// The request of contract `fetch-provider-metadata`: Fetch identity provider metadata.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct FetchProviderMetadataRequest {
     /// Field `provider`.
     pub provider: types::ProviderId,
 }
 
 /// The response of contract `fetch-provider-metadata`: Fetch identity provider metadata.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct FetchProviderMetadataResponse {
     /// Field `metadata`.
     pub metadata: Vec<u8>,
 }
 
 /// The errors of contract `fetch-provider-metadata`: Fetch identity provider metadata.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum FetchProviderMetadataError {
     /// The address is not the one the provider configuration names (FED-261).
     #[serde(rename = "address_refused")]
@@ -8489,7 +8489,7 @@ impl fmt::Display for FetchProviderMetadataError {
 impl std::error::Error for FetchProviderMetadataError {}
 
 /// The request of contract `issue-access-grant`: Issue a support grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IssueAccessGrantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -8504,14 +8504,14 @@ pub struct IssueAccessGrantRequest {
 }
 
 /// The response of contract `issue-access-grant`: Issue a support grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IssueAccessGrantResponse {
     /// Field `grant`.
     pub grant: types::GrantId,
 }
 
 /// The errors of contract `issue-access-grant`: Issue a support grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum IssueAccessGrantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -8557,7 +8557,7 @@ impl fmt::Display for IssueAccessGrantError {
 impl std::error::Error for IssueAccessGrantError {}
 
 /// The request of contract `withdraw-access-grant`: Withdraw a support grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct WithdrawAccessGrantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -8566,11 +8566,11 @@ pub struct WithdrawAccessGrantRequest {
 }
 
 /// The response of contract `withdraw-access-grant`: Withdraw a support grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct WithdrawAccessGrantResponse {}
 
 /// The errors of contract `withdraw-access-grant`: Withdraw a support grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum WithdrawAccessGrantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -8655,7 +8655,7 @@ impl fmt::Display for ExportSubjectDataError {
 impl std::error::Error for ExportSubjectDataError {}
 
 /// The request of contract `rectify-subject-field`: Rectify one personal field.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RectifySubjectFieldRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -8670,14 +8670,14 @@ pub struct RectifySubjectFieldRequest {
 }
 
 /// The response of contract `rectify-subject-field`: Rectify one personal field.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RectifySubjectFieldResponse {
     /// Field `version`.
     pub version: u64,
 }
 
 /// The errors of contract `rectify-subject-field`: Rectify one personal field.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RectifySubjectFieldError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -8818,21 +8818,21 @@ impl fmt::Display for EraseSubjectError {
 impl std::error::Error for EraseSubjectError {}
 
 /// The request of contract `get-processing-record`: Export the processing record of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetProcessingRecordRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
 }
 
 /// The response of contract `get-processing-record`: Export the processing record of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GetProcessingRecordResponse {
     /// Field `record`.
     pub record: types::ValueMap,
 }
 
 /// The errors of contract `get-processing-record`: Export the processing record of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum GetProcessingRecordError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -8914,7 +8914,7 @@ impl fmt::Display for PlaceLegalHoldError {
 impl std::error::Error for PlaceLegalHoldError {}
 
 /// The request of contract `define-token`: Define a content token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DefineTokenRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -8927,14 +8927,14 @@ pub struct DefineTokenRequest {
 }
 
 /// The response of contract `define-token`: Define a content token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DefineTokenResponse {
     /// Field `version`.
     pub version: u64,
 }
 
 /// The errors of contract `define-token`: Define a content token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DefineTokenError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -8964,7 +8964,7 @@ impl fmt::Display for DefineTokenError {
 impl std::error::Error for DefineTokenError {}
 
 /// The request of contract `remove-token`: Remove a content token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RemoveTokenRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -8973,11 +8973,11 @@ pub struct RemoveTokenRequest {
 }
 
 /// The response of contract `remove-token`: Remove a content token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RemoveTokenResponse {}
 
 /// The errors of contract `remove-token`: Remove a content token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RemoveTokenError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9007,7 +9007,7 @@ impl fmt::Display for RemoveTokenError {
 impl std::error::Error for RemoveTokenError {}
 
 /// The request of contract `evaluate-token`: Evaluate a token for a reader.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EvaluateTokenRequest {
     /// Field `state`.
     pub state: types::State,
@@ -9020,7 +9020,7 @@ pub struct EvaluateTokenRequest {
 }
 
 /// The response of contract `evaluate-token`: Evaluate a token for a reader.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EvaluateTokenResponse {
     /// Field `value`.
     pub value: String,
@@ -9029,7 +9029,7 @@ pub struct EvaluateTokenResponse {
 }
 
 /// The errors of contract `evaluate-token`: Evaluate a token for a reader.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum EvaluateTokenError {}
 
 impl fmt::Display for EvaluateTokenError {
@@ -9041,7 +9041,7 @@ impl fmt::Display for EvaluateTokenError {
 impl std::error::Error for EvaluateTokenError {}
 
 /// The request of contract `define-mail-template`: Define a mail template.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DefineMailTemplateRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -9054,14 +9054,14 @@ pub struct DefineMailTemplateRequest {
 }
 
 /// The response of contract `define-mail-template`: Define a mail template.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DefineMailTemplateResponse {
     /// Field `version`.
     pub version: u64,
 }
 
 /// The errors of contract `define-mail-template`: Define a mail template.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DefineMailTemplateError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9129,7 +9129,7 @@ impl fmt::Display for RenderMessageError {
 impl std::error::Error for RenderMessageError {}
 
 /// The request of contract `prove-sender-domain`: Prove a sender domain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProveSenderDomainRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -9138,14 +9138,14 @@ pub struct ProveSenderDomainRequest {
 }
 
 /// The response of contract `prove-sender-domain`: Prove a sender domain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProveSenderDomainResponse {
     /// Field `state`.
     pub state: types::DomainState,
 }
 
 /// The errors of contract `prove-sender-domain`: Prove a sender domain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ProveSenderDomainError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9282,7 +9282,7 @@ impl fmt::Display for ManageSuppressionListError {
 impl std::error::Error for ManageSuppressionListError {}
 
 /// The request of contract `create-release`: Create a release record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CreateReleaseRequest {
     /// Field `commit`.
     pub commit: String,
@@ -9293,14 +9293,14 @@ pub struct CreateReleaseRequest {
 }
 
 /// The response of contract `create-release`: Create a release record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CreateReleaseResponse {
     /// Field `release`.
     pub release: types::ReleaseId,
 }
 
 /// The errors of contract `create-release`: Create a release record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CreateReleaseError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9322,7 +9322,7 @@ impl fmt::Display for CreateReleaseError {
 impl std::error::Error for CreateReleaseError {}
 
 /// The request of contract `promote-release`: Promote a release.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PromoteReleaseRequest {
     /// Field `release`.
     pub release: types::ReleaseId,
@@ -9331,14 +9331,14 @@ pub struct PromoteReleaseRequest {
 }
 
 /// The response of contract `promote-release`: Promote a release.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PromoteReleaseResponse {
     /// Field `state`.
     pub state: types::ReleaseState,
 }
 
 /// The errors of contract `promote-release`: Promote a release.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum PromoteReleaseError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9368,7 +9368,7 @@ impl fmt::Display for PromoteReleaseError {
 impl std::error::Error for PromoteReleaseError {}
 
 /// The request of contract `switch-colour`: Switch the live colour of a component.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SwitchColourRequest {
     /// Field `release`.
     pub release: types::ReleaseId,
@@ -9377,14 +9377,14 @@ pub struct SwitchColourRequest {
 }
 
 /// The response of contract `switch-colour`: Switch the live colour of a component.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SwitchColourResponse {
     /// Field `live`.
     pub live: types::ColourId,
 }
 
 /// The errors of contract `switch-colour`: Switch the live colour of a component.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SwitchColourError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9410,21 +9410,21 @@ impl fmt::Display for SwitchColourError {
 impl std::error::Error for SwitchColourError {}
 
 /// The request of contract `switch-back`: Switch back to the previous colour.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SwitchBackRequest {
     /// Field `component`.
     pub component: String,
 }
 
 /// The response of contract `switch-back`: Switch back to the previous colour.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SwitchBackResponse {
     /// Field `live`.
     pub live: types::ColourId,
 }
 
 /// The errors of contract `switch-back`: Switch back to the previous colour.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SwitchBackError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9446,21 +9446,21 @@ impl fmt::Display for SwitchBackError {
 impl std::error::Error for SwitchBackError {}
 
 /// The request of contract `report-drift`: Report drift of an environment.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReportDriftRequest {
     /// Field `environment`.
     pub environment: types::EnvironmentId,
 }
 
 /// The response of contract `report-drift`: Report drift of an environment.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReportDriftResponse {
     /// Field `differences`.
     pub differences: Vec<String>,
 }
 
 /// The errors of contract `report-drift`: Report drift of an environment.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReportDriftError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9478,7 +9478,7 @@ impl fmt::Display for ReportDriftError {
 impl std::error::Error for ReportDriftError {}
 
 /// The request of contract `set-listener-rule`: Set the listener rule of a component.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SetListenerRuleRequest {
     /// Field `component`.
     pub component: String,
@@ -9489,11 +9489,11 @@ pub struct SetListenerRuleRequest {
 }
 
 /// The response of contract `set-listener-rule`: Set the listener rule of a component.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SetListenerRuleResponse {}
 
 /// The errors of contract `set-listener-rule`: Set the listener rule of a component.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SetListenerRuleError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9515,7 +9515,7 @@ impl fmt::Display for SetListenerRuleError {
 impl std::error::Error for SetListenerRuleError {}
 
 /// The request of contract `preview-migration`: Preview a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PreviewMigrationRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -9524,14 +9524,14 @@ pub struct PreviewMigrationRequest {
 }
 
 /// The response of contract `preview-migration`: Preview a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PreviewMigrationResponse {
     /// Field `plan`.
     pub plan: types::MigrationPlan,
 }
 
 /// The errors of contract `preview-migration`: Preview a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum PreviewMigrationError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9557,7 +9557,7 @@ impl fmt::Display for PreviewMigrationError {
 impl std::error::Error for PreviewMigrationError {}
 
 /// The request of contract `start-migration-run`: Start a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StartMigrationRunRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -9566,14 +9566,14 @@ pub struct StartMigrationRunRequest {
 }
 
 /// The response of contract `start-migration-run`: Start a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StartMigrationRunResponse {
     /// Field `run`.
     pub run: types::MigrationId,
 }
 
 /// The errors of contract `start-migration-run`: Start a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum StartMigrationRunError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9603,14 +9603,14 @@ impl fmt::Display for StartMigrationRunError {
 impl std::error::Error for StartMigrationRunError {}
 
 /// The request of contract `run-migration-batch`: Run one batch of a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RunMigrationBatchRequest {
     /// Field `run`.
     pub run: types::MigrationId,
 }
 
 /// The response of contract `run-migration-batch`: Run one batch of a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RunMigrationBatchResponse {
     /// Field `cursor`.
     pub cursor: String,
@@ -9619,7 +9619,7 @@ pub struct RunMigrationBatchResponse {
 }
 
 /// The errors of contract `run-migration-batch`: Run one batch of a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RunMigrationBatchError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9637,21 +9637,21 @@ impl fmt::Display for RunMigrationBatchError {
 impl std::error::Error for RunMigrationBatchError {}
 
 /// The request of contract `stop-migration-run`: Stop a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StopMigrationRunRequest {
     /// Field `run`.
     pub run: types::MigrationId,
 }
 
 /// The response of contract `stop-migration-run`: Stop a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StopMigrationRunResponse {
     /// Field `cursor`.
     pub cursor: String,
 }
 
 /// The errors of contract `stop-migration-run`: Stop a migration run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum StopMigrationRunError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9673,7 +9673,7 @@ impl fmt::Display for StopMigrationRunError {
 impl std::error::Error for StopMigrationRunError {}
 
 /// The request of contract `move-tenant`: Move a tenant to another placement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct MoveTenantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -9682,14 +9682,14 @@ pub struct MoveTenantRequest {
 }
 
 /// The response of contract `move-tenant`: Move a tenant to another placement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct MoveTenantResponse {
     /// Field `move`.
     pub r#move: types::MoveId,
 }
 
 /// The errors of contract `move-tenant`: Move a tenant to another placement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum MoveTenantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9719,21 +9719,21 @@ impl fmt::Display for MoveTenantError {
 impl std::error::Error for MoveTenantError {}
 
 /// The request of contract `switch-placement`: Switch a tenant to its target placement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SwitchPlacementRequest {
     /// Field `move`.
     pub r#move: types::MoveId,
 }
 
 /// The response of contract `switch-placement`: Switch a tenant to its target placement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SwitchPlacementResponse {
     /// Field `placement`.
     pub placement: types::PlacementId,
 }
 
 /// The errors of contract `switch-placement`: Switch a tenant to its target placement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SwitchPlacementError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9860,7 +9860,7 @@ impl fmt::Display for ParseBundleError {
 impl std::error::Error for ParseBundleError {}
 
 /// The request of contract `propose-template-upgrade`: Offer a newer template version.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProposeTemplateUpgradeRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -9871,14 +9871,14 @@ pub struct ProposeTemplateUpgradeRequest {
 }
 
 /// The response of contract `propose-template-upgrade`: Offer a newer template version.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProposeTemplateUpgradeResponse {
     /// Field `proposal`.
     pub proposal: types::ProposalId,
 }
 
 /// The errors of contract `propose-template-upgrade`: Offer a newer template version.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ProposeTemplateUpgradeError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -9900,21 +9900,21 @@ impl fmt::Display for ProposeTemplateUpgradeError {
 impl std::error::Error for ProposeTemplateUpgradeError {}
 
 /// The request of contract `hash-password`: Hash a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct HashPasswordRequest {
     /// Field `password`.
     pub password: types::Secret,
 }
 
 /// The response of contract `hash-password`: Hash a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct HashPasswordResponse {
     /// Field `hash`.
     pub hash: types::Hash,
 }
 
 /// The errors of contract `hash-password`: Hash a password.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum HashPasswordError {
     /// The operating system supplies no randomness.
     #[serde(rename = "unavailable")]
@@ -9936,7 +9936,7 @@ impl fmt::Display for HashPasswordError {
 impl std::error::Error for HashPasswordError {}
 
 /// The request of contract `verify-password`: Verify a password against its hash.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyPasswordRequest {
     /// Field `password`.
     pub password: types::Secret,
@@ -9945,14 +9945,14 @@ pub struct VerifyPasswordRequest {
 }
 
 /// The response of contract `verify-password`: Verify a password against its hash.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyPasswordResponse {
     /// Field `matches`.
     pub matches: bool,
 }
 
 /// The errors of contract `verify-password`: Verify a password against its hash.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum VerifyPasswordError {}
 
 impl fmt::Display for VerifyPasswordError {
@@ -9964,21 +9964,21 @@ impl fmt::Display for VerifyPasswordError {
 impl std::error::Error for VerifyPasswordError {}
 
 /// The request of contract `draw-random-secret`: Draw a random secret.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DrawRandomSecretRequest {
     /// Field `bytes`.
     pub bytes: u32,
 }
 
 /// The response of contract `draw-random-secret`: Draw a random secret.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DrawRandomSecretResponse {
     /// Field `secret`.
     pub secret: types::Secret,
 }
 
 /// The errors of contract `draw-random-secret`: Draw a random secret.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DrawRandomSecretError {
     /// The operating system supplies no randomness.
     #[serde(rename = "unavailable")]
@@ -10217,21 +10217,21 @@ impl fmt::Display for HashBytesError {
 impl std::error::Error for HashBytesError {}
 
 /// The request of contract `terminate-tls`: Terminate TLS.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TerminateTlsRequest {
     /// Field `connection`.
     pub connection: Vec<u8>,
 }
 
 /// The response of contract `terminate-tls`: Terminate TLS.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TerminateTlsResponse {
     /// Field `stream`.
     pub stream: Vec<u8>,
 }
 
 /// The errors of contract `terminate-tls`: Terminate TLS.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum TerminateTlsError {
     /// No allowed protocol version or certificate matches.
     #[serde(rename = "handshake_failed")]
@@ -10249,21 +10249,21 @@ impl fmt::Display for TerminateTlsError {
 impl std::error::Error for TerminateTlsError {}
 
 /// The request of contract `render-page`: Render a page to HTML.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RenderPageRequest {
     /// Field `view`.
     pub view: types::ViewData,
 }
 
 /// The response of contract `render-page`: Render a page to HTML.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RenderPageResponse {
     /// Field `page`.
     pub page: types::HtmlPage,
 }
 
 /// The errors of contract `render-page`: Render a page to HTML.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RenderPageError {}
 
 impl fmt::Display for RenderPageError {
@@ -10275,7 +10275,7 @@ impl fmt::Display for RenderPageError {
 impl std::error::Error for RenderPageError {}
 
 /// The request of contract `sign-access-token`: Sign an access token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignAccessTokenRequest {
     /// Field `claims`.
     pub claims: types::ValueMap,
@@ -10284,14 +10284,14 @@ pub struct SignAccessTokenRequest {
 }
 
 /// The response of contract `sign-access-token`: Sign an access token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignAccessTokenResponse {
     /// Field `token`.
     pub token: types::Secret,
 }
 
 /// The errors of contract `sign-access-token`: Sign an access token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SignAccessTokenError {}
 
 impl fmt::Display for SignAccessTokenError {
@@ -10303,7 +10303,7 @@ impl fmt::Display for SignAccessTokenError {
 impl std::error::Error for SignAccessTokenError {}
 
 /// The request of contract `verify-access-token`: Verify an access token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyAccessTokenRequest {
     /// Field `token`.
     pub token: types::Secret,
@@ -10314,14 +10314,14 @@ pub struct VerifyAccessTokenRequest {
 }
 
 /// The response of contract `verify-access-token`: Verify an access token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyAccessTokenResponse {
     /// Field `claims`.
     pub claims: types::ValueMap,
 }
 
 /// The errors of contract `verify-access-token`: Verify an access token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum VerifyAccessTokenError {
     /// The signature, audience, tenant or expiry is wrong.
     #[serde(rename = "invalid")]
@@ -10339,7 +10339,7 @@ impl fmt::Display for VerifyAccessTokenError {
 impl std::error::Error for VerifyAccessTokenError {}
 
 /// The request of contract `verify-identity-token`: Verify an OpenID Connect identity token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyIdentityTokenRequest {
     /// Field `token`.
     pub token: types::Secret,
@@ -10352,7 +10352,7 @@ pub struct VerifyIdentityTokenRequest {
 }
 
 /// The response of contract `verify-identity-token`: Verify an OpenID Connect identity token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyIdentityTokenResponse {
     /// Field `subject`.
     pub subject: types::ExternalSubject,
@@ -10364,7 +10364,7 @@ pub struct VerifyIdentityTokenResponse {
 }
 
 /// The errors of contract `verify-identity-token`: Verify an OpenID Connect identity token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum VerifyIdentityTokenError {
     /// The issuer, audience, signature or nonce fails verification.
     #[serde(rename = "invalid")]
@@ -10382,7 +10382,7 @@ impl fmt::Display for VerifyIdentityTokenError {
 impl std::error::Error for VerifyIdentityTokenError {}
 
 /// The request of contract `verify-saml-assertion`: Verify a SAML assertion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifySamlAssertionRequest {
     /// Field `response`.
     pub response: Vec<u8>,
@@ -10391,7 +10391,7 @@ pub struct VerifySamlAssertionRequest {
 }
 
 /// The response of contract `verify-saml-assertion`: Verify a SAML assertion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifySamlAssertionResponse {
     /// Field `subject`.
     pub subject: types::ExternalSubject,
@@ -10400,7 +10400,7 @@ pub struct VerifySamlAssertionResponse {
 }
 
 /// The errors of contract `verify-saml-assertion`: Verify a SAML assertion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum VerifySamlAssertionError {
     /// The signature, issuer, audience, recipient, destination, time or request is wrong, or the message is not one that is read.
     #[serde(rename = "invalid")]
@@ -10418,7 +10418,7 @@ impl fmt::Display for VerifySamlAssertionError {
 impl std::error::Error for VerifySamlAssertionError {}
 
 /// The request of contract `verify-passkey-assertion`: Verify a passkey assertion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyPasskeyAssertionRequest {
     /// Field `assertion`.
     pub assertion: Vec<u8>,
@@ -10429,14 +10429,14 @@ pub struct VerifyPasskeyAssertionRequest {
 }
 
 /// The response of contract `verify-passkey-assertion`: Verify a passkey assertion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyPasskeyAssertionResponse {
     /// Field `credential`.
     pub credential: types::CredentialId,
 }
 
 /// The errors of contract `verify-passkey-assertion`: Verify a passkey assertion.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum VerifyPasskeyAssertionError {
     /// The signature, challenge or relying party is wrong.
     #[serde(rename = "invalid")]
@@ -10454,7 +10454,7 @@ impl fmt::Display for VerifyPasskeyAssertionError {
 impl std::error::Error for VerifyPasskeyAssertionError {}
 
 /// The request of contract `verify-one-time-code`: Verify a time-based one-time code.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyOneTimeCodeRequest {
     /// Field `code`.
     pub code: types::Secret,
@@ -10465,14 +10465,14 @@ pub struct VerifyOneTimeCodeRequest {
 }
 
 /// The response of contract `verify-one-time-code`: Verify a time-based one-time code.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyOneTimeCodeResponse {
     /// Field `matches`.
     pub matches: bool,
 }
 
 /// The errors of contract `verify-one-time-code`: Verify a time-based one-time code.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum VerifyOneTimeCodeError {}
 
 impl fmt::Display for VerifyOneTimeCodeError {
@@ -10484,7 +10484,7 @@ impl fmt::Display for VerifyOneTimeCodeError {
 impl std::error::Error for VerifyOneTimeCodeError {}
 
 /// The request of contract `seal-field`: Encrypt under a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SealFieldRequest {
     /// Field `plaintext`.
     pub plaintext: Vec<u8>,
@@ -10493,14 +10493,14 @@ pub struct SealFieldRequest {
 }
 
 /// The response of contract `seal-field`: Encrypt under a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SealFieldResponse {
     /// Field `sealed`.
     pub sealed: Vec<u8>,
 }
 
 /// The errors of contract `seal-field`: Encrypt under a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SealFieldError {
     /// The key was destroyed.
     #[serde(rename = "key_destroyed")]
@@ -10518,7 +10518,7 @@ impl fmt::Display for SealFieldError {
 impl std::error::Error for SealFieldError {}
 
 /// The request of contract `open-field`: Decrypt under a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct OpenFieldRequest {
     /// Field `sealed`.
     pub sealed: Vec<u8>,
@@ -10527,14 +10527,14 @@ pub struct OpenFieldRequest {
 }
 
 /// The response of contract `open-field`: Decrypt under a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct OpenFieldResponse {
     /// Field `plaintext`.
     pub plaintext: Vec<u8>,
 }
 
 /// The errors of contract `open-field`: Decrypt under a data key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum OpenFieldError {
     /// The key was destroyed.
     #[serde(rename = "key_destroyed")]
@@ -10616,7 +10616,7 @@ impl fmt::Display for VerifyWebhookSignatureError {
 impl std::error::Error for VerifyWebhookSignatureError {}
 
 /// The request of contract `send-through-mail-provider`: Hand a message to the mail provider.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SendThroughMailProviderRequest {
     /// Field `message`.
     pub message: Vec<u8>,
@@ -10625,14 +10625,14 @@ pub struct SendThroughMailProviderRequest {
 }
 
 /// The response of contract `send-through-mail-provider`: Hand a message to the mail provider.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SendThroughMailProviderResponse {
     /// Field `accepted`.
     pub accepted: bool,
 }
 
 /// The errors of contract `send-through-mail-provider`: Hand a message to the mail provider.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SendThroughMailProviderError {
     /// The provider refused for a temporary reason.
     #[serde(rename = "temporary_refusal")]
@@ -10654,7 +10654,7 @@ impl fmt::Display for SendThroughMailProviderError {
 impl std::error::Error for SendThroughMailProviderError {}
 
 /// The request of contract `sign-mail-dkim`: Sign a message with DKIM.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignMailDkimRequest {
     /// Field `message`.
     pub message: Vec<u8>,
@@ -10663,14 +10663,14 @@ pub struct SignMailDkimRequest {
 }
 
 /// The response of contract `sign-mail-dkim`: Sign a message with DKIM.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SignMailDkimResponse {
     /// Field `signed`.
     pub signed: Vec<u8>,
 }
 
 /// The errors of contract `sign-mail-dkim`: Sign a message with DKIM.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SignMailDkimError {}
 
 impl fmt::Display for SignMailDkimError {
@@ -10682,7 +10682,7 @@ impl fmt::Display for SignMailDkimError {
 impl std::error::Error for SignMailDkimError {}
 
 /// The request of contract `open-postgres-store`: Open the PostgreSQL store.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct OpenPostgresStoreRequest {
     /// Field `placement`.
     pub placement: types::PlacementId,
@@ -10691,14 +10691,14 @@ pub struct OpenPostgresStoreRequest {
 }
 
 /// The response of contract `open-postgres-store`: Open the PostgreSQL store.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct OpenPostgresStoreResponse {
     /// Field `store`.
     pub store: types::StoreHandle,
 }
 
 /// The errors of contract `open-postgres-store`: Open the PostgreSQL store.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum OpenPostgresStoreError {
     /// The database cannot be reached.
     #[serde(rename = "unavailable")]
@@ -10788,14 +10788,14 @@ impl fmt::Display for PerformOutboundHttpError {
 impl std::error::Error for PerformOutboundHttpError {}
 
 /// The request of contract `scan-content`: Scan the content of an upload.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ScanContentRequest {
     /// Field `content`.
     pub content: Vec<u8>,
 }
 
 /// The response of contract `scan-content`: Scan the content of an upload.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ScanContentResponse {
     /// Field `clean`.
     pub clean: bool,
@@ -10804,7 +10804,7 @@ pub struct ScanContentResponse {
 }
 
 /// The errors of contract `scan-content`: Scan the content of an upload.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ScanContentError {}
 
 impl fmt::Display for ScanContentError {
@@ -10816,7 +10816,7 @@ impl fmt::Display for ScanContentError {
 impl std::error::Error for ScanContentError {}
 
 /// The request of contract `produce-rendition`: Produce a rendition of a file.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProduceRenditionRequest {
     /// Field `content`.
     pub content: Vec<u8>,
@@ -10825,14 +10825,14 @@ pub struct ProduceRenditionRequest {
 }
 
 /// The response of contract `produce-rendition`: Produce a rendition of a file.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ProduceRenditionResponse {
     /// Field `result`.
     pub result: Vec<u8>,
 }
 
 /// The errors of contract `produce-rendition`: Produce a rendition of a file.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ProduceRenditionError {
     /// The decompressed size exceeds the limit of the plan (CMS-263).
     #[serde(rename = "too_large")]
@@ -10850,21 +10850,21 @@ impl fmt::Display for ProduceRenditionError {
 impl std::error::Error for ProduceRenditionError {}
 
 /// The request of contract `issue-domain-certificate`: Issue a certificate for a tenant domain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IssueDomainCertificateRequest {
     /// Field `host`.
     pub host: types::Host,
 }
 
 /// The response of contract `issue-domain-certificate`: Issue a certificate for a tenant domain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IssueDomainCertificateResponse {
     /// Field `certificate-state`.
     pub certificate_state: types::CertificateState,
 }
 
 /// The errors of contract `issue-domain-certificate`: Issue a certificate for a tenant domain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum IssueDomainCertificateError {
     /// The certificate authority record of the domain does not permit issuing (EDG-254).
     #[serde(rename = "refused")]
@@ -10882,11 +10882,11 @@ impl fmt::Display for IssueDomainCertificateError {
 impl std::error::Error for IssueDomainCertificateError {}
 
 /// The request of contract `read-front-page`: Read the front page view.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadFrontPageRequest {}
 
 /// The response of contract `read-front-page`: Read the front page view.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadFrontPageResponse {
     /// Field `view`.
     pub view: String,
@@ -10909,7 +10909,7 @@ pub struct ReadFrontPageResponse {
 }
 
 /// The errors of contract `read-front-page`: Read the front page view.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadFrontPageError {
     /// A dependency of the operation did not answer.
     #[serde(rename = "unavailable")]
@@ -10927,14 +10927,14 @@ impl fmt::Display for ReadFrontPageError {
 impl std::error::Error for ReadFrontPageError {}
 
 /// The request of contract `read-article-page`: Read the view of one article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadArticlePageRequest {
     /// Field `slug`.
     pub slug: String,
 }
 
 /// The response of contract `read-article-page`: Read the view of one article.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadArticlePageResponse {
     /// Field `view`.
     pub view: String,
@@ -10957,7 +10957,7 @@ pub struct ReadArticlePageResponse {
 }
 
 /// The errors of contract `read-article-page`: Read the view of one article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadArticlePageError {
     /// The page or the record it names does not exist for this tenant.
     #[serde(rename = "not_found")]
@@ -10979,11 +10979,11 @@ impl fmt::Display for ReadArticlePageError {
 impl std::error::Error for ReadArticlePageError {}
 
 /// The request of contract `read-topics-page`: Read the view of the topic index.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadTopicsPageRequest {}
 
 /// The response of contract `read-topics-page`: Read the view of the topic index.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadTopicsPageResponse {
     /// Field `view`.
     pub view: String,
@@ -11006,7 +11006,7 @@ pub struct ReadTopicsPageResponse {
 }
 
 /// The errors of contract `read-topics-page`: Read the view of the topic index.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadTopicsPageError {
     /// A dependency of the operation did not answer.
     #[serde(rename = "unavailable")]
@@ -11024,14 +11024,14 @@ impl fmt::Display for ReadTopicsPageError {
 impl std::error::Error for ReadTopicsPageError {}
 
 /// The request of contract `read-topic-page`: Read the view of one topic.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadTopicPageRequest {
     /// Field `slug`.
     pub slug: String,
 }
 
 /// The response of contract `read-topic-page`: Read the view of one topic.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadTopicPageResponse {
     /// Field `view`.
     pub view: String,
@@ -11054,7 +11054,7 @@ pub struct ReadTopicPageResponse {
 }
 
 /// The errors of contract `read-topic-page`: Read the view of one topic.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadTopicPageError {
     /// The page or the record it names does not exist for this tenant.
     #[serde(rename = "not_found")]
@@ -11076,11 +11076,11 @@ impl fmt::Display for ReadTopicPageError {
 impl std::error::Error for ReadTopicPageError {}
 
 /// The request of contract `read-authors-page`: Read the view of the author index.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadAuthorsPageRequest {}
 
 /// The response of contract `read-authors-page`: Read the view of the author index.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadAuthorsPageResponse {
     /// Field `view`.
     pub view: String,
@@ -11103,7 +11103,7 @@ pub struct ReadAuthorsPageResponse {
 }
 
 /// The errors of contract `read-authors-page`: Read the view of the author index.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadAuthorsPageError {
     /// A dependency of the operation did not answer.
     #[serde(rename = "unavailable")]
@@ -11121,14 +11121,14 @@ impl fmt::Display for ReadAuthorsPageError {
 impl std::error::Error for ReadAuthorsPageError {}
 
 /// The request of contract `read-author-page`: Read the view of one author.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadAuthorPageRequest {
     /// Field `slug`.
     pub slug: String,
 }
 
 /// The response of contract `read-author-page`: Read the view of one author.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadAuthorPageResponse {
     /// Field `view`.
     pub view: String,
@@ -11151,7 +11151,7 @@ pub struct ReadAuthorPageResponse {
 }
 
 /// The errors of contract `read-author-page`: Read the view of one author.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadAuthorPageError {
     /// The page or the record it names does not exist for this tenant.
     #[serde(rename = "not_found")]
@@ -11173,7 +11173,7 @@ impl fmt::Display for ReadAuthorPageError {
 impl std::error::Error for ReadAuthorPageError {}
 
 /// The request of contract `read-search-page`: Read the view of the search results.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadSearchPageRequest {
     /// Field `q`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -11181,7 +11181,7 @@ pub struct ReadSearchPageRequest {
 }
 
 /// The response of contract `read-search-page`: Read the view of the search results.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadSearchPageResponse {
     /// Field `view`.
     pub view: String,
@@ -11207,7 +11207,7 @@ pub struct ReadSearchPageResponse {
 }
 
 /// The errors of contract `read-search-page`: Read the view of the search results.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadSearchPageError {
     /// A dependency of the operation did not answer.
     #[serde(rename = "unavailable")]
@@ -11225,11 +11225,11 @@ impl fmt::Display for ReadSearchPageError {
 impl std::error::Error for ReadSearchPageError {}
 
 /// The request of contract `read-about-page`: Read the view of the about page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadAboutPageRequest {}
 
 /// The response of contract `read-about-page`: Read the view of the about page.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadAboutPageResponse {
     /// Field `view`.
     pub view: String,
@@ -11252,7 +11252,7 @@ pub struct ReadAboutPageResponse {
 }
 
 /// The errors of contract `read-about-page`: Read the view of the about page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadAboutPageError {
     /// A dependency of the operation did not answer.
     #[serde(rename = "unavailable")]
@@ -11270,21 +11270,21 @@ impl fmt::Display for ReadAboutPageError {
 impl std::error::Error for ReadAboutPageError {}
 
 /// The request of contract `read-missing-page`: Read the view of an address no page answers.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadMissingPageRequest {
     /// Field `missing`.
     pub missing: String,
 }
 
 /// The response of contract `read-missing-page`: Read the view of an address no page answers.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadMissingPageResponse {
     /// Field `path`.
     pub path: String,
 }
 
 /// The errors of contract `read-missing-page`: Read the view of an address no page answers.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadMissingPageError {
     /// The page or the record it names does not exist for this tenant.
     #[serde(rename = "not_found")]
@@ -11302,7 +11302,7 @@ impl fmt::Display for ReadMissingPageError {
 impl std::error::Error for ReadMissingPageError {}
 
 /// The request of contract `read-sign-in-view`: Read the view of the sign-in page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadSignInViewRequest {
     /// Field `next`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -11310,7 +11310,7 @@ pub struct ReadSignInViewRequest {
 }
 
 /// The response of contract `read-sign-in-view`: Read the view of the sign-in page.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadSignInViewResponse {
     /// Field `view`.
     pub view: String,
@@ -11333,7 +11333,7 @@ pub struct ReadSignInViewResponse {
 }
 
 /// The errors of contract `read-sign-in-view`: Read the view of the sign-in page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadSignInViewError {
     /// A dependency of the operation did not answer.
     #[serde(rename = "unavailable")]
@@ -11351,11 +11351,11 @@ impl fmt::Display for ReadSignInViewError {
 impl std::error::Error for ReadSignInViewError {}
 
 /// The request of contract `read-desk-view`: Read the view of the writing desk.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadDeskViewRequest {}
 
 /// The response of contract `read-desk-view`: Read the view of the writing desk.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadDeskViewResponse {
     /// Field `view`.
     pub view: String,
@@ -11380,7 +11380,7 @@ pub struct ReadDeskViewResponse {
 }
 
 /// The errors of contract `read-desk-view`: Read the view of the writing desk.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadDeskViewError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -11406,7 +11406,7 @@ impl fmt::Display for ReadDeskViewError {
 impl std::error::Error for ReadDeskViewError {}
 
 /// The request of contract `read-new-article-view`: Read the view for a new article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadNewArticleViewRequest {
     /// The object types, separated by commas and at most 8, whose rules the editor asks for; the page asks for post. A signed-in reader only (CMS-2960).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -11414,7 +11414,7 @@ pub struct ReadNewArticleViewRequest {
 }
 
 /// The response of contract `read-new-article-view`: Read the view for a new article.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadNewArticleViewResponse {
     /// Field `view`.
     pub view: String,
@@ -11444,7 +11444,7 @@ pub struct ReadNewArticleViewResponse {
 }
 
 /// The errors of contract `read-new-article-view`: Read the view for a new article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadNewArticleViewError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -11470,7 +11470,7 @@ impl fmt::Display for ReadNewArticleViewError {
 impl std::error::Error for ReadNewArticleViewError {}
 
 /// The request of contract `read-edit-article-view`: Read the view for editing an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadEditArticleViewRequest {
     /// Field `slug`.
     pub slug: String,
@@ -11480,7 +11480,7 @@ pub struct ReadEditArticleViewRequest {
 }
 
 /// The response of contract `read-edit-article-view`: Read the view for editing an article.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadEditArticleViewResponse {
     /// Field `view`.
     pub view: String,
@@ -11514,7 +11514,7 @@ pub struct ReadEditArticleViewResponse {
 }
 
 /// The errors of contract `read-edit-article-view`: Read the view for editing an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadEditArticleViewError {
     /// The page or the record it names does not exist for this tenant.
     #[serde(rename = "not_found")]
@@ -11544,11 +11544,11 @@ impl fmt::Display for ReadEditArticleViewError {
 impl std::error::Error for ReadEditArticleViewError {}
 
 /// The request of contract `read-settings-view`: Read the view of the publication settings.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadSettingsViewRequest {}
 
 /// The response of contract `read-settings-view`: Read the view of the publication settings.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadSettingsViewResponse {
     /// Field `view`.
     pub view: String,
@@ -11579,7 +11579,7 @@ pub struct ReadSettingsViewResponse {
 }
 
 /// The errors of contract `read-settings-view`: Read the view of the publication settings.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadSettingsViewError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -11605,11 +11605,11 @@ impl fmt::Display for ReadSettingsViewError {
 impl std::error::Error for ReadSettingsViewError {}
 
 /// The request of contract `read-lab-view`: Read the view of the impact lab.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadLabViewRequest {}
 
 /// The response of contract `read-lab-view`: Read the view of the impact lab.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadLabViewResponse {
     /// Field `view`.
     pub view: String,
@@ -11632,7 +11632,7 @@ pub struct ReadLabViewResponse {
 }
 
 /// The errors of contract `read-lab-view`: Read the view of the impact lab.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadLabViewError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -11778,7 +11778,7 @@ impl fmt::Display for ReadSessionViewError {
 impl std::error::Error for ReadSessionViewError {}
 
 /// The request of contract `create-article`: Create an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CreateArticleRequest {
     /// Field `title`.
     pub title: String,
@@ -11813,7 +11813,7 @@ pub struct CreateArticleRequest {
 }
 
 /// The response of contract `create-article`: Create an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CreateArticleResponse {
     /// Field `article-id`.
     pub article_id: types::RecordId,
@@ -11824,7 +11824,7 @@ pub struct CreateArticleResponse {
 }
 
 /// The errors of contract `create-article`: Create an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CreateArticleError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -11858,7 +11858,7 @@ impl fmt::Display for CreateArticleError {
 impl std::error::Error for CreateArticleError {}
 
 /// The request of contract `update-article`: Update an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct UpdateArticleRequest {
     /// Field `article`.
     pub article: types::RecordId,
@@ -11897,7 +11897,7 @@ pub struct UpdateArticleRequest {
 }
 
 /// The response of contract `update-article`: Update an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct UpdateArticleResponse {
     /// Field `article-id`.
     pub article_id: types::RecordId,
@@ -11908,7 +11908,7 @@ pub struct UpdateArticleResponse {
 }
 
 /// The errors of contract `update-article`: Update an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum UpdateArticleError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -11946,7 +11946,7 @@ impl fmt::Display for UpdateArticleError {
 impl std::error::Error for UpdateArticleError {}
 
 /// The request of contract `delete-article`: Delete an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeleteArticleRequest {
     /// Field `article`.
     pub article: types::RecordId,
@@ -11955,11 +11955,11 @@ pub struct DeleteArticleRequest {
 }
 
 /// The response of contract `delete-article`: Delete an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeleteArticleResponse {}
 
 /// The errors of contract `delete-article`: Delete an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DeleteArticleError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -11993,7 +11993,7 @@ impl fmt::Display for DeleteArticleError {
 impl std::error::Error for DeleteArticleError {}
 
 /// The request of contract `save-site-settings`: Save the publication settings.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SaveSiteSettingsRequest {
     /// Field `publication`.
     pub publication: types::RecordId,
@@ -12011,14 +12011,14 @@ pub struct SaveSiteSettingsRequest {
 }
 
 /// The response of contract `save-site-settings`: Save the publication settings.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SaveSiteSettingsResponse {
     /// Field `version`.
     pub version: u64,
 }
 
 /// The errors of contract `save-site-settings`: Save the publication settings.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SaveSiteSettingsError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -12326,11 +12326,11 @@ impl fmt::Display for ReadViewError {
 impl std::error::Error for ReadViewError {}
 
 /// The request of contract `issue-passkey-challenge`: Issue a passkey challenge.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IssuePasskeyChallengeRequest {}
 
 /// The response of contract `issue-passkey-challenge`: Issue a passkey challenge.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct IssuePasskeyChallengeResponse {
     /// Field `challenge`.
     pub challenge: types::ChallengeId,
@@ -12339,7 +12339,7 @@ pub struct IssuePasskeyChallengeResponse {
 }
 
 /// The errors of contract `issue-passkey-challenge`: Issue a passkey challenge.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum IssuePasskeyChallengeError {
     /// The caller exceeded a limit that applies to it.
     #[serde(rename = "throttled")]
@@ -12369,18 +12369,18 @@ impl fmt::Display for IssuePasskeyChallengeError {
 impl std::error::Error for IssuePasskeyChallengeError {}
 
 /// The request of contract `list-passkeys`: List the passkeys of the caller.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListPasskeysRequest {}
 
 /// The response of contract `list-passkeys`: List the passkeys of the caller.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ListPasskeysResponse {
     /// Field `credentials`.
     pub credentials: Vec<types::CredentialId>,
 }
 
 /// The errors of contract `list-passkeys`: List the passkeys of the caller.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ListPasskeysError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -12398,18 +12398,18 @@ impl fmt::Display for ListPasskeysError {
 impl std::error::Error for ListPasskeysError {}
 
 /// The request of contract `remove-passkey`: Remove a passkey.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RemovePasskeyRequest {
     /// Field `credential`.
     pub credential: types::CredentialId,
 }
 
 /// The response of contract `remove-passkey`: Remove a passkey.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RemovePasskeyResponse {}
 
 /// The errors of contract `remove-passkey`: Remove a passkey.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RemovePasskeyError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -12439,7 +12439,7 @@ impl fmt::Display for RemovePasskeyError {
 impl std::error::Error for RemovePasskeyError {}
 
 /// The request of contract `deliver-sign-in-mail`: Deliver a sign-in message through the mail transport.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeliverSignInMailRequest {
     /// Field `to`.
     pub to: types::EmailAddress,
@@ -12450,11 +12450,11 @@ pub struct DeliverSignInMailRequest {
 }
 
 /// The response of contract `deliver-sign-in-mail`: Deliver a sign-in message through the mail transport.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeliverSignInMailResponse {}
 
 /// The errors of contract `deliver-sign-in-mail`: Deliver a sign-in message through the mail transport.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DeliverSignInMailError {
     /// The transport did not accept the message.
     #[serde(rename = "unavailable")]
@@ -12472,14 +12472,14 @@ impl fmt::Display for DeliverSignInMailError {
 impl std::error::Error for DeliverSignInMailError {}
 
 /// The request of contract `check-return-address`: Check a return address.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CheckReturnAddressRequest {
     /// Field `next`.
     pub next: String,
 }
 
 /// The response of contract `check-return-address`: Check a return address.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CheckReturnAddressResponse {
     /// Field `path`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -12487,7 +12487,7 @@ pub struct CheckReturnAddressResponse {
 }
 
 /// The errors of contract `check-return-address`: Check a return address.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CheckReturnAddressError {}
 
 impl fmt::Display for CheckReturnAddressError {
@@ -12499,7 +12499,7 @@ impl fmt::Display for CheckReturnAddressError {
 impl std::error::Error for CheckReturnAddressError {}
 
 /// The request of contract `configure-identity-providers`: Configure the identity providers of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConfigureIdentityProvidersRequest {
     /// Field `tenant`.
     pub tenant: String,
@@ -12508,11 +12508,11 @@ pub struct ConfigureIdentityProvidersRequest {
 }
 
 /// The response of contract `configure-identity-providers`: Configure the identity providers of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConfigureIdentityProvidersResponse {}
 
 /// The errors of contract `configure-identity-providers`: Configure the identity providers of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ConfigureIdentityProvidersError {
     /// The file does not parse, names a signature method that is not allowed, a provider twice, an unknown kind, a field its kind does not allow or lacks one it requires, or an environment variable that is not set.
     #[serde(rename = "invalid")]
@@ -12530,7 +12530,7 @@ impl fmt::Display for ConfigureIdentityProvidersError {
 impl std::error::Error for ConfigureIdentityProvidersError {}
 
 /// The request of contract `redeem-oidc-code`: Redeem an authorization code and check the identity token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RedeemOidcCodeRequest {
     /// Field `state`.
     pub state: types::Secret,
@@ -12541,14 +12541,14 @@ pub struct RedeemOidcCodeRequest {
 }
 
 /// The response of contract `redeem-oidc-code`: Redeem an authorization code and check the identity token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RedeemOidcCodeResponse {
     /// Field `subject`.
     pub subject: types::ExternalSubject,
 }
 
 /// The errors of contract `redeem-oidc-code`: Redeem an authorization code and check the identity token.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RedeemOidcCodeError {
     /// The state matches no pending request of this browser, the code does not redeem, or the token fails a check.
     #[serde(rename = "unauthenticated")]
@@ -12570,21 +12570,21 @@ impl fmt::Display for RedeemOidcCodeError {
 impl std::error::Error for RedeemOidcCodeError {}
 
 /// The request of contract `refuse-bound-domain-sign-in`: Refuse password and emailed-link sign-in in a provider-bound domain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RefuseBoundDomainSignInRequest {
     /// Field `address`.
     pub address: types::EmailAddress,
 }
 
 /// The response of contract `refuse-bound-domain-sign-in`: Refuse password and emailed-link sign-in in a provider-bound domain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RefuseBoundDomainSignInResponse {
     /// Field `bound`.
     pub bound: bool,
 }
 
 /// The errors of contract `refuse-bound-domain-sign-in`: Refuse password and emailed-link sign-in in a provider-bound domain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RefuseBoundDomainSignInError {}
 
 impl fmt::Display for RefuseBoundDomainSignInError {
@@ -12596,7 +12596,7 @@ impl fmt::Display for RefuseBoundDomainSignInError {
 impl std::error::Error for RefuseBoundDomainSignInError {}
 
 /// The request of contract `resolve-federated-identity`: Decide whose account a verified identity is.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ResolveFederatedIdentityRequest {
     /// Field `provider`.
     pub provider: types::ProviderId,
@@ -12610,14 +12610,14 @@ pub struct ResolveFederatedIdentityRequest {
 }
 
 /// The response of contract `resolve-federated-identity`: Decide whose account a verified identity is.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ResolveFederatedIdentityResponse {
     /// Field `principal`.
     pub principal: String,
 }
 
 /// The errors of contract `resolve-federated-identity`: Decide whose account a verified identity is.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ResolveFederatedIdentityError {
     /// The realm does not admit the identity.
     #[serde(rename = "unauthenticated")]
@@ -12635,7 +12635,7 @@ impl fmt::Display for ResolveFederatedIdentityError {
 impl std::error::Error for ResolveFederatedIdentityError {}
 
 /// The request of contract `configure-saml-providers`: Configure the SAML providers of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConfigureSamlProvidersRequest {
     /// Field `tenant`.
     pub tenant: String,
@@ -12644,11 +12644,11 @@ pub struct ConfigureSamlProvidersRequest {
 }
 
 /// The response of contract `configure-saml-providers`: Configure the SAML providers of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConfigureSamlProvidersResponse {}
 
 /// The errors of contract `configure-saml-providers`: Configure the SAML providers of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ConfigureSamlProvidersError {
     /// The file does not parse, a certificate or an address in it is not usable, or a provider appears twice.
     #[serde(rename = "invalid")]
@@ -12666,7 +12666,7 @@ impl fmt::Display for ConfigureSamlProvidersError {
 impl std::error::Error for ConfigureSamlProvidersError {}
 
 /// The request of contract `start-saml-sign-in`: Start a sign-in at a SAML provider.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StartSamlSignInRequest {
     /// Field `provider`.
     pub provider: types::ProviderId,
@@ -12679,14 +12679,14 @@ pub struct StartSamlSignInRequest {
 }
 
 /// The response of contract `start-saml-sign-in`: Start a sign-in at a SAML provider.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StartSamlSignInResponse {
     /// Field `redirect`.
     pub redirect: String,
 }
 
 /// The errors of contract `start-saml-sign-in`: Start a sign-in at a SAML provider.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum StartSamlSignInError {
     /// The provider does not exist or is not enabled.
     #[serde(rename = "invalid")]
@@ -12716,7 +12716,7 @@ impl fmt::Display for StartSamlSignInError {
 impl std::error::Error for StartSamlSignInError {}
 
 /// The request of contract `carry-saml-response-to-sign-in-page`: Carry a SAML response from the provider's post to the sign-in page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CarrySamlResponseToSignInPageRequest {
     /// Field `response`.
     pub response: types::Secret,
@@ -12725,14 +12725,14 @@ pub struct CarrySamlResponseToSignInPageRequest {
 }
 
 /// The response of contract `carry-saml-response-to-sign-in-page`: Carry a SAML response from the provider's post to the sign-in page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CarrySamlResponseToSignInPageResponse {
     /// Field `location`.
     pub location: String,
 }
 
 /// The errors of contract `carry-saml-response-to-sign-in-page`: Carry a SAML response from the provider's post to the sign-in page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum CarrySamlResponseToSignInPageError {
     /// No site is served at the address.
     #[serde(rename = "not_found")]
@@ -12750,7 +12750,7 @@ impl fmt::Display for CarrySamlResponseToSignInPageError {
 impl std::error::Error for CarrySamlResponseToSignInPageError {}
 
 /// The request of contract `consume-saml-response`: Check a SAML response and its assertion, once.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConsumeSamlResponseRequest {
     /// Field `relay-state`.
     pub relay_state: types::Secret,
@@ -12761,14 +12761,14 @@ pub struct ConsumeSamlResponseRequest {
 }
 
 /// The response of contract `consume-saml-response`: Check a SAML response and its assertion, once.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ConsumeSamlResponseResponse {
     /// Field `subject`.
     pub subject: types::ExternalSubject,
 }
 
 /// The errors of contract `consume-saml-response`: Check a SAML response and its assertion, once.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ConsumeSamlResponseError {
     /// The response answers no pending request of this browser, or the assertion fails a check, or it was presented before.
     #[serde(rename = "unauthenticated")]
@@ -13526,7 +13526,7 @@ impl fmt::Display for SetLedgerLimitError {
 impl std::error::Error for SetLedgerLimitError {}
 
 /// The request of contract `verify-ledger-balance`: Compare a balance with the sum of its entries.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyLedgerBalanceRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -13535,7 +13535,7 @@ pub struct VerifyLedgerBalanceRequest {
 }
 
 /// The response of contract `verify-ledger-balance`: Compare a balance with the sum of its entries.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerifyLedgerBalanceResponse {
     /// Field `ok`.
     pub ok: bool,
@@ -13546,7 +13546,7 @@ pub struct VerifyLedgerBalanceResponse {
 }
 
 /// The errors of contract `verify-ledger-balance`: Compare a balance with the sum of its entries.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum VerifyLedgerBalanceError {
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -13564,7 +13564,7 @@ impl fmt::Display for VerifyLedgerBalanceError {
 impl std::error::Error for VerifyLedgerBalanceError {}
 
 /// The request of contract `derive-ledger-balance`: Derive a balance from the entries a reader may read.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeriveLedgerBalanceRequest {
     /// Field `state`.
     pub state: types::State,
@@ -13577,14 +13577,14 @@ pub struct DeriveLedgerBalanceRequest {
 }
 
 /// The response of contract `derive-ledger-balance`: Derive a balance from the entries a reader may read.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DeriveLedgerBalanceResponse {
     /// Field `balance`.
     pub balance: types::LedgerBalance,
 }
 
 /// The errors of contract `derive-ledger-balance`: Derive a balance from the entries a reader may read.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DeriveLedgerBalanceError {
     /// A checked integer operation inside the derivation overflowed; nothing was changed.
     #[serde(rename = "fault")]
@@ -13823,7 +13823,7 @@ impl fmt::Display for TestSegmentPredicateError {
 impl std::error::Error for TestSegmentPredicateError {}
 
 /// The request of contract `evaluate-segment-predicate`: Evaluate the predicate of a segment for one person.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EvaluateSegmentPredicateRequest {
     /// Field `state`.
     pub state: types::State,
@@ -13836,7 +13836,7 @@ pub struct EvaluateSegmentPredicateRequest {
 }
 
 /// The response of contract `evaluate-segment-predicate`: Evaluate the predicate of a segment for one person.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EvaluateSegmentPredicateResponse {
     /// Field `member`.
     pub member: bool,
@@ -13845,7 +13845,7 @@ pub struct EvaluateSegmentPredicateResponse {
 }
 
 /// The errors of contract `evaluate-segment-predicate`: Evaluate the predicate of a segment for one person.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum EvaluateSegmentPredicateError {}
 
 impl fmt::Display for EvaluateSegmentPredicateError {
@@ -13857,7 +13857,7 @@ impl fmt::Display for EvaluateSegmentPredicateError {
 impl std::error::Error for EvaluateSegmentPredicateError {}
 
 /// The request of contract `plan-segment-needs`: Plan the state that evaluating segments needs.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PlanSegmentNeedsRequest {
     /// Field `schema`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -13869,14 +13869,14 @@ pub struct PlanSegmentNeedsRequest {
 }
 
 /// The response of contract `plan-segment-needs`: Plan the state that evaluating segments needs.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PlanSegmentNeedsResponse {
     /// Field `needs`.
     pub needs: Vec<types::Need>,
 }
 
 /// The errors of contract `plan-segment-needs`: Plan the state that evaluating segments needs.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum PlanSegmentNeedsError {}
 
 impl fmt::Display for PlanSegmentNeedsError {
@@ -13888,7 +13888,7 @@ impl fmt::Display for PlanSegmentNeedsError {
 impl std::error::Error for PlanSegmentNeedsError {}
 
 /// The request of contract `decide-segment-membership`: Decide the memberships that a change causes.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DecideSegmentMembershipRequest {
     /// Field `state`.
     pub state: types::State,
@@ -13899,7 +13899,7 @@ pub struct DecideSegmentMembershipRequest {
 }
 
 /// The response of contract `decide-segment-membership`: Decide the memberships that a change causes.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct DecideSegmentMembershipResponse {
     /// Field `events`.
     pub events: Vec<types::SegmentMembershipEvent>,
@@ -13908,7 +13908,7 @@ pub struct DecideSegmentMembershipResponse {
 }
 
 /// The errors of contract `decide-segment-membership`: Decide the memberships that a change causes.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DecideSegmentMembershipError {}
 
 impl fmt::Display for DecideSegmentMembershipError {
@@ -13920,7 +13920,7 @@ impl fmt::Display for DecideSegmentMembershipError {
 impl std::error::Error for DecideSegmentMembershipError {}
 
 /// The request of contract `run-segment-batch`: Evaluate one batch of persons for a segment.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RunSegmentBatchRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -13936,7 +13936,7 @@ pub struct RunSegmentBatchRequest {
 }
 
 /// The response of contract `run-segment-batch`: Evaluate one batch of persons for a segment.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RunSegmentBatchResponse {
     /// Field `next`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -13946,7 +13946,7 @@ pub struct RunSegmentBatchResponse {
 }
 
 /// The errors of contract `run-segment-batch`: Evaluate one batch of persons for a segment.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RunSegmentBatchError {}
 
 impl fmt::Display for RunSegmentBatchError {
@@ -14093,7 +14093,7 @@ impl fmt::Display for SettingResolveAllError {
 impl std::error::Error for SettingResolveAllError {}
 
 /// The request of contract `setting-set-platform`: Set or remove the platform level of a setting.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SettingSetPlatformRequest {
     /// Field `setting`.
     pub setting: types::SettingId,
@@ -14105,14 +14105,14 @@ pub struct SettingSetPlatformRequest {
 }
 
 /// The response of contract `setting-set-platform`: Set or remove the platform level of a setting.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SettingSetPlatformResponse {
     /// Field `revision`.
     pub revision: u64,
 }
 
 /// The errors of contract `setting-set-platform`: Set or remove the platform level of a setting.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SettingSetPlatformError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -14410,7 +14410,7 @@ impl fmt::Display for AggregateRunError {
 impl std::error::Error for AggregateRunError {}
 
 /// The request of contract `request-tenant-deletion`: Request the deletion of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RequestTenantDeletionRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -14419,14 +14419,14 @@ pub struct RequestTenantDeletionRequest {
 }
 
 /// The response of contract `request-tenant-deletion`: Request the deletion of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RequestTenantDeletionResponse {
     /// Field `executes-at`.
     pub executes_at: prelude::Timestamp,
 }
 
 /// The errors of contract `request-tenant-deletion`: Request the deletion of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RequestTenantDeletionError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -14468,7 +14468,7 @@ impl fmt::Display for RequestTenantDeletionError {
 impl std::error::Error for RequestTenantDeletionError {}
 
 /// The request of contract `record-enterprise-contract`: Record the enterprise contract of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RecordEnterpriseContractRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -14477,11 +14477,11 @@ pub struct RecordEnterpriseContractRequest {
 }
 
 /// The response of contract `record-enterprise-contract`: Record the enterprise contract of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RecordEnterpriseContractResponse {}
 
 /// The errors of contract `record-enterprise-contract`: Record the enterprise contract of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum RecordEnterpriseContractError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -14515,7 +14515,7 @@ impl fmt::Display for RecordEnterpriseContractError {
 impl std::error::Error for RecordEnterpriseContractError {}
 
 /// The request of contract `set-platform-flag`: Set a platform flag or quota of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SetPlatformFlagRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -14526,11 +14526,11 @@ pub struct SetPlatformFlagRequest {
 }
 
 /// The response of contract `set-platform-flag`: Set a platform flag or quota of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SetPlatformFlagResponse {}
 
 /// The errors of contract `set-platform-flag`: Set a platform flag or quota of a tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SetPlatformFlagError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -14568,7 +14568,7 @@ impl fmt::Display for SetPlatformFlagError {
 impl std::error::Error for SetPlatformFlagError {}
 
 /// The request of contract `take-down-tenant`: Take a tenant down.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TakeDownTenantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -14579,7 +14579,7 @@ pub struct TakeDownTenantRequest {
 }
 
 /// The response of contract `take-down-tenant`: Take a tenant down.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TakeDownTenantResponse {
     /// Field `state`.
     pub state: types::TenantLifecycle,
@@ -14588,7 +14588,7 @@ pub struct TakeDownTenantResponse {
 }
 
 /// The errors of contract `take-down-tenant`: Take a tenant down.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum TakeDownTenantError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -14626,7 +14626,7 @@ impl fmt::Display for TakeDownTenantError {
 impl std::error::Error for TakeDownTenantError {}
 
 /// The request of contract `take-down-host`: Take a host down.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TakeDownHostRequest {
     /// Field `host`.
     pub host: types::Host,
@@ -14637,14 +14637,14 @@ pub struct TakeDownHostRequest {
 }
 
 /// The response of contract `take-down-host`: Take a host down.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TakeDownHostResponse {
     /// The time by which every gateway has stopped serving the host (ARC-1228).
     pub effective_by: u64,
 }
 
 /// The errors of contract `take-down-host`: Take a host down.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum TakeDownHostError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -14678,7 +14678,7 @@ impl fmt::Display for TakeDownHostError {
 impl std::error::Error for TakeDownHostError {}
 
 /// The request of contract `release-takedown`: Release a takedown.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReleaseTakedownRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -14690,14 +14690,14 @@ pub struct ReleaseTakedownRequest {
 }
 
 /// The response of contract `release-takedown`: Release a takedown.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReleaseTakedownResponse {
     /// Field `state`.
     pub state: types::TenantLifecycle,
 }
 
 /// The errors of contract `release-takedown`: Release a takedown.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReleaseTakedownError {
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -15154,7 +15154,7 @@ impl fmt::Display for ChangeSubscriptionByLinkError {
 impl std::error::Error for ChangeSubscriptionByLinkError {}
 
 /// The request of contract `send-digest`: Send one digest of the notices of a category.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SendDigestRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -15177,14 +15177,14 @@ pub struct SendDigestRequest {
 }
 
 /// The response of contract `send-digest`: Send one digest of the notices of a category.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SendDigestResponse {
     /// Field `progress`.
     pub progress: types::SendProgress,
 }
 
 /// The errors of contract `send-digest`: Send one digest of the notices of a category.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SendDigestError {
     /// The window is empty or longer than 31 days.
     #[serde(rename = "invalid")]
@@ -15660,11 +15660,11 @@ impl std::error::Error for RemoveBundleError {}
 /// The request of contract `read-tenant-ui-manifest`: Read the manifest of the interface definition of the tenant.
 ///
 /// The manifest of the interface definition of the tenant (D-8250, INT-3253): served with no-cache, since it changes with the schema.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadTenantUiManifestRequest {}
 
 /// The response of contract `read-tenant-ui-manifest`: Read the manifest of the interface definition of the tenant.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadTenantUiManifestResponse {
     /// The hash of the list of parts (INT-3253).
     pub hash: String,
@@ -15675,7 +15675,7 @@ pub struct ReadTenantUiManifestResponse {
 }
 
 /// The errors of contract `read-tenant-ui-manifest`: Read the manifest of the interface definition of the tenant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadTenantUiManifestError {
     /// The backend could not be reached.
     #[serde(rename = "unavailable")]
@@ -15695,21 +15695,21 @@ impl std::error::Error for ReadTenantUiManifestError {}
 /// The request of contract `read-tenant-ui-part`: Read one part of the interface definition of the tenant by its hash.
 ///
 /// One part of the interface definition (D-8250, INT-3253, INT-3254).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ReadTenantUiPartRequest {
     /// Field `hash`.
     pub hash: String,
 }
 
 /// The response of contract `read-tenant-ui-part`: Read one part of the interface definition of the tenant by its hash.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadTenantUiPartResponse {
     /// A screen with its forms, actions and live bindings, or the error messages.
     pub part: serde_json::Value,
 }
 
 /// The errors of contract `read-tenant-ui-part`: Read one part of the interface definition of the tenant by its hash.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ReadTenantUiPartError {
     /// The current definition of the site's tenant holds no part with that hash.
     #[serde(rename = "not_found")]
@@ -18394,7 +18394,7 @@ impl fmt::Display for RunDevelopmentActionError {
 impl std::error::Error for RunDevelopmentActionError {}
 
 /// The request of contract `accept-owner-invitation`: Accept the invitation of a new tenant's owner.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AcceptOwnerInvitationRequest {
     /// Field `challenge`.
     pub challenge: String,
@@ -18405,7 +18405,7 @@ pub struct AcceptOwnerInvitationRequest {
 }
 
 /// The response of contract `accept-owner-invitation`: Accept the invitation of a new tenant's owner.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct AcceptOwnerInvitationResponse {
     /// Field `accepted`.
     pub accepted: bool,
@@ -18414,7 +18414,7 @@ pub struct AcceptOwnerInvitationResponse {
 }
 
 /// The errors of contract `accept-owner-invitation`: Accept the invitation of a new tenant's owner.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum AcceptOwnerInvitationError {
     /// The invitation is unknown, used, expired, has another token or is presented from another origin; the response does not say which (IDN-1682).
     #[serde(rename = "unauthenticated")]

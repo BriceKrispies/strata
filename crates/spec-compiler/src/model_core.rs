@@ -43,15 +43,18 @@ pub fn crate_files(spec: &Spec, crate_name: &str) -> Result<Vec<GeneratedFile>, 
     crate_files_with(spec, crate_name, false)
 }
 
-/// As [`crate_files`]; with `tests_apart`, the examples of the functions are not a test module of
-/// `functions` but integration test files `tests/function_examples_<n>.rs`
-/// ([`function::emit_tests_apart`]), so the library compiles once, with no tests, and each test
-/// file in a compiler process of its own.
+/// As [`crate_files`]; with `split` (the pure crate beside a model split by area), the examples
+/// of the functions are not a test module of `functions` but integration test files
+/// `tests/function_examples_<n>.rs` ([`function::emit_tests_apart`]), so the library compiles
+/// once, with no tests, and each test file in a compiler process of its own; and only the declared
+/// types that cross a boundary derive the serde traits ([`crate::boundary`]).
 pub fn crate_files_with(
     spec: &Spec,
     crate_name: &str,
-    tests_apart: bool,
+    split: bool,
 ) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
+    let boundary = split.then(|| crate::boundary::Boundary::of(spec));
+    let tests_apart = split;
     let mut files = vec![GeneratedFile {
         path: "Cargo.toml".to_string(),
         contents: cargo_toml(spec, crate_name),
@@ -59,7 +62,10 @@ pub fn crate_files_with(
     let languages: Vec<String> = spec.languages.iter().map(language::module_name).collect();
     let mut modules: Vec<(&str, TokenStream)> = vec![
         (prelude::MODULE, prelude::emit_core()),
-        ("types", types::emit(spec, types::Selection::Core)),
+        (
+            "types",
+            types::emit_with(spec, types::Selection::Core, boundary.as_ref()),
+        ),
     ];
     for (lang, module) in spec.languages.iter().zip(&languages) {
         modules.push((module.as_str(), language::emit(spec, lang)));

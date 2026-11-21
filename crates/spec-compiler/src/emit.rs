@@ -242,7 +242,8 @@ pub fn crate_refs(tokens: &TokenStream) -> std::collections::BTreeSet<String> {
 /// served contracts are written into the contracts module rather than the routes module, since the
 /// orphan rule allows an impl of the runtime's trait only in the crate of the error type. A module
 /// that names a module of a later area would make a cycle, and refuses the generation with an
-/// internal diagnostic.
+/// internal diagnostic. Only the declared and contract types something reads derive `Deserialize`
+/// ([`crate::boundary`]).
 pub fn split_crate_files(
     spec: &Spec,
     options: &Options,
@@ -250,22 +251,24 @@ pub fn split_crate_files(
 ) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
     use std::collections::{BTreeMap, BTreeSet};
     let core_ident = core.crate_name.replace('-', "_");
+    let boundary = crate::boundary::Boundary::of(spec);
     let mut modules: Vec<(&str, TokenStream)> =
         vec![(prelude::MODULE, prelude::emit_with(Some(&core_ident)))];
     for backend in BACKENDS.iter().filter(|b| b.wanted(spec)) {
         let tokens = match backend.module() {
-            "types" => crate::backend::types::emit(
+            "types" => crate::backend::types::emit_with(
                 spec,
                 crate::backend::types::Selection::Rest {
                     core_crate: &core_ident,
                 },
+                Some(&boundary),
             ),
             crate::backend::derived::MODULE => {
                 crate::backend::derived::emit_with(spec, Some(&core_ident))
             }
             "routes" => crate::backend::routes::emit_with(spec, false),
             "contracts" => {
-                let contracts = backend.emit(spec);
+                let contracts = crate::backend::contracts::emit_with(spec, Some(&boundary));
                 let impls = crate::backend::routes::contract_error_impls(spec);
                 quote! { #contracts #impls }
             }
