@@ -661,11 +661,10 @@ fn situation_11_reference_cycle_removing_one_side_stays_consistent() {
 ///
 /// Wanted: refused, naming the transition and the value.
 ///
-/// Today: accepted. `problems()` checks the workflow's `set` values only for their shape
-/// (`schema.rs:465-478`), and `WorkflowDefExt::states` (`schema.rs:76-86`) does not take `set`
-/// values into account. Records are checked against states only when they are written.
+/// Today: refused. `problems()` checks a transition whose `set` assigns the workflow's own field
+/// a literal against the workflow's states (`schema.rs`, workflow validation), so the change
+/// names the transition and the value.
 #[test]
-#[ignore = "gap: a transition sets status to closed, which is not a state of the workflow; the schema change is accepted, the value is only refused on a later write"]
 fn situation_12_a_transition_writing_a_removed_state_is_refused_naming_it() {
     let world = accepted(
         &catalogue(),

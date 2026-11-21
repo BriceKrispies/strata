@@ -10,7 +10,7 @@ use crate::expr::{self, Expr, TypeEnv};
 use crate::limits;
 use crate::types::{
     owner_role, public_role, FieldTypeExt, InvitationId, ObjectTypeId, RoleId, SchemaVersion,
-    TeamId,
+    TeamId, Value,
 };
 pub use crate::types::{
     Action, ArgSource, ConstraintDef, FieldDef, FieldType, Grant, InvitationDef, ObjectAction,
@@ -475,6 +475,16 @@ impl TenantSchemaExt for TenantSchema {
                     }
                     if let Err(e) = expr::check(value, &env) {
                         problems.push(format!("{at}.{}: set {field}: {e}", transition.name));
+                    }
+                    if *field == workflow.field {
+                        if let Expr::Lit(Value::Str(state)) = value {
+                            if !workflow.states().contains(state.as_str()) {
+                                problems.push(format!(
+                                    "{at}.{}: sets {field} to {state}, which is not a state of the workflow {}",
+                                    transition.name, workflow.id
+                                ));
+                            }
+                        }
                     }
                 }
             }
