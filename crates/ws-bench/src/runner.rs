@@ -13,7 +13,7 @@
 //! state. Reads are also compared in a probe straight after each fault.
 
 use crate::corpus::{Actor, CorpusLoader, CorpusTenant, Probe, TenantRequest};
-use crate::generation::GenerationView;
+use crate::generation::{Generation, GenerationView};
 use crate::modes::{build, Built, CountingHook, Mode};
 use crate::report::*;
 use crate::rng::{hash_text, Rng, ZipfCache};
@@ -51,6 +51,8 @@ pub struct Config {
     pub max_divergences: usize,
     /// Count the size of the records the store returns (costs time inside the counting layer).
     pub count_bytes: bool,
+    /// The storage holds the primary tenant already: address it, do not build it.
+    pub reuse: bool,
 }
 
 impl Config {
@@ -62,6 +64,7 @@ impl Config {
             coherence: CoherenceLevel::Full,
             max_divergences: 5,
             count_bytes: false,
+            reuse: false,
         }
     }
 }
@@ -161,22 +164,26 @@ pub fn run(
 
     let populate_started = Instant::now();
     let mut tenants: Vec<Box<dyn CorpusTenant>> = Vec::new();
-    tenants.push(loader.populate(
-        opened.reference.as_ref(),
-        &TenantRequest {
-            name: "corpus".to_string(),
-            scale: scenario.scale,
-            seed: cfg.seed,
-        },
-    )?);
+    let primary = TenantRequest {
+        name: "corpus".to_string(),
+        scale: scenario.scale,
+        seed: cfg.seed,
+        small: false,
+    };
+    tenants.push(if cfg.reuse {
+        loader.reuse(opened.reference.clone(), &primary)?
+    } else {
+        loader.populate(opened.reference.clone(), &primary)?
+    });
     if let Some(small) = &scenario.small_tenants {
         for i in 0..small.count {
             tenants.push(loader.populate(
-                opened.reference.as_ref(),
+                opened.reference.clone(),
                 &TenantRequest {
                     name: format!("small{i}"),
                     scale: small.scale,
                     seed: cfg.seed ^ (u64::from(i) + 1),
+                    small: true,
                 },
             )?);
         }
@@ -564,12 +571,11 @@ impl Runner<'_> {
             .push(ns);
     }
 
-    fn generation(&self, tenant: &TenantId) -> Option<u64> {
+    fn generation(&self, tenant: &TenantId) -> Option<Generation> {
         self.gens
             .generation(self.opened.reference.as_ref(), tenant)
             .ok()
             .flatten()
-            .map(|g| g.counter)
     }
 
     fn execute_plan(
@@ -626,7 +632,7 @@ impl Runner<'_> {
         reference: String,
         after_fault: Option<&str>,
     ) {
-        let generation = self.generation(tenant);
+        let generation = self.generation(tenant).map(|g| g.counter);
         let coherence = &mut self.report.coherence;
         coherence.divergences += 1;
         if after_fault.is_some() {
@@ -708,7 +714,12 @@ impl Runner<'_> {
         kind: &str,
         tenant: &TenantId,
         what: &str,
-        pair: Option<((String, String), (String, String), Option<u64>, Option<u64>)>,
+        pair: Option<(
+            (String, String),
+            (String, String),
+            Option<Generation>,
+            Option<Generation>,
+        )>,
         after_fault: Option<&str>,
     ) {
         let Some((test, reference, g0, g1)) = pair else {
@@ -886,12 +897,7 @@ impl Runner<'_> {
         // The decision the kernel reaches on the reference's complete state, before the write.
         let expected = (self.cfg.coherence == CoherenceLevel::Full).then(|| {
             let g0 = self.generation(&tid);
-            let decided = self
-                .opened
-                .reference
-                .load_complete(&tid)
-                .map_err(|e| e.to_string())
-                .map(|state| strata_kernel::transition(&state, &intent, &ctx));
+            let decided = crate::decide::dry_run(self.opened.reference.as_ref(), &intent, &ctx);
             (decided, g0, self.generation(&tid))
         });
         let at = if contended {
@@ -1023,7 +1029,7 @@ impl Runner<'_> {
                     Some(id) => self
                         .opened
                         .reference
-                        .restore_snapshot(&tid, id)
+                        .restore_snapshot(&tid, id, None)
                         .map(|_| "restored".to_string())
                         .unwrap_or_else(|e| format!("restore failed: {e}")),
                     None => "no snapshot".to_string(),
@@ -1037,21 +1043,43 @@ impl Runner<'_> {
                     None => "the tenant offers no erasure".to_string(),
                     Some(erasure) => {
                         let ctx = self.ctx(0, Actor::System);
-                        let done = execute(
-                            self.opened.reference.as_ref(),
-                            &Intent::EraseSubject {
+                        let mut done: Result<usize, String> = Ok(0);
+                        let (mut object, mut after) = (None, None);
+                        // One decision erases a batch; repeat while its output says there is more.
+                        for batch in 1..=50 {
+                            let intent = Intent::EraseSubject {
                                 subject: erasure.subject.clone(),
-                                resume_object: None,
-                                resume_after: None,
+                                resume_object: object.take(),
+                                resume_after: after.take(),
                                 held_objects: Vec::new(),
                                 addressed_invitations: Vec::new(),
-                            },
-                            &ctx,
-                        );
+                            };
+                            match execute(self.opened.reference.as_ref(), &intent, &ctx) {
+                                Ok(executed) => {
+                                    done = Ok(batch);
+                                    match executed.transition.output {
+                                        strata_kernel::Output::Erased {
+                                            more: true,
+                                            next_object,
+                                            next_after,
+                                            ..
+                                        } => {
+                                            object = next_object;
+                                            after = next_after;
+                                        }
+                                        _ => break,
+                                    }
+                                }
+                                Err(e) => {
+                                    done = Err(e.to_string());
+                                    break;
+                                }
+                            }
+                        }
                         self.erased.extend(erasure.probes);
                         self.resync_live();
                         match done {
-                            Ok(_) => "erased".to_string(),
+                            Ok(batches) => format!("erased in {batches} decision(s)"),
                             Err(e) => format!("refused: {e}"),
                         }
                     }
@@ -1206,6 +1234,8 @@ impl Runner<'_> {
         report.mode = self.cfg.mode.name().to_string();
         report.seed = self.cfg.seed;
         report.scale = scenario.scale;
+        report.scale_name = self.tenants[0].label();
+        report.unmapped = self.tenants[0].unmapped();
         report.length = scenario.length;
         report.clients = scenario.clients;
         report.modules = scenario.modules.clone();

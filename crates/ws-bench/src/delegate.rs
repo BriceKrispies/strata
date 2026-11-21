@@ -12,8 +12,8 @@ use crate::layer::{Hook, Layer};
 use std::sync::Arc;
 use strata_kernel::segments as seg;
 use strata_kernel::{
-    DomainEvent, Need, PrincipalId, Record, SessionId, SettingId, State, TenantId, TenantState,
-    Timestamp, Value, WorkflowId,
+    DomainEvent, Need, PrincipalId, Record, SessionId, SettingId, TenantId, TenantState, Timestamp,
+    Value, WorkflowId,
 };
 use strata_storage_api::jobs::{
     ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported, RunRecord,
@@ -66,12 +66,44 @@ impl<H: Hook> Store for Layer<H> {
         self.inner.stored_bytes(tenant)
     }
 
-    fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
-        self.hook.load(self.inner.as_ref(), tenant, needs)
+    // `load` and `load_complete` are the trait's defaults over the two methods below, so every
+    // read reaches the hook. Each of the four loads is forwarded explicitly: a layer never falls
+    // back to a default that would decode a header it was handed already.
+    fn load_at(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<Loaded> {
+        self.hook.load_at(self.inner.as_ref(), tenant, needs)
     }
 
-    fn load_complete(&self, tenant: &TenantId) -> StoreResult<State> {
-        self.hook.load_complete(self.inner.as_ref(), tenant)
+    fn load_complete_at(&self, tenant: &TenantId) -> StoreResult<Loaded> {
+        self.hook.load_complete_at(self.inner.as_ref(), tenant)
+    }
+
+    fn load_at_held(
+        &self,
+        tenant: &TenantId,
+        needs: &[Need],
+        held: Option<&resident::HeldHeader>,
+    ) -> StoreResult<resident::HeldLoad> {
+        self.hook
+            .load_at_held(self.inner.as_ref(), tenant, needs, held)
+    }
+
+    fn load_complete_at_held(
+        &self,
+        tenant: &TenantId,
+        held: Option<&resident::HeldHeader>,
+    ) -> StoreResult<resident::HeldLoad> {
+        self.hook
+            .load_complete_at_held(self.inner.as_ref(), tenant, held)
+    }
+
+    fn generation(&self, tenant: &TenantId) -> StoreResult<Option<Generation>> {
+        self.inner.generation(tenant)
+    }
+
+    fn rotate_nonce(&self, tenant: &TenantId) -> StoreResult<Generation> {
+        let done = self.inner.rotate_nonce(tenant);
+        self.hook.wrote(tenant, done.as_ref().err());
+        done
     }
 
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
@@ -225,8 +257,13 @@ impl<H: Hook> Store for Layer<H> {
         &self,
         tenant: &TenantId,
         principal: &PrincipalId,
+        expected: Option<&Generation>,
     ) -> StoreResult<strata_kernel::ledger::Anonymised> {
-        self.inner.anonymise_ledger_principal(tenant, principal)
+        let done = self
+            .inner
+            .anonymise_ledger_principal(tenant, principal, expected);
+        self.hook.wrote(tenant, done.as_ref().err());
+        done
     }
 
     fn account_of(
@@ -537,8 +574,13 @@ impl<H: Hook> Store for Layer<H> {
         self.inner.load_snapshot(tenant, id)
     }
 
-    fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()> {
-        let done = self.inner.restore_snapshot(tenant, id);
+    fn restore_snapshot(
+        &self,
+        tenant: &TenantId,
+        id: u64,
+        expected: Option<&Generation>,
+    ) -> StoreResult<()> {
+        let done = self.inner.restore_snapshot(tenant, id, expected);
         self.hook.wrote(tenant, done.as_ref().err());
         done
     }

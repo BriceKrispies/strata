@@ -2,16 +2,21 @@
 //!
 //! ```text
 //! ws-bench <scenario.jsonc> [--store memory|sqlite[:path]] [--mode none|header|full|stale]
+//!          [--loader enterprise|stub] [--scale small|medium|large] [--reuse <sqlite path>]
 //!          [--seed N] [--out report.json] [--coherence off|reads|full]
 //!          [--max-divergences N] [--count-bytes] [--fail-on-divergence]
 //! ```
 //!
-//! The population comes from `NotesLoader`, the stand-in for the corpus loader (WG-5398); wire the
-//! real loader in `loader()`.
+//! The population is the enterprise corpus (`strata-corpus`) at `--scale`; `--loader stub` uses the
+//! small notes tenant of the kernel testkit instead. `--reuse <path>` opens a copy of a SQLite
+//! store populated earlier (`strata-corpus build --scale ... --store sqlite:<path>`) and does not
+//! rebuild it.
 
 use std::process::ExitCode;
+use strata_corpus::Scale;
 use strata_ws_bench::corpus::{CorpusLoader, NotesLoader};
-use strata_ws_bench::generation::RevisionView;
+use strata_ws_bench::enterprise::EnterpriseLoader;
+use strata_ws_bench::generation::StoreGeneration;
 use strata_ws_bench::modes::Mode;
 use strata_ws_bench::runner::{run, CoherenceLevel, Config};
 use strata_ws_bench::scenario::Scenario;
@@ -21,9 +26,13 @@ const USAGE: &str = "usage: ws-bench <scenario.jsonc> [--store memory|sqlite[:pa
 [--mode none|header|full|stale] [--seed N] [--out report.json] [--coherence off|reads|full] \
 [--max-divergences N] [--count-bytes] [--fail-on-divergence]";
 
-/// The loader the harness populates tenants with. Replace with the corpus loader.
-fn loader() -> Box<dyn CorpusLoader> {
-    Box::new(NotesLoader)
+/// The loader the harness populates tenants with.
+fn loader(stub: bool, scale: Scale) -> Box<dyn CorpusLoader> {
+    if stub {
+        Box::new(NotesLoader)
+    } else {
+        Box::new(EnterpriseLoader { scale })
+    }
 }
 
 fn main() -> ExitCode {
@@ -47,11 +56,26 @@ fn real_main() -> Result<ExitCode, String> {
     let mut max_divergences = 5usize;
     let mut count_bytes = false;
     let mut fail_on_divergence = false;
+    let mut stub = false;
+    let mut scale = Scale::Small;
+    let mut reuse = false;
     while let Some(arg) = args.next() {
         let mut value = |name: &str| args.next().ok_or_else(|| format!("{name} needs a value"));
         match arg.as_str() {
             "--store" => store = StoreSpec::parse(&value("--store")?)?,
             "--mode" => mode = Mode::parse(&value("--mode")?)?,
+            "--loader" => {
+                stub = match value("--loader")?.as_str() {
+                    "stub" => true,
+                    "enterprise" => false,
+                    other => return Err(format!("--loader {other:?}: enterprise or stub")),
+                }
+            }
+            "--scale" => scale = value("--scale")?.parse::<Scale>()?,
+            "--reuse" => {
+                store = StoreSpec::SqliteReuse(value("--reuse")?.into());
+                reuse = true;
+            }
             "--seed" => {
                 seed = value("--seed")?
                     .parse()
@@ -94,7 +118,13 @@ fn real_main() -> Result<ExitCode, String> {
     config.coherence = coherence;
     config.max_divergences = max_divergences;
     config.count_bytes = count_bytes;
-    let report = run(&scenario, &config, loader().as_ref(), &RevisionView)?;
+    config.reuse = reuse;
+    let report = run(
+        &scenario,
+        &config,
+        loader(stub, scale).as_ref(),
+        &StoreGeneration,
+    )?;
     let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
     match &out {
         Some(file) => std::fs::write(file, &json).map_err(|e| format!("{file}: {e}"))?,

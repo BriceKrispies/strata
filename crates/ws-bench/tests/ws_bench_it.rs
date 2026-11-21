@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use strata_ws_bench::corpus::NotesLoader;
-use strata_ws_bench::generation::RevisionView;
+use strata_ws_bench::generation::StoreGeneration;
 use strata_ws_bench::modes::Mode;
 use strata_ws_bench::report::{Latency, Report};
 use strata_ws_bench::rng::{Rng, Zipf};
@@ -200,7 +200,7 @@ fn tiny(faults: &str) -> Scenario {
 fn play(scenario: &Scenario, mode: Mode, seed: u64, store: StoreSpec) -> Report {
     let mut config = Config::new(store, mode, seed);
     config.coherence = CoherenceLevel::Full;
-    run(scenario, &config, &NotesLoader, &RevisionView).expect("run")
+    run(scenario, &config, &NotesLoader, &StoreGeneration).expect("run")
 }
 
 #[test]

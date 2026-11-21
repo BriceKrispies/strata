@@ -22,7 +22,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use strata_kernel::{Need, State, TenantId};
-use strata_storage_api::{Commit, Receipt, Store, StoreError, StoreResult};
+use strata_storage_api::resident::{HeldHeader, HeldLoad, ResidentStore};
+use strata_storage_api::{Commit, Loaded, Receipt, Store, StoreError, StoreResult};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -144,8 +145,8 @@ impl CountingHook {
     }
 }
 
-impl Hook for CountingHook {
-    fn load(&self, inner: &dyn Store, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
+impl CountingHook {
+    fn note_load(&self, needs: &[Need]) {
         self.loads.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut map) = self.by_need.lock() {
             if needs.is_empty() {
@@ -155,20 +156,53 @@ impl Hook for CountingHook {
                 *map.entry(need_kind(need)).or_default() += 1;
             }
         }
-        let state = inner.load(tenant, needs)?;
-        if self.count_bytes.load(Ordering::Relaxed) {
-            self.bytes.fetch_add(state_bytes(&state), Ordering::Relaxed);
-        }
-        Ok(state)
     }
 
-    fn load_complete(&self, inner: &dyn Store, tenant: &TenantId) -> StoreResult<State> {
-        self.load_completes.fetch_add(1, Ordering::Relaxed);
-        let state = inner.load_complete(tenant)?;
+    fn note_bytes(&self, state: &State) {
         if self.count_bytes.load(Ordering::Relaxed) {
-            self.bytes.fetch_add(state_bytes(&state), Ordering::Relaxed);
+            self.bytes.fetch_add(state_bytes(state), Ordering::Relaxed);
         }
-        Ok(state)
+    }
+}
+
+impl Hook for CountingHook {
+    fn load_at(&self, inner: &dyn Store, tenant: &TenantId, needs: &[Need]) -> StoreResult<Loaded> {
+        self.note_load(needs);
+        let loaded = inner.load_at(tenant, needs)?;
+        self.note_bytes(&loaded.state);
+        Ok(loaded)
+    }
+
+    fn load_complete_at(&self, inner: &dyn Store, tenant: &TenantId) -> StoreResult<Loaded> {
+        self.load_completes.fetch_add(1, Ordering::Relaxed);
+        let loaded = inner.load_complete_at(tenant)?;
+        self.note_bytes(&loaded.state);
+        Ok(loaded)
+    }
+
+    fn load_at_held(
+        &self,
+        inner: &dyn Store,
+        tenant: &TenantId,
+        needs: &[Need],
+        held: Option<&HeldHeader>,
+    ) -> StoreResult<HeldLoad> {
+        self.note_load(needs);
+        let done = inner.load_at_held(tenant, needs, held)?;
+        self.note_bytes(&done.loaded.state);
+        Ok(done)
+    }
+
+    fn load_complete_at_held(
+        &self,
+        inner: &dyn Store,
+        tenant: &TenantId,
+        held: Option<&HeldHeader>,
+    ) -> StoreResult<HeldLoad> {
+        self.load_completes.fetch_add(1, Ordering::Relaxed);
+        let done = inner.load_complete_at_held(tenant, held)?;
+        self.note_bytes(&done.loaded.state);
+        Ok(done)
     }
 
     fn commit(&self, inner: &dyn Store, commit: &Commit) -> StoreResult<Receipt> {
@@ -213,8 +247,8 @@ struct Entry<T> {
 
 #[derive(Default)]
 struct StaleCache {
-    reads: BTreeMap<(String, Vec<Need>), Entry<State>>,
-    completes: BTreeMap<String, Entry<State>>,
+    reads: BTreeMap<(String, Vec<Need>), Entry<Loaded>>,
+    completes: BTreeMap<String, Entry<Loaded>>,
 }
 
 /// A read cache that is broken on purpose: it keeps every answer it has loaded and drops a
@@ -237,7 +271,7 @@ impl StaleHook {
 }
 
 impl Hook for StaleHook {
-    fn load(&self, inner: &dyn Store, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
+    fn load_at(&self, inner: &dyn Store, tenant: &TenantId, needs: &[Need]) -> StoreResult<Loaded> {
         let key = (tenant.to_string(), needs.to_vec());
         if let Ok(cache) = self.cache.lock() {
             if let Some(entry) = cache.reads.get(&key) {
@@ -248,7 +282,7 @@ impl Hook for StaleHook {
             }
         }
         let started = Instant::now();
-        let state = inner.load(tenant, needs)?;
+        let loaded = inner.load_at(tenant, needs)?;
         let cost_ns = started.elapsed().as_nanos() as u64;
         self.misses.fetch_add(1, Ordering::Relaxed);
         self.miss_cost_ns.fetch_add(cost_ns, Ordering::Relaxed);
@@ -256,16 +290,16 @@ impl Hook for StaleHook {
             cache.reads.insert(
                 key,
                 Entry {
-                    bytes: Self::bytes_of(&state),
-                    value: state.clone(),
+                    bytes: Self::bytes_of(&loaded.state),
+                    value: loaded.clone(),
                     cost_ns,
                 },
             );
         }
-        Ok(state)
+        Ok(loaded)
     }
 
-    fn load_complete(&self, inner: &dyn Store, tenant: &TenantId) -> StoreResult<State> {
+    fn load_complete_at(&self, inner: &dyn Store, tenant: &TenantId) -> StoreResult<Loaded> {
         let key = tenant.to_string();
         if let Ok(cache) = self.cache.lock() {
             if let Some(entry) = cache.completes.get(&key) {
@@ -276,7 +310,7 @@ impl Hook for StaleHook {
             }
         }
         let started = Instant::now();
-        let state = inner.load_complete(tenant)?;
+        let loaded = inner.load_complete_at(tenant)?;
         let cost_ns = started.elapsed().as_nanos() as u64;
         self.misses.fetch_add(1, Ordering::Relaxed);
         self.miss_cost_ns.fetch_add(cost_ns, Ordering::Relaxed);
@@ -284,13 +318,13 @@ impl Hook for StaleHook {
             cache.completes.insert(
                 key,
                 Entry {
-                    bytes: Self::bytes_of(&state),
-                    value: state.clone(),
+                    bytes: Self::bytes_of(&loaded.state),
+                    value: loaded.clone(),
                     cost_ns,
                 },
             );
         }
-        Ok(state)
+        Ok(loaded)
     }
 
     fn wrote(&self, tenant: &TenantId, error: Option<&StoreError>) {
@@ -324,6 +358,7 @@ impl Hook for StaleHook {
             miss_cost_ns: self.miss_cost_ns.load(Ordering::Relaxed),
             hit_saved_ns: self.hit_saved_ns.load(Ordering::Relaxed),
             resident_bytes,
+            ..WrapperStats::default()
         }
     }
 }
@@ -362,7 +397,24 @@ pub fn build(base: Arc<dyn Store>, mode: Mode, counting: Arc<CountingHook>) -> B
     };
     let (store, wrapper) = match mode {
         Mode::None => (counted.clone(), None),
-        Mode::Header => layered(Arc::new(PlaceholderHook { name: "header" })),
+        Mode::Header => {
+            let resident = Arc::new(ResidentStore::header_only(counted.clone()));
+            let probe = resident.clone();
+            let stats: Arc<dyn Fn() -> WrapperStats + Send + Sync> = Arc::new(move || {
+                let s = probe.stats();
+                WrapperStats {
+                    name: "header".to_string(),
+                    placeholder: false,
+                    hits: s.hits,
+                    misses: s.misses,
+                    decodes: Some(s.decodes),
+                    resident_bytes: s.resident_bytes,
+                    resident_tenants: Some(s.resident_tenants),
+                    ..WrapperStats::default()
+                }
+            });
+            (resident as Arc<dyn Store>, Some(stats))
+        }
         Mode::Full => layered(Arc::new(PlaceholderHook { name: "full" })),
         Mode::Stale => layered(Arc::new(StaleHook::default())),
     };

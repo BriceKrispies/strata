@@ -18,6 +18,7 @@
 
 use crate::rng::{hash_text, Rng};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use strata_kernel::ext::RecordExt;
 use strata_kernel::testkit;
 use strata_kernel::{
@@ -34,6 +35,9 @@ pub struct TenantRequest {
     /// The population scale S, in the loader's own unit (the stand-in: notes per tenant).
     pub scale: u32,
     pub seed: u64,
+    /// One of the small tenants beside the primary one: a platform-template tenant, not the
+    /// corpus.
+    pub small: bool,
 }
 
 /// Install and populate a tenant.
@@ -41,9 +45,19 @@ pub trait CorpusLoader {
     /// Create the tenant `request.name` on `store` (replacing one of that name) and fill it.
     fn populate(
         &self,
-        store: &dyn Store,
+        store: Arc<dyn Store>,
         request: &TenantRequest,
     ) -> Result<Box<dyn CorpusTenant>, String>;
+
+    /// Address a tenant that `store` holds already (a reused populated store) without building it.
+    /// The default builds it.
+    fn reuse(
+        &self,
+        store: Arc<dyn Store>,
+        request: &TenantRequest,
+    ) -> Result<Box<dyn CorpusTenant>, String> {
+        self.populate(store, request)
+    }
 }
 
 /// The records of one object type in the populated tenant.
@@ -121,7 +135,15 @@ pub struct Erasure {
 /// advances per call, for values that must differ (a slug, a title).
 pub trait CorpusTenant: Send + Sync {
     fn tenant(&self) -> &TenantId;
+    /// What the tenant is, for the report (`small`, `notes-60`).
+    fn label(&self) -> String {
+        String::new()
+    }
     fn catalogue(&self) -> &Catalogue;
+    /// Operations the tenant could not map onto its schema at opening, for the report.
+    fn unmapped(&self) -> Vec<String> {
+        Vec::new()
+    }
     fn actor(&self, who: Actor) -> Principal;
     /// The fields to create a record of `object` with.
     fn create_fields(&self, object: &ObjectTypeId, n: u64) -> Option<BTreeMap<FieldId, Value>>;
@@ -172,9 +194,10 @@ fn ctx_for(tenant: &TenantId, principal: Principal, now: i64) -> Context {
 impl CorpusLoader for NotesLoader {
     fn populate(
         &self,
-        store: &dyn Store,
+        store: Arc<dyn Store>,
         request: &TenantRequest,
     ) -> Result<Box<dyn CorpusTenant>, String> {
+        let store = store.as_ref();
         let id = TenantId::new(&request.name).map_err(|e| format!("tenant id: {e:?}"))?;
         store.reset_tenant(&id).map_err(|e| e.to_string())?;
         let mut now = 1_000;
@@ -271,6 +294,10 @@ impl CorpusLoader for NotesLoader {
 impl CorpusTenant for NotesTenant {
     fn tenant(&self) -> &TenantId {
         &self.id
+    }
+
+    fn label(&self) -> String {
+        "stub".to_string()
     }
 
     fn catalogue(&self) -> &Catalogue {

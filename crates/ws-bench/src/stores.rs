@@ -19,6 +19,8 @@ use strata_storage_sqlite::SqliteStore;
 pub enum StoreSpec {
     Memory,
     Sqlite(Option<PathBuf>),
+    /// A populated SQLite store opened as a private copy, so a run never changes the original.
+    SqliteReuse(PathBuf),
 }
 
 impl StoreSpec {
@@ -45,6 +47,7 @@ impl StoreSpec {
             StoreSpec::Memory => "memory".to_string(),
             StoreSpec::Sqlite(None) => "sqlite".to_string(),
             StoreSpec::Sqlite(Some(path)) => format!("sqlite:{}", path.display()),
+            StoreSpec::SqliteReuse(path) => format!("sqlite-reuse:{}", path.display()),
         }
     }
 
@@ -61,15 +64,22 @@ impl StoreSpec {
                     control: None,
                 })
             }
-            StoreSpec::Sqlite(path) => {
-                let (control, private_dir) = match path {
-                    Some(path) => (path.clone(), None),
-                    None => {
-                        let dir = std::env::temp_dir()
-                            .join(format!("strata-ws-bench-{}-{salt:x}", std::process::id()));
-                        std::fs::create_dir_all(&dir).map_err(|e| {
-                            StoreError::Unavailable(format!("{}: {e}", dir.display()))
+            StoreSpec::Sqlite(_) | StoreSpec::SqliteReuse(_) => {
+                let path = match self {
+                    StoreSpec::Sqlite(path) => path.as_ref(),
+                    _ => None,
+                };
+                let (control, private_dir) = match (self, path) {
+                    (StoreSpec::SqliteReuse(source), _) => {
+                        let dir = private_dir(salt)?;
+                        let control = copy_store(source, &dir).map_err(|e| {
+                            StoreError::Unavailable(format!("{}: {e}", source.display()))
                         })?;
+                        (control, Some(dir))
+                    }
+                    (_, Some(path)) => (path.clone(), None),
+                    (_, None) => {
+                        let dir = private_dir(salt)?;
                         (dir.join("control.db"), Some(dir))
                     }
                 };
@@ -91,7 +101,9 @@ impl StoreSpec {
     pub fn schema_decodes(&self) -> Option<u64> {
         match self {
             StoreSpec::Memory => None,
-            StoreSpec::Sqlite(_) => Some(strata_storage_sqlite::schema_decodes()),
+            StoreSpec::Sqlite(_) | StoreSpec::SqliteReuse(_) => {
+                Some(strata_storage_sqlite::schema_decodes())
+            }
         }
     }
 }
@@ -111,7 +123,9 @@ impl Opened {
     /// A fresh primary handle on the same data, with whatever the old one had cached gone: a
     /// process restart. The memory store has nothing to reopen and keeps its handle.
     pub fn reopen_primary(&mut self) -> Result<(), StoreError> {
-        if let (StoreSpec::Sqlite(_), Some(control)) = (&self.spec, &self.control) {
+        if let (StoreSpec::Sqlite(_) | StoreSpec::SqliteReuse(_), Some(control)) =
+            (&self.spec, &self.control)
+        {
             self.primary = Arc::new(SqliteStore::open(control, Timestamp(0))?);
         }
         Ok(())
@@ -128,4 +142,53 @@ impl Drop for Opened {
             let _ = std::fs::remove_dir_all(dir);
         }
     }
+}
+
+/// A fresh private directory for a run.
+fn private_dir(salt: u64) -> Result<PathBuf, StoreError> {
+    let dir = std::env::temp_dir().join(format!("strata-ws-bench-{}-{salt:x}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| StoreError::Unavailable(format!("{}: {e}", dir.display())))?;
+    Ok(dir)
+}
+
+/// Copy a control database (with its write-ahead files) and its tenants directory into `into`,
+/// keeping the names the adapter derives the tenants directory from. Returns the copied control
+/// database.
+fn copy_store(control: &std::path::Path, into: &std::path::Path) -> std::io::Result<PathBuf> {
+    let name = control
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("the store path names no file"))?;
+    let copy = into.join(name);
+    std::fs::copy(control, &copy)?;
+    for suffix in ["-wal", "-shm"] {
+        let mut side = control.as_os_str().to_owned();
+        side.push(suffix);
+        let side = PathBuf::from(side);
+        if side.exists() {
+            let mut to = copy.as_os_str().to_owned();
+            to.push(suffix);
+            std::fs::copy(&side, PathBuf::from(to))?;
+        }
+    }
+    let tenants = strata_storage_sqlite::default_tenants_dir(control);
+    if tenants.is_dir() {
+        copy_tree(&tenants, &strata_storage_sqlite::default_tenants_dir(&copy))?;
+    }
+    Ok(copy)
+}
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }

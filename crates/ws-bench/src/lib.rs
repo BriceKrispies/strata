@@ -13,7 +13,9 @@
 //! and the layers of [`modes`] (WG-5390, WG-5391). Design: `docs/working-set.md`, "Experiments".
 
 pub mod corpus;
+pub mod decide;
 mod delegate;
+pub mod enterprise;
 pub mod generation;
 pub mod layer;
 pub mod modes;

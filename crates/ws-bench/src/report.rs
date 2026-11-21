@@ -157,6 +157,8 @@ pub struct Report {
     pub mode: String,
     pub seed: u64,
     pub scale: u32,
+    /// What the primary tenant is (the corpus scale, or the stand-in's size).
+    pub scale_name: String,
     pub length: usize,
     pub clients: u32,
     pub tenants: usize,
@@ -173,4 +175,6 @@ pub struct Report {
     pub timing: Timing,
     /// Object types the scenario named that the catalogue lacks, and what each ran as.
     pub object_aliases: BTreeMap<String, String>,
+    /// Operations the primary tenant could not map onto its schema when it was opened.
+    pub unmapped: Vec<String>,
 }
