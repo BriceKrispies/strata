@@ -33,7 +33,9 @@
 //!   tenant is at), or a step the harness implements by name ([`SETUP_STEPS`]).
 //! - **Every reply**: a refusal is the `errorBody` type with a `code` that is the `kind` of one of
 //!   the contract's declared errors and the status `system.generation.errorKinds` gives it; a
-//!   success is the declared outputs.
+//!   success is the declared outputs. A view contract whose one output is the backend's result
+//!   (`view-data`, the derived `read-view`) is held to the projection the route answers
+//!   ([`VIEW_PROJECTION`]) instead.
 //!
 //! A check that applies but cannot be made (no example, a quota too large to exhaust, a scheme the
 //! suite holds no credential of) is listed in `SKIPPED` with its reason, which the gate counts and
@@ -104,6 +106,27 @@ pub const TENANT_TYPE: &str = "tenant-id";
 pub const SOCKET_TYPE: &str = "event-stream";
 /// The name of the declared error a refusal for a stale authentication is.
 pub const STEP_UP_ERROR: &str = "step-up-required";
+/// The output type of a derived view contract (`read-view`): what the backend hands the BFF.
+pub const VIEW_RESULT_TYPE: &str = "view-data";
+/// The members of the view model the BFF answers at a view route in place of the backend's result
+/// (`strata_substrate::project::project` and the `view` route of the BFF): the contracts of the
+/// facade views declare the same members as their outputs. The sections of `view-data` are the
+/// `data` member, and the route adds the address `path` and the resolved `theme`; `next` is there
+/// only when a section has a further page, and `record_rules` only for the editor.
+/// (wire name, type, optional).
+pub const VIEW_PROJECTION: &[(&str, &str, bool)] = &[
+    ("view", "string", false),
+    ("title", "string", false),
+    ("path", "string", false),
+    ("params", "json", false),
+    ("data", "json", false),
+    ("depends_on", "list<string>", false),
+    ("revision", "state-revision", false),
+    ("schema_version", "schema-version", false),
+    ("theme", "view-theme", false),
+    ("next", "json", true),
+    ("record_rules", "json", true),
+];
 /// The value a route parameter takes when no example gives one.
 pub const PLACEHOLDER: &str = "conformance-probe";
 
@@ -825,6 +848,14 @@ fn plan(
     };
     let reply = match &shape {
         Shape::Socket => Reply::Socket,
+        // A derived view contract declares the backend's result as its one output; the route
+        // answers the BFF's projection of it.
+        Shape::View if outputs.len() == 1 && outputs[0].ty == VIEW_RESULT_TYPE => Reply::Members(
+            VIEW_PROJECTION
+                .iter()
+                .map(|(name, ty, optional)| (name.to_string(), ty.to_string(), *optional))
+                .collect(),
+        ),
         Shape::Records { .. } => Reply::Records(
             outputs
                 .iter()
@@ -1980,6 +2011,33 @@ mod tests {
         assert!(
             text.contains(r#"#[should_panic(expected = "[reply-shape]")]"#),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn a_derived_view_contract_is_held_to_the_projection_the_route_answers() {
+        let derived = r#"{ "id": "read-any", "deployment": "shipped", "bffRoute": "GET /api/view view",
+          "auth": { "scheme": "anonymous" }, "inputs": [],
+          "outputs": [{ "name": "view", "type": "view-data" }], "errors": [] }"#;
+        let spec = spec(derived).replace(
+            r#""types": ["#,
+            r#""types": [
+    { "id": "view-data", "kind": "struct", "fields": [{ "name": "title", "type": "string" }] },
+    { "id": "state-revision", "kind": "id", "repr": "u64" },
+    { "id": "schema-version", "kind": "id", "repr": "u32" },
+    { "id": "view-theme", "kind": "struct", "fields": [{ "name": "accent", "type": "string" }] },"#,
+        );
+        let text = generate("fixture.jsonc", &spec, &Options::default())
+            .unwrap()
+            .files[0]
+            .contents
+            .clone();
+        for member in ["depends_on", "schema_version", "theme", "path"] {
+            assert!(text.contains(&format!(r#"wire: "{member}""#)), "{member}: {text}");
+        }
+        assert!(
+            !text.contains("view-data"),
+            "the backend's result is not what the route answers: {text}"
         );
     }
 
