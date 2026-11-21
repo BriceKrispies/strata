@@ -2828,7 +2828,13 @@
     {"id":"d-8120","ref":"D-8120","title":"The change audit is written by the shell after the commit, with values read before and after","group":"Data safety","decided":"2026-11-20","statement":"**The change audit is written by the shell after the commit, with values read before and after.** Every change of a role, a team, an invitation, a setting or the schema is committed through one function of the backend (ops::run_intent_at). It reads the tenant header before the commit and after it and appends one audit line holding the previous and the new value of what the intent changes, the acting principal, the revision and the correlation identifier of the request. A line about a person (the roles of a person, a person-level setting) names the person as principal and holds the values as previous and value, which the sealed store seals under the person's key; every other line holds them as before and after in plain, because configuration is not personal data. A refused or replayed intent leaves no line, and the installation of a tenant leaves none (ops::run_intent_unaudited). The line is written after the commit, so a crash between the two loses the line and not the change, and the event and the journal line of the commit still carry the change. Alternative: write the line in the same commit as the change; not taken because the audit trail has its own chain and a transaction across both would reach into every store adapter."},
     {"id":"d-8140","ref":"D-8140","title":"Which contracts are facades, which stay with the gateway, and which take no idempotency key","group":"Platform","decided":"2026-11-20","statement":"**Which contracts are facades, which stay with the gateway, and which take no idempotency key.** deliver-view (CT-093) becomes a facade onto the generic view contract read-view (CT-264), at GET /api/view, with the other page reads (CT-239..CT-253); its target change was to stop being a gateway operation of its own, since the backend view operation already serves the route. sign-in-at-site, sign-out-of-site and read-session-view (CT-254..CT-256) stay gateway contracts, because the gateway holds the session cookie and the request token and no other served contract states their routes for a facade to be lowered onto. Of the BFF contracts that were idempotent false with no idempotency-key input, run-lab-projection takes the key and the backend honours it for 24 hours (the starts are held in the backend process, like the runs). Seven are idempotent true for the reason stated in their postconditions: a repeat changes nothing the first call did not already make, or is refused and changes nothing, or replaces what the first call made so that one of it exists; the two whose answer holds a secret or codes shown once are never answered from a stored copy, so a key would have nothing to replay."},
     {"id":"d-8210","ref":"D-8210","title":"The dependencies of an entity are computed from its definition at the level of a field, and are never declared by hand","group":"Platform","decided":"2026-11-20","statement":"**The dependencies of an entity are computed from its definition at the level of a field, and are never declared by hand.** An entity of a tenant schema (an object type, a field, a query, a policy, a view, a workflow, a trigger, an automation, a screen, a form, an event kind) depends on the entities its definition names, and an expression depends on each field it reads. The platform computes this set from the definitions and keeps it in step with them in the commit of every schema change. The dependents of an entity are read from the same graph by inverting it. A definition that carries a list of its dependencies is refused, because a list written by hand can disagree with the definition it describes. The kernel's check that a schema holds no dangling reference after a change is the same graph read once: a change is valid when each entity in the graph still resolves."},
-    {"id":"d-8211","ref":"D-8211","title":"A product declares the products it depends on with a version range, and refers to another product only through that declaration","group":"Platform","decided":"2026-11-20","statement":"**A product declares the products it depends on with a version range, and refers to another product only through that declaration.** A reference from an entity of one product to an entity of another is allowed only to a product the first declares a dependency on, and is checked against the range: the installed version of the other product must be inside it. Installs of several products are ordered so that a product follows the products it depends on. The removal or the downgrade of a product that an installed product depends on is refused, naming the dependent product, and a cycle of dependencies between products is refused naming the products on it. The platform computes the dependencies between entities (D-8210) and the declaration states only which products they may lie in. This extends INT-2900 and D-7342, which refuse a schema change to what a product owns and a removal while another entity names what is removed; it does not replace them."}
+    {"id":"d-8211","ref":"D-8211","title":"A product declares the products it depends on with a version range, and refers to another product only through that declaration","group":"Platform","decided":"2026-11-20","statement":"**A product declares the products it depends on with a version range, and refers to another product only through that declaration.** A reference from an entity of one product to an entity of another is allowed only to a product the first declares a dependency on, and is checked against the range: the installed version of the other product must be inside it. Installs of several products are ordered so that a product follows the products it depends on. The removal or the downgrade of a product that an installed product depends on is refused, naming the dependent product, and a cycle of dependencies between products is refused naming the products on it. The platform computes the dependencies between entities (D-8210) and the declaration states only which products they may lie in. This extends INT-2900 and D-7342, which refuse a schema change to what a product owns and a removal while another entity names what is removed; it does not replace them."},
+    {"id":"d-8212","ref":"D-8212","title":"Every schema change has a class, computed from its effect on dependents: compatible, adaptable or breaking","group":"Platform","decided":"2026-11-20","statement":"**Every schema change has a class, computed from its effect on dependents: compatible, adaptable or breaking.** A compatible change (add a field, widen a type, add an enum value) leaves each valid dependent valid, and evaluating the same on the data that exists. An adaptable change (rename, move a field, split a field totally) is applied together with a rewrite of the dependents, so that each evaluates the same on the migrated data. A breaking change (remove, narrow, retarget a reference, turn a single value into a list) cannot be followed by a rewrite, and is refused naming each affected dependent, unless that dependent is pinned to a projection (D-8214). The platform computes the class and the impact set, the dependents the change reaches directly or through other dependents, from the dependency graph (D-8210). The author does not state the class, and the preview (MIG-550) shows both before the change is decided. The irreversible changes of MIG-557 are breaking."},
+    {"id":"d-8213","ref":"D-8213","title":"A structural version changes only on a breaking change, and a dependent records the versions it was validated against","group":"Platform","decided":"2026-11-20","statement":"**A structural version changes only on a breaking change, and a dependent records the versions it was validated against.** Each entity has a structural version that starts at one and rises by one when a breaking change is applied to it; a compatible or adaptable change leaves it alone, since dependents keep working through it. A dependent records, for each entity it depends on, the structural version it was validated against. That record is the pin: it is what lets the platform say which dependents a breaking change would leave behind, and what a projection (D-8214) is a projection of."},
+    {"id":"d-8214","ref":"D-8214","title":"A pinned dependent reads a breaking change through a projection until it is migrated or its deprecation window closes","group":"Platform","decided":"2026-11-20","statement":"**A pinned dependent reads a breaking change through a projection until it is migrated or its deprecation window closes.** When an entity owned by another product or another author takes a breaking change, a dependent pinned to the earlier structural version is not broken: it reads the entity through a projection of the pinned version, a read-only view of the new data in the old shape. A projection is defined only where the change has a left inverse on the data the dependent reads, that is, where reading the new shape back into the old one returns what the old shape held. The irreversible changes of MIG-557 have none, so a removal is never projected and waits for its pins (D-8215). A pin ends when its dependent is migrated to the new version or when the deprecation window the change declared closes; after the window the dependent is reported and refused. A workflow run under the definition version that started it (MIG-562) and a draft saved under an earlier schema version (MIG-561) are instances: each is a dependent pinned to the version it began under. So is the definition of the interface that an open client holds, which keeps working under its pin until the client reloads (WG-5292). An upgrade of a product that carries the product's record (INT-2900) is still a schema change and is classified like any other."},
+    {"id":"d-8215","ref":"D-8215","title":"A breaking change across an ownership boundary is made by expanding, migrating the dependents, and contracting","group":"Platform","decided":"2026-11-20","statement":"**A breaking change across an ownership boundary is made by expanding, migrating the dependents, and contracting.** The owner first adds the new shape beside the old one, which is a compatible change; the dependents then migrate to it, each at its own pace within the deprecation window; and the old shape is removed only when no pin on it remains. The removal, the contract step, is the breaking change, and it is refused while a pin remains (MIG-599)."},
+    {"id":"d-8216","ref":"D-8216","title":"Schema changes from one base revision commute when their footprints are disjoint, and are otherwise serialised and classified again","group":"Platform","decided":"2026-11-20","statement":"**Schema changes from one base revision commute when their footprints are disjoint, and are otherwise serialised and classified again.** The footprint of a change is the entities it touches together with its impact set. Two changes made from the same base revision whose footprints are disjoint both apply, in either order, to the same schema. When the footprints overlap, the revision guard of the commit admits one; the other is refused as stale and is classified again against the schema now in force, which is its rebase, and is never applied with the class and the impact set it had at its base revision."},
+    {"id":"d-8217","ref":"D-8217","title":"A dependent is bound to an entity by its stable identity, never by its name","group":"Platform","decided":"2026-11-20","statement":"**A dependent is bound to an entity by its stable identity, never by its name.** Each entity has an identity that does not change when it is renamed or moved. A dependent records the identity of what it was validated against, and a name is only how a person writes it. A dependent bound to an entity stays bound to it when the entity is renamed, and does not bind to a different entity that later takes the name the first one had."}
   ],
   "constraints": [
     {"id":"k-1","statement":"The kernel performs no input or output and reads no clock and no source of randomness.","group":"Kernel","ref":"K-1"},
@@ -3727,6 +3733,26 @@
     {"id":"mig-578","kind":"requirement","lifecycle":"active","statement":"An archive SHALL state each kind of content that it does not carry.","rationale":"An archive that looks complete and is not misleads the customer who takes it elsewhere (ADM-161).","evaluate":{"method":"example"},"ref":"MIG-578","area":"02-tenancy","section":"Import and export","boundary":"b-153","boundaryDetail":"`archive manifest`","traces":["g-163"],"milestone":11,"inSection":"sec-migration-9","realisation":"checked"},
     {"id":"mig-583","kind":"requirement","lifecycle":"active","statement":"A plan change SHALL be refused while the tenant holds more of a metered quantity than the new plan allows, with that quantity named.","rationale":"A downgrade is a migration of the tenant's own usage, and it is refused where the tenant would be out of line (BIL-151).","evaluate":{"method":"scenario"},"ref":"MIG-583","area":"02-tenancy","section":"Plans","boundary":"b-3","boundaryDetail":"`tenant plan`","traces":["g-157","g-4"],"milestone":6,"inSection":"sec-migration-10","realisation":"checked"},
     {"id":"mig-584","kind":"requirement","lifecycle":"active","statement":"A migration run SHALL carry each published version of a record across its change, with the schema version under which that version was written.","rationale":"A record's history reads the same after a change of schema, and each version says which schema it was written under (CMS-006, G-32).","evaluate":{"method":"scenario"},"ref":"MIG-584","area":"02-tenancy","section":"Schema changes","boundary":"b-552","boundaryDetail":"`record history`","traces":["g-32","g-556"],"milestone":11,"inSection":"sec-migration-3","realisation":"checked"},
+    {"id":"mig-589","kind":"requirement","lifecycle":"active","statement":"The platform SHALL assign each schema change the class compatible, adaptable or breaking, computed from the dependents of the entities it changes and not stated by its author.","rationale":"A class that the author states can be wrong in the author's favour. The dependency graph decides it (D-8212, D-8210).","evaluate":{"method":"property"},"ref":"MIG-589","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`schema change class`","traces":["g-556","g-44","d-8212"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-590","kind":"requirement","lifecycle":"active","statement":"A compatible schema change (add a field, widen a type, add an enum value) SHALL leave each valid dependent valid and evaluating the same on existing data.","rationale":"This is what lets a compatible change be applied without a preview of each dependent. Carried by a Lean theorem of compatibility over the change forms that are compatible (D-8212).","evaluate":{"method":"proof"},"ref":"MIG-590","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`compatible schema change`","traces":["g-556","g-557","d-8212"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-591","kind":"requirement","lifecycle":"active","statement":"An adaptable schema change (rename, move a field, total split) SHALL be applied together with a rewrite of each dependent that makes it evaluate the same on the migrated data.","rationale":"A rename that leaves its readers pointing at the old name is a break. Carried by a Lean theorem of rewrite correctness: the rewritten dependent on the migrated data gives what the dependent gave on the data before (D-8212).","evaluate":{"method":"proof"},"ref":"MIG-591","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`adaptable schema change`","traces":["g-556","g-557","d-8212"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-592","kind":"requirement","lifecycle":"active","statement":"A breaking schema change SHALL be refused naming each affected dependent, unless that dependent is pinned to a projection.","rationale":"The refusal lists the dependents so the author can see what to migrate first, and the pin is the only thing that excuses one (D-8212, D-8214).","evaluate":{"method":"scenario"},"ref":"MIG-592","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`breaking schema change`","traces":["g-556","g-557","d-8212","d-8214"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-593","kind":"requirement","lifecycle":"active","statement":"The preview of a schema change (MIG-550) SHALL show the class of the change and its impact set.","rationale":"The owner decides on what the change does to others as well as to records (D-8212).","evaluate":{"method":"scenario"},"ref":"MIG-593","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`schema change preview`","traces":["g-556","g-44","d-8212"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-594","kind":"requirement","lifecycle":"active","statement":"The structural version of an entity SHALL change only on a breaking change.","rationale":"A version that rose on every edit would pin dependents to versions that differ in nothing they read (D-8213).","evaluate":{"method":"property"},"ref":"MIG-594","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`structural version`","traces":["g-556","d-8213"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-595","kind":"requirement","lifecycle":"active","statement":"A dependent SHALL record the structural version of each entity it was validated against.","rationale":"The record is the pin, and a breaking change reads it to find the dependents it leaves behind (D-8213).","evaluate":{"method":"example"},"ref":"MIG-595","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`dependent`","traces":["g-556","d-8213"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-596","kind":"requirement","lifecycle":"active","statement":"A dependent pinned to an earlier structural version of an entity SHALL read the entity through a projection of that version until it is migrated or its deprecation window closes.","rationale":"A breaking change by another product or another author does not break a dependent that has not migrated yet (D-8214).","evaluate":{"method":"scenario"},"ref":"MIG-596","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`pinned dependent`","traces":["g-556","g-557","d-8214"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-597","kind":"requirement","lifecycle":"active","statement":"A projection SHALL be defined only for a change that has a left inverse on the data the dependent reads.","rationale":"Without a left inverse the old shape cannot be rebuilt from the new data, so the dependent would read something it never held. The irreversible changes of MIG-557 have none. Carried by a Lean theorem of the lens laws: reading the new shape back returns what the old shape held (D-8214).","evaluate":{"method":"proof"},"ref":"MIG-597","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`projection`","traces":["g-557","d-8214","d-571"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-598","kind":"requirement","lifecycle":"active","statement":"A dependent whose pin is still held when its deprecation window closes SHALL be reported and refused.","rationale":"A pin does not last for ever: after the window the owner of the entity is no longer held to the old shape, and the dependent's owner is told (D-8214).","evaluate":{"method":"scenario"},"ref":"MIG-598","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`deprecation window`","traces":["g-556","d-8214"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-599","kind":"requirement","lifecycle":"active","statement":"The old shape of an entity after a breaking change across an ownership boundary SHALL be removed only when no pin on it remains.","rationale":"Expand, migrate and contract is the order that keeps a dependent working; the contract step waits for the last pin (D-8215).","evaluate":{"method":"scenario"},"ref":"MIG-599","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`contract step`","traces":["g-556","g-557","d-8215"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-600","kind":"requirement","lifecycle":"active","statement":"The interface definition held by an open client SHALL be a dependent pinned to the structural versions it was loaded under.","rationale":"An open page keeps working under its pin when a breaking change lands, and is told to reload when the pin ends, which is the live client control of WG-5292 (D-8214).","evaluate":{"method":"scenario"},"ref":"MIG-600","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`open client`","traces":["g-556","g-206","d-8214"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-601","kind":"requirement","lifecycle":"active","statement":"A workflow run and a draft SHALL each be a dependent pinned to the structural versions under which it began.","rationale":"MIG-562 and MIG-561 are this rule for a run and for a draft; stating the general rule keeps them from drifting apart (D-8214).","evaluate":{"method":"scenario"},"ref":"MIG-601","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`pinned dependent`","traces":["g-16","g-556","g-206","d-8214"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-602","kind":"requirement","lifecycle":"active","statement":"Two schema changes made from one base revision whose footprints are disjoint SHALL both apply, in either order, to the same schema.","rationale":"Changes that touch nothing in common need not wait for each other. Carried by a Lean theorem of commutation (D-8216).","evaluate":{"method":"proof"},"ref":"MIG-602","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`schema change footprint`","traces":["g-556","g-557","d-8216"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-603","kind":"requirement","lifecycle":"active","statement":"A schema change whose footprint overlaps that of a change committed since its base revision SHALL be classified again against the current schema before it applies.","rationale":"A class and an impact set computed at the base revision describe a schema that is gone (D-8216).","evaluate":{"method":"scenario"},"ref":"MIG-603","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`schema change rebase`","traces":["g-556","g-557","d-8216"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-604","kind":"requirement","lifecycle":"active","statement":"A dependent SHALL stay bound to the entity it was validated against when a different entity later takes that entity's former name.","rationale":"A name reused by another entity must not silently retarget what depends on the first (D-8217).","evaluate":{"method":"property"},"ref":"MIG-604","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`dependent binding`","traces":["g-556","g-557","d-8217"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-605","kind":"requirement","lifecycle":"active","statement":"A schema change SHALL leave unchanged each entity outside its footprint.","rationale":"The impact set is the whole of what a change reaches, so a dependent outside it is not rewritten or revalidated. Carried by a Lean theorem of locality (D-8212, D-8216).","evaluate":{"method":"proof"},"ref":"MIG-605","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`schema change impact set`","traces":["g-556","g-557","d-8212"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-606","kind":"requirement","lifecycle":"active","statement":"Schema changes applied in sequence SHALL leave the dependents in the state that applying their composition as one change gives.","rationale":"A change split into steps and the same change made at once must not differ in what they leave behind. Carried by a Lean theorem of composition (D-8212).","evaluate":{"method":"proof"},"ref":"MIG-606","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`schema change sequence`","traces":["g-556","g-557","d-8212"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-607","kind":"requirement","lifecycle":"active","statement":"A switch of a dependent back to an earlier pinned version SHALL be refused when data written since cannot be read through that version without loss.","rationale":"After a forward migration the data may hold what the old shape cannot, and a switch back would silently drop it (D-8214, MIG-597).","evaluate":{"method":"scenario"},"ref":"MIG-607","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`pin switch back`","traces":["g-557","d-8214"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
+    {"id":"mig-608","kind":"requirement","lifecycle":"active","statement":"The dependents rewritten by an adaptable schema change SHALL each be rewritten once, after the entities they depend on.","rationale":"In a diamond, where two dependents of a field are both depended on by a third, a rewrite that reaches the third twice or before the others reads a half-rewritten definition (D-8212).","evaluate":{"method":"property"},"ref":"MIG-608","area":"02-tenancy","section":"Change classes, pins and projections","boundary":"b-1","boundaryDetail":"`schema change rewrite`","traces":["g-556","g-557","d-8212"],"milestone":2,"inSection":"sec-migration-11","realisation":"checked"},
     {"id":"mig-586","kind":"requirement","lifecycle":"active","statement":"A request that began before a placement switch SHALL complete on the source placement, and a request that begins after it uses the target placement.","rationale":"A switch that changes the placement under a request in flight writes to the wrong database for that request.","evaluate":{"method":"scenario"},"ref":"MIG-586","area":"02-tenancy","section":"Moving a tenant","boundary":"b-553","boundaryDetail":"`placement switch`","traces":["g-558"],"milestone":2,"inSection":"sec-migration-7","realisation":"checked"},
     {"id":"mig-587","kind":"requirement","lifecycle":"active","statement":"A placement switch SHALL leave the stored copies and the edge copies of the tenant valid, because their keys name the tenant and not the placement.","rationale":"A move that purges every copy turns a placement change into a load spike on the target database.","evaluate":{"method":"scenario"},"ref":"MIG-587","area":"02-tenancy","section":"Moving a tenant","boundary":"b-553","boundaryDetail":"`placement switch`","traces":["g-558","g-18"],"milestone":6,"inSection":"sec-migration-7","realisation":"checked"},
     {"id":"mig-588","kind":"requirement","lifecycle":"active","statement":"After a placement switch, the backups and the files of the tenant SHALL be those of the target placement, with the source backups kept for the source retention.","rationale":"Backups and files follow the placement that holds the tenant, and the source copies stay available for the retention (MIG-572).","evaluate":{"method":"scenario"},"ref":"MIG-588","area":"02-tenancy","section":"Moving a tenant","boundary":"b-553","boundaryDetail":"`placement switch`","traces":["g-558","g-1","d-706"],"milestone":2,"inSection":"sec-migration-7","realisation":"checked"},
@@ -12462,7 +12488,191 @@
     {"id":"int-3203","kind":"requirement","statement":"A product file SHALL have a section eventKinds of values of event-kind-decl, specc SHALL refuse a kind that does not begin with app. and a name or that has more than 16 fields with layer.event-kind-invalid and SHALL write the section as the bundle section event-kinds, and the bundle reader SHALL read and check it and refuse to install a bundle that fills it until the kernel holds declared kinds.","rationale":"A product states the events it produces as data, with the same checks the tenant's own declaration has (SCH-1576, D-6700).","evaluate":{"method":"example"},"ref":"INT-3203","area":"04-automation","lifecycle":"active","realisation":"checked","milestone":5,"section":"Product bundles: install, upgrade and remove","boundary":"b-21","boundaryDetail":"`tenant bundle`","traces":["g-167","d-8202"],"inSection":"sec-product-bundles"},
     {"id":"ops-3120","kind":"requirement","statement":"A committed change of the roles of a person, of a team, of an invitation, of a setting or of the schema of a running tenant SHALL append an audit line that holds the previous value, the new value, the acting principal, the revision and the correlation identifier of the request, and a change that is refused SHALL append none.","rationale":"OPS-329 asks it of a configuration change; roles and permissions are configuration too, and a refused change changed nothing to explain (D-8120).","evaluate":{"method":"scenario"},"ref":"OPS-3120","area":"09-operations","section":"Releases and change","lifecycle":"active","boundary":"b-12","boundaryDetail":"`audit entry`","traces":["g-30"],"milestone":10,"inSection":"sec-operations-8","realisation":"checked"},
     {"id":"obs-3121","kind":"requirement","statement":"The route of verify-audit-chain SHALL answer a principal that holds the capability audit-read, SHALL refuse anyone else and a tenant other than the one of the request, and SHALL report a chain with an altered or a removed line as broken with the sequence number of the first line that no longer chains.","rationale":"A check that anyone may run reads the trail of every tenant; one that cannot find a changed line proves nothing (OBS-007, CT-128).","evaluate":{"method":"scenario"},"ref":"OBS-3121","area":"06-agents","section":"Audit","lifecycle":"active","boundary":"b-12","boundaryDetail":"`verify-audit-chain`","traces":["g-30"],"milestone":8,"inSection":"sec-observability-3","realisation":"checked"},
-    {"id":"prv-3122","kind":"requirement","statement":"The receipt of an erasure SHALL name each backup image the tenant holds with the time it was taken and the time it expires, and each export of the erased subject's data with its own expiry, and the erasure SHALL remove each such export before its expiry.","rationale":"A copy that outlives the erasure for a stated time is named with that time, one by one, so the person can see when each stops existing (PRV-353, D-351, D-7727).","evaluate":{"method":"scenario"},"ref":"PRV-3122","area":"09-privacy","section":"Data subject rights","lifecycle":"active","boundary":"b-350","boundaryDetail":"`POST /api/subject-rights/erase`","traces":["g-350","k-352"],"milestone":6,"inSection":"sec-privacy-2","realisation":"checked"}
+    {"id":"prv-3122","kind":"requirement","statement":"The receipt of an erasure SHALL name each backup image the tenant holds with the time it was taken and the time it expires, and each export of the erased subject's data with its own expiry, and the erasure SHALL remove each such export before its expiry.","rationale":"A copy that outlives the erasure for a stated time is named with that time, one by one, so the person can see when each stops existing (PRV-353, D-351, D-7727).","evaluate":{"method":"scenario"},"ref":"PRV-3122","area":"09-privacy","section":"Data subject rights","lifecycle":"active","boundary":"b-350","boundaryDetail":"`POST /api/subject-rights/erase`","traces":["g-350","k-352"],"milestone":6,"inSection":"sec-privacy-2","realisation":"checked"},
+    {
+      "id": "m-overlapping-change-is-reclassified",
+      "kind": "invariant",
+      "models": "mig-603",
+      "statement": "A change that adds a dependent on a renamed field reads the field under the name now in force, not the name at its base revision.",
+      "evaluate": {
+        "method": "state-invariant",
+        "scenarios": [
+          "rename-races-a-dependent-add"
+        ],
+        "expr": "concurrent-change-flow.readsField != 1 || concurrent-change-flow.dependentReads == 0 || concurrent-change-flow.dependentReads == concurrent-change-flow.fieldName",
+        "negatives": [
+          {
+            "scenario": "rename-races-a-dependent-add",
+            "faults": [
+              "defect-stale-classification"
+            ]
+          }
+        ]
+      },
+      "faultModel": "fault-model-operations",
+      "assumptions": [
+        "a-model-abstraction"
+      ],
+      "faultBasis": "fault"
+    },
+    {
+      "id": "m-disjoint-changes-commute",
+      "kind": "invariant",
+      "models": "mig-602",
+      "statement": "A change whose footprint is disjoint from a committed change applies without a rebase and reads what it would have read in either order.",
+      "evaluate": {
+        "method": "state-invariant",
+        "scenarios": [
+          "rename-beside-an-unrelated-add"
+        ],
+        "expr": "concurrent-change-flow.readsField != 3 || (concurrent-change-flow.rebases == 0 && (concurrent-change-flow.dependentReads == 0 || concurrent-change-flow.dependentReads == 3))",
+        "negatives": [
+          {
+            "scenario": "rename-beside-an-unrelated-add",
+            "faults": [
+              "defect-needless-rebase"
+            ]
+          }
+        ]
+      },
+      "faultModel": "fault-model-operations",
+      "assumptions": [
+        "a-model-abstraction"
+      ],
+      "faultBasis": "fault"
+    },
+    {
+      "id": "m-dependents-rewritten-in-dependency-order",
+      "kind": "invariant",
+      "models": "mig-608",
+      "statement": "The entity that depends on both dependents of a split field is rewritten once, and only after both of them.",
+      "evaluate": {
+        "method": "state-invariant",
+        "scenarios": [
+          "diamond-split-late-rewrite",
+          "diamond-split-first-rewrite-late"
+        ],
+        "expr": "split-rewrite-flow.dRewrites == 0 || (split-rewrite-flow.dRewrites == 1 && split-rewrite-flow.bDone && split-rewrite-flow.cDone)",
+        "negatives": [
+          {
+            "scenario": "diamond-split-late-rewrite",
+            "faults": [
+              "defect-rewrites-before-inputs"
+            ]
+          }
+        ]
+      },
+      "faultModel": "fault-model-operations",
+      "assumptions": [
+        "a-model-abstraction"
+      ],
+      "faultBasis": "fault"
+    },
+    {
+      "id": "m-pinned-entity-is-not-removed",
+      "kind": "invariant",
+      "models": "mig-599",
+      "statement": "The old shape of an entity is not removed while a pin on it remains.",
+      "evaluate": {
+        "method": "state-invariant",
+        "scenarios": [
+          "removal-waits-for-migration"
+        ],
+        "expr": "pinned-removal-flow.fieldPresent || pinned-removal-flow.pins == 0",
+        "negatives": [
+          {
+            "scenario": "removal-waits-for-migration",
+            "faults": [
+              "defect-removes-under-pin"
+            ]
+          }
+        ]
+      },
+      "faultModel": "fault-model-operations",
+      "assumptions": [
+        "a-model-abstraction"
+      ],
+      "faultBasis": "fault"
+    },
+    {
+      "id": "m-lapsed-pin-is-reported",
+      "kind": "invariant",
+      "models": "mig-598",
+      "statement": "Each pin that ends because its window closed is reported.",
+      "evaluate": {
+        "method": "state-invariant",
+        "scenarios": [
+          "window-closes-on-an-unmigrated-dependent"
+        ],
+        "expr": "pinned-removal-flow.reported == pinned-removal-flow.pinsLapsed",
+        "negatives": [
+          {
+            "scenario": "window-closes-on-an-unmigrated-dependent",
+            "faults": [
+              "defect-window-closes-silently"
+            ]
+          }
+        ]
+      },
+      "faultModel": "fault-model-operations",
+      "assumptions": [
+        "a-model-abstraction"
+      ],
+      "faultBasis": "restatement"
+    },
+    {
+      "id": "m-dependent-keeps-its-binding",
+      "kind": "invariant",
+      "models": "mig-604",
+      "statement": "A dependent resolves the entity it was bound to, or none, and never an entity that took its name later.",
+      "evaluate": {
+        "method": "state-invariant",
+        "scenarios": [
+          "old-name-is-taken-by-another-entity"
+        ],
+        "expr": "name-reuse-flow.resolvedTo == 0 || name-reuse-flow.resolvedTo == name-reuse-flow.bound",
+        "negatives": [
+          {
+            "scenario": "old-name-is-taken-by-another-entity",
+            "faults": [
+              "defect-resolves-by-name"
+            ]
+          }
+        ]
+      },
+      "faultModel": "fault-model-operations",
+      "assumptions": [
+        "a-model-abstraction"
+      ],
+      "faultBasis": "fault"
+    },
+    {
+      "id": "m-switch-back-refuses-lossy-read",
+      "kind": "invariant",
+      "models": "mig-607",
+      "statement": "A dependent is pinned to the old shape only while the data it reads fits that shape.",
+      "evaluate": {
+        "method": "state-invariant",
+        "scenarios": [
+          "switch-back-after-new-data",
+          "switch-back-before-new-data"
+        ],
+        "expr": "switch-back-flow.pinnedTo == 2 || switch-back-flow.elements <= 1",
+        "negatives": [
+          {
+            "scenario": "switch-back-after-new-data",
+            "faults": [
+              "defect-lossy-switch-back"
+            ]
+          }
+        ]
+      },
+      "faultModel": "fault-model-operations",
+      "assumptions": [
+        "a-model-abstraction"
+      ],
+      "faultBasis": "restatement"
+    }
   ],
 
   // ---- Glossary ----------------------------------------------------------------------------------
@@ -12866,6 +13076,7 @@
     {"id":"sec-migration-8","title":"Restore","level":8,"document":"doc-tenant-migrations","order":8,"body":"\nA restore to a point in time reports what it did not carry.\n\n{{entity:mig-573}}\n\n"},
     {"id":"sec-migration-9","title":"Import and export","level":9,"document":"doc-tenant-migrations","order":9,"body":"\nRecords, pages and archives move into and out of the platform with identifiers and redirects kept, and each import reports what it could not map.\n\n{{entity:mig-574}}\n\n{{entity:mig-575}}\n\n{{entity:mig-576}}\n\n{{entity:mig-577}}\n\n{{entity:mig-578}}\n\n"},
     {"id":"sec-migration-10","title":"Plans","level":10,"document":"doc-tenant-migrations","order":10,"body":"\nA plan change is a migration of the tenant's own use, and it is refused where the tenant would be out of line with the new plan. Trial expiry suspends the tenant with its data kept (BIL-154), and keeping a sandbox makes it a production tenant without copying its records (ADM-156).\n\n{{entity:mig-583}}\n\n"},
+    {"id":"sec-migration-11","title":"Change classes, pins and projections","level":11,"document":"doc-tenant-migrations","order":11,"body":"\nA schema change is classified as compatible, adaptable or breaking from its effect on the dependents of what it changes, and the preview shows the class and the impact set. A dependent that a breaking change would leave behind is pinned to the version it was validated against and reads through a projection until it is migrated or its window closes. Changes made from one base revision commute when they touch nothing in common, a dependent is bound to an entity by identity, and the old shape of a breaking change is removed last (D-8210, D-8212 to D-8217).\n\n{{entity:mig-589}}\n\n{{entity:mig-590}}\n\n{{entity:mig-591}}\n\n{{entity:mig-592}}\n\n{{entity:mig-593}}\n\n{{entity:mig-594}}\n\n{{entity:mig-595}}\n\n{{entity:mig-596}}\n\n{{entity:mig-597}}\n\n{{entity:mig-598}}\n\n{{entity:mig-599}}\n\n{{entity:mig-600}}\n\n{{entity:mig-601}}\n\n{{entity:mig-602}}\n\n{{entity:mig-603}}\n\n{{entity:mig-604}}\n\n{{entity:mig-605}}\n\n{{entity:mig-606}}\n\n{{entity:mig-607}}\n\n{{entity:mig-608}}\n\n"},
     {"id":"sec-whitepaper-550","title":"Platform engineering review","level":2,"document":"doc-whitepaper","order":550,"body":"\nThe platform engineering review adds how the platform is released and how a tenant changes over its life. Each entity below is traced to the requirements of the release lifecycle and tenant migrations documents.\n\n**Goals**\n\n{{entity:g-550}}\n\n{{entity:g-551}}\n\n{{entity:g-552}}\n\n{{entity:g-553}}\n\n{{entity:g-554}}\n\n{{entity:g-555}}\n\n{{entity:g-556}}\n\n{{entity:g-557}}\n\n{{entity:g-558}}\n\n**Non-goals**\n\n{{entity:ng-550}}\n\n{{entity:ng-551}}\n\n{{entity:ng-552}}\n\n{{entity:ng-553}}\n\n{{entity:ng-554}}\n\n{{entity:ng-555}}\n\n{{entity:ng-556}}\n\n**Boundaries**\n\n{{entity:b-550}}\n\n{{entity:b-551}}\n\n{{entity:b-552}}\n\n{{entity:b-553}}\n\n**Components**\n\n{{entity:release-controller}}\n\n{{entity:release-pipeline}}\n\n{{entity:image-registry}}\n\n{{entity:traffic-switch}}\n\n{{entity:agent-traffic-switch}}\n\n{{entity:migration-job}}\n\n{{entity:platform-audit-store}}\n\n**Decisions**\n\n{{entity:d-550}}\n\n{{entity:d-551}}\n\n{{entity:d-552}}\n\n{{entity:d-553}}\n\n{{entity:d-554}}\n\n{{entity:d-555}}\n\n{{entity:d-556}}\n\n{{entity:d-557}}\n\n{{entity:d-558}}\n\n{{entity:d-559}}\n\n{{entity:d-560}}\n\n{{entity:d-561}}\n\n{{entity:d-562}}\n\n{{entity:d-563}}\n\n{{entity:d-564}}\n\n{{entity:d-565}}\n\n{{entity:d-566}}\n\n{{entity:d-567}}\n\n{{entity:d-568}}\n\n{{entity:d-569}}\n\n{{entity:d-570}}\n\n{{entity:d-571}}\n\n{{entity:d-572}}\n\n{{entity:d-573}}\n\n{{entity:d-574}}\n\n{{entity:d-575}}\n\n{{entity:d-576}}\n\n{{entity:d-577}}\n\n{{entity:d-578}}\n\n{{entity:d-579}}\n\n{{entity:d-580}}\n\n**Constraints**\n\n{{entity:k-550}}\n\n{{entity:k-551}}\n\n"},
     {"id":"sec-glossary-550","title":"Platform engineering terms","level":2,"document":"doc-glossary","order":550,"body":"\nThe terms that the platform engineering review introduces.\n\n{{entity:term-blue}}\n\n{{entity:term-green}}\n\n{{entity:term-colour-switch}}\n\n{{entity:term-stage-environment}}\n\n{{entity:term-production-environment}}\n\n{{entity:term-migration-run}}\n\n{{entity:term-release-record}}\n\n"},
     {"id":"sec-conversation-700","title":"Consistency review additions","level":2,"document":"doc-conversation","order":700,"body":"\nRequirements that the consistency review added to reconcile the conversation with the rest of the specification.\n\n{{entity:cnv-700}}\n\n{{entity:cnv-701}}\n\n"},
@@ -19884,7 +20095,23 @@
       "name": "Catalogue operation refused",
       "description": "The operation was refused with forbidden and nothing was changed.",
       "delivery": "at-most-once"
-    }
+    },
+    {"id":"cch-proposed-overlapping","name":"Change proposed that reads the renamed field","description":"A change that adds a dependent on the field is proposed from the current revision; its footprint overlaps the rename."},
+    {"id":"cch-proposed-disjoint","name":"Change proposed that reads another field","description":"A change that adds a dependent on another field is proposed from the current revision; its footprint is disjoint from the rename."},
+    {"id":"cch-rename-committed","name":"Rename committed","description":"A rename of the field commits and the revision rises."},
+    {"id":"cch-dependent-committed","name":"Dependent change committed","description":"The proposed change that adds a dependent is submitted to commit."},
+    {"id":"dsp-rewrite-b","name":"First dependent rewritten","description":"The rewrite of the first dependent of the split field completes."},
+    {"id":"dsp-rewrite-c","name":"Second dependent rewritten","description":"The rewrite of the second dependent of the split field completes."},
+    {"id":"dsp-rewrite-d","name":"Joint dependent due","description":"The rewrite of the entity that depends on both dependents is due."},
+    {"id":"rpn-removal-requested","name":"Removal requested","description":"The owner asks to remove the old shape of an entity."},
+    {"id":"rpn-dependent-migrated","name":"Dependent migrated","description":"The pinned dependent migrates to the new version and its pin ends."},
+    {"id":"rpn-window-closed","name":"Deprecation window closed","description":"The deprecation window of the old shape closes."},
+    {"id":"nre-a-renamed","name":"Entity renamed","description":"The entity the dependent is bound to is renamed, and its former name is free."},
+    {"id":"nre-b-created","name":"Another entity created","description":"A different entity is created under the former name of the first."},
+    {"id":"nre-evaluated","name":"Dependent evaluated","description":"The dependent is evaluated and resolves what it is bound to."},
+    {"id":"swb-migrated-forward","name":"Dependent migrated forward","description":"The dependent migrates to the new structural version."},
+    {"id":"swb-element-added","name":"Second element written","description":"The dependent writes a second element in the new shape."},
+    {"id":"swb-switch-back-requested","name":"Switch back requested","description":"The dependent is asked to go back to the earlier pinned version."}
   ],
   "behaviors": [
     {"id":"emailed-link-flow","name":"Emailed link","subject":"identity-service","initial":"ml-idle","description":"One sign-in link: issued, presented, accepted once in the requesting browser within its lifetime of 15 ticks.","variables":[{"name":"issuedAt","type":"number","initial":0},{"name":"sessions","type":"number","initial":0}],"states":[{"id":"ml-idle","name":"No link"},{"id":"ml-pending","name":"Link issued"},{"id":"ml-used","name":"Link used"}],"transitions":[{"id":"ml-issue","from":"ml-idle","to":"ml-pending","on":"ml-requested","effects":[{"set":"issuedAt","to":"time"},{"emit":"ml-mailed"}]},{"id":"ml-accept-unchecked","from":"ml-pending","to":"ml-used","on":"ml-presented","faultOnly":true,"guard":"event.token == 'good'","description":"Defect: accepts the right token without checking lifetime or browser.","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"ml-session-issued"}]},{"id":"ml-accept-untimed","from":"ml-pending","to":"ml-used","on":"ml-presented","faultOnly":true,"guard":"event.token == 'good' && event.browser == 'requester'","description":"Defect: accepts the right token without checking lifetime or browser.","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"ml-session-issued"}]},{"id":"ml-accept-unbrowsed","from":"ml-pending","to":"ml-used","on":"ml-presented","faultOnly":true,"guard":"event.token == 'good' && time - issuedAt <= 15","description":"Defect: accepts the right token without checking lifetime or browser.","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"ml-session-issued"}]},{"id":"ml-accept","from":"ml-pending","to":"ml-used","on":"ml-presented","guard":"event.token == 'good' && event.browser == 'requester' && time - issuedAt <= 15","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"ml-session-issued"}]},{"id":"ml-refuse-pending","from":"ml-pending","to":"ml-pending","on":"ml-presented","effects":[{"emit":"ml-refused"}]},{"id":"ml-accept-again","from":"ml-used","to":"ml-used","on":"ml-presented","faultOnly":true,"description":"Defect: accepts a link that was already used.","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"ml-session-issued"}]},{"id":"ml-refuse-used","from":"ml-used","to":"ml-used","on":"ml-presented","effects":[{"emit":"ml-refused"}]}],"realisation":"target"},
@@ -46533,6 +46760,681 @@
         }
       ],
       "realisation": "target"
+    },
+    {
+      "id": "concurrent-change-flow",
+      "name": "Two schema changes made from one base revision",
+      "subject": "runtime",
+      "initial": "cch-idle",
+      "description": "A rename of a field and a change that adds a dependent are both made from the same base revision. A change that reads the renamed field is classified again against the schema after the rename; a change that reads another field applies as it is.",
+      "variables": [
+        {
+          "name": "revision",
+          "type": "number",
+          "initial": 1
+        },
+        {
+          "name": "fieldName",
+          "type": "number",
+          "initial": 1
+        },
+        {
+          "name": "baseRevision",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "baseName",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "readsField",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "dependentReads",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "rebases",
+          "type": "number",
+          "initial": 0
+        }
+      ],
+      "states": [
+        {
+          "id": "cch-idle",
+          "name": "Nothing proposed"
+        },
+        {
+          "id": "cch-open",
+          "name": "Changes proposed"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "cch-commit-stale",
+          "from": "cch-open",
+          "to": "cch-open",
+          "on": "cch-dependent-committed",
+          "guard": "readsField == 1",
+          "effects": [
+            {
+              "set": "dependentReads",
+              "to": "baseName"
+            },
+            {
+              "set": "revision",
+              "to": "revision + 1"
+            }
+          ],
+          "faultOnly": true,
+          "description": "Defect: applies the change with the name it was classified against at its base revision."
+        },
+        {
+          "id": "cch-rebase-disjoint",
+          "from": "cch-open",
+          "to": "cch-open",
+          "on": "cch-dependent-committed",
+          "guard": "readsField == 3",
+          "effects": [
+            {
+              "set": "dependentReads",
+              "to": "3"
+            },
+            {
+              "set": "rebases",
+              "to": "rebases + 1"
+            },
+            {
+              "set": "revision",
+              "to": "revision + 1"
+            }
+          ],
+          "faultOnly": true,
+          "description": "Defect: serialises a change whose footprint is disjoint from the committed one."
+        },
+        {
+          "id": "cch-propose-overlapping",
+          "from": "cch-idle",
+          "to": "cch-open",
+          "on": "cch-proposed-overlapping",
+          "effects": [
+            {
+              "set": "readsField",
+              "to": "1"
+            },
+            {
+              "set": "baseRevision",
+              "to": "revision"
+            },
+            {
+              "set": "baseName",
+              "to": "fieldName"
+            }
+          ]
+        },
+        {
+          "id": "cch-propose-disjoint",
+          "from": "cch-idle",
+          "to": "cch-open",
+          "on": "cch-proposed-disjoint",
+          "effects": [
+            {
+              "set": "readsField",
+              "to": "3"
+            },
+            {
+              "set": "baseRevision",
+              "to": "revision"
+            }
+          ]
+        },
+        {
+          "id": "cch-commit-rename",
+          "from": "cch-open",
+          "to": "cch-open",
+          "on": "cch-rename-committed",
+          "effects": [
+            {
+              "set": "fieldName",
+              "to": "2"
+            },
+            {
+              "set": "revision",
+              "to": "revision + 1"
+            }
+          ]
+        },
+        {
+          "id": "cch-commit-dependent",
+          "from": "cch-open",
+          "to": "cch-open",
+          "on": "cch-dependent-committed",
+          "guard": "readsField == 1 && baseRevision == revision",
+          "effects": [
+            {
+              "set": "dependentReads",
+              "to": "fieldName"
+            },
+            {
+              "set": "revision",
+              "to": "revision + 1"
+            }
+          ]
+        },
+        {
+          "id": "cch-rebase-dependent",
+          "from": "cch-open",
+          "to": "cch-open",
+          "on": "cch-dependent-committed",
+          "guard": "readsField == 1 && baseRevision != revision",
+          "effects": [
+            {
+              "set": "dependentReads",
+              "to": "fieldName"
+            },
+            {
+              "set": "rebases",
+              "to": "rebases + 1"
+            },
+            {
+              "set": "revision",
+              "to": "revision + 1"
+            }
+          ],
+          "description": "The commit is refused as stale, the change is classified again against the schema in force and then applies."
+        },
+        {
+          "id": "cch-commit-disjoint",
+          "from": "cch-open",
+          "to": "cch-open",
+          "on": "cch-dependent-committed",
+          "guard": "readsField == 3",
+          "effects": [
+            {
+              "set": "dependentReads",
+              "to": "3"
+            },
+            {
+              "set": "revision",
+              "to": "revision + 1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "split-rewrite-flow",
+      "name": "Rewrite of the dependents of a split field in a diamond",
+      "subject": "runtime",
+      "initial": "dsp-rewriting",
+      "description": "A field is split. Two entities depend on it and a third depends on both. The third is rewritten once, and only after both of the others.",
+      "variables": [
+        {
+          "name": "bDone",
+          "type": "boolean",
+          "initial": false
+        },
+        {
+          "name": "cDone",
+          "type": "boolean",
+          "initial": false
+        },
+        {
+          "name": "dWaiting",
+          "type": "boolean",
+          "initial": false
+        },
+        {
+          "name": "dRewrites",
+          "type": "number",
+          "initial": 0
+        }
+      ],
+      "states": [
+        {
+          "id": "dsp-rewriting",
+          "name": "Rewriting dependents"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "dsp-rewrite-d-early",
+          "from": "dsp-rewriting",
+          "to": "dsp-rewriting",
+          "on": "dsp-rewrite-d",
+          "guard": "!(bDone && cDone)",
+          "effects": [
+            {
+              "set": "dRewrites",
+              "to": "dRewrites + 1"
+            }
+          ],
+          "faultOnly": true,
+          "description": "Defect: rewrites the joint dependent before both of the entities it depends on are rewritten."
+        },
+        {
+          "id": "dsp-rewrite-d",
+          "from": "dsp-rewriting",
+          "to": "dsp-rewriting",
+          "on": "dsp-rewrite-d",
+          "guard": "bDone && cDone",
+          "effects": [
+            {
+              "set": "dRewrites",
+              "to": "dRewrites + 1"
+            }
+          ]
+        },
+        {
+          "id": "dsp-rewrite-d-wait",
+          "from": "dsp-rewriting",
+          "to": "dsp-rewriting",
+          "on": "dsp-rewrite-d",
+          "guard": "!(bDone && cDone)",
+          "effects": [
+            {
+              "set": "dWaiting",
+              "to": "true"
+            }
+          ],
+          "description": "The rewrite waits for the entities it depends on."
+        },
+        {
+          "id": "dsp-rewrite-b-last",
+          "from": "dsp-rewriting",
+          "to": "dsp-rewriting",
+          "on": "dsp-rewrite-b",
+          "guard": "cDone && dWaiting",
+          "effects": [
+            {
+              "set": "bDone",
+              "to": "true"
+            },
+            {
+              "set": "dWaiting",
+              "to": "false"
+            },
+            {
+              "emit": "dsp-rewrite-d"
+            }
+          ]
+        },
+        {
+          "id": "dsp-rewrite-b",
+          "from": "dsp-rewriting",
+          "to": "dsp-rewriting",
+          "on": "dsp-rewrite-b",
+          "guard": "!(cDone && dWaiting)",
+          "effects": [
+            {
+              "set": "bDone",
+              "to": "true"
+            }
+          ]
+        },
+        {
+          "id": "dsp-rewrite-c-last",
+          "from": "dsp-rewriting",
+          "to": "dsp-rewriting",
+          "on": "dsp-rewrite-c",
+          "guard": "bDone && dWaiting",
+          "effects": [
+            {
+              "set": "cDone",
+              "to": "true"
+            },
+            {
+              "set": "dWaiting",
+              "to": "false"
+            },
+            {
+              "emit": "dsp-rewrite-d"
+            }
+          ]
+        },
+        {
+          "id": "dsp-rewrite-c",
+          "from": "dsp-rewriting",
+          "to": "dsp-rewriting",
+          "on": "dsp-rewrite-c",
+          "guard": "!(bDone && dWaiting)",
+          "effects": [
+            {
+              "set": "cDone",
+              "to": "true"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pinned-removal-flow",
+      "name": "Removal of an old shape under a pinned dependent",
+      "subject": "runtime",
+      "initial": "rpn-live",
+      "description": "The old shape of an entity has one pinned dependent. A removal waits until the dependent migrates or its deprecation window closes, and a dependent whose window closes is reported.",
+      "variables": [
+        {
+          "name": "fieldPresent",
+          "type": "boolean",
+          "initial": true
+        },
+        {
+          "name": "pins",
+          "type": "number",
+          "initial": 1
+        },
+        {
+          "name": "pinsLapsed",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "reported",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "refusals",
+          "type": "number",
+          "initial": 0
+        }
+      ],
+      "states": [
+        {
+          "id": "rpn-live",
+          "name": "Old shape present"
+        },
+        {
+          "id": "rpn-removed",
+          "name": "Old shape removed",
+          "terminal": true
+        }
+      ],
+      "transitions": [
+        {
+          "id": "rpn-remove-under-pin",
+          "from": "rpn-live",
+          "to": "rpn-removed",
+          "on": "rpn-removal-requested",
+          "guard": "pins > 0",
+          "effects": [
+            {
+              "set": "fieldPresent",
+              "to": "false"
+            }
+          ],
+          "faultOnly": true,
+          "description": "Defect: removes the old shape while a pin on it remains."
+        },
+        {
+          "id": "rpn-window-close-silent",
+          "from": "rpn-live",
+          "to": "rpn-live",
+          "on": "rpn-window-closed",
+          "guard": "pins > 0",
+          "effects": [
+            {
+              "set": "pins",
+              "to": "0"
+            },
+            {
+              "set": "pinsLapsed",
+              "to": "pinsLapsed + 1"
+            }
+          ],
+          "faultOnly": true,
+          "description": "Defect: ends the pin when the window closes without reporting the dependent."
+        },
+        {
+          "id": "rpn-refuse",
+          "from": "rpn-live",
+          "to": "rpn-live",
+          "on": "rpn-removal-requested",
+          "guard": "pins > 0",
+          "effects": [
+            {
+              "set": "refusals",
+              "to": "refusals + 1"
+            }
+          ],
+          "description": "The removal is refused, naming the pinned dependent."
+        },
+        {
+          "id": "rpn-remove",
+          "from": "rpn-live",
+          "to": "rpn-removed",
+          "on": "rpn-removal-requested",
+          "guard": "pins == 0",
+          "effects": [
+            {
+              "set": "fieldPresent",
+              "to": "false"
+            }
+          ]
+        },
+        {
+          "id": "rpn-migrate",
+          "from": "rpn-live",
+          "to": "rpn-live",
+          "on": "rpn-dependent-migrated",
+          "guard": "pins > 0",
+          "effects": [
+            {
+              "set": "pins",
+              "to": "pins - 1"
+            }
+          ]
+        },
+        {
+          "id": "rpn-window-close",
+          "from": "rpn-live",
+          "to": "rpn-live",
+          "on": "rpn-window-closed",
+          "guard": "pins > 0",
+          "effects": [
+            {
+              "set": "pins",
+              "to": "0"
+            },
+            {
+              "set": "pinsLapsed",
+              "to": "pinsLapsed + 1"
+            },
+            {
+              "set": "reported",
+              "to": "reported + 1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "name-reuse-flow",
+      "name": "A dependent when another entity takes a former name",
+      "subject": "runtime",
+      "initial": "nre-live",
+      "description": "A dependent is bound to entity 1. Entity 1 is renamed, and a different entity, 2, is created under the name entity 1 had. The dependent still resolves entity 1.",
+      "variables": [
+        {
+          "name": "bound",
+          "type": "number",
+          "initial": 1
+        },
+        {
+          "name": "nameHolder",
+          "type": "number",
+          "initial": 1
+        },
+        {
+          "name": "resolvedTo",
+          "type": "number",
+          "initial": 0
+        }
+      ],
+      "states": [
+        {
+          "id": "nre-live",
+          "name": "Dependent bound"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "nre-resolve-by-name",
+          "from": "nre-live",
+          "to": "nre-live",
+          "on": "nre-evaluated",
+          "effects": [
+            {
+              "set": "resolvedTo",
+              "to": "nameHolder"
+            }
+          ],
+          "faultOnly": true,
+          "description": "Defect: resolves the dependent by the name, so it reaches whatever holds the name now."
+        },
+        {
+          "id": "nre-rename-a",
+          "from": "nre-live",
+          "to": "nre-live",
+          "on": "nre-a-renamed",
+          "effects": [
+            {
+              "set": "nameHolder",
+              "to": "0"
+            }
+          ]
+        },
+        {
+          "id": "nre-create-b",
+          "from": "nre-live",
+          "to": "nre-live",
+          "on": "nre-b-created",
+          "guard": "nameHolder == 0",
+          "effects": [
+            {
+              "set": "nameHolder",
+              "to": "2"
+            }
+          ]
+        },
+        {
+          "id": "nre-evaluate",
+          "from": "nre-live",
+          "to": "nre-live",
+          "on": "nre-evaluated",
+          "effects": [
+            {
+              "set": "resolvedTo",
+              "to": "bound"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "switch-back-flow",
+      "name": "A switch back after a forward migration",
+      "subject": "runtime",
+      "initial": "swb-live",
+      "description": "A dependent pinned to the old shape migrates forward and may write what the old shape cannot hold. A switch back is allowed while the old shape can hold the data, and refused after.",
+      "variables": [
+        {
+          "name": "pinnedTo",
+          "type": "number",
+          "initial": 1
+        },
+        {
+          "name": "elements",
+          "type": "number",
+          "initial": 1
+        },
+        {
+          "name": "refusals",
+          "type": "number",
+          "initial": 0
+        }
+      ],
+      "states": [
+        {
+          "id": "swb-live",
+          "name": "Dependent running"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "swb-switch-back-lossy",
+          "from": "swb-live",
+          "to": "swb-live",
+          "on": "swb-switch-back-requested",
+          "guard": "pinnedTo == 2",
+          "effects": [
+            {
+              "set": "pinnedTo",
+              "to": "1"
+            }
+          ],
+          "faultOnly": true,
+          "description": "Defect: switches back although the old shape cannot hold what has been written."
+        },
+        {
+          "id": "swb-migrate-forward",
+          "from": "swb-live",
+          "to": "swb-live",
+          "on": "swb-migrated-forward",
+          "guard": "pinnedTo == 1",
+          "effects": [
+            {
+              "set": "pinnedTo",
+              "to": "2"
+            }
+          ]
+        },
+        {
+          "id": "swb-write-second",
+          "from": "swb-live",
+          "to": "swb-live",
+          "on": "swb-element-added",
+          "guard": "pinnedTo == 2",
+          "effects": [
+            {
+              "set": "elements",
+              "to": "elements + 1"
+            }
+          ]
+        },
+        {
+          "id": "swb-switch-back",
+          "from": "swb-live",
+          "to": "swb-live",
+          "on": "swb-switch-back-requested",
+          "guard": "pinnedTo == 2 && elements <= 1",
+          "effects": [
+            {
+              "set": "pinnedTo",
+              "to": "1"
+            }
+          ]
+        },
+        {
+          "id": "swb-switch-back-refused",
+          "from": "swb-live",
+          "to": "swb-live",
+          "on": "swb-switch-back-requested",
+          "guard": "pinnedTo == 2 && elements > 1",
+          "effects": [
+            {
+              "set": "refusals",
+              "to": "refusals + 1"
+            }
+          ]
+        }
+      ]
     }
   ],
   "faults": [
@@ -48761,7 +49663,18 @@
       "kind": "enable-transition",
       "transition": "ci-apply-unchecked",
       "description": "The defect that AGT-1209 forbids."
-    }
+    },
+    {"id":"concurrent-rename-lands","name":"A rename commits between the proposal and the commit of a dependent","kind":"inject-event","event":"cch-rename-committed","at":1,"description":"A concurrent actor renames the field after both changes were proposed from the same base revision."},
+    {"id":"defect-stale-classification","name":"Defect: applies a change with the class and name it had at its base revision","kind":"enable-transition","transition":"cch-commit-stale","description":"Defect: applies a change with the class and name it had at its base revision."},
+    {"id":"defect-needless-rebase","name":"Defect: serialises two changes whose footprints are disjoint","kind":"enable-transition","transition":"cch-rebase-disjoint","description":"Defect: serialises two changes whose footprints are disjoint."},
+    {"id":"rewrite-of-second-dependent-late","name":"The rewrite of the second dependent arrives 3 ticks late","kind":"delay-event","event":"dsp-rewrite-c","by":3,"description":"The rewrite of one dependent completes after the joint dependent is due."},
+    {"id":"defect-rewrites-before-inputs","name":"Defect: rewrites the joint dependent before the entities it depends on","kind":"enable-transition","transition":"dsp-rewrite-d-early","description":"Defect: rewrites the joint dependent before the entities it depends on."},
+    {"id":"removal-requested-early","name":"A removal is requested before the dependent has migrated","kind":"inject-event","event":"rpn-removal-requested","at":0,"description":"The owner asks to remove the old shape while a pin on it remains."},
+    {"id":"defect-removes-under-pin","name":"Defect: removes the old shape while a pin on it remains","kind":"enable-transition","transition":"rpn-remove-under-pin","description":"Defect: removes the old shape while a pin on it remains."},
+    {"id":"defect-window-closes-silently","name":"Defect: ends a pin at the close of the window without reporting the dependent","kind":"enable-transition","transition":"rpn-window-close-silent","description":"Defect: ends a pin at the close of the window without reporting the dependent."},
+    {"id":"another-entity-takes-the-name","name":"Another entity is created under the former name","kind":"inject-event","event":"nre-b-created","at":2,"description":"A concurrent actor creates a different entity under the name the first entity had."},
+    {"id":"defect-resolves-by-name","name":"Defect: resolves a dependent by name instead of by identity","kind":"enable-transition","transition":"nre-resolve-by-name","description":"Defect: resolves a dependent by name instead of by identity."},
+    {"id":"defect-lossy-switch-back","name":"Defect: switches back to the old shape although it cannot hold the data written","kind":"enable-transition","transition":"swb-switch-back-lossy","description":"Defect: switches back to the old shape although it cannot hold the data written."}
   ],
   "scenarios": [
     {"id":"link-used-twice","name":"A link is used, then presented again","description":"The second presentation is refused.","behaviors":["emailed-link-flow"],"steps":[{"at":0,"event":"ml-requested"},{"at":2,"event":"ml-presented","payload":{"token":"good","browser":"requester"},"note":"The person follows the link."},{"at":4,"event":"ml-presented","payload":{"token":"good","browser":"requester"},"note":"The same link again."}]},
@@ -63457,7 +64370,16 @@
           "note": "The author invokes issue-access-grant through the catalogue."
         }
       ]
-    }
+    },
+    {"id":"rename-races-a-dependent-add","name":"A rename commits before a dependent that reads the field","description":"A rename and a change that adds a dependent on the field are proposed from one base revision. The rename commits first and the dependent change is submitted after it.","behaviors":["concurrent-change-flow"],"faults":["concurrent-rename-lands"],"steps":[{"at":0,"event":"cch-proposed-overlapping"},{"at":2,"event":"cch-dependent-committed"}]},
+    {"id":"rename-beside-an-unrelated-add","name":"A rename commits before a dependent that reads another field","description":"A rename and a change that adds a dependent on another field are proposed from one base revision. The rename commits first and the dependent change is submitted after it.","behaviors":["concurrent-change-flow"],"faults":["concurrent-rename-lands"],"steps":[{"at":0,"event":"cch-proposed-disjoint"},{"at":2,"event":"cch-dependent-committed"}]},
+    {"id":"diamond-split-late-rewrite","name":"A diamond split whose second rewrite arrives late","description":"A field is split. The rewrite of the first dependent completes, the joint dependent is due, and only then does the second dependent complete.","behaviors":["split-rewrite-flow"],"faults":["rewrite-of-second-dependent-late"],"steps":[{"at":1,"event":"dsp-rewrite-b"},{"at":2,"event":"dsp-rewrite-c"},{"at":3,"event":"dsp-rewrite-d"}]},
+    {"id":"diamond-split-first-rewrite-late","name":"A diamond split whose first rewrite arrives last","description":"The second dependent completes, the joint dependent is due, and the first dependent completes last.","behaviors":["split-rewrite-flow"],"steps":[{"at":1,"event":"dsp-rewrite-c"},{"at":2,"event":"dsp-rewrite-d"},{"at":3,"event":"dsp-rewrite-b"}]},
+    {"id":"removal-waits-for-migration","name":"A removal waits for the pinned dependent to migrate","description":"A removal is requested before the dependent migrates and is refused. The dependent migrates and the removal is requested again.","behaviors":["pinned-removal-flow"],"faults":["removal-requested-early"],"steps":[{"at":1,"event":"rpn-dependent-migrated"},{"at":2,"event":"rpn-removal-requested"}]},
+    {"id":"window-closes-on-an-unmigrated-dependent","name":"The window closes on a dependent that has not migrated","description":"A removal is refused while the pin remains. The deprecation window closes and the dependent is reported. The removal is requested again and applies.","behaviors":["pinned-removal-flow"],"steps":[{"at":0,"event":"rpn-removal-requested"},{"at":1,"event":"rpn-window-closed"},{"at":2,"event":"rpn-removal-requested"}]},
+    {"id":"old-name-is-taken-by-another-entity","name":"A different entity takes the former name","description":"The entity is renamed, a different entity is created under its former name, and the dependent is evaluated.","behaviors":["name-reuse-flow"],"faults":["another-entity-takes-the-name"],"steps":[{"at":1,"event":"nre-a-renamed"},{"at":3,"event":"nre-evaluated"}]},
+    {"id":"switch-back-after-new-data","name":"A switch back after the dependent wrote a second element","description":"The dependent migrates forward, writes a second element and is asked to switch back.","behaviors":["switch-back-flow"],"steps":[{"at":1,"event":"swb-migrated-forward"},{"at":2,"event":"swb-element-added"},{"at":3,"event":"swb-switch-back-requested"}]},
+    {"id":"switch-back-before-new-data","name":"A switch back before the dependent wrote anything new","description":"The dependent migrates forward and is asked to switch back before it writes.","behaviors":["switch-back-flow"],"steps":[{"at":1,"event":"swb-migrated-forward"},{"at":2,"event":"swb-switch-back-requested"}]}
   ],
 
   // ---- Fault model -------------------------------------------------------------------------------
