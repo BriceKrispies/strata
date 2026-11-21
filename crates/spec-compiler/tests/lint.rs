@@ -3,6 +3,7 @@
 //! `tests/fixtures/lint/<rule>/` holds, for every rule, an accepted specification (no finding at
 //! all) and a refused one (exactly one finding, of that rule, on the entity the test names).
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -17,13 +18,24 @@ fn fixture(rule: &str, kind: &str) -> (String, String) {
     (path.display().to_string(), text)
 }
 
+/// The started milestones the fixtures of `rule` are linted with: milestone 1 for the rules about
+/// a requirement's check, none for the others (their fixtures declare no check).
+fn started(rule: &str) -> BTreeSet<u64> {
+    if matches!(rule, "no-check" | "check-declaration") {
+        BTreeSet::from([1])
+    } else {
+        BTreeSet::new()
+    }
+}
+
 fn findings(rule: &str, kind: &str) -> Vec<Finding> {
     let (path, text) = fixture(rule, kind);
-    lint::lint(&path, &text).unwrap_or_else(|d| panic!("{path} is refused by the loader: {d:?}"))
+    lint::lint_started(&path, &text, &started(rule))
+        .unwrap_or_else(|d| panic!("{path} is refused by the loader: {d:?}"))
 }
 
 /// Every rule with the entity its refused fixture is expected to be reported on.
-const EXPECTED: [(&str, &str); 8] = [
+const EXPECTED: [(&str, &str); 10] = [
     (lint::ONE_SHALL, "r-1"),
     (lint::BOUNDARY, "r-1"),
     (lint::VAGUE_WORD, "r-1"),
@@ -32,6 +44,8 @@ const EXPECTED: [(&str, &str); 8] = [
     (lint::BUDGET_ROW, "r-1"),
     (lint::UNTRACED, "g-2"),
     (lint::MILESTONE, "r-1"),
+    (lint::NO_CHECK, "r-1"),
+    (lint::CHECK_DECLARATION, "r-1"),
 ];
 
 #[test]
@@ -82,4 +96,34 @@ fn a_finding_is_on_the_line_of_its_entity() {
         .unwrap()
         + 1;
     assert_eq!(found[0].line, expected);
+}
+
+#[test]
+fn a_requirement_needs_a_check_only_when_its_milestone_is_started() {
+    let (path, text) = fixture("no-check", "refused");
+    for (started, expected) in [
+        (BTreeSet::from([1]), 1),
+        (BTreeSet::from([2]), 0),
+        (BTreeSet::new(), 0),
+    ] {
+        let found = lint::lint_started(&path, &text, &started).unwrap();
+        assert_eq!(found.len(), expected, "started {started:?}: {found:?}");
+    }
+}
+
+#[test]
+fn a_documentation_statement_needs_no_check_and_names_none() {
+    let (path, text) = fixture("check-declaration", "accepted");
+    assert!(text.contains("\"check\":\"documentation\""));
+    assert_eq!(
+        lint::lint_started(&path, &text, &BTreeSet::from([1])).unwrap(),
+        vec![]
+    );
+    let named = text.replace(
+        "\"check\":\"documentation\"",
+        "\"check\":\"documentation\",\"checkedBy\":[\"m-x\"]",
+    );
+    let found = lint::lint_started(&path, &named, &BTreeSet::from([1])).unwrap();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].rule, lint::CHECK_DECLARATION);
 }
