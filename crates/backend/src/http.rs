@@ -562,6 +562,7 @@ async fn members(
         if matches!(
             request,
             MembersRequest::AssignRole { .. }
+                | MembersRequest::AddTeamMember { .. }
                 | MembersRequest::Invite { .. }
                 | MembersRequest::RevokeInvitation { .. }
         ) && identity.session.is_some()
@@ -1159,6 +1160,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/aggregate", post(aggregate))
         .route("/internal/search", post(search))
         .route("/internal/mutate", post(mutate))
+        .route("/internal/admit", post(crate::precheck::route))
         .route("/internal/members", post(members))
         .route("/internal/erasure/erase", post(erasure_erase))
         .route("/internal/erasure/receipts", post(erasure_receipts))

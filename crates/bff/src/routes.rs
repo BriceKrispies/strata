@@ -539,6 +539,36 @@ pub(crate) async fn guard_write(
     Ok(reply.session)
 }
 
+/// What a contract asks of its caller beyond the origin and the request token, decided by the
+/// backend before the route reads its input: a session, the capabilities (`any` of them, or every
+/// one), a role and a fresh authentication. A caller who may not make the call is told so, and not
+/// that its input is wrong (`unauthenticated`, `forbidden`, or `forbidden` of kind
+/// `step_up_required`).
+pub(crate) struct Admission<'a> {
+    pub capabilities: &'a [&'a str],
+    pub any: bool,
+    pub roles: &'a [&'a str],
+    pub step_up: bool,
+}
+
+impl Admission<'_> {
+    pub(crate) async fn admit(&self, bff: &Bff, visit: &Visit) -> Result<(), Failure> {
+        let _: Json_ = backend(
+            bff,
+            visit,
+            "/internal/admit",
+            &json!({
+                "capabilities": self.capabilities,
+                "any": self.any,
+                "roles": self.roles,
+                "step_up": self.step_up,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+}
+
 async fn session(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
     let reply: SessionReply = backend(&bff, &visit, "/internal/session", &json!({})).await?;
@@ -1205,6 +1235,15 @@ async fn subject_erase(
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
+    // An owner holding subject-rights, with a fresh authentication (contract erase-subject).
+    Admission {
+        capabilities: &["subject-rights"],
+        any: false,
+        roles: &["owner"],
+        step_up: true,
+    }
+    .admit(&bff, &visit)
+    .await?;
     let Some(principal) = body.get("principal").and_then(Json_::as_str) else {
         return Err(Failure::new(
             ErrorCode::Invalid,
@@ -1274,6 +1313,19 @@ async fn subject_rights(
             "No such endpoint.",
             &visit.correlation,
         ));
+    }
+    // The person the data concerns, or an owner, asks for a fresh authentication before the
+    // body is looked at (contracts export-subject-data and fetch-subject-export). Whether the
+    // caller is the person or an owner depends on the input and is decided by the backend.
+    if matches!(operation.as_str(), "export" | "export-fetch") {
+        Admission {
+            capabilities: &[],
+            any: false,
+            roles: &[],
+            step_up: true,
+        }
+        .admit(&bff, &visit)
+        .await?;
     }
     backend(
         &bff,
@@ -1399,6 +1451,20 @@ struct Paging {
     fields: Option<Vec<String>>,
     cursor: Option<String>,
     limit: Option<u32>,
+}
+
+/// The capability a view of the desk or the lab requires, by the address of its screen: the
+/// contracts read-desk-view, read-new-article-view, read-edit-article-view, read-settings-view and
+/// read-lab-view.
+fn desk_capability(path: &str) -> Option<&'static str> {
+    let address = path.split(['?', '#']).next().unwrap_or(path);
+    let address = address.trim_end_matches('/');
+    match address {
+        "/desk/settings" => Some("site-configure"),
+        "/desk" | "/desk/new" | "/lab" => Some("content-draft-read"),
+        _ if address.starts_with("/desk/edit/") => Some("content-draft-read"),
+        _ => None,
+    }
 }
 
 /// Fetch a view from the backend and project it into the browser's view model.
@@ -1548,6 +1614,18 @@ async fn view(
         .remove("path")
         .filter(|p| p.starts_with('/') && p.len() <= 300)
         .unwrap_or_else(|| "/".into());
+    // The screens of the desk and the lab are the signed-in's, and need what their view models
+    // require (read-desk-view and its siblings): the refusal comes before the view is read.
+    if let Some(capability) = desk_capability(&path) {
+        Admission {
+            capabilities: &[capability],
+            any: false,
+            roles: &[],
+            step_up: false,
+        }
+        .admit(&bff, &visit)
+        .await?;
+    }
     // `fields`, `cursor` and `limit` are the delivery interface's own (CMS-163, CMS-164) and are
     // never a view's request parameters. The backend checks the names against the view's fields.
     let refuse = |why: &str| Failure::new(ErrorCode::Invalid, why, &visit.correlation);
@@ -1592,6 +1670,16 @@ async fn aggregate_run(
     Query(mut query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
+    // A session that may read aggregates, before the request is looked at (contract
+    // aggregate-run-signed-in).
+    Admission {
+        capabilities: &["aggregate-read"],
+        any: false,
+        roles: &[],
+        step_up: false,
+    }
+    .admit(&bff, &visit)
+    .await?;
     let invalid = |why: &str| Failure::new(ErrorCode::Invalid, why, &visit.correlation);
     let name = |query: &mut BTreeMap<String, String>, key: &str| {
         query
@@ -1731,6 +1819,22 @@ async fn members(
             "No such endpoint.",
             &visit.correlation,
         ));
+    }
+    // What the contract asks of the caller comes before the body is looked at: members-manage,
+    // and a fresh authentication for the operations that change who may do what (IDN-019). The
+    // redemption of an invitation is the invitee's and asks for neither.
+    if op != "redeem" {
+        Admission {
+            capabilities: &["members-manage"],
+            any: false,
+            roles: &[],
+            step_up: matches!(
+                op.as_str(),
+                "assign_role" | "add_team_member" | "invite" | "revoke_invitation"
+            ),
+        }
+        .admit(&bff, &visit)
+        .await?;
     }
     let invalid = || {
         Failure::new(
@@ -1994,6 +2098,14 @@ async fn diagnostics(
     headers: HeaderMap,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
+    Admission {
+        capabilities: &["diagnostics-run"],
+        any: false,
+        roles: &[],
+        step_up: false,
+    }
+    .admit(&bff, &visit)
+    .await?;
     let backend_report: Json_ = backend(&bff, &visit, "/internal/diagnostics", &json!({})).await?;
     // The gateway's own socket and in-flight counts span every tenant, so a tenant is not shown
     // them.

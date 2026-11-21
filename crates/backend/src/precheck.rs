@@ -15,10 +15,15 @@
 use crate::app::{ApiError, Shared};
 use crate::auth::{self, Identity};
 use crate::ops;
+use crate::signin::stepup;
+use axum::extract::State;
 use axum::http::HeaderMap;
+use axum::Json;
+use serde::Deserialize;
+use serde_json::Value as Json_;
 use std::collections::BTreeSet;
-use strata_kernel::rules::holds_any;
-use strata_kernel::Grant;
+use strata_kernel::rules::{holds_any, roles_of};
+use strata_kernel::{Grant, RoleId};
 use strata_protocol::api::ErrorCode;
 
 /// An operation of the backend and the capabilities its contract requires (every one).
@@ -126,6 +131,86 @@ fn holds_all(
         }
     }
     Ok(())
+}
+
+/// What the gateway asks the backend to decide about a caller before it reads the request's body
+/// (`POST /internal/admit`): the auth block of the contract the route serves. The checks come in
+/// the order the contracts state them: a session, a capability, a role, a fresh authentication.
+#[derive(Debug, Deserialize)]
+pub struct Admission {
+    /// The capabilities the contract requires.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    /// Whether one of the capabilities suffices (D-6591) and not every one.
+    #[serde(default)]
+    pub any: bool,
+    /// The roles of which the caller must hold one.
+    #[serde(default)]
+    pub roles: Vec<String>,
+    /// Whether the contract has a step-up age.
+    #[serde(default)]
+    pub step_up: bool,
+}
+
+/// `POST /internal/admit`: decide an [`Admission`] for the caller. It answers `{}` or the refusal:
+/// `unauthenticated` without a session, `forbidden` for a lacking capability or role, and
+/// `forbidden` with the kind `step_up_required` for an authentication that is too old.
+pub async fn route(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(admission): Json<Admission>,
+) -> Result<Json<Json_>, ApiError> {
+    crate::http::as_caller_at(&app, &headers, move |app, caller, identity| {
+        if identity.anonymous() {
+            return Err(ApiError::new(
+                ErrorCode::Unauthenticated,
+                "Sign in to do this.",
+            ));
+        }
+        let tenant = ops::header(app, identity)?;
+        let wanted: Vec<BTreeSet<Grant>> = admission
+            .capabilities
+            .iter()
+            .map(|name| BTreeSet::from([Grant::Capability(name.clone())]))
+            .collect();
+        let allowed = if admission.any {
+            wanted.is_empty()
+                || wanted
+                    .iter()
+                    .any(|grant| holds_any(&tenant, &identity.principal, grant))
+        } else {
+            wanted
+                .iter()
+                .all(|grant| holds_any(&tenant, &identity.principal, grant))
+        };
+        if !allowed {
+            return Err(ApiError::new(
+                ErrorCode::Forbidden,
+                format!(
+                    "This needs the permission {}.",
+                    admission.capabilities.join(" or ")
+                ),
+            ));
+        }
+        if !admission.roles.is_empty() {
+            let held = roles_of(&tenant, &identity.principal);
+            if !admission
+                .roles
+                .iter()
+                .any(|role| held.contains(&RoleId(role.clone())))
+            {
+                return Err(ApiError::new(
+                    ErrorCode::Forbidden,
+                    "Your role may not do this.",
+                ));
+            }
+        }
+        if admission.step_up && identity.session.is_some() {
+            stepup::require_fresh(app, caller, identity)?;
+        }
+        Ok(serde_json::json!({}))
+    })
+    .await
 }
 
 #[cfg(test)]
