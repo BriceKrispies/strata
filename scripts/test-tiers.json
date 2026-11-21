@@ -208,6 +208,62 @@
       "tier": "routine",
       "seconds": null,
       "unmeasured": true
+    },
+    {
+      "package": "strata-model-core",
+      "target": "function_examples_1",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-model-core",
+      "target": "function_examples_2",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-model-core",
+      "target": "function_examples_3",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-model-core",
+      "target": "function_examples_4",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-model-core",
+      "target": "function_examples_5",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-model-core",
+      "target": "function_examples_6",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-model-core",
+      "target": "function_examples_7",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-model-core",
+      "target": "function_examples_8",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
     }
   ]
 }

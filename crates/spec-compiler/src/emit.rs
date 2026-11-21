@@ -129,16 +129,32 @@ pub fn crate_files_with(
 /// could not be written.
 pub(crate) fn rust_files(
     spec: &Spec,
-    mut files: Vec<GeneratedFile>,
+    files: Vec<GeneratedFile>,
     modules: Vec<(&str, TokenStream)>,
 ) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
+    let paths = modules
+        .into_iter()
+        .map(|(module, tokens)| (format!("src/{module}.rs"), tokens))
+        .collect();
+    rust_files_at(spec, files, paths)
+}
+
+/// As [`rust_files`], each file at the path given with it (relative to the crate directory).
+pub(crate) fn rust_files_at(
+    spec: &Spec,
+    mut files: Vec<GeneratedFile>,
+    modules: Vec<(String, TokenStream)>,
+) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
     let mut errors = Vec::new();
-    for (module, tokens) in modules {
+    for (path, tokens) in modules {
+        let module = path
+            .strip_prefix("src/")
+            .and_then(|p| p.strip_suffix(".rs"))
+            .unwrap_or(&path)
+            .to_string();
+        let module = module.as_str();
         match rust_file(spec, tokens) {
-            Ok(contents) => files.push(GeneratedFile {
-                path: format!("src/{module}.rs"),
-                contents,
-            }),
+            Ok(contents) => files.push(GeneratedFile { path, contents }),
             Err(FileError::Syntax(e)) => errors.push(Diagnostic::new(
                 INTERNAL,
                 module,

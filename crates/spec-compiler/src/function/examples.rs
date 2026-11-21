@@ -726,7 +726,7 @@ fn fixture_ref(v: &Value) -> Result<Option<FixtureRef<'_>>, Refusal> {
 }
 
 /// The name of the function that gives a fixture's value.
-fn fixture_fn(id: &str) -> proc_macro2::Ident {
+pub(crate) fn fixture_fn(id: &str) -> proc_macro2::Ident {
     format_ident!("fixture_{}", naming::snake(id).unwrap_or_default())
 }
 

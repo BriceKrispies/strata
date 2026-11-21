@@ -81,8 +81,9 @@
 //! crate, written into the `--core-out` directory and named `--core-crate-name` (by default that
 //! directory's last component), holds the representation types and every declared type (uuid ids
 //! through the uuid crate without its v4 feature); the crate in `--out` depends on it by relative
-//! path and re-exports them. `check` then
-//! compares both directories.
+//! path and re-exports them. The examples of the specification's functions are integration test
+//! files of the pure crate (`tests/function_examples_<n>.rs`), not a test module of its library.
+//! `check` then compares both directories.
 //!
 //! A crate with implementation-level machines depends on `strata-runtime` by path: `--runtime`
 //! names the runtime crate's directory, by default `crates/runtime` of the Strata checkout specc
