@@ -112,12 +112,22 @@ fn value_token(rng: &mut Lcg, field: u64) -> String {
         (1, _) => rng.below(3),
         (_, 1) => 0,
         (_, 2) => 1,
-        _ => 2,
+        (_, 3) => 2,
+        _ => 4,
     };
     match kind {
         0 => format!("s:{}", rng.pick(&["oak", "ash", "elm", "fir", "yew"])),
         1 => format!("i:{}", rng.below(40) as i64 - 5),
         2 => format!("b:{}", rng.below(2)),
+        // A reference: mostly to one of the first few records (which exist, or were deleted, so
+        // chains form and both delete behaviours fire), sometimes to an id never issued.
+        4 => {
+            if rng.below(8) == 0 {
+                format!("r:{}", 90 + rng.below(5))
+            } else {
+                format!("r:{}", 1 + rng.below(6))
+            }
+        }
         _ => "n".to_string(),
     }
 }
@@ -132,6 +142,11 @@ fn field_list(rng: &mut Lcg) -> Vec<(u64, String)> {
             rng.below(2) == 0
         };
         if include {
+            out.push((field, value_token(rng, field)));
+        }
+    }
+    for (field, odds) in [(4u64, 3), (5, 4)] {
+        if rng.below(odds) == 0 {
             out.push((field, value_token(rng, field)));
         }
     }
@@ -174,8 +189,8 @@ pub fn generate(seed: u64) -> Scenario {
             0..=7 => OpKind::Create(field_list(&mut rng)),
             8..=13 => OpKind::Update(1 + rng.below(6), field_list(&mut rng)),
             14..=16 => OpKind::Delete(1 + rng.below(6)),
-            17 => OpKind::Require(1 + rng.below(3), true),
-            _ => OpKind::Require(1 + rng.below(3), false),
+            17 => OpKind::Require(1 + rng.below(5), true),
+            _ => OpKind::Require(1 + rng.below(5), false),
         };
         // Schema changes are mostly attempted by the owner, so both strict outcomes occur.
         let principal = if matches!(kind, OpKind::Require(..)) && rng.below(4) != 0 {

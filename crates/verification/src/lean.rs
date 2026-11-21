@@ -12,12 +12,13 @@
 //! | Lean model | Rust kernel in these fixtures |
 //! |---|---|
 //! | tenant `n` | tenant `t<n>` with one object type `item` |
-//! | fields 1, 2, 3 | `f1: string, required`, `f2: int`, `f3: bool` |
+//! | fields 1 to 5 | `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict` |
 //! | owner, editors, writers | the `owner` role; an `editor` role allowed everything on `item`; a `writer` role allowed to create, and to update or delete where `record.$created_by == principal` |
 //! | `create fs` | `CreateRecord` |
 //! | `update id fs` | `UpdateRecord` naming all three fields, absent ones as `null` |
 //! | `delete id` | `DeleteRecord` |
 //! | `setRequired f strict` | `ChangeSchema [DefineField f required]` with `Reject` or `Grandfather` |
+//! | `Err.danglingReference`, `Err.stillReferenced` | `DanglingReference`, `StillReferenced` |
 //! | `Err.invalid` | `TypeMismatch`, `MissingRequired`, `UnknownField` |
 //!
 //! # The Main.lean protocol
@@ -168,6 +169,16 @@ fn field_type(n: u64) -> FieldType {
     match n {
         1 => FieldType::Str,
         2 => FieldType::Int,
+        3 => FieldType::Bool,
+        // Field 4 clears itself when its target is deleted; field 5 refuses the delete.
+        4 | 5 => FieldType::Ref {
+            target: item(),
+            on_delete: if n == 4 {
+                OnDelete::SetNull
+            } else {
+                OnDelete::Restrict
+            },
+        },
         _ => FieldType::Bool,
     }
 }
@@ -259,6 +270,14 @@ fn initial_world() -> World {
                 object: item(),
                 field: field_def(3, false),
             },
+            SchemaChange::DefineField {
+                object: item(),
+                field: field_def(4, false),
+            },
+            SchemaChange::DefineField {
+                object: item(),
+                field: field_def(5, false),
+            },
             policy(
                 "editors_all",
                 "editor",
@@ -310,6 +329,7 @@ fn parse_value(token: &str) -> Value {
         Some(("i", n)) => Value::Int(n.parse().expect("fixture integer")),
         Some(("s", s)) => Value::Str(s.to_string()),
         Some(("b", b)) => Value::Bool(b == "1"),
+        Some(("r", r)) => Value::Ref(RecordId(r.parse().expect("fixture record id"))),
         _ => Value::Null,
     }
 }
@@ -332,6 +352,7 @@ fn show_value(value: &Value) -> String {
         Value::Int(i) => format!("i:{i}"),
         Value::Str(s) => format!("s:{s}"),
         Value::Bool(b) => format!("b:{}", u8::from(*b)),
+        Value::Ref(r) => format!("r:{}", r.0),
         _ => "n".to_string(),
     }
 }
@@ -343,6 +364,8 @@ fn show_error(kind: ErrorKind) -> &'static str {
         ErrorKind::UnknownRecord => "not_found",
         ErrorKind::TypeMismatch | ErrorKind::MissingRequired | ErrorKind::UnknownField => "invalid",
         ErrorKind::MigrationRejected => "migration_rejected",
+        ErrorKind::DanglingReference => "dangling_reference",
+        ErrorKind::StillReferenced => "still_referenced",
         _ => "unmodelled",
     }
 }
@@ -427,7 +450,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                     ["update", record, fields @ ..] => {
                         // The model replaces a record; a patch that names every field does too.
                         let mut all: BTreeMap<FieldId, Value> =
-                            (1..=3).map(|n| (field_id(n), Value::Null)).collect();
+                            (1..=5).map(|n| (field_id(n), Value::Null)).collect();
                         all.extend(parse_fields(fields));
                         Intent::UpdateRecord {
                             object: item(),

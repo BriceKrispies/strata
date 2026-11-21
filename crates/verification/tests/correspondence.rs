@@ -215,8 +215,24 @@ fn every_cited_rust_test_exists() {
 
 #[test]
 fn the_lean_sources_contain_no_placeholder_proofs() {
-    for file in ["Strata/Model.lean", "Strata/Proofs.lean"] {
-        let source = std::fs::read_to_string(lean_dir().join(file)).unwrap();
+    // Every file under lean/Strata (recursively), so a new slice is covered without editing this list.
+    fn lean_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                lean_files(&path, out);
+            } else if path.extension().is_some_and(|x| x == "lean") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    lean_files(&lean_dir().join("Strata"), &mut files);
+    files.sort();
+    assert!(files.len() >= 2, "lean/Strata holds {files:?}");
+    for path in files {
+        let file = path.display().to_string();
+        let source = std::fs::read_to_string(&path).unwrap();
         // Strip comments, where the words may legitimately appear.
         let mut code = String::new();
         let mut rest = source.as_str();
