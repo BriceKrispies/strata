@@ -156,6 +156,39 @@ fn field_list(rng: &mut Lcg) -> Vec<(u64, String)> {
     out
 }
 
+/// The field of a `require`: half the time one of the reference fields.
+fn require_field(rng: &mut Lcg) -> u64 {
+    if rng.below(2) == 0 {
+        4 + rng.below(2)
+    } else {
+        1 + rng.below(3)
+    }
+}
+
+/// Set reference fields on `fields` to records the sequence made (so far), now and then to one
+/// it has not made yet or an id never issued, and remember what is referred to.
+fn aimed_refs(
+    rng: &mut Lcg,
+    fields: &mut Vec<(u64, String)>,
+    created: u64,
+    referred: &mut Vec<u64>,
+) {
+    fields.retain(|(f, _)| *f < 4 || *f == 9);
+    for field in [4u64, 5] {
+        if rng.below(3) == 0 {
+            continue;
+        }
+        let target = match rng.below(8) {
+            0 => 90 + rng.below(5),
+            1 => created + 1 + rng.below(3),
+            _ => 1 + rng.below(created.max(1)),
+        };
+        referred.push(target);
+        fields.push((field, format!("r:{target}")));
+    }
+    fields.sort_by_key(|(f, _)| *f);
+}
+
 /// One sequence, deterministic in `seed`.
 pub fn generate(seed: u64) -> Scenario {
     let mut rng = Lcg(seed ^ 0x9e37_79b9_7f4a_7c15);
@@ -164,6 +197,11 @@ pub fn generate(seed: u64) -> Scenario {
         rng.below(2);
     }
     let mut ops = Vec::new();
+    // What the sequence has probably built so far, per tenant (an approximation: a refused
+    // create still counts), so that aimed operations target records that exist and the ones
+    // other records refer to.
+    let mut created = [0u64; 4];
+    let mut referred: [Vec<u64>; 4] = Default::default();
     for _ in 0..(8 + rng.below(20)) {
         let tenant = match rng.below(12) {
             0 => 3,
@@ -185,12 +223,45 @@ pub fn generate(seed: u64) -> Scenario {
             6..=9 => home + 2,
             _ => home + 3,
         };
+        let t = tenant as usize;
+        // Half the operations on a real tenant are aimed: made by someone who may write, to
+        // build references, to delete what is referred to, to refer to what is gone.
+        let aimed = tenant != 3 && rng.below(2) == 0;
+        let mut principal = principal;
         let kind = match rng.below(20) {
-            0..=7 => OpKind::Create(field_list(&mut rng)),
-            8..=13 => OpKind::Update(1 + rng.below(6), field_list(&mut rng)),
-            14..=16 => OpKind::Delete(1 + rng.below(6)),
-            17 => OpKind::Require(1 + rng.below(5), true),
-            _ => OpKind::Require(1 + rng.below(5), false),
+            0..=7 => {
+                let mut fields = field_list(&mut rng);
+                if aimed {
+                    principal = home + rng.below(2);
+                    aimed_refs(&mut rng, &mut fields, created[t], &mut referred[t]);
+                }
+                if tenant != 3 {
+                    created[t] += 1;
+                }
+                OpKind::Create(fields)
+            }
+            8..=13 => {
+                let mut id = 1 + rng.below(6);
+                let mut fields = field_list(&mut rng);
+                if aimed && created[t] > 0 {
+                    principal = home + rng.below(2);
+                    id = 1 + rng.below(created[t]);
+                    aimed_refs(&mut rng, &mut fields, created[t], &mut referred[t]);
+                }
+                OpKind::Update(id, fields)
+            }
+            14..=16 => {
+                let mut id = 1 + rng.below(6);
+                if aimed {
+                    principal = home + rng.below(2);
+                    if !referred[t].is_empty() {
+                        id = referred[t][rng.below(referred[t].len() as u64) as usize];
+                    }
+                }
+                OpKind::Delete(id)
+            }
+            17 => OpKind::Require(require_field(&mut rng), true),
+            _ => OpKind::Require(require_field(&mut rng), false),
         };
         // Schema changes are mostly attempted by the owner, so both strict outcomes occur.
         let principal = if matches!(kind, OpKind::Require(..)) && rng.below(4) != 0 {
@@ -294,6 +365,43 @@ fn unexplained(ops: &[Op], lean: &[String], rust: &[String]) -> Option<(usize, S
 /// Run every scenario through Lean (one process) and the kernel; return the unexplained
 /// differences, one per differing scenario.
 pub fn diff_batch(lean_dir: &Path, scenarios: &[Scenario]) -> Result<Vec<Difference>, String> {
+    diff_batch_counted(lean_dir, scenarios).map(|(diffs, _)| diffs)
+}
+
+/// How often each outcome occurred, by name: `ok`, `err <kind>`, and the same per intent
+/// (`create ok`, `delete err still_referenced`, `require-strict ok`, ...), counted in the
+/// output of the Lean model.
+pub type Outcomes = std::collections::BTreeMap<String, usize>;
+
+fn intent_name(op: &Op) -> &'static str {
+    match op.kind {
+        OpKind::Create(_) => "create",
+        OpKind::Update(..) => "update",
+        OpKind::Delete(_) => "delete",
+        OpKind::Require(_, true) => "require-strict",
+        OpKind::Require(_, false) => "require-lax",
+    }
+}
+
+fn count_outcomes(scenarios: &[Scenario], lean: &[Vec<String>]) -> Outcomes {
+    let mut counts = Outcomes::new();
+    for (ops, out) in scenarios.iter().zip(lean) {
+        // Line 0 is `scenario <name>`; then one line per operation.
+        for (op, line) in ops.iter().zip(out.iter().skip(1)) {
+            *counts.entry(line.clone()).or_default() += 1;
+            *counts
+                .entry(format!("{} {line}", intent_name(op)))
+                .or_default() += 1;
+        }
+    }
+    counts
+}
+
+/// [`diff_batch`] that also reports the outcomes counted in the Lean output.
+pub fn diff_batch_counted(
+    lean_dir: &Path,
+    scenarios: &[Scenario],
+) -> Result<(Vec<Difference>, Outcomes), String> {
     let text = render("c", scenarios);
     let path = std::env::temp_dir().join(format!(
         "strata-lean-diff-{}-{}.txt",
@@ -313,7 +421,8 @@ pub fn diff_batch(lean_dir: &Path, scenarios: &[Scenario]) -> Result<Vec<Differe
             rust.len()
         ));
     }
-    Ok(scenarios
+    let counts = count_outcomes(scenarios, &lean);
+    let diffs = scenarios
         .iter()
         .enumerate()
         .filter_map(|(n, ops)| {
@@ -324,7 +433,8 @@ pub fn diff_batch(lean_dir: &Path, scenarios: &[Scenario]) -> Result<Vec<Differe
                 rust: rust[n].clone(),
             })
         })
-        .collect())
+        .collect();
+    Ok((diffs, counts))
 }
 
 /// Every sequence one step smaller than `ops`: one operation removed, or one field removed.
@@ -369,6 +479,84 @@ pub fn shrink(lean_dir: &Path, failing: Scenario) -> Result<Scenario, String> {
     Ok(current)
 }
 
+/// Runs of at least this many cases must exercise every outcome kind (see [`check_coverage`]).
+pub const COVERAGE_FROM_CASES: usize = 1000;
+
+/// The fewest times each outcome kind must occur in such a run.
+pub const MIN_OUTCOME_COUNT: usize = 20;
+
+/// The errors the model can print, from the `showErr` function of `Main.lean`: the name after
+/// each `=>`.
+pub fn lean_error_names(main_source: &str) -> Result<Vec<String>, String> {
+    let start = main_source
+        .find("def showErr")
+        .ok_or("Main.lean has no showErr")?;
+    let names: Vec<String> = main_source[start..]
+        .lines()
+        .skip(1)
+        .take_while(|l| l.trim_start().starts_with('|'))
+        .filter_map(|l| {
+            let (_, rest) = l.split_once("=>")?;
+            Some(rest.trim().trim_matches('"').to_string())
+        })
+        .collect();
+    if names.is_empty() {
+        return Err("no error names found in showErr".into());
+    }
+    Ok(names)
+}
+
+/// Outcomes that must also be reached through a particular intent, because reaching the error
+/// some other way would not exercise that intent's own rule.
+pub const REQUIRED_PER_INTENT: &[&str] = &[
+    "create ok",
+    "update ok",
+    "delete ok",
+    "require-strict ok",
+    "require-lax ok",
+    "create err invalid",
+    "update err invalid",
+    "create err dangling_reference",
+    "update err dangling_reference",
+    "delete err still_referenced",
+    "delete err not_found",
+    "update err not_found",
+    "require-strict err migration_rejected",
+    "require-strict err unauthorized",
+    "delete err unauthorized",
+];
+
+/// Fail when the batch did not reach every outcome kind often enough: `ok`, every error the model
+/// can print, and each of [`REQUIRED_PER_INTENT`] occur at least [`MIN_OUTCOME_COUNT`] times, and
+/// nothing was unparsed. A generator that stops reaching a rule must fail here, not pass quietly.
+pub fn check_coverage(outcomes: &Outcomes, main_source: &str) -> Result<(), String> {
+    let mut wanted: Vec<String> = vec!["ok".to_string()];
+    wanted.extend(
+        lean_error_names(main_source)?
+            .into_iter()
+            .map(|n| format!("err {n}")),
+    );
+    wanted.extend(REQUIRED_PER_INTENT.iter().map(|s| s.to_string()));
+    let seen = |k: &str| outcomes.get(k).copied().unwrap_or(0);
+    let thin: Vec<String> = wanted
+        .iter()
+        .filter(|k| seen(k) < MIN_OUTCOME_COUNT)
+        .map(|k| format!("`{k}` {} times", seen(k)))
+        .collect();
+    let unparsed = outcomes
+        .keys()
+        .filter(|k| k.starts_with("unparsed"))
+        .count();
+    if !thin.is_empty() || unparsed > 0 {
+        return Err(format!(
+            "the generator does not reach every outcome (need {MIN_OUTCOME_COUNT} each): {}; \
+             unparsed lines: {unparsed}. Counts: {outcomes:?}",
+            thin.join(", ")
+        ));
+    }
+    Ok(())
+}
+
 /// Run `cases` generated sequences from `base_seed`. `Err` carries the full failure report: the
 /// seeds, the shrunk sequence and both sides' output.
 pub fn run(lean_dir: &Path, base_seed: u64, cases: usize) -> Result<(), String> {
@@ -376,8 +564,13 @@ pub fn run(lean_dir: &Path, base_seed: u64, cases: usize) -> Result<(), String> 
     let scenarios: Vec<Scenario> = (0..cases)
         .map(|i| generate(case_seed(base_seed, i)))
         .collect();
-    let diffs = diff_batch(lean_dir, &scenarios)?;
+    let (diffs, outcomes) = diff_batch_counted(lean_dir, &scenarios)?;
     let Some(first) = diffs.first() else {
+        if cases >= COVERAGE_FROM_CASES {
+            let main = std::fs::read_to_string(lean_dir.join("Main.lean"))
+                .map_err(|e| format!("cannot read Main.lean: {e}"))?;
+            check_coverage(&outcomes, &main)?;
+        }
         return Ok(());
     };
     let seed = case_seed(base_seed, first.scenario);

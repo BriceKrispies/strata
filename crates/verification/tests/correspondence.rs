@@ -267,7 +267,7 @@ fn an_audit_line_with_a_placeholder_is_not_clean() {
 
 /// The default is sized to run in a few seconds of the Lean process; a larger run:
 /// `STRATA_LEAN_DIFF_CASES=20000` (and `STRATA_LEAN_DIFF_SEED=<n>` to vary or reproduce).
-const DEFAULT_DIFF_CASES: usize = 400;
+const DEFAULT_DIFF_CASES: usize = 3000;
 const DEFAULT_DIFF_SEED: u64 = 20_261_121;
 
 fn env_number<T: std::str::FromStr>(name: &str, default: T) -> T {
