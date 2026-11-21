@@ -91,6 +91,7 @@ impl<K: strata_runtime::Credentials> RuntimeDeps<K> {
 ///
 /// - `control-plane`: implements no contract.
 /// - `conversation-service`: implements no contract.
+/// - `cell`: implements no contract.
 #[derive(Debug, Clone)]
 pub struct GatewayDeps<K: strata_runtime::Credentials = strata_runtime::NoCredentials> {
     identity_service: crate::routes::IdentityServiceClient<K>,

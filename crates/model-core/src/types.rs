@@ -747,6 +747,26 @@ impl std::fmt::Display for ClusterId {
     }
 }
 
+/// cell-id
+///
+/// Specification type `cell-id`: an identifier represented as `string`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CellId(pub String);
+
+impl CellId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for CellId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// region-id
 ///
 /// Specification type `region-id`: an identifier represented as `string`.

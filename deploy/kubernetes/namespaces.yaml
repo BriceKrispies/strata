@@ -9,6 +9,13 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
+  name: strata-tenant
+  labels:
+    strata.dev/trust-zone: "tenant"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
   name: strata-control
   labels:
     strata.dev/trust-zone: "control"
@@ -19,13 +26,6 @@ metadata:
   name: strata-identity
   labels:
     strata.dev/trust-zone: "identity"
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: strata-tenant
-  labels:
-    strata.dev/trust-zone: "tenant"
 ---
 apiVersion: v1
 kind: Namespace

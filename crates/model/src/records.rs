@@ -655,12 +655,16 @@ pub struct RecPlacement {
     /// Field `placement-id`.
     #[serde(rename = "placement-id")]
     pub placement_id: types::PlacementId,
+    /// Field `cell`.
+    pub cell: types::CellId,
     /// Field `cluster`.
-    pub cluster: types::ClusterId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<types::ClusterId>,
     /// Field `region`.
     pub region: types::RegionId,
     /// Field `database`.
-    pub database: types::DatabaseId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<types::DatabaseId>,
 }
 
 /// The key of a [`RecPlacement`]: `placement-id`.
