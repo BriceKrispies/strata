@@ -1693,10 +1693,6 @@ pub const TYPES: &[TypeDecl] = &[
         ]),
     },
     TypeDecl {
-        id: "key-id",
-        decl: Decl::Alias(Ty::Text),
-    },
-    TypeDecl {
         id: "ledger-account-id",
         decl: Decl::Alias(Ty::Text),
     },
@@ -2277,18 +2273,38 @@ pub const TYPES: &[TypeDecl] = &[
         id: "public-key",
         decl: Decl::Struct(&[
             Field {
-                wire: "id",
-                ty: Ty::Named("key-id"),
-                optional: false,
-            },
-            Field {
-                wire: "algorithm",
+                wire: "kid",
                 ty: Ty::Text,
                 optional: false,
             },
             Field {
-                wire: "key",
-                ty: Ty::Bytes,
+                wire: "kty",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "crv",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "alg",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "use",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "x",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "y",
+                ty: Ty::Text,
                 optional: false,
             },
         ]),
@@ -2704,6 +2720,10 @@ pub const TYPES: &[TypeDecl] = &[
         decl: Decl::Alias(Ty::Text),
     },
     TypeDecl {
+        id: "session-state",
+        decl: Decl::Enum(&["anonymous", "active", "expired", "revoked"]),
+    },
+    TypeDecl {
         id: "session-view",
         decl: Decl::Struct(&[
             Field {
@@ -2750,6 +2770,11 @@ pub const TYPES: &[TypeDecl] = &[
                 wire: "expires_at",
                 ty: Ty::Int(-9223372036854775808, 9223372036854775807),
                 optional: true,
+            },
+            Field {
+                wire: "may",
+                ty: Ty::Map(&Ty::List(&Ty::Text)),
+                optional: false,
             },
             Field {
                 wire: "may_manage_schema",
@@ -4554,8 +4579,13 @@ pub const EXPORT_SUBJECT_DATA: Contract = Contract {
     }),
     reply: Reply::Members(&[
         Field {
-            wire: "archive",
+            wire: "export",
             ty: Ty::Named("archive-ref"),
+            optional: false,
+        },
+        Field {
+            wire: "state",
+            ty: Ty::Text,
             optional: false,
         },
         Field {
@@ -5346,7 +5376,7 @@ pub const READ_SEARCH_PAGE: Contract = Contract {
         Field {
             wire: "q",
             ty: Ty::Text,
-            optional: false,
+            optional: true,
         },
     ]),
     errors: &["unavailable"],
@@ -6041,14 +6071,21 @@ pub const SIGN_IN_AT_SITE: Contract = Contract {
         query: &[],
         body: Some("{\"login\":\"ines\",\"password\":\"strata-dev-ines\"}"),
     }),
-    reply: Reply::Members(&[Field {
-        wire: "session",
-        ty: Ty::Named("session-view"),
-        optional: false,
-    }]),
-    errors: &["unauthenticated", "throttled", "unavailable"],
+    reply: Reply::Members(&[
+        Field {
+            wire: "session",
+            ty: Ty::Named("session-view"),
+            optional: false,
+        },
+        Field {
+            wire: "state",
+            ty: Ty::Named("session-state"),
+            optional: false,
+        },
+    ]),
+    errors: &["unauthenticated", "throttled", "unavailable", "forbidden"],
     step_up_error: None,
-    quota: Some(100),
+    quota: Some(30),
 };
 
 #[tokio::test]
@@ -6079,12 +6116,19 @@ pub const SIGN_OUT_OF_SITE: Contract = Contract {
         query: &[],
         body: None,
     }),
-    reply: Reply::Members(&[Field {
-        wire: "session",
-        ty: Ty::Named("session-view"),
-        optional: false,
-    }]),
-    errors: &["unauthenticated"],
+    reply: Reply::Members(&[
+        Field {
+            wire: "session",
+            ty: Ty::Named("session-view"),
+            optional: false,
+        },
+        Field {
+            wire: "state",
+            ty: Ty::Named("session-state"),
+            optional: false,
+        },
+    ]),
+    errors: &["unauthenticated", "forbidden"],
     step_up_error: None,
     quota: None,
 };
@@ -6117,11 +6161,18 @@ pub const READ_SESSION_VIEW: Contract = Contract {
         query: &[],
         body: None,
     }),
-    reply: Reply::Members(&[Field {
-        wire: "session",
-        ty: Ty::Named("session-view"),
-        optional: false,
-    }]),
+    reply: Reply::Members(&[
+        Field {
+            wire: "session",
+            ty: Ty::Named("session-view"),
+            optional: false,
+        },
+        Field {
+            wire: "state",
+            ty: Ty::Named("session-state"),
+            optional: false,
+        },
+    ]),
     errors: &["unavailable"],
     step_up_error: None,
     quota: None,
@@ -6338,7 +6389,7 @@ pub const PREVIEW_MARKDOWN: Contract = Contract {
         ty: Ty::Any,
         optional: false,
     }]),
-    errors: &["unauthenticated", "unavailable"],
+    errors: &["unauthenticated", "unavailable", "forbidden"],
     step_up_error: None,
     quota: None,
 };
@@ -8634,19 +8685,19 @@ pub const STEP_UP_SESSION: Contract = Contract {
     probe: Request {
         path: "/api/session/step-up",
         query: &[],
-        body: None,
+        body: Some("{\"password\":\"strata-dev-admin\"}"),
     },
     success: Some(Request {
         path: "/api/session/step-up",
         query: &[],
-        body: None,
+        body: Some("{\"password\":\"strata-dev-admin\"}"),
     }),
     reply: Reply::Members(&[Field {
         wire: "authenticated_at",
         ty: Ty::Int(-9223372036854775808, 9223372036854775807),
         optional: false,
     }]),
-    errors: &["unauthenticated", "throttled"],
+    errors: &["unauthenticated", "throttled", "forbidden"],
     step_up_error: None,
     quota: None,
 };
@@ -8924,7 +8975,13 @@ pub const COMPLETE_RECOVERY: Contract = Contract {
             optional: false,
         },
     ]),
-    errors: &["unauthenticated", "invalid", "conflict", "throttled"],
+    errors: &[
+        "unauthenticated",
+        "invalid",
+        "conflict",
+        "throttled",
+        "forbidden",
+    ],
     step_up_error: None,
     quota: None,
 };
@@ -8958,7 +9015,7 @@ pub const CANCEL_RECOVERY: Contract = Contract {
         ty: Ty::Bool,
         optional: false,
     }]),
-    errors: &["unauthenticated", "throttled"],
+    errors: &["unauthenticated", "throttled", "forbidden"],
     step_up_error: None,
     quota: None,
 };
@@ -9034,7 +9091,7 @@ pub const LIST_IDENTITY_CLIENTS: Contract = Contract {
         ty: Ty::Any,
         optional: false,
     }]),
-    errors: &["unauthenticated", "forbidden"],
+    errors: &["unauthenticated", "forbidden", "not_found"],
     step_up_error: None,
     quota: None,
 };
@@ -9164,7 +9221,7 @@ pub const ACCEPT_SITE_INVITATION: Contract = Contract {
             optional: false,
         },
     ]),
-    errors: &["unauthenticated", "invalid", "throttled"],
+    errors: &["unauthenticated", "invalid", "throttled", "forbidden"],
     step_up_error: None,
     quota: None,
 };
@@ -9197,11 +9254,83 @@ pub const READ_LAB_OVERVIEW: Contract = Contract {
         query: &[],
         body: None,
     }),
-    reply: Reply::Members(&[Field {
-        wire: "overview",
-        ty: Ty::Any,
-        optional: false,
-    }]),
+    reply: Reply::Members(&[
+        Field {
+            wire: "tenant",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "kernel_version",
+            ty: Ty::Text,
+            optional: false,
+        },
+        Field {
+            wire: "objects",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "workflows",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "policies",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "roles",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "queries",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "views",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "members",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "snapshots",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "presets",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "classes",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "verification",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "recent_runs",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "runs_kept",
+            ty: Ty::Any,
+            optional: false,
+        },
+    ]),
     errors: &["unauthenticated", "forbidden", "unavailable"],
     step_up_error: None,
     quota: None,
@@ -9366,6 +9495,11 @@ pub const REPLAY_LAB_JOURNAL: Contract = Contract {
             ty: Ty::Text,
             optional: false,
         },
+        Field {
+            wire: "does_not_establish",
+            ty: Ty::List(&Ty::Text),
+            optional: false,
+        },
     ]),
     errors: &["unauthenticated", "forbidden", "unavailable"],
     step_up_error: None,
@@ -9407,7 +9541,7 @@ pub const VERIFY_LAB_PROOFS: Contract = Contract {
     }]),
     errors: &["unauthenticated", "forbidden", "not_found", "throttled"],
     step_up_error: None,
-    quota: Some(5),
+    quota: Some(1),
 };
 
 #[tokio::test]
@@ -9476,11 +9610,33 @@ pub const RUN_DEVELOPMENT_ACTION: Contract = Contract {
         query: &[],
         body: Some("{}"),
     }),
-    reply: Reply::Members(&[Field {
-        wire: "result",
-        ty: Ty::Any,
-        optional: false,
-    }]),
+    reply: Reply::Members(&[
+        Field {
+            wire: "reset",
+            ty: Ty::Bool,
+            optional: true,
+        },
+        Field {
+            wire: "tenant",
+            ty: Ty::Text,
+            optional: true,
+        },
+        Field {
+            wire: "messages",
+            ty: Ty::List(&Ty::Any),
+            optional: true,
+        },
+        Field {
+            wire: "aged",
+            ty: Ty::Bool,
+            optional: true,
+        },
+        Field {
+            wire: "expired",
+            ty: Ty::Bool,
+            optional: true,
+        },
+    ]),
     errors: &["unauthenticated", "forbidden", "not_found"],
     step_up_error: None,
     quota: None,
@@ -9791,7 +9947,7 @@ pub const LIST_LEGAL_HOLDS: Contract = Contract {
     }),
     reply: Reply::Members(&[Field {
         wire: "holds",
-        ty: Ty::Named("value-map"),
+        ty: Ty::List(&Ty::Any),
         optional: false,
     }]),
     errors: &["unauthenticated", "forbidden"],
