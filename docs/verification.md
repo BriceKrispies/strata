@@ -58,32 +58,59 @@ changes.
 
 - **Entities have stable ids, separate from names.** Object types and their fields, queries,
   policies and views are all referred to by id. A rename changes a label nobody resolves through,
-  so it touches nothing, and a name that is deleted and reused cannot make a dependent point at a
-  different entity (no ABA).
-- **A dependent is a read set and a function of the values read.** A query reading fields and a
-  policy whose condition reads fields (the far end of one reference is one more pair) are
-  readers; a view reads queries. Dependencies are stratified, so they are acyclic by
+  so no dependent needs a different read, and a name that is deleted and reused cannot make a
+  dependent point at a different entity (no ABA).
+- **A dependent is a read list and a function of the values read.** A query reading fields and a
+  policy whose condition reads fields (the far end of one reference is one more cell) are readers;
+  a view reads queries. A read is a cell, or a combination of two reads (which is what a rewrite
+  leaves behind for a split field). Dependencies are stratified, so they are acyclic by
   construction. What the function does is not constrained.
-- **Data** is a context of one record per object type, a map from field ids to values.
+- **Data** is a context of one record per object type, a map from field ids to values. A move
+  along a reference reads the context as a record of the source object with the record of the
+  target object it references.
 - **Changes**: add a field, widen, rename, remove a field, narrow, retarget a reference, remove an
-  object type, remove a dependent. `footprint` is the existing cells a change touches, `impact`
-  the dependents that read them (through views too), `classify` gives compatible (rename, widen),
-  adaptable (add a field) or breaking (everything else), `apply` the new schema and `migrate` the
-  new data.
+  object type, remove a dependent, move a field along a reference, split a field totally (one field
+  becomes two whose combination gives the original), re-encode a field (with an inverse).
+  `footprint` is the existing cells a change touches, `impact` the dependents that read them
+  (through views too), `apply` the new schema, `migrate` the new data, `rewrite` the dependent as
+  rewritten for the change, `project` the read-only view of new data in the old shape.
+- **Classes** follow the specification: compatible (add a field, widen), adaptable (rename, move a
+  field, total split) and breaking (everything else). See the reconciliation below.
 - **Acceptance** (`accepted`): the local checks pass (targets exist, new ids are fresh, new
   references resolve, the type moves the right way, no reference is left to a deleted object) and,
-  if the change is breaking, its impact is empty. It does not say "the result is well-formed";
-  that is what closure proves. It is the one place pins and projections (WG-5327) will add a
-  condition.
+  if the change is breaking, every dependent it reaches is pinned (`Schema.pins`) and the change
+  has a left inverse (`hasLeftInverse`: the old shape can be rebuilt from the new data). With no
+  pins that says the impact is empty. It does not say "the result is well-formed"; that is what
+  closure proves.
+- **Footprints for concurrency** (`ents`): the cells and field lists a change touches, labels
+  included (a rename touches its field), together with its impact set. Two changes are disjoint
+  (`Disjoint`) when these share nothing.
 
-`lean/Strata/Evolution/Proofs.lean` proves:
+### Reconciliation of the change classes with the specification
+
+The first version of the model called adding a field adaptable and a rename compatible. The
+specification (D-8212) says the opposite: adding a field is compatible, a rename is adaptable.
+The model now follows the specification (option (a)). Because ids are stable, a rename's rewrite
+of a dependent is the identity, and the theorem of rewrite correctness holds for it trivially;
+adding a field changes no existing cell, so it needs no rewrite and joins the compatible class.
+The earlier theorems stay true. `compatibility` gains the hypothesis that the change passes its
+local checks (`pre`) and that the dependents of the schema are valid, which adding a field needs
+(a fresh id, and nothing read the new cell before); for a widening it is not used.
+
+### Theorems
+
+`lean/Strata/Evolution/` proves (each file's docstrings carry the requirement it verifies):
 
 | Property | Theorem | Statement |
 |---|---|---|
-| Closure | `closure` | A well-formed schema stays well-formed under any accepted change |
-| Locality | `locality` | For an accepted change on a well-formed schema, every dependent outside the change's impact (and not deleted by it) is still present, still valid, and evaluates to the same value on the migrated data |
-| Compatibility | `compatibility` | A compatible change (rename, widen) keeps every valid dependent valid and its value unchanged on the migrated data |
+| Closure | `closure` | A well-formed schema stays well-formed under any accepted change, including a pinned breaking change and a move or a split |
+| Locality | `locality` | For an accepted change on a well-formed schema, every dependent outside the change's impact (and not deleted by it) is still present, still valid, and evaluates to the same value on the migrated data (MIG-605) |
+| Compatibility | `compatibility` | A compatible change (add a field, widen) keeps every valid dependent valid and its value unchanged on the migrated data (MIG-590) |
 | The classification is necessary | `breaking_change_can_change_value`, `breaking_change_can_invalidate` | There is a well-formed schema, a breaking change refused by the acceptance rule, and a dependent in its impact, such that applying the change anyway changes the dependent's value (narrowing clamps a stored `-1`) or leaves it reading a field that no longer exists |
+| 4. Rewrite correctness | `rewrite_correct` (`rewrite_correct_nb` for every non-breaking change) | For an accepted adaptable change on a well-formed schema and a dependent of it, the rewritten dependent is in the new schema, is valid, and `evalDep (apply c s) (migrate c data) (rewrite c d) = evalDep s data d` (MIG-591) |
+| 5. Lens laws | `project_migrate`, `left_inverse_on_footprint`, `pinned_eval`, `pinned_eval_live`, `removeField_irreversible` (and `retargetRef_`, `removeObject_`, `narrow_nat_irreversible`) | For a change with a left inverse, `project c (migrate c data)` agrees with `data` on every cell of the schema (MIG-597), so a pinned dependent reading the projected data evaluates to what it did; removing a field has no left inverse on its cell, whatever function is tried (the irreversibility MIG-557 relies on). `pinned_breaking_change_accepted` shows the pinned route is not vacuous |
+| 6. Commutation | `commutation` | For two accepted changes with disjoint footprints, `apply c₂ (apply c₁ s) = apply c₁ (apply c₂ s)` and `migrate c₂ (migrate c₁ data) = migrate c₁ (migrate c₂ data)`, exactly (MIG-602) |
+| 7. Composition | `rewrite_compose`, `rewrite_chain` | A dependent rewritten by `c₁` then `c₂` (accepted, not breaking) is valid in the final schema and evaluates on `migrate c₂ (migrate c₁ data)` to what it evaluated to on `data`; the same over a chain of any length (MIG-606). `rewriteReader_compose` says the composed rewrite is one substitution of the reads |
 
 `lake env lean Audit.lean` prints the axioms each depends on: only `propext`, `Classical.choice`
 and `Quot.sound`.
@@ -92,14 +119,29 @@ and `Quot.sound`.
 
 1. The object of the theorems is this model, not the Rust source. The correspondence with the
    kernel is pending (WG-5330).
-2. Dependents are read sets plus an arbitrary function. Expressions beyond their read sets, and
-   reads along more than one reference, are not modelled.
-3. Locality needs a well-formed starting schema. Compatibility and the two counterexamples do not.
-4. Pins and projections are pending (WG-5327); `accepted` is where they attach.
-5. Concurrency (changes arriving together) is not modelled: one change at a time.
-6. Data conformance to field types is not modelled; `migrate` says what a changed cell becomes
-   (defaulted, clamped, cleared). Widening is the identity on values.
-7. `classify` looks at the change alone, not at the schema.
+2. Dependents are read lists plus an arbitrary function. Expressions beyond their reads, and
+   reads along more than one reference, are not modelled. A rewrite substitutes reads and never
+   changes a dependent's function; a view is never rewritten.
+3. Locality needs a well-formed starting schema; compatibility, rewrite correctness, the lens
+   evaluation theorem and composition need the dependents of the schema to be valid. The two
+   counterexamples do not.
+4. A move along a reference is modelled inside one context (a record of the source with the record
+   it references), copying the value; whether many sources agree is not modelled. A split is total
+   by hypothesis (`jn (sp v) = v` is part of its local checks).
+5. A pin is an id in `Schema.pins`. A pinned dependent stays valid because the only breaking
+   changes that have a left inverse (a re-encoding) lose no cell. The end of a pin (the dependent
+   migrates, or the deprecation window closes) and the projection of a chain of breaking changes
+   are not modelled. A narrowing is not given a projection (it clamps); a projection on the data
+   that happens to be lossless is not modelled.
+6. Commutation is stated for changes accepted on the same base schema with disjoint `ents`. The
+   equality is exact (schemas as lists, dependents as rewritten structures) and needs only each
+   change's local checks. That each change is still accepted on the schema the other produced is
+   what the revision guard checks; it is not proved here, and the rebase of overlapping changes
+   is not modelled. The granularity is the cell, plus the object type for a change that edits its
+   field list or deletes it, so two additions to one object are not disjoint.
+7. Data conformance to field types is not modelled; `migrate` says what a changed cell becomes
+   (defaulted, clamped, cleared, copied, re-encoded). Widening is the identity on values.
+8. `classify` looks at the change alone, not at the schema.
 
 ## Correspondence between the model and the kernel
 
