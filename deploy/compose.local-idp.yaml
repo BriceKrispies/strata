@@ -1,0 +1,55 @@
+# The local identity-provider profile: overrides layered on deploy/compose.yaml by
+# `STRATA_IDP=1 node scripts/containers.mjs up` (or `npm run idp:containers`). Written by hand, not
+# generated. Everything in it, and in deploy/keycloak/, is for local development only: the
+# passwords, the client secrets and the realm signing key are published values and protect nothing.
+#
+# Keycloak is the test identity provider. It answers OpenID Connect and SAML for realm `strata`, and
+# realm `strata` brokers realm `upstream`, which stands in for an outside social provider.
+#
+# One issuer for the browser and for the runtime. Both see Keycloak as http://keycloak.localhost:8180:
+# the browser resolves *.localhost to loopback and reaches the published port, and the runtime
+# reaches the container through a network alias of that name on the tenant network. KC_HOSTNAME makes
+# every address Keycloak hands out, the issuer included, that same one.
+#
+# The identity provider is outside Strata's trust zones, so the runtime reaches it through the
+# outbound gate's development exception (STRATA_DEV=1, which this profile implies). Relative paths
+# resolve against deploy/.
+services:
+  keycloak:
+    image: "quay.io/keycloak/keycloak:26.8.1"
+    container_name: "strata-keycloak"
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_HTTP_PORT: "8180"
+      KC_HOSTNAME: "http://keycloak.localhost:8180"
+      KC_BOOTSTRAP_ADMIN_USERNAME: "admin"
+      KC_BOOTSTRAP_ADMIN_PASSWORD: "strata-dev-keycloak-admin"
+    ports:
+      - "127.0.0.1:8180:8180"
+    volumes:
+      - "./keycloak/realms:/opt/keycloak/data/import:ro"
+    healthcheck:
+      # The image has no curl; bash can open the socket. Healthy once realm strata answers, which is
+      # after the realm import.
+      test:
+        - "CMD-SHELL"
+        - "exec 3<>/dev/tcp/127.0.0.1/8180 && printf 'GET /realms/strata/.well-known/openid-configuration HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n 1 <&3 | grep -q ' 200 '"
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    networks:
+      zone-tenant:
+        aliases:
+          - "keycloak.localhost"
+  runtime:
+    environment:
+      STRATA_OIDC_CONFIG: "/opt/strata/keycloak/oidc.config.json"
+      STRATA_SAML_CONFIG: "/opt/strata/keycloak/saml.config.json"
+      STRATA_KEYCLOAK_CLIENT_SECRET: "strata-dev-keycloak-secret"
+    volumes:
+      - "./keycloak/oidc.config.json:/opt/strata/keycloak/oidc.config.json:ro"
+      - "./keycloak/saml.config.json:/opt/strata/keycloak/saml.config.json:ro"
+    depends_on:
+      keycloak:
+        condition: service_healthy

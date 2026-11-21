@@ -90,6 +90,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "keycloak",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "The OpenID Connect authorization code flow against a live Keycloak container (STRATA_IDP=1 node scripts/containers.mjs up); needs STRATA_KEYCLOAK_URL, and fails naming it when unset; not yet measured"
+    },
+    {
+      "package": "strata-backend",
       "target": "lab_revision",
       "tier": "routine",
       "seconds": null,

@@ -1,0 +1,196 @@
+{
+  "realm": "strata",
+  "displayName": "Strata test realm (local development only)",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "verifyEmail": false,
+  "bruteForceProtected": false,
+  "accessTokenLifespan": 300,
+  "components": {
+    "org.keycloak.keys.KeyProvider": [
+      {
+        "name": "development-only-rsa-signing-key",
+        "providerId": "rsa",
+        "subComponents": {},
+        "config": {
+          "priority": ["1000"],
+          "enabled": ["true"],
+          "active": ["true"],
+          "algorithm": ["RS256"],
+          "keyUse": ["SIG"],
+          "privateKey": ["MIIEuwIBADANBgkqhkiG9w0BAQEFAASCBKUwggShAgEAAoIBAQCq4LZ2yOgYXW4wheh7j2yzKDHuhtTBnsDN6APKGNCYDJjq65OOo25KR4tJ1AiBDf2zePIFX7wqxZEpAdF3lO9P9lsPQRV41mP9mmcIJOeo0qLvtaJMYOUbCUO4UiYk0F4iznwxftPom/n7fFFKdhoa+z/TalfOBJWEnmF/VclqaO9X7pdx06Tu9EPl9qT8uyDWJylOPLcfcTb6cmFwPAHE1FCrWWqbPMNlSkgM+t0bOZmN54WzVFwNtoM+Ti+6RUKGgzpUHqBhbTFqpolB1jsUGqo89jAn2UVYv++S8DJs14SGFLCTRmHQd0S9brB6e5JNIo78/dIk7us+4t9ouuxhAgMBAAECggEAD1T0wjEyE/eUGrH1I1sB0YxeeIyr+8hq+76g0moKE050DQYAmhiDXZJQRtpJvgybkhYcvwsxNrQ920xQt1ZLZ6UO1A5OpyYzWA6ZxoMLLxxhJrlpG8nI3LVm2Fu0lPKGM8DLp2Q+Dr2p/xzPLWtt2bRn7Gf7A17pbHoKfPKdTRkB4wDhtLqvpFnZLprgnr8y+ALgG5XIveqaSHXQOaSuG00AyIUQOjXVdoRvC7NajVOOjouH4kKLz/m/vbC+SvuxbQqk5nY94dSEXJ2QhzZTrdLDDCNf7icTW6AEggR1BLK6lam7aKxLal3DFMNQ2khI0K9mfz4mMT46D7pA+0iX7QKBgQDtzhMt/YEWzJoINqTncqZL3cD4gLRS5nigUW1Yt2a9hsKfINovpN6BGztghEd7y2M/KuLV79FQeyHgkz0DrR1lAxEXuKh36dgqHS/Xycs+A8meYLtca8AGkpHP+T7bioKqqPzmHuCUpCZM6XHsZsCkrrjnVn09Aru7yCn8RmP0ZQKBgQC387lQgPENUlyauZobxEZHZ7+IBGc2y5sIZOdxjro4WOHa66oGobBZPS/kCM74ff28b3GjLh9maJlIx+Nn8kt+AgtRTjDNRJLgRGaL0gP2V4K8ptNwIpTBUVNDrc7Ek3pP3FE41RTPgZKtKdrYwI927mkrBgurrcdKgFc6VZEiTQJ/WSzuBFEMF4CiQnI7ZI+ZzNlbg9S/ylai5XujhaFA5dGjKgknyLYKul975LW2GLYsgYOTjKZh18xU5+JO/xHr8/Uyc7LLeiw245QOXN1PWfIRqVKc8At39v7/rv3IlItcdKLqM2Fg1ly4AB+KmRvvIdJjhFzqmfZsb/6fv/qlgQKBgQCo7gj79j3ohv+GE/aDk18bChrpdWm394k7TzcAoRtAzdc0LYHqLyh8+2T0nGY9665OE2YffibV7C8AmJitB+TuJkBwfUbx6wybKhWmR8rduoXUa7v22bsUQXQezgn5mpoTpvdsIrrGyW6C2dIhhcz6Yn1wRlAHbEJ9l5kDeDsdbQKBgCzYaj2FFdD4uKvOvWchUflhy4oBDBda5hPzAWUHfHrmQHTQGMTENkTOcQKHUb+qJb4YZcL6IwJCiewSlvQz8gOkTOaNsi1OFx1KHCb2xe1w1J9hIcXWV0cZeI8iy2bl6/wUzFmc/SkALiIFgQ14EWgI9sUUdA9BtjdIlpPbaDIY"],
+          "certificate": ["MIIDKTCCAhGgAwIBAgIUe0zDDQEAfCBXEP9+EV2a7MB7gRcwDQYJKoZIhvcNAQELBQAwIzEhMB8GA1UEAwwYc3RyYXRhLWtleWNsb2FrLWRldi1vbmx5MCAXDTI2MTEyMTAwNDI1M1oYDzIxMjYxMDI4MDA0MjUzWjAjMSEwHwYDVQQDDBhzdHJhdGEta2V5Y2xvYWstZGV2LW9ubHkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCq4LZ2yOgYXW4wheh7j2yzKDHuhtTBnsDN6APKGNCYDJjq65OOo25KR4tJ1AiBDf2zePIFX7wqxZEpAdF3lO9P9lsPQRV41mP9mmcIJOeo0qLvtaJMYOUbCUO4UiYk0F4iznwxftPom/n7fFFKdhoa+z/TalfOBJWEnmF/VclqaO9X7pdx06Tu9EPl9qT8uyDWJylOPLcfcTb6cmFwPAHE1FCrWWqbPMNlSkgM+t0bOZmN54WzVFwNtoM+Ti+6RUKGgzpUHqBhbTFqpolB1jsUGqo89jAn2UVYv++S8DJs14SGFLCTRmHQd0S9brB6e5JNIo78/dIk7us+4t9ouuxhAgMBAAGjUzBRMB0GA1UdDgQWBBRelJ/or9pU9Iv7f0XgvBMVuNWxJjAfBgNVHSMEGDAWgBRelJ/or9pU9Iv7f0XgvBMVuNWxJjAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBgUZh/tKGm5sHKKSOx9uHanl7MZXzCqwpJNV2eZzpPwJBqOqFpIxyawLajX3AEZTmx4DSBIFCxkqV+ti9JzJbq0wZmf/4zCL4zWiZsDCv2P7bZWWkRNQXO6FbTfBI9Uoh8HUTs/VcpCNNdOlO/DjCusWRYUZ8jd2kJCTfttjdCKMwwJK/vhE0Fyl7JePJZAquSlvY6pfby7/yG56kqZd3MkYdtHwnK3SK1vbOjzFMT6GdrB8DHONwGzjniTGOrDzpD8YWBpPdE2vkqbMuKdm/qtMug66bHQt87n/d9I+NNmaBn2Ucezzlp38CYwmeELLFnGben2f8fN0z2pfjeVInB"]
+        }
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "strata",
+      "name": "Strata (local development only)",
+      "description": "The OpenID Connect client of Strata. The secret is a development-only value.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "strata-dev-keycloak-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "consentRequired": false,
+      "redirectUris": [
+        "http://127.0.0.1:4100/federation/oidc/callback",
+        "http://localhost:4100/federation/oidc/callback",
+        "http://tidewater.localhost:4100/federation/oidc/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "strata-consent",
+      "name": "Strata with a consent screen (local development only)",
+      "description": "The same client with a consent screen, so that a test can cancel at the identity provider. The secret is a development-only value.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "strata-dev-keycloak-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "consentRequired": true,
+      "redirectUris": [
+        "http://127.0.0.1:4100/federation/oidc/callback",
+        "http://localhost:4100/federation/oidc/callback",
+        "http://tidewater.localhost:4100/federation/oidc/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "urn:strata:keycloak-saml",
+      "name": "Strata over SAML (local development only)",
+      "description": "The SAML service provider of Strata. Its entity identifier is the sp_entity_id of deploy/keycloak/saml.config.json.",
+      "enabled": true,
+      "protocol": "saml",
+      "publicClient": false,
+      "frontchannelLogout": false,
+      "consentRequired": false,
+      "redirectUris": [
+        "http://127.0.0.1:4100/federation/saml/acs",
+        "http://localhost:4100/federation/saml/acs",
+        "http://tidewater.localhost:4100/federation/saml/acs"
+      ],
+      "attributes": {
+        "saml_assertion_consumer_url_post": "http://127.0.0.1:4100/federation/saml/acs",
+        "saml_force_name_id_format": "true",
+        "saml_name_id_format": "username",
+        "saml.authnstatement": "true",
+        "saml.assertion.signature": "true",
+        "saml.server.signature": "false",
+        "saml.client.signature": "false",
+        "saml.encrypt": "false",
+        "saml.force.post.binding": "true",
+        "saml.signature.algorithm": "RSA_SHA256",
+        "saml.onetimeuse.condition": "false",
+        "saml_signature_canonicalization_method": "http://www.w3.org/2001/10/xml-exc-c14n#"
+      },
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "attribute.name": "email",
+            "friendly.name": "email",
+            "attribute.nameformat": "Basic"
+          }
+        },
+        {
+          "name": "name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "firstName",
+            "attribute.name": "name",
+            "friendly.name": "name",
+            "attribute.nameformat": "Basic"
+          }
+        }
+      ]
+    }
+  ],
+  "identityProviders": [
+    {
+      "alias": "upstream",
+      "displayName": "upstream",
+      "providerId": "keycloak-oidc",
+      "enabled": true,
+      "trustEmail": true,
+      "storeToken": false,
+      "addReadTokenRoleOnCreate": false,
+      "authenticateByDefault": false,
+      "linkOnly": false,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "clientId": "strata-broker",
+        "clientSecret": "strata-dev-broker-secret",
+        "clientAuthMethod": "client_secret_post",
+        "issuer": "http://keycloak.localhost:8180/realms/upstream",
+        "authorizationUrl": "http://keycloak.localhost:8180/realms/upstream/protocol/openid-connect/auth",
+        "tokenUrl": "http://keycloak.localhost:8180/realms/upstream/protocol/openid-connect/token",
+        "userInfoUrl": "http://keycloak.localhost:8180/realms/upstream/protocol/openid-connect/userinfo",
+        "jwksUrl": "http://keycloak.localhost:8180/realms/upstream/protocol/openid-connect/certs",
+        "logoutUrl": "http://keycloak.localhost:8180/realms/upstream/protocol/openid-connect/logout",
+        "useJwksUrl": "true",
+        "validateSignature": "true",
+        "defaultScope": "openid email profile",
+        "pkceEnabled": "true",
+        "pkceMethod": "S256",
+        "syncMode": "IMPORT"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "olive",
+      "email": "olive@keycloak.example",
+      "emailVerified": true,
+      "firstName": "Olive",
+      "lastName": "Oidc",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "strata-dev-olive", "temporary": false }]
+    },
+    {
+      "username": "sana",
+      "email": "sana@keycloak.example",
+      "emailVerified": true,
+      "firstName": "Sana",
+      "lastName": "Saml",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "strata-dev-sana", "temporary": false }]
+    },
+    {
+      "username": "cora",
+      "email": "cora@keycloak.example",
+      "emailVerified": true,
+      "firstName": "Cora",
+      "lastName": "Cancel",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "strata-dev-cora", "temporary": false }]
+    }
+  ]
+}

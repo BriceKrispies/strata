@@ -1,0 +1,40 @@
+{
+  "tenants": {
+    "fieldnotes": [
+      {
+        "id": "keycloak-saml",
+        "label": "Keycloak SAML",
+        "idp_entity_id": "http://keycloak.localhost:8180/realms/strata",
+        "sso_url": "http://keycloak.localhost:8180/realms/strata/protocol/saml",
+        "certificates": [
+          "-----BEGIN CERTIFICATE-----\nMIIDKTCCAhGgAwIBAgIUe0zDDQEAfCBXEP9+EV2a7MB7gRcwDQYJKoZIhvcNAQEL\nBQAwIzEhMB8GA1UEAwwYc3RyYXRhLWtleWNsb2FrLWRldi1vbmx5MCAXDTI2MTEy\nMTAwNDI1M1oYDzIxMjYxMDI4MDA0MjUzWjAjMSEwHwYDVQQDDBhzdHJhdGEta2V5\nY2xvYWstZGV2LW9ubHkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCq\n4LZ2yOgYXW4wheh7j2yzKDHuhtTBnsDN6APKGNCYDJjq65OOo25KR4tJ1AiBDf2z\nePIFX7wqxZEpAdF3lO9P9lsPQRV41mP9mmcIJOeo0qLvtaJMYOUbCUO4UiYk0F4i\nznwxftPom/n7fFFKdhoa+z/TalfOBJWEnmF/VclqaO9X7pdx06Tu9EPl9qT8uyDW\nJylOPLcfcTb6cmFwPAHE1FCrWWqbPMNlSkgM+t0bOZmN54WzVFwNtoM+Ti+6RUKG\ngzpUHqBhbTFqpolB1jsUGqo89jAn2UVYv++S8DJs14SGFLCTRmHQd0S9brB6e5JN\nIo78/dIk7us+4t9ouuxhAgMBAAGjUzBRMB0GA1UdDgQWBBRelJ/or9pU9Iv7f0Xg\nvBMVuNWxJjAfBgNVHSMEGDAWgBRelJ/or9pU9Iv7f0XgvBMVuNWxJjAPBgNVHRMB\nAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBgUZh/tKGm5sHKKSOx9uHanl7M\nZXzCqwpJNV2eZzpPwJBqOqFpIxyawLajX3AEZTmx4DSBIFCxkqV+ti9JzJbq0wZm\nf/4zCL4zWiZsDCv2P7bZWWkRNQXO6FbTfBI9Uoh8HUTs/VcpCNNdOlO/DjCusWRY\nUZ8jd2kJCTfttjdCKMwwJK/vhE0Fyl7JePJZAquSlvY6pfby7/yG56kqZd3MkYdt\nHwnK3SK1vbOjzFMT6GdrB8DHONwGzjniTGOrDzpD8YWBpPdE2vkqbMuKdm/qtMug\n66bHQt87n/d9I+NNmaBn2Ucezzlp38CYwmeELLFnGben2f8fN0z2pfjeVInB\n-----END CERTIFICATE-----\n"
+        ],
+        "sp_entity_id": "urn:strata:keycloak-saml",
+        "email_attribute": "email",
+        "name_attribute": "name",
+        "email_verified": true,
+        "domains": ["keycloak.example"],
+        "create_on_first_sign_in": true,
+        "default_role": "author"
+      }
+    ],
+    "tidewater": [
+      {
+        "id": "keycloak-saml",
+        "label": "Keycloak SAML",
+        "idp_entity_id": "http://keycloak.localhost:8180/realms/strata",
+        "sso_url": "http://keycloak.localhost:8180/realms/strata/protocol/saml",
+        "certificates": [
+          "-----BEGIN CERTIFICATE-----\nMIIDKTCCAhGgAwIBAgIUe0zDDQEAfCBXEP9+EV2a7MB7gRcwDQYJKoZIhvcNAQEL\nBQAwIzEhMB8GA1UEAwwYc3RyYXRhLWtleWNsb2FrLWRldi1vbmx5MCAXDTI2MTEy\nMTAwNDI1M1oYDzIxMjYxMDI4MDA0MjUzWjAjMSEwHwYDVQQDDBhzdHJhdGEta2V5\nY2xvYWstZGV2LW9ubHkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCq\n4LZ2yOgYXW4wheh7j2yzKDHuhtTBnsDN6APKGNCYDJjq65OOo25KR4tJ1AiBDf2z\nePIFX7wqxZEpAdF3lO9P9lsPQRV41mP9mmcIJOeo0qLvtaJMYOUbCUO4UiYk0F4i\nznwxftPom/n7fFFKdhoa+z/TalfOBJWEnmF/VclqaO9X7pdx06Tu9EPl9qT8uyDW\nJylOPLcfcTb6cmFwPAHE1FCrWWqbPMNlSkgM+t0bOZmN54WzVFwNtoM+Ti+6RUKG\ngzpUHqBhbTFqpolB1jsUGqo89jAn2UVYv++S8DJs14SGFLCTRmHQd0S9brB6e5JN\nIo78/dIk7us+4t9ouuxhAgMBAAGjUzBRMB0GA1UdDgQWBBRelJ/or9pU9Iv7f0Xg\nvBMVuNWxJjAfBgNVHSMEGDAWgBRelJ/or9pU9Iv7f0XgvBMVuNWxJjAPBgNVHRMB\nAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBgUZh/tKGm5sHKKSOx9uHanl7M\nZXzCqwpJNV2eZzpPwJBqOqFpIxyawLajX3AEZTmx4DSBIFCxkqV+ti9JzJbq0wZm\nf/4zCL4zWiZsDCv2P7bZWWkRNQXO6FbTfBI9Uoh8HUTs/VcpCNNdOlO/DjCusWRY\nUZ8jd2kJCTfttjdCKMwwJK/vhE0Fyl7JePJZAquSlvY6pfby7/yG56kqZd3MkYdt\nHwnK3SK1vbOjzFMT6GdrB8DHONwGzjniTGOrDzpD8YWBpPdE2vkqbMuKdm/qtMug\n66bHQt87n/d9I+NNmaBn2Ucezzlp38CYwmeELLFnGben2f8fN0z2pfjeVInB\n-----END CERTIFICATE-----\n"
+        ],
+        "sp_entity_id": "urn:strata:keycloak-saml",
+        "email_attribute": "email",
+        "name_attribute": "name",
+        "email_verified": true,
+        "domains": ["keycloak.example"],
+        "create_on_first_sign_in": true,
+        "default_role": "author"
+      }
+    ]
+  }
+}
