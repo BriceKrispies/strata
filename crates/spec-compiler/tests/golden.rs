@@ -438,7 +438,7 @@ fn the_crate_has_the_expected_files_each_with_a_header() {
             "src/validations.rs"
         ]
     );
-    for file in &files {
+    for file in files {
         let first = file.contents.lines().next().unwrap();
         assert!(
             HEADER_MARKERS.iter().any(|m| first.starts_with(m)),
