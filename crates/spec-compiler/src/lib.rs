@@ -42,6 +42,8 @@ mod language_js_text;
 pub mod layer_expr;
 pub mod layer_values;
 pub mod layers;
+pub mod lint;
+mod lint_text;
 pub mod load;
 pub mod model_core;
 pub mod naming;

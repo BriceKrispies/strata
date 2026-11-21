@@ -15,6 +15,8 @@
 //      specification, which refuses a product that does not pass (WG-4989).
 //      check-catalogue does the same for specifications/catalogue.md, check-deploy for deploy/, and check-conformance for the
 //      contract conformance suite (crates/bff/tests/conformance/generated) and its fixtures.
+//      specc lint applies the requirement wording rules to every requirement; the violations that exist
+//      are the `lint` exemptions of scripts/gate-exemptions.json, and a stale exemption fails the step.
 //   0b. The test tiers (scripts/test-tiers.json): a test binary in neither tier fails. Runs with --no-test too.
 //   1. cargo test --workspace, lake build, node --test (web kernel and client tests), the generated
 //      share tests (scripts/generated-share.test.mjs), tsc, cargo fmt --check, cargo clippy with
@@ -346,6 +348,16 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
   });
   check('specc check-conformance (crates/bff/tests/conformance/fixtures/generated is generated from the conformance fixtures)', conformanceFixtures.ok,
     conformanceFixtures.ok ? 'up to date' : `${exitText(conformanceFixtures)}: ${lastLine(conformanceFixtures.out)}; run npm run generate and commit`);
+
+  // The requirement wording lint. Known violations are the `lint` list of scripts/gate-exemptions.json
+  // (WG-5369 clears them); specc fails on a finding no exemption covers and on an exemption no finding matches.
+  const lint = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'lint', '--spec', 'specifications/spec.jsonc', '--exemptions', 'scripts/gate-exemptions.json'], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc lint (requirements follow the wording rules; known violations are exempt in scripts/gate-exemptions.json)', lint.ok,
+    lint.ok ? lastLine(lint.out) : `${exitText(lint)}: ${lastLine(lint.out)}`);
+  if (!lint.ok) detail(lint.stdout.split(/\r?\n/).filter(Boolean).slice(0, 40));
 }
 
 // ---------------------------------------------------------------------------------------------

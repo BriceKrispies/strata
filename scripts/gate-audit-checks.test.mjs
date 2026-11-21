@@ -92,7 +92,7 @@ test('a checkout without the files a check reads fails the check', () => {
 
 test('the exemption file of the gate is well formed', () => {
   const file = JSON.parse(readFileSync(resolve(import.meta.dirname, 'gate-exemptions.json'), 'utf8'));
-  assert.deepEqual(Object.keys(file).sort(), ['bffRoutes', 'env', 'handlers', 'paths', 'tables']);
+  assert.deepEqual(Object.keys(file).sort(), ['bffRoutes', 'env', 'handlers', 'lint', 'paths', 'tables']);
   for (const groups of Object.values(file)) {
     for (const group of groups) {
       assert.match(group.reason, /\S/);

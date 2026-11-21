@@ -1,0 +1,16 @@
+{
+  "exegra": "0.1",
+  "system": {"id":"s","name":"S"},
+  "goals": [
+    {"id":"g-1","statement":"A caller can be refused with a reason."}
+  ],
+  "constraints": [
+    {"id":"k-1","statement":"The kernel reads no clock."}
+  ],
+  "boundaries": [
+    {"id":"b-1","name":"Kernel interface"}
+  ],
+  "claims": [
+    {"id":"r-1","kind":"requirement","statement":"A rejected request SHALL name the failed check.","rationale":"People act on the reason.","evaluate":{"method":"example"},"ref":"R-1","lifecycle":"active","boundary":"b-1","boundaryDetail":"`kernel::decide`","traces":["g-1","k-1"],"milestone":1,"seam":1}
+  ]
+}
