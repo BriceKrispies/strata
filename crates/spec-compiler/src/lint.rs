@@ -16,7 +16,7 @@
 //! | `lint.boundary` | a requirement that names no boundary, or one the specification does not define |
 //! | `lint.vague-word` | a word that is not an outcome: correctly, properly, efficient(ly), robust(ly), appropriate(ly), as expected, user-friendly, fast, secure(ly) |
 //! | `lint.universal-method` | "never", "always", "whenever", "for every/all/any/each" or "no ... ever" verified by `example` or `scenario` instead of `property`, `proof` or `conformance` |
-//! | `lint.limit-method` | a number with a unit, or a count or size limit, in a requirement whose method is not `budget` |
+//! | `lint.limit-method` | a performance bound (a percentile, a time an operation takes, a rate) in a requirement whose method is not `budget`; an enforced limit, retention period or expiry is shown by an example and is not one |
 //! | `lint.budget-row` | a `budget` requirement with no row in the budget measurement case table (silent when the specification has no such table) |
 //! | `lint.untraced` | a goal or constraint that no active requirement traces |
 //! | `lint.milestone` | a milestone that is not a positive integer, or a seam that is not one or is later than the milestone |
@@ -32,7 +32,7 @@ use serde_json::Value;
 
 use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
 use crate::jsonc;
-use crate::lint_text::{find_limit, find_no_ever, find_word, mask_code, tokens};
+use crate::lint_text::{find_no_ever, find_performance_bound, find_word, mask_code, tokens};
 
 /// The rule of a statement that is not one SHALL.
 pub const ONE_SHALL: &str = "lint.one-shall";
@@ -429,13 +429,13 @@ pub fn lint(path: &str, text: &str) -> Result<Vec<Finding>, Vec<Diagnostic>> {
             }
         }
         if method != "budget" {
-            if let Some((_, phrase)) = find_limit(&mask_code(statement)) {
+            if let Some((_, phrase)) = find_performance_bound(&mask_code(statement)) {
                 sink.add(
                     LIMIT_METHOD,
                     "claims",
                     id,
                     format!(
-                        "the limit \"{phrase}\" needs method budget, not {}; change the method and add a budget measurement row",
+                        "the performance bound \"{phrase}\" needs method budget, not {}; change the method and add a budget measurement row",
                         if method.is_empty() { "none" } else { method }
                     ),
                 );

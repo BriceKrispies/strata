@@ -198,6 +198,6 @@ hand, and then run the gate. The rules for wording a requirement that come up mo
 
 - one SHALL per requirement, stated at a boundary, with no implementation detail
 - "for every", "never" and "always" need a property, a proof or a conformance table
-- a number with a unit needs the method `budget` and a row in the budget measurement table
+- a performance bound (a percentile, a time an operation takes, a rate) needs the method `budget` and a row in the budget measurement table; an enforced limit, a retention period or an expiry is shown by an example at the bound
 - every goal and every constraint is traced by at least one requirement
 - a behaviour claim declares a run that violates it, or Exegra reports it as inconclusive

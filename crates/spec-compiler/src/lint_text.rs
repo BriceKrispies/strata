@@ -102,28 +102,6 @@ const TIME_UNITS: &[&str] = &[
     "millisecond",
     "milliseconds",
 ];
-const SIZE_UNITS: &[&str] = &[
-    "b",
-    "kb",
-    "mb",
-    "gb",
-    "tb",
-    "kib",
-    "mib",
-    "gib",
-    "tib",
-    "byte",
-    "bytes",
-    "kilobyte",
-    "kilobytes",
-    "megabyte",
-    "megabytes",
-    "gigabyte",
-    "gigabytes",
-    "terabyte",
-    "terabytes",
-    "percent",
-];
 /// Number words. `a` and `an` are not among them: "a second copy" is not a limit.
 const NUMBER_WORDS: &[&str] = &[
     "zero",
@@ -159,118 +137,40 @@ const NUMBER_WORDS: &[&str] = &[
     "million",
     "billion",
 ];
-const LIMIT_PHRASES: &[&str] = &[
-    "at most",
-    "at least",
-    "no more than",
-    "no fewer than",
-    "no less than",
-    "fewer than",
-    "more than",
-    "less than",
-    "up to",
-    "exceed",
-    "exceeds",
-    "exceeding",
-];
-
-/// The first time, size or count limit in `s` (already code-masked): a number with a unit (`5 ms`,
-/// `10MB`, `90%`, `five milliseconds`), or a number after `at most`, `no more than` and the like
-/// (digits or number words). The word `one` after a phrase is not counted (`at least one retry` is
-/// an existence, not a bound). Returns the byte offset and the phrase.
-pub fn find_limit(s: &str) -> Option<(usize, String)> {
-    match (find_limit_digits(s), find_limit_words(s)) {
-        (Some(a), Some(b)) => Some(if a.0 <= b.0 { a } else { b }),
-        (a, b) => a.or(b),
-    }
-}
-
-/// The start of the limit phrase that ends right before `at` in `s`, if one does.
-fn phrase_before(s: &str, at: usize) -> Option<(usize, &'static str)> {
-    let before = s[..at].trim_end().to_lowercase();
-    for p in LIMIT_PHRASES {
-        if before.ends_with(p)
-            && !before[..before.len() - p.len()]
-                .chars()
-                .next_back()
-                .is_some_and(is_word_char)
-        {
-            return Some((before.len() - p.len(), p));
-        }
-    }
-    None
-}
-
-/// A number word with a time or size unit, or a limit phrase directly before it.
-fn find_limit_words(s: &str) -> Option<(usize, String)> {
+/// The first performance bound in `s` (already code-masked): a bound on how the system performs that
+/// has to be measured rather than shown at one input. That is a percentile (`99th percentile`,
+/// `p99`), a time an operation takes (`within 5 seconds`, `within five milliseconds`) or a rate
+/// (`100 requests per second`). An enforced limit (`refuses more than 200 ids`), a retention period
+/// or an expiry time is not one: an example at the bound shows it exactly. Returns the byte offset
+/// and the phrase.
+pub fn find_performance_bound(s: &str) -> Option<(usize, String)> {
     let toks = tokens(s);
+    let is_number = |w: &str| w.chars().all(|c| c.is_ascii_digit()) || NUMBER_WORDS.contains(&w);
     for (k, (off, w)) in toks.iter().enumerate() {
-        if !NUMBER_WORDS.contains(&w.as_str()) {
-            continue;
+        if w == "percentile" {
+            return Some((*off, w.clone()));
         }
-        let end = off + w.len();
-        if let Some((noff, nw)) = toks.get(k + 1) {
-            let gap = &s[end..*noff];
-            if gap.chars().all(|c| c == ' ')
-                && (TIME_UNITS.contains(&nw.as_str()) || SIZE_UNITS.contains(&nw.as_str()))
-            {
-                return Some((*off, format!("{w} {nw}")));
+        if w.len() >= 3 && w.starts_with('p') && w[1..].chars().all(|c| c.is_ascii_digit()) {
+            return Some((*off, w.clone()));
+        }
+        if w == "within" {
+            if let (Some((_, n)), Some((_, u))) = (toks.get(k + 1), toks.get(k + 2)) {
+                if is_number(n) && TIME_UNITS.contains(&u.as_str()) {
+                    return Some((*off, format!("within {n} {u}")));
+                }
             }
         }
-        if w == "one" {
-            continue;
-        }
-        if let Some((start, p)) = phrase_before(s, *off) {
-            return Some((start, format!("{p} {w}")));
-        }
-    }
-    None
-}
-
-/// The digit form of [`find_limit`].
-fn find_limit_digits(s: &str) -> Option<(usize, String)> {
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if !bytes[i].is_ascii_digit() || (i > 0 && bytes[i - 1].is_ascii_alphanumeric()) {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'_' || bytes[i] == b',')
-        {
-            i += 1;
-        }
-        if i + 1 < bytes.len() && bytes[i] == b'.' && bytes[i + 1].is_ascii_digit() {
-            i += 1;
-            while i < bytes.len() && bytes[i].is_ascii_digit() {
-                i += 1;
+        if w == "per" {
+            if let Some((_, u)) = toks.get(k + 1) {
+                let rate_unit = matches!(u.as_str(), "second" | "minute" | "hour");
+                let counted = toks[k.saturating_sub(3)..k]
+                    .iter()
+                    .any(|(_, n)| is_number(n));
+                if rate_unit && counted {
+                    return Some((*off, format!("per {u}")));
+                }
             }
         }
-        let num_end = i;
-        let mut j = i;
-        if j < bytes.len() && bytes[j] == b' ' {
-            j += 1;
-        }
-        let unit: String = s[j..]
-            .chars()
-            .take_while(|c| c.is_alphabetic() || *c == '%' || *c == '\u{b5}')
-            .collect();
-        let lower = unit.to_lowercase();
-        let tight = j == num_end;
-        let has_unit = !unit.is_empty()
-            && (unit == "%"
-                || ((TIME_UNITS.contains(&lower.as_str()) || SIZE_UNITS.contains(&lower.as_str()))
-                    // A single letter unit must touch the number (`5s`; `2 b` is prose).
-                    && (lower.len() > 1 || tight)));
-        if has_unit {
-            let end = j + unit.len();
-            return Some((start, s[start..end].to_string()));
-        }
-        if let Some((phrase_start, p)) = phrase_before(s, start) {
-            return Some((phrase_start, format!("{p} {}", &s[start..num_end])));
-        }
-        i = num_end.max(i + 1);
     }
     None
 }
@@ -280,17 +180,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn limits_are_found_with_a_unit_or_after_a_phrase() {
+    fn performance_bounds_are_measured_quantities_not_enforced_limits() {
+        let b = |s: &str| find_performance_bound(s).map(|l| l.1);
         assert_eq!(
-            find_limit("within 30 seconds").map(|l| l.1),
-            Some("30 seconds".into())
+            b("SHALL answer within 5 seconds"),
+            Some("within 5 seconds".into())
         );
+        assert_eq!(b("at the 99th percentile"), Some("percentile".into()));
         assert_eq!(
-            find_limit("at most three retries").map(|l| l.1),
-            Some("at most three".into())
+            b("serve 100 requests per second"),
+            Some("per second".into())
         );
-        assert_eq!(find_limit("at least one retry"), None);
-        assert_eq!(find_limit("a second copy"), None);
+        assert_eq!(b("SHALL refuse a read that names more than 200 ids"), None);
+        assert_eq!(b("keep an idempotency key for 24 hours"), None);
+        assert_eq!(b("within the bounds that the platform defines"), None);
     }
 
     #[test]

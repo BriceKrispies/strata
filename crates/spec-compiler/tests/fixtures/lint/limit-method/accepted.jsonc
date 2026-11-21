@@ -14,6 +14,7 @@
     {"id":"cases-budget-measurement","path":"x","title":"Budget measurement","body":"# Budget measurement\n\n## Cases\n\n| Case | Requirement | Measure | Bound | Measured on |\n|---|---|---|---|---|\n| answer-time | R-1 | time to answer | 5 seconds | the local stack |"}
   ],
   "claims": [
-    {"id":"r-1","kind":"requirement","statement":"A request SHALL complete within 5 seconds.","rationale":"People act on the reason.","evaluate":{"method":"budget"},"ref":"R-1","lifecycle":"active","boundary":"b-1","boundaryDetail":"`kernel::decide`","traces":["g-1","k-1"],"milestone":1}
+    {"id":"r-1","kind":"requirement","statement":"A request SHALL complete within 5 seconds.","rationale":"People act on the reason.","evaluate":{"method":"budget"},"ref":"R-1","lifecycle":"active","boundary":"b-1","boundaryDetail":"`kernel::decide`","traces":["g-1","k-1"],"milestone":1},
+    {"id":"r-2","kind":"requirement","statement":"The kernel SHALL refuse a read that names more than 200 ids, and keep an idempotency key for 24 hours.","rationale":"An enforced limit is shown exactly by an example at the bound.","evaluate":{"method":"example"},"ref":"R-2","lifecycle":"active","boundary":"b-1","boundaryDetail":"`kernel::decide`","traces":["g-1","k-1"],"milestone":1}
   ]
 }
