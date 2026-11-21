@@ -12,75 +12,7 @@
     }
   },
 
-  "types": [
-    { "id": "taxonomy__region_level", "name": "Region level", "kind": "enum",
-      "values": ["world", "continent", "country", "region", "district", "city", "postcode"], "description": "The seven levels of the region hierarchy, from the whole world down to a postcode." },
-    { "id": "taxonomy__tag_kind", "name": "Tag kind", "kind": "enum",
-      "values": ["topic", "product", "channel", "campaign", "internal"], "description": "What a tag describes." },
-    { "id": "taxonomy__audience_kind", "name": "Audience kind", "kind": "enum",
-      "values": ["segment", "list", "persona"], "description": "How an audience is formed." },
-    { "id": "taxonomy__category_status", "name": "Category status", "kind": "enum",
-      "values": ["proposed", "active", "retired"], "description": "Where a category is in its life." },
-    { "id": "taxonomy__alias_source", "name": "Alias source", "kind": "enum",
-      "values": ["import", "editor", "api"], "description": "How a tag alias was created." },
-    { "id": "taxonomy__category_path", "name": "Category path", "kind": "struct",
-      "fields": [ { "name": "segment", "type": "string" }, { "name": "depth", "type": "u32" } ], "description": "One step of a category path from the root." },
-    { "id": "taxonomy__region_bounds", "name": "Region bounds", "kind": "struct",
-      "fields": [ { "name": "north", "type": "string" }, { "name": "south", "type": "string" }, { "name": "east", "type": "string" }, { "name": "west", "type": "string" } ], "description": "The bounding box of a region, in decimal degrees." },
-    { "id": "taxonomy__audience_profile", "name": "Audience profile", "kind": "struct",
-      "fields": [ { "name": "age_band", "type": "string" }, { "name": "region", "type": "string" }, { "name": "days_since_visit", "type": "u32" } ], "description": "The attributes an audience is matched on." },
-    { "id": "taxonomy__tag_usage", "name": "Tag usage", "kind": "struct",
-      "fields": [ { "name": "tag", "type": "string" }, { "name": "uses", "type": "u32" } ], "description": "How often a tag is applied." }
-  ],
 
-  "records": [
-    { "id": "taxonomy__category_rec", "name": "Category", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "name", "type": "string" },
-        { "name": "slug", "type": "string" },
-        { "name": "status", "type": "taxonomy__category_status" },
-        { "name": "parent", "type": "u64", "refersTo": "taxonomy__category_rec", "onDelete": "set-null", "optional": true } ],
-      "retention": "Until a curator deletes the category.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "taxonomy__tag_rec", "name": "Tag", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "label", "type": "string" },
-        { "name": "kind", "type": "taxonomy__tag_kind" },
-        { "name": "status", "type": "string" } ],
-      "retention": "Until the tag is merged into another or deleted by a steward.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "taxonomy__tag_alias_rec", "name": "Tag alias", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "tag", "type": "u64", "refersTo": "taxonomy__tag_rec", "onDelete": "restrict" },
-        { "name": "alias", "type": "string" },
-        { "name": "source", "type": "taxonomy__alias_source" } ],
-      "retention": "Kept while the tag it names exists.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "taxonomy__region_rec", "name": "Region", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "name", "type": "string" },
-        { "name": "level", "type": "taxonomy__region_level" },
-        { "name": "continent", "type": "string" },
-        { "name": "region_code", "type": "string" },
-        { "name": "parent", "type": "u64", "refersTo": "taxonomy__region_rec", "onDelete": "set-null", "optional": true } ],
-      "retention": "Until the region is retired from the hierarchy.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "taxonomy__audience_rec", "name": "Audience", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "label", "type": "string" },
-        { "name": "kind", "type": "taxonomy__audience_kind" },
-        { "name": "age_band", "type": "string" },
-        { "name": "region", "type": "string" },
-        { "name": "active", "type": "bool" },
-        { "name": "days_since_visit", "type": "u32" } ],
-      "retention": "Until a curator removes the audience.",
-      "schemaVersion": 1, "realisation": "target" }
-  ],
 
   "objects": [
     { "id": "taxonomy__category", "label": "Category",
@@ -110,7 +42,7 @@
       "retention": { "days": 3650, "from": "Created" } },
     { "id": "taxonomy__audience", "label": "Audience",
       "fields": {
-        "label": { "id": "label", "label": "Label", "ty": "Str", "required": true, "unique": false },
+        "label": { "id": "label", "label": "Label", "ty": "Str", "required": true, "unique": true },
         "kind": { "id": "kind", "label": "Kind", "ty": "Str", "required": true, "unique": false },
         "age_band": { "id": "age_band", "label": "Age band", "ty": "Str", "required": false, "unique": false },
         "region": { "id": "region", "label": "Region", "ty": "Str", "required": false, "unique": false },
@@ -132,7 +64,9 @@
     { "id": "taxonomy__category_curator", "name": "Category curator", "description": "Maintains the category tree for the whole tenant.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["taxonomy__browse", "taxonomy__curate"] },
     { "id": "taxonomy__region_editor_emea", "name": "Region editor, EMEA", "description": "Edits the European regions only.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["taxonomy__browse", "taxonomy__region_edit"] },
     { "id": "taxonomy__region_editor_amer", "name": "Region editor, Americas", "description": "Edits the regions of North and South America only.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["taxonomy__browse", "taxonomy__region_edit"] },
-    { "id": "taxonomy__tag_steward", "name": "Tag steward", "description": "Merges duplicate tags and retires unused ones.", "level": "tenant", "holders": ["person"], "capabilities": ["taxonomy__browse", "taxonomy__curate"] }
+    { "id": "taxonomy__tag_steward", "name": "Tag steward", "description": "Merges duplicate tags and retires unused ones.", "level": "tenant", "holders": ["person"], "capabilities": ["taxonomy__browse", "taxonomy__curate"] },
+    { "id": "taxonomy__member", "name": "Member", "description": "Any member of the tenant who reads what the product shares with everyone.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": [] }
   ],
 
   "capabilities": [
@@ -146,29 +80,35 @@
     { "id": "taxonomy__emea_regions", "role": "taxonomy__region_editor_emea", "resource": { "Object": "taxonomy__region" }, "actions": ["Create", "Read", "Update"], "condition": "record.continent == 'europe'" },
     { "id": "taxonomy__amer_regions", "role": "taxonomy__region_editor_amer", "resource": { "Object": "taxonomy__region" }, "actions": ["Create", "Read", "Update"], "condition": "record.continent == 'americas'" },
     { "id": "taxonomy__steward_tags", "role": "taxonomy__tag_steward", "resource": { "Object": "taxonomy__tag" }, "actions": ["Read", "Update", "Delete"] },
-    { "id": "taxonomy__member_active_audiences", "role": "member", "resource": { "Object": "taxonomy__audience" }, "actions": ["Read"], "condition": "record.active == true" }
+    { "id": "taxonomy__member_active_audiences", "role": "taxonomy__member", "resource": { "Object": "taxonomy__audience" }, "actions": ["Read"], "condition": "record.active == true" }
   ],
 
   "queries": [
-    { "id": "taxonomy__categories_all", "object": "taxonomy__category", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 1000 },
+    { "id": "taxonomy__categories_all", "object": "taxonomy__category", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 },
     { "id": "taxonomy__regions_world", "object": "taxonomy__region", "filter": "record.level == 'world'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 10 },
     { "id": "taxonomy__regions_continent", "object": "taxonomy__region", "filter": "record.level == 'continent'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 20 },
-    { "id": "taxonomy__regions_country", "object": "taxonomy__region", "filter": "record.level == 'country'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 300 },
-    { "id": "taxonomy__regions_region", "object": "taxonomy__region", "filter": "record.level == 'region'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 1000 },
-    { "id": "taxonomy__regions_district", "object": "taxonomy__region", "filter": "record.level == 'district'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 5000 },
-    { "id": "taxonomy__regions_city", "object": "taxonomy__region", "filter": "record.level == 'city'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 5000 },
-    { "id": "taxonomy__regions_postcode", "object": "taxonomy__region", "filter": "record.level == 'postcode'", "params": [], "order": [ { "field": "region_code", "descending": false } ], "limit": 500 }
+    { "id": "taxonomy__regions_country", "object": "taxonomy__region", "filter": "record.level == 'country'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 },
+    { "id": "taxonomy__regions_region", "object": "taxonomy__region", "filter": "record.level == 'region'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 },
+    { "id": "taxonomy__regions_district", "object": "taxonomy__region", "filter": "record.level == 'district'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 },
+    { "id": "taxonomy__regions_city", "object": "taxonomy__region", "filter": "record.level == 'city'", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 },
+    { "id": "taxonomy__regions_postcode", "object": "taxonomy__region", "filter": "record.level == 'postcode'", "params": [], "order": [ { "field": "region_code", "descending": false } ], "limit": 200 }
   ],
 
   "views": [
     { "id": "taxonomy__category_board", "route": "/taxonomy/board", "title": "Category board",
-      "sections": { "main": { "query": "taxonomy__categories_all", "args": {}, "include": [], "markdown": [], "single": false } } }
+      "sections": { "main": { "query": "taxonomy__categories_all", "args": {}, "include": [], "markdown": [], "single": false } } },
+    {"id":"taxonomy__category_tree_view","route":"/taxonomy/categories","title":"Categories","sections":{"main":{"query":"taxonomy__categories_all","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"taxonomy__category_editor_view","route":"/taxonomy/categories/:category_id","title":"Edit category","sections":{"main":{"query":"taxonomy__categories_all","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"taxonomy__region_list_view","route":"/taxonomy/regions","title":"Regions","sections":{"main":{"query":"taxonomy__regions_region","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"taxonomy__region_editor_view","route":"/taxonomy/regions/:region_id","title":"Edit region","sections":{"main":{"query":"taxonomy__regions_region","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"taxonomy__tag_list_view","route":"/taxonomy/tags","title":"Tags","sections":{"main":{"query":"taxonomy__categories_all","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"taxonomy__audience_list_view","route":"/taxonomy/audiences","title":"Audiences","sections":{"main":{"query":"taxonomy__categories_all","args":{},"include":[],"markdown":[],"single":false}}}
   ],
 
   "segments": [
-    { "id": "taxonomy__active_adults", "name": "Active adults", "subject-type": "taxonomy__audience", "predicate": "record.active == true and record.age_band == 'adult'" },
-    { "id": "taxonomy__lapsed_audience", "name": "Lapsed audience", "subject-type": "taxonomy__audience", "predicate": "record.days_since_visit > 90" },
-    { "id": "taxonomy__european_audience", "name": "European audience", "subject-type": "taxonomy__audience", "predicate": "record.region == 'europe'" }
+    { "id": "taxonomy__active_adults", "name": "Active adults", "subject-type": "taxonomy__audience", "principal-field": "label", "predicate": "record.active == true and record.age_band == 'adult'" },
+    { "id": "taxonomy__lapsed_audience", "name": "Lapsed audience", "subject-type": "taxonomy__audience", "principal-field": "label", "predicate": "record.days_since_visit > 90" },
+    { "id": "taxonomy__european_audience", "name": "European audience", "subject-type": "taxonomy__audience", "principal-field": "label", "predicate": "record.region == 'europe'" }
   ],
 
   "settings": [
@@ -176,72 +116,14 @@
     { "id": "taxonomy__default_region", "label": "Default region code", "type": "string", "default": {"Str": "world"}, "levels": ["tenant", "team"] }
   ],
 
-  "contracts": [
-    { "id": "taxonomy__read_category_tree", "name": "Read the category tree", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member with browse access", "requires": ["taxonomy__browse"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "root", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the category tree below the root named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "taxonomy__read_region_list", "name": "Read the region list", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member with browse access", "requires": ["taxonomy__browse"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "level", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the regions at the level named, in name order."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "taxonomy__read_tag_list", "name": "Read the tag list", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member with browse access", "requires": ["taxonomy__browse"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "kind", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the tags of the kind named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "taxonomy__read_audience_list", "name": "Read the audience list", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in member with browse access", "requires": ["taxonomy__browse"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "kind", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the audiences of the kind named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "taxonomy__submit_category", "name": "Save a category", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in curator", "requires": ["taxonomy__curate"] },
-      "idempotent": false, "timeoutMs": 3000,
-      "inputs": [ { "name": "name", "type": "string" }, { "name": "slug", "type": "string" }, { "name": "parent", "type": "string" }, { "name": "description", "type": "string" } ],
-      "outputs": [ { "name": "category", "type": "u64" } ],
-      "postconditions": ["The category exists with the name, slug and parent given."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "taxonomy__apply_move", "name": "Move a category", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in curator", "requires": ["taxonomy__curate"] },
-      "idempotent": true, "timeoutMs": 3000,
-      "inputs": [ { "name": "category", "type": "string" }, { "name": "parent", "type": "string" } ],
-      "outputs": [ { "name": "moved", "type": "bool" } ],
-      "postconditions": ["The category has the parent named, or none."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "taxonomy__apply_merge", "name": "Merge a duplicate tag", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in tag steward", "requires": ["taxonomy__curate"] },
-      "idempotent": false, "timeoutMs": 5000,
-      "inputs": [ { "name": "keep", "type": "string" }, { "name": "drop", "type": "string" } ],
-      "outputs": [ { "name": "merged", "type": "bool" } ],
-      "postconditions": ["Only the kept tag remains live."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "taxonomy__submit_region", "name": "Save a region", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in regional editor", "requires": ["taxonomy__region_edit"] },
-      "idempotent": false, "timeoutMs": 3000,
-      "inputs": [ { "name": "name", "type": "string" }, { "name": "region_code", "type": "string" }, { "name": "level", "type": "string" }, { "name": "continent", "type": "string" }, { "name": "parent", "type": "string" } ],
-      "outputs": [ { "name": "region", "type": "u64" } ],
-      "postconditions": ["The region exists at the level and under the parent given."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
-  ],
 
   "screens": [
-    { "id": "taxonomy__category_tree", "name": "Category tree", "route": "/taxonomy/categories", "viewModel": "taxonomy__read_category_tree", "kind": "taxonomy.list", "auth": "session", "description": "The category tree, with parents and children.", "viewName": "taxonomy_category_tree", "title": "Categories" },
-    { "id": "taxonomy__category_editor", "name": "Category editor", "route": "/taxonomy/categories/:categoryId", "viewModel": "taxonomy__read_category_tree", "kind": "taxonomy.editor", "auth": "session", "description": "Edit one category and its parent.", "viewName": "taxonomy_category_editor", "title": "Edit category" },
-    { "id": "taxonomy__region_list", "name": "Region list", "route": "/taxonomy/regions", "viewModel": "taxonomy__read_region_list", "kind": "taxonomy.list", "auth": "session", "description": "The regions of the hierarchy, by level.", "viewName": "taxonomy_region_list", "title": "Regions" },
-    { "id": "taxonomy__region_editor", "name": "Region editor", "route": "/taxonomy/regions/:regionId", "viewModel": "taxonomy__read_region_list", "kind": "taxonomy.editor", "auth": "session", "description": "Edit one region and its parent.", "viewName": "taxonomy_region_editor", "title": "Edit region" },
-    { "id": "taxonomy__tag_list", "name": "Tag list", "route": "/taxonomy/tags", "viewModel": "taxonomy__read_tag_list", "kind": "taxonomy.list", "auth": "session", "description": "The tags in use, with a merge action for duplicates.", "viewName": "taxonomy_tag_list", "title": "Tags" },
-    { "id": "taxonomy__audience_list", "name": "Audience list", "route": "/taxonomy/audiences", "viewModel": "taxonomy__read_audience_list", "kind": "taxonomy.list", "auth": "session", "description": "The audiences defined for the tenant.", "viewName": "taxonomy_audience_list", "title": "Audiences" }
+    { "id": "taxonomy__category_tree", "name": "Category tree", "route": "/taxonomy/categories", "viewModel": "taxonomy__category_tree_view", "kind": "taxonomy.list", "auth": "session", "description": "The category tree, with parents and children.", "viewName": "taxonomy_category_tree", "title": "Categories" },
+    { "id": "taxonomy__category_editor", "name": "Category editor", "route": "/taxonomy/categories/:category_id", "viewModel": "taxonomy__category_editor_view", "kind": "taxonomy.editor", "auth": "session", "description": "Edit one category and its parent.", "viewName": "taxonomy_category_editor", "title": "Edit category" },
+    { "id": "taxonomy__region_list", "name": "Region list", "route": "/taxonomy/regions", "viewModel": "taxonomy__region_list_view", "kind": "taxonomy.list", "auth": "session", "description": "The regions of the hierarchy, by level.", "viewName": "taxonomy_region_list", "title": "Regions" },
+    { "id": "taxonomy__region_editor", "name": "Region editor", "route": "/taxonomy/regions/:region_id", "viewModel": "taxonomy__region_editor_view", "kind": "taxonomy.editor", "auth": "session", "description": "Edit one region and its parent.", "viewName": "taxonomy_region_editor", "title": "Edit region" },
+    { "id": "taxonomy__tag_list", "name": "Tag list", "route": "/taxonomy/tags", "viewModel": "taxonomy__tag_list_view", "kind": "taxonomy.list", "auth": "session", "description": "The tags in use, with a merge action for duplicates.", "viewName": "taxonomy_tag_list", "title": "Tags" },
+    { "id": "taxonomy__audience_list", "name": "Audience list", "route": "/taxonomy/audiences", "viewModel": "taxonomy__audience_list_view", "kind": "taxonomy.list", "auth": "session", "description": "The audiences defined for the tenant.", "viewName": "taxonomy_audience_list", "title": "Audiences" }
   ],
 
   "forms": [
@@ -310,21 +192,25 @@
   "operations": [
     { "id": "taxonomy__move_category", "label": "Move a category under a new parent",
       "conditions": [],
-      "inputs": [ { "name": "category", "ty": "Str", "required": true, "label": "The category" },
+      "inputs": [ { "name": "category", "ty": { "Ref": { "target": "taxonomy__category", "on-delete": "Restrict" } }, "required": true, "label": "The category" },
                   { "name": "parent", "ty": "Str", "required": false, "label": "The new parent" } ],
       "invokers": { "signed-in": true, "roles": ["taxonomy__category_curator"] },
       "subject": { "object": "taxonomy__category", "input": "category" },
       "steps": [
         { "UpdateRecord": { "id": "set_parent", "object": "taxonomy__category", "record": "record.$id", "fields": { "parent": "param.parent" } } } ] },
     { "id": "taxonomy__merge_tags", "label": "Merge a duplicate tag into another",
-      "inputs": [ { "name": "keep", "ty": "Str", "required": true, "label": "The tag to keep" },
+      "inputs": [ { "name": "keep", "ty": { "Ref": { "target": "taxonomy__tag", "on-delete": "Restrict" } }, "required": true, "label": "The tag to keep" },
                   { "name": "drop", "ty": "Str", "required": true, "label": "The duplicate to remove" } ],
       "invokers": { "signed-in": true, "roles": ["taxonomy__tag_steward"] },
       "subject": { "object": "taxonomy__tag", "input": "keep" },
       "conditions": [ { "id": "distinct", "expr": "param.keep != param.drop", "error": "same-tag", "message": "Choose two different tags." } ],
       "steps": [
         { "UpdateRecord": { "id": "mark_kept", "object": "taxonomy__tag", "record": "record.$id", "fields": { "status": "'canonical'" } } },
-        { "DeleteRecord": { "id": "remove_duplicate", "object": "taxonomy__tag", "record": "param.drop" } } ] }
+        { "DeleteRecord": { "id": "remove_duplicate", "object": "taxonomy__tag", "record": "param.drop" } } ] },
+    {"id":"taxonomy__submit_category","label":"Save a category","inputs":[{"name":"name","ty":"Str","required":false,"label":"name"},{"name":"slug","ty":"Str","required":false,"label":"slug"},{"name":"parent","ty":"Str","required":false,"label":"parent"},{"name":"description","ty":"Str","required":false,"label":"description"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"taxonomy__apply_move","label":"Move a category","inputs":[{"name":"category","ty":"Str","required":false,"label":"category"},{"name":"parent","ty":"Str","required":false,"label":"parent"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"taxonomy__submit_region","label":"Save a region","inputs":[{"name":"name","ty":"Str","required":false,"label":"name"},{"name":"region_code","ty":"Str","required":false,"label":"region code"},{"name":"level","ty":"Str","required":false,"label":"level"},{"name":"continent","ty":"Str","required":false,"label":"continent"},{"name":"parent","ty":"Str","required":false,"label":"parent"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"taxonomy__apply_merge","label":"Merge a duplicate tag","inputs":[{"name":"keep","ty":"Str","required":false,"label":"keep"},{"name":"drop","ty":"Str","required":false,"label":"drop"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]}
   ],
 
   "triggers": [
@@ -349,14 +235,9 @@
     { "id": "taxonomy__category_notice", "title": "Category created", "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"A new category was created.\"}]}]" }
   ],
 
-  "events": [
-    { "id": "taxonomy__category_moved_event", "name": "Category moved", "description": "A category was given a new parent.", "payload": [ { "name": "category", "type": "string" }, { "name": "parent", "type": "string" } ] },
-    { "id": "taxonomy__tags_merged_event", "name": "Tags merged", "description": "A duplicate tag was merged into another.", "payload": [ { "name": "keep", "type": "string" }, { "name": "drop", "type": "string" } ] },
-    { "id": "taxonomy__region_changed_event", "name": "Region changed", "description": "A region was created or moved in the hierarchy.", "payload": [ { "name": "region", "type": "string" }, { "name": "level", "type": "string" } ] }
-  ],
 
   "errorMessages": [
-    { "id": "taxonomy__error_code_taken", "on": "check", "kinds": ["unique"], "text": "Another region already uses this code.", "field": "region_code" },
+    { "id": "taxonomy__error_code_taken", "on": "check", "kinds": ["unique"], "text": "Another region already uses this code.", "field": { "name": "region_code" } },
     { "id": "taxonomy__error_tree_changed", "on": "error", "kinds": ["conflict"], "text": "The category tree changed while you were editing. Reload to see the latest version." }
   ],
 

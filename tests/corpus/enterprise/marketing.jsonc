@@ -13,72 +13,7 @@
   },
 
   // Data model: campaigns and journeys refer to each other, so the cycle is in the records.
-  "records": [
-    { "id": "marketing__campaign_rec", "name": "Campaign", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "journey", "type": "u64", "refersTo": "marketing__journey_rec", "onDelete": "set-null", "optional": true },
-        { "name": "title", "type": "string" },
-        { "name": "owner_name", "type": "string" },
-        { "name": "state", "type": "marketing__campaign_state" },
-        { "name": "channel", "type": "marketing__channel" },
-        { "name": "utm", "type": "marketing__utm", "optional": true } ],
-      "retention": "Ended campaigns are kept for two years for reporting, then removed.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "marketing__journey_rec", "name": "Journey", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "campaign", "type": "u64", "refersTo": "marketing__campaign_rec", "onDelete": "set-null", "optional": true },
-        { "name": "title", "type": "string" },
-        { "name": "state", "type": "marketing__journey_state" },
-        { "name": "review", "type": "marketing__review_note", "optional": true } ],
-      "retention": "Retired journeys are kept for two years for audit, then removed.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "marketing__journey_step_rec", "name": "Journey step", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "journey", "type": "u64", "refersTo": "marketing__journey_rec", "onDelete": "restrict" },
-        { "name": "position", "type": "u32" },
-        { "name": "kind", "type": "string" },
-        { "name": "delay_ms", "type": "u64", "optional": true } ],
-      "retention": "Removed with its journey.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "marketing__audience_member_rec", "name": "Audience member", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "email", "type": "string", "personal": "contact" },
-        { "name": "full_name", "type": "string", "personal": "name" },
-        { "name": "tier", "type": "marketing__audience_tier" },
-        { "name": "lifetime_value", "type": "u64" },
-        { "name": "opted_in", "type": "bool" },
-        { "name": "lapsed", "type": "bool" },
-        { "name": "consent_source", "type": "marketing__consent_source" },
-        { "name": "last_seen_at", "type": "timestamp", "optional": true } ],
-      "retention": "Removed 730 days after the member was created, or earlier on an erasure request.",
-      "schemaVersion": 1, "realisation": "target" },
-    { "id": "marketing__email_send_rec", "name": "Email send", "owner": "product-module", "key": ["id"],
-      "fields": [
-        { "name": "id", "type": "u64" },
-        { "name": "member", "type": "u64", "refersTo": "marketing__audience_member_rec", "onDelete": "restrict" },
-        { "name": "template", "type": "string" },
-        { "name": "category", "type": "marketing__send_category" },
-        { "name": "outcome", "type": "marketing__send_outcome" },
-        { "name": "sent_at", "type": "timestamp" } ],
-      "retention": "Kept 365 days for deliverability reporting, then removed.",
-      "schemaVersion": 1, "realisation": "target" }
-  ],
 
-  "types": [
-    { "id": "marketing__campaign_state", "name": "Campaign state", "kind": "enum", "values": ["draft", "scheduled", "live", "paused", "ended"], "description": "Where a campaign is in its life." },
-    { "id": "marketing__journey_state", "name": "Journey state", "kind": "enum", "values": ["draft", "live", "paused", "retired"], "description": "Where a customer journey is." },
-    { "id": "marketing__channel", "name": "Channel", "kind": "enum", "values": ["email", "push", "sms", "in_app"], "description": "The channel a campaign sends on." },
-    { "id": "marketing__audience_tier", "name": "Audience tier", "kind": "enum", "values": ["standard", "silver", "gold", "platinum"], "description": "The loyalty tier of an audience member." },
-    { "id": "marketing__send_outcome", "name": "Send outcome", "kind": "enum", "values": ["queued", "delivered", "bounced", "opened", "clicked", "unsubscribed"], "description": "What happened to one email." },
-    { "id": "marketing__send_category", "name": "Send category", "kind": "enum", "values": ["transactional", "marketing", "promotional"], "description": "The consent category of a send." },
-    { "id": "marketing__consent_source", "name": "Consent source", "kind": "enum", "values": ["web_form", "import", "api", "in_store"], "description": "Where an opt-in was captured." },
-    { "id": "marketing__utm", "name": "UTM tags", "kind": "struct", "fields": [ { "name": "source", "type": "string" }, { "name": "medium", "type": "string" }, { "name": "campaign", "type": "string" } ], "description": "Tracking tags carried by a campaign link." },
-    { "id": "marketing__review_note", "name": "Review note", "kind": "struct", "fields": [ { "name": "author", "type": "string" }, { "name": "at", "type": "timestamp" } ], "description": "Who last reviewed a journey, and when." }
-  ],
 
   "capabilities": [
     { "id": "marketing__manage_campaigns", "name": "Manage campaigns", "description": "Create, schedule and launch campaigns." },
@@ -92,14 +27,16 @@
     { "id": "marketing__journey_editor", "name": "Journey editor", "description": "Designs and pauses customer journeys.", "level": "tenant",
       "holders": ["person", "team"], "capabilities": ["marketing__manage_journeys", "marketing__view_audiences", "automations-define", "automations-read", "segments-define"] },
     { "id": "marketing__marketing_lead", "name": "Marketing lead", "description": "Approves launches and owns consent.", "level": "tenant",
-      "holders": ["person", "team"], "capabilities": ["marketing__manage_campaigns", "marketing__manage_journeys", "marketing__view_audiences", "workflow-approve", "consent-record"] }
+      "holders": ["person", "team"], "capabilities": ["marketing__manage_campaigns", "marketing__manage_journeys", "marketing__view_audiences", "workflow-approve", "consent-record"] },
+    { "id": "marketing__member", "name": "Member", "description": "Any member of the tenant who reads what the product shares with everyone.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["segments-read"] }
   ],
 
   "policies": [
     { "id": "marketing__marketer_campaigns", "role": "marketing__marketer", "resource": { "Object": "marketing__campaign" }, "actions": ["Create", "Read", "Update"] },
     { "id": "marketing__marketer_audiences", "role": "marketing__marketer", "resource": { "Object": "marketing__audience_member" }, "actions": ["Read"] },
     { "id": "marketing__journey_editor_steps", "role": "marketing__journey_editor", "resource": { "Object": "marketing__journey_step" }, "actions": ["Create", "Read", "Update", "Delete"] },
-    { "id": "marketing__owner_drafts", "role": "member", "resource": { "Object": "marketing__campaign" }, "actions": ["Read", "Update"], "condition": "record.owner_name == principal" },
+    { "id": "marketing__owner_drafts", "role": "marketing__member", "resource": { "Object": "marketing__campaign" }, "actions": ["Read", "Update"], "condition": "record.owner_name == principal" },
     { "id": "marketing__lead_approves_launch", "role": "marketing__marketing_lead", "resource": { "Object": "marketing__campaign" }, "actions": ["Update"] }
   ],
 
@@ -156,9 +93,9 @@
   ],
 
   "segments": [
-    { "id": "marketing__opted_in_members", "name": "Opted-in members", "subject-type": "marketing__audience_member", "predicate": "record.opted_in == true" },
-    { "id": "marketing__lapsed_members", "name": "Lapsed members", "subject-type": "marketing__audience_member", "predicate": "record.opted_in == true and record.lapsed == true" },
-    { "id": "marketing__high_value_members", "name": "High-value members", "subject-type": "marketing__audience_member", "predicate": "record.opted_in == true and record.lifetime_value >= 500" }
+    { "id": "marketing__opted_in_members", "name": "Opted-in members", "subject-type": "marketing__audience_member", "principal-field": "email", "predicate": "record.opted_in == true" },
+    { "id": "marketing__lapsed_members", "name": "Lapsed members", "subject-type": "marketing__audience_member", "principal-field": "email", "predicate": "record.opted_in == true and record.lapsed == true" },
+    { "id": "marketing__high_value_members", "name": "High-value members", "subject-type": "marketing__audience_member", "principal-field": "email", "predicate": "record.opted_in == true and record.lifetime_value >= 500" }
   ],
 
   "settings": [
@@ -185,7 +122,13 @@
 
   "views": [
     { "id": "marketing__campaign_board", "route": "/marketing/board", "title": "Campaign board",
-      "sections": { "main": { "query": "marketing__live_campaigns", "args": {}, "include": [], "markdown": [], "single": false } } }
+      "sections": { "main": { "query": "marketing__live_campaigns", "args": {}, "include": [], "markdown": [], "single": false } } },
+    {"id":"marketing__campaign_list_view","route":"/marketing/campaigns","title":"Campaigns","sections":{"main":{"query":"marketing__live_campaigns","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"marketing__campaign_editor_view","route":"/marketing/campaigns/:slug","title":"Campaign","sections":{"main":{"query":"marketing__live_campaigns","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"marketing__journey_board_view","route":"/marketing/journeys","title":"Journeys","sections":{"main":{"query":"marketing__live_campaigns","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"marketing__journey_designer_view","route":"/marketing/journeys/:slug","title":"Journey","sections":{"main":{"query":"marketing__live_campaigns","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"marketing__audience_list_view","route":"/marketing/audiences","title":"Audiences","sections":{"main":{"query":"marketing__live_campaigns","args":{},"include":[],"markdown":[],"single":false}}},
+    {"id":"marketing__template_settings_view","route":"/marketing/settings","title":"Marketing settings","sections":{"main":{"query":"marketing__live_campaigns","args":{},"include":[],"markdown":[],"single":false}}}
   ],
 
   "mailTemplates": [
@@ -202,46 +145,36 @@
       "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"The campaign has started sending.\"}]}]" }
   ],
 
-  "eventKinds": [
-    { "id": "marketing__member_opted_out", "kind": "app.marketing-member-opted-out",
-      "fields": [ { "name": "member", "type": "string" }, { "name": "at", "type": "timestamp" } ],
-      "readers": ["marketing__marketing_lead"] }
-  ],
 
-  "events": [
-    { "id": "marketing__campaign_launched_event", "name": "Campaign launched", "description": "A campaign was scheduled for sending.", "payload": [ { "name": "campaign", "type": "string" } ] },
-    { "id": "marketing__journey_paused_event", "name": "Journey paused", "description": "A live journey was paused.", "payload": [ { "name": "journey", "type": "string" }, { "name": "at", "type": "timestamp" } ] },
-    { "id": "marketing__member_lapsed_event", "name": "Member lapsed", "description": "An opted-in member has gone quiet.", "payload": [ { "name": "member", "type": "string" } ] }
-  ],
 
   "triggers": [
-    { "id": "marketing__on_opt_in", "on": { "SegmentEntered": { "segment": "marketing__opted_in_members" } }, "automation": "marketing__welcome_journey" },
-    { "id": "marketing__on_high_value", "on": { "SegmentEntered": { "segment": "marketing__high_value_members" } }, "automation": "marketing__reminder_journey" },
-    { "id": "marketing__on_lapsed", "on": { "SegmentEntered": { "segment": "marketing__lapsed_members" } }, "automation": "marketing__winback_fanout" }
+    { "id": "marketing__on_opt_in", "on": { "SegmentEntered": { "segment": "36e002ad-7049-8823-b89e-ec00ea9dafb1" } }, "automation": "marketing__welcome_journey" },
+    { "id": "marketing__on_high_value", "on": { "SegmentEntered": { "segment": "863d1a73-129b-89ae-8473-5bc5fa841e50" } }, "automation": "marketing__reminder_journey" },
+    { "id": "marketing__on_lapsed", "on": { "SegmentEntered": { "segment": "dc998259-97c8-83ab-9e50-a790dcc6b029" } }, "automation": "marketing__winback_fanout" }
   ],
 
   "automations": [
     { "id": "marketing__welcome_journey", "label": "Welcome a newly opted-in member",
-      "run-as": { "roles": ["marketing__journey_editor"] }, "run-key": "param.record",
+      "run-as": { "roles": ["marketing__journey_editor"] }, "run-key": "param.seq",
       "start": "wait",
       "steps": {
         "wait": { "action": { "WaitFor": { "duration": 86400000 } }, "next": "check" },
-        "check": { "action": { "Branch": { "condition": "record.opted_in == true", "object": "marketing__audience_member", "record": "param.record", "then": "send", "else": "done" } } },
-        "send": { "action": { "SendMail": { "template": "marketing__welcome_mail", "to": "param.record", "category": "marketing" } }, "next": "done", "retry": { "attempts": 3 }, "timeout": 30000 },
+        "check": { "action": { "Branch": { "condition": "record.opted_in == true", "object": "marketing__audience_member", "record": "record.$id", "then": "send", "else": "done" } } },
+        "send": { "action": { "SendMail": { "template": "marketing__welcome_mail", "to": "param.person", "category": "marketing" } }, "next": "done", "retry": { "attempts": 3 }, "timeout": 30000 },
         "done": { "action": "End" } } },
     { "id": "marketing__reminder_journey", "label": "Remind a high-value member three days later",
-      "run-as": { "roles": ["marketing__journey_editor"] }, "run-key": "param.record",
+      "run-as": { "roles": ["marketing__journey_editor"] }, "run-key": "param.seq",
       "start": "wait",
       "steps": {
         "wait": { "action": { "WaitFor": { "duration": 259200000 } }, "next": "remind" },
-        "remind": { "action": { "SendMail": { "template": "marketing__reminder_mail", "to": "param.record", "category": "marketing" } }, "next": "done", "retry": { "attempts": 3 }, "timeout": 30000 },
+        "remind": { "action": { "SendMail": { "template": "marketing__reminder_mail", "to": "param.person", "category": "marketing" } }, "next": "done", "retry": { "attempts": 3 }, "timeout": 30000 },
         "done": { "action": "End" } } },
     { "id": "marketing__winback_fanout", "label": "Send a win-back mail to every lapsed member in batches",
       "run-as": { "roles": ["marketing__marketing_lead"] },
       "start": "fan",
       "steps": {
-        "fan": { "action": { "FanOut": { "segment": "marketing__lapsed_members", "batch": 500, "each": "mail" } }, "next": "done" },
-        "mail": { "action": { "SendMail": { "template": "marketing__winback_mail", "to": "param.record", "category": "promotional" } }, "next": "done", "retry": { "attempts": 5 } },
+        "fan": { "action": { "FanOut": { "segment": "dc998259-97c8-83ab-9e50-a790dcc6b029", "batch": 100, "each": "mail" } }, "next": "done" },
+        "mail": { "action": { "SendMail": { "template": "marketing__winback_mail", "to": "param.member", "category": "promotional" } }, "next": "done", "retry": { "attempts": 5 } },
         "done": { "action": "End" } } }
   ],
 
@@ -256,97 +189,36 @@
       "steps": [
         { "CreateRecord": { "id": "campaign", "object": "marketing__campaign", "fields": { "title": "param.title", "owner_name": "principal", "state": "'scheduled'", "segment": "param.segment", "send_now": "param.send_now" } } } ] },
     { "id": "marketing__pause_journey", "label": "Pause a journey",
-      "inputs": [ { "name": "journey", "ty": "Str", "required": true, "label": "The journey" } ],
+      "inputs": [ { "name": "journey", "ty": { "Ref": { "target": "marketing__journey", "on-delete": "Restrict" } }, "required": true, "label": "The journey" } ],
       "invokers": { "signed-in": true, "roles": ["marketing__journey_editor", "marketing__marketing_lead"] },
       "subject": { "object": "marketing__journey", "input": "journey" },
       "conditions": [ { "id": "is_live", "expr": "record.state == 'live'", "error": "not-live", "message": "Only a live journey can be paused." } ],
       "steps": [
-        { "UpdateRecord": { "id": "pause", "object": "marketing__journey", "record": "record.$id", "fields": { "state": "'paused'" } } } ] }
+        { "UpdateRecord": { "id": "pause", "object": "marketing__journey", "record": "record.$id", "fields": { "state": "'paused'" } } } ] },
+    {"id":"marketing__submit_campaign","label":"Submit a campaign for launch","inputs":[{"name":"title","ty":"Str","required":false,"label":"title"},{"name":"summary","ty":"Str","required":false,"label":"summary"},{"name":"segment","ty":"Str","required":false,"label":"segment"},{"name":"send_now","ty":"Bool","required":false,"label":"send now"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"marketing__request_journey_pause","label":"Request a journey pause","inputs":[{"name":"journey","ty":"Str","required":false,"label":"journey"},{"name":"reason","ty":"Str","required":false,"label":"reason"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"marketing__read_audience_page","label":"Read the audience page","inputs":[{"name":"tier","ty":"Str","required":false,"label":"tier"},{"name":"include_lapsed","ty":"Bool","required":false,"label":"include lapsed"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]},
+    {"id":"marketing__save_settings","label":"Save the marketing settings","inputs":[{"name":"frequency_cap","ty":"Int","required":false,"label":"frequency cap"},{"name":"quiet_hours_start","ty":"Str","required":false,"label":"quiet hours start"},{"name":"weekly_digest","ty":"Bool","required":false,"label":"weekly digest"}],"invokers":{"signed-in":true,"roles":[]},"conditions":[],"steps":[]}
   ],
 
-  "contracts": [
-    { "id": "marketing__read_campaign_board", "name": "Read the campaign board", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in marketer", "requires": ["marketing__manage_campaigns"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "status", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the campaign board for the status named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "marketing__read_campaign", "name": "Read one campaign", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in marketer", "requires": ["marketing__manage_campaigns"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "slug", "type": "string" } ],
-      "outputs": [ { "name": "campaign", "type": "json" } ],
-      "postconditions": ["The answer is the campaign named by the slug."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "marketing__submit_campaign", "name": "Submit a campaign for launch", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in marketer", "requires": ["marketing__manage_campaigns", "messages-send"] },
-      "idempotent": false, "timeoutMs": 5000,
-      "inputs": [ { "name": "title", "type": "string" }, { "name": "summary", "type": "string" }, { "name": "segment", "type": "string" }, { "name": "send_now", "type": "bool" } ],
-      "outputs": [ { "name": "campaign", "type": "string" } ],
-      "postconditions": ["A campaign exists in the scheduled state for the audience named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "marketing__read_journey_board", "name": "Read the journey board", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in journey editor", "requires": ["marketing__manage_journeys"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "status", "type": "string" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer is the journey board for the status named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "marketing__read_journey", "name": "Read one journey", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in journey editor", "requires": ["marketing__manage_journeys"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [ { "name": "slug", "type": "string" } ],
-      "outputs": [ { "name": "journey", "type": "json" } ],
-      "postconditions": ["The answer is the journey named by the slug, with its steps."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "marketing__request_journey_pause", "name": "Request a journey pause", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in journey editor", "requires": ["marketing__manage_journeys", "automations-define"] },
-      "idempotent": false, "timeoutMs": 5000,
-      "inputs": [ { "name": "journey", "type": "string" }, { "name": "reason", "type": "string" } ],
-      "outputs": [ { "name": "journey_state", "type": "string" } ],
-      "postconditions": ["The named journey is paused and its automations stop at the next step."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "marketing__read_audience_page", "name": "Read the audience page", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in viewer of audiences", "requires": ["marketing__view_audiences", "segments-read"] },
-      "idempotent": true, "timeoutMs": 3000,
-      "inputs": [ { "name": "tier", "type": "string" }, { "name": "include_lapsed", "type": "bool" } ],
-      "outputs": [ { "name": "view", "type": "json" } ],
-      "postconditions": ["The answer lists the audience members for the tier named."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "marketing__read_settings", "name": "Read the marketing settings", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in marketer", "requires": ["setting-read"] },
-      "idempotent": true, "timeoutMs": 2000,
-      "inputs": [],
-      "outputs": [ { "name": "settings", "type": "json" } ],
-      "postconditions": ["The answer holds the frequency cap and quiet hours in force."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
-    { "id": "marketing__save_settings", "name": "Save the marketing settings", "realisation": "facade",
-      "auth": { "scheme": "session", "description": "A signed-in marketing lead", "requires": ["setting-write-tenant"] },
-      "idempotent": true, "timeoutMs": 3000,
-      "inputs": [ { "name": "frequency_cap", "type": "u32" }, { "name": "quiet_hours_start", "type": "string" }, { "name": "weekly_digest", "type": "bool" } ],
-      "outputs": [ { "name": "saved", "type": "bool" } ],
-      "postconditions": ["The tenant settings hold the values given."],
-      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
-  ],
 
   "screens": [
-    { "id": "marketing__campaign_list", "name": "Campaign list", "route": "/marketing/campaigns", "viewModel": "marketing__read_campaign_board",
+    { "id": "marketing__campaign_list", "name": "Campaign list", "route": "/marketing/campaigns", "viewModel": "marketing__campaign_list_view",
       "kind": "marketing.list", "auth": "session", "description": "The campaigns of the tenant, by state.",
       "viewName": "marketing_campaign_list", "title": "Campaigns" },
-    { "id": "marketing__campaign_editor", "name": "Campaign editor", "route": "/marketing/campaigns/:slug", "viewModel": "marketing__read_campaign",
+    { "id": "marketing__campaign_editor", "name": "Campaign editor", "route": "/marketing/campaigns/:slug", "viewModel": "marketing__campaign_editor_view",
       "kind": "marketing.editor", "auth": "session", "description": "Write and launch one campaign.",
       "viewName": "marketing_campaign_editor", "title": "Campaign" },
-    { "id": "marketing__journey_board", "name": "Journey board", "route": "/marketing/journeys", "viewModel": "marketing__read_journey_board",
+    { "id": "marketing__journey_board", "name": "Journey board", "route": "/marketing/journeys", "viewModel": "marketing__journey_board_view",
       "kind": "marketing.list", "auth": "session", "description": "The customer journeys, by state.",
       "viewName": "marketing_journey_board", "title": "Journeys" },
-    { "id": "marketing__journey_designer", "name": "Journey designer", "route": "/marketing/journeys/:slug", "viewModel": "marketing__read_journey",
+    { "id": "marketing__journey_designer", "name": "Journey designer", "route": "/marketing/journeys/:slug", "viewModel": "marketing__journey_designer_view",
       "kind": "marketing.editor", "auth": "session", "description": "Lay out the steps of one journey.",
       "viewName": "marketing_journey_designer", "title": "Journey" },
-    { "id": "marketing__audience_list", "name": "Audience list", "route": "/marketing/audiences", "viewModel": "marketing__read_audience_page",
+    { "id": "marketing__audience_list", "name": "Audience list", "route": "/marketing/audiences", "viewModel": "marketing__audience_list_view",
       "kind": "marketing.list", "auth": "session", "description": "Audience members filtered by tier.",
       "viewName": "marketing_audience_list", "title": "Audiences" },
-    { "id": "marketing__template_settings", "name": "Template and cap settings", "route": "/marketing/settings", "viewModel": "marketing__read_settings",
+    { "id": "marketing__template_settings", "name": "Template and cap settings", "route": "/marketing/settings", "viewModel": "marketing__template_settings_view",
       "kind": "marketing.settings", "auth": "session", "description": "Frequency cap, quiet hours and digest settings.",
       "viewName": "marketing_template_settings", "title": "Marketing settings" }
   ],
@@ -401,27 +273,27 @@
 
   "liveBindings": [
     { "id": "marketing__live_campaign_list", "screen": "marketing__campaign_list", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'marketing-campaign'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "marketing__live_campaign_list_ended", "screen": "marketing__campaign_list", "event": "ui-session-ended", "refresh": "whole" },
     { "id": "marketing__live_campaign_editor", "screen": "marketing__campaign_editor", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'marketing-campaign'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "marketing__live_campaign_editor_ended", "screen": "marketing__campaign_editor", "event": "ui-session-ended", "refresh": "whole" },
     { "id": "marketing__live_journey_board", "screen": "marketing__journey_board", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'marketing-journey'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "marketing__live_journey_board_ended", "screen": "marketing__journey_board", "event": "ui-session-ended", "refresh": "whole" },
     { "id": "marketing__live_journey_designer", "screen": "marketing__journey_designer", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'marketing-journey'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "marketing__live_journey_designer_ended", "screen": "marketing__journey_designer", "event": "ui-session-ended", "refresh": "whole" },
     { "id": "marketing__live_audience_list", "screen": "marketing__audience_list", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'marketing-audience'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "marketing__live_audience_list_ended", "screen": "marketing__audience_list", "event": "ui-session-ended", "refresh": "whole" },
     { "id": "marketing__live_template_settings", "screen": "marketing__template_settings", "event": "ui-notice-received", "refresh": "whole",
-      "when": { "any": ["event.kind == 'marketing-settings'", { "value": "event.object", "in": "depends-on" }] } },
+      "when": { "any": ["event.kind == 'upsert'", { "value": "event.object", "in": "depends-on" }] } },
     { "id": "marketing__live_template_settings_ended", "screen": "marketing__template_settings", "event": "ui-session-ended", "refresh": "whole" }
   ],
 
   "errorMessages": [
-    { "id": "marketing__error_title_taken", "on": "check", "kinds": ["unique"], "text": "A campaign already uses this title.", "field": "title" },
+    { "id": "marketing__error_title_taken", "on": "check", "kinds": ["unique"], "text": "A campaign already uses this title.", "field": { "name": "title" } },
     { "id": "marketing__error_journey_not_live", "on": "error", "kinds": ["workflow"], "text": "Only a live journey can be paused." }
   ],
 

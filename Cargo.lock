@@ -4002,6 +4002,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-corpus"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strata-kernel",
+ "strata-spec-compiler",
+ "strata-spec-parts",
+ "strata-storage-api",
+ "strata-storage-postgres",
+ "strata-storage-sqlite",
+ "strata-substrate",
+]
+
+[[package]]
 name = "strata-kernel"
 version = "0.1.0"
 dependencies = [
