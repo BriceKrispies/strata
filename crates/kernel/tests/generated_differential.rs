@@ -230,7 +230,7 @@ use strata_model_core::functions::{self as spec, Failure};
 use strata_model_core::types::Rejection;
 
 /// How many random operation sequences run from each starting world, and how long each is.
-const SEQUENCES: usize = 24;
+const SEQUENCES: usize = 96;
 const OPS_PER_SEQUENCE: usize = 20;
 
 /// The reason of difference 1 above.
