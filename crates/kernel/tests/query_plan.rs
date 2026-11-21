@@ -769,7 +769,9 @@ fn every_plan_returns_the_rows_of_a_scan_in_the_same_order_across_pages() {
     let mut compared = 0;
     let mut nonempty = 0;
     for dataset in 0..30 {
-        let count = 150 + rng.below(250);
+        // Enough items for several pages of every size drawn (up to 25) and for every plan to
+        // match some of them; the cost of a page grows with the items, so no more.
+        let count = 60 + rng.below(60);
         let tenant = with_items(&world, (1..=count).map(|id| random_item(&mut rng, id)));
         for def in planned_queries() {
             let name = def.id.as_str().to_string();
@@ -898,10 +900,13 @@ fn an_index_cursor_continues_after_its_position_whatever_changed_in_between() {
 #[test]
 fn a_field_the_reader_may_not_read_does_not_show_through_rows_order_or_pages() {
     let world = item_world();
-    let make = |secret: &dyn Fn(u64) -> i64| {
+    // `count` items: two thousand for the index read, which has to examine more than 1600
+    // candidates for its cursor to be a position that could carry the hidden field, and a
+    // hundred for the scans, whose every page reads the whole tenant.
+    let make = |count: u64, secret: &dyn Fn(u64) -> i64| {
         with_items(
             &world,
-            (1..=2_000).map(|id| {
+            (1..=count).map(|id| {
                 item(
                     id,
                     &[
@@ -915,8 +920,11 @@ fn a_field_the_reader_may_not_read_does_not_show_through_rows_order_or_pages() {
             }),
         )
     };
-    let one = make(&|id| (id % 10) as i64);
-    let other = make(&|id| ((id * 7 + 3) % 10) as i64);
+    let by_id = |id: u64| (id % 10) as i64;
+    let by_mix = |id: u64| ((id * 7 + 3) % 10) as i64;
+    let one = make(2_000, &by_id);
+    let other = make(2_000, &by_mix);
+    let (small_one, small_other) = (make(100, &by_id), make(100, &by_mix));
     let filtered_by_secret = query(
         "by_secret",
         cmp(CmpOp::Gt, rec("secret"), int(3)),
@@ -955,7 +963,7 @@ fn a_field_the_reader_may_not_read_does_not_show_through_rows_order_or_pages() {
                 tenant.schema = Arc::new(schema);
                 tenant
             };
-            let (a, b) = (with(&one), with(&other));
+            let (a, b) = (with(&small_one), with(&small_other));
             let x = page_all(&a, def.id.as_str(), &BTreeMap::new(), 9, &context);
             let y = page_all(&b, def.id.as_str(), &BTreeMap::new(), 9, &context);
             assert_eq!(x, y, "{} as {reader:?}", def.id);

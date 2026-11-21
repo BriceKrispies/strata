@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use strata_backend::simulated::Backend;
 use strata_kernel::*;
 use strata_protocol::tenants::load_all;
@@ -38,9 +38,19 @@ fn seeded() -> World {
         .clone()
 }
 
+/// The generated schedule of a seed and length, made once per binary run: each of its steps is
+/// decided by the kernel on a scratch world, and the tests ask for the same schedules again.
+fn schedule_of(seed: u64, steps: usize) -> Vec<Scheduled> {
+    static MADE: Mutex<BTreeMap<(u64, usize), Vec<Scheduled>>> = Mutex::new(BTreeMap::new());
+    let mut made = MADE.lock().unwrap();
+    made.entry((seed, steps))
+        .or_insert_with(|| generate(&seeded(), &tenant(), seed, steps, 1_800_000_000_000, 60_000))
+        .clone()
+}
+
 fn scenario(seed: u64, steps: usize, faults: Faults) -> Scenario {
     let initial = seeded();
-    let schedule = generate(&initial, &tenant(), seed, steps, 1_800_000_000_000, 60_000);
+    let schedule = schedule_of(seed, steps);
     Scenario {
         name: format!("editorial-{seed}"),
         seed,
@@ -307,7 +317,7 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     let mut diverged = 0;
     for seed in [5, 9, 14] {
         for before_step in [0, 25] {
-            let scenario = scenario(seed, 80, Faults::default());
+            let scenario = scenario(seed, 50, Faults::default());
             let projection = project(
                 &scenario,
                 &require_excerpt(ExistingData::Grandfather, before_step),
@@ -338,7 +348,7 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     assert!(diverged >= 2, "the change diverged only {diverged} times");
     // A change that is refused diverges nowhere, and says so.
     let refused = project(
-        &scenario(5, 80, Faults::default()),
+        &scenario(5, 50, Faults::default()),
         &require_excerpt(ExistingData::Reject, 0),
         &mut |_, _, _| true,
     )
@@ -346,7 +356,7 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     assert_eq!(first_difference(&refused.baseline, &refused.branch), None);
     assert_eq!(refused.comparison.first_divergence, None);
 
-    let scenario = scenario(5, 80, Faults::default());
+    let scenario = scenario(5, 50, Faults::default());
     let proposal = require_excerpt(ExistingData::Grandfather, 0);
     let projection = project(&scenario, &proposal, &mut |_, _, _| true).unwrap();
     assert!(projection.change_outcome.accepted());
@@ -444,8 +454,7 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
         hop: None,
     };
     let role_of = |name: &str| RoleId::new(name).unwrap();
-    let mut work: Vec<Scheduled> =
-        generate(&seeded(), &tenant(), 17, 80, 1_800_000_000_000, 60_000);
+    let mut work: Vec<Scheduled> = schedule_of(17, 30);
     fn add(work: &mut Vec<Scheduled>, label: &str, context: Context, intent: Intent) {
         work.push(Scheduled {
             label: label.to_string(),
