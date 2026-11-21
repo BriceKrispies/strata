@@ -408,18 +408,67 @@ fn typed_body<T: DeserializeOwned>(body: Json_, visit: &Visit) -> Result<T, Fail
 /// The most of a JSON body the gateway reads before the handler does (axum's own default).
 const JSON_BODY_LIMIT: usize = 2 * 1024 * 1024;
 
-/// Refuse a body that is not JSON only after the checks that come before the input: our origin,
-/// then the request token. axum's `Json` extractor would read the body first and answer with a
-/// plain-text rejection, to a caller who had not even shown it comes from the site. A body that
-/// is JSON goes on to the handler unchanged; one that is not is answered here, once the origin
-/// and the token are good, with the specification's `invalid` error body.
+/// The refusal of a request that names another tenant than the one of its host, once the checks
+/// that come before the input have passed: our origin and the request token for a request that
+/// changes state.
+async fn another_tenant(bff: &Bff, parts: &axum::http::request::Parts, writes: bool) -> Response {
+    let outcome = async {
+        let visit = visit(bff, &parts.headers)?;
+        if writes {
+            guard_request(bff, &visit, &parts.headers).await?;
+        }
+        Err::<Response, Failure>(Failure::new(
+            ErrorCode::Forbidden,
+            "The request names another tenant than the one it is made at.",
+            &visit.correlation,
+        ))
+    }
+    .await;
+    match outcome {
+        Ok(response) => response,
+        Err(failure) => failure.into_response(),
+    }
+}
+
+/// Whether `named` is a tenant other than the one `headers` address. A host that serves no site is
+/// left to the handler, which refuses it.
+fn names_another_tenant(bff: &Bff, headers: &HeaderMap, named: Option<&str>) -> bool {
+    match (named, visit(bff, headers)) {
+        (Some(named), Ok(visit)) => named != visit.site.as_str(),
+        _ => false,
+    }
+}
+
+/// Two checks that come before a handler reads its input, which the handlers cannot make
+/// themselves because they take their input typed.
+///
+/// A tenant that a request names (the `tenant` input of a contract, in the query of a read or the
+/// body of a write) must be the tenant of the host it is made at; another is refused `forbidden`
+/// before anything else about the input is looked at, once the origin and the request token of a
+/// write are good (the contracts of tenant scope `request`).
+///
+/// A body that is not JSON is refused only after the checks that come before the input: our
+/// origin, then the request token. axum's `Json` extractor would read the body first and answer
+/// with a plain-text rejection, to a caller who had not even shown it comes from the site. A body
+/// that is JSON goes on to the handler unchanged; one that is not is answered here, once the
+/// origin and the token are good, with the specification's `invalid` error body.
 async fn json_after_guards(State(bff): State<Shared>, request: Request, next: Next) -> Response {
     let writes = !matches!(
         *request.method(),
         Method::GET | Method::HEAD | Method::OPTIONS
     );
+    if !writes {
+        let named = Query::<BTreeMap<String, String>>::try_from_uri(request.uri())
+            .ok()
+            .and_then(|query| query.0.get("tenant").cloned());
+        if names_another_tenant(&bff, request.headers(), named.as_deref()) {
+            let (parts, _) = request.into_parts();
+            return another_tenant(&bff, &parts, false).await;
+        }
+        return next.run(request).await;
+    }
     let json = text(request.headers(), CONTENT_TYPE).is_some_and(|kind| kind.contains("json"));
-    if !(writes && json) {
+    if !json {
         return next.run(request).await;
     }
     let (parts, body) = request.into_parts();
@@ -427,7 +476,16 @@ async fn json_after_guards(State(bff): State<Shared>, request: Request, next: Ne
         Ok(bytes) => bytes,
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
     };
-    if bytes.is_empty() || serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_ok() {
+    if bytes.is_empty() {
+        return next
+            .run(Request::from_parts(parts, axum::body::Body::from(bytes)))
+            .await;
+    }
+    if let Ok(value) = serde_json::from_slice::<Json_>(&bytes) {
+        let named = value.get("tenant").and_then(Json_::as_str);
+        if names_another_tenant(&bff, &parts.headers, named) {
+            return another_tenant(&bff, &parts, true).await;
+        }
         return next
             .run(Request::from_parts(parts, axum::body::Body::from(bytes)))
             .await;
