@@ -3,7 +3,7 @@
 What a Strata runtime should hold in memory in front of its store, how it decides, and exactly when
 holding it changes no answer. This is a design, with its safety properties proved in Lean
 (`lean/Strata/WorkingSet.lean`). Nothing here is implemented yet; the follow-up work is listed at
-the end, ordered by what unblocks what. The design has been revised after two adversarial
+the end, ordered by what unblocks what. The design has been revised after three adversarial
 reviews; the answers are collected in the last section, and everything above it is the current
 design.
 
@@ -108,8 +108,8 @@ There is no tenant state cache today.
 - **Copies have rules** (CPY-001 to CPY-014): tenant-first keys, supersession on commit, an outage
   is a slowdown never an error (CPY-011), concurrent misses compute once (CPY-012), erasure reaches
   copies (CPY-013). The working set is a new copy class and needs a row in the copy class table.
-- **Erasure is by key destruction** (D-350): destroying a subject key changes no stored byte and no
-  revision, and from then on nothing opens.
+- **Erasure is by key destruction** (D-350): destroying a subject key changes no stored record or
+  header and raises no generation, and from then on nothing opens.
 
 ## Candidate designs
 
@@ -158,33 +158,38 @@ A `ResidentStore` implements `Store` and wraps the **adapter**, underneath `Seal
 backend / simulator  ->  SealedStore (opens on every load)  ->  ResidentStore  ->  SQLite | PostgreSQL | memory
 ```
 
-Resident entries hold what the adapter holds: sealed tokens for personal fields, blind hashes in
-answer keys over searchable personal fields, and the wrapped key documents the cipher session reads
-(`subject_keys.rs:292-316`). Every serve passes through `SealedStore`, whose cipher session keeps no
-unwrapped key beyond one call (`sealed.rs:212-217`), so a destroyed key opens nothing from the
-working set either. Destroying a key writes the key documents (`subject_keys.rs` `destroy`:
-`doc_put`, `doc_remove`), which raises the tenant generation like any other write, so a resident
-key document cannot outlive its destruction.
+Resident entries hold what the adapter returns to a load: sealed tokens for personal fields and
+blind hashes in answer keys over searchable personal fields. **Key documents are never resident.**
+The cipher session reads the tenant-key document and the subject-key documents it needs from the
+store on every call (`subject_keys.rs:292-316`) and keeps no unwrapped key beyond the call
+(`sealed.rs:212-217`); the working set does not cache those reads. So a key destroyed by any
+process opens nothing from the next call on, in every cell, with no event, no lease renewal and no
+bound to state: CPY-013 holds for resident tokens as it holds for stored ones.
 
-**What a hit costs.** A hit is not free of key work. For a tenant with sealed fields, each call
-builds a key session that reads the tenant-key document and unwraps it through the key service,
-then opens every sealed field it serves. Below sealing the documents are resident entries, so a hit
-makes no store round trip, but it still makes one unwrap per call (a local operation with the
-in-process key service, a remote call with a managed one) and one open per sealed field served.
-That cost is measured per tenant in the cost runs; for a tenant without personal fields a hit costs
-neither.
+Key documents are not load results, so writing them raises no generation: neither the key creation
+`seal_commit` does on demand inside a commit (`sealed.rs:690-700`, `:930`) nor a destruction
+(`subject_keys.rs:255-270`). A commit that names a new data subject therefore cannot conflict with
+its own key write. Nothing resident depends on a key document, so nothing needs invalidating when
+one changes.
+
+**What a hit costs.** For a tenant without personal fields a hit is memory only. For a tenant with
+sealed fields a hit still makes the key session's store reads (the tenant-key document, and one
+subject-key document per subject of the sealed fields served), one unwrap of the tenant key (local
+with the in-process key service, a remote call with a managed one) and one open per sealed field
+served. That is a store round trip on every request of such a tenant, cheaper than a miss (no
+records, no schema decode) but not free; the cost runs measure it. Correct erasure is worth more
+than the saved read.
 
 **Excluded from residency.** A lookup of a searchable personal field also matches the plain value
 for rows written before sealing (`sealed.rs:20-25`), so its need names a plaintext personal value.
 Such needs are never answer keys and never appear in the hot-set manifest; they are answered from
-the store every time. Only needs whose arguments are blind hashes or non-personal values are
-resident.
+the store every time.
 
 Placing the working set above sealing is rejected: it would hold opened values, and a key
-destruction is not a change the generation sees in the opened value, so it would go on serving an
-erased value. The sealing model in the Lean file shows both placements on the same schedules
-(`below_sealing_erasure_safe`, `above_sealing_serves_erased`); it is a model of placement, separate
-from the main model, with one subject key per value.
+destruction raises no generation, so an opened entry stays current and goes on being served after
+its key is destroyed. The sealing model in the Lean file shows both placements on the same
+schedules, with stamped entries, value writes that raise the generation, and key destructions that
+do not (`below_sealing_erasure_safe`, `above_sealing_serves_erased`).
 
 ### What can be resident
 
@@ -194,10 +199,9 @@ from the main model, with one subject key per value.
 | `counters(tenant)` | revision, record counter, event sequence | no | Changed by every commit; taken from the generation read or the commit receipt |
 | `record(tenant, object, id)` | the record, or its absence | no | |
 | `answer(tenant, need)` | complete id set for `ByField`, `ByFields`, `IndexPage`, `PairPage` | no | Valid only as a complete set; legacy plain-value personal lookups excluded |
-| `page(tenant, object, after, limit)` | `PageOf`: up to `limit` ids above `after` | no | Ordered; invalidated only by a create or delete above `after` |
+| `page(tenant, object, after, limit)` | `PageOf`: up to `limit` ids above `after` | no | Ordered; not invalidated by updates |
 | `all(tenant, object)` | every id of the type | no | `AllOf` |
 | `ledger(tenant, need)` | ledger state for a `Need::Ledger` | no | Ledger entries change outside commits (anonymisation), which raises the generation |
-| key documents | the wrapped tenant key and subject keys | no | Read by every call for a tenant with sealed fields |
 | derived structures | indexes, reference closures, policy dependencies | by choice | Pinned when measured access says every decision reads them |
 
 ### The tenant generation (store contract, follow-up item 1)
@@ -207,96 +211,122 @@ The revision is not safe to key on: a restored snapshot sets it back
 repeat (`lib.rs:800-808`), a tenant deleted and created again starts over at 1, and a tenant file
 can be restored from outside the cell (OPS-3121, D-8300).
 
-The first revision split the generation into a directory epoch and an in-file counter. That fails
-twice: the two live in different databases with no common transaction, so a cell can stamp old file
-contents with a new epoch; and a counter epoch compared by equality repeats when the control
-directory is restored or lost. The revised generation lives entirely in the tenant's own storage:
+The generation lives entirely in the tenant's own storage, in a small row of its own (not in the
+tenant row beside the schema and member JSON, so reading it is a constant-cost read):
 
 ```rust
-/// Rises, or changes to a value never used before, with every change to what a load returns.
+/// Changes, to a value never used before, with every change to what a load returns.
 pub struct Generation {
-    /// Random, 128 bits, drawn when the tenant's storage is created, opened by a serving process,
-    /// restored, or imported. Never derived from anything that can be restored.
+    /// Random, 128 bits. Drawn only at events the control plane controls (below).
     pub nonce: u128,
-    /// Raised by one in every write transaction that changes what a load returns.
+    /// Raised by one in every write transaction that changes what a load returns. Never reset:
+    /// a nonce rotation leaves it as it is.
     pub counter: u64,
 }
 ```
 
-- **The nonce is rotated** in the first write transaction after any of: creating the tenant;
-  opening its storage in a serving process (before the first load is served; `tenant_db`'s cold
-  open path, `storage-sqlite/src/lib.rs:1694-1730`); `restore_snapshot`; a point-in-time restore
-  by the archive tooling (a required step of the runbook, after the file is in place and before the
-  tenant is routed to a cell); an import on a move (D-8302). A file restored from outside the cell
-  carries its old nonce only until a serving process opens it, and that open rotates it.
-- **The counter** is raised by every commit and by every other method that changes load results:
-  `anonymise_ledger_principal`, `remove_principal`, setting writes, key-document writes, index
-  rebuilds that change answers. The hot-set manifest is written to a table no load returns and
-  raises nothing.
-- **`generation(tenant) -> StoreResult<Option<Generation>>`** reads both from one row: no schema
-  decode, no count (unlike `tenant_summary`, `storage-sqlite/src/lib.rs:2740-2758`). On PostgreSQL
-  it is two columns of the tenant's row.
-- **`Commit` gains `expected_generation: Option<Generation>`**, and the store compares it with the
-  stored generation in the same write transaction that compares the base revision (under the
-  tenant lock on PostgreSQL, in the `BEGIN IMMEDIATE` transaction on SQLite, under the lock in
-  `MemoryStore`'s `commit_in`, `memory.rs:2123`). A mismatch is `StoreError::Conflict`, extended
-  with the generation found. The same transaction raises the counter.
+- **The nonce is rotated only at control-plane events**, each a write by the process the control
+  plane has chosen: creating the tenant; acquiring its lease; `restore_snapshot`; a point-in-time
+  restore by the archive tooling (after the file is in place, before the tenant is routed); an
+  import on a move (D-8302). **Opening a handle rotates nothing**: `tenant_db`'s cold open is also
+  the path after an LRU handle eviction (`storage-sqlite/src/lib.rs:1694-1768`, 256 handles by
+  default), and a reopen keeps the nonce, the counter and the working set. A read-only open writes
+  nothing. PostgreSQL has no open; there the events are row updates by the acquiring process.
+- **The counter** is raised by every write transaction that changes load results: commits,
+  `anonymise_ledger_principal`, `remove_principal`, setting writes, index rebuilds that change
+  answers. Writes outside load results raise nothing: key documents, the hot-set manifest,
+  sessions, throttle rows, jobs.
+- **Fencing every writer is an API-wide change.** Each method that raises the counter takes the
+  writer's expected generation (at least its nonce) and compares it in its write transaction:
+  `commit`, `remove_principal`, `anonymise_ledger_principal`, setting writes, index rebuilds. On
+  PostgreSQL that is one more row updated in a transaction that already serialises on the tenant's
+  advisory lock (`docs/storage.md`), so it adds no new point of contention; on SQLite it is in the
+  same `BEGIN IMMEDIATE` transaction.
+- **Processes other than the lease holder** (a migration job, an admin tool, the subject-rights
+  service): they may read freely and open without rotating anything. A write that raises the
+  generation either goes through the lease holder's API or is made under the lease (the control
+  plane revokes it from the cell first, the tool acquires it, which rotates the nonce, and the cell
+  reacquires afterwards). A write from anyone else is refused by the fence. There is no alternation:
+  only a lease acquisition rotates.
+- **`generation(tenant) -> StoreResult<Option<Generation>>`** reads the generation row.
+- **`Commit` gains `expected_generation: Option<Generation>`**, compared with the stored generation
+  in the write transaction that compares the base revision (under the tenant lock on PostgreSQL, in
+  the `BEGIN IMMEDIATE` transaction on SQLite, under the lock in `MemoryStore`'s `commit_in`,
+  `memory.rs:2123`). A mismatch is `StoreError::Conflict`, extended with the generation found. The
+  same transaction raises the counter.
 - **`Receipt` gains `generation: Generation`**, the generation the commit produced. The runtime
-  checks it equals `expected` with the counter raised by one; anything else (which the guard should
-  make impossible) drops the tenant's entries and is logged as a contract violation.
-- **Conformance cases**: every mutating method raises the generation of the tenant it names and
-  changes no other's; a commit with a stale expected generation conflicts and changes nothing; an
-  **out-of-band restore** (replace the tenant file with an older copy while the store is closed,
-  reopen) yields a generation never observed before; and reopening a store rotates the nonce.
+  checks it equals `expected` with the counter raised by one; anything else drops the tenant's
+  entries and is logged as a contract violation.
+- **Conformance cases**: every counter-raising method raises the generation of the tenant it names
+  and changes no other's; writes outside load results (key documents, sessions) change no
+  generation; a commit with a stale expected generation conflicts and changes nothing; an **LRU
+  handle cycle** (open, evict the handle, reopen) leaves the generation unchanged; an
+  **out-of-band restore** (replace the file with an older copy while the store is closed, then run
+  the restore's control-plane step) yields a generation never observed before; a lease acquisition
+  rotates the nonce and fences the previous holder's writes.
 
 In the Lean model the generation is a counter that every store change raises (assumption W4,
 `Advances`). The Rust pair realises the only property the proofs use: a changed state never shows a
 generation already seen, up to a nonce collision (128 random bits).
 
-**Outside the guarantee**: a file replaced underneath a process that keeps it open, so that no open
-rotates the nonce. SQLite does not support that either (an open connection over a replaced file is
-corruption). What the cell does if it sees the signs (a counter lower than one it has seen under
-the same nonce, a page or decode error): drop the tenant's entries, stop serving it, alarm, and
-reopen, which rotates the nonce. `w4_violation_breaks_checked_read` is the model's statement that
-without W4 even checked reads can be wrong.
+**Outside the guarantee**: a file replaced without the control-plane step (no rotation), and above
+all a file replaced underneath a process that keeps a handle open. A restore by rename leaves an
+open handle on the old inode with no sign at all, so the restore runbook (OPS-3121) revokes the
+tenant's lease and has the cell close its handles before the file is replaced. What the cell does
+if it sees signs anyway (a counter lower than one it has seen under the same nonce, a page or decode
+error): drop the tenant's entries, stop serving it, alarm, and reacquire, which rotates the nonce.
+`w4_violation_breaks_checked_read` is the model's statement that without W4 even checked reads can
+be wrong.
 
 ### Two modes, and what each guarantees
 
-**Checked mode** (no lease). Every request starts with `generation(tenant)`. Guarantees, under W4:
+**Checked mode** (no lease). Every request reads the generation at its start, at each round and at
+its end. Guarantees, under W4:
 
-- a read linearizes at its generation read: it returns the store's value as of that read
-  (`checkedRead_linearizes`), however stale the runtime was;
+- a single-key read returns the store's value as of its generation read (`checkedRead_linearizes`),
+  however stale the runtime was;
+- a read request over several keys and up to 32 rounds returns, key by key, the store's value at
+  the moment it finishes (`request_snapshot`, with `runWS_reqOk`): a round that finds the
+  generation changed rereads everything the request has read at the new state, so the snapshot is
+  never a mix of generations;
 - a refusal linearizes at its confirming generation read (`decideWS_refusal`);
-- an accepted commit linearizes at the store's guarded write, and is the kernel's step on the state
-  it was applied to (`submitWS_world`).
+- an accepted commit is the kernel's step on the state it was applied to (`submitWS_world`). This is
+  safety only: the claim that staleness costs at most one conflict per request is argued, not
+  proved.
 
-There is no uncovered path for reads in checked mode.
+There is no uncovered path for reads in checked mode. W4 is still assumed: it is the store's
+obligation, not a condition on the environment.
 
-**Leased mode**. The cell holds a lease per tenant and makes no generation read on the request
-path. Guarantees: commits and refusals as in checked mode (the commit guard does not depend on the
-lease); reads return the store's value as long as every writer to the tenant is fenced, which is
-what the lease provides (`runWS_reads` under `covered`); when a writer is not fenced (the lease was
-lost without the cell knowing), reads are stale for at most the renewal interval, and the first
-commit or renewal discovers it (`unfenced_breaks_reads` shows the staleness is real without the
-lease).
+**Leased mode**. The cell holds a lease per tenant and makes no generation read on the read path:
+a request's rounds compare against the generation the runtime knows. A refusal is still confirmed
+by one generation read, and a commit is still guarded by the store. Guarantees: commits and
+refusals as in checked mode; reads and request snapshots return the store's value as long as every
+writer to the tenant is fenced, which is what the lease provides (`runWS_reads` under `covered`);
+when a writer is not fenced (the lease was lost without the cell knowing), reads are stale for at
+most the renewal interval, and the first commit or renewal discovers it (`unfenced_breaks_reads`
+shows the staleness is real without the lease). The model's request rounds use generation reads,
+that is checked mode; the leased variant is argued from `covered`, not modelled separately.
 
 ### Leases (follow-up item 13)
 
 - **Record**: in the control directory, per tenant: holder cell, lease number, term end.
 - **Acquire**: a cell takes the lease when it is free or its term ended more than a drift margin ago
-  by the directory's clock. Having acquired, it opens the tenant's storage, which rotates the nonce.
-- **Fence**: the nonce is the fence token. Every write of the tenant, commits and out-of-commit
-  writes alike, carries the writer's expected generation and is refused in the write transaction if
-  the stored nonce is not the writer's. A cell whose nonce was replaced can write nothing.
+  by the directory's clock. Having acquired, it rotates the nonce in its first write to the tenant,
+  before serving.
+- **Fence**: the nonce is the fence token. Every write that raises the generation, commits and
+  out-of-commit writes alike, carries the writer's expected generation and is refused in the write
+  transaction if the stored nonce is not the writer's. A cell whose nonce was replaced can make no
+  such write. Key-document writes are not fenced (they raise no generation); a fenced-out cell can
+  still create a subject key, which is harmless.
 - **Renew**: every renewal interval R (shorter than the term T) the holder renews in the directory
   and makes a generation read; if the nonce is no longer its own, it has lost the tenant.
 - **Expiry**: a cell that has not renewed stops serving the tenant at its local term end minus the
   drift margin. A request in flight at expiry may finish a commit (fenced anyway), but a read it
   would answer from resident entries after expiry is answered by a checked read instead, or
   refused with a retryable error naming the tenant's new cell.
-- **Revocation**: by notification (the fast path: the cell acknowledges and stops serving), or by
-  timeout: the control plane hands the tenant to another cell, restores it or moves it only after
-  an acknowledgement or after the term end plus the margin.
+- **Revocation**: by notification (the fast path: the cell acknowledges, closes its handles and
+  stops serving), or by timeout: the control plane hands the tenant to another cell, restores it or
+  moves it only after an acknowledgement or after the term end plus the margin.
 - **Two cells believing they hold it** (a restored or lost directory, a partition): only the one
   whose nonce is in the storage can write; the other's first write or renewal fails, and it drops
   the tenant and gives up the lease. Its reads in the meantime are stale by at most R.
@@ -309,10 +339,10 @@ lease).
 Rust already decides above the store and commits separately, guarded by the base revision
 (`execute_guarded`, `lib.rs:1924-2030`). The design keeps that shape and adds the generation:
 
-1. Decide on what the working set serves, at the generation the runtime knows for the tenant. A
-   snapshot is assembled from one generation: resident entries stamped with it plus one load for
-   the misses; the load returns its generation, and if it differs, the resident entries are dropped
-   and the request is answered from a fresh load.
+1. Decide on what the working set serves, at the generation the runtime knows for the tenant, over
+   as many rounds as the kernel's needs take. The decision's expected generation is the one its
+   first round read. Rounds may mix generations if something changes in between; the commit guard
+   then refuses, since the tenant is no longer at the first round's generation.
 2. A refusal is confirmed by a generation read before it is returned; if the runtime was behind, it
    refreshes and decides again (`decideWS`). In checked mode the request's own generation read
    serves as the confirmation.
@@ -324,8 +354,9 @@ Rust already decides above the store and commits separately, guarded by the base
    current entries at the receipt's generation, take the counters from the receipt, re-admit a
    pinned header the commit changed.
 5. A conflict refreshes the tenant and the request is decided again (`execute_guarded`'s retry). In
-   leased mode a conflict caused by the runtime's own staleness happens at most once per request,
-   since the refresh makes it current; a slowdown, never an error (CPY-011).
+   leased mode a conflict caused by the runtime's own staleness should happen at most once per
+   request, since the refresh makes it current; that is argued, not proved. With key creation
+   raising no generation, a commit naming a new data subject does not conflict with itself.
 6. A commit whose outcome is unknown (timeout, lost connection) drops the tenant's entries and
    assumes no generation (`submitLost`).
 
@@ -348,8 +379,10 @@ that the map does not invalidate has the same store answer after the delta, in e
 - a schema change invalidates the header and everything derived from the schema version;
 - in Rust, the counters change on every commit, so `counters` is invalidated by every delta.
 
-The page rule is where the criterion does work: a page survives every update, and a create or delete
-below its start. A finer rule for unordered answers (an update invalidates `ByField(f, v)` only if
+The page rule is where the criterion does work: a page survives every update. In Rust record ids
+are monotonic (`next_record`), so a create is always above every existing id and never "below the
+start"; what the finer rule buys there is no invalidation on update, and none on a delete below the
+page's start. Rust pages are per object type, so the rule applies per type. A finer rule for unordered answers (an update invalidates `ByField(f, v)` only if
 the old or new value of `f` is `v`) needs the old record in the delta; it is a refinement, and each
 Rust key kind's criterion is follow-up item 4, held by a property test against `apply_delta`.
 
@@ -433,17 +466,18 @@ invalidations, resizes, decisions, guarded commits, commits with lost receipts, 
 writes by others, and generation reads, in any order, so anything may happen between a decision
 and its commit. Assumptions W1 to W4 are at the head of the file; W4 (every change raises the
 generation) is the store obligation the contract above has to deliver. No `sorry`, no added axioms;
-`lake env lean Audit.lean` lists only `propext`, `Classical.choice` and `Quot.sound` for all 32
+`lake env lean Audit.lean` lists only `propext`, `Classical.choice` and `Quot.sound` for all 35
 audited theorems.
 
 | Property | Theorem |
 |---|---|
 | A decision from the header, counters and needed records is the kernel's step | `decideTenant_faithful`, `decideOn_fetch`, `decideOn_congr` |
 | One invalidation map meets the criterion, with a finer rule for ordered pages | `touchedIn_sound` |
-| A checked read returns the store's value, whatever the runtime held | `checkedRead_linearizes` |
+| A checked single-key read returns the store's value, whatever the runtime held | `checkedRead_linearizes` |
+| A read request over several rounds returns, key by key, the store at the moment it finishes | `request_snapshot`, `stepWS_reqOk`, `runWS_reqOk` |
 | An unchecked read of a safe tenant returns the store's value; in covered schedules, every one | `readWS_value`, `runWS_reads` |
 | A refusal is the kernel's refusal on the current state | `decideWS_refusal` |
-| An accepted commit is a kernel step on the state it is applied to | `submitWS_world` |
+| An accepted commit is a kernel step on the state it is applied to (safety only) | `submitWS_world` |
 | At every step of every schedule (given W4): the above, and the committed world changes only by such steps or by other writers | `runWS_faithful` |
 | The invariants (coherence, knowledge never ahead of the store, pending decisions valid) hold at every step | `stepWS_inv` |
 | An unchecked read after an unfenced write serves the old value | `unfenced_breaks_reads` |
@@ -451,7 +485,7 @@ audited theorems.
 | Accounted bytes never exceed the budget | `stepWS_within`, `runWS_within` |
 | Pins change only when asked; pinned keys survive admission, eviction, resize | `stepWS_pins`, `admit_keeps_pinned`, `evict_keeps_pinned`, `resize_keeps_pinned`, `pin_resident` |
 | Budgets on one machine, under the floor rule | `resize_budget_exact`, `resize_budget_le`, `machine_resize` |
-| Placement against sealing, on schedules of admissions, key destructions and reads | `below_sealing_erasure_safe`, `above_sealing_serves_erased` |
+| Placement against sealing, on schedules of admissions, value writes, key destructions and reads | `below_sealing_erasure_safe`, `above_sealing_serves_erased` |
 
 The central statements:
 
@@ -467,6 +501,11 @@ theorem submitWS_world (sys : Sys σ) (h : Inv sys) :
 theorem runWS_faithful (hinv : InvSound inv) (ops : List Op) :
     ∀ (sys : Sys σ), Inv sys → RunFaithful pol size inv sys ops
 
+theorem request_snapshot (sys : Sys σ) (r : Req) (hrq : sys.req = some r)
+    (hr : ReqOk sys.req sys.store) :
+    (stepWS pol size inv sys .finish).2 =
+      .snapshot ((r.got.map Prod.fst).map (fun k => (k, fetch sys.store.world k)))
+
 theorem runWS_reads (hinv : InvSound inv) (ops : List Op) :
     ∀ (sys : Sys σ) (dirty : TenantId → Bool), Inv sys →
       (∀ y, dirty y = false → SafeAt sys.cache.entries sys.known sys.store y) →
@@ -474,8 +513,9 @@ theorem runWS_reads (hinv : InvSound inv) (ops : List Op) :
 ```
 
 `RunFaithful` says, at every step: a safe unchecked read and every checked read return the store's
-value; a refusal is the kernel's; and the committed world is unchanged, or is the kernel's step of a
-pending decision on the state it was applied to, or is another writer's write. `covered` is a
+value; a refusal is the kernel's; and the committed world is unchanged, or (only at a submit) is the
+kernel's step of the pending decision on the state it was applied to, or (only at another writer's
+write) is that write. `covered` is a
 property of the environment, not something the runtime can observe: no unchecked read of a tenant
 written behind the runtime's back since its last generation read. It is what a lease provides;
 checked mode does not need it.
@@ -498,7 +538,9 @@ checked mode does not need it.
   written next to `stepTenant`; its value is in fixing which keys a decision reads. `InvSound` is
   the general part; each Rust key kind's criterion is follow-up item 4.
 - **The sealing model is separate from the main one** and has one key per value; it shows the
-  placement decision on schedules, not the Rust token format.
+  placement decision on schedules with writes, generations and destructions, not the Rust token
+  format.
+- **"At most one conflict from staleness"** is argued, not proved; `submitWS_world` is safety.
 - **Accounted bytes are not resident memory**; the gap is measured, not proved.
 - **Correspondence with the Rust code is evidence, not proof** (D20 in `docs/decisions.md`).
 
@@ -520,6 +562,8 @@ existing faults (`engine.rs:49-58`), each a function of the seed and the subject
 - a key destruction in the middle of reads of the subject's records;
 - an ambiguous commit;
 - a lost lease: a second runtime acquiring the tenant while the first still holds resident entries;
+- an LRU handle cycle under load (handles evicted and reopened), which must change nothing;
+- a commit naming a new data subject (key creation inside the commit), which must not conflict;
 - a read whose miss load lands between the runtime's resident entries and another commit.
 
 Measures: in checked mode with every fault, and in leased mode with only fenced faults, every
@@ -533,8 +577,8 @@ or a leased divergence longer than R.
 ### Cost runs (on real stores)
 
 `MemoryStore` misses are nearly free, so policy and arbiter questions are answered on SQLite with
-SQLCipher and on PostgreSQL: wall time per miss and per hit by key kind (including the unwrap and
-opens of a hit for a tenant with sealed fields), the generation read's cost in checked mode, bytes
+SQLCipher and on PostgreSQL: wall time per miss and per hit by key kind (including the key-document reads,
+the unwrap and the opens of a hit for a tenant with sealed fields), the generation read's cost in checked mode, bytes
 decoded per request, and resident memory sampled from the process against accounted bytes.
 
 **Data.** The corpus installed into one tenant and populated by a seeded generator, plus a
@@ -558,20 +602,22 @@ manifests; schema changes and erasures in the middle.
 - Whole-tenant residency matching the design within the same budget: choose it.
 - The generation read costing a large share of the saving in checked mode: leases become a
   prerequisite.
-- The unwrap and opens making a hit for a tenant with sealed fields cost a large share of a miss:
-  those tenants keep only the header resident.
+- The key-document reads, unwrap and opens making a hit for a tenant with sealed fields cost a large
+  share of a miss: those tenants keep only the header resident.
 
 ## Follow-up work, by dependency
 
-1. **Tenant generation** in the store contract, specified above: `Generation` (nonce, counter);
-   nonce rotation on create, open by a serving process, `restore_snapshot`, archive restore and
-   import; counter raised by every mutating method; `generation(tenant)`; `Commit.expected_generation`
-   compared in the write transaction; `Receipt.generation`; `Conflict` reporting the generation
-   found; the conformance cases including the out-of-band restore. Depends on nothing; everything
-   below depends on it.
+1. **Tenant generation** in the store contract, specified above: `Generation` (nonce, counter) in
+   a row of its own; nonce rotation only on create, lease acquisition, `restore_snapshot`, archive
+   restore and import, never on a handle open; the counter raised by every write that changes load
+   results and by nothing else (not key documents); the expected generation on every
+   counter-raising method (`commit`, `remove_principal`, `anonymise_ledger_principal`, setting
+   writes, index rebuilds); `generation(tenant)`; `Commit.expected_generation`; `Receipt.generation`;
+   `Conflict` reporting the generation found; the conformance cases, including the LRU handle cycle
+   and the out-of-band restore. Depends on nothing; everything below depends on it.
 2. **Header residency** (CPY-014), counters split out. Depends on 1.
-3. **`ResidentStore` below sealing**: record entries, key documents, stamps, snapshot assembly at
-   one generation, refresh, refusal confirmation, guarded commit and receipt check, carry-forward,
+3. **`ResidentStore` below sealing**: record entries (key documents never resident), stamps,
+   request rounds that reread on a generation change, refresh, refusal confirmation, guarded commit and receipt check, carry-forward,
    lost-receipt drop, miss coalescing; legacy plain-value lookups excluded; passes the storage
    conformance suite. Depends on 1 and 2.
 4. **Invalidation map in Rust** with a property test of its criterion against `apply_delta`, per
@@ -591,22 +637,35 @@ manifests; schema changes and erasures in the middle.
 14. **Hot-set manifest and warmup**, with the exclusions and erasure rule above. Depends on 3.
 15. **Cell arbiter**, floors, ceilings, the over-placement rule. Depends on 7, and on 12 showing
     it beats a static split.
-16. **Specification changes**: a copy class row for the working set (CPY-001); the generation
+16. **Restore runbook** (OPS-3121): revoke the lease and close handles before replacing a file, then
+    the rotation step. Depends on 1 and 13.
+17. **Specification changes**: a copy class row for the working set (CPY-001); the generation
     obligation as a storage requirement; the per-tenant memory ceiling as a proposed decision.
     Can proceed alongside 1.
 
 ## Answers to the reviews
 
+### Third review
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | Rotating on every open breaks leased mode and cannot be enforced | **Fixed.** Confirmed: the cold open is the LRU-reopen path (`storage-sqlite/src/lib.rs:1694-1768`). The nonce rotates only at control-plane events (create, lease acquisition, restore, archive restore, import); a handle reopen keeps the nonce, the counter and the working set; the counter never resets; other processes write through the holder or under the lease; an LRU handle cycle conformance case is added |
+| 2 | Guarded commit conflicts with sealing's own key writes | **Fixed by the simpler rule.** Confirmed (`sealed.rs:1002-1005`, `:690-700`). Key documents are not load results and their writes raise no generation, creation and destruction alike; nothing resident depends on them |
+| 3 | Resident key documents bring back an erasure delay | **Fixed by the recommended rule.** Key documents are never resident; every call reads them, so a destruction anywhere takes effect at the next call. The hit cost for tenants with sealed fields is stated (a store round trip for the key documents, an unwrap, the opens). The sealing model now has value writes raising a generation, stamped entries and destructions raising none; `below_sealing_erasure_safe` is no longer true by construction |
+| 4 | Linearizability proved per key only | **Fixed.** Read requests over several rounds are in the model (`begin`, `round`, `finish`); `request_snapshot` proves the snapshot is the store at the finishing state, at every step of every schedule (`runWS_reqOk`). Single-key claims are labelled as such |
+| - | Restore by rename; generation in the tenant row; API-wide fencing; page rule in Rust; one-conflict claim; `StepFaithful` disjunct | **Addressed**: the runbook closes handles first; the generation has its own row; the counter-raising methods are listed with the PostgreSQL lock argument; the page rule's Rust gain is stated; the one-conflict claim is marked unproved; `StepFaithful`'s step disjunct is now tied to `submit` and `submitLost` |
+| - | Wording | **Corrected**: the constraints line, the leased-mode refusal path, and the second-review rows below |
+
 ### Second review
 
 | # | Finding | Answer |
 |---|---|---|
-| 1 | W4 relocates the old hypothesis; epoch and counter share no transaction; a restored directory repeats the epoch | **Fixed in the design, stated in the model.** Confirmed. The generation is now entirely in the tenant's storage: a 128-bit nonce rotated on create, on every open by a serving process, on restore and import, plus a counter. One transaction, nothing compared lives in the directory. A restore under an open file is outside the guarantee, with the cell's behaviour specified, and `w4_violation_breaks_checked_read` states the boundary. An out-of-band restore conformance case is added |
+| 1 | W4 relocates the old hypothesis; epoch and counter share no transaction; a restored directory repeats the epoch | **Fixed in the design, stated in the model.** Confirmed. The generation is entirely in the tenant's storage: a 128-bit nonce and a counter (the rotation events were narrowed in the third review). One transaction; no generation lives in the directory, though the lease does. A restore under an open file is outside the guarantee, with the cell's behaviour specified, and `w4_violation_breaks_checked_read` states the boundary. An out-of-band restore conformance case is added |
 | 2 | `commitWS` fused check and commit; Rust guards on revision only | **Fixed.** Confirmed (`commit_in`, `memory.rs:2123`; `Commit` and `Receipt` carry no generation, `lib.rs:221-351`). Decide and submit are separate operations; the store applies a commit only at the generation it was decided at; `Commit.expected_generation` and `Receipt.generation` are part of follow-up item 1. Commit transparency is restated as `submitWS_world` and `runWS_faithful` |
-| 3 | "Covered" is unobservable | **Fixed.** Checked mode is stated as linearizability (`checkedRead_linearizes`, `decideWS_refusal`, `submitWS_world`) with no environment condition; `covered` is presented as the environment condition a lease provides, with a staleness bound of one renewal interval and specified behaviour on the uncovered path |
+| 3 | "Covered" is unobservable | **Fixed.** Checked mode is stated as linearizability (`checkedRead_linearizes`, `request_snapshot`, `decideWS_refusal`, `submitWS_world`) with no environment condition beyond W4, the store's obligation; `covered` is presented as the environment condition a lease provides, with a staleness bound of one renewal interval and specified behaviour on the uncovered path |
 | 4 | Leases have no semantics | **Fixed in the design**: record, acquire, the nonce as fence token compared in the write transaction, renewal, expiry (including mid-request), revocation by notification and by timeout, two cells, move. Not modelled beyond their effect |
-| 5 | A hit is not store-free with sealed fields; legacy plain-value lookups | **Fixed.** Confirmed (`subject_keys.rs:292-316`, `sealed.rs:20-25`). Key documents are resident entries (destruction writes them and raises the generation); a hit still unwraps and opens, measured in the cost runs; legacy plain-value needs are excluded from answers and the manifest; the manifest's behavioural data is stated and erased with its subject |
-| 6 | The sealing theorems were trivial | **Fixed.** Replaced by a sealing model with a keyring, key destruction and two caches over schedules: `below_sealing_erasure_safe` (every read is the stored value opened with the live keys) and `above_sealing_serves_erased` (for any value admitted while its key lived, a read after destroying the key serves it) |
+| 5 | A hit is not store-free with sealed fields; legacy plain-value lookups | **Fixed, then revised in the third review**: key documents are not resident after all, so a hit for such a tenant makes the key-document reads, an unwrap and the opens, measured in the cost runs; legacy plain-value needs are excluded from answers and the manifest; the manifest's behavioural data is stated and erased with its subject |
+| 6 | The sealing theorems were trivial | **Replaced twice**; the third-review version adds value writes, generations and stamps, so the below-sealing theorem is not true by construction. Earlier version: `below_sealing_erasure_safe` (every read is the stored value opened with the live keys) and `above_sealing_serves_erased` (for any value admitted while its key lived, a read after destroying the key serves it) |
 | 7 | `touchedIn` is weak | **Fixed in part.** An ordered page key is in the model with a finer rule (no invalidation on update, none on create or delete below the start), proved against the criterion. Unordered answers stay coarse; follow-up item 4 keeps the per-kind criterion |
 | 8 | Carry assumed the commit is the only generation change | **Fixed.** The guard makes an intervening write refuse the commit; the receipt carries its generation and the runtime checks it |
 | - | Header grown past its grant; floors not always feasible; in-flight reserve unmeasured | **Addressed in text**: the cliff and the arbiter's floor raise; the over-placement rule; the reserve's calibration |

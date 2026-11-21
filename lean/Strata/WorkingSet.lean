@@ -26,7 +26,7 @@ Assumptions, all of them:
 W1. The kernel is the model of `Strata/Model.lean`; nothing here refers to Rust.
 W2. Operations are atomic and sequential. Interleaving is modelled by placing other writers'
     operations (`external`, `unfenced`), lost receipts (`submitLost`) and any other operation
-    between a decision and its commit.
+    between a decision and its commit, and between the rounds of a read request.
 W3. The size of an entry is a function of its key and value (`size`): accounted bytes, not
     measured memory.
 W4. Every change to what a load returns raises the tenant's generation (`Advances`).
@@ -36,7 +36,9 @@ The theorems the design cites:
 - Coverage soundness: `decideTenant_faithful`, `decideOn_fetch`, `decideOn_congr`.
 - Invalidation: `InvSound` (the criterion), `touchedIn_sound` (a map meeting it, with unordered
   answers invalidated by any record change and ordered pages only by changes above their start).
-- Reads: `checkedRead_linearizes` (a checked read returns the store's value, always),
+- Reads: `checkedRead_linearizes` (a checked single-key read returns the store's value, always),
+  `request_snapshot` with `stepWS_reqOk` and `runWS_reqOk` (a request read over several rounds
+  returns, key by key, the store at the moment it finishes, whatever happened between rounds),
   `readWS_value` and `runWS_reads` (unchecked reads, in covered schedules),
   `unfenced_breaks_reads` (the counterexample outside them).
 - Commits: `decideWS_refusal` (a refusal is the kernel's), `submitWS_world` (an accepted commit is
@@ -636,12 +638,20 @@ structure Pending where
   delta : Delta
   expected : Nat
 
+/-- A read request in progress: its tenant, the generation it started at, what it has read. -/
+structure Req where
+  tenant : TenantId
+  gen : Nat
+  got : List (Key × Payload)
+
 structure Sys (σ : Type) where
   cache : Cache
   store : Store
   /-- The generation of each tenant as the runtime last learned it. -/
   known : TenantId → Nat
   pending : Option Pending
+  /-- The read request in progress, if any. -/
+  req : Option Req
   pst : σ
 
 /-- Forget what the runtime holds for `x` and learn `x`'s generation. -/
@@ -675,6 +685,12 @@ inductive Op where
   | unfenced (x : TenantId) (t : Option Tenant)
   /-- A generation read. -/
   | check (x : TenantId)
+  /-- Start a read request on a tenant (a generation read). -/
+  | begin (x : TenantId)
+  /-- One round of the request: read these keys, with the round's generation read. -/
+  | round (ks : List Key)
+  /-- End the request (a generation read) and return its snapshot. -/
+  | finish
 
 inductive Outcome where
   | value (p : Payload)
@@ -682,6 +698,8 @@ inductive Outcome where
   /-- The store refused the commit: the generation moved since the decision. -/
   | conflict
   | unknown
+  /-- What a request read, key by key. -/
+  | snapshot (kvs : List (Key × Payload))
   | done
 
 /-- A read: a resident entry stamped with the known generation, else a load, which also tells the
@@ -748,6 +766,21 @@ def submitLostWS (sys : Sys σ) : Sys σ × Outcome :=
           entries := dropTenant (submitWS pol size inv sys).1.cache.entries p.ctx.tenant },
         known := sys.known }, .unknown)
 
+/-- A round at the request's own generation: the round's keys of the request's tenant, served from
+    what the runtime holds (after the round's generation read). -/
+def continueReq (sys : Sys σ) (r : Req) (ks : List Key) : Req :=
+  { r with
+    got := r.got ++ (ks.filter (fun k => k.tenant == r.tenant)).map
+      (fun k => (k, serve sys.cache.entries sys.known sys.store k)) }
+
+/-- A round after the tenant moved on: everything the request has read, and this round's keys,
+    read again at the new state. -/
+def restartReq (sys : Sys σ) (r : Req) (ks : List Key) : Req :=
+  { tenant := r.tenant
+    gen := sys.store.gen r.tenant
+    got := (r.got.map Prod.fst ++ ks.filter (fun k => k.tenant == r.tenant)).map
+      (fun k => (k, fetch sys.store.world k)) }
+
 def stepWS (sys : Sys σ) : Op → Sys σ × Outcome
   | .read k => readWS pol size sys k
   | .checkedRead k => readWS pol size (sync sys k.tenant) k
@@ -769,6 +802,22 @@ def stepWS (sys : Sys σ) : Op → Sys σ × Outcome
   | .external x t => (refresh { sys with store := sys.store.set x t } x, .done)
   | .unfenced x t => ({ sys with store := sys.store.set x t }, .done)
   | .check x => (sync sys x, .done)
+  | .begin x => ({ sync sys x with req := some ⟨x, sys.store.gen x, []⟩ }, .done)
+  | .round ks =>
+    match sys.req with
+    | none => (sys, .done)
+    | some r =>
+      if sys.store.gen r.tenant = r.gen then
+        ({ sync sys r.tenant with req := some (continueReq (sync sys r.tenant) r ks) }, .done)
+      else
+        ({ sync sys r.tenant with req := some (restartReq sys r ks) }, .done)
+  | .finish =>
+    match sys.req with
+    | none => (sys, .done)
+    | some r =>
+      if sys.store.gen r.tenant = r.gen then ({ sync sys r.tenant with req := none }, .snapshot r.got)
+      else ({ sync sys r.tenant with req := none },
+        .snapshot ((r.got.map Prod.fst).map (fun k => (k, fetch sys.store.world k))))
 
 /-- Which tenants may have been written behind the runtime's back since it last read their
     generation. Only the environment knows this; the runtime does not. -/
@@ -777,6 +826,7 @@ def nextDirty (dirty : TenantId → Bool) : Op → TenantId → Bool
   | .check x => upd dirty x false
   | .checkedRead k => upd dirty k.tenant false
   | .external x _ => upd dirty x false
+  | .begin x => upd dirty x false
   | _ => dirty
 
 def readOk (dirty : TenantId → Bool) : Op → Bool
@@ -804,6 +854,12 @@ def PendingOk (pd : Option Pending) (s : Store) : Prop :=
   ∀ p, pd = some p → p.expected ≤ s.gen p.ctx.tenant ∧
     (p.expected = s.gen p.ctx.tenant →
       decideOn (fetch s.world) p.ctx.tenant p.ctx.principal p.intent = .ok p.delta)
+
+/-- A request in progress started at a generation its tenant has reached, read only its tenant's
+    keys, and if the tenant is still at that generation, everything it read is the store's value. -/
+def ReqOk (rq : Option Req) (s : Store) : Prop :=
+  ∀ r, rq = some r → r.gen ≤ s.gen r.tenant ∧ (∀ kv ∈ r.got, kv.1.tenant = r.tenant) ∧
+    (r.gen = s.gen r.tenant → ∀ kv ∈ r.got, kv.2 = fetch s.world kv.1)
 
 def Inv (sys : Sys σ) : Prop :=
   Sound sys.cache.entries sys.store ∧ KnownLe sys.known sys.store ∧ PendingOk sys.pending sys.store
@@ -1487,6 +1543,21 @@ theorem stepWS_inv (sys : Sys σ) (op : Op) (hinv : InvSound inv) (h : Inv sys) 
     exact ⟨sound_set _ _ x t h.1, knownLe_advance _ _ _ h.2.1 (advances_set _ x t),
       pendingOk_advance _ _ _ h.2.2 (advances_set _ x t)⟩
   | check x => exact sync_inv sys x h
+  | begin x => exact sync_inv sys x h
+  | round ks =>
+    simp only [stepWS]
+    split
+    · exact h
+    · split
+      · exact sync_inv sys _ h
+      · exact sync_inv sys _ h
+  | finish =>
+    simp only [stepWS]
+    split
+    · exact h
+    · split
+      · exact sync_inv sys _ h
+      · exact sync_inv sys _ h
 
 theorem stepWS_within (sys : Sys σ) (op : Op) (hw : Within size sys.cache) :
     Within size (stepWS pol size inv sys op).1.cache := by
@@ -1507,6 +1578,21 @@ theorem stepWS_within (sys : Sys σ) (op : Op) (hw : Within size sys.cache) :
   | external x t => exact Nat.le_trans (bytes_filter_le size _ _) hw
   | unfenced x t => exact hw
   | check x => exact sync_within size sys x hw
+  | begin x => exact sync_within size sys x hw
+  | round ks =>
+    simp only [stepWS]
+    split
+    · exact hw
+    · split
+      · exact sync_within size sys _ hw
+      · exact sync_within size sys _ hw
+  | finish =>
+    simp only [stepWS]
+    split
+    · exact hw
+    · split
+      · exact sync_within size sys _ hw
+      · exact sync_within size sys _ hw
 
 /-- **Pins change only when asked.** -/
 theorem stepWS_pins (sys : Sys σ) (op : Op) :
@@ -1535,6 +1621,21 @@ theorem stepWS_pins (sys : Sys σ) (op : Op) :
   | external x t => rfl
   | unfenced x t => rfl
   | check x => exact sync_pins sys x
+  | begin x => exact sync_pins sys x
+  | round ks =>
+    simp only [stepWS]
+    split
+    · rfl
+    · split
+      · exact sync_pins sys _
+      · exact sync_pins sys _
+  | finish =>
+    simp only [stepWS]
+    split
+    · rfl
+    · split
+      · exact sync_pins sys _
+      · exact sync_pins sys _
 
 /-- Safety of unchecked reads across one operation: tenants the environment did not write behind
     the runtime's back stay safe, and a check makes its tenant safe. -/
@@ -1574,6 +1675,36 @@ theorem stepWS_safe (sys : Sys σ) (op : Op) (hinv : InvSound inv) (h : Inv sys)
     by_cases hyx : y = x
     · subst hyx; exact sync_safe_self sys _ h.1
     · exact sync_safe_other sys x y hyx (hsafe y (by simpa [nextDirty, upd, hyx] using hy))
+  | begin x =>
+    by_cases hyx : y = x
+    · subst hyx; exact sync_safe_self sys _ h.1
+    · exact sync_safe_other sys x y hyx (hsafe y (by simpa [nextDirty, upd, hyx] using hy))
+  | round ks =>
+    simp only [stepWS]
+    split
+    · exact hsafe y hy
+    · next r _ =>
+      have hsy : SafeAt (sync sys r.tenant).cache.entries (sync sys r.tenant).known
+          (sync sys r.tenant).store y := by
+        by_cases hyx : y = r.tenant
+        · subst hyx; exact sync_safe_self sys _ h.1
+        · exact sync_safe_other sys _ y hyx (hsafe y hy)
+      split
+      · exact hsy
+      · exact hsy
+  | finish =>
+    simp only [stepWS]
+    split
+    · exact hsafe y hy
+    · next r _ =>
+      have hsy : SafeAt (sync sys r.tenant).cache.entries (sync sys r.tenant).known
+          (sync sys r.tenant).store y := by
+        by_cases hyx : y = r.tenant
+        · subst hyx; exact sync_safe_self sys _ h.1
+        · exact sync_safe_other sys _ y hyx (hsafe y hy)
+      split
+      · exact hsy
+      · exact hsy
 
 /-- What each operation guarantees. A safe read returns the store's value; a checked read always
     does; a refusal is the kernel's; and the committed world changes only by a kernel step of a
@@ -1584,7 +1715,8 @@ def StepFaithful (sys : Sys σ) (op : Op) (r : Sys σ × Outcome) : Prop :=
   (∀ k, op = .checkedRead k → r.2 = .value (fetch sys.store.world k)) ∧
   (∀ i c e, op = .decide i c → r.2 = .result (.error e) → step sys.store.world i c = .error e) ∧
   (r.1.store.world = sys.store.world ∨
-    (∃ p, sys.pending = some p ∧ step sys.store.world p.intent p.ctx = .ok r.1.store.world) ∨
+    (∃ p, (op = .submit ∨ op = .submitLost) ∧ sys.pending = some p ∧
+      step sys.store.world p.intent p.ctx = .ok r.1.store.world) ∨
     (∃ x t, (op = .external x t ∨ op = .unfenced x t) ∧ r.1.store.world = upd sys.store.world x t))
 
 theorem stepWS_faithful (sys : Sys σ) (op : Op) (h : Inv sys) :
@@ -1616,18 +1748,18 @@ theorem stepWS_faithful (sys : Sys σ) (op : Op) (h : Inv sys) :
     · left; exact congrArg Store.world (decideWS_parts sys i c).1
   | submit =>
     refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk), ?_⟩
-    rcases submitWS_world pol size inv sys h with hw | hw
+    rcases submitWS_world pol size inv sys h with hw | ⟨p, hp, hs⟩
     · exact Or.inl hw
-    · exact Or.inr (Or.inl hw)
+    · exact Or.inr (Or.inl ⟨p, Or.inl rfl, hp, hs⟩)
   | submitLost =>
     refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk), ?_⟩
     show (submitLostWS pol size inv sys).1.store.world = _ ∨
-      (∃ p, sys.pending = some p ∧
+      (∃ p, (Op.submitLost = .submit ∨ Op.submitLost = .submitLost) ∧ sys.pending = some p ∧
         step sys.store.world p.intent p.ctx = .ok (submitLostWS pol size inv sys).1.store.world) ∨ _
     rw [submitLostWS_parts]
-    rcases submitWS_world pol size inv sys h with hw | hw
+    rcases submitWS_world pol size inv sys h with hw | ⟨p, hp, hs⟩
     · exact Or.inl hw
-    · exact Or.inr (Or.inl hw)
+    · exact Or.inr (Or.inl ⟨p, Or.inr rfl, hp, hs⟩)
   | external x t =>
     exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
       Or.inr (Or.inr ⟨x, t, Or.inl rfl, rfl⟩)⟩
@@ -1637,6 +1769,27 @@ theorem stepWS_faithful (sys : Sys σ) (op : Op) (h : Inv sys) :
   | check x =>
     exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
       Or.inl (congrArg Store.world (sync_store sys x))⟩
+  | begin x =>
+    exact ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
+      Or.inl (congrArg Store.world (sync_store sys x))⟩
+  | round ks =>
+    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
+      Or.inl ?_⟩
+    simp only [stepWS]
+    split
+    · rfl
+    · split
+      · exact congrArg Store.world (sync_store sys _)
+      · exact congrArg Store.world (sync_store sys _)
+  | finish =>
+    refine ⟨fun _ hk => (by cases hk), fun _ hk => (by cases hk), fun _ _ _ hk => (by cases hk),
+      Or.inl ?_⟩
+    simp only [stepWS]
+    split
+    · rfl
+    · split
+      · exact congrArg Store.world (sync_store sys _)
+      · exact congrArg Store.world (sync_store sys _)
 
 /-! ### Whole schedules -/
 
@@ -1712,6 +1865,7 @@ def cexSys : Sys Unit :=
     store := { world := cexWorld, gen := fun _ => 0 },
     known := fun _ => 0,
     pending := none,
+    req := none,
     pst := () }
 
 /-- **Why leased reads need fencing.** An unchecked read after a write behind the runtime's back
@@ -1743,6 +1897,178 @@ theorem w4_violation_breaks_checked_read (pol : Policy Unit) (size : Key → Pay
   · have := (ha 1).2 rfl
     simp [cexRolledBack, cexSys, cexWorld, upd] at this
   · simp [stepWS, readWS, sync, hit, upd, fetch, cexSys, cexRolledBack, cexWorld, cexTenant]
+
+/-! ### Multi-key requests -/
+
+theorem sync_req (sys : Sys σ) (x : TenantId) : (sync sys x).req = sys.req := by
+  unfold sync; split <;> rfl
+
+theorem readWS_req (sys : Sys σ) (k : Key) : (readWS pol size sys k).1.req = sys.req := by
+  unfold readWS; split
+  · rfl
+  · exact sync_req sys k.tenant
+
+theorem decideWS_req (sys : Sys σ) (i : Intent) (c : Ctx) : (decideWS sys i c).1.req = sys.req := by
+  unfold decideWS; split
+  · rfl
+  · split
+    · rfl
+    · split
+      · exact sync_req _ _
+      · exact sync_req _ _
+
+theorem submitWS_req (sys : Sys σ) : (submitWS pol size inv sys).1.req = sys.req := by
+  unfold submitWS; split
+  · rfl
+  · split
+    · rfl
+    · exact sync_req _ _
+
+theorem submitLostWS_req (sys : Sys σ) : (submitLostWS pol size inv sys).1.req = sys.req := by
+  unfold submitLostWS; split
+  · rfl
+  · exact submitWS_req pol size inv sys
+
+theorem reqOk_advance (rq : Option Req) (s s' : Store) (h : ReqOk rq s) (ha : Advances s s') :
+    ReqOk rq s' := by
+  intro r hr
+  obtain ⟨hle, ht, hv⟩ := h r hr
+  obtain ⟨hg, hw⟩ := ha r.tenant
+  refine ⟨Nat.le_trans hle hg, ht, fun heq kv hkv => ?_⟩
+  have hgs : s'.gen r.tenant = s.gen r.tenant := by omega
+  rw [fetch_congr s'.world s.world kv.1 (by rw [ht kv hkv]; exact hw hgs)]
+  exact hv (by omega) kv hkv
+
+private theorem filter_tenant (ks : List Key) (x : TenantId) (k : Key)
+    (hk : k ∈ ks.filter (fun k => k.tenant == x)) : k.tenant = x := by
+  simpa using (List.mem_filter.mp hk).2
+
+/-- The request invariant holds at every step, whatever else happens between rounds. -/
+theorem stepWS_reqOk (sys : Sys σ) (op : Op) (h : Inv sys) (hr : ReqOk sys.req sys.store) :
+    ReqOk (stepWS pol size inv sys op).1.req (stepWS pol size inv sys op).1.store := by
+  cases op with
+  | read k =>
+    show ReqOk (readWS pol size sys k).1.req (readWS pol size sys k).1.store
+    rw [readWS_req, readWS_store]; exact hr
+  | checkedRead k =>
+    show ReqOk (readWS pol size (sync sys k.tenant) k).1.req
+      (readWS pol size (sync sys k.tenant) k).1.store
+    rw [readWS_req, readWS_store, sync_req, sync_store]; exact hr
+  | pin k => exact hr
+  | unpin k => exact hr
+  | evict ks => exact hr
+  | invalidate k => exact hr
+  | resize b => exact hr
+  | decide i c =>
+    show ReqOk (decideWS sys i c).1.req (decideWS sys i c).1.store
+    rw [decideWS_req, (decideWS_parts sys i c).1]; exact hr
+  | submit =>
+    show ReqOk (submitWS pol size inv sys).1.req (submitWS pol size inv sys).1.store
+    rw [submitWS_req]; exact reqOk_advance _ _ _ hr (submitWS_advances pol size inv sys)
+  | submitLost =>
+    show ReqOk (submitLostWS pol size inv sys).1.req (submitLostWS pol size inv sys).1.store
+    rw [submitLostWS_req, submitLostWS_parts]
+    exact reqOk_advance _ _ _ hr (submitWS_advances pol size inv sys)
+  | external x t => exact reqOk_advance _ _ _ hr (advances_set _ x t)
+  | unfenced x t => exact reqOk_advance _ _ _ hr (advances_set _ x t)
+  | check x =>
+    show ReqOk (sync sys x).req (sync sys x).store
+    rw [sync_req, sync_store]; exact hr
+  | begin x =>
+    show ReqOk (some ⟨x, sys.store.gen x, []⟩) (sync sys x).store
+    rw [sync_store]
+    intro r hr'
+    simp only [Option.some.injEq] at hr'
+    subst hr'
+    exact ⟨Nat.le_refl _, fun _ h => absurd h List.not_mem_nil, fun _ _ h => absurd h List.not_mem_nil⟩
+  | round ks =>
+    simp only [stepWS]
+    split
+    · exact hr
+    · next r hrq =>
+      obtain ⟨hle, ht, hv⟩ := hr r hrq
+      split
+      · next hg =>
+        show ReqOk (some (continueReq (sync sys r.tenant) r ks)) (sync sys r.tenant).store
+        rw [sync_store]
+        intro r' hr'
+        simp only [Option.some.injEq] at hr'
+        subst hr'
+        refine ⟨hle, fun kv hkv => ?_, fun _ kv hkv => ?_⟩
+        · rcases List.mem_append.mp hkv with h1 | h1
+          · exact ht kv h1
+          · obtain ⟨k, hk, rfl⟩ := List.mem_map.mp h1
+            exact filter_tenant ks r.tenant k hk
+        · rcases List.mem_append.mp hkv with h1 | h1
+          · exact hv hg.symm kv h1
+          · obtain ⟨k, hk, rfl⟩ := List.mem_map.mp h1
+            have hkt := filter_tenant ks r.tenant k hk
+            show serve (sync sys r.tenant).cache.entries (sync sys r.tenant).known
+              (sync sys r.tenant).store k = fetch sys.store.world k
+            rw [serve_eq_fetch _ _ _ k (by rw [hkt]; exact sync_safe_self sys r.tenant h.1),
+              sync_store]
+      · show ReqOk (some (restartReq sys r ks)) (sync sys r.tenant).store
+        rw [sync_store]
+        intro r' hr'
+        simp only [Option.some.injEq] at hr'
+        subst hr'
+        refine ⟨Nat.le_refl _, fun kv hkv => ?_, fun _ kv hkv => ?_⟩
+        · obtain ⟨k, hk, rfl⟩ := List.mem_map.mp hkv
+          rcases List.mem_append.mp hk with h1 | h1
+          · obtain ⟨kv0, hkv0, rfl⟩ := List.mem_map.mp h1
+            exact ht kv0 hkv0
+          · exact filter_tenant ks r.tenant k h1
+        · obtain ⟨k, _, rfl⟩ := List.mem_map.mp hkv
+          rfl
+  | finish =>
+    simp only [stepWS]
+    split
+    · exact hr
+    · split
+      · intro r hr'; simp at hr'
+      · intro r hr'; simp at hr'
+
+private theorem pairs_eq (l : List (Key × Payload)) (f : Key → Payload)
+    (h : ∀ kv ∈ l, kv.2 = f kv.1) : l = (l.map Prod.fst).map (fun k => (k, f k)) := by
+  induction l with
+  | nil => rfl
+  | cons kv l ih =>
+    obtain ⟨k, v⟩ := kv
+    have hv : v = f k := h (k, v) List.mem_cons_self
+    simp only [List.map_cons, hv]
+    rw [← ih (fun kv' h' => h kv' (List.mem_cons_of_mem _ h'))]
+
+/-- **A request's snapshot is the store at one state.** However many rounds it took and whatever
+    happened between them (commits, writes behind the runtime's back, restores), the snapshot a
+    request returns is, key by key, the store's value at the moment it finishes. -/
+theorem request_snapshot (sys : Sys σ) (r : Req) (hrq : sys.req = some r)
+    (hr : ReqOk sys.req sys.store) :
+    (stepWS pol size inv sys .finish).2 =
+      .snapshot ((r.got.map Prod.fst).map (fun k => (k, fetch sys.store.world k))) := by
+  obtain ⟨_, _, hv⟩ := hr r hrq
+  simp only [stepWS, hrq]
+  split
+  · next hg =>
+    show Outcome.snapshot r.got = _
+    rw [← pairs_eq r.got _ (hv hg.symm)]
+  · rfl
+
+def RunReqOk : Sys σ → List Op → Prop
+  | _, [] => True
+  | sys, op :: ops =>
+    ReqOk (stepWS pol size inv sys op).1.req (stepWS pol size inv sys op).1.store ∧
+    RunReqOk (stepWS pol size inv sys op).1 ops
+
+/-- The request invariant at every step of every schedule, so `request_snapshot` applies to every
+    `finish` in it. -/
+theorem runWS_reqOk (hinv : InvSound inv) (ops : List Op) :
+    ∀ (sys : Sys σ), Inv sys → ReqOk sys.req sys.store → RunReqOk pol size inv sys ops := by
+  induction ops with
+  | nil => intro _ _ _; trivial
+  | cons op ops ih =>
+    intro sys h hr
+    have hr' := stepWS_reqOk pol size inv sys op h hr
+    exact ⟨hr', ih _ (stepWS_inv pol size inv sys op hinv h) hr'⟩
 
 /-! ### Pinning -/
 
@@ -1878,10 +2204,13 @@ theorem machine_resize (st : σ) (cs : List (Cache × Nat)) (m : Nat)
 
 /-! ## Erasure: where the working set sits against sealing
 
-A small model of its own. A personal value is stored sealed under one subject key; the keyring says
-which keys still open; destroying a key changes no stored value and no generation (D-350). The
-working set holds either the sealed values (below sealing, opened on every read) or the values
-opened when they were admitted (above sealing). -/
+A model of its own. A personal value is stored sealed under one subject key. The store has a
+generation that every write of a value raises; the keys are documents the working set never holds,
+read live by every opening, and writing them (creating or destroying a key) raises no generation
+(D-350: destroying a key changes no stored value). The working set holds entries stamped with the
+generation they were read at, and serves one only while its stamp is the store's generation. Below
+sealing an entry is the sealed value, opened at every read; above sealing it is the value opened
+when it was admitted. -/
 
 abbrev Keyring := Nat → Bool
 
@@ -1896,45 +2225,70 @@ def openWith (kr : Keyring) (v : SealedVal) : Payload := if kr v.key then v.plai
 
 structure SealedStore where
   vals : Key → SealedVal
+  gen : Nat
   keys : Keyring
+
+def SealedStore.write (s : SealedStore) (k : Key) (v : SealedVal) : SealedStore :=
+  { s with vals := fun k' => if k' = k then v else s.vals k', gen := s.gen + 1 }
 
 def destroyKey (s : SealedStore) (n : Nat) : SealedStore := { s with keys := destroy s.keys n }
 
 inductive SOp where
   | admit (k : Key)
+  | write (k : Key) (v : SealedVal)
   | destroy (n : Nat)
   | read (k : Key)
 
-/-- Below sealing: entries are sealed values, opened with the keys live at the read. -/
-def runBelow : List (Key × SealedVal) → SealedStore → List SOp → List Payload
+/-- The entry for `k` stamped with generation `g`, if resident. -/
+def sHit {α : Type} (c : List (Key × Nat × α)) (g : Nat) (k : Key) : Option α :=
+  (c.find? (fun e => e.1 == k && e.2.1 == g)).map (fun e => e.2.2)
+
+/-- Below sealing: entries are sealed values; a read opens with the keys live at the read. -/
+def runBelow : List (Key × Nat × SealedVal) → SealedStore → List SOp → List Payload
   | _, _, [] => []
-  | c, s, .admit k :: ops => runBelow ((k, s.vals k) :: c) s ops
+  | c, s, .admit k :: ops => runBelow ((k, s.gen, s.vals k) :: c) s ops
+  | c, s, .write k v :: ops => runBelow c (s.write k v) ops
   | c, s, .destroy n :: ops => runBelow c (destroyKey s n) ops
-  | c, s, .read k :: ops => openWith s.keys ((c.lookup k).getD (s.vals k)) :: runBelow c s ops
+  | c, s, .read k :: ops => openWith s.keys ((sHit c s.gen k).getD (s.vals k)) :: runBelow c s ops
 
-/-- Above sealing: entries are the values opened at admission. -/
-def runAbove : List (Key × Payload) → SealedStore → List SOp → List Payload
+/-- Above sealing: entries are values opened at admission. -/
+def runAbove : List (Key × Nat × Payload) → SealedStore → List SOp → List Payload
   | _, _, [] => []
-  | c, s, .admit k :: ops => runAbove ((k, openWith s.keys (s.vals k)) :: c) s ops
+  | c, s, .admit k :: ops => runAbove ((k, s.gen, openWith s.keys (s.vals k)) :: c) s ops
+  | c, s, .write k v :: ops => runAbove c (s.write k v) ops
   | c, s, .destroy n :: ops => runAbove c (destroyKey s n) ops
-  | c, s, .read k :: ops => (c.lookup k).getD (openWith s.keys (s.vals k)) :: runAbove c s ops
+  | c, s, .read k :: ops => (sHit c s.gen k).getD (openWith s.keys (s.vals k)) :: runAbove c s ops
 
-/-- What a read should return: the stored value opened with the keys live now. -/
+/-- What each read should return: the stored value opened with the keys live now. -/
 def runTruth : SealedStore → List SOp → List Payload
   | _, [] => []
   | s, .admit _ :: ops => runTruth s ops
+  | s, .write k v :: ops => runTruth (s.write k v) ops
   | s, .destroy n :: ops => runTruth (destroyKey s n) ops
   | s, .read k :: ops => openWith s.keys (s.vals k) :: runTruth s ops
 
-/-- The below-sealing working set holds what the store holds. -/
-def BelowOk (c : List (Key × SealedVal)) (s : SealedStore) : Prop :=
-  ∀ k v, c.lookup k = some v → v = s.vals k
+/-- Coherence of the below-sealing working set with the store, as in the main model. -/
+def BelowOk (c : List (Key × Nat × SealedVal)) (s : SealedStore) : Prop :=
+  ∀ e ∈ c, e.2.1 ≤ s.gen ∧ (e.2.1 = s.gen → e.2.2 = s.vals e.1)
 
-/-- **Below sealing, erasure needs nothing from the working set**: for every schedule of
-    admissions, key destructions and reads, every read is the stored value opened with the keys
-    live at that read. -/
+theorem sHit_spec {α : Type} (c : List (Key × Nat × α)) (g : Nat) (k : Key) (v : α)
+    (h : sHit c g k = some v) : ∃ e ∈ c, e.1 = k ∧ e.2.1 = g ∧ e.2.2 = v := by
+  unfold sHit at h
+  cases hf : c.find? (fun e => e.1 == k && e.2.1 == g) with
+  | none => rw [hf] at h; cases h
+  | some e =>
+    rw [hf] at h
+    simp only [Option.map_some, Option.some.injEq] at h
+    have hp := List.find?_some hf
+    simp only [Bool.and_eq_true, beq_iff_eq] at hp
+    exact ⟨e, List.mem_of_find?_eq_some hf, hp.1, hp.2, h⟩
+
+/-- **Below sealing, erasure takes effect at once and writes are coherent**: for every schedule
+    of admissions, value writes, key destructions and reads, every read is the stored value opened
+    with the keys live at that read. -/
 theorem below_sealing_erasure_safe (ops : List SOp) :
-    ∀ (c : List (Key × SealedVal)) (s : SealedStore), BelowOk c s → runBelow c s ops = runTruth s ops := by
+    ∀ (c : List (Key × Nat × SealedVal)) (s : SealedStore), BelowOk c s →
+      runBelow c s ops = runTruth s ops := by
   induction ops with
   | nil => intro _ _ _; rfl
   | cons op ops ih =>
@@ -1942,27 +2296,36 @@ theorem below_sealing_erasure_safe (ops : List SOp) :
     cases op with
     | admit k =>
       apply ih
-      intro k' v hl
-      by_cases hk : k' = k
-      · subst hk; simp [List.lookup] at hl; exact hl.symm
-      · have : (k' == k) = false := by simp [hk]
-        simp [List.lookup, this] at hl
-        exact hc k' v hl
-    | destroy n => exact ih c _ (fun k v hl => hc k v hl)
+      intro e he
+      rcases List.mem_cons.mp he with h | h
+      · subst h; exact ⟨Nat.le_refl _, fun _ => rfl⟩
+      · exact hc e h
+    | write k v =>
+      apply ih
+      intro e he
+      obtain ⟨hle, _⟩ := hc e he
+      refine ⟨by simp [SealedStore.write]; omega, fun h => ?_⟩
+      simp [SealedStore.write] at h; omega
+    | destroy n => exact ih c _ (fun e he => hc e he)
     | read k =>
       simp only [runBelow, runTruth]
       congr 1
-      · cases hl : c.lookup k with
+      · cases hh : sHit c s.gen k with
         | none => rfl
-        | some v => simp [hc k v hl]
+        | some v =>
+          obtain ⟨e, he, hk, hg, hv⟩ := sHit_spec c s.gen k v hh
+          have := (hc e he).2 hg
+          rw [hv, hk] at this
+          simp [this]
       · exact ih c s hc
 
-/-- **Above sealing, a destroyed key goes on opening**: a value admitted while its key lived is
-    served as it was after the key is destroyed, where the store now gives the erased marker. -/
-theorem above_sealing_serves_erased (s : SealedStore) (k : Key) (hlive : s.keys (s.vals k).key = true)
-    (hplain : (s.vals k).plain ≠ .record none) :
+/-- **Above sealing, a destroyed key goes on opening.** Destruction raises no generation, so an
+    entry opened while its key lived stays current and is served after the key is destroyed, where
+    the store now gives the erased marker. -/
+theorem above_sealing_serves_erased (s : SealedStore) (k : Key)
+    (hlive : s.keys (s.vals k).key = true) (hplain : (s.vals k).plain ≠ .record none) :
     runAbove [] s [.admit k, .destroy (s.vals k).key, .read k] ≠
       runTruth s [.admit k, .destroy (s.vals k).key, .read k] := by
-  simp [runAbove, runTruth, openWith, destroyKey, destroy, List.lookup, hlive, hplain]
+  simp [runAbove, runTruth, openWith, destroyKey, destroy, sHit, hlive, hplain]
 
 end Strata.WorkingSet

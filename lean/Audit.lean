@@ -58,6 +58,9 @@ import Strata
 #print axioms Strata.WorkingSet.runWS_faithful
 #print axioms Strata.WorkingSet.runWS_reads
 #print axioms Strata.WorkingSet.runWS_within
+#print axioms Strata.WorkingSet.stepWS_reqOk
+#print axioms Strata.WorkingSet.request_snapshot
+#print axioms Strata.WorkingSet.runWS_reqOk
 #print axioms Strata.WorkingSet.unfenced_breaks_reads
 #print axioms Strata.WorkingSet.w4_violation_breaks_checked_read
 #print axioms Strata.WorkingSet.admit_keeps_pinned
