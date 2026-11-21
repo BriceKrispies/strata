@@ -24,6 +24,7 @@
 pub mod backend;
 pub mod budget;
 pub mod bundle;
+pub mod bundle_ui;
 pub mod catalogue;
 pub mod codetext;
 pub mod conformance;

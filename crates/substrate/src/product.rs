@@ -70,6 +70,7 @@ const BUILT_SECTIONS: &[&str] = &[
     "ledger-limits",
     "segments",
     "event-kinds",
+    "ui",
 ];
 
 /// The kind of document in the store's small-document table (`Store::doc_put`) that held the
@@ -195,6 +196,10 @@ pub struct ProductBundle {
     /// `app.` and a name; the declaration is read and checked here, and installing it is
     /// [`ProductBundle::unbuilt`] until the kernel holds a tenant's declared kinds.
     pub event_kinds: BTreeSet<String>,
+    /// The interface elements of the product (`ui`, D-8250): its screens, forms, actions, live
+    /// bindings and error messages, by id. Installed into `tenant-schema.ui` with the rest of the
+    /// product, last, since they name its views and operations.
+    pub ui: BTreeMap<String, UiElement>,
     /// What the bundle fills that the kernel cannot install yet, by section name.
     pub unbuilt: Vec<Unbuilt>,
 }
@@ -903,6 +908,7 @@ impl ProductBundle {
                 }
             })?;
         let event_kinds = read_event_kinds(&mut content)?;
+        let ui: BTreeMap<String, UiElement> = parse_map(&mut content, "ui", &|_, _| Ok(()))?;
         let unbuilt = if event_kinds.is_empty() {
             Vec::new()
         } else {
@@ -936,6 +942,7 @@ impl ProductBundle {
             ledger_limits,
             segments,
             event_kinds,
+            ui,
             unbuilt,
         })
     }
@@ -950,8 +957,9 @@ impl ProductBundle {
 
     /// Every entity the bundle installs, in install order: capabilities, settings, ledger units,
     /// pools and limits (which roles, triggers and steps name), roles, object types, policies,
-    /// workflows, queries, views, mail templates, notice templates, tokens, triggers, automations
-    /// and operations, each by id.
+    /// workflows, queries, views, mail templates, notice templates, tokens, triggers, automations,
+    /// operations, segments and interface elements (which name views, operations and each other),
+    /// each by id.
     pub fn entities(&self) -> Vec<OwnedEntity> {
         let mut out = Vec::new();
         out.extend(
@@ -1020,6 +1028,7 @@ impl ProductBundle {
                 .keys()
                 .map(|key| OwnedEntity::of("segment", &key.0)),
         );
+        out.extend(self.ui.keys().map(|id| OwnedEntity::of("ui-element", id)));
         out
     }
 
@@ -1191,6 +1200,16 @@ impl ProductBundle {
                     .filter(|(k, _)| k.as_str() == id)
                     .map(|(_, v)| SchemaChange::SetLedgerLimit(v.clone())),
             ),
+            "ui-element" => {
+                changes.extend(
+                    self.ui
+                        .get(id)
+                        .map(|element| SchemaChange::DefineUiElement {
+                            id: id.to_string(),
+                            element: element.clone(),
+                        }),
+                )
+            }
             _ => {}
         }
         changes
@@ -1327,6 +1346,10 @@ impl ProductBundle {
                 });
                 same(held, def)
             }),
+            "ui-element" => self
+                .ui
+                .get(id)
+                .and_then(|def| same(strata_kernel::ui::element(schema, id), def)),
             _ => None,
         }
     }
@@ -1732,6 +1755,9 @@ pub fn plan_install(
 /// object types and roles), then the types and roles themselves.
 fn removal_rank(kind: &str) -> u8 {
     match kind {
+        // An interface element names views, operations and other elements, and nothing names it
+        // but another element (D-8250).
+        "ui-element" => 0,
         "trigger" => 0,
         "automation" => 1,
         "operation" => 2,
@@ -1769,6 +1795,7 @@ fn removal_change(entity: &OwnedEntity, delete_records: bool) -> Result<SchemaCh
         "mail-template" => SchemaChange::RemoveMailTemplate(TemplateId(id.to_string())),
         "notice-template" => SchemaChange::RemoveNoticeTemplate(TemplateId(id.to_string())),
         "token" => SchemaChange::RemoveToken(id.to_string()),
+        "ui-element" => SchemaChange::RemoveUiElement(id.to_string()),
         "capability" => SchemaChange::RemoveCapability(CapabilityName(id.to_string())),
         "setting" => {
             SchemaChange::RemoveSetting(SettingId::new(id).map_err(|e| bad(e.to_string()))?)

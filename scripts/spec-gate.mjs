@@ -380,7 +380,7 @@ const snapshot = sourceHashes();
 const resultHashes = () => Object.fromEntries(testFiles.filter((file) => existsSync(join(resultsDir, file))).map((file) => [file, sha256(join(resultsDir, file))]));
 // EXEGRA_HOME: the specc differential tests run Exegra and fail without it (no silent skip).
 const cargoEnv = { CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2', CARGO_TARGET_DIR: 'target/gate', EXEGRA_HOME: exegraHome };
-const nodeTestFiles = ['web/test/kernel.test.js', 'web/test/client.test.js'];
+const nodeTestFiles = ['web/test/kernel.test.js', 'web/test/client.test.js', 'web/test/tenant-ui.test.js'];
 const shareTestFile = 'scripts/generated-share.test.mjs';
 // The tests of the scripts: the share tests and the tests of the audit checks (gate-*.test.mjs).
 const scriptTestFiles = [shareTestFile, ...readdirSync(resolve(root, 'scripts')).filter((f) => /^(gate|test)-.*\.test\.mjs$/.test(f)).sort().map((f) => `scripts/${f}`)];

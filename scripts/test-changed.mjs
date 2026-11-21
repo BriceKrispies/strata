@@ -75,7 +75,7 @@ function main(argv) {
   const steps = [];
   if (scope.packages.length) steps.push(['cargo test', 'cargo', cargoArgs(scope, targets), env]);
   if (scope.web) {
-    steps.push(['web tests', process.execPath, ['--test', 'web/test/kernel.test.js', 'web/test/client.test.js'], {}]);
+    steps.push(['web tests', process.execPath, ['--test', 'web/test/kernel.test.js', 'web/test/client.test.js', 'web/test/tenant-ui.test.js'], {}]);
     steps.push(['type check', process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', 'web/jsconfig.json'], {}]);
   }
   if (scope.scripts) {

@@ -59,6 +59,7 @@ pub mod testkit;
 pub mod transition;
 pub mod triggers;
 pub mod types;
+pub mod ui;
 pub mod world;
 
 pub use expr::{CmpOp, Expr, Scope};

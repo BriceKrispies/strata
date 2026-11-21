@@ -1120,6 +1120,8 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/products/upgrade", post(crate::products::upgrade))
         .route("/internal/products/remove", post(crate::products::remove))
         .route("/internal/view", post(view))
+        .route("/internal/ui", post(crate::ui::manifest))
+        .route("/internal/ui/part", post(crate::ui::part))
         .route("/internal/aggregate", post(aggregate))
         .route("/internal/search", post(search))
         .route("/internal/mutate", post(mutate))

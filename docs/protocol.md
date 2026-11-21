@@ -21,6 +21,8 @@ All under `/api`, JSON in and out. The tenant is taken from the request's host n
 | `POST /api/login` | Start a session; sets the cookie | allowed origin, request token |
 | `POST /api/logout` | End the session; clears the cookie | allowed origin, request token |
 | `GET /api/view?path=/posts/x&q=...` | The view model for an address | none (rows are filtered by policy) |
+| `GET /api/ui` | The manifest of the site tenant's interface definition: its hash, the schema version, and each part with its hash (a screen also with its route, view, title, layout, access and query parameters). `no-store` | none |
+| `GET /api/ui/parts/<hash>` | One part of that definition: a screen with its forms, actions and live bindings, or the error messages. Only a part the site tenant's current definition holds; `private, max-age=31536000, immutable` | none |
 | `POST /api/records` | Create, update or delete a record | allowed origin, CSRF token |
 | `POST /api/members/<operation>` | Change who holds which role: `assign-role`, `revoke-role`, `add-team-member`, `remove-team-member`, `invite`, `redeem` (inputs as the JSON body) | allowed origin, CSRF token; the kernel decides |
 | `POST /api/preview` | Constrained Markdown to blocks | allowed origin |

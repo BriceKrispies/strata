@@ -1,0 +1,22 @@
+{
+  // Refused by specc bundle (WG-5297, D-8250, INT-3251): the screen answers /desk, which no view of
+  // the product answers, and the form submits to a contract that is not an operation of the product
+  // (bundle.ui-unresolved). The layer checks accept the file.
+  "product": {
+    "id": "ticket-desk",
+    "name": "Ticket desk",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] }
+  },
+  "screens": [
+    { "id": "ticket_desk__desk", "name": "Desk", "route": "/desk", "viewModel": "ticket_desk__read_desk", "kind": "tickets.list", "auth": "session" }
+  ],
+  "forms": [
+    {
+      "id": "ticket_desk__open_form", "screen": "ticket_desk__desk", "contract": "ticket_desk__open_ticket",
+      "fields": [{ "name": "title", "input": "title", "label": "Title", "control": "text" }],
+      "submitLabel": "Open", "onSuccess": {}, "onError": { "show": "inline" }
+    }
+  ]
+}

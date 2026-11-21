@@ -2588,6 +2588,103 @@ async fn products_are_installed_listed_and_removed_through_the_gateway() {
     assert_eq!(listed["products"], json!([]));
 }
 
+/// Verifies: INT-3254, INT-3255
+///
+/// A product that declares its interface is installed into the first site; the gateway serves the
+/// manifest of that site's interface definition and each part by its hash, kept by the browser as
+/// immutable, and the view of the product's screen is titled as the screen states. The other site's
+/// definition holds none of it, and a part of the first site is not found from the second.
+#[tokio::test]
+async fn a_tenants_interface_definition_is_served_by_hash_to_its_own_site_only() {
+    let edge = start().await;
+    let (owner, csrf) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
+    let bundle: Json = serde_json::from_str(include_str!(
+        "../../spec-compiler/tests/fixtures/products/expected/ticket-desk.bundle.json"
+    ))
+    .unwrap();
+    let (status, installed, _) = edge
+        .send(
+            edge.post(
+                "127.0.0.1",
+                "/api/products/install",
+                json!({ "bundle": bundle }),
+            )
+            .header("cookie", format!("{SESSION_COOKIE}={owner}"))
+            .header("x-csrf-token", &csrf),
+        )
+        .await;
+    assert_eq!(status, 200, "{installed}");
+
+    // Every visitor of the site routes with the same definition: no session is needed.
+    let (status, manifest, reply) = edge.get("127.0.0.1", "/api/ui", None).await;
+    assert_eq!(status, 200, "{manifest}");
+    assert_eq!(
+        reply.headers.get("cache-control").unwrap(),
+        "no-store",
+        "the manifest changes with the schema"
+    );
+    let screen = manifest["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == "ticket_desk__board_screen")
+        .cloned()
+        .expect("the manifest lists the product's screen");
+    assert_eq!(screen["route"], "/tickets");
+    assert_eq!(screen["view"], "ticket_desk__board");
+    let hash = screen["hash"].as_str().unwrap().to_string();
+
+    let (status, part, reply) = edge
+        .get("127.0.0.1", &format!("/api/ui/parts/{hash}"), None)
+        .await;
+    assert_eq!(status, 200, "{part}");
+    assert_eq!(
+        reply.headers.get("cache-control").unwrap(),
+        "private, max-age=31536000, immutable"
+    );
+    assert_eq!(part["id"], "ticket_desk__board_screen");
+    assert_eq!(
+        part["forms"]["ticket_desk__open_form"]["operation"],
+        "ticket_desk__open_ticket"
+    );
+
+    // The second site has no such screen, and does not serve the first site's part.
+    let (status, other, _) = edge.get("localhost", "/api/ui", None).await;
+    assert_eq!(status, 200, "{other}");
+    assert!(
+        other["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["id"] != "ticket_desk__board_screen"),
+        "{other}"
+    );
+    let (status, _, reply) = edge
+        .get("localhost", &format!("/api/ui/parts/{hash}"), None)
+        .await;
+    assert_eq!(status, 404);
+    assert_eq!(reply.headers.get("cache-control").unwrap(), "no-store");
+    let (status, _, _) = edge
+        .get(
+            "127.0.0.1",
+            &format!("/api/ui/parts/{}", "0".repeat(64)),
+            None,
+        )
+        .await;
+    assert_eq!(
+        status, 404,
+        "a hash the definition does not hold is no part"
+    );
+
+    // The view of the product's screen carries the title the screen states, not the view's own.
+    let (status, view, _) = edge
+        .get("127.0.0.1", "/api/view?path=/tickets", Some(&owner))
+        .await;
+    assert_eq!(status, 200, "{view}");
+    assert_eq!(view["view"], "ticket_desk__board");
+    assert_eq!(view["title"], "Open tickets");
+}
+
 /// Sign in as a person of the first site, presenting `token` as the request token; the status.
 async fn login_with(edge: &Edge, token: String) -> u16 {
     edge.send(

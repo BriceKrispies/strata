@@ -1884,6 +1884,9 @@ pub(crate) fn apply_change(
         SchemaChange::RecordProduct(_) | SchemaChange::RemoveProduct(_) => {
             crate::products::apply(schema, change)?
         }
+        SchemaChange::DefineUiElement { .. } | SchemaChange::RemoveUiElement(_) => {
+            crate::ui::apply(schema, change)?
+        }
     })
 }
 

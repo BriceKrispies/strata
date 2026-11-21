@@ -20,7 +20,7 @@ use std::process::Command;
 
 use serde_json::{json, Map, Value};
 use strata_spec_compiler::layers::{self, ProductFile};
-use strata_spec_compiler::{bundle, jsonc, layer_values, output, Diagnostic};
+use strata_spec_compiler::{bundle, bundle_ui, jsonc, layer_values, output, Diagnostic};
 
 const PLATFORM: &str = "specifications/spec.jsonc";
 const PRODUCTS: &str = "crates/spec-compiler/tests/fixtures/products";
@@ -154,6 +154,94 @@ fn golden_bundle_of_a_product_that_states_its_release_in_its_header() {
     // The claim states a fact about the product and is not tenant metadata.
     assert_eq!(output.omitted, vec![("claims".to_string(), 1)]);
     check_golden(&output);
+}
+
+/// Verifies: INT-3250
+///
+/// The screens, forms, actions, live bindings and error messages of a product file are the section
+/// `ui` of its bundle: each a value of `ui-element`, keyed by its id, bound to the product's view by
+/// its route and to its operation by its id.
+#[test]
+fn golden_bundle_of_a_product_that_declares_its_interface() {
+    let output = bundle_of(&product("bundle/ticket-desk.jsonc"));
+    assert_eq!(output.files[0].path, "ticket-desk.bundle.json");
+    let bundle = the_bundle(&output);
+    let ui = &bundle["content"]["ui"];
+    let screen = &ui["ticket_desk__board_screen"]["Screen"];
+    assert_eq!(screen["view"], "ticket_desk__board");
+    assert_eq!(screen["route"], "/tickets");
+    assert_eq!(screen["kind"], "list");
+    assert_eq!(screen["auth"], "session");
+    let form = &ui["ticket_desk__open_form"]["Form"];
+    assert_eq!(form["operation"], "ticket_desk__open_ticket");
+    assert_eq!(form["fields"][0]["trim"], true);
+    assert_eq!(
+        ui["ticket_desk__open_again"]["Action"]["arguments"],
+        json!({ "title": "form.title" })
+    );
+    assert_eq!(
+        ui["ticket_desk__board_live"]["LiveBinding"],
+        json!({ "screen": "ticket_desk__board_screen", "event": "notice", "kinds": ["membership"], "objects": true })
+    );
+    assert_eq!(
+        ui["ticket_desk__title_needed"]["ErrorMessage"]["applies-to"],
+        json!(["ticket_desk__open_form"])
+    );
+    // The interface is the section `ui`, and no other section holds it.
+    for section in [
+        "screens",
+        "forms",
+        "actions",
+        "liveBindings",
+        "errorMessages",
+    ] {
+        assert!(bundle["content"].get(section).is_none(), "{section}");
+    }
+    check_golden(&output);
+}
+
+/// Verifies: INT-3251
+///
+/// A screen whose route no view of the product answers and a form that submits to no operation of
+/// the product are refused, each naming the element.
+#[test]
+fn an_interface_element_bound_to_nothing_of_the_product_is_refused() {
+    let diagnostics = refused("bundle-refused/ui-unresolved.jsonc");
+    assert_eq!(
+        codes(&diagnostics),
+        [bundle_ui::UI_UNRESOLVED, bundle_ui::UI_UNRESOLVED],
+        "{diagnostics:?}"
+    );
+    let entities: Vec<&str> = diagnostics.iter().map(|d| d.entity.as_str()).collect();
+    assert_eq!(entities, ["ticket_desk__desk", "ticket_desk__open_form"]);
+    assert!(
+        diagnostics[0].message.contains("\"/desk\""),
+        "{}",
+        diagnostics[0].message
+    );
+    assert!(
+        diagnostics[1].message.contains("ticket_desk__open_ticket"),
+        "{}",
+        diagnostics[1].message
+    );
+}
+
+/// A feature of the format that the interpreter does not draw is refused, not dropped.
+#[test]
+fn an_interface_feature_the_interpreter_does_not_draw_is_refused() {
+    let mut top = jsonc::parse(&product("bundle/ticket-desk.jsonc").text)
+        .unwrap()
+        .as_object()
+        .cloned()
+        .unwrap();
+    top["forms"][0]["fields"][0]["derive"] = json!("form.other");
+    let diagnostics = bundle::build("ticket-desk", "Ticket desk", "1.0.0", None, &top).unwrap_err();
+    assert_eq!(
+        codes(&diagnostics),
+        [bundle_ui::UI_UNSUPPORTED],
+        "{diagnostics:?}"
+    );
+    assert_eq!(diagnostics[0].entity, "ticket_desk__open_form.title");
 }
 
 fn the_bundle(output: &bundle::Output) -> Value {

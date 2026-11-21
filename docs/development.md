@@ -112,7 +112,7 @@ store's own integrity check.
 | Command | What runs |
 |---|---|
 | `cargo test --workspace` | The Rust tests: kernel behaviour and properties, substrate, storage conformance on both adapters, simulation, verification (with Lean when installed), backend and BFF as running services |
-| `npm run test:web` | The tests of the frontend kernel and client (`web/test/kernel.test.js`, `web/test/client.test.js`) as plain functions |
+| `npm run test:web` | The tests of the frontend kernel and client (`web/test/kernel.test.js`, `web/test/client.test.js`, `web/test/tenant-ui.test.js`) as plain functions |
 | `npm run test:scripts` | The tests of `scripts/generated-share.mjs` |
 | `npm run check` | `tsc --checkJs` over the JSDoc-typed JavaScript |
 | `npm run e2e` | The Playwright tests (`tests/e2e/site.spec.js`, `hmr.spec.js`) on two private stacks (ports 4200/4201 and 4210/4211/5183). The stacks build the backend, the BFF and the frontend first. The Lean test fails when Lean is missing unless `STRATA_E2E_SKIP_LEAN=1` |

@@ -37,7 +37,10 @@ that names the platform file and the platform entities it uses:
 
 A product may declare `records`, `types`, `screens`, `forms`, `actions`, `liveBindings`,
 `errorMessages`, `behaviors`, `events`, `contracts`, `roles`, `scenarios`, `uiScenarios`,
-`claims` and `evidence`, and nothing that redefines a platform entity. specc checks every file
+`claims` and `evidence`, and nothing that redefines a platform entity. The interface sections
+(`screens`, `forms`, `actions`, `liveBindings`, `errorMessages`) become the `ui` section of the
+product's bundle (D-8250): a screen shows the product view of its route, and a form or action
+submits to the product operation its `contract` names. specc checks every file
 in `specifications/products/` when `npm run generate` and the gate run (`--product`), refuses a
 bad one with an `error[layer.*]` line saying what to change, and generates nothing from it, so
 the generated files and their semantic hash stay the platform's. Exegra reads a product file

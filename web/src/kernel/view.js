@@ -5,6 +5,7 @@
 import { hrefFor } from '../generated/routes.js';
 import { SIGN_IN_PATH, SIGN_IN_SCREEN, guardedView, navigation, pageTitle as statedTitle, screenOfView } from '../generated/screens.js';
 import { pageBuilderOf } from './page-builders.js';
+import { partOf, tenantPage, tenantScreenOfView } from './tenant-ui.js';
 import { hrefOf } from './update.js';
 // The publication's page builders register themselves; a product's are registered the same way
 // (`registerPageBuilder`), by a module the entry point imports, without editing this file.
@@ -19,12 +20,24 @@ function page(state) {
   const d = model.data;
   const signedIn = session?.authenticated === true;
   const canWrite = signedIn && (session.may?.post ?? []).includes('create');
+  // A view a screen of the tenant's interface definition shows is drawn by the interpreter, from
+  // the screen's part (D-8250, INT-3257).
+  const tenant = tenantScreenOfView(state.ui, model.view);
+  if (tenant) {
+    if (tenant.auth === 'session' && !signedIn) return view.status === 'loading' ? { kind: 'loading' } : { kind: 'signin_required', next: hrefOf(state.route) };
+    const part = partOf(state.ui, tenant);
+    if (!part) return { kind: 'loading' };
+    return tenantPage(tenant, part, model, { forms: state.tenant.forms, confirm: state.tenant.confirm, signedIn });
+  }
   const guarded = guardedView(model.view);
   // While the next page is on its way, a guarded page the visitor just left is not shown again.
   if (guarded && !signedIn) return view.status === 'loading' ? { kind: 'loading' } : { kind: 'signin_required', next: hrefOf(state.route) };
 
   const build = pageBuilderOf(screenOfView(model.view)?.kind);
-  return build ? build(state, { model, d, session, signedIn, canWrite }) : { kind: 'missing', path: state.route.path };
+  if (build) return build(state, { model, d, session, signedIn, canWrite });
+  // The tenant's interface definition is on its way: the view may be one of its screens.
+  const asking = Object.values(state.pending ?? {}).some((p) => p.kind === 'ui.manifest');
+  return asking ? { kind: 'loading' } : { kind: 'missing', path: state.route.path };
 }
 
 /** The titles of the states the page frame shows itself, which no screen states. */

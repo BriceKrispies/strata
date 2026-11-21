@@ -1,0 +1,90 @@
+{
+  // A product that declares its interface, for the tenant interface definition (WG-5297, D-8250): a
+  // record type of tickets, the open tickets as a query and a view at /tickets, an operation that
+  // opens a ticket, and the screen, form, action, live binding and error message that show and use
+  // them. specc writes the interface as the section "ui" of the bundle, each entity an interface
+  // element bound to the product's own view (by its route) and operation (by its id). The expected
+  // bundle is tests/fixtures/products/expected/ticket-desk.bundle.json.
+  "product": {
+    "id": "ticket-desk",
+    "name": "Ticket desk",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../../../../specifications/spec.jsonc",
+      "entities": ["ui-notice-received"]
+    }
+  },
+  "objects": [
+    {
+      "id": "ticket_desk__ticket",
+      "label": "Ticket",
+      "fields": {
+        "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": false },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false }
+      },
+      "constraints": {}
+    }
+  ],
+  "queries": [
+    {
+      "id": "ticket_desk__open",
+      "object": "ticket_desk__ticket",
+      "filter": "record.status == 'open'",
+      "params": [],
+      "order": [{ "field": "title", "descending": false }],
+      "limit": 50
+    }
+  ],
+  "views": [
+    {
+      "id": "ticket_desk__board",
+      "route": "/tickets",
+      "title": "Tickets",
+      "sections": {
+        "open": { "query": "ticket_desk__open", "args": {}, "include": [], "markdown": [], "single": false }
+      }
+    }
+  ],
+  "operations": [
+    {
+      "id": "ticket_desk__open_ticket",
+      "label": "Open a ticket",
+      "inputs": [{ "name": "title", "ty": "Str", "required": true, "label": "Title" }],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [
+        { "CreateRecord": { "id": "ticket", "object": "ticket_desk__ticket", "fields": { "title": "param.title", "status": "'open'" } } }
+      ]
+    }
+  ],
+  "screens": [
+    {
+      "id": "ticket_desk__board_screen", "name": "Ticket board", "route": "/tickets", "viewModel": "ticket_desk__board",
+      "kind": "tickets.list", "auth": "session", "title": "Open tickets"
+    }
+  ],
+  "forms": [
+    {
+      "id": "ticket_desk__open_form", "screen": "ticket_desk__board_screen", "contract": "ticket_desk__open_ticket",
+      "fields": [{ "name": "title", "input": "title", "label": "Title", "control": "text", "normalize": "trim" }],
+      "submitLabel": "Open the ticket", "onSuccess": { "toast": "Ticket opened." }, "onError": { "show": "inline" }
+    }
+  ],
+  "actions": [
+    {
+      "id": "ticket_desk__open_again", "screen": "ticket_desk__board_screen", "label": "Open it again", "contract": "ticket_desk__open_ticket",
+      "form": "ticket_desk__open_form", "arguments": { "title": "form.title" },
+      "onSuccess": { "toast": "Opened again." }, "onError": { "show": "toast" }
+    }
+  ],
+  "liveBindings": [
+    {
+      "id": "ticket_desk__board_live", "screen": "ticket_desk__board_screen", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] }
+    }
+  ],
+  "errorMessages": [
+    { "id": "ticket_desk__title_needed", "on": "check", "kinds": ["required"], "text": "A ticket needs a title.", "field": "name", "appliesTo": ["ticket_desk__open_form"] }
+  ]
+}
