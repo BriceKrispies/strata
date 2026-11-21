@@ -456,11 +456,15 @@ pub fn project(data: &ViewData) -> Json {
         "title": data.title,
         "params": data.params,
         "data": sections,
-        "next": next,
         "depends_on": data.depends_on.iter().map(|o| o.as_str()).collect::<Vec<_>>(),
         "revision": data.revision.0,
         "schema_version": data.schema_version.0,
     });
+    // The cursors of the sections that have a further page: a member only when there is one, as
+    // the view contracts declare no `next` output for a model with no further page.
+    if !next.is_empty() {
+        model["next"] = json!(next);
+    }
     // The editor's rules are a member of the model of their own, the output `record-rules` of the
     // view contract (CT-251), not a section of `data`: a section is a record or a list of them.
     if !data.record_rules.is_empty() {
