@@ -454,6 +454,52 @@ fn a_failed_installation_leaves_no_half_tenant_and_the_next_start_installs_it() 
     }
 }
 
+/// Verifies: fm-provisioning-step-fails
+#[test]
+fn an_installation_whose_creating_commit_loses_its_answer_leaves_no_half_tenant() {
+    // fm-provisioning-step-fails: the commit that creates a tenant is made, but its answer is lost
+    // (the first commit of each bundle, as every commit's answer is lost during the start). The
+    // install fails, and a tenant is whole or absent: after the restart each tenant is whole,
+    // with exactly one `create_tenant` in its journal.
+    let tidewater = tenant_id("tidewater");
+    let scenario = ShellScenario {
+        name: "provisioning-reply-lost".into(),
+        seed: 22,
+        start: T0 - 3_600_000,
+        schedule: workload(22, 8),
+        faults: Faults {
+            crash: 1_000_000,
+            ..Faults::default()
+        },
+        listen: vec![fieldnotes(), tidewater.clone()],
+        keys: true,
+        start_faults: StoreFaults {
+            commit_reply_lost: 1_000_000,
+            ..StoreFaults::default()
+        },
+        operations: Vec::new(),
+    };
+    let installed = run(&backend(), &scenario);
+    assert_clean(&installed.trace);
+    assert!(injected(&installed.trace, StoreFault::CommitReplyLost) > 0);
+    assert!(!installed.trace.restarts.is_empty());
+    let seeded = kernel_seeded();
+    for tenant in [fieldnotes(), tidewater] {
+        let state = &installed.world.tenants[&tenant];
+        assert_eq!(state.schema, seeded.tenants[&tenant].schema, "{tenant}");
+        let journal = &installed.recordings[&tenant].entries;
+        assert_eq!(journal[0].intent.name(), "create_tenant", "{tenant}");
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|e| e.intent.name() == "create_tenant")
+                .count(),
+            1,
+            "{tenant}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Jobs and automation runs, on the kernel's notes fixture
 // ---------------------------------------------------------------------------------------------

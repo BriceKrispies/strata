@@ -63,11 +63,17 @@ pub fn install_bundle(app: &App, bundle: &Bundle) -> Result<usize, String> {
     let mut begun = false;
     let result = install::<String>(bundle, &mut |ctx, intent| {
         let creates = matches!(intent, Intent::CreateTenant { .. });
+        if creates {
+            // The creating commit may be durable although its answer is lost, and the directory
+            // row that `begin_provisioning` marks does not exist until that commit. So from here
+            // a failure may have left a tenant, and the failure branch removes it. The tenant is
+            // absent when this is called (both callers check), so nothing else is removed.
+            begun = true;
+        }
         let output = run_intent_unaudited(app, &ctx, &intent, false)
             .map(|done| done.transition.output)
             .map_err(|e| e.describe())?;
         if creates {
-            begun = true;
             app.store
                 .begin_provisioning(&ctx.tenant)
                 .map_err(|e| e.to_string())?;
@@ -82,7 +88,7 @@ pub fn install_bundle(app: &App, bundle: &Bundle) -> Result<usize, String> {
             Ok(steps)
         }
         Err(error) => {
-            // Only a tenant this call created is removed; a refused first step touches nothing.
+            // Only a tenant this call may have created is removed (the tenant was absent).
             if begun {
                 let _ = app.store.reset_tenant(&tenant);
             }
