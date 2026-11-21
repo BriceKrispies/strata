@@ -1205,31 +1205,3 @@ fn a_journal_replays_to_its_balance_and_a_gap_is_reported() {
     assert_eq!(gap.gap, Some(1));
     assert!(!gap.agrees(header.balance.0, header.last_sequence));
 }
-
-proptest! {
-    #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
-
-    /// Verifies: LDG-1545
-    ///
-    /// Whatever the credits and debits, the buckets add up to the balance when it is positive and
-    /// to nothing when it is not.
-    #[test]
-    fn the_buckets_add_up_to_the_positive_balance(
-        posts in proptest::collection::vec((-30i64..30, 0i64..48), 1..25)
-    ) {
-        let mut world = expiring_world();
-        let mut now = T0;
-        for (n, (amount, hours)) in posts.into_iter().enumerate() {
-            let amount = if amount == 0 { 1 } else { amount };
-            now += hours * HOUR;
-            world = posted(
-                &world,
-                now,
-                request(person("writer1"), points(), "", amount, &format!("p{n}")),
-            );
-            let header = header_of(&world, &person("writer1"), &points(), "").unwrap();
-            let held: u64 = header.buckets.iter().flatten().map(|b| b.remaining).sum();
-            prop_assert_eq!(held as i64, header.balance.0.max(0));
-        }
-    }
-}

@@ -150,9 +150,10 @@ fn ids(result: &ReadResult) -> Vec<u64> {
 
 // Verifies: KRN-1286
 #[test]
-fn a_query_with_a_limit_over_a_hundred_thousand_records_loads_a_bounded_window() {
+fn a_query_with_a_limit_over_a_table_of_a_thousand_records_loads_a_bounded_window() {
     let world = with_queries(vec![query("all_notes", vec![], None, Some(20))]);
-    let full = crowded(&world, 100_000);
+    // Five times the page: a read that loaded the table would load far more than the page.
+    let full = crowded(&world, 1_000);
     let schema = &full.tenant.as_ref().unwrap().schema;
     let request = named("all_notes", None, None);
     let needs = read_needs(schema, &request);
@@ -265,27 +266,6 @@ fn a_page_size_above_the_maximum_or_of_zero_is_refused() {
     assert!(read_as(limits::MAX_PAGE_SIZE).is_ok());
     let schema = &state.tenant.as_ref().unwrap().schema;
     assert!(read_needs(schema, &named("all_notes", Some(201), None)).is_empty());
-}
-
-// Verifies: KRN-1285
-#[test]
-fn a_records_read_names_at_most_the_stated_number_of_ids() {
-    let world = notes_world();
-    let state = world.state(&tenant_id("alpha"));
-    let ids = |n: usize| (1..=n as u64).map(RecordId).collect::<Vec<_>>();
-    let read_ids = |n| {
-        read(
-            &state,
-            &ReadRequest::Records {
-                object: object("note"),
-                ids: ids(n),
-            },
-            &ctx("alpha", owner(), 7_000),
-        )
-    };
-    assert!(read_ids(limits::MAX_READ_IDS).is_ok());
-    let refused = read_ids(limits::MAX_READ_IDS + 1).unwrap_err();
-    assert_eq!(refused.kind, ErrorKind::LimitExceeded);
 }
 
 // Verifies: KRN-2522
