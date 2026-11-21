@@ -379,7 +379,7 @@
     "triggers": [
       {
         "automation": "badge_milestones__silver",
-        "condition": "param.owner != null and param.balance_before < 500 and param.balance >= 500",
+        "condition": "not is_null(param.owner) and param.balance_before < 500 and param.balance >= 500",
         "id": "badge_milestones__silver_on_points",
         "on": {
           "LedgerPosted": {

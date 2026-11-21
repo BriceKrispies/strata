@@ -217,7 +217,7 @@
     {
       "id": "badge_milestones__silver_on_points",
       "on": { "LedgerPosted": { "unit": "badge_milestones__points" } },
-      "condition": "param.owner != null and param.balance_before < 500 and param.balance >= 500",
+      "condition": "not is_null(param.owner) and param.balance_before < 500 and param.balance >= 500",
       "automation": "badge_milestones__silver"
     }
   ],

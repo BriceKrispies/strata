@@ -27,7 +27,9 @@ use strata_protocol::api::{
     HEADER_SOURCE,
 };
 use strata_protocol::log::now_ms;
-use strata_storage_api::jobs::{JobWork, RunRecord, RunState, StepRecord, StepState};
+use strata_storage_api::jobs::{
+    ExceptionKind, JobWork, RunRecord, RunState, StepRecord, StepState,
+};
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, Store};
 
@@ -197,6 +199,26 @@ impl Backend {
             .collect()
     }
 
+    /// Pass the worker until a declined exception record with `reason` exists; how many there are.
+    async fn declined_until(&self, reason: &str) -> usize {
+        let config = WorkerConfig::from_limits(&Default::default());
+        for _ in 0..400 {
+            worker::tick(&self.app, "t-worker", &config, &|| Timestamp(now_ms()));
+            let declined = self
+                .store
+                .automation_exceptions(&tenant(), Some(ExceptionKind::Declined), false, None, 50)
+                .unwrap()
+                .into_iter()
+                .filter(|record| record.reason == reason)
+                .count();
+            if declined > 0 {
+                return declined;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("the worker wrote no declined record with reason {reason}");
+    }
+
     /// Pass the worker until the runs of the automation are in the state `done` accepts.
     async fn work_until(&self, done: impl Fn(&[RunRecord]) -> bool) -> Vec<RunRecord> {
         let config = WorkerConfig::from_limits(&Default::default());
@@ -262,8 +284,10 @@ impl Backend {
             .count()
     }
 
+    /// The awards as the application reads them: through its store, which opens the personal
+    /// fields sealed under their subject's key (the raw store holds them sealed).
     fn awards(&self) -> Vec<(String, String)> {
-        let state = self.store.load_complete(&tenant()).unwrap();
+        let state = self.app.store.load_complete(&tenant()).unwrap();
         let tenant = state.tenant.expect("the tenant exists");
         tenant
             .records_of(&strata_kernel::ObjectTypeId::new("badge_milestones__award").unwrap())
@@ -414,9 +438,12 @@ async fn points_that_cross_the_threshold_award_the_badge_once() {
     // which is the person, makes it the same run: no second job, no second award (SCH-1536).
     backend.post_points(&owner, "user:mirela", -100, "p3").await;
     backend.post_points(&owner, "user:mirela", 100, "p4").await;
+    // The worker keeps the key it started a run for, so the repeated key starts nothing and
+    // writes a declined record (SCH-1536, D-6534).
+    let declined = backend.declined_until("run-key-repeated").await;
+    assert_eq!(declined, 1);
     let runs = backend.work_until(|runs| runs.len() == 1).await;
     assert_eq!(runs.len(), 1);
-    assert_eq!(backend.silver_start_jobs(), 1);
     assert_eq!(backend.awards().len(), 1);
     assert_eq!(backend.badges(&mirela).await.len(), 1);
     assert_eq!(backend.notices(&mirela).await.len(), 1, "no second notice");
