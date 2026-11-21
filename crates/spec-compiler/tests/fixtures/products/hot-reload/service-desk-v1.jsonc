@@ -1,0 +1,389 @@
+{
+  // v1: the baseline. Objects customer, asset and ticket (ticket references both and has a status
+  // workflow and an sla_due time), a ticket board at /desk reading customer through the reference, a
+  // customer list, an asset detail, and a form, action, live binding and error messages.
+  "product": {
+    "id": "service-desk",
+    "name": "Service desk",
+    "version": "1.0.0",
+    "platform": {
+      "min": "0.2"
+    },
+    "imports": {
+      "spec": "../../../../../../specifications/spec.jsonc",
+      "entities": [
+        "ui-notice-received"
+      ]
+    }
+  },
+  "objects": [
+    {
+      "id": "service_desk__customer",
+      "label": "Customer",
+      "fields": {
+        "name": {
+          "id": "name",
+          "label": "Name",
+          "ty": "Str",
+          "required": true,
+          "unique": false
+        },
+        "email": {
+          "id": "email",
+          "label": "Email",
+          "ty": "Str",
+          "required": true,
+          "unique": false
+        }
+      },
+      "constraints": {}
+    },
+    {
+      "id": "service_desk__asset",
+      "label": "Asset",
+      "fields": {
+        "tag": {
+          "id": "tag",
+          "label": "Tag",
+          "ty": "Str",
+          "required": true,
+          "unique": true
+        },
+        "model": {
+          "id": "model",
+          "label": "Model",
+          "ty": "Str",
+          "required": true,
+          "unique": false
+        }
+      },
+      "constraints": {}
+    },
+    {
+      "id": "service_desk__ticket",
+      "label": "Ticket",
+      "fields": {
+        "title": {
+          "id": "title",
+          "label": "Title",
+          "ty": "Str",
+          "required": true,
+          "unique": false
+        },
+        "status": {
+          "id": "status",
+          "label": "Status",
+          "ty": "Str",
+          "required": true,
+          "unique": false
+        },
+        "sla_due": {
+          "id": "sla_due",
+          "label": "SLA due",
+          "ty": "Time",
+          "required": false,
+          "unique": false
+        },
+        "customer": {
+          "id": "customer",
+          "label": "Customer",
+          "ty": {
+            "Ref": {
+              "target": "service_desk__customer",
+              "on-delete": "Restrict"
+            }
+          },
+          "required": false,
+          "unique": false
+        },
+        "asset": {
+          "id": "asset",
+          "label": "Asset",
+          "ty": {
+            "Ref": {
+              "target": "service_desk__asset",
+              "on-delete": "Restrict"
+            }
+          },
+          "required": false,
+          "unique": false
+        }
+      },
+      "constraints": {}
+    }
+  ],
+  "queries": [
+    {
+      "id": "service_desk__open",
+      "object": "service_desk__ticket",
+      "filter": "record.status == 'open'",
+      "params": [],
+      "order": [
+        {
+          "field": "title",
+          "descending": false
+        }
+      ],
+      "limit": 50
+    },
+    {
+      "id": "service_desk__customers",
+      "object": "service_desk__customer",
+      "filter": "record.email != ''",
+      "params": [],
+      "order": [
+        {
+          "field": "name",
+          "descending": false
+        }
+      ],
+      "limit": 100
+    },
+    {
+      "id": "service_desk__assets",
+      "object": "service_desk__asset",
+      "filter": "record.tag != ''",
+      "params": [],
+      "order": [
+        {
+          "field": "tag",
+          "descending": false
+        }
+      ],
+      "limit": 100
+    }
+  ],
+  "views": [
+    {
+      "id": "service_desk__board",
+      "route": "/desk",
+      "title": "Tickets",
+      "sections": {
+        "open": {
+          "query": "service_desk__open",
+          "args": {},
+          "include": [
+            "customer",
+            "asset"
+          ],
+          "markdown": [],
+          "single": false
+        }
+      }
+    },
+    {
+      "id": "service_desk__customer_list",
+      "route": "/customers",
+      "title": "Customers",
+      "sections": {
+        "all": {
+          "query": "service_desk__customers",
+          "args": {},
+          "include": [],
+          "markdown": [],
+          "single": false
+        }
+      }
+    },
+    {
+      "id": "service_desk__asset_detail",
+      "route": "/assets",
+      "title": "Assets",
+      "sections": {
+        "all": {
+          "query": "service_desk__assets",
+          "args": {},
+          "include": [],
+          "markdown": [],
+          "single": false
+        }
+      }
+    }
+  ],
+  "operations": [
+    {
+      "id": "service_desk__open_ticket",
+      "label": "Open a ticket",
+      "inputs": [
+        {
+          "name": "title",
+          "ty": "Str",
+          "required": true,
+          "label": "Title"
+        }
+      ],
+      "invokers": {
+        "signed-in": true,
+        "roles": []
+      },
+      "conditions": [],
+      "steps": [
+        {
+          "CreateRecord": {
+            "id": "ticket",
+            "object": "service_desk__ticket",
+            "fields": {
+              "title": "param.title",
+              "status": "'open'"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "service_desk__lifecycle",
+      "object": "service_desk__ticket",
+      "field": "status",
+      "initial": [
+        "open"
+      ],
+      "transitions": [
+        {
+          "name": "start",
+          "from": "open",
+          "to": "in_progress",
+          "set": {}
+        },
+        {
+          "name": "close",
+          "from": "in_progress",
+          "to": "closed",
+          "set": {}
+        },
+        {
+          "name": "reopen",
+          "from": "closed",
+          "to": "open",
+          "set": {}
+        }
+      ]
+    }
+  ],
+  "screens": [
+    {
+      "id": "service_desk__board_screen",
+      "name": "Ticket board",
+      "route": "/desk",
+      "viewModel": "service_desk__board",
+      "kind": "tickets.list",
+      "auth": "session",
+      "title": "Tickets"
+    },
+    {
+      "id": "service_desk__customers_screen",
+      "name": "Customers",
+      "route": "/customers",
+      "viewModel": "service_desk__customer_list",
+      "kind": "customers.list",
+      "auth": "none",
+      "title": "Customers"
+    },
+    {
+      "id": "service_desk__asset_screen",
+      "name": "Asset",
+      "route": "/assets",
+      "viewModel": "service_desk__asset_detail",
+      "kind": "assets.detail",
+      "auth": "session",
+      "title": "Assets"
+    }
+  ],
+  "forms": [
+    {
+      "id": "service_desk__open_form",
+      "screen": "service_desk__board_screen",
+      "contract": "service_desk__open_ticket",
+      "fields": [
+        {
+          "name": "title",
+          "input": "title",
+          "label": "Title",
+          "control": "text",
+          "normalize": "trim"
+        }
+      ],
+      "submitLabel": "Open the ticket",
+      "onSuccess": {
+        "toast": "Ticket opened."
+      },
+      "onError": {
+        "show": "inline"
+      }
+    }
+  ],
+  "actions": [
+    {
+      "id": "service_desk__open_again",
+      "screen": "service_desk__board_screen",
+      "label": "Open it again",
+      "contract": "service_desk__open_ticket",
+      "form": "service_desk__open_form",
+      "arguments": {
+        "title": "form.title"
+      },
+      "onSuccess": {
+        "toast": "Opened again."
+      },
+      "onError": {
+        "show": "toast"
+      }
+    }
+  ],
+  "liveBindings": [
+    {
+      "id": "service_desk__board_live",
+      "screen": "service_desk__board_screen",
+      "event": "ui-notice-received",
+      "refresh": "whole",
+      "when": {
+        "any": [
+          "event.kind == 'upsert'",
+          {
+            "value": "event.object",
+            "in": "depends-on"
+          }
+        ]
+      }
+    },
+    {
+      "id": "service_desk__customers_live",
+      "screen": "service_desk__customers_screen",
+      "event": "ui-notice-received",
+      "refresh": "whole"
+    },
+    {
+      "id": "service_desk__asset_live",
+      "screen": "service_desk__asset_screen",
+      "event": "ui-notice-received",
+      "refresh": "whole"
+    }
+  ],
+  "errorMessages": [
+    {
+      "id": "service_desk__title_needed",
+      "on": "check",
+      "kinds": [
+        "required"
+      ],
+      "text": "A ticket needs a title.",
+      "field": "name",
+      "appliesTo": [
+        "service_desk__open_form"
+      ]
+    },
+    {
+      "id": "service_desk__open_failed",
+      "on": "check",
+      "kinds": [
+        "required"
+      ],
+      "text": "The ticket could not be opened.",
+      "field": "name",
+      "appliesTo": [
+        "service_desk__open_again"
+      ]
+    }
+  ]
+}
