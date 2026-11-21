@@ -69,7 +69,7 @@ pub fn set_of(items: &Vec<String>) -> Vec<String> {
     support::sorted_by(items.iter(), |r| r.clone())
         .iter()
         .fold(Vec::<String>::new(), |acc, r| {
-            if acc.iter().any(|a| *a == *r) {
+            if acc.contains(r) {
                 acc.clone()
             } else {
                 support::concat(&acc, &[r.clone()])
@@ -103,8 +103,8 @@ pub fn policy_applies(
     action: &types::Action,
     resource: &types::Resource,
 ) -> bool {
-    roles.iter().any(|r| *r == policy.role)
-        && policy.actions.iter().any(|a| *a == *action)
+    roles.contains(&policy.role)
+        && policy.actions.contains(action)
         && (match &policy.resource {
             types::Resource::AnyObject => match resource {
                 types::Resource::Object(_) => true,
@@ -282,9 +282,9 @@ pub fn next_version(
     expected: Option<u64>,
 ) -> Result<u64, Failure<types::DomainError>> {
     let _ = check_version(version, expected).map_err(Failure::Error)?;
-    Ok(version
+    version
         .checked_add(1)
-        .ok_or(Failure::Fault(Fault { op: "+" }))?)
+        .ok_or(Failure::Fault(Fault { op: "+" }))
 }
 
 /// A timestamp moved on by a number of milliseconds (WG-4966): checked i64 arithmetic on Timestamp.
@@ -334,7 +334,7 @@ pub fn grants_of(
 ) -> Vec<types::Grant> {
     actions
         .iter()
-        .map(|a| types::Grant::Object(object.clone(), a.clone()))
+        .map(|a| types::Grant::Object(object.clone(), *a))
         .collect::<Vec<_>>()
 }
 
@@ -388,10 +388,10 @@ pub fn text_checks(s: &String) -> bool {
 ///
 /// Specification function `sizes`; an integer overflow, a division by zero or a failed conversion is a `Fault`.
 pub fn sizes(s: &String, xs: &Vec<String>) -> Result<u64, Fault> {
-    Ok(u64::try_from(s.as_str().chars().count())
+    u64::try_from(s.as_str().chars().count())
         .unwrap_or(u64::MAX)
         .checked_add(u64::try_from(xs.len()).unwrap_or(u64::MAX))
-        .ok_or(Fault { op: "+" })?)
+        .ok_or(Fault { op: "+" })
 }
 
 /// trim and chars (WG-4957, WG-4966).
@@ -470,21 +470,21 @@ pub fn double_negation(e: &types::Expr) -> bool {
 ///
 /// Specification function `narrow`; an integer overflow, a division by zero or a failed conversion is a `Fault`.
 pub fn narrow(x: i64) -> Result<u64, Fault> {
-    Ok(u64::try_from(x).map_err(|_| Fault { op: "as" })?)
+    u64::try_from(x).map_err(|_| Fault { op: "as" })
 }
 
 /// A record id as an i64: its u64, narrowed (WG-4966).
 ///
 /// Specification function `rid-number`; an integer overflow, a division by zero or a failed conversion is a `Fault`.
 pub fn rid_number(r: &types::Rid) -> Result<i64, Fault> {
-    Ok(i64::try_from(r.clone().0).map_err(|_| Fault { op: "as" })?)
+    i64::try_from(r.0).map_err(|_| Fault { op: "as" })
 }
 
 /// A string built as a constrained id: checked with RoleId::new (WG-4966).
 ///
 /// Specification function `make-role`; an integer overflow, a division by zero or a failed conversion is a `Fault`.
 pub fn make_role(s: &String) -> Result<types::Role, Fault> {
-    Ok(types::Role::new(s.clone()).map_err(|_| Fault { op: "new" })?)
+    types::Role::new(s.clone()).map_err(|_| Fault { op: "new" })
 }
 
 /// A map of strings as a map of constrained ids: each key checked (WG-4966).
@@ -493,7 +493,7 @@ pub fn make_role(s: &String) -> Result<types::Role, Fault> {
 pub fn role_map(
     m: &std::collections::BTreeMap<String, String>,
 ) -> Result<std::collections::BTreeMap<types::Role, String>, Fault> {
-    Ok(m.clone()
+    m.clone()
         .into_iter()
         .map(|(key_, item_)| {
             Ok::<_, Fault>((
@@ -501,7 +501,7 @@ pub fn role_map(
                 item_,
             ))
         })
-        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?)
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()
 }
 
 /// A lookup by a string in a map of constrained ids: the key built without the check (WG-4966).
@@ -531,7 +531,7 @@ pub fn builtin_roles() -> std::collections::BTreeMap<types::Role, String> {
 /// Specification function `key-order`.
 pub fn key_order(xs: &Vec<types::Key>) -> Vec<types::Key> {
     support::sorted_by(xs.iter(), |x| match x {
-        types::Key::Rec(r) => i128::from(r.clone().0),
+        types::Key::Rec(r) => i128::from(r.0),
         types::Key::Num(i) => i128::from(*i),
     })
 }
@@ -548,28 +548,28 @@ pub fn mentions_field(e: &types::Expr) -> bool {
         types::Expr::Now => false,
         types::Expr::Principal => false,
         types::Expr::HasRole(_) => false,
-        types::Expr::Not(a) => mentions_field(&(**a)),
-        types::Expr::IsNull(a) => mentions_field(&(**a)),
-        types::Expr::Len(a) => mentions_field(&(**a)),
-        types::Expr::Lower(a) => mentions_field(&(**a)),
-        types::Expr::IsSlug(a) => mentions_field(&(**a)),
-        types::Expr::And(items) => items.iter().any(|i| mentions_field(i)),
-        types::Expr::Or(items) => items.iter().any(|i| mentions_field(i)),
+        types::Expr::Not(a) => mentions_field(a),
+        types::Expr::IsNull(a) => mentions_field(a),
+        types::Expr::Len(a) => mentions_field(a),
+        types::Expr::Lower(a) => mentions_field(a),
+        types::Expr::IsSlug(a) => mentions_field(a),
+        types::Expr::And(items) => items.iter().any(mentions_field),
+        types::Expr::Or(items) => items.iter().any(mentions_field),
         types::Expr::Cmp { left, right, .. } => {
-            mentions_field(&(**left)) || mentions_field(&(**right))
+            mentions_field(left) || mentions_field(right)
         }
-        types::Expr::In { item, list: l } => mentions_field(&(**item)) || mentions_field(&(**l)),
+        types::Expr::In { item, list: l } => mentions_field(item) || mentions_field(l),
         types::Expr::Contains { haystack, needle } => {
-            mentions_field(&(**haystack)) || mentions_field(&(**needle))
+            mentions_field(haystack) || mentions_field(needle)
         }
         types::Expr::StartsWith { text, prefix } => {
-            mentions_field(&(**text)) || mentions_field(&(**prefix))
+            mentions_field(text) || mentions_field(prefix)
         }
         types::Expr::If {
             cond,
             then: t,
             otherwise,
-        } => mentions_field(&(**cond)) || mentions_field(&(**t)) || mentions_field(&(**otherwise)),
+        } => mentions_field(cond) || mentions_field(t) || mentions_field(otherwise),
     }
 }
 

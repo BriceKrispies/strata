@@ -4,7 +4,6 @@
 //! the install is idempotent and records which product owns each entity (D-6582, D-6583).
 
 use serde_json::{json, Value as Json};
-use strata_kernel::expr::parse;
 use strata_kernel::*;
 use strata_substrate::bundle::{
     install_into, install_product, plan_install, remove_product, Bundle, BundleError,

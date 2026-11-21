@@ -1651,7 +1651,7 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
             Prim::ConcatChecked | Prim::ToText => &["null", "string"],
         };
         for f in needs {
-            if !has_form(*f) {
+            if !has_form(f) {
                 err(LANGUAGE_UNSUPPORTED, format!("operator {} needs values of the {f} literal form, which no literal operator gives.", o.op.name));
             }
         }

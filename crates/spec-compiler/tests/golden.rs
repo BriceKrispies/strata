@@ -74,10 +74,10 @@ fn golden_output_matches_the_fixture_crate() {
     let dir = manifest_dir().join("../spec-compiler-fixture");
     let files = fixture_files();
     if std::env::var("SPECC_BLESS").as_deref() == Ok("1") {
-        output::write(&dir, &files).unwrap();
+        output::write(&dir, files).unwrap();
         return;
     }
-    let differences = output::compare(&dir, &files).unwrap();
+    let differences = output::compare(&dir, files).unwrap();
     assert!(
         differences.is_empty(),
         "crates/spec-compiler-fixture is not what specc generates from the fixture: {differences:?}. \
@@ -90,10 +90,10 @@ fn machines_golden_output_matches_its_fixture_crate() {
     let dir = manifest_dir().join("../spec-compiler-machines-fixture");
     let files = machines_files();
     if std::env::var("SPECC_BLESS").as_deref() == Ok("1") {
-        output::write(&dir, &files).unwrap();
+        output::write(&dir, files).unwrap();
         return;
     }
-    let differences = output::compare(&dir, &files).unwrap();
+    let differences = output::compare(&dir, files).unwrap();
     assert!(
         differences.is_empty(),
         "crates/spec-compiler-machines-fixture is not what specc generates from the machines fixture: {differences:?}.          Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
@@ -105,10 +105,10 @@ fn wiring_golden_output_matches_its_fixture_crate() {
     let dir = manifest_dir().join("../spec-compiler-wiring-fixture");
     let files = wiring_files();
     if std::env::var("SPECC_BLESS").as_deref() == Ok("1") {
-        output::write(&dir, &files).unwrap();
+        output::write(&dir, files).unwrap();
         return;
     }
-    let differences = output::compare(&dir, &files).unwrap();
+    let differences = output::compare(&dir, files).unwrap();
     assert!(
         differences.is_empty(),
         "crates/spec-compiler-wiring-fixture is not what specc generates from the wiring fixture: {differences:?}.          Run the test with SPECC_BLESS=1 to rewrite it, and review the change."

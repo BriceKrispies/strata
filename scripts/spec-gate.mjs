@@ -429,7 +429,7 @@ if (!noTest) {
   if (!hasTool('cargo', ['clippy', '--version'])) {
     skipCheck('cargo clippy -D warnings', 'clippy is not installed (rustup component add clippy)');
   } else {
-    const clippy = run('cargo', ['clippy', '--workspace', ...packages.generated.flatMap((name) => ['--exclude', name]), '--all-targets', '--', '-D', 'warnings'], { env: lintEnv, timeoutMs: LONG_TIMEOUT_MS });
+    const clippy = run('cargo', ['clippy', '--no-deps', '--workspace', ...packages.generated.flatMap((name) => ['--exclude', name]), '--all-targets', '--', '-D', 'warnings'], { env: lintEnv, timeoutMs: LONG_TIMEOUT_MS });
     check('cargo clippy -D warnings (hand-written crates)', clippy.ok, clippy.ok ? `${packages.handWritten.length} crates` : `${exitText(clippy)}: ${lastLine(clippy.out)}`);
   }
   if (!hasTool('cargo', ['audit', '--version'])) {

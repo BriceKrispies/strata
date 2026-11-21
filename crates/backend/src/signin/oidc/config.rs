@@ -525,11 +525,11 @@ impl Federation {
         let domain = domain.to_lowercase();
         self.providers(tenant)
             .iter()
-            .any(|p| p.enabled && p.domains.iter().any(|bound| *bound == domain))
+            .any(|p| p.enabled && p.domains.contains(&domain))
             || self
                 .saml_providers(tenant)
                 .iter()
-                .any(|p| p.enabled && p.domains.iter().any(|bound| *bound == domain))
+                .any(|p| p.enabled && p.domains.contains(&domain))
     }
 
     fn slot(&self, tenant: &TenantId, provider: &ProviderConfig) -> (TenantId, String) {

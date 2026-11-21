@@ -573,7 +573,7 @@ pub fn lint_started(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    
 
     fn finding(rule: &'static str, entity: &str) -> Finding {
         Finding {

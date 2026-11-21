@@ -1115,7 +1115,7 @@ pub async fn usage_route(
     State(app): State<Shared>,
     headers: HeaderMap,
 ) -> Result<Json<Json_>, ApiError> {
-    crate::http::as_caller(&app, &headers, |app, identity| usage_of(app, identity)).await
+    crate::http::as_caller(&app, &headers, usage_of).await
 }
 
 /// `/internal/flags`: each tenant switch, what the release record says, what the tenant set, and

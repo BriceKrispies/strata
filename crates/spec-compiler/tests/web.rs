@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use serde_json::{json, Value};
-use strata_spec_compiler::{generate, jsonc, output, web, GeneratedFile};
+use strata_spec_compiler::{jsonc, output, web, GeneratedFile};
 
 const SPEC: &str = "crates/spec-compiler/tests/fixtures/machines-web/spec.jsonc";
 const MACHINE: &str = "login-form";

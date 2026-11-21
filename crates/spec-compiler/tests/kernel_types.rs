@@ -27,7 +27,6 @@
 //! read and write exactly what the kernel's serde does.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 

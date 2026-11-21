@@ -1,6 +1,5 @@
 //! The in-memory reference adapter passes the conformance suite.
 
-use strata_kernel::testkit::*;
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{conformance, Store};
 

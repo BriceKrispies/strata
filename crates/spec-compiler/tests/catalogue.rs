@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use strata_spec_compiler::catalogue;
-use strata_spec_compiler::{jsonc, output, GeneratedFile};
+use strata_spec_compiler::{output, GeneratedFile};
 
 const FIXTURE_SPEC: &str = "crates/spec-compiler/tests/fixtures/catalogue/spec.jsonc";
 

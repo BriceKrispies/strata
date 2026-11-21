@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use strata_spec_compiler::scenarios;
 use strata_spec_compiler::Diagnostic;
 

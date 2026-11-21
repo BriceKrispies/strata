@@ -394,7 +394,7 @@ impl Gate {
                 deadline,
                 allow_http: self.policy.development,
             };
-            let mut answer = match self.transport.open(&exchange) {
+            let answer = match self.transport.open(&exchange) {
                 Ok(answer) => answer,
                 Err(TransportError::TimedOut) => break Err(Failure::TimedOut),
                 Err(TransportError::Failed(why)) => break Err(Failure::Unreachable(why)),

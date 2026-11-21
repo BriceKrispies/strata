@@ -8,7 +8,7 @@
 //! function of the records alone: rebuilt, it answers the same. Random data from a fixed seed.
 
 use std::sync::Arc;
-use strata_kernel::search::{self, SearchCursor, SearchRequest, SearchResult};
+use strata_kernel::search::{SearchCursor, SearchRequest, SearchResult};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_storage_api::memory::MemoryStore;

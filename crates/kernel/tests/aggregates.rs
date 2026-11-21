@@ -591,7 +591,7 @@ fn define(aggs: Vec<AggregateDef>, declared: &[&str]) -> Result<World, DomainErr
 }
 
 fn refused(result: Result<World, DomainError>, mentions: &str) {
-    let error = result.err().expect("the definition is refused");
+    let error = result.expect_err("the definition is refused");
     assert_eq!(error.kind, ErrorKind::InvalidSchema, "{}", error.message);
     assert!(
         error.evidence.iter().any(|c| c.detail.contains(mentions)),

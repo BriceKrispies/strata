@@ -298,7 +298,7 @@ pub fn split_crate_files(
             if other > area {
                 errors.push(Diagnostic::new(
                     INTERNAL,
-                    *module,
+                    module,
                     format!(
                         "module {module} names module {named}, which the model split puts in the later crate {}; this is a defect in specc.",
                         AREAS[other].dir

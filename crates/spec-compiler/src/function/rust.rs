@@ -1904,7 +1904,7 @@ impl<'a> Gen<'a> {
                             continue;
                         }
                         let b = &idents[i];
-                        if b.to_string() == fid.to_string() {
+                        if fid == b.to_string() {
                             parts.push(quote! { #fid });
                         } else {
                             parts.push(quote! { #fid: #b });
@@ -1948,7 +1948,7 @@ impl<'a> Gen<'a> {
             t.clone()
         };
         let fid = snake_ident(&f.name);
-        let shorthand = !f.boxed && v.ident && v.t.to_string() == fid.to_string();
+        let shorthand = !f.boxed && v.ident && fid == v.t.to_string();
         Ok((value, v.exits, shorthand))
     }
 

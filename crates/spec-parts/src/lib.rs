@@ -78,6 +78,16 @@ struct Scanner<'a> {
 }
 
 impl Scanner<'_> {
+    /// Whether a bare scalar ends here: at the end of input, whitespace, a separator or a comment.
+    fn at_scalar_end(&self) -> bool {
+        match self.b.get(self.i) {
+            None => true,
+            Some(c) if c.is_ascii_whitespace() || matches!(c, b',' | b'}' | b']') => true,
+            Some(b'/') => matches!(self.b.get(self.i + 1), Some(b'/' | b'*')),
+            Some(_) => false,
+        }
+    }
+
     fn fail(&self, message: &str) -> SpecPartsError {
         let line = self.b[..self.i.min(self.b.len())]
             .iter()
@@ -150,12 +160,7 @@ impl Scanner<'_> {
             }
             Some(_) => {
                 let start = self.i;
-                while self.i < self.b.len()
-                    && !self.b[self.i].is_ascii_whitespace()
-                    && !matches!(self.b[self.i], b',' | b'}' | b']')
-                    && !(self.b[self.i] == b'/'
-                        && matches!(self.b.get(self.i + 1), Some(b'/' | b'*')))
-                {
+                while !self.at_scalar_end() {
                     self.i += 1;
                 }
                 if self.i == start {

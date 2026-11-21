@@ -25,7 +25,6 @@ use std::process::Command;
 
 use serde_json::Value;
 use strata_spec_compiler::layer_expr;
-use strata_spec_compiler::layer_values::{self};
 use strata_spec_compiler::layers::{self, ProductFile};
 
 const PLATFORM: &str = "specifications/spec.jsonc";

@@ -1514,7 +1514,7 @@ impl<'a> Reader<'a> {
             Start::AfterId(id) => record.id > *id,
             Start::At(at) => is_after(&plan_value(plan, record), record.id, at, descending),
         };
-        let before = keyed.iter().take_while(|(_, r)| !beyond(&**r)).count();
+        let before = keyed.iter().take_while(|(_, r)| !beyond(r)).count();
         let size = size as usize;
         let next = (before.saturating_add(size) < keyed.len())
             .then(|| PageCursor::Offset((before + size) as u32));

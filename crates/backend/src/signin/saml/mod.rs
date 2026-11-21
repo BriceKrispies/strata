@@ -386,10 +386,9 @@ impl SignInMethod for SamlMethod {
         // A request to link is answered only to the person who made it.
         if let Some(principal) = &pending.principal {
             let identity = identify(app, caller)?;
-            if !identity
+            if identity
                 .session
-                .as_ref()
-                .is_some_and(|session| session.principal == *principal)
+                .as_ref().is_none_or(|session| session.principal != *principal)
             {
                 return refuse(caller, &provider.id, "link_session");
             }

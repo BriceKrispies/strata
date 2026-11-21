@@ -6,8 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
-use strata_spec_compiler::layers::{self};
-use strata_spec_compiler::{generate, jsonc, Diagnostic, Options, RuntimeDependency};
+use strata_spec_compiler::{generate, Diagnostic, Options, RuntimeDependency};
 
 fn options() -> Options {
     Options {

@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicI64;
-use strata_bff::routes::{backend, Visit};
+use strata_bff::routes::Visit;
 use strata_bff::{token, Bff, Config};
 use strata_kernel::TenantId;
 

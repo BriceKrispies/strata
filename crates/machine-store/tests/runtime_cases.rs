@@ -12,7 +12,6 @@ use std::sync::Arc;
 use strata_kernel::ext::*;
 use strata_kernel::TenantId;
 use strata_machine_store::StorageApiMachineStore;
-use strata_runtime::store::{OutboxStore, RecordStore, TimerStore};
 use strata_runtime::SystemClock;
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::Store;

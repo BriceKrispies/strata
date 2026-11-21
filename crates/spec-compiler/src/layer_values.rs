@@ -622,7 +622,7 @@ impl Check<'_, '_> {
             |v: &Value| variant_tag(v.get("name").and_then(Value::as_str).unwrap_or(""), case);
         let listing = variants
             .iter()
-            .map(|v| tag_of(*v))
+            .map(|v| tag_of(v))
             .collect::<Vec<_>>()
             .join(", ");
         let written = if internal {
@@ -656,7 +656,7 @@ impl Check<'_, '_> {
                 return;
             }
         };
-        let Some(variant) = variants.iter().find(|v| tag_of(**v) == tag) else {
+        let Some(variant) = variants.iter().find(|v| tag_of(v) == tag) else {
             let place = if at.is_empty() {
                 "its value".to_string()
             } else {

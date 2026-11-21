@@ -1282,7 +1282,7 @@ fn change(app: &App, identity: &Identity, body: &Json_, how: Change) -> Result<J
                 json!({ "topic": item.topic }),
             );
         }
-        announce(app, tenant, *kind, item, unread, now);
+        announce(app, tenant, kind, item, unread, now);
     }
     Ok(json!({ "unread": unread }))
 }
