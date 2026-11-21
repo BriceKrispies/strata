@@ -103,6 +103,7 @@ pub const ROLES: &[(&str, &[&str])] = &[
     (
         "owner",
         &[
+            "jobs-run",
             "diagnostics-run",
             "content-read",
             "content-draft-read",
@@ -178,6 +179,7 @@ pub const ROLES: &[(&str, &[&str])] = &[
     (
         "editor",
         &[
+            "self-data-export",
             "content-read",
             "content-draft-read",
             "content-write",
@@ -204,6 +206,7 @@ pub const ROLES: &[(&str, &[&str])] = &[
     (
         "author",
         &[
+            "self-data-export",
             "content-read",
             "content-draft-read",
             "content-write",
@@ -2412,46 +2415,6 @@ pub const TYPES: &[TypeDecl] = &[
         decl: Decl::Alias(Ty::Text),
     },
     TypeDecl {
-        id: "record",
-        decl: Decl::Struct(&[
-            Field {
-                wire: "id",
-                ty: Ty::Named("record-id"),
-                optional: false,
-            },
-            Field {
-                wire: "object",
-                ty: Ty::Named("object-type-id"),
-                optional: false,
-            },
-            Field {
-                wire: "version",
-                ty: Ty::Int(0, 18446744073709551615),
-                optional: false,
-            },
-            Field {
-                wire: "created_by",
-                ty: Ty::Option(&Ty::Named("principal-id")),
-                optional: false,
-            },
-            Field {
-                wire: "created_at",
-                ty: Ty::Int(-9223372036854775808, 9223372036854775807),
-                optional: false,
-            },
-            Field {
-                wire: "updated_at",
-                ty: Ty::Int(-9223372036854775808, 9223372036854775807),
-                optional: false,
-            },
-            Field {
-                wire: "fields",
-                ty: Ty::Map(&Ty::Named("value")),
-                optional: false,
-            },
-        ]),
-    },
-    TypeDecl {
         id: "record-id",
         decl: Decl::Alias(Ty::Int(0, 18446744073709551615)),
     },
@@ -2561,36 +2524,6 @@ pub const TYPES: &[TypeDecl] = &[
     TypeDecl {
         id: "secret",
         decl: Decl::Alias(Ty::Bytes),
-    },
-    TypeDecl {
-        id: "section-data",
-        decl: Decl::Struct(&[
-            Field {
-                wire: "single",
-                ty: Ty::Bool,
-                optional: false,
-            },
-            Field {
-                wire: "rows",
-                ty: Ty::List(&Ty::Named("record")),
-                optional: false,
-            },
-            Field {
-                wire: "included",
-                ty: Ty::Map(&Ty::Map(&Ty::Named("record"))),
-                optional: false,
-            },
-            Field {
-                wire: "markdown",
-                ty: Ty::List(&Ty::Named("field-id")),
-                optional: false,
-            },
-            Field {
-                wire: "aggregate",
-                ty: Ty::Named("aggregate-result"),
-                optional: true,
-            },
-        ]),
     },
     TypeDecl {
         id: "segment-count",
@@ -3004,50 +2937,6 @@ pub const TYPES: &[TypeDecl] = &[
     },
     TypeDecl {
         id: "value-map",
-        decl: Decl::Alias(Ty::Text),
-    },
-    TypeDecl {
-        id: "view-data",
-        decl: Decl::Struct(&[
-            Field {
-                wire: "view",
-                ty: Ty::Named("view-id"),
-                optional: false,
-            },
-            Field {
-                wire: "title",
-                ty: Ty::Text,
-                optional: false,
-            },
-            Field {
-                wire: "params",
-                ty: Ty::Map(&Ty::Text),
-                optional: false,
-            },
-            Field {
-                wire: "sections",
-                ty: Ty::Map(&Ty::Named("section-data")),
-                optional: false,
-            },
-            Field {
-                wire: "depends_on",
-                ty: Ty::List(&Ty::Named("object-type-id")),
-                optional: false,
-            },
-            Field {
-                wire: "revision",
-                ty: Ty::Named("state-revision"),
-                optional: false,
-            },
-            Field {
-                wire: "schema_version",
-                ty: Ty::Named("schema-version"),
-                optional: false,
-            },
-        ]),
-    },
-    TypeDecl {
-        id: "view-id",
         decl: Decl::Alias(Ty::Text),
     },
     TypeDecl {
@@ -3768,6 +3657,7 @@ pub const SCHEDULE_JOB: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "job",
         ty: Ty::Named("job-id"),
@@ -3808,6 +3698,7 @@ pub const CANCEL_JOB: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[]),
     errors: &["unauthenticated", "forbidden", "not_found"],
     step_up_error: None,
@@ -3838,6 +3729,7 @@ pub const RETRY_JOB: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "attempt",
         ty: Ty::Int(0, 4294967295),
@@ -3876,6 +3768,7 @@ pub const LIST_JOBS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "jobs",
@@ -3922,6 +3815,7 @@ pub const DEFINE_SCHEDULE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "next_due",
         ty: Ty::Int(-9223372036854775808, 9223372036854775807),
@@ -3956,6 +3850,7 @@ pub const ACTIVATE_WORKFLOW: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "version",
         ty: Ty::Int(0, 18446744073709551615),
@@ -3996,6 +3891,7 @@ pub const START_WORKFLOW_RUN: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "run",
@@ -4043,6 +3939,7 @@ pub const APPROVE_WORKFLOW_STEP: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "run",
@@ -4095,6 +3992,7 @@ pub const DELIVER_VIEW: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -4180,6 +4078,7 @@ pub const SUBSCRIBE_EVENTS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Socket,
     errors: &["unauthenticated", "forbidden", "throttled"],
     step_up_error: None,
@@ -4210,6 +4109,7 @@ pub const SIGN_MEDIA_ADDRESS: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "address",
         ty: Ty::Named("url"),
@@ -4248,6 +4148,7 @@ pub const VERIFY_AUDIT_CHAIN: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "intact",
@@ -4309,6 +4210,7 @@ pub const RECEIVE_INBOUND_WEBHOOK: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "run",
         ty: Ty::Named("run-id"),
@@ -4347,6 +4249,7 @@ pub const LIST_WEBHOOK_DELIVERIES: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "deliveries",
@@ -4388,6 +4291,7 @@ pub const SEARCH: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "hits",
@@ -4448,6 +4352,7 @@ pub const LIST_INBOX: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "notices",
@@ -4494,6 +4399,7 @@ pub const UPLOAD_FILE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "file",
@@ -4535,6 +4441,7 @@ pub const DELIVER_FILE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "content",
@@ -4580,6 +4487,7 @@ pub const EXPORT_SUBJECT_DATA: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "export",
@@ -4626,6 +4534,7 @@ pub const RESTRICT_SUBJECT: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[]),
     errors: &["unauthenticated", "forbidden", "not_found", "invalid"],
     step_up_error: Some("step_up_required"),
@@ -4656,6 +4565,7 @@ pub const ERASE_SUBJECT: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "receipt",
         ty: Ty::Named("erasure-receipt"),
@@ -4696,6 +4606,7 @@ pub const PLACE_LEGAL_HOLD: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "hold",
         ty: Ty::Named("hold-id"),
@@ -4734,6 +4645,7 @@ pub const LIST_MAIL_MESSAGES: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "messages",
@@ -4775,6 +4687,7 @@ pub const MANAGE_SUPPRESSION_LIST: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[]),
     errors: &["unauthenticated", "forbidden"],
     step_up_error: None,
@@ -4805,6 +4718,7 @@ pub const INSTALL_BUNDLE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "schema_version",
@@ -4850,6 +4764,7 @@ pub const READ_FRONT_PAGE: Contract = Contract {
         query: &[("path", "/")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -4930,6 +4845,7 @@ pub const READ_ARTICLE_PAGE: Contract = Contract {
         query: &[("path", "/posts/slow-software")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5010,6 +4926,7 @@ pub const READ_TOPICS_PAGE: Contract = Contract {
         query: &[("path", "/topics")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5090,6 +5007,7 @@ pub const READ_TOPIC_PAGE: Contract = Contract {
         query: &[("path", "/topics/craft")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5170,6 +5088,7 @@ pub const READ_AUTHORS_PAGE: Contract = Contract {
         query: &[("path", "/authors")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5250,6 +5169,7 @@ pub const READ_AUTHOR_PAGE: Contract = Contract {
         query: &[("path", "/authors/ines-okafor")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5330,6 +5250,7 @@ pub const READ_SEARCH_PAGE: Contract = Contract {
         query: &[("path", "/search")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5415,6 +5336,7 @@ pub const READ_ABOUT_PAGE: Contract = Contract {
         query: &[("path", "/about")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5491,6 +5413,7 @@ pub const READ_MISSING_PAGE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "path",
         ty: Ty::Text,
@@ -5529,6 +5452,7 @@ pub const READ_SIGN_IN_VIEW: Contract = Contract {
         query: &[("path", "/login")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5609,6 +5533,7 @@ pub const READ_DESK_VIEW: Contract = Contract {
         query: &[("path", "/desk")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5694,6 +5619,7 @@ pub const READ_NEW_ARTICLE_VIEW: Contract = Contract {
         query: &[("path", "/desk/new")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5789,6 +5715,7 @@ pub const READ_EDIT_ARTICLE_VIEW: Contract = Contract {
         query: &[("path", "/desk/edit/slow-software")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5894,6 +5821,7 @@ pub const READ_SETTINGS_VIEW: Contract = Contract {
         query: &[("path", "/desk/settings")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -5994,6 +5922,7 @@ pub const READ_LAB_VIEW: Contract = Contract {
         query: &[("path", "/lab")],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "view",
@@ -6074,6 +6003,7 @@ pub const SIGN_IN_AT_SITE: Contract = Contract {
         query: &[],
         body: Some("{\"login\":\"ines\",\"password\":\"strata-dev-ines\"}"),
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "session",
@@ -6119,6 +6049,7 @@ pub const SIGN_OUT_OF_SITE: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "session",
@@ -6164,6 +6095,7 @@ pub const READ_SESSION_VIEW: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "session",
@@ -6202,9 +6134,10 @@ pub const CREATE_ARTICLE: Contract = Contract {
     probe: Request {
         path: "/api/records",
         query: &[],
-        body: None,
+        body: Some("{\"fields\":{},\"object\":\"post\",\"op\":\"create\"}"),
     },
     success: None,
+    setup: &[],
     reply: Reply::Records(&[
         RecordOutput {
             from: RecordFrom::Id,
@@ -6254,9 +6187,10 @@ pub const UPDATE_ARTICLE: Contract = Contract {
     probe: Request {
         path: "/api/records",
         query: &[],
-        body: None,
+        body: Some("{\"fields\":{},\"object\":\"post\",\"op\":\"update\"}"),
     },
     success: None,
+    setup: &[],
     reply: Reply::Records(&[
         RecordOutput {
             from: RecordFrom::Id,
@@ -6307,9 +6241,10 @@ pub const DELETE_ARTICLE: Contract = Contract {
     probe: Request {
         path: "/api/records",
         query: &[],
-        body: None,
+        body: Some("{\"expected_version\":1,\"id\":1,\"object\":\"post\",\"op\":\"delete\"}"),
     },
     success: None,
+    setup: &[],
     reply: Reply::Records(&[]),
     errors: &[
         "unauthenticated",
@@ -6328,40 +6263,7 @@ async fn delete_article() {
 }
 
 /// Contract `save-site-settings` (CT-260): POST /api/records records update publication.
-pub const SAVE_SITE_SETTINGS: Contract = Contract {
-    id: "save-site-settings",
-    method: "POST",
-    shape: Shape::Records,
-    scheme: Scheme::Session,
-    requires: &["site-configure"],
-    roles: &[],
-    origin: true,
-    csrf: true,
-    step_up: false,
-    read_only: false,
-    tenant_input: None,
-    probe: Request {
-        path: "/api/records",
-        query: &[],
-        body: None,
-    },
-    success: None,
-    reply: Reply::Records(&[RecordOutput {
-        from: RecordFrom::Version,
-        ty: Ty::Int(0, 18446744073709551615),
-        optional: false,
-    }]),
-    errors: &[
-        "unauthenticated",
-        "forbidden",
-        "invalid",
-        "throttled",
-        "unavailable",
-        "conflict",
-    ],
-    step_up_error: None,
-    quota: None,
-};
+pub const SAVE_SITE_SETTINGS: Contract = Contract { id: "save-site-settings", method: "POST", shape: Shape::Records, scheme: Scheme::Session, requires: &["site-configure"], roles: &[], origin: true, csrf: true, step_up: false, read_only: false, tenant_input: None, probe: Request { path: "/api/records", query: &[], body: Some("{\"expected_version\":1,\"fields\":{\"accent\":\"moss\",\"name\":\"Fieldnotes\",\"paper\":\"linen\"},\"id\":1,\"object\":\"publication\",\"op\":\"update\"}") }, success: None, setup: &[], reply: Reply::Records(&[RecordOutput { from: RecordFrom::Version, ty: Ty::Int(0, 18446744073709551615), optional: false }]), errors: &["unauthenticated", "forbidden", "invalid", "throttled", "unavailable", "conflict"], step_up_error: None, quota: None };
 
 #[tokio::test]
 async fn save_site_settings() {
@@ -6387,6 +6289,7 @@ pub const PREVIEW_MARKDOWN: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "blocks",
         ty: Ty::Any,
@@ -6414,19 +6317,21 @@ pub const MUTATE_RECORD: Contract = Contract {
     csrf: true,
     step_up: false,
     read_only: false,
-    tenant_input: Some("tenant"),
+    tenant_input: None,
     probe: Request {
         path: "/api/records",
         query: &[],
-        body: None,
+        body: Some("{\"expected_version\":1,\"id\":1,\"object\":\"post\",\"op\":\"delete\"}"),
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "reply",
         ty: Ty::Named("mutation-reply"),
         optional: true,
     }]),
     errors: &[
+        "unauthenticated",
         "invalid",
         "internal",
         "conflict",
@@ -6461,11 +6366,64 @@ pub const READ_VIEW: Contract = Contract {
         body: None,
     },
     success: None,
-    reply: Reply::Members(&[Field {
-        wire: "view",
-        ty: Ty::Named("view-data"),
-        optional: false,
-    }]),
+    setup: &[],
+    reply: Reply::Members(&[
+        Field {
+            wire: "view",
+            ty: Ty::Text,
+            optional: false,
+        },
+        Field {
+            wire: "title",
+            ty: Ty::Text,
+            optional: false,
+        },
+        Field {
+            wire: "path",
+            ty: Ty::Text,
+            optional: false,
+        },
+        Field {
+            wire: "params",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "data",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "depends_on",
+            ty: Ty::List(&Ty::Text),
+            optional: false,
+        },
+        Field {
+            wire: "revision",
+            ty: Ty::Named("state-revision"),
+            optional: false,
+        },
+        Field {
+            wire: "schema_version",
+            ty: Ty::Named("schema-version"),
+            optional: false,
+        },
+        Field {
+            wire: "theme",
+            ty: Ty::Named("view-theme"),
+            optional: false,
+        },
+        Field {
+            wire: "next",
+            ty: Ty::Any,
+            optional: true,
+        },
+        Field {
+            wire: "record_rules",
+            ty: Ty::Any,
+            optional: true,
+        },
+    ]),
     errors: &["invalid", "internal", "unavailable", "forbidden"],
     step_up_error: None,
     quota: None,
@@ -6495,6 +6453,7 @@ pub const ASSIGN_ROLE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "revision",
@@ -6536,6 +6495,7 @@ pub const REVOKE_ROLE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "revision",
@@ -6577,6 +6537,7 @@ pub const ADD_TEAM_MEMBER: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "revision",
@@ -6618,6 +6579,7 @@ pub const REMOVE_TEAM_MEMBER: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "revision",
@@ -6659,6 +6621,7 @@ pub const INVITE_PERSON: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "revision",
@@ -6700,6 +6663,7 @@ pub const REDEEM_INVITATION: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "revision",
@@ -6741,6 +6705,7 @@ pub const POST_LEDGER_ENTRY: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "result",
         ty: Ty::Named("ledger-posting-result"),
@@ -6781,6 +6746,7 @@ pub const READ_LEDGER_BALANCE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "balance",
         ty: Ty::Named("ledger-balance"),
@@ -6815,6 +6781,7 @@ pub const LIST_LEDGER_ENTRIES: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "entries",
@@ -6856,6 +6823,7 @@ pub const DECLARE_LEDGER_UNIT: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "unit",
         ty: Ty::Named("ledger-unit"),
@@ -6890,6 +6858,7 @@ pub const DECLARE_LEDGER_POOL: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "pool",
         ty: Ty::Named("ledger-pool-name"),
@@ -6924,6 +6893,7 @@ pub const SET_LEDGER_LIMIT: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "limit",
         ty: Ty::Named("ledger-limit"),
@@ -6958,6 +6928,7 @@ pub const DEFINE_SEGMENT: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "version",
@@ -6999,6 +6970,7 @@ pub const REMOVE_SEGMENT: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[]),
     errors: &["unauthenticated", "forbidden"],
     step_up_error: None,
@@ -7029,6 +7001,7 @@ pub const LIST_SEGMENT_MEMBERS: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "members",
@@ -7070,6 +7043,7 @@ pub const TEST_SEGMENT_PREDICATE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "result",
         ty: Ty::Named("segment-test-result"),
@@ -7104,6 +7078,7 @@ pub const SETTING_SAVE_DEFINITION: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "version",
         ty: Ty::Named("schema-version"),
@@ -7144,6 +7119,7 @@ pub const SETTING_RESOLVE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "resolution",
         ty: Ty::Named("setting-resolution"),
@@ -7182,6 +7158,7 @@ pub const SETTING_RESOLVE_ALL: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "settings",
         ty: Ty::List(&Ty::Named("setting-resolution")),
@@ -7216,6 +7193,7 @@ pub const SETTING_SET_TENANT: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "revision",
@@ -7264,6 +7242,7 @@ pub const SETTING_SET_TEAM: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "revision",
@@ -7312,6 +7291,7 @@ pub const SETTING_SET_PERSON: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "revision",
@@ -7360,6 +7340,7 @@ pub const AGGREGATE_RUN: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "result",
         ty: Ty::Named("aggregate-result"),
@@ -7394,6 +7375,7 @@ pub const AGGREGATE_RUN_SIGNED_IN: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "result",
         ty: Ty::Named("aggregate-result"),
@@ -7435,6 +7417,7 @@ pub const SEND_MESSAGE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "progress",
@@ -7483,6 +7466,7 @@ pub const SET_NOTICE_READ: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "unread",
         ty: Ty::Int(0, 4294967295),
@@ -7517,6 +7501,7 @@ pub const REMOVE_NOTICES: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "unread",
         ty: Ty::Int(0, 4294967295),
@@ -7555,6 +7540,7 @@ pub const COUNT_UNREAD_NOTICES: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "unread",
         ty: Ty::Int(0, 4294967295),
@@ -7589,6 +7575,7 @@ pub const DEFINE_NOTICE_TEMPLATE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "version",
         ty: Ty::Int(0, 18446744073709551615),
@@ -7623,6 +7610,7 @@ pub const DEFINE_MESSAGE_CATEGORY: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "version",
         ty: Ty::Int(0, 18446744073709551615),
@@ -7657,6 +7645,7 @@ pub const SET_NOTIFICATION_PREFERENCE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[]),
     errors: &["unauthenticated", "forbidden", "not_found", "invalid"],
     step_up_error: None,
@@ -7687,6 +7676,7 @@ pub const CHANGE_SUBSCRIPTION_BY_LINK: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "category",
@@ -7728,6 +7718,7 @@ pub const CREATE_WEBHOOK_ENDPOINT: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "secret",
@@ -7769,6 +7760,7 @@ pub const ROTATE_WEBHOOK_SECRET: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "secret",
@@ -7810,6 +7802,7 @@ pub const COUNT_MAIL_MESSAGES: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "counts",
         ty: Ty::List(&Ty::Named("mail-count")),
@@ -7844,6 +7837,7 @@ pub const UPGRADE_BUNDLE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "schema_version",
@@ -7891,6 +7885,7 @@ pub const REMOVE_BUNDLE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "schema_version",
@@ -7936,6 +7931,7 @@ pub const LIST_INSTALLED_PRODUCTS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "products",
@@ -7977,6 +7973,7 @@ pub const START_UPLOAD: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "upload",
@@ -8018,6 +8015,7 @@ pub const PUT_UPLOAD_CHUNK: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "received",
         ty: Ty::Int(0, 18446744073709551615),
@@ -8058,6 +8056,7 @@ pub const FINISH_UPLOAD: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "file",
@@ -8099,6 +8098,7 @@ pub const INVOKE_TENANT_OPERATION: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "result",
         ty: Ty::Named("tenant-operation-result"),
@@ -8140,6 +8140,7 @@ pub const READ_MY_LEDGER_BALANCE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "balance",
         ty: Ty::Named("ledger-balance"),
@@ -8174,6 +8175,7 @@ pub const LIST_MY_LEDGER_ENTRIES: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "entries",
@@ -8215,6 +8217,7 @@ pub const LIST_LEDGER_ACCOUNTS: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "accounts",
@@ -8260,6 +8263,7 @@ pub const LIST_LEDGER_DEFINITIONS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "definitions",
         ty: Ty::Named("ledger-definitions"),
@@ -8294,6 +8298,7 @@ pub const REMOVE_LEDGER_DEFINITION: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[]),
     errors: &["unauthenticated", "forbidden", "conflict", "not_found"],
     step_up_error: None,
@@ -8328,6 +8333,7 @@ pub const LIST_MY_SEGMENTS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "segments",
         ty: Ty::List(&Ty::Named("segment-summary")),
@@ -8362,6 +8368,7 @@ pub const COUNT_SEGMENT_MEMBERS: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "count",
         ty: Ty::Named("segment-count"),
@@ -8396,6 +8403,7 @@ pub const PREVIEW_SEGMENT_PREDICATE: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "preview",
@@ -8441,6 +8449,7 @@ pub const LIST_AUTOMATION_RUNS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "runs",
@@ -8482,6 +8491,7 @@ pub const LIST_AUTOMATION_STEPS: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "steps",
@@ -8527,6 +8537,7 @@ pub const LIST_AUTOMATION_EXCEPTIONS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "exceptions",
@@ -8568,6 +8579,7 @@ pub const SETTLE_AUTOMATION_EXCEPTION: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "job",
         ty: Ty::Named("job-id"),
@@ -8606,6 +8618,7 @@ pub const LIST_SIGN_IN_PROVIDERS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "providers",
         ty: Ty::Any,
@@ -8644,6 +8657,7 @@ pub const START_PASSKEY_REGISTRATION: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "challenge",
@@ -8695,6 +8709,7 @@ pub const STEP_UP_SESSION: Contract = Contract {
         query: &[],
         body: Some("{\"password\":\"strata-dev-admin\"}"),
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "authenticated_at",
         ty: Ty::Int(-9223372036854775808, 9223372036854775807),
@@ -8733,6 +8748,7 @@ pub const LIST_FACTORS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "totp",
@@ -8798,6 +8814,7 @@ pub const START_TOTP_ENROLMENT: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "secret",
@@ -8849,6 +8866,7 @@ pub const CONFIRM_TOTP_ENROLMENT: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "enabled",
         ty: Ty::Bool,
@@ -8887,6 +8905,7 @@ pub const REMOVE_TOTP_FACTOR: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "enabled",
         ty: Ty::Bool,
@@ -8925,6 +8944,7 @@ pub const REGENERATE_RECOVERY_CODES: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[Setup::Step("enrol-authenticator")],
     reply: Reply::Members(&[
         Field {
             wire: "codes",
@@ -8966,6 +8986,7 @@ pub const COMPLETE_RECOVERY: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "recovered",
@@ -9013,6 +9034,7 @@ pub const CANCEL_RECOVERY: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "cancelled",
         ty: Ty::Bool,
@@ -9051,6 +9073,7 @@ pub const REVOKE_OTHER_SESSIONS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "revoked",
         ty: Ty::Int(0, 18446744073709551615),
@@ -9089,6 +9112,7 @@ pub const LIST_IDENTITY_CLIENTS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "clients",
         ty: Ty::Any,
@@ -9123,6 +9147,7 @@ pub const INTROSPECT_TOKEN_OVER_HTTP: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "active",
@@ -9178,6 +9203,7 @@ pub const SERVE_JWKS_DOCUMENT: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "keys",
         ty: Ty::List(&Ty::Named("public-key")),
@@ -9212,6 +9238,7 @@ pub const ACCEPT_SITE_INVITATION: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "accepted",
@@ -9257,6 +9284,7 @@ pub const READ_LAB_OVERVIEW: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "tenant",
@@ -9363,6 +9391,7 @@ pub const RUN_LAB_PROJECTION: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "run",
@@ -9417,6 +9446,7 @@ pub const READ_LAB_RUN: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "id",
@@ -9477,6 +9507,7 @@ pub const REPLAY_LAB_JOURNAL: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "report",
@@ -9537,6 +9568,7 @@ pub const VERIFY_LAB_PROOFS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "run",
         ty: Ty::Text,
@@ -9575,6 +9607,7 @@ pub const READ_DIAGNOSTICS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "backend",
         ty: Ty::Any,
@@ -9613,6 +9646,7 @@ pub const RUN_DEVELOPMENT_ACTION: Contract = Contract {
         query: &[],
         body: Some("{}"),
     }),
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "reset",
@@ -9669,6 +9703,7 @@ pub const WITHDRAW_INVITATION: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "revision",
@@ -9714,6 +9749,7 @@ pub const LIST_ERASURE_RECEIPTS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "receipts",
         ty: Ty::List(&Ty::Named("erasure-receipt")),
@@ -9748,6 +9784,7 @@ pub const CREATE_WEBHOOK_SUBSCRIPTION: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "subscription",
@@ -9789,6 +9826,7 @@ pub const ROTATE_WEBHOOK_SUBSCRIPTION_SECRET: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "secret",
@@ -9827,9 +9865,10 @@ pub const FETCH_SUBJECT_EXPORT: Contract = Contract {
     probe: Request {
         path: "/api/subject-rights/export-fetch",
         query: &[],
-        body: None,
+        body: Some("{\"export\":\"conformance-probe\"}"),
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[
         Field {
             wire: "state",
@@ -9876,6 +9915,7 @@ pub const LIFT_SUBJECT_RESTRICTION: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "lifted",
         ty: Ty::Bool,
@@ -9910,6 +9950,7 @@ pub const RELEASE_LEGAL_HOLD: Contract = Contract {
         body: None,
     },
     success: None,
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "released_at",
         ty: Ty::Int(-9223372036854775808, 9223372036854775807),
@@ -9948,6 +9989,7 @@ pub const LIST_LEGAL_HOLDS: Contract = Contract {
         query: &[],
         body: None,
     }),
+    setup: &[],
     reply: Reply::Members(&[Field {
         wire: "holds",
         ty: Ty::List(&Ty::Any),
@@ -9979,13 +10021,17 @@ pub const APPLY_LAB_CHANGE: Contract = Contract {
     probe: Request {
         path: "/api/lab/apply",
         query: &[],
-        body: None,
+        body: Some("{\"change\":\"require post.excerpt\",\"existing\":\"grandfather\"}"),
     },
     success: Some(Request {
         path: "/api/lab/apply",
         query: &[],
-        body: None,
+        body: Some("{\"change\":\"require post.excerpt\",\"existing\":\"grandfather\"}"),
     }),
+    setup: &[Setup::Read {
+        path: "/api/lab/overview",
+        set: &[("revision", "tenant.revision")],
+    }],
     reply: Reply::Members(&[
         Field {
             wire: "version",
