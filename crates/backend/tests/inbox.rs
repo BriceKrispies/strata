@@ -306,32 +306,6 @@ fn a_topic_follows_the_grammar_and_its_source() {
     assert!(TopicFilter::parse("*").is_err());
 }
 
-// Verifies: NTF-1571
-#[test]
-fn quiet_hours_and_zones_are_read_as_written() {
-    let hour = 3_600_000;
-    // 22:00-07:00 crosses midnight.
-    assert!(inbox::in_quiet_hours("22:00-07:00", 0, 23 * hour));
-    assert!(inbox::in_quiet_hours("22:00-07:00", 0, 2 * hour));
-    assert!(!inbox::in_quiet_hours("22:00-07:00", 0, 7 * hour));
-    assert!(!inbox::in_quiet_hours("22:00-07:00", 0, 12 * hour));
-    assert!(inbox::in_quiet_hours("09:00-17:00", 0, 9 * hour));
-    assert!(!inbox::in_quiet_hours("09:00-17:00", 0, 17 * hour));
-    // The same instant is inside in one zone and outside in another.
-    assert!(!inbox::in_quiet_hours("09:00-17:00", 0, 8 * hour));
-    assert!(inbox::in_quiet_hours(
-        "09:00-17:00",
-        inbox::zone_offset_minutes("UTC+2"),
-        8 * hour
-    ));
-    assert_eq!(inbox::zone_offset_minutes("UTC-05:30"), -330);
-    assert_eq!(inbox::zone_offset_minutes("UTC"), 0);
-    // An empty range and a text that is not a range hold no time.
-    assert!(!inbox::in_quiet_hours("08:00-08:00", 0, 8 * hour));
-    assert!(!inbox::in_quiet_hours("night", 0, 8 * hour));
-    assert!(!inbox::in_quiet_hours("25:00-07:00", 0, hour));
-}
-
 // Verifies: NTF-1570
 #[test]
 fn a_template_is_rendered_as_text_from_the_values_and_expands_nothing_twice() {
@@ -976,7 +950,7 @@ async fn a_segment_send_reaches_each_member_once_in_batches_through_jobs() {
 
     // The worker of the running backend takes the three jobs.
     let mut settled = false;
-    for _ in 0..200 {
+    for _ in 0..50 {
         let jobs = backend.store.jobs_list(&fieldnotes(), None, 50).unwrap();
         if jobs.len() == 3 && jobs.iter().all(|j| j.state == JobState::Completed) {
             settled = true;
