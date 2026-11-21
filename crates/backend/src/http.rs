@@ -1081,16 +1081,15 @@ async fn gate(State(app): State<Shared>, request: Request, next: Next) -> Respon
         .to_string();
     let open = path == "/internal/health";
     let response = if open || has_service_token(&app, request.headers()) {
-        // The one enforcement point of the quotas of the specification (EDG-013).
-        match crate::quota::admit(&app, &path, request.headers()).await {
-            Ok(()) => {
-                // What the operation asks of its caller comes before its input is read.
-                match crate::precheck::admit(&app, &path, request.headers()).await {
-                    Ok(()) => as_error_body(next.run(request).await, &correlation).await,
-                    Err(refused) => refused.with_correlation(&correlation).into_response(),
-                }
-            }
-            Err(refused) => refused,
+        // What the operation asks of its caller comes first, before its input is read and before
+        // the call is counted: a call the operation refuses spends no quota.
+        match crate::precheck::admit(&app, &path, request.headers()).await {
+            // The one enforcement point of the quotas of the specification (EDG-013).
+            Ok(()) => match crate::quota::admit(&app, &path, request.headers()).await {
+                Ok(()) => as_error_body(next.run(request).await, &correlation).await,
+                Err(refused) => refused,
+            },
+            Err(refused) => refused.with_correlation(&correlation).into_response(),
         }
     } else {
         ApiError::new(ErrorCode::Unauthenticated, "service token required").into_response()

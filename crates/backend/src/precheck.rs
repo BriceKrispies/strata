@@ -78,6 +78,8 @@ const RULES: &[Rule] = &[
         &["webhooks-manage"],
     ),
     // Bundles.
+    // A verification builds the Lean project, one a minute for each tenant (verify-lab-proofs).
+    rule("/internal/lab/verify", &["change-project"]),
     rule("/internal/products/install", &["bundle-install"]),
     rule("/internal/products/upgrade", &["bundle-install"]),
     rule("/internal/products/remove", &["bundle-install"]),
