@@ -77,6 +77,9 @@ function rows(r, baseline) {
     ["resident bytes", w.placeholder ? "placeholder" : kb(w.resident_bytes)],
     ["hit rate (count)", w.placeholder ? "placeholder" : pct(w.hit_rate_by_count)],
     ["hit rate (cost)", w.placeholder ? "placeholder" : pct(w.hit_rate_by_cost)],
+    ["policy refusals", num(r.refusals?.Unauthorized ?? 0)],
+    ["refusals (all kinds)", Object.entries(r.refusals ?? {}).map(([k, v]) => `${k} ${v}`).join(", ") || "-"],
+    ["faults ineffective", num(r.faults_ineffective ?? 0)],
     ["retries", num(r.conflicts.retries)],
     ["contended conflicts", num(r.conflicts.contended_conflicts)],
     ["coherence checked", num(c.checked)],
@@ -131,7 +134,9 @@ function main() {
       const base = none.get(r.seed)?.determinism.answer_digest;
       const body = rows(r, r.mode === "none" ? null : base);
       labels ??= body.map((b) => b[0]);
-      const flag = r.coherence.divergences > 0 ? " (DIVERGES)" : "";
+      const flag =
+        (r.coherence.divergences > 0 ? " (DIVERGES)" : "") +
+        ((r.faults_ineffective ?? 0) > 0 ? " (FAULT NO-OP)" : "");
       header.push(`${r.mode}#${r.seed}${flag}`);
       columns.push(body.map((b) => b[1]));
     }

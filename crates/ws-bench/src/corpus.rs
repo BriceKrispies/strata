@@ -144,7 +144,9 @@ pub trait CorpusTenant: Send + Sync {
     fn unmapped(&self) -> Vec<String> {
         Vec::new()
     }
-    fn actor(&self, who: Actor) -> Principal;
+    /// The principal that acts as `who` on `subject`, an object type or a query of the corpus
+    /// (its module's member holding the matching roles).
+    fn actor(&self, who: Actor, subject: Option<&str>) -> Principal;
     /// The fields to create a record of `object` with.
     fn create_fields(&self, object: &ObjectTypeId, n: u64) -> Option<BTreeMap<FieldId, Value>>;
     /// The fields to change on an existing record of `object`.
@@ -304,7 +306,7 @@ impl CorpusTenant for NotesTenant {
         &self.catalogue
     }
 
-    fn actor(&self, who: Actor) -> Principal {
+    fn actor(&self, who: Actor, _subject: Option<&str>) -> Principal {
         match who {
             Actor::Owner => testkit::user(&format!("{}:owner", self.id)),
             Actor::Editor => testkit::user(&format!("{}:editor", self.id)),

@@ -152,8 +152,13 @@ pub enum FaultKind {
     Erasure,
     /// An additive schema change through the second handle (a product upgrade).
     SchemaChange,
-    /// The store under test reopened: a new handle and an empty working set (a process restart).
+    /// A handle cycle: the adapter handle under the store under test is replaced by a fresh one on
+    /// the same files, and the working set above it is kept (it must change nothing).
     Reopen,
+    /// A process restart: the whole stack is dropped, another handle commits while the process is
+    /// down, and a new stack is built over a fresh handle with an empty working set (a `stale`
+    /// cache is the exception: it is persisted across the restart).
+    Restart,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

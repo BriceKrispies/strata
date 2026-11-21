@@ -142,7 +142,20 @@ fn real_main() -> Result<ExitCode, String> {
         report.coherence.checked,
         report.coherence.divergences,
     );
-    if fail_on_divergence && report.coherence.divergences > 0 {
+    if report.faults_ineffective > 0 {
+        eprintln!(
+            "ws-bench: {} fault(s) did not take effect: {}",
+            report.faults_ineffective,
+            report
+                .faults
+                .iter()
+                .filter(|f| !f.effective)
+                .map(|f| format!("{} at op {}: {}", f.kind, f.at_op, f.outcome))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    if fail_on_divergence && (report.coherence.divergences > 0 || report.faults_ineffective > 0) {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::SUCCESS)

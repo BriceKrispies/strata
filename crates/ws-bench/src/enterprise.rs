@@ -36,7 +36,7 @@ use strata_corpus::{
     build_with, compile_corpus, Catalogue as CorpusCatalogue, CorpusPaths, HotPerson, LoadOptions,
     PopulateOptions, Scale, TypeEntry,
 };
-use strata_kernel::ext::{RecordExt, TenantStateExt};
+use strata_kernel::ext::{DomainErrorExt, RecordExt, TenantStateExt};
 use strata_kernel::{
     Context, FieldDef, FieldId, FieldType, Intent, LedgerAmount, LedgerOrder, LedgerPoolName,
     LedgerPostingRequest, LedgerScope, LedgerUnit, Need, ObjectTypeDef, ObjectTypeId, Principal,
@@ -135,7 +135,10 @@ pub struct EnterpriseTenant {
     creates: BTreeMap<ObjectTypeId, CreatePlan>,
     updates: BTreeMap<ObjectTypeId, UpdateField>,
     queries: BTreeMap<String, Vec<ReadRequest>>,
-    ledger: Option<(LedgerUnit, LedgerPoolName)>,
+    /// The ledger units a posting is accepted for, with their pools.
+    ledger: Vec<(LedgerUnit, LedgerPoolName)>,
+    /// The member that acts as an editor or a reader of a module.
+    actors: BTreeMap<(String, Actor), PrincipalId>,
     upgrade: Option<ObjectTypeId>,
     /// What the opening found it could not map, for the log.
     pub unmapped: Vec<String>,
@@ -180,6 +183,13 @@ fn derive(state: &TenantState) -> CorpusCatalogue {
                     }
                 }
             }
+        }
+    }
+    for (principal, roles) in &state.members {
+        for role in roles.iter().filter(|r| r.as_str().contains("__")) {
+            catalogue
+                .members
+                .insert(role.to_string(), principal.to_string());
         }
     }
     let mut first_names: BTreeMap<String, u64> = BTreeMap::new();
@@ -350,6 +360,67 @@ impl EnterpriseTenant {
             );
         }
 
+        // The members of each module: an editor is the member the kernel lets update most of the
+        // module's types, a reader the one it lets update fewest.
+        let mut by_module: BTreeMap<String, Vec<PrincipalId>> = BTreeMap::new();
+        for (role, principal) in &corpus.members {
+            if let (Some(module), Ok(principal)) =
+                (role.split("__").next(), PrincipalId::new(principal.clone()))
+            {
+                by_module
+                    .entry(module.to_string())
+                    .or_default()
+                    .push(principal);
+            }
+        }
+        let mut actors = BTreeMap::new();
+        for (module, members) in &by_module {
+            let mut scored: Vec<(usize, &PrincipalId)> = Vec::new();
+            for member in members {
+                let as_member = ctx(&tenant, Principal::User(member.clone()));
+                let mut allowed = 0;
+                for (object, field) in &updates {
+                    let in_module = object.as_str().split("__").next() == Some(module.as_str());
+                    let Some(first) = objects.get(object).and_then(|o: &ObjectIds| o.ids.first())
+                    else {
+                        continue;
+                    };
+                    if !in_module {
+                        continue;
+                    }
+                    let intent = Intent::UpdateRecord {
+                        object: object.clone(),
+                        id: *first,
+                        fields: BTreeMap::from([(field.field.clone(), update_value(field, 0))]),
+                        expected_version: None,
+                    };
+                    if accepted(store.as_ref(), &intent, &as_member) {
+                        allowed += 1;
+                    }
+                }
+                scored.push((allowed, member));
+            }
+            // Ties go to the first member for an editor and the last for a reader.
+            if let Some((_, editor)) = scored.iter().max_by_key(|(n, _)| *n).map(|(n, m)| (*n, *m))
+            {
+                actors.insert((module.clone(), Actor::Editor), editor.clone());
+            }
+            if let Some((_, reader)) = scored
+                .iter()
+                .rev()
+                .min_by_key(|(n, _)| *n)
+                .map(|(n, m)| (*n, *m))
+            {
+                actors.insert((module.clone(), Actor::Reader), reader.clone());
+            }
+        }
+        if actors.is_empty() {
+            unmapped.push(
+                "actors: the store holds no module members, so every operation acts as the owner"
+                    .to_string(),
+            );
+        }
+
         // Named queries, with parameters the data holds.
         let mut queries: BTreeMap<String, Vec<ReadRequest>> = BTreeMap::new();
         for (qid, def) in &ts.schema.queries {
@@ -399,23 +470,28 @@ impl EnterpriseTenant {
             }
         }
 
-        // The ledger: a posting to the commerce stock pool.
-        let ledger = match (
-            LedgerUnit::new("commerce__stock"),
-            LedgerPoolName::new("commerce__stock_pool"),
-        ) {
-            (Ok(unit), Ok(pool)) => {
-                let probe = posting(&unit, &pool, 0);
-                let system = ctx(&tenant, Principal::System);
-                if accepted(store.as_ref(), &probe, &system) {
-                    Some((unit, pool))
-                } else {
-                    unmapped.push("ledger postings (refused for the system principal)".into());
-                    None
-                }
+        // The ledger: a posting to the stock pool of commerce and to the budget pool of
+        // automation. A direct posting needs the capability `ledger-post`, which no corpus role
+        // grants and only the owner holds, so the owner posts.
+        let mut ledger = Vec::new();
+        for (unit, pool) in [
+            ("commerce__stock", "commerce__stock_pool"),
+            ("automation__api_calls", "automation__budget_pool"),
+        ] {
+            let (Ok(unit), Ok(pool)) = (LedgerUnit::new(unit), LedgerPoolName::new(pool)) else {
+                continue;
+            };
+            let probe = posting(&unit, &pool, 0);
+            match dry_run(store.as_ref(), &probe, &as_owner) {
+                Ok(Ok(_)) => ledger.push((unit, pool)),
+                Ok(Err(refused)) => unmapped.push(format!(
+                    "ledger postings to {} are refused for the owner: {}",
+                    unit.0,
+                    refused.describe()
+                )),
+                Err(e) => unmapped.push(format!("ledger postings to {}: {e}", unit.0)),
             }
-            _ => None,
-        };
+        }
 
         let upgrade = ObjectTypeId::new("content__article")
             .ok()
@@ -445,6 +521,7 @@ impl EnterpriseTenant {
             updates,
             queries,
             ledger,
+            actors,
             upgrade,
             unmapped,
         }))
@@ -569,10 +646,17 @@ impl CorpusTenant for EnterpriseTenant {
         &self.catalogue
     }
 
-    fn actor(&self, who: Actor) -> Principal {
+    fn actor(&self, who: Actor, subject: Option<&str>) -> Principal {
         match who {
             Actor::System => Principal::System,
-            _ => Principal::User(self.owner.clone()),
+            Actor::Owner => Principal::User(self.owner.clone()),
+            Actor::Editor | Actor::Reader => subject
+                .and_then(|s| s.split("__").next())
+                .and_then(|module| self.actors.get(&(module.to_string(), who)))
+                .map_or_else(
+                    || Principal::User(self.owner.clone()),
+                    |member| Principal::User(member.clone()),
+                ),
         }
     }
 
@@ -596,8 +680,8 @@ impl CorpusTenant for EnterpriseTenant {
         variants.get(n as usize % variants.len()).cloned()
     }
 
-    fn ledger_need(&self, _n: u64) -> Option<Need> {
-        let (unit, _) = self.ledger.as_ref()?;
+    fn ledger_need(&self, n: u64) -> Option<Need> {
+        let (unit, _) = self.ledger.get(n as usize % self.ledger.len().max(1))?;
         Some(Need::Ledger(strata_kernel::LedgerNeed::Ranked {
             unit: unit.clone(),
             scope: LedgerScope::new("").ok()?,
@@ -608,7 +692,7 @@ impl CorpusTenant for EnterpriseTenant {
     }
 
     fn ledger_intent(&self, n: u64) -> Option<Intent> {
-        let (unit, pool) = self.ledger.as_ref()?;
+        let (unit, pool) = self.ledger.get(n as usize % self.ledger.len().max(1))?;
         Some(posting(unit, pool, n))
     }
 

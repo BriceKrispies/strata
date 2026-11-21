@@ -1,6 +1,8 @@
 // Commerce flash sale. A hot product set is read by many clients while order bursts arrive,
 // stock is posted to the ledger and prices are read. Writes are frequent, so invalidation work
-// and the cost of confirming a generation on every read show up here.
+// and the cost of confirming a generation on every read show up here. A direct ledger posting
+// needs the capability ledger-post, which no corpus role grants and only the owner holds, so the
+// owner posts; commerce roles read and edit through their own policies.
 {
   "name": "commerce-flash-sale",
   "description": "Commerce flash sale: a hot product and price set, order creation bursts, ledger stock postings and price reads from eight clients.",
@@ -17,7 +19,7 @@
     { "op": "ledger-read", "weight": 10, "actor": "reader" },
     { "op": "create", "object": "commerce__order", "weight": 8, "actor": "reader" },
     { "op": "create", "object": "commerce__order_line", "weight": 8, "actor": "reader" },
-    { "op": "post-ledger", "weight": 8, "actor": "system" },
+    { "op": "post-ledger", "weight": 8, "actor": "owner" },
     { "op": "update", "object": "commerce__promotion", "weight": 4, "actor": "editor", "contended": true },
     { "op": "get", "object": "commerce__order", "weight": 2, "actor": "editor" }
   ],

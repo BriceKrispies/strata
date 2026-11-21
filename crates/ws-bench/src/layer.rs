@@ -111,15 +111,43 @@ impl<T: Hook + ?Sized> Hook for Arc<T> {
     }
 }
 
+/// The store a layer forwards to, replaceable: a handle cycle swaps the adapter under a layer
+/// that keeps everything it holds.
+pub struct Cell(std::sync::Mutex<Arc<dyn Store>>);
+
+impl Cell {
+    pub fn get(&self) -> Arc<dyn Store> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn set(&self, store: Arc<dyn Store>) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = store;
+    }
+}
+
 /// The store `inner` behind `hook`. The `Store` impl is in `delegate.rs`.
 pub struct Layer<H> {
-    pub(crate) inner: Arc<dyn Store>,
+    pub(crate) inner: Cell,
     pub(crate) hook: H,
 }
 
 impl<H: Hook> Layer<H> {
     pub fn new(inner: Arc<dyn Store>, hook: H) -> Self {
-        Layer { inner, hook }
+        Layer {
+            inner: Cell(std::sync::Mutex::new(inner)),
+            hook,
+        }
+    }
+
+    /// Forward to `inner` from now on; the hook and everything it holds stay.
+    pub fn swap_inner(&self, inner: Arc<dyn Store>) {
+        self.inner.set(inner);
     }
 
     pub fn hook(&self) -> &H {
