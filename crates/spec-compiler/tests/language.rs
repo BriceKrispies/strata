@@ -553,3 +553,15 @@ impl lang::TypeEnv for Definitions<'_> {
         RoleId::new(role).is_ok_and(|r| self.roles.contains(&r))
     }
 }
+
+fn to_generated(v: &KValue) -> Value {
+    match v {
+        KValue::Null => Value::Null,
+        KValue::Bool(b) => Value::Bool(*b),
+        KValue::Int(i) => Value::Int(*i),
+        KValue::Str(s) => Value::Str(s.clone()),
+        KValue::Time(t) => Value::Time(*t),
+        KValue::Ref(id) => Value::Ref(id.0),
+        KValue::List(items) => Value::List(items.iter().map(to_generated).collect()),
+    }
+}

@@ -7,16 +7,23 @@
 use serde_json::json;
 use std::sync::Arc;
 use strata_backend::app::{App, Config};
+use strata_backend::auth::Identity;
 use strata_backend::erasure::erase_subject;
 use strata_backend::mail::DevSink;
 use strata_kernel::{
-    Context, DataSubject, ExistingData, FieldDef, FieldId, FieldType, Intent, Need, ObjectTypeId,
-    PersonalDeclaration, PersonalKind, Principal, PrincipalId, Record, RecordId, RetentionRule,
-    RetentionStart, SchemaChange, TenantId, Timestamp, Value,
+    Action, Context, DataSubject, ErrorKind, ExistingData, Expr, FieldDef, FieldId, FieldType,
+    Intent, Need, ObjectTypeId, PersonalDeclaration, PersonalKind, PolicyDef, PolicyId, Principal,
+    PrincipalId, QueryDef, QueryId, Record, RecordId, Resource, RetentionRule, RetentionStart,
+    RoleDef, RoleId, SchemaChange, SessionId, TenantId, Timestamp, Value, ViewDef, ViewId,
+    ViewSection,
 };
+use strata_protocol::api::ViewRequest;
+use strata_protocol::ws::SessionState;
 use strata_simulation::journal::{replay_journal_with, Recorded};
-use strata_storage_api::sealed::{is_sealed, parse_token, TOKEN_PREFIX};
-use strata_storage_api::{execute, ExecuteError, Store};
+use strata_storage_api::sealed::{
+    is_sealed, parse_token, CipherSession, FieldCipher, TOKEN_PREFIX,
+};
+use strata_storage_api::{execute, ExecuteError, SessionRecord, Store};
 use strata_storage_sqlite::SqliteStore;
 
 const ADA_EMAIL: &str = "ada@example.org";

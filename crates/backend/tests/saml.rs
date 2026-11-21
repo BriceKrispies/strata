@@ -10,7 +10,8 @@
 mod mock_saml;
 
 use mock_saml::{
-    encode, now, read_request, signature_of, Reply, Request, IDP_ENTITY, IDP_KEY, SAML_NS, SSO_URL,
+    encode, now, read_request, signature_of, Reply, Request, IDP_ENTITY, IDP_KEY, OTHER_CERT,
+    OTHER_KEY, SAML_NS, SSO_URL,
 };
 use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
@@ -18,10 +19,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use strata_backend::app::Config;
-use strata_backend::mail::DevSink;
+use strata_backend::mail::{DevSink, Mailer};
 use strata_backend::signin::oidc::Federation;
 use strata_backend::signin::saml::SamlProvider;
-use strata_kernel::TenantId;
+use strata_kernel::{canon, TenantId, Timestamp};
 use strata_protocol::api::{
     HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };

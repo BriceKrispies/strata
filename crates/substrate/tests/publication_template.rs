@@ -452,3 +452,27 @@ fn the_templates_roles_name_their_capabilities() {
     assert_eq!(held("cy"), editor);
     assert!(held("dee").is_empty());
 }
+
+// Cited by the Lean correspondence (crates/verification/src/obligations.rs).
+#[test]
+fn an_author_cannot_touch_another_authors_post() {
+    let world = world();
+    let edit = Intent::UpdateRecord {
+        object: ObjectTypeId::new("post").unwrap(),
+        id: RecordId(4),
+        fields: BTreeMap::from([(
+            FieldId::new("title").unwrap(),
+            Value::Str("Hijacked".into()),
+        )]),
+        expected_version: None,
+    };
+    assert_eq!(
+        world
+            .step(&edit, &ctx(user("bob")))
+            .expect_err("rejected")
+            .kind,
+        ErrorKind::Unauthorized
+    );
+    assert!(world.step(&edit, &ctx(user("ann"))).is_ok());
+    assert!(world.step(&edit, &ctx(user("ed"))).is_ok());
+}

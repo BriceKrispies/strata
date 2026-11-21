@@ -1339,3 +1339,82 @@ fn an_unauthorised_caller_cannot_tell_a_missing_record_from_an_existing_one() {
     let error = refused(step(&world, "alpha", "owner", 8_201, update("ghost", 1)));
     assert_eq!(error.kind, ErrorKind::UnknownObject);
 }
+
+// Cited by the Lean correspondence (crates/verification/src/obligations.rs).
+#[test]
+fn a_strict_migration_is_rejected_when_existing_records_would_not_conform() {
+    let world = must(
+        &notes_world(),
+        "alpha",
+        "writer1",
+        5_000,
+        new_note("First", "first"),
+    );
+    let world = must(
+        &world,
+        "alpha",
+        "writer1",
+        5_001,
+        new_note("Second", "second"),
+    );
+    let error = step(
+        &world,
+        "alpha",
+        "owner",
+        5_002,
+        require_rank(ExistingData::Reject),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::MigrationRejected);
+    for id in [1, 2] {
+        let rule = format!("existing:note/{id}:required:note.rank");
+        assert!(
+            error.evidence.iter().any(|c| c.rule == rule && !c.passed),
+            "{rule} is not listed among the refusal's checks"
+        );
+    }
+}
+
+// Cited by the Lean correspondence (crates/verification/src/obligations.rs).
+#[test]
+fn writers_edit_only_their_own_notes() {
+    let world = must(
+        &notes_world(),
+        "alpha",
+        "writer1",
+        5_000,
+        new_note("First", "first"),
+    );
+    let other = step(
+        &world,
+        "alpha",
+        "writer2",
+        5_001,
+        patch(1, &[("title", text("Mine now"))]),
+    )
+    .unwrap_err();
+    assert_eq!(other.kind, ErrorKind::Unauthorized);
+    assert!(other
+        .evidence
+        .iter()
+        .any(|c| c.rule == "policy:writers_edit_own" && !c.passed));
+    let world = must(
+        &world,
+        "alpha",
+        "writer1",
+        5_002,
+        patch(1, &[("title", text("Still mine"))]),
+    );
+    assert_eq!(note(&world, "alpha", 1).version, 2);
+}
+
+fn require_rank(mode: ExistingData) -> Intent {
+    Intent::ChangeSchema {
+        changes: vec![SchemaChange::DefineField {
+            object: object("note"),
+            field: field_def("rank", FieldType::Int, true),
+        }],
+        expected_version: None,
+        existing: mode,
+    }
+}

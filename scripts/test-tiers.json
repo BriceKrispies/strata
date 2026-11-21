@@ -96,13 +96,6 @@
       "reason": "simulation: Determinism and minimisation over the Fieldnotes bundle; scoped runs include it when the simulation crate or a tenant bundle changed"
     },
     {
-      "package": "strata-spec-compiler-language-fixture",
-      "target": "spec_compiler_language_fixture_it",
-      "tier": "routine",
-      "seconds": 0.64,
-      "unmeasured": true
-    },
-    {
       "package": "strata-spec-compiler",
       "target": "spec_compiler_it",
       "tier": "routine",
@@ -201,6 +194,13 @@
       "seconds": 24.12,
       "unmeasured": true,
       "reason": "correspondence: Runs the Lean build and compares it with the kernel (needs lake); the gate also runs lake build"
+    },
+    {
+      "package": "strata-spec-compiler-language-fixture",
+      "target": "kernel_cases",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
     }
   ]
 }

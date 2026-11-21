@@ -15,7 +15,7 @@ use std::sync::Arc;
 use strata_backend::app::{ApiError, App, Config, Shared};
 use strata_backend::auth::Identity;
 use strata_backend::mail::DevSink;
-use strata_backend::worker::{commands, steps, WorkerConfig};
+use strata_backend::worker::{self, commands, leases, routes, steps, WorkerConfig};
 use strata_kernel::approvals::WORKFLOW_APPROVE;
 use strata_kernel::testkit::*;
 use strata_kernel::*;
@@ -24,7 +24,8 @@ use strata_model::types::AutomationStepResult;
 use strata_protocol::api::ErrorCode;
 use strata_protocol::ws::SessionState;
 use strata_storage_api::jobs::{
-    ExceptionKind, JobWork, NewJob, RetryPolicy, RunRecord, RunState, StepState,
+    ExceptionKind, JobReport, JobWork, NewJob, Reported, RetryPolicy, RunRecord, RunState,
+    StepState,
 };
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, SessionRecord, Store};
