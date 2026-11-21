@@ -615,11 +615,13 @@ async fn sign_in_and_sign_out_carry_a_request_token_the_gateway_issued() {
             "anonymous sign-out with {what}"
         );
     }
+    // With the token, a browser that has no session has none to end: `unauthenticated`
+    // (contract sign-out-of-site).
     assert_eq!(
         edge.send(anonymous_out(Some(("x-csrf-token", issued.as_str()))))
             .await
             .0,
-        200
+        401
     );
 }
 

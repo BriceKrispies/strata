@@ -1417,6 +1417,15 @@ async fn logout(State(bff): State<Shared>, headers: HeaderMap) -> Result<Respons
             .insert(SET_COOKIE, session_cookie("", 0));
         response
     };
+    // A call with no session to end is `unauthenticated` (contract sign-out-of-site); the cookie
+    // that named no session is cleared with the refusal.
+    if !live {
+        return Ok(cleared(Failure::new(
+            ErrorCode::Unauthenticated,
+            "Sign in to do this.",
+            &visit.correlation,
+        )));
+    }
     if live {
         let ended: Result<Json_, Failure> =
             backend(&bff, &visit, "/internal/session/logout", &json!({})).await;
