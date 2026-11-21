@@ -28,6 +28,7 @@ sha2.workspace = true
 strata-backend = { path = "../backend" }
 strata-storage-api.workspace = true
 strata-storage-sqlite.workspace = true
+totp-rs.workspace = true
 
 [[test]]
 name = "bff_it"

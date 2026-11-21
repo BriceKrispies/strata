@@ -4,8 +4,8 @@
 //! (`conformance/generated/contracts.rs`) with the harness of `conformance/harness.rs`.
 //!
 //! The target is the development stack in-process: the backend seeds the tenants under `tenants/`
-//! (fieldnotes at 127.0.0.1, tidewater at localhost), whose development accounts sign in with a
-//! password. The persons the checks sign in as, and the roles each holds, are read from those files:
+//! (fieldnotes at fieldnotes.localhost, tidewater at localhost: each is reached by a name, as a
+//! passkey needs, never by an address), whose development accounts sign in with a password. The persons the checks sign in as, and the roles each holds, are read from those files:
 //! `accounts.dev.json` (login, password, principal) and `tenant.json` (the owner, the members'
 //! roles, the teams' roles and members).
 //!
@@ -31,7 +31,10 @@ use strata_storage_sqlite::SqliteStore;
 const TOKEN: &str = "conformance-service-token-0123456789";
 
 /// The sites of the development stack: the one checked, then the other tenant.
-const SITES: [(&str, &str); 2] = [("fieldnotes", "127.0.0.1"), ("tidewater", "localhost")];
+const SITES: [(&str, &str); 2] = [
+    ("fieldnotes", "fieldnotes.localhost"),
+    ("tidewater", "localhost"),
+];
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -189,6 +192,7 @@ pub async fn start_target() -> Target {
         let ready = target
             .http
             .get(format!("http://127.0.0.1:{port}/api/session"))
+            .header("host", format!("{}:{port}", SITES[0].1))
             .send()
             .await
             .is_ok_and(|r| r.status().as_u16() == 200);

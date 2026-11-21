@@ -625,6 +625,22 @@ async fn sign_in_and_sign_out_carry_a_request_token_the_gateway_issued() {
     );
 }
 
+/// Verifies: CT-245
+///
+/// The view model of the search page repeats the words asked for as its output `q`, and leaves the
+/// member out when the request carried none.
+#[tokio::test]
+async fn the_search_page_repeats_the_words_asked_for() {
+    let edge = start().await;
+    let (status, page, _) = edge
+        .get("127.0.0.1", "/api/view?path=/search&q=kiln", None)
+        .await;
+    assert_eq!(status, 200, "{page}");
+    assert_eq!(page["q"], "kiln");
+    let (_, bare, _) = edge.get("127.0.0.1", "/api/view?path=/search", None).await;
+    assert!(bare.get("q").is_none(), "{bare}");
+}
+
 /// Verifies: GWY-001
 #[tokio::test]
 async fn the_site_comes_from_the_host_and_nothing_the_client_says() {
