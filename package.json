@@ -14,6 +14,7 @@
     "containers:up": "node scripts/containers.mjs up",
     "containers:down": "node scripts/containers.mjs down",
     "e2e:containers": "node scripts/containers.mjs e2e",
+    "idp:containers": "node scripts/containers.mjs idp",
     "e2e:generated": "playwright test -c tests/e2e/generated/playwright.generated.config.js",
     "e2e:steps": "playwright test -c tests/e2e/step-fixtures/playwright.config.js",
     "test:routine": "node scripts/test-tiers.mjs routine",

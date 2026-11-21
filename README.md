@@ -106,6 +106,33 @@ containers the log test reads `podman logs`, the backend-is-not-reachable test c
 answers on 127.0.0.1:4101, and the Lean test skips itself because the image has no Lean. The
 hot-reload test is not part of the container run.
 
+### A real identity provider: Keycloak
+
+`STRATA_IDP=1 node scripts/containers.mjs up` adds Keycloak 26.8.1 to the stack
+(`deploy/compose.local-idp.yaml`, hand-written; realms in `deploy/keycloak/realms/`, Strata's provider
+configuration in `deploy/keycloak/oidc.config.json` and `saml.config.json`). It implies `STRATA_DEV=1`,
+because the runtime reaches a provider on this machine only through the outbound gate's development
+exception. `npm run idp:containers` starts a fresh stack with it and runs the `idp` Playwright project
+(`tests/e2e/idp.spec.js`): OpenID Connect, SAML, a brokered sign-in and a cancel at Keycloak.
+`crates/backend/tests/keycloak.rs` drives the authorization code flow against it over HTTP when
+`STRATA_KEYCLOAK_URL=http://keycloak.localhost:8180` is set.
+
+Keycloak is at http://keycloak.localhost:8180/ for the browser and for the runtime alike, so both see one
+issuer, `http://keycloak.localhost:8180/realms/strata`. Everything in the profile is a development-only value,
+the realm signing key included. The sign-in page of Fieldnotes (and, for OpenID Connect and SAML, Tidewater)
+offers "Keycloak OIDC" and "Keycloak SAML"; Fieldnotes also offers "Keycloak with consent".
+
+| Realm | User | Password | Used for |
+|---|---|---|---|
+| strata | `olive` | `strata-dev-olive` | OpenID Connect |
+| strata | `sana` | `strata-dev-sana` | SAML (the name sent is the first name, `Sana`) |
+| strata | `cora` | `strata-dev-cora` | "Keycloak with consent", where she can say no |
+| upstream | `una` | `strata-dev-una` | "upstream" on the realm `strata` login page: the brokered path |
+| master | `admin` | `strata-dev-keycloak-admin` | the Keycloak admin console |
+
+A person who signs in for the first time is made a principal with the role `author`; the email domains
+`keycloak.example` and `upstream.example` are bound to the providers.
+
 ## What is where
 
 ```
