@@ -1,6 +1,7 @@
 //! `transition`: the one function that decides what an intent does to a tenant's state.
 
 use crate::definitions::{operation_powers, uniques, AUTOMATIONS_DEFINE};
+use crate::dependencies::{self, Assessment, ChangeClass, DependencyGraph};
 use crate::expr::{self, Env};
 use crate::intent::{
     Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, DomainEvent, Effect, ErrorKind,
@@ -1969,6 +1970,37 @@ pub fn plan_migration(
     })
 }
 
+/// The class and the impact of each change of a list, as the list is applied to `base` and
+/// leaves `after`. A change is classified against the schema as it stands when it is applied; its
+/// impact is read in the graph of `base` and the graph of `after` (see
+/// [`dependencies::impact_between`]). Stops at a change that cannot be applied.
+pub fn assess_changes(
+    base: &TenantSchema,
+    changes: &[SchemaChange],
+    after: &TenantSchema,
+) -> Vec<Assessment> {
+    let mut working = base.clone();
+    let mut steps = Vec::new();
+    for change in changes {
+        let class = dependencies::classify(change, &working);
+        let footprint = dependencies::footprint(change, &working);
+        let Ok(description) = apply_change(&mut working, change) else {
+            break;
+        };
+        steps.push((description, class, footprint));
+    }
+    let before = DependencyGraph::of(base);
+    let after = DependencyGraph::of(after);
+    steps
+        .into_iter()
+        .map(|(description, class, footprint)| Assessment {
+            description,
+            class,
+            impact: dependencies::impact_between(&footprint, &before, &after),
+        })
+        .collect()
+}
+
 fn change_schema(
     draft: &mut Draft<'_>,
     lookup: Lookup<'_>,
@@ -2017,6 +2049,50 @@ fn change_schema(
         e.evidence = evidence;
         e
     })?;
+    // D-8212: the class of each change and the dependents it reaches are computed from the
+    // dependency graph, shown in the evidence, and a breaking change that reaches a dependent is
+    // refused naming it (MIG-592). The same check refuses a name that is removed and defined again
+    // while a dependent reads it, which would otherwise bind the dependent to another entity
+    // (D-8217, MIG-604).
+    let assessments = assess_changes(&draft.tenant.schema, changes, &migration.schema);
+    for assessment in &assessments {
+        let reached: Vec<String> = assessment.impact.iter().map(|d| d.to_string()).collect();
+        let detail = if reached.is_empty() {
+            format!("{}: {}", assessment.description, assessment.class.name())
+        } else {
+            format!(
+                "{}: {}, reaches {}",
+                assessment.description,
+                assessment.class.name(),
+                reached.join(", ")
+            )
+        };
+        draft.evidence.push(Check::pass("schema:class", detail));
+    }
+    let mut refusals = Vec::new();
+    for assessment in &assessments {
+        if assessment.class != ChangeClass::Breaking || assessment.impact.is_empty() {
+            continue;
+        }
+        let reached: Vec<String> = assessment.impact.iter().map(|d| d.to_string()).collect();
+        for dependent in &reached {
+            draft.evidence.push(Check::fail(
+                "schema:impact",
+                format!(
+                    "{}: {dependent} is still bound to what the change removes or replaces",
+                    assessment.description
+                ),
+            ));
+        }
+        refusals.push(format!(
+            "{} is a breaking change that reaches {}",
+            assessment.description,
+            reached.join(", ")
+        ));
+    }
+    if !refusals.is_empty() {
+        return Err(draft.reject(ErrorKind::InvalidSchema, refusals.join("; ")));
+    }
     // The overrides and revisions that a change of setting definitions brings with it, or the
     // refusal of a type that changes under overrides (SET-004).
     let settings = crate::settings::schema_change_effects(draft.tenant, changes)
