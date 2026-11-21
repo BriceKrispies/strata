@@ -50,6 +50,57 @@ and no added axiom; a test fails if the sources contain one or the audit reports
    side, where it is tested, not proved.
 6. Lean's kernel and its three standard axioms are trusted.
 
+## The schema evolution model
+
+`lean/Strata/Evolution/` is a second model, independent of the one above (its own namespace,
+`Strata.Evolution`). It models what happens to the things that depend on a schema when the schema
+changes.
+
+- **Entities have stable ids, separate from names.** Object types and their fields, queries,
+  policies and views are all referred to by id. A rename changes a label nobody resolves through,
+  so it touches nothing, and a name that is deleted and reused cannot make a dependent point at a
+  different entity (no ABA).
+- **A dependent is a read set and a function of the values read.** A query reading fields and a
+  policy whose condition reads fields (the far end of one reference is one more pair) are
+  readers; a view reads queries. Dependencies are stratified, so they are acyclic by
+  construction. What the function does is not constrained.
+- **Data** is a context of one record per object type, a map from field ids to values.
+- **Changes**: add a field, widen, rename, remove a field, narrow, retarget a reference, remove an
+  object type, remove a dependent. `footprint` is the existing cells a change touches, `impact`
+  the dependents that read them (through views too), `classify` gives compatible (rename, widen),
+  adaptable (add a field) or breaking (everything else), `apply` the new schema and `migrate` the
+  new data.
+- **Acceptance** (`accepted`): the local checks pass (targets exist, new ids are fresh, new
+  references resolve, the type moves the right way, no reference is left to a deleted object) and,
+  if the change is breaking, its impact is empty. It does not say "the result is well-formed";
+  that is what closure proves. It is the one place pins and projections (WG-5327) will add a
+  condition.
+
+`lean/Strata/Evolution/Proofs.lean` proves:
+
+| Property | Theorem | Statement |
+|---|---|---|
+| Closure | `closure` | A well-formed schema stays well-formed under any accepted change |
+| Locality | `locality` | For an accepted change on a well-formed schema, every dependent outside the change's impact (and not deleted by it) is still present, still valid, and evaluates to the same value on the migrated data |
+| Compatibility | `compatibility` | A compatible change (rename, widen) keeps every valid dependent valid and its value unchanged on the migrated data |
+| The classification is necessary | `breaking_change_can_change_value`, `breaking_change_can_invalidate` | There is a well-formed schema, a breaking change refused by the acceptance rule, and a dependent in its impact, such that applying the change anyway changes the dependent's value (narrowing clamps a stored `-1`) or leaves it reading a field that no longer exists |
+
+`lake env lean Audit.lean` prints the axioms each depends on: only `propext`, `Classical.choice`
+and `Quot.sound`.
+
+### Assumptions and what is left out
+
+1. The object of the theorems is this model, not the Rust source. The correspondence with the
+   kernel is pending (WG-5330).
+2. Dependents are read sets plus an arbitrary function. Expressions beyond their read sets, and
+   reads along more than one reference, are not modelled.
+3. Locality needs a well-formed starting schema. Compatibility and the two counterexamples do not.
+4. Pins and projections are pending (WG-5327); `accepted` is where they attach.
+5. Concurrency (changes arriving together) is not modelled: one change at a time.
+6. Data conformance to field types is not modelled; `migrate` says what a changed cell becomes
+   (defaulted, clamped, cleared). Widening is the identity on values.
+7. `classify` looks at the change alone, not at the schema.
+
 ## Correspondence between the model and the kernel
 
 | Lean | Rust kernel |
