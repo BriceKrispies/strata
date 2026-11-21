@@ -822,6 +822,16 @@ impl Run<'_> {
         holdings(self.spec, &persona.roles, true).contains(capability)
     }
 
+    /// Whether the person holds what the contract requires: every capability when it names one,
+    /// and any one of them when it names several (D-6591).
+    fn holds_required(&self, persona: &Persona) -> bool {
+        match self.contract.requires {
+            [] => true,
+            [only] => self.holds(persona, only),
+            several => several.iter().any(|c| self.holds(persona, c)),
+        }
+    }
+
     fn holds_role(&self, persona: &Persona) -> bool {
         self.contract.roles.is_empty()
             || persona
@@ -831,11 +841,7 @@ impl Run<'_> {
     }
 
     fn admitted(&self, persona: &Persona) -> bool {
-        self.contract
-            .requires
-            .iter()
-            .all(|c| self.holds(persona, c))
-            && self.holds_role(persona)
+        self.holds_required(persona) && self.holds_role(persona)
     }
 
     /// A person of the site who holds everything the contract asks for; the owner first.
@@ -1227,22 +1233,23 @@ impl Run<'_> {
     }
 
     async fn capabilities(&mut self) {
-        for capability in self.contract.requires {
+        // A contract that names several capabilities is met by any one of them (D-6591), so the
+        // refused person lacks all of them; one that names a single capability is checked alone.
+        let groups: Vec<&[&str]> = match self.contract.requires {
+            [] => Vec::new(),
+            requires => vec![requires],
+        };
+        for group in groups {
+            let capability = group.join(" or ");
+            let capability = capability.as_str();
             let mut lacking: Vec<Persona> = self
                 .home_personas()
                 .into_iter()
-                .filter(|p| !self.holds(p, capability))
+                .filter(|p| group.iter().all(|c| !self.holds(p, c)))
                 .cloned()
                 .collect();
-            // One who holds everything else is refused for this capability alone.
-            lacking.sort_by_key(|p| {
-                !(self
-                    .contract
-                    .requires
-                    .iter()
-                    .all(|c| c == capability || self.holds(p, c))
-                    && self.holds_role(p))
-            });
+            // One who holds the role the contract names is refused for the capability alone.
+            lacking.sort_by_key(|p| !self.holds_role(p));
             let Some(persona) = lacking.first().cloned() else {
                 self.skip(
                     "capability",
@@ -1274,7 +1281,7 @@ impl Run<'_> {
             .filter(|p| !self.holds_role(p))
             .cloned()
             .collect();
-        lacking.sort_by_key(|p| !self.contract.requires.iter().all(|c| self.holds(p, c)));
+        lacking.sort_by_key(|p| !self.holds_required(p));
         let Some(persona) = lacking.first().cloned() else {
             self.skip(
                 "role",
