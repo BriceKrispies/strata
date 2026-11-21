@@ -168,7 +168,10 @@ enum Shape {
     /// type `mutation`, whole, not wrapped in a member of that name.
     Mutation,
     View,
-    Records { op: String, object: String },
+    Records {
+        op: String,
+        object: String,
+    },
     Socket,
 }
 
@@ -1024,10 +1027,16 @@ fn setup_property(
             if let Some(Value::Object(map)) = step.get("set") {
                 for (name, member) in map {
                     let Some(member) = member.as_str() else {
-                        return bad(format!("sets \"{name}\" from something that is not a member path"), out);
+                        return bad(
+                            format!("sets \"{name}\" from something that is not a member path"),
+                            out,
+                        );
                     };
                     if !inputs.iter().any(|i| i.name == *name) {
-                        return bad(format!("sets \"{name}\", which is not one of its inputs"), out);
+                        return bad(
+                            format!("sets \"{name}\", which is not one of its inputs"),
+                            out,
+                        );
                     }
                     set.push((case.name(name), member.to_string()));
                 }
@@ -2033,7 +2042,10 @@ mod tests {
             .contents
             .clone();
         for member in ["depends_on", "schema_version", "theme", "path"] {
-            assert!(text.contains(&format!(r#"wire: "{member}""#)), "{member}: {text}");
+            assert!(
+                text.contains(&format!(r#"wire: "{member}""#)),
+                "{member}: {text}"
+            );
         }
         assert!(
             !text.contains("view-data"),

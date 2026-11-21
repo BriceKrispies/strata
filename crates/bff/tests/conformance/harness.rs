@@ -523,7 +523,12 @@ fn totp_code(secret: &str, steps: i64) -> Result<String, String> {
 }
 
 /// A call as the caller of the success call makes it: our origin, the session and its token.
-fn caller_call(method: Method, path: &str, session: Option<&Session>, body: Option<String>) -> Call {
+fn caller_call(
+    method: Method,
+    path: &str,
+    session: Option<&Session>,
+    body: Option<String>,
+) -> Call {
     Call {
         method,
         site: 0,
@@ -553,7 +558,8 @@ fn set_input(call: &mut Call, name: &str, value: &Value) -> Result<(), String> {
             Value::String(s) => s.clone(),
             other => other.to_string(),
         };
-        call.path.push(if call.path.contains('?') { '&' } else { '?' });
+        call.path
+            .push(if call.path.contains('?') { '&' } else { '?' });
         call.path
             .push_str(&format!("{}={}", encode(name), encode(&text)));
     }
@@ -1290,8 +1296,8 @@ impl Run<'_> {
                 // An address that does not verify is not found, not refused for lack of a
                 // credential, when the contract declares that: the answer does not say whether
                 // the address was never ours or its signature is wrong.
-                let signed_address_not_found = scheme == "signed-address"
-                    && self.contract.errors.contains(&"not_found");
+                let signed_address_not_found =
+                    scheme == "signed-address" && self.contract.errors.contains(&"not_found");
                 let codes: &[&str] = if signed_address_not_found {
                     &["unauthenticated", "not_found"]
                 } else {

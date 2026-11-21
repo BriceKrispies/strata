@@ -628,12 +628,7 @@ async fn introspection_reports_a_token_to_a_caller_permitted_to_ask() {
     // Who asks is decided before the body is read: no credentials and no token is still
     // unauthenticated, not a request that lacks its token.
     let (status, refused) = backend
-        .call(
-            "fieldnotes",
-            None,
-            "/internal/token/introspect",
-            json!({}),
-        )
+        .call("fieldnotes", None, "/internal/token/introspect", json!({}))
         .await;
     assert_eq!(status, 401, "no credentials, no token: {refused}");
     let (status, seen) = backend
