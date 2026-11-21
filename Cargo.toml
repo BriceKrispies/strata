@@ -10,6 +10,7 @@ members = [
     "crates/machine-store",
     "crates/protocol",
     "crates/backend",
+    "crates/corpus",
     "crates/bff",
     "crates/simulation",
     "crates/verification",
