@@ -2108,7 +2108,22 @@ async fn lab_replay(State(bff): State<Shared>, headers: HeaderMap) -> Result<Jso
 }
 
 async fn lab_verify(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
-    guarded(&bff, &headers, "/internal/lab/verify", json!({})).await
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    // The owner, who may change the schema (contract verify-lab-proofs), is decided before the
+    // call reaches the backend, so a refused call spends none of the tenant's one verification a
+    // minute.
+    Admission {
+        capabilities: &["change-project"],
+        any: false,
+        roles: &["owner"],
+        step_up: false,
+    }
+    .admit(&bff, &visit)
+    .await?;
+    backend(&bff, &visit, "/internal/lab/verify", &json!({}))
+        .await
+        .map(Json)
 }
 
 async fn diagnostics(
