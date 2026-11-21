@@ -228,7 +228,8 @@ async fn a_service_account_gets_a_token_within_its_scopes_for_five_minutes() {
     assert_eq!(reply["token_type"], "Bearer");
     assert!(reply["expires_in"].as_i64().unwrap() <= 300, "{reply}");
     assert_eq!(reply["scope"], "read:post read:category");
-    let claims = part(reply["access_token"].as_str().unwrap(), 1);
+    let token = reply["access_token"].as_str().unwrap().to_string();
+    let claims = part(&token, 1);
     assert!(claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap() <= 300);
     assert_eq!(claims["sub"], client.id);
 
@@ -249,19 +250,8 @@ async fn a_service_account_gets_a_token_within_its_scopes_for_five_minutes() {
         )
         .await;
     assert_eq!(status, 422);
-}
 
-/// Verifies: TOK-005
-///
-/// With the test clock: a token holds until its five minutes are over and is refused after them,
-/// whatever else is true of it.
-#[tokio::test]
-async fn a_token_is_refused_once_its_five_minutes_have_passed() {
-    let backend = start().await;
-    let owner = backend.owner().await;
-    let client = backend.client(&owner, &["read:post"]).await;
-    let token = backend.access(&client, None).await;
-
+    // Held for four minutes, refused once its five minutes are over, whatever else is true of it.
     assert_eq!(backend.verify("fieldnotes", &token).await.0, 200);
     backend.advance(4 * MINUTE).await;
     assert_eq!(
@@ -278,6 +268,7 @@ async fn a_token_is_refused_once_its_five_minutes_have_passed() {
 }
 
 /// Verifies: TOK-006
+/// Verifies: TOK-250
 ///
 /// A token made for one site is refused by another: the other has other keys and another audience.
 #[tokio::test]
@@ -300,40 +291,25 @@ async fn a_token_of_one_tenant_is_refused_by_every_other() {
         .await;
     assert_eq!(status, 401);
     assert_eq!(backend.token(&client, None).await.0, 200);
-}
 
-/// Verifies: TOK-007
-///
-/// Revoking the service account, with the test clock a minute into the token's life: the very next
-/// check refuses the token, which is inside the bound that applies to sessions, and nothing waits
-/// for a notice to arrive.
-#[tokio::test]
-async fn revoking_a_client_refuses_its_tokens_at_once() {
-    let backend = start().await;
-    let owner = backend.owner().await;
-    let client = backend.client(&owner, &["read:post"]).await;
-    let token = backend.access(&client, None).await;
-    backend.advance(MINUTE).await;
-    assert_eq!(backend.verify("fieldnotes", &token).await.0, 200);
-
-    let (status, reply) = backend
-        .call(
+    // A resource that knows which client presents a token refuses one issued to another.
+    let other = backend.client(&owner, &["read:post"]).await;
+    let present = |presenter: &str| {
+        backend.call(
             "fieldnotes",
-            Some(&owner),
-            "/internal/clients/revoke",
-            json!({ "id": client.id }),
+            None,
+            "/internal/token/verify",
+            json!({ "token": token, "presenter": presenter }),
         )
-        .await;
-    assert_eq!(status, 200, "{reply}");
-    assert_eq!(backend.verify("fieldnotes", &token).await.0, 401);
-    // And it makes no new one.
-    assert_eq!(backend.token(&client, None).await.0, 401);
+    };
+    assert_eq!(present(&client.id).await.0, 200);
+    assert_eq!(present(&other.id).await.0, 401);
 }
 
 /// Verifies: TOK-007, TOK-003, TOK-004
 ///
 /// Revoking a grant refuses the tokens made from it at once, and until then they name the agent
-/// and the person.
+/// and the person. Revoking the agent's account refuses the tokens it holds at once.
 #[tokio::test]
 async fn revoking_a_grant_refuses_the_tokens_made_from_it() {
     let backend = start().await;
@@ -391,6 +367,21 @@ async fn revoking_a_grant_refuses_the_tokens_made_from_it() {
     assert_eq!(status, 200);
     assert_eq!(backend.verify("fieldnotes", &token).await.0, 401);
     assert_eq!(exchange(None).await.0, 401, "and no new one is made");
+
+    // Revoking the agent's account refuses the tokens it holds at once, and makes no new one.
+    let held = backend.access(&agent, None).await;
+    assert_eq!(backend.verify("fieldnotes", &held).await.0, 200);
+    let (status, reply) = backend
+        .call(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/clients/revoke",
+            json!({ "id": agent.id }),
+        )
+        .await;
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(backend.verify("fieldnotes", &held).await.0, 401);
+    assert_eq!(backend.token(&agent, None).await.0, 401);
 }
 
 /// Verifies: TOK-004
@@ -465,40 +456,37 @@ async fn a_delegation_grants_nothing_the_person_lacks_and_belongs_to_its_agent()
     assert_eq!(status, 401);
 }
 
-/// Verifies: TOK-250
-///
-/// A resource that knows which client presents a token refuses a token issued to another.
-#[tokio::test]
-async fn a_token_is_worthless_to_a_client_it_was_not_issued_to() {
-    let backend = start().await;
-    let owner = backend.owner().await;
-    let client = backend.client(&owner, &["read:post"]).await;
-    let other = backend.client(&owner, &["read:post"]).await;
-    let token = backend.access(&client, None).await;
-    let present = |presenter: &str| {
-        backend.call(
-            "fieldnotes",
-            None,
-            "/internal/token/verify",
-            json!({ "token": token, "presenter": presenter }),
-        )
-    };
-    assert_eq!(present(&client.id).await.0, 200);
-    assert_eq!(present(&other.id).await.0, 401);
-}
-
 /// Verifies: TOK-008
 ///
 /// After a rotation the previous key still verifies the tokens it signed, new tokens are signed
 /// by the new key, and the previous key leaves the published set once its tokens have expired.
+/// The private half of each key is held sealed at rest, never as a PEM, before and after.
 #[tokio::test]
 async fn rotating_a_key_leaves_the_tokens_of_the_previous_one_verifiable_until_they_expire() {
+    use strata_storage_api::Store;
     let backend = start().await;
     let owner = backend.owner().await;
     let client = backend.client(&owner, &["read:post"]).await;
     let before = backend.access(&client, None).await;
     let first = kid(&before);
     assert_eq!(backend.keys().await, [first.clone()]);
+    let tenant = strata_kernel::TenantId::new("fieldnotes").unwrap();
+    let at_rest = || -> Vec<String> {
+        backend
+            .store
+            .doc_list(&tenant, "signing-key")
+            .unwrap()
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect()
+    };
+    let stored = at_rest();
+    assert_eq!(stored.len(), 1);
+    assert!(
+        !stored[0].contains("PRIVATE KEY") && !stored[0].contains("private_pem"),
+        "the PEM is at rest"
+    );
+    assert!(stored[0].contains("sealed_private"), "{}", stored[0]);
 
     let (status, rotated) = backend
         .call(
@@ -521,6 +509,11 @@ async fn rotating_a_key_leaves_the_tokens_of_the_previous_one_verifiable_until_t
     let mut both = vec![first.clone(), second.clone()];
     both.sort();
     assert_eq!(published, both);
+    let stored = at_rest();
+    assert_eq!(stored.len(), 2);
+    assert!(stored
+        .iter()
+        .all(|text| !text.contains("PRIVATE KEY") && text.contains("sealed_private")));
 
     backend.advance(6 * MINUTE).await;
     assert_eq!(
@@ -862,52 +855,4 @@ async fn an_owner_operation_that_makes_durable_access_needs_a_recent_authenticat
         )
         .await;
     assert_eq!(status, 200, "{rotated}");
-}
-
-/// The private half of the signing key is not at rest in the clear: a copy of the tenant's
-/// documents holds no PEM, and the key still signs and verifies, also after a rotation re-wrote
-/// the retired one.
-#[tokio::test]
-async fn the_signing_key_is_sealed_at_rest() {
-    use strata_kernel::TenantId;
-    use strata_storage_api::Store;
-
-    let backend = start().await;
-    let owner = backend.owner().await;
-    let client = backend.client(&owner, &["read:post"]).await;
-    let before = backend.access(&client, None).await;
-    let tenant = TenantId::new("fieldnotes").unwrap();
-
-    let at_rest = |backend: &Backend| -> Vec<String> {
-        backend
-            .store
-            .doc_list(&tenant, "signing-key")
-            .unwrap()
-            .into_iter()
-            .map(|(_, text)| text)
-            .collect()
-    };
-    let stored = at_rest(&backend);
-    assert_eq!(stored.len(), 1);
-    assert!(!stored[0].contains("PRIVATE KEY"), "the PEM is at rest");
-    assert!(!stored[0].contains("private_pem"), "{}", stored[0]);
-    assert!(stored[0].contains("sealed_private"), "{}", stored[0]);
-
-    let (status, rotated) = backend
-        .call(
-            "fieldnotes",
-            Some(&owner),
-            "/internal/keys/rotate",
-            json!({}),
-        )
-        .await;
-    assert_eq!(status, 200, "{rotated}");
-    let stored = at_rest(&backend);
-    assert_eq!(stored.len(), 2);
-    assert!(stored.iter().all(|text| !text.contains("PRIVATE KEY")));
-    assert!(stored.iter().all(|text| text.contains("sealed_private")));
-    // Opened again for signing and verifying.
-    assert_eq!(backend.verify("fieldnotes", &before).await.0, 200);
-    let after = backend.access(&client, None).await;
-    assert_eq!(backend.verify("fieldnotes", &after).await.0, 200);
 }

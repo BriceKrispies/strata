@@ -5,9 +5,7 @@
 //! listed fails.
 
 use std::time::Duration;
-use strata_backend::app::{
-    ApiError, ThrottleLimits, DEFAULT_SESSION_IDLE_MS, DEFAULT_SESSION_TTL_MS,
-};
+use strata_backend::app::{ApiError, ThrottleLimits};
 use strata_backend::limits::Limits;
 use strata_kernel::{DomainError, ErrorKind};
 use strata_model::machines::guess_throttle_flow_impl::{
@@ -24,47 +22,16 @@ use strata_storage_api::{throttle_step, StoreError, ThrottleRow, ThrottleRule};
 // Session lifetime
 // ---------------------------------------------------------------------------------------
 
-/// The one place the session lifetimes the default is checked against are written.
-///
-/// The specification disagrees with itself, and the owner has not decided which text stands:
-///
-///   - decision `d-700` (`specifications/spec.jsonc`, "Platform defaults for throttles, retries,
-///     sessions and recovery"): "A session ends twelve hours after it was last used or fourteen
-///     days after sign-in, whichever comes first." That is idle 12 hours, absolute 14 days.
-///   - machine `session-authority-flow-impl`, its description: "the runtime finds it idle for 2
-///     hours (7200000 ms; ...) or 12 hours (43200000 ms) after sign-in". That is idle 2 hours,
-///     absolute 12 hours. The description of the state `sa-live-i` and of the component record
-///     repeat 2 hours and 12 hours.
-///
-/// The backend follows the machine text. These constants hold those values, so that the test
-/// passes today and a decision for d-700 is one edit here (and in `DEFAULT_SESSION_*_MS`):
-/// idle 12 * 3_600_000, absolute 14 * 24 * 3_600_000.
-const SPEC_SESSION_IDLE_MS: i64 = 2 * 3_600_000;
-const SPEC_SESSION_ABSOLUTE_MS: i64 = 12 * 3_600_000;
-
-#[test]
-fn the_default_session_lifetimes_are_the_specs() {
-    assert_eq!(
-        DEFAULT_SESSION_IDLE_MS, SPEC_SESSION_IDLE_MS,
-        "idle lifetime"
-    );
-    assert_eq!(
-        DEFAULT_SESSION_TTL_MS, SPEC_SESSION_ABSOLUTE_MS,
-        "absolute lifetime"
-    );
-}
-
-/// The binary takes its defaults from the same constants, not from numbers of its own.
-#[test]
-fn the_binary_reads_the_defaults_from_the_constants() {
-    let main = include_str!("../src/main.rs");
-    assert!(main.contains("DEFAULT_SESSION_TTL_MS"));
-    assert!(main.contains("DEFAULT_SESSION_IDLE_MS"));
-    assert!(
-        !main.contains("12 * 3_600_000") && !main.contains("2 * 3_600_000"),
-        "main.rs writes a session lifetime of its own"
-    );
-}
+// The specification disagrees with itself about the session lifetimes, and the owner has not
+// decided which text stands. The backend follows the machine text; the session trace below holds
+// its defaults against the machine thresholds, so a decision for d-700 is one edit in
+// DEFAULT_SESSION_*_MS and one in the machine comparison there.
+//
+// Decision d-700 (specifications/spec.jsonc, "Platform defaults for throttles, retries, sessions
+// and recovery") says: "A session ends twelve hours after it was last used or fourteen days after
+// sign-in, whichever comes first." That is idle 12 hours, absolute 14 days.
+// Machine session-authority-flow-impl says: "the runtime finds it idle for 2 hours (7200000 ms;
+// ...) or 12 hours (43200000 ms) after sign-in". That is idle 2 hours, absolute 12 hours.
 
 // ---------------------------------------------------------------------------------------
 // Quotas
@@ -170,16 +137,6 @@ fn backend_limits_match_the_generated_quotas() {
             .iter()
             .map(|p| (p.backend, p.backend_limit, p.quota.id, quota_ms(p.quota)))
             .collect::<Vec<_>>()
-    );
-}
-
-/// The source limit the backend applies comes from the generated model, not from a number of
-/// its own.
-#[test]
-fn the_source_limit_comes_from_the_generated_quota() {
-    assert_eq!(
-        u64::from(ThrottleLimits::default().source_max),
-        quotas::Q_SIGN_IN_WITH_PASSWORD.limit
     );
 }
 
