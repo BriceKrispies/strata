@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use strata_kernel::query_plan::{self, IndexBound, IndexPosition, INDEX_PAGE};
+use strata_kernel::query_plan::{self, IndexBound, IndexPosition};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_storage_api::covering::{load_covering, read_asking, Covered};
@@ -617,7 +617,8 @@ fn reads_and_views_over_a_hundred_thousand_records_load_a_bounded_number() {
         let store = store.as_ref();
         crowded(store, "alpha");
         let context = ctx("alpha", Principal::Anonymous, 9_000);
-        let per_page = INDEX_PAGE as usize;
+        // The most records a page of candidates holds (KRN-2520).
+        let per_page = 200;
         // Posts by this author, newest first (WG-5181): one page of candidates per page of rows,
         // and the rows the kernel reads from the whole table.
         let complete = store.load_complete(&tenant_id("alpha")).unwrap();
