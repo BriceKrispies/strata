@@ -36,9 +36,9 @@ Proved:
   when the change removes no binding they name and narrows no catalogue entry they use, and changed
   screens are checked against the new schema and catalogue (`incremental_valid`); without the
   removal guard a valid screen breaks (`unguarded_removal_breaks`);
-- orphaning instead of refusing: removing from a screen exactly the widgets whose binding stopped
-  existing leaves a valid screen with distinct ids (`orphan_valid`), and removes nothing else
-  (`orphan_removes_only_dangling`).
+- orphaning instead of refusing: removing from a screen exactly the widgets that fail under the new
+  catalogue and schema leaves a valid screen with distinct ids (`orphan_valid`), removes only those
+  (`orphan_removes_only_failing`), and removes nothing from a screen that still passes (`orphan_keeps_valid`).
 
 Not modelled: the content of props beyond what `accepts` decides, overlay operations other than
 dropping a widget, and the screens' visibility (Visibility.lean). No `sorry`, no added axioms.
@@ -362,40 +362,39 @@ theorem unguarded_removal_breaks :
     have := h.2 ⟨0, (), (), .bound ()⟩ (by simp)
     simp [widgetCheck, bindOk] at this
 
-/-- Whether a widget's binding still exists. -/
-def live (has : B → Bool) (w : Widget P R B) : Bool :=
-  match w.bind with
-  | .bound b => has b
-  | _ => true
+/-- Orphan the widgets that no longer pass under the new catalogue and schema: a binding that stopped
+    existing or changed shape, a pattern the catalogue no longer allows where it is, a binding kind it
+    no longer accepts. -/
+def orphan (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B) : Screen T P R B :=
+  { s with widgets := s.widgets.filter (widgetCheck cat has s.template) }
 
-/-- Orphan the widgets whose binding stopped existing. -/
-def orphan (has : B → Bool) (s : Screen T P R B) : Screen T P R B :=
-  { s with widgets := s.widgets.filter (live has) }
+/-- Orphaning keeps a screen valid under any new catalogue and schema: what is left passes the check,
+    and ids stay distinct.
+    Verifies: DS-013 -/
+theorem orphan_valid (cat cat' : Catalogue T P R B) (has has' : B → Bool) (s : Screen T P R B)
+    (hv : Valid cat has s) : Valid cat' has' (orphan cat' has' s) := by
+  refine ⟨List.Nodup.sublist (List.Sublist.map _ List.filter_sublist) hv.1, ?_⟩
+  intro w hw
+  simp only [orphan, List.mem_filter] at hw
+  exact hw.2
 
-/-- Orphaning keeps a screen valid under the new schema.
-    Verifies: DS-004 -/
-theorem orphan_valid (cat : Catalogue T P R B) (has has' : B → Bool) (s : Screen T P R B)
-    (hv : Valid cat has s) : Valid cat has' (orphan has' s) := by
-  refine ⟨?_, ?_⟩
-  · exact List.Nodup.sublist (List.Sublist.map _ List.filter_sublist) hv.1
-  · intro w hw
-    simp only [orphan, List.mem_filter] at hw
-    obtain ⟨hw, hl⟩ := hw
-    have ok := hv.2 w hw
-    refine wc_transfer ok rfl rfl ?_
-    intro b hb
-    exact ⟨rfl, by simpa [live, hb] using hl⟩
-
-/-- Orphaning removes only widgets whose binding stopped existing.
-    Verifies: DS-004 -/
-theorem orphan_removes_only_dangling (has : B → Bool) (s : Screen T P R B) (w : Widget P R B)
-    (hw : w ∈ s.widgets) (hgone : w ∉ (orphan has s).widgets) :
-    ∃ b, w.bind = .bound b ∧ has b = false := by
+/-- Orphaning removes only widgets that fail under the new catalogue and schema.
+    Verifies: DS-013 -/
+theorem orphan_removes_only_failing (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B)
+    (w : Widget P R B) (hw : w ∈ s.widgets) (hgone : w ∉ (orphan cat has s).widgets) :
+    widgetCheck cat has s.template w = false := by
   simp only [orphan, List.mem_filter, not_and] at hgone
-  have hl := hgone hw
-  cases hb : w.bind with
-  | placeholder => simp [live, hb] at hl
-  | static => simp [live, hb] at hl
-  | bound b => exact ⟨b, rfl, by simpa [live, hb] using hl⟩
+  cases h : widgetCheck cat has s.template w
+  · rfl
+  · exact absurd h (hgone hw)
+
+/-- Orphaning removes nothing from a screen that still passes.
+    Verifies: DS-013 -/
+theorem orphan_keeps_valid (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B)
+    (hv : Valid cat has s) : orphan cat has s = s := by
+  cases s with
+  | mk t ws =>
+    simp only [orphan, Screen.mk.injEq, true_and]
+    exact List.filter_eq_self.mpr (fun w hw => hv.2 w hw)
 
 end Strata.UI.Composition

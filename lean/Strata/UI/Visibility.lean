@@ -1,47 +1,43 @@
 /-
 Who sees what of a composition (docs/design-system.md, "Visibility" and "Role-based views").
 
-A composition is a tree. Its inner nodes are **containers** (a screen, a region, a layout container,
-a navigation group); its leaves are **elements** (a widget, a field rendering, an action, a
-navigation entry). Every node has a declared audience: anyone, every signed-in person, the holders
-of one of a list of roles, or the signed-in holders of one of a list of roles. An element also has:
+A composition is a tree. Its inner nodes are **containers** (a shell, a screen, a region, a layout
+container, a navigation group); its leaves are **elements** (a widget, a field rendering, an action,
+a navigation entry, a link). Every node has a **declared** audience, written by the owner or the
+agent in roles or audience groups: anyone, every signed-in person, the holders of one of a list of
+roles, or the signed-in holders of one of a list of roles. An element also has:
 
-- a **data audience**, derived from the tenant's policies and never written: the roles with a Read
-  grant on the object type it shows, with or without a condition (an upper bound of who may get a
-  row), or, for an action, the invokers of its operation (`audOf`);
-- a **content audience**, also derived: the roles with an *unconditional* Read grant, or every role
-  with a grant when the author marks the widget own-scoped (it shows each person their own rows);
-  a content audience is always inside the data audience;
-- whether it **counts** as content: a widget that binds data or offers an action counts; a static
-  block of prose or links does not.
+- a **data audience**, derived from the tenant's policies: the roles with a Read grant on the object
+  type it shows, or, for an action, the invokers of its operation (`audOf`). It only ever narrows what
+  is served; it never decides who a screen is for;
+- a **content audience** (for the content lint): the roles with an unconditional grant, or with a
+  grant whose condition mentions `principal` (a row of one's own), as `audience.rs`'s `scan` finds;
+- whether it **counts** as content (binds data or offers an action), and whether it is **admin**:
+  marked by the author, or derived by the kernel (an action whose invokers name roles, or whose
+  conditions test a role or negate anything).
 
-Every principal holds the role `pub` (`roles_of` in `crates/kernel/src/rules.rs` gives `public` to
-the anonymous principal and to every user), so a grant to `pub` makes data public. Automation
-principals hold only their run-as roles; they draw no interface and are not viewers here.
-
-The server serves a viewer the elements the viewer sees under their declared and data audiences,
-inside containers the viewer sees, and **prunes a container left with nothing**, so no region,
-heading or box is served without an element in it (`render`).
+A container may **need content**: then it is served only when an element that counts is served
+inside it. Every principal holds the role `pub` (`roles_of`); automation principals draw no interface
+and are not viewers.
 
 Proved:
 
-- **soundness** (`render_sound`): every label served comes from a node the viewer sees, under
+- **soundness** (`render_sound`): every label served comes from a node the viewer sees, inside
   containers the viewer sees;
-- **no empty container** (`served_has_element`): every container served holds a served element;
-- **no trace** (`hidden_leaves_no_trace`, `hidden_leaves_no_trace_in`): a node the viewer is not
-  served changes nothing in what the viewer is served, wherever it is among its siblings, including
-  the container around it, which is pruned exactly as if the node were not there;
-- **actions follow the server's own check** (`audOf_sees`): the audience derived from an operation's
-  invokers admits a viewer exactly when the kernel's invoke check (`operations.rs`, stage 1) does not
-  refuse that viewer;
-- **data audiences follow policies** (`dataAud_sees`), **public data is public**
-  (`public_grant_anon_sees`), and content audiences are inside data audiences (`contentAud_sub`);
-- **the content check** (`checked_screen_has_content`): a screen that passes it, served to any
-  viewer it is served to, holds an element that counts and whose content audience holds that
-  viewer. The check reasons on the least viewers of the screen's audience, which is sound because
-  every audience here is monotone in the viewer's roles (`sees_mono`). A condition such as
-  `not has_role(banned)` is not monotone; a grant with any condition is conditional, and
-  conditional grants count only for own-scoped widgets, so the check never relies on one.
+- **no empty container** (`served_has_element`), and **no container that needs content without it**
+  (`served_needs_content`);
+- **no trace** (`hidden_leaves_no_trace`, `hidden_leaves_no_trace_in`): a node the viewer is not served
+  changes nothing the viewer is served, wherever it is among its siblings, including the container;
+- **admin by construction** (`admin_needs_role`): in a composition that passes the admin check (every
+  admin element lies under, or is itself, a declared audience of roles that does not include
+  `public`), an admin element is served only to a viewer holding one of those roles; so a member who
+  holds no such role, and an anonymous visitor, are never served it (`admin_never_to_plain_member`);
+- **first match wins** (`select_sees`, `select_first`): of an ordered list of shells or of screen
+  variants, the one served is the first whose audience holds the viewer;
+- actions follow the kernel's invoker check (`audOf_sees`); data audiences follow grants, the public
+  role included (`dataAud_sees`, `public_grant_anon_sees`); content inside data (`contentAud_sub`);
+- the **content lint** (`checked_screen_has_content`) holds for what it reasons on; it is a lint that
+  warns, not the guarantee that keeps admin screens from members (that is the admin check).
 
 No `sorry`, no added axioms.
 -/
@@ -66,7 +62,7 @@ def Viewer.signedIn : Viewer → Bool
   | .anon => false
   | .member _ => true
 
-/-- An audience. -/
+/-- An audience. Audience groups are expanded to their roles before this point. -/
 inductive Aud where
   | anyone
   | signedIn
@@ -80,27 +76,52 @@ def sees (v : Viewer) : Aud → Bool
   | .roles rs => rs.any (fun r => (rolesOf v).contains r)
   | .memberRoles rs => v.signedIn && rs.any (fun r => (rolesOf v).contains r)
 
-/-- A node: a container with children, or an element. -/
+/-- A node: a container (that may need content) with children, or an element. -/
 inductive Node where
-  | box (label : Nat) (aud : Aud) (kids : List Node)
-  | elem (label : Nat) (aud data content : Aud) (counts : Bool)
+  | box (label : Nat) (aud : Aud) (needs : Bool) (kids : List Node)
+  | elem (label : Nat) (aud data content : Aud) (counts admin : Bool)
 
 /-- What a viewer is served. -/
 inductive Out where
   | box (label : Nat) (kids : List Out)
-  | elem (label : Nat) (counts : Bool)
+  | elem (label : Nat) (counts admin : Bool)
 
 mutual
-  /-- The served form of a node: an element the viewer sees, a container the viewer sees that
-      holds something served; otherwise nothing. -/
+  /-- The number of served elements that count. -/
+  def counted : Out → Nat
+    | .box _ ks => countedAll ks
+    | .elem _ c _ => if c then 1 else 0
+  /-- The number of served elements that count, in a list. -/
+  def countedAll : List Out → Nat
+    | [] => 0
+    | o :: os => counted o + countedAll os
+end
+
+/-- A container's served form, from its children's: pruned when empty, or when it needs content and
+    none of its served elements counts. -/
+def boxOut (l : Nat) (needs : Bool) : List Out → Option Out
+  | [] => none
+  | o :: os => if needs = true ∧ countedAll (o :: os) = 0 then none else some (.box l (o :: os))
+
+theorem boxOut_some {l : Nat} {needs : Bool} {os : List Out} {o : Out} (h : boxOut l needs os = some o) :
+    o = .box l os ∧ os ≠ [] ∧ (needs = true → 0 < countedAll os) := by
+  cases os with
+  | nil => simp [boxOut] at h
+  | cons x xs =>
+    simp only [boxOut] at h
+    split at h
+    · cases h
+    · rename_i hn
+      cases h
+      refine ⟨rfl, by simp, fun hneed => ?_⟩
+      have : ¬ countedAll (x :: xs) = 0 := fun h0 => hn ⟨hneed, h0⟩
+      omega
+
+mutual
+  /-- The served form of a node. -/
   def render (v : Viewer) : Node → Option Out
-    | .box l a ks =>
-      if sees v a then
-        match renderAll v ks with
-        | [] => none
-        | o :: os => some (.box l (o :: os))
-      else none
-    | .elem l a d _ c => if sees v a && sees v d then some (.elem l c) else none
+    | .box l a n ks => if sees v a then boxOut l n (renderAll v ks) else none
+    | .elem l a d _ c adm => if sees v a && sees v d then some (.elem l c adm) else none
   /-- The served forms of the nodes the viewer is served, in order. -/
   def renderAll (v : Viewer) : List Node → List Out
     | [] => []
@@ -112,24 +133,24 @@ end
 
 /-- The label of a node. -/
 def Node.label : Node → Nat
-  | .box l _ _ => l
-  | .elem l _ _ _ _ => l
+  | .box l _ _ _ => l
+  | .elem l _ _ _ _ _ => l
 
 /-- Whether a viewer sees a node itself (not its children). -/
 def here (v : Viewer) : Node → Bool
-  | .box _ a _ => sees v a
-  | .elem _ a d _ _ => sees v a && sees v d
+  | .box _ a _ _ => sees v a
+  | .elem _ a d _ _ _ => sees v a && sees v d
 
 /-- The children of a node. -/
 def Node.kids : Node → List Node
-  | .box _ _ ks => ks
-  | .elem _ _ _ _ _ => []
+  | .box _ _ _ ks => ks
+  | .elem _ _ _ _ _ _ => []
 
 mutual
   /-- Every label of a served tree. -/
   def labels : Out → List Nat
     | .box l ks => l :: labelsAll ks
-    | .elem l _ => [l]
+    | .elem l _ _ => [l]
   /-- Every label of a list of served trees. -/
   def labelsAll : List Out → List Nat
     | [] => []
@@ -145,26 +166,21 @@ mutual
   /-- Verifies: DS-007 -/
   theorem render_sound (v : Viewer) : ∀ (n : Node) (o : Out) (l : Nat),
       render v n = some o → l ∈ labels o → Served v n l
-    | .box lab a ks, o, l, h, hl => by
-      unfold render at h
+    | .box lab a nd ks, o, l, h, hl => by
+      simp only [render] at h
       by_cases ha : sees v a = true
       · rw [if_pos ha] at h
-        have hh : here v (.box lab a ks) = true := by simpa [here] using ha
-        cases hr : renderAll v ks with
-        | nil => rw [hr] at h; cases h
-        | cons o' os =>
-          rw [hr] at h
-          cases h
-          simp only [labels, List.mem_cons] at hl
-          rcases hl with rfl | hl
-          · exact Served.self _ hh
-          · rw [← hr] at hl
-            obtain ⟨k, hk, hs⟩ := renderAll_sound v ks l hl
-            exact Served.child _ k l hh (by simpa [Node.kids] using hk) hs
+        have hh : here v (.box lab a nd ks) = true := by simpa [here] using ha
+        obtain ⟨rfl, _, _⟩ := boxOut_some h
+        simp only [labels, List.mem_cons] at hl
+        rcases hl with rfl | hl
+        · exact Served.self _ hh
+        · obtain ⟨k, hk, hs⟩ := renderAll_sound v ks l hl
+          exact Served.child _ k l hh (by simpa [Node.kids] using hk) hs
       · rw [if_neg ha] at h
         cases h
-    | .elem lab a d c cnt, o, l, h, hl => by
-      unfold render at h
+    | .elem lab a d c cnt adm, o, l, h, hl => by
+      simp only [render] at h
       by_cases hv : (sees v a && sees v d) = true
       · rw [if_pos hv] at h
         cases h
@@ -196,7 +212,7 @@ mutual
   /-- The number of elements in a served tree. -/
   def elems : Out → Nat
     | .box _ ks => elemsAll ks
-    | .elem _ _ => 1
+    | .elem _ _ _ => 1
   /-- The number of elements in a list of served trees. -/
   def elemsAll : List Out → Nat
     | [] => 0
@@ -205,22 +221,16 @@ end
 
 mutual
   theorem render_elems (v : Viewer) : ∀ (n : Node) (o : Out), render v n = some o → 0 < elems o
-    | .box lab a ks, o, h => by
-      unfold render at h
+    | .box lab a nd ks, o, h => by
+      simp only [render] at h
       by_cases ha : sees v a = true
       · rw [if_pos ha] at h
-        cases hr : renderAll v ks with
-        | nil => rw [hr] at h; cases h
-        | cons o' os =>
-          rw [hr] at h
-          cases h
-          have := renderAll_elems v ks
-          rw [hr] at this
-          simp only [elems]
-          exact this (by simp)
+        obtain ⟨rfl, hne, _⟩ := boxOut_some h
+        simp only [elems]
+        exact renderAll_elems v ks hne
       · rw [if_neg ha] at h; cases h
-    | .elem lab a d c cnt, o, h => by
-      unfold render at h
+    | .elem lab a d c cnt adm, o, h => by
+      simp only [render] at h
       by_cases hv : (sees v a && sees v d) = true
       · rw [if_pos hv] at h; cases h; simp [elems]
       · rw [if_neg hv] at h; cases h
@@ -237,10 +247,21 @@ mutual
         omega
 end
 
-/-- Every container served holds a served element: no region, heading or box is served empty.
-    Verifies: DS-007 -/
+/-- Every container served holds a served element.
+    Verifies: DS-012 -/
 theorem served_has_element (v : Viewer) (n : Node) (o : Out) (h : render v n = some o) :
     0 < elems o := render_elems v n o h
+
+/-- A container that needs content is served only with a served element that counts.
+    Verifies: DS-012 -/
+theorem served_needs_content (v : Viewer) (l : Nat) (a : Aud) (ks : List Node) (o : Out)
+    (h : render v (.box l a true ks) = some o) : 0 < counted o := by
+  simp only [render] at h
+  by_cases ha : sees v a = true
+  · rw [if_pos ha] at h
+    obtain ⟨rfl, _, hc⟩ := boxOut_some h
+    simpa [counted] using hc rfl
+  · rw [if_neg ha] at h; cases h
 
 theorem renderAll_append (v : Viewer) (a b : List Node) :
     renderAll v (a ++ b) = renderAll v a ++ renderAll v b := by
@@ -258,31 +279,199 @@ theorem hidden_leaves_no_trace (v : Viewer) (a b : List Node) (h : Node)
   rw [renderAll_append, renderAll_append]
   simp [renderAll, hh]
 
-/-- A node the viewer is not served leaves no trace in the container around it, which is served,
-    or pruned, exactly as if the node were not there.
+/-- A node the viewer is not served leaves no trace in the container around it, which is served, or
+    pruned, exactly as if the node were not there.
     Verifies: DS-008 -/
-theorem hidden_leaves_no_trace_in (v : Viewer) (l : Nat) (aud : Aud) (a b : List Node) (h : Node)
-    (hh : render v h = none) :
-    render v (.box l aud (a ++ h :: b)) = render v (.box l aud (a ++ b)) := by
+theorem hidden_leaves_no_trace_in (v : Viewer) (l : Nat) (aud : Aud) (nd : Bool) (a b : List Node)
+    (h : Node) (hh : render v h = none) :
+    render v (.box l aud nd (a ++ h :: b)) = render v (.box l aud nd (a ++ b)) := by
   simp only [render, hidden_leaves_no_trace v a b h hh]
 
-/-- An element the viewer does not see is not served. -/
-theorem render_elem_none (v : Viewer) (l : Nat) (a d c : Aud) (cnt : Bool)
-    (h : (sees v a && sees v d) = false) : render v (.elem l a d c cnt) = none := by
-  simp [render, h]
+/-- A declared audience that holds only signed-in holders of named roles, `public` not among them. -/
+def strict : Aud → Bool
+  | .roles rs => !(rs.contains pub)
+  | .memberRoles rs => !(rs.contains pub)
+  | _ => false
 
-/-- Who may invoke an operation: every signed-in person, or the holders of these roles (D-6547). -/
+theorem strict_sees (a : Aud) (v : Viewer) (hs : strict a = true) (h : sees v a = true) :
+    ∃ r, r ≠ pub ∧ r ∈ rolesOf v ∧ a ≠ .anyone := by
+  cases a with
+  | anyone => simp [strict] at hs
+  | signedIn => simp [strict] at hs
+  | roles rs =>
+    simp only [strict, Bool.not_eq_true'] at hs
+    simp only [sees, List.any_eq_true, List.contains_iff_mem] at h
+    obtain ⟨r, hr, hv⟩ := h
+    refine ⟨r, fun e => ?_, hv, by simp⟩
+    subst e
+    have hc : rs.contains pub = true := List.contains_iff_mem.mpr hr
+    rw [hc] at hs
+    cases hs
+  | memberRoles rs =>
+    simp only [strict, Bool.not_eq_true'] at hs
+    simp only [sees, Bool.and_eq_true, List.any_eq_true, List.contains_iff_mem] at h
+    obtain ⟨_, r, hr, hv⟩ := h
+    refine ⟨r, fun e => ?_, hv, by simp⟩
+    subst e
+    have hc : rs.contains pub = true := List.contains_iff_mem.mpr hr
+    rw [hc] at hs
+    cases hs
+
+mutual
+  /-- The admin check: every admin element lies under, or has, a strict declared audience. `g` says a
+      strict audience is above. -/
+  def adminOk (g : Bool) : Node → Bool
+    | .box _ a _ ks => adminOkAll (g || strict a) ks
+    | .elem _ a _ _ _ adm => !adm || g || strict a
+  /-- The admin check of a list of nodes. -/
+  def adminOkAll (g : Bool) : List Node → Bool
+    | [] => true
+    | n :: ns => adminOk g n && adminOkAll g ns
+end
+
+mutual
+  /-- The admin labels of a served tree. -/
+  def adminLabels : Out → List Nat
+    | .box _ ks => adminLabelsAll ks
+    | .elem l _ adm => if adm then [l] else []
+  /-- The admin labels of a list of served trees. -/
+  def adminLabelsAll : List Out → List Nat
+    | [] => []
+    | o :: os => adminLabels o ++ adminLabelsAll os
+end
+
+/-- The viewer holds a role other than `public`. -/
+def HoldsRole (v : Viewer) : Prop := ∃ r, r ≠ pub ∧ r ∈ rolesOf v
+
+mutual
+  theorem admin_served (v : Viewer) : ∀ (g : Bool) (n : Node) (o : Out) (l : Nat),
+      adminOk g n = true → (g = true → HoldsRole v) → render v n = some o →
+      l ∈ adminLabels o → HoldsRole v
+    | g, .box lab a nd ks, o, l, hok, hg, h, hl => by
+      simp only [render] at h
+      by_cases ha : sees v a = true
+      · rw [if_pos ha] at h
+        obtain ⟨rfl, _, _⟩ := boxOut_some h
+        simp only [adminOk] at hok
+        simp only [adminLabels] at hl
+        refine adminAll_served v (g || strict a) ks l hok ?_ hl
+        intro hg'
+        cases hgv : g
+        · simp [hgv] at hg'
+          obtain ⟨r, hr, hv, _⟩ := strict_sees a v hg' ha
+          exact ⟨r, hr, hv⟩
+        · exact hg hgv
+      · rw [if_neg ha] at h; cases h
+    | g, .elem lab a d c cnt adm, o, l, hok, hg, h, hl => by
+      simp only [render] at h
+      by_cases hv : (sees v a && sees v d) = true
+      · rw [if_pos hv] at h
+        cases h
+        cases hadm : adm
+        · simp [adminLabels, hadm] at hl
+        · simp only [adminOk, hadm, Bool.not_true, Bool.false_or, Bool.or_eq_true] at hok
+          rcases hok with hgt | hs
+          · exact hg hgt
+          · simp only [Bool.and_eq_true] at hv
+            obtain ⟨r, hr, hvr, _⟩ := strict_sees a v hs hv.1
+            exact ⟨r, hr, hvr⟩
+      · rw [if_neg hv] at h; cases h
+  theorem adminAll_served (v : Viewer) : ∀ (g : Bool) (ns : List Node) (l : Nat),
+      adminOkAll g ns = true → (g = true → HoldsRole v) →
+      l ∈ adminLabelsAll (renderAll v ns) → HoldsRole v
+    | g, [], l, _, _, h => by simp [renderAll, adminLabelsAll] at h
+    | g, n :: ns, l, hok, hg, h => by
+      simp only [adminOkAll, Bool.and_eq_true] at hok
+      unfold renderAll at h
+      cases hr : render v n with
+      | none => rw [hr] at h; exact adminAll_served v g ns l hok.2 hg h
+      | some o =>
+        rw [hr] at h
+        simp only [adminLabelsAll, List.mem_append] at h
+        rcases h with h | h
+        · exact admin_served v g n o l hok.1 hg hr h
+        · exact adminAll_served v g ns l hok.2 hg h
+end
+
+/-- In a composition that passes the admin check, an admin element is served only to a viewer who
+    holds a role other than `public`, named in a strict audience above it or on it.
+    Verifies: DS-011 -/
+theorem admin_needs_role (v : Viewer) (n : Node) (o : Out) (l : Nat)
+    (hok : adminOk false n = true) (h : render v n = some o) (hl : l ∈ adminLabels o) :
+    HoldsRole v :=
+  admin_served v false n o l hok (by simp) h hl
+
+/-- An anonymous visitor, and a member holding no role but `public`, are never served an admin
+    element.
+    Verifies: DS-011 -/
+theorem admin_never_to_plain_member (n : Node) (o : Out) (hok : adminOk false n = true) :
+    (render (.member []) n = some o → adminLabels o = []) ∧
+    (render .anon n = some o → adminLabels o = []) := by
+  constructor
+  · intro h
+    cases hl : adminLabels o with
+    | nil => rfl
+    | cons l ls =>
+      obtain ⟨r, hr, hv⟩ := admin_needs_role _ n o l hok h (by simp [hl])
+      simp [rolesOf] at hv
+      exact absurd hv hr
+  · intro h
+    cases hl : adminLabels o with
+    | nil => rfl
+    | cons l ls =>
+      obtain ⟨r, hr, hv⟩ := admin_needs_role _ n o l hok h (by simp [hl])
+      simp [rolesOf] at hv
+      exact absurd hv hr
+
+/-- The first review's admin action: an action offered to every signed-in person but derived admin
+    (its conditions test a role) fails the admin check under a box declared for every signed-in
+    person. -/
+theorem admin_action_for_members_refused :
+    adminOk false (.box 1 .signedIn false [.elem 2 .signedIn .signedIn .signedIn true true]) = false := by
+  simp [adminOk, adminOkAll, strict]
+
+/-- The first audience in order that holds the viewer, with what it selects. -/
+def select {α : Type} (v : Viewer) : List (Aud × α) → Option α
+  | [] => none
+  | (a, x) :: rest => if sees v a then some x else select v rest
+
+/-- The shell or variant selected has an audience that holds the viewer.
+    Verifies: DS-014 -/
+theorem select_sees {α : Type} (v : Viewer) :
+    ∀ (vs : List (Aud × α)) (x : α), select v vs = some x → ∃ a, (a, x) ∈ vs ∧ sees v a = true
+  | [], x, h => by simp [select] at h
+  | (a, y) :: rest, x, h => by
+    simp only [select] at h
+    by_cases ha : sees v a = true
+    · rw [if_pos ha] at h; cases h; exact ⟨a, by simp, ha⟩
+    · rw [if_neg ha] at h
+      obtain ⟨b, hb, hs⟩ := select_sees v rest x h
+      exact ⟨b, List.mem_cons_of_mem _ hb, hs⟩
+
+/-- No earlier entry's audience holds the viewer: the declared order decides, never a union.
+    Verifies: DS-014 -/
+theorem select_first {α : Type} (v : Viewer) (pre : List (Aud × α)) (a : Aud) (x : α)
+    (rest : List (Aud × α)) (hpre : ∀ p ∈ pre, sees v p.1 = false) (ha : sees v a = true) :
+    select v (pre ++ (a, x) :: rest) = some x := by
+  induction pre with
+  | nil => simp [select, ha]
+  | cons p ps ih =>
+    obtain ⟨b, y⟩ := p
+    have hb : sees v b = false := hpre (b, y) (by simp)
+    simp only [List.cons_append, select, hb]
+    exact ih (fun q hq => hpre q (List.mem_cons_of_mem _ hq))
+
+/-- Who may invoke an operation (D-6547). -/
 structure Invokers where
   signedIn : Bool
   roles : List Nat
 
-/-- Stage 1 of an invocation (`operations.rs`): refused unless the caller is a signed-in person
-    whom the invokers name, the caller's roles including `public`. -/
+/-- Stage 1 of an invocation (`operations.rs`). -/
 def invokeRefused (inv : Invokers) : Viewer → Bool
   | .anon => true
   | v@(.member _) => !inv.signedIn && !(inv.roles.any (fun r => (rolesOf v).contains r))
 
-/-- The audience of an action, derived from the invokers of its operation. -/
+/-- The audience of an action, derived from its invokers. -/
 def audOf (inv : Invokers) : Aud := if inv.signedIn then .signedIn else .memberRoles inv.roles
 
 /-- Verifies: DS-009 -/
@@ -291,20 +480,21 @@ theorem audOf_sees (inv : Invokers) (v : Viewer) : sees v (audOf inv) = !invokeR
   | anon => cases h : inv.signedIn <;> simp [audOf, h, sees, invokeRefused, Viewer.signedIn]
   | member ps => cases h : inv.signedIn <;> simp [audOf, h, sees, invokeRefused, Viewer.signedIn]
 
-/-- A Read grant: a role, an object type, and whether it has a condition. -/
+/-- A Read grant: a role, an object type, whether it has a condition, and whether its condition
+    mentions `principal` (as `audience.rs`'s `scan` reports). -/
 structure Grant where
   role : Nat
   obj : Nat
   conditional : Bool
+  principal : Bool
 
 /-- The data audience of an object type: every role with a Read grant on it. -/
 def dataAud (gs : List Grant) (obj : Nat) : Aud :=
   .roles ((gs.filter (fun g => g.obj == obj)).map (·.role))
 
-/-- The content audience: the roles with an unconditional grant, or with any grant when the widget
-    is own-scoped. -/
-def contentAud (gs : List Grant) (obj : Nat) (own : Bool) : Aud :=
-  .roles ((gs.filter (fun g => g.obj == obj && (own || !g.conditional))).map (·.role))
+/-- The content audience: unconditional grants, and grants whose condition mentions `principal`. -/
+def contentAud (gs : List Grant) (obj : Nat) : Aud :=
+  .roles ((gs.filter (fun g => g.obj == obj && (!g.conditional || g.principal))).map (·.role))
 
 /-- Verifies: DS-010 -/
 theorem dataAud_sees (gs : List Grant) (obj : Nat) (v : Viewer) :
@@ -317,16 +507,16 @@ theorem dataAud_sees (gs : List Grant) (obj : Nat) (v : Viewer) :
   · rintro ⟨g, hg, ho, hr⟩
     exact ⟨g.role, ⟨g, ⟨hg, ho⟩, rfl⟩, hr⟩
 
-/-- A grant to `public` makes the data audience hold the anonymous visitor.
+/-- A grant to `public` puts the anonymous visitor in the data audience.
     Verifies: DS-010 -/
-theorem public_grant_anon_sees (gs : List Grant) (obj : Nat) (c : Bool)
-    (h : ⟨pub, obj, c⟩ ∈ gs) : sees .anon (dataAud gs obj) = true :=
+theorem public_grant_anon_sees (gs : List Grant) (obj : Nat) (c p : Bool)
+    (h : ⟨pub, obj, c, p⟩ ∈ gs) : sees .anon (dataAud gs obj) = true :=
   (dataAud_sees gs obj .anon).2 ⟨_, h, rfl, by simp [rolesOf]⟩
 
 /-- The content audience is inside the data audience.
     Verifies: DS-010 -/
-theorem contentAud_sub (gs : List Grant) (obj : Nat) (own : Bool) (v : Viewer)
-    (h : sees v (contentAud gs obj own) = true) : sees v (dataAud gs obj) = true := by
+theorem contentAud_sub (gs : List Grant) (obj : Nat) (v : Viewer)
+    (h : sees v (contentAud gs obj) = true) : sees v (dataAud gs obj) = true := by
   simp only [contentAud, sees, List.any_eq_true, List.mem_map, List.mem_filter, Bool.and_eq_true,
     beq_iff_eq, List.contains_iff_mem] at h
   obtain ⟨r, ⟨g, ⟨hg, ho, _⟩, rfl⟩, hr⟩ := h
@@ -349,7 +539,7 @@ theorem sees_mono (a : Aud) (m v : Viewer) (hle : Le m v) (h : sees m a = true) 
     obtain ⟨hs, r, hr, hm⟩ := h
     exact ⟨hle.2 hs, r, hr, hle.1 r hm⟩
 
-/-- The least viewers of an audience: every viewer in it holds at least one of them. -/
+/-- The least viewers of an audience. -/
 def minimal : Aud → List Viewer
   | .anyone => [.anon]
   | .signedIn => [.member []]
@@ -405,11 +595,11 @@ theorem minimal_le (a : Aud) (v : Viewer) (h : sees v a = true) : ∃ m ∈ mini
       · exact hv
 
 mutual
-  /-- Whether a viewer reaches, through containers it sees, an element that counts and whose
-      declared and content audiences hold it. -/
+  /-- Whether a viewer reaches, through containers it sees, an element that counts and whose declared
+      and content audiences hold it. -/
   def reach (v : Viewer) : Node → Bool
-    | .box _ a ks => sees v a && reachAll v ks
-    | .elem _ a _ c cnt => cnt && sees v a && sees v c
+    | .box _ a _ ks => sees v a && reachAll v ks
+    | .elem _ a _ c cnt _ => cnt && sees v a && sees v c
   /-- Whether a viewer reaches content in one of these nodes. -/
   def reachAll (v : Viewer) : List Node → Bool
     | [] => false
@@ -418,10 +608,10 @@ end
 
 mutual
   theorem reach_mono (m v : Viewer) (hle : Le m v) : ∀ n : Node, reach m n = true → reach v n = true
-    | .box l a ks, h => by
+    | .box l a nd ks, h => by
       simp only [reach, Bool.and_eq_true] at h ⊢
       exact ⟨sees_mono a m v hle h.1, reachAll_mono m v hle ks h.2⟩
-    | .elem l a d c cnt, h => by
+    | .elem l a d c cnt adm, h => by
       simp only [reach, Bool.and_eq_true] at h ⊢
       exact ⟨⟨h.1.1, sees_mono a m v hle h.1.2⟩, sees_mono c m v hle h.2⟩
   theorem reachAll_mono (m v : Viewer) (hle : Le m v) :
@@ -434,49 +624,39 @@ mutual
       · exact Or.inr (reachAll_mono m v hle ns h)
 end
 
-mutual
-  /-- The number of served elements that count. -/
-  def counted : Out → Nat
-    | .box _ ks => countedAll ks
-    | .elem _ c => if c then 1 else 0
-  /-- The number of served elements that count, in a list. -/
-  def countedAll : List Out → Nat
-    | [] => 0
-    | o :: os => counted o + countedAll os
-end
-
--- Every element's content audience lies inside its data audience.
-mutual
-  def WellFormed (sub : Aud → Aud → Prop) : Node → Prop
-    | .box _ _ ks => WellFormedAll sub ks
-    | .elem _ _ d c _ => sub c d
-  def WellFormedAll (sub : Aud → Aud → Prop) : List Node → Prop
-    | [] => True
-    | n :: ns => WellFormed sub n ∧ WellFormedAll sub ns
-end
-
 /-- Content inside data, for every viewer. -/
 def Sub (c d : Aud) : Prop := ∀ v, sees v c = true → sees v d = true
 
+-- Every element's content audience lies inside its data audience.
 mutual
-  theorem reach_served (v : Viewer) : ∀ n : Node, WellFormed Sub n → reach v n = true →
+  def WellFormed : Node → Prop
+    | .box _ _ _ ks => WellFormedAll ks
+    | .elem _ _ d c _ _ => Sub c d
+  def WellFormedAll : List Node → Prop
+    | [] => True
+    | n :: ns => WellFormed n ∧ WellFormedAll ns
+end
+
+mutual
+  theorem reach_served (v : Viewer) : ∀ n : Node, WellFormed n → reach v n = true →
       ∃ o, render v n = some o ∧ 0 < counted o
-    | .box l a ks, hw, h => by
+    | .box l a nd ks, hw, h => by
       simp only [reach, Bool.and_eq_true] at h
       obtain ⟨ha, hk⟩ := h
       have hall := reachAll_served v ks (by simpa [WellFormed] using hw) hk
       cases hr : renderAll v ks with
       | nil => rw [hr] at hall; simp [countedAll] at hall
       | cons o os =>
-        refine ⟨.box l (o :: os), ?_, ?_⟩
-        · simp [render, ha, hr]
-        · rw [hr] at hall; simpa [counted] using hall
-    | .elem l a d c cnt, hw, h => by
+        rw [hr] at hall
+        refine ⟨.box l (o :: os), ?_, by simpa [counted] using hall⟩
+        simp only [render, if_pos ha, hr, boxOut]
+        rw [if_neg (by omega)]
+    | .elem l a d c cnt adm, hw, h => by
       simp only [reach, Bool.and_eq_true] at h
       obtain ⟨⟨hc, ha⟩, hcon⟩ := h
       have hd : sees v d = true := hw v hcon
-      refine ⟨.elem l cnt, by simp [render, ha, hd], by simp [counted, hc]⟩
-  theorem reachAll_served (v : Viewer) : ∀ ns : List Node, WellFormedAll Sub ns →
+      refine ⟨.elem l cnt adm, by simp [render, ha, hd], by simp [counted, hc]⟩
+  theorem reachAll_served (v : Viewer) : ∀ ns : List Node, WellFormedAll ns →
       reachAll v ns = true → 0 < countedAll (renderAll v ns)
     | [], _, h => by simp [reachAll] at h
     | n :: ns, hw, h => by
@@ -492,35 +672,33 @@ mutual
         | some o => simp only [countedAll]; omega
 end
 
-/-- The content check of a screen: every least viewer of its declared audience reaches content. -/
+/-- The content lint of a screen: every least viewer of its declared audience reaches content. -/
 def contentCheck : Node → Bool
-  | n@(.box _ a _) => (minimal a).all (fun m => reach m n)
-  | .elem _ _ _ _ _ => true
+  | n@(.box _ a _ _) => (minimal a).all (fun m => reach m n)
+  | .elem _ _ _ _ _ _ => true
 
-/-- A screen that passes the content check, served to a viewer in its audience, holds an element
-    that counts and whose content audience holds that viewer.
-    Verifies: DS-011 -/
-theorem checked_screen_has_content (l : Nat) (a : Aud) (ks : List Node) (v : Viewer)
-    (hw : WellFormed Sub (.box l a ks)) (hc : contentCheck (.box l a ks) = true)
-    (hv : sees v a = true) : ∃ o, render v (.box l a ks) = some o ∧ 0 < counted o := by
+/-- What the content lint establishes, for what it reasons on: a screen that passes it, served to a
+    viewer in its audience, holds an element that counts in that viewer's content audience. -/
+theorem checked_screen_has_content (l : Nat) (a : Aud) (nd : Bool) (ks : List Node) (v : Viewer)
+    (hw : WellFormed (.box l a nd ks)) (hc : contentCheck (.box l a nd ks) = true)
+    (hv : sees v a = true) : ∃ o, render v (.box l a nd ks) = some o ∧ 0 < counted o := by
   obtain ⟨m, hm, hle⟩ := minimal_le a v hv
   simp only [contentCheck, List.all_eq_true] at hc
   exact reach_served v _ hw (reach_mono m v hle _ (hc m hm))
 
-/-- Without the pruning rule, an empty region's label would be served: the counterexample of the
-    first review, a public screen with a public region holding one admin-only widget, renders
-    nothing for the anonymous visitor. -/
+/-- The first review's empty region: a public screen with a public region holding one admin-only
+    widget renders nothing for the anonymous visitor. -/
 theorem empty_region_pruned :
-    render .anon (.box 1 .anyone [.box 2 .anyone [.elem 3 (.roles [7]) .anyone .anyone true]]) = none := by
-  simp [render, renderAll, sees, rolesOf, pub]
+    render .anon (.box 1 .anyone false
+      [.box 2 .anyone false [.elem 3 (.roles [7]) .anyone .anyone true false]]) = none := by
+  simp [render, renderAll, sees, rolesOf, pub, boxOut]
 
-/-- The second review's case: members (role 5) read only their own messages (a conditional grant),
-    admins (role 7) read all of them. A moderation screen declared for members whose queue widget is
-    not own-scoped fails the content check, so it cannot be declared for members. -/
-theorem conditional_grant_does_not_count :
-    let gs : List Grant := [⟨5, 1, true⟩, ⟨7, 1, false⟩]
-    contentCheck (.box 1 (.roles [5])
-      [.elem 2 .anyone (dataAud gs 1) (contentAud gs 1 false) true]) = false := by
-  simp [contentCheck, minimal, reach, reachAll, sees, contentAud, rolesOf, pub]
+/-- The second review's static element: a region that needs content, holding a static introduction
+    and a widget the viewer may not see, is pruned rather than served with the introduction alone. -/
+theorem static_does_not_keep_region :
+    render (.member []) (.box 2 .signedIn true
+      [.elem 3 .signedIn .anyone .anyone false false,
+       .elem 4 (.roles [7]) .anyone .anyone true false]) = none := by
+  simp [render, renderAll, sees, rolesOf, pub, boxOut, countedAll, counted, Viewer.signedIn]
 
 end Strata.UI.Visibility
