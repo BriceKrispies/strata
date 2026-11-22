@@ -106,3 +106,7 @@ schema (`tenant-schema.ui`, D-8250) and served as a manifest and parts named by 
 literal platform route answers (and again on a schema notice), routes to the tenant's screen, and
 builds its page with one fixed interpreter (`web/src/kernel/tenant-ui.js`, drawn by
 `web/src/views/tenant.js`).
+
+The design for what the browser keeps (a service worker for hash-named files, encrypted IndexedDB
+for stamped view results and queued offline writes, one leader tab), its coherence with the server
+and its privacy at rest is `docs/frontend.md`, with its models in `lean/Strata/Client/`.
