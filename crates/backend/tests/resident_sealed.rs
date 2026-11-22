@@ -10,8 +10,8 @@ use strata_backend::app::SealKey;
 use strata_backend::subject_keys::{InProcessKeyService, SubjectKeys};
 use strata_kernel::{
     DataSubject, ExistingData, FieldDef, FieldId, FieldType, Intent, Need, ObjectTypeId,
-    PersonalDeclaration, PersonalKind, Principal, PrincipalId, Record, RecordId, SchemaChange,
-    TenantId, Timestamp, Value,
+    PersonalDeclaration, PersonalKind, Principal, PrincipalId, Record, RecordId, RetentionRule,
+    RetentionStart, SchemaChange, TenantId, Timestamp, Value,
 };
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::resident::ResidentStore;
@@ -108,6 +108,14 @@ fn found(store: &dyn Store, name: &str) -> TenantId {
             field,
         });
     }
+    // A type with a personal field must declare its retention (D-6584).
+    changes.push(SchemaChange::SetRetention {
+        object: object(),
+        retention: RetentionRule {
+            days: 30,
+            from: RetentionStart::Created,
+        },
+    });
     execute(
         store,
         &Intent::ChangeSchema {
