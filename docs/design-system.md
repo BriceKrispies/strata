@@ -981,14 +981,22 @@ fields):
 **Draft sets.** A change that spans products (once WG-5493 allows cross-product references, WG-5516) or a
 product and the tenant's interface (a new product and the audience group of its soft launch) is a **draft
 set**: a **named, stored** set of drafts, **hashed over its members' snapshot hashes**, previewed as one
-projection and approved once; publishing binds to the **set hash**. It is applied in dependency order:
-**newly created groups that nothing live references** first (no member sees a difference, since no element
-names them yet), then the product drafts (each staged within the cap), then, last, **changes to existing
-groups, to the shell list** (shell selection is first-match on audience, so a change there is visible to
-members at once) **and to overlays**. An audience that names a group neither the set nor the tenant
-defines is refused with `ui.audience.unknown-group`, naming the group and the element. If applying stops,
-what was created and not yet granted is unreachable; the owner resumes, or rolls back by removal upgrades in
-reverse order.
+projection and approved once; publishing binds to the **set hash**. It is applied in an order chosen by
+**direction**, so that no step serves anyone outside the final audience:
+
+- first, **newly created groups** that nothing live references, and **changes that narrow an existing
+  group** (a role removed from it), so a new element naming the group is never served to a role the final
+  audience excludes; a narrowing that would hide something live is shown as such in the permission delta;
+- then the product drafts, each staged within the cap;
+- last, **changes that widen** an existing group, **changes to the shell list** (shell selection is
+  first-match on audience, so a change there is visible to members at once) and **overlays**.
+
+The permission delta lists each group change with its direction. An audience that names a group neither
+the set nor the tenant defines is refused with `ui.audience.unknown-group`, naming the group and the
+element. If applying stops, what was created and not yet granted is unreachable, and narrowings already
+applied only ever reduce who is served; the owner resumes, or rolls back by removal upgrades in reverse
+order. A negative fixture narrows a group and adds an element naming it, stops between every pair of steps,
+and checks that no viewer outside the final audience is served the element at any step.
 
 **Real data for new types: soft launch.** The owner publishes the new type, as a draft set with its
 narrow audience group, with policies that grant only staff; uses it; and widens it with an ordinary upgrade
@@ -1390,25 +1398,39 @@ A rename or a type change is a sequence of ordinary approved upgrades with expli
    step. It then repeats **catch-up passes** over records whose version is above their mark. Screens still
    read the old field throughout, and the product's own writers keep both fields equal; only writers outside
    the product (generic record intents, other products, automations, imports, `write-answers`) can make the
-   fields differ, and the catch-up passes copy what they changed.
+   fields differ, and the catch-up passes copy what they changed. A **complete report** at event sequence S
+   states that **every record of the type at a version written at or before S has been copied**, and that
+   **no unconverted value remains** (every value the conversion refused has been fixed by an approved
+   data-fix step).
 3. **Freeze, last pass and rebind in one commit** (the chosen design). One owner-approved upgrade, the
-   **rebind** upgrade, does all of this in **one commit**:
+   **rebind** upgrade, does all of this in **one commit**. Its planner preconditions are a **complete
+   report** from the job (else `migration.not-ready`, with the job's status: records not yet copied,
+   unconverted values left) and no remaining dependent of the old field the commit does not rewrite (below).
    - **changes the writers**: it replaces the product's operations, forms and actions with versions that
      write **only the new field**, and relaxes the old field to **optional** if it was required. Operation
      steps are validated like any record change (`validate_record`, `operations.rs:618`, `:737`), so a
      dual-writing operation would hit the freeze, and a required old field would leave no valid write (a
      create setting it is a change of value). The planner refuses a rebind commit while any of the product's
-     own writers still writes the field being frozen (`migration.writers-remain`, naming them). These writer
-     changes are in the commit's diff, so they appear in the permission delta and the classification;
+     own writers still writes the field being frozen (`migration.writers-remain`, naming them);
+   - **rewrites every other dependent** of the old field that the kernel's dependency graph reports
+     (`crates/kernel/src/dependencies.rs`): queries and views (filters, orders, projections), policy
+     conditions, read rules, constraints and unique constraints, workflows, triggers, automations and
+     settings. After the freeze they would read a field no longer written, and the contract upgrade would
+     be refused while they name it. The rebind commit's diff rewrites each to the new field, or the planner
+     refuses with `migration.dependents-remain`, naming them;
+   - the writer and dependent changes are in the commit's diff, so they appear in the **permission delta**
+     and the **classification**;
    - **freezes** the old field;
-   - runs the **last pass**, computed by the kernel inside the commit, not from a list made at plan time
-     (record writes do not move the schema version, so a plan-time list would miss records written between
-     the job's report and the commit). The commit declares a **Need**: the record events of the type after
-     the event sequence of the job's last report, and those records, so the kernel's coverage holds and
-     nothing is read outside the commit's own snapshot. If more than one batch (`erasure::BATCH`) of records
-     changed since the report, the commit is refused with `migration.not-ready` without loading them;
-     otherwise, for every loaded record where the new field differs from the conversion of the old one, the
-     new field is set to that conversion;
+   - runs the **last pass** for the records changed **after** the complete report, computed by the kernel
+     inside the commit (record writes do not move the schema version, so a plan-time list would miss them).
+     This needs a **new `Need` variant**, `record-events-after { object, after }` (the `Need` union,
+     `crates/model-core/src/types.rs:5326-5380`, has none), served by the store's `events_after`
+     (`crates/storage-api/src/lib.rs:968`, CT-015) and declared in the specification as a change to the
+     `need` type: the shell loads the record events of the type after sequence S, then those records, so
+     the kernel's coverage holds. If more than one batch (`erasure::BATCH`) of **distinct records** changed
+     since S, the commit is refused with `migration.not-ready` without loading them; otherwise, for every
+     loaded record whose new field differs from the conversion of the old one, the new field is set to that
+     conversion;
    - **rebinds** the screens to the new field, with the owner-approved **overlay rebind** steps.
 
    *Why this and not a separate freeze step*: with a separate freeze first, records written between the
@@ -1416,6 +1438,7 @@ A rename or a type change is a sequence of ordinary approved upgrades with expli
    writers outside the product keep more than one batch changing between reports, the owner may choose the
    separate sequence (freeze as its own approved step, then the last pass, then the rebind), accepting that
    window.
+
 4. **Contract.** A later upgrade removes the old field and may tighten the new one to required; the removal
    guard passes because no published screen names the old field.
 
@@ -1738,7 +1761,8 @@ line. Requirements checked by tests are added with those tests:
 | A preview is built from a viewer-scoped redacted snapshot; a widening draft policy shows no extra row | backend tests | WG-5464, WG-5470 |
 | A staged upgrade at the product entity limits commits in stages and members see nothing new before the last; an early operation's only invoker is the reserved staging role | substrate fixtures | WG-5472 |
 | The permission delta reports each source (role permissions, policies, invokers, operation conditions, written types, transition guards, read rules, audiences) and derived-admin changes | kernel fixtures, one per source | WG-5471 |
-| The rebind commit changes the product's writers, relaxes and freezes the old field, runs the last pass from the record events since the report (a record written after the report is still copied, or the commit is refused) and rebinds; `field.frozen` refuses only a change of value and spares erasure and retention | kernel tests, and a fixture renaming a required field through every phase with a live writer | WG-5514 |
+| The rebind commit requires a complete report (refused with the bulk copy incomplete, or with an unconverted record), changes the product's writers and every other dependent of the old field (refused while one remains), relaxes and freezes the old field, runs the last pass from the record events after the report (a record written after it is still copied, or the commit is refused) and rebinds; `field.frozen` refuses only a change of value and spares erasure and retention | kernel tests; fixtures renaming a required field through every phase with a live writer, and a rename where a policy condition and a query filter name the old field | WG-5514 |
+| A draft set narrowing a group and adding an element naming it, stopped between steps, serves the element to no viewer outside the final audience | negative fixture | WG-5471 |
 | Expand raises the old field to the new field's protection; subject erasure after rebind removes both copies; a reverse migration of a personal field is legal and of a less protected destination refused | kernel tests | WG-5514 |
 | A three-stage upgrade passes `foreign_change` with per-stage pre-release versions; abandon removes what stages created | kernel tests | WG-5472 |
 | Publishing takes the revision id and hash, refuses a mismatch, and re-plans once on a race | backend tests | WG-5471 |
@@ -1862,6 +1886,16 @@ Each is a Workgraph task under WG-5457 with testable acceptance criteria (Workgr
   content at rest for photos and large uploads (see "Reserved entries")?
 
 ## Answers to the reviews
+
+### Ninth review
+
+Each claim was re-checked against the code; all hold.
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | The last pass misses records the bulk copy never reached | Confirmed. Fixed: a complete report (every record at or before the report's sequence copied, no unconverted value left) is a planner precondition of the rebind commit (`migration.not-ready` with the job's status); the in-commit pass covers only records changed after the report, through a new `record-events-after` Need served by `Store::events_after` (`storage-api/src/lib.rs:968`), with the one-batch bound counted in distinct records; kernel tests for an incomplete copy and an unconverted record |
+| 2 | Other dependents of the old field | Fixed: the rebind commit rewrites every dependent the dependency graph reports (queries, views, policy conditions, read rules, constraints, unique constraints, workflows, triggers, automations, settings), or is refused with `migration.dependents-remain`; all in the permission delta and classification; a fixture where a policy condition and a query filter name the old field |
+| 3 | Group change direction | Confirmed. Fixed: narrowing changes to existing groups apply before the product drafts that name them, widening changes after; the permission delta shows each direction; a negative fixture stops between every pair of steps and checks no viewer outside the final audience is served the new element |
 
 ### Eighth review
 
