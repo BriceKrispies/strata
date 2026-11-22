@@ -293,14 +293,36 @@ The browser holds entries stamped `(e, g, x)`, and for the current tenant epoch 
 generation, its erasure epochs, its **floor** and the time of its last contact. Generations are
 ordered only within a tenant epoch: a restore, a re-created tenant or a lease acquisition rotates the
 nonce and starts a new one, whose counter may start again from 1. The tag `e` is random and unordered,
-so with it the server sends the epoch's **ordinal**, raised at every nonce rotation and never reset.
-On a higher ordinal the browser purges every entry and resets its known generation, floor and erasure
-epochs together, in one transaction; a lower ordinal, or an equal ordinal with a different tag, is
-ignored. No list of left epochs is kept (`tenant_epoch_purges`, `older_epoch_ignored`,
-`rest_same_tenant_epoch`). **Recovery**: whatever arrived before, any answer sent in the server's current
-epoch brings the client to that epoch (`contact_reaches_current_epoch`); after two rotations with
-answers arriving out of order (epoch 2, then a late 1, then 2) the client ends current in epoch 2
-(`out_of_order_epochs_recover`). Without the reset, the new tenant's replies at generation 1 fall below
+so with it the server sends the epoch's **ordinal**.
+
+**Where the ordinal comes from.** At every nonce rotation the server sets the ordinal to
+`max(previous + 1, rotation time in milliseconds)` and persists it with the nonce. The time term is what
+keeps it monotone across the events that lose or never had the previous value: a restore from an older
+snapshot (the snapshot's ordinal is older, but the rotation time is now), a control-directory restore,
+a re-created tenant whose generation counter restarts at 1 under `Generation::first` (no previous value
+at all), and an import into another cell carrying an older ordinal. It relies on the clock not going
+back past the last rotation; rule (b) covers the case where it does.
+
+**The client's two rules.** The browser keeps, with its epoch, the send time of the request whose
+answer made it switch. (a) A message of a **higher ordinal** switches it. (b) An **answer to a request
+sent after its last switch**, matched by its echoed nonce, carrying a different tag, switches it
+**whatever its ordinal**: a server that answered a request sent after the switch answered from state at
+least as new as the switch, so a lower ordinal there means the ordinal went down, not that the answer is
+old. The ordinal only orders answers to requests sent before the switch, and frames, which answer no
+request. Switching purges every entry and resets the known generation, floor and erasure epochs
+together, in one transaction; anything else of another tag is ignored. No list of left epochs is kept
+(`tenant_epoch_purges`, `older_epoch_ignored`, `rest_same_tenant_epoch`). **Recovery**: whatever
+arrived before, any answer sent in the server's current epoch brings the client to that epoch
+(`contact_reaches_current_epoch`); after two rotations with answers arriving out of order (epoch 2, then
+a late 1 to an earlier request, then 2) the client ends current in epoch 2
+(`out_of_order_epochs_recover`); an answer to a later request is taken whatever its ordinal
+(`later_request_is_authoritative`), so a client at ordinal 5000 reaches a re-created tenant at ordinal 1
+(`lower_ordinal_recovers`). Recovery needs such an answer to arrive: it is a liveness assumption, not a
+theorem about the network. Rule (b) can move a client to an older epoch when an answer to a later
+request was served before an answer to an earlier one; that is safe (everything is purged, and the
+model keeps the client's epoch at or below the server's), and the next answer moves it on. The kernel
+drops a pending nonce when its request is answered, abandoned or older than the contact bound, so the
+set of unanswered nonces stays bounded. Without the reset, the new tenant's replies at generation 1 fall below
 the old floor and are all dropped (`restarted_counter_dropped_without_reset`). Every lease failover
 rotates the nonce, so it resets every connected client's cache; its rate is measured in WG-5435.
 Three kinds of message carry stamps, each after a delay the browser cannot measure:
@@ -706,6 +728,7 @@ that pins it is WG-5450.
 | A non-current answer is labelled with its generation | `read_stale_older` |
 | Nothing at rest from an older erasure epoch, read below the floor, or from another tenant epoch; hearing any of them purges at once; the floor covers a policy change for every principal | `rest_one_epoch`, `rest_above_floor`, `rest_same_tenant_epoch`, `hear_purges`, `hear_access_purges`, `tenant_epoch_purges`, `older_epoch_ignored`, `contact_floor` |
 | Recovery: an answer of the server's current tenant epoch brings the client to it; out-of-order answers across two rotations end current in the newest epoch | `contact_reaches_current_epoch`, `out_of_order_epochs_recover` |
+| Rule (b): an answer to a request sent after the last switch is taken whatever its ordinal; a client at a high ordinal reaches a re-created tenant at ordinal 1 | `later_request_is_authoritative`, `lower_ordinal_recovers` |
 | A re-created tenant compared with the old epoch's numbers drops everything; with the reset it is kept | `restarted_counter_dropped_without_reset`, `reset_accepts` |
 | A reply read and sent at the current stamp is read back as current | `receipt_read`, `read_after_commit` |
 | Counterexamples: incomplete notice, incomplete notice despite fresh contacts, epoch read after opening, unguarded put, unfloored put, generation alone | `incomplete_notice_serves_stale`, `fresh_contact_still_stale`, `stamp_after_open_serves_erased`, `unguarded_put_resurrects`, `unfloored_put_resurrects` (and `guarded_put_drops`, `floored_put_drops`), `browser_generation_only_serves_erased` |
@@ -752,6 +775,12 @@ False as first stated, with the strongest true statement:
   forgets its key, or after a "not found" lookup that does not fence. True from the two retention
   rules (`at_most_once`), for a stamped write always (`stamped_at_most_once`), with the lookup fence
   (`fence_holds`), and for what the client sends given its scheme (`q2_sent`).
+- **Tenant epoch tags and ordinals are one value in the model.** The server's epoch only grows there,
+  so "equal ordinal, different tag is ignored" is not modelled, nor is a lower ordinal on the server
+  side: `lower_ordinal_recovers` and `later_request_is_authoritative` are statements about the client's
+  rule, not about a server run in which the ordinal went down. The split-brain case, two lease holders
+  rotating to the same ordinal with different tags, is the same gap; rule (b) resolves it in the
+  implementation, since the client follows whichever holder answered its latest request.
 - **"The cache never serves an entry staler than its last known generation"**: the stamp part holds
   with no assumption (`current_recent`); the value part needs complete notices (`current_value`).
 - **"After sign-out no cached plaintext is readable"**: true for ciphertext at rest and the hot set,
@@ -813,6 +842,17 @@ record). Server items unblock client items; within the client, the stores preced
   enforced rather than "at the next connection"?
 
 ## Answers to the reviews
+
+### Sixth review
+
+| Item | Answer |
+|---|---|
+| Where the ordinal comes from, and monotonicity across restore, control-directory restore, re-creation and import | The ordinal is `max(previous + 1, rotation time in ms)`, persisted with the nonce; the time term covers every event that loses the previous value. WG-5435's criterion now tests a restore from an older snapshot, a control-directory restore, a re-created tenant and an import |
+| Client rule (b) | Adopted with (a): an answer, matched by nonce, to a request sent after the last switch is authoritative whatever its ordinal. Modelled: `Cache.switched`, `epochOf c e t`, `later_request_is_authoritative`, `lower_ordinal_recovers`; added to WG-5441 |
+| Recovery is a liveness assumption | Said in the cache model section |
+| Equal ordinal with a different tag, split brain | Not modelled (tag and ordinal are one value); listed under what is not proved, with rule (b) as the resolution |
+| Unanswered nonces | Dropped when answered, abandoned or older than the contact bound; in WG-5441 |
+| Membership notices that change other principals' visible sets | Named in WG-5435's criterion (a policy reading who shares a team) |
 
 ### Fifth review
 

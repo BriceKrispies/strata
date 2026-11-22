@@ -20,8 +20,10 @@ checked at ..." and not refetched); otherwise **stale**.
 Stamps are ordered only within a tenant epoch: a restore, a re-created tenant or a lease acquisition
 rotates the nonce and starts a new epoch, whose counter may start again from 1. With the epoch's tag
 the server sends its **ordinal**, raised at every rotation and never reset. The client keeps its known
-stamp, its floor and its entries for one epoch; it switches only to a higher ordinal (purging and
-resetting), and ignores anything of a lower ordinal. In the model the ordinal stands for the tag as
+stamp, its floor and its entries for one epoch, and the send time of the request whose answer made it
+switch. It switches (purging and resetting) on a higher ordinal, or on any other tag in an answer to a
+request it sent after its last switch, which a server cannot have answered from older state; it
+ignores anything else of another tag. In the model the ordinal stands for the tag as
 well, and the generation `g` is one order across epochs, which the client never relies on across
 them.
 
@@ -42,7 +44,10 @@ Proved:
   (`contact_floor`);
 - **recovery across tenant epochs** (`contact_reaches_current_epoch`): whatever arrived before, any
   answer sent in the server's current epoch brings the client to that epoch; answers out of order
-  across two rotations cannot leave it stuck (`out_of_order_epochs_recover`);
+  across two rotations cannot leave it stuck (`out_of_order_epochs_recover`); and an answer to a
+  request sent after the last switch is taken whatever its ordinal (`later_request_is_authoritative`),
+  so a tenant whose ordinal went down (a re-created tenant, a restore) is not ignored
+  (`lower_ordinal_recovers`);
 - **a read after a confirmed commit** returns the committed value (`receipt_read`,
   `read_after_commit`);
 - **what fails without each piece**: an incomplete notice (`incomplete_notice_serves_stale`,
@@ -137,6 +142,8 @@ structure Cache (K V : Type) where
   contact : Nat
   /-- The ordinal of the tenant epoch the known stamp, floor and entries belong to. -/
   ce : Nat
+  /-- The send time of the request whose answer made the client switch to that epoch. -/
+  switched : Nat
   entries : K → Option (Entry V)
 
 inductive Answer (V : Type) where
@@ -157,12 +164,15 @@ def read (B now : Nat) (c : Cache K V) (k : K) : Answer V :=
       (if now ≤ c.contact + B then .current e.val else .checked e.val)
     else .stale e.val e.gen
 
-/-- Taking in a message of tenant epoch ordinal `e`: the same epoch goes on, a lower one is ignored
-    (`none`), a higher one purges and resets everything, in one transaction. -/
-def epochOf (c : Cache K V) (e : Nat) : Option (Cache K V) :=
+/-- Taking in a message of tenant epoch `e`, answering a request sent at `t` (0 for a frame, which
+    answers no request): the same epoch goes on; a higher ordinal, or any other epoch in an answer to
+    a request sent after the last switch, purges and resets everything in one transaction; anything
+    else is ignored (`none`). -/
+def epochOf (c : Cache K V) (e t : Nat) : Option (Cache K V) :=
   if e = c.ce then some c
-  else if e < c.ce then none
-  else some { known := 0, knownX := 0, floor := 0, contact := 0, ce := e, entries := fun _ => none }
+  else if c.ce < e ∨ c.switched < t then
+    some { known := 0, knownX := 0, floor := 0, contact := 0, ce := e, switched := t, entries := fun _ => none }
+  else none
 
 def hearX (c : Cache K V) (y : Nat) : Cache K V :=
   if c.knownX < y then
@@ -193,7 +203,7 @@ def put (c : Cache K V) (k : K) (v : V) (g y er : Nat) : Cache K V :=
 
 /-- An answer to a request sent at `t`, carrying the server's stamp when it answered. -/
 def contactIn (c : Cache K V) (t gp xp fp ep : Nat) : Cache K V :=
-  match epochOf c ep with
+  match epochOf c ep t with
   | none => c
   | some c0 =>
     let c1 := hearAcc (hearX c0 xp) fp
@@ -208,7 +218,7 @@ def carry (es : K → Option (Entry V)) (a b : Nat) (ks : List K) : K → Option
 
 /-- A frame of tenant epoch `e`, sent with stamp `(b, y, f)`. -/
 def frame (c : Cache K V) (a b y f e : Nat) (ks : List K) : Cache K V :=
-  match epochOf c e with
+  match epochOf c e 0 with
   | none => c
   | some c0 =>
     if y < c0.knownX then c0
@@ -293,35 +303,35 @@ def Vals (s : Server K V) (c : Cache K V) : Prop :=
 
 /-! ### Tenant epochs -/
 
-theorem epochOf_base (s : Server K V) (c : Cache K V) (e : Nat) (c' : Cache K V) (h : Base s c)
-    (hle : e ≤ s.ep) (he : epochOf c e = some c') : Base s c' := by
+theorem epochOf_base (s : Server K V) (c : Cache K V) (e t : Nat) (c' : Cache K V) (h : Base s c)
+    (hle : e ≤ s.ep) (he : epochOf c e t = some c') : Base s c' := by
   unfold epochOf at he
   split at he
   · cases he; exact h
   · split at he
     · cases he
-    · cases he
       exact ⟨Nat.zero_le _, Nat.zero_le _, Nat.zero_le _, h.acc_le, h.pol_le, Nat.zero_le _, hle,
         (fun _ _ h => by cases h), (fun _ _ h => by cases h), (fun _ _ h => by cases h),
         (fun _ _ h => by cases h), (fun _ _ _ => Nat.zero_le _), (fun _ _ _ => Nat.zero_le _), h.flight⟩
+    · cases he
 
-theorem epochOf_vals (s : Server K V) (c : Cache K V) (e : Nat) (c' : Cache K V) (hv : Vals s c)
-    (he : epochOf c e = some c') : Vals s c' := by
+theorem epochOf_vals (s : Server K V) (c : Cache K V) (e t : Nat) (c' : Cache K V) (hv : Vals s c)
+    (he : epochOf c e t = some c') : Vals s c' := by
   unfold epochOf at he
   split at he
   · cases he; exact hv
   · split at he
-    · cases he
     · cases he; intro _ _ h; cases h
+    · cases he
 
-theorem epochOf_ce (c : Cache K V) (e : Nat) (c' : Cache K V) (he : epochOf c e = some c') :
+theorem epochOf_ce (c : Cache K V) (e t : Nat) (c' : Cache K V) (he : epochOf c e t = some c') :
     c'.ce = e := by
   unfold epochOf at he
   split at he
   · rename_i h; cases he; exact h.symm
   · split at he
-    · cases he
     · cases he; rfl
+    · cases he
 
 /-! ### What hearing does to the fields -/
 
@@ -419,11 +429,11 @@ theorem contact_base (s : Server K V) (c : Cache K V) (t gp xp fp ep : Nat) (h :
     (hin : (t, gp, xp, fp, ep) ∈ s.inflight) : Base s (contactIn c t gp xp fp ep) := by
   obtain ⟨ht, hgp, hxp, hfp, hgg, hgx, hep⟩ := h.flight _ hin
   unfold contactIn
-  cases hc : epochOf c ep with
+  cases hc : epochOf c ep t with
   | none => exact h
   | some c0 =>
     simp only
-    have h0 := epochOf_base s c ep c0 h hep hc
+    have h0 := epochOf_base s c ep t c0 h hep hc
     have h1 := hear_base s c0 xp fp h0 hxp hfp
     obtain ⟨x1, x2, x3, x4, x5⟩ := hearX_fields c0 xp
     obtain ⟨a1, a2, a3, a4, a5⟩ := hearAcc_fields (hearX c0 xp) fp
@@ -447,11 +457,11 @@ theorem contact_base (s : Server K V) (c : Cache K V) (t gp xp fp ep : Nat) (h :
 theorem contact_vals (s : Server K V) (c : Cache K V) (t gp xp fp ep : Nat) (h : Base s c)
     (hin : (t, gp, xp, fp, ep) ∈ s.inflight) (hv : Vals s c) : Vals s (contactIn c t gp xp fp ep) := by
   unfold contactIn
-  cases hc : epochOf c ep with
+  cases hc : epochOf c ep t with
   | none => exact hv
   | some c0 =>
-    exact hear_vals s c0 xp fp (epochOf_base s c ep c0 h (by
-      obtain ⟨_, _, _, _, _, _, hep⟩ := h.flight _ hin; exact hep) hc) (epochOf_vals s c ep c0 hv hc)
+    exact hear_vals s c0 xp fp (epochOf_base s c ep t c0 h (by
+      obtain ⟨_, _, _, _, _, _, hep⟩ := h.flight _ hin; exact hep) hc) (epochOf_vals s c ep t c0 hv hc)
 
 /-! ### The put -/
 
@@ -553,11 +563,11 @@ theorem carry_entry (es : K → Option (Entry V)) (a b : Nat) (ks : List K) (k :
 theorem frame_base (s : Server K V) (c : Cache K V) (a b y f e : Nat) (ks : List K) (h : Base s c)
     (hb : b ≤ s.gen) (hy : y ≤ s.x) (hf : f ≤ s.fl) (he : e ≤ s.ep) : Base s (frame c a b y f e ks) := by
   unfold frame
-  cases hc : epochOf c e with
+  cases hc : epochOf c e 0 with
   | none => exact h
   | some c0 =>
     simp only
-    have h0 := epochOf_base s c e c0 h he hc
+    have h0 := epochOf_base s c e 0 c0 h he hc
     by_cases hlt : y < c0.knownX
     · simp only [hlt, ↓reduceIte]; exact h0
     · simp only [hlt, ↓reduceIte]
@@ -586,12 +596,12 @@ theorem frame_vals (s : Server K V) (c : Cache K V) (a b y f e : Nat) (ks : List
     (he : e ≤ s.ep) (hv : Vals s c) (hc2 : ∀ k, k ∉ ks → ∀ g, a ≤ g → g ≤ b → s.view g y k = s.view b y k) :
     Vals s (frame c a b y f e ks) := by
   unfold frame
-  cases hc : epochOf c e with
+  cases hc : epochOf c e 0 with
   | none => exact hv
   | some c0 =>
     simp only
-    have h0 := epochOf_base s c e c0 h he hc
-    have hv0 := epochOf_vals s c e c0 hv hc
+    have h0 := epochOf_base s c e 0 c0 h he hc
+    have hv0 := epochOf_vals s c e 0 c0 hv hc
     by_cases hlt : y < c0.knownX
     · simp only [hlt, ↓reduceIte]; exact hv0
     · simp only [hlt, ↓reduceIte]
@@ -859,7 +869,7 @@ theorem hear_access_purges (s : Server K V) (c : Cache K V) (h : Base s c) (a : 
 theorem contact_floor (s : Server K V) (c : Cache K V) (t : Nat) (hce : c.ce = s.ep) :
     s.pol ≤ (contactIn c t s.gen s.x s.fl s.ep).floor ∧ s.acc ≤ (contactIn c t s.gen s.x s.fl s.ep).floor := by
   unfold contactIn
-  have he : epochOf c s.ep = some c := by simp [epochOf, hce]
+  have he : epochOf c s.ep t = some c := by simp [epochOf, hce]
   rw [he]
   simp only
   have := (hearAcc_fields (hearX c s.x) s.fl).2.2.2.1
@@ -868,26 +878,34 @@ theorem contact_floor (s : Server K V) (c : Cache K V) (t : Nat) (hce : c.ce = s
   exact ⟨Nat.le_trans (Nat.le_max_right s.acc s.pol) (Nat.le_max_right _ _),
          Nat.le_trans (Nat.le_max_left s.acc s.pol) (Nat.le_max_right _ _)⟩
 
-/-- **Hearing a higher tenant epoch purges and resets together**: nothing is left at rest, and the
-    known stamp, erasure epoch and floor start again from that epoch.
+/-- **Switching tenant epoch purges and resets together**: nothing is left at rest, and the known
+    stamp, erasure epoch and floor start again from that epoch.
     Verifies: FE-018 -/
-theorem tenant_epoch_purges (c c' : Cache K V) (e : Nat) (hgt : c.ce < e) (he : epochOf c e = some c') :
+theorem tenant_epoch_purges (c c' : Cache K V) (e t : Nat) (hne : e ≠ c.ce)
+    (he : epochOf c e t = some c') :
     (∀ k, c'.entries k = none) ∧ c'.known = 0 ∧ c'.knownX = 0 ∧ c'.floor = 0 ∧ c'.ce = e := by
   unfold epochOf at he
-  have hne : e ≠ c.ce := by omega
-  have hnlt : ¬ e < c.ce := by omega
-  simp only [hne, hnlt, ↓reduceIte, Option.some.injEq] at he
-  subst he
-  exact ⟨fun _ => rfl, rfl, rfl, rfl, rfl⟩
+  simp only [hne, ↓reduceIte] at he
+  split at he
+  · simp only [Option.some.injEq] at he; subst he; exact ⟨fun _ => rfl, rfl, rfl, rfl, rfl⟩
+  · cases he
 
-/-- **A message of a lower tenant epoch ordinal changes nothing.**
+/-- **A message of a lower ordinal that answers no request sent after the last switch changes
+    nothing.**
     Verifies: FE-018 -/
 theorem older_epoch_ignored (c : Cache K V) (e : Nat) (hlt : e < c.ce)
-    (a b y f : Nat) (ks : List K) (t gp xp : Nat) :
+    (a b y f : Nat) (ks : List K) (t gp xp : Nat) (ht : t ≤ c.switched) :
     frame c a b y f e ks = c ∧ contactIn c t gp xp f e = c := by
   have hne : e ≠ c.ce := by omega
-  have hn : epochOf c e = none := by simp [epochOf, hne, hlt]
-  exact ⟨by simp [frame, hn], by simp [contactIn, hn]⟩
+  have hn0 : epochOf c e 0 = none := by
+    simp only [epochOf, hne, ↓reduceIte]; split
+    · rename_i h; omega
+    · rfl
+  have hn : epochOf c e t = none := by
+    simp only [epochOf, hne, ↓reduceIte]; split
+    · rename_i h; omega
+    · rfl
+  exact ⟨by simp [frame, hn0], by simp [contactIn, hn]⟩
 
 /-- **Recovery across tenant epochs**: whatever arrived before, an answer sent in the server's
     current epoch brings the client to that epoch.
@@ -896,31 +914,66 @@ theorem contact_reaches_current_epoch (s : Server K V) (c : Cache K V) (h : Base
     (t gp xp fp : Nat) : (contactIn c t gp xp fp s.ep).ce = s.ep := by
   unfold contactIn
   have hle := h.ce_le
-  cases hc : epochOf c s.ep with
+  cases hc : epochOf c s.ep t with
   | none =>
     unfold epochOf at hc
     by_cases heq : s.ep = c.ce
     · simp [heq] at hc
-    · have : ¬ s.ep < c.ce := by omega
-      simp [heq, this] at hc
+    · simp only [heq, ↓reduceIte] at hc
+      split at hc
+      · cases hc
+      · rename_i hn; omega
   | some c0 =>
     simp only
-    have := epochOf_ce c s.ep c0 hc
+    have := epochOf_ce c s.ep t c0 hc
     show (hearAcc (hearX c0 xp) fp).ce = s.ep
     rw [(hearAcc_fields _ fp).2.2.2.2, (hearX_fields c0 xp).2.2.2.2, this]
 
+/-- **An answer to a request sent after the last switch is authoritative, whatever its ordinal**:
+    the client takes its epoch. This is what keeps a tenant whose ordinal went down (a re-created
+    tenant, a restore, an import, two lease holders at one ordinal) from being ignored.
+    Verifies: FE-019 -/
+theorem later_request_is_authoritative (c : Cache K V) (t gp xp fp e : Nat) (ht : c.switched < t) :
+    (contactIn c t gp xp fp e).ce = e := by
+  unfold contactIn
+  have hc : ∃ c0, epochOf c e t = some c0 := by
+    unfold epochOf
+    by_cases heq : e = c.ce
+    · exact ⟨c, by simp [heq]⟩
+    · simp only [heq, ↓reduceIte]
+      have hor : c.ce < e ∨ c.switched < t := Or.inr ht
+      exact ⟨_, ite_eq_left_of_eq_true _ _ (eq_true hor)⟩
+  obtain ⟨c0, hc0⟩ := hc
+  rw [hc0]
+  simp only
+  have := epochOf_ce c e t c0 hc0
+  show (hearAcc (hearX c0 xp) fp).ce = e
+  rw [(hearAcc_fields _ fp).2.2.2.2, (hearX_fields c0 xp).2.2.2.2, this]
+
 /-- The review's schedule: the tenant rotates twice (ordinals 0, 1, 2); the client hears an answer of
-    epoch 2, then a late answer of epoch 1, then another answer of epoch 2 with a reply, and ends in
+    epoch 2, then a late answer of epoch 1 to a request sent before that switch, then another answer of epoch 2 with a reply, and ends in
     epoch 2 with the reply current. -/
 def cx0 : Cache Nat Nat :=
-  { known := 0, knownX := 0, floor := 0, contact := 0, ce := 0, entries := fun _ => none }
+  { known := 0, knownX := 0, floor := 0, contact := 0, ce := 0, switched := 0, entries := fun _ => none }
 
 /-- Verifies: FE-019 -/
 theorem out_of_order_epochs_recover :
     let c1 := contactIn cx0 5 10 0 0 2
-    let c2 := contactIn c1 6 3 0 0 1
+    let c2 := contactIn c1 4 3 0 0 1
     let c3 := put (contactIn c2 7 11 0 0 2) 0 9 11 0 2
     c2.ce = 2 ∧ c3.ce = 2 ∧ read 1 7 c3 0 = .current 9 := by
+  decide
+
+/-- A client in epoch ordinal 5000, switched by an answer to a request sent at time 3. -/
+def cxHigh : Cache Nat Nat :=
+  { known := 0, knownX := 0, floor := 0, contact := 3, ce := 5000, switched := 3, entries := fun _ => none }
+
+/-- A client that switched to ordinal 5000 at time 3, and a tenant re-created on the same host name
+    whose ordinal is 1: an answer to a request sent at time 4 is taken, and its reply is current.
+    Verifies: FE-019 -/
+theorem lower_ordinal_recovers :
+    let c1 := put (contactIn cxHigh 4 2 0 0 1) 0 9 2 0 1
+    c1.ce = 1 ∧ read 1 4 c1 0 = .current 9 := by
   decide
 
 set_option linter.unusedSimpArgs false in
@@ -936,7 +989,7 @@ theorem receipt_read (B : Nat) (s : Server K V) (c : Cache K V) (k : K) (h : Bas
   have hb1 : Base s1 c := step_base s c (.answer t) h |> fun hb => by
     simp only [step, ht, ↓reduceIte] at hb; exact hb
   have hc1 := contact_base s1 c t s.gen s.x s.fl s.ep hb1 hin
-  have he : epochOf c s.ep = some c := by simp [epochOf, hce]
+  have he : epochOf c s.ep t = some c := by simp [epochOf, hce]
   have hci : contactIn c t s.gen s.x s.fl s.ep =
       { hearAcc (hearX c s.x) s.fl with known := max (hearAcc (hearX c s.x) s.fl).known s.gen,
                                         contact := max (hearAcc (hearX c s.x) s.fl).contact t } := by
@@ -1000,7 +1053,7 @@ def cxServer : Server Nat Nat :=
     gTime := fun _ => 0, xTime := fun _ => 0, now := 0, inflight := [] }
 
 def cxCache : Cache Nat Nat :=
-  { known := 0, knownX := 0, floor := 0, contact := 0, ce := 0,
+  { known := 0, knownX := 0, floor := 0, contact := 0, ce := 0, switched := 0,
     entries := fun _ => some ⟨5, 0, 0, 0⟩ }
 
 /-- **Without C2, a stale value stays current.** -/
@@ -1050,7 +1103,7 @@ theorem floored_put_drops : (put (hearAcc cxCache 1) 0 5 0 0 0).entries 0 = none
 
 /-- A client that had reached floor 5000 in one tenant epoch. -/
 def cxOld : Cache Nat Nat :=
-  { known := 5000, knownX := 0, floor := 5000, contact := 0, ce := 0, entries := fun _ => none }
+  { known := 5000, knownX := 0, floor := 5000, contact := 0, ce := 0, switched := 0, entries := fun _ => none }
 
 /-- **Comparing a re-created tenant with the old one's numbers drops everything**: its counter
     starts again, so a reply at generation 1 is below the old floor. -/
@@ -1059,7 +1112,7 @@ theorem restarted_counter_dropped_without_reset : (put cxOld 0 7 1 0 0).entries 
 
 /-- With the reset on a new tenant epoch, the same reply is kept. -/
 theorem reset_accepts :
-    ((epochOf cxOld 1).map (fun c => put c 0 7 1 0 1)).map (fun c => (c.entries 0).map (·.val)) = some (some 7) := by
+    ((epochOf cxOld 1 0).map (fun c => put c 0 7 1 0 1)).map (fun c => (c.entries 0).map (·.val)) = some (some 7) := by
   decide
 
 /-! ## The working set's keys -/
