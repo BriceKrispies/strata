@@ -989,7 +989,12 @@ projection and approved once; publishing binds to the **set hash**. It is applie
   audience excludes; a narrowing that would hide something live is shown as such in the permission delta;
 - then the product drafts, each staged within the cap;
 - last, **changes that widen** an existing group, **changes to the shell list** (shell selection is
-  first-match on audience, so a change there is visible to members at once) and **overlays**.
+  first-match on audience, so a change there is visible to members at once), **deletions and renames of
+  groups** (they come after the product stages that stop naming the group; applied first, live elements
+  would still name a group that no longer exists, `ui.audience.unknown-group`), and **overlays**.
+
+A **mixed change** to one group (one role removed, another added) is split into its narrowing part, applied
+first, and its widening part, applied last.
 
 The permission delta lists each group change with its direction. An audience that names a group neither
 the set nor the tenant defines is refused with `ui.audience.unknown-group`, naming the group and the
@@ -1412,12 +1417,20 @@ A rename or a type change is a sequence of ordinary approved upgrades with expli
      dual-writing operation would hit the freeze, and a required old field would leave no valid write (a
      create setting it is a change of value). The planner refuses a rebind commit while any of the product's
      own writers still writes the field being frozen (`migration.writers-remain`, naming them);
-   - **rewrites every other dependent** of the old field that the kernel's dependency graph reports
-     (`crates/kernel/src/dependencies.rs`): queries and views (filters, orders, projections), policy
-     conditions, read rules, constraints and unique constraints, workflows, triggers, automations and
-     settings. After the freeze they would read a field no longer written, and the contract upgrade would
-     be refused while they name it. The rebind commit's diff rewrites each to the new field, or the planner
-     refuses with `migration.dependents-remain`, naming them;
+   - **rewrites every other dependent** of the old field. The kernel's dependency graph
+     (`crates/kernel/src/dependencies.rs`) has eleven kinds of dependent (queries, policies, workflows,
+     triggers, automations, views, constraints, unique constraints, field rules, references, object
+     settings) and none for three readers that also name fields, so the set is extended:
+     - **two new `DependentId` kinds**, built like the others from closed forms in the schema:
+       `Operation` (a tenant operation's conditions, its subject and its step expressions) and `Template`
+       (a mail or notice template whose blocks interpolate a field through a typed value node);
+     - **a planner scan of segment predicates**, because segments are stored outside the tenant schema, in
+       the segment store, and so are not in the graph; the planner reads the tenant's segment definitions
+       and lists every predicate that names the old field.
+
+     After the freeze these readers would read a field no longer written, and the contract upgrade would be
+     refused while they name it. The rebind commit's diff rewrites each to the new field (segments through
+     their own definition path), or the planner refuses with `migration.dependents-remain`, naming them;
    - the writer and dependent changes are in the commit's diff, so they appear in the **permission delta**
      and the **classification**;
    - **freezes** the old field;
@@ -1432,6 +1445,11 @@ A rename or a type change is a sequence of ordinary approved upgrades with expli
      loaded record whose new field differs from the conversion of the old one, the new field is set to that
      conversion;
    - **rebinds** the screens to the new field, with the owner-approved **overlay rebind** steps.
+
+   The rebind commit is **one** `ChangeSchema` under the 200-change cap, and it carries the writers, the
+   dependents, the screens and the overlay rebinds. When those exceed the cap it is refused with
+   `migration.rebind-too-large`, naming the count, and the restructure falls back to the separate sequence
+   below (freeze as its own approved step, then the last pass, then the rebind, each within the cap).
 
    *Why this and not a separate freeze step*: with a separate freeze first, records written between the
    freeze and the rebind would show their pre-freeze value on the still-bound screens. *Fallback*: if
@@ -1761,8 +1779,9 @@ line. Requirements checked by tests are added with those tests:
 | A preview is built from a viewer-scoped redacted snapshot; a widening draft policy shows no extra row | backend tests | WG-5464, WG-5470 |
 | A staged upgrade at the product entity limits commits in stages and members see nothing new before the last; an early operation's only invoker is the reserved staging role | substrate fixtures | WG-5472 |
 | The permission delta reports each source (role permissions, policies, invokers, operation conditions, written types, transition guards, read rules, audiences) and derived-admin changes | kernel fixtures, one per source | WG-5471 |
-| The rebind commit requires a complete report (refused with the bulk copy incomplete, or with an unconverted record), changes the product's writers and every other dependent of the old field (refused while one remains), relaxes and freezes the old field, runs the last pass from the record events after the report (a record written after it is still copied, or the commit is refused) and rebinds; `field.frozen` refuses only a change of value and spares erasure and retention | kernel tests; fixtures renaming a required field through every phase with a live writer, and a rename where a policy condition and a query filter name the old field | WG-5514 |
+| The rebind commit requires a complete report (refused with the bulk copy incomplete, or with an unconverted record), changes the product's writers and every other dependent of the old field (refused while one remains), relaxes and freezes the old field, runs the last pass from the record events after the report (a record written after it is still copied, or the commit is refused) and rebinds; `field.frozen` refuses only a change of value and spares erasure and retention | kernel tests; fixtures renaming a required field through every phase with a live writer, a rename where a policy condition and a query filter name the old field; one each where an operation condition, a segment predicate and a template name it; a rebind commit over the cap refused with `migration.rebind-too-large` | WG-5514 |
 | A draft set narrowing a group and adding an element naming it, stopped between steps, serves the element to no viewer outside the final audience | negative fixture | WG-5471 |
+| A group deletion or rename applies after the product stages that stop naming it; a mixed group change splits into a narrowing part first and a widening part last | tests | WG-5471 |
 | Expand raises the old field to the new field's protection; subject erasure after rebind removes both copies; a reverse migration of a personal field is legal and of a less protected destination refused | kernel tests | WG-5514 |
 | A three-stage upgrade passes `foreign_change` with per-stage pre-release versions; abandon removes what stages created | kernel tests | WG-5472 |
 | Publishing takes the revision id and hash, refuses a mismatch, and re-plans once on a race | backend tests | WG-5471 |
@@ -1886,6 +1905,17 @@ Each is a Workgraph task under WG-5457 with testable acceptance criteria (Workgr
   content at rest for photos and large uploads (see "Reserved entries")?
 
 ## Answers to the reviews
+
+### Tenth review
+
+Each claim was re-checked against the code; all hold.
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | Readers the dependency graph does not model | Confirmed (`DependentId` has eleven kinds, none for operations, segments or templates). Fixed: two new `DependentId` kinds, `Operation` (conditions, subject, step expressions) and `Template` (typed value nodes), and a planner scan of segment predicates, which live in the segment store outside the schema; a fixture each for an operation condition, a segment predicate and a template naming the old field |
+| 2 | Group deletion and rename | Fixed: they apply after the product stages that stop naming the group |
+| 3 | Mixed group changes | Fixed: split into a narrowing part (first) and a widening part (last) |
+| 4 | Rebind commit size | Fixed: one `ChangeSchema` under the cap; over it, refused with `migration.rebind-too-large` naming the count, falling back to the separate freeze sequence |
 
 ### Ninth review
 
