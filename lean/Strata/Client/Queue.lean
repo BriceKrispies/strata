@@ -134,7 +134,7 @@ theorem submit_ok_guard (s : Srv) (allow : Bool) (w : Write) (h : (s.submit allo
 
 /-- **Any other answer changes no record**: a conflict, a refusal and a recorded answer leave the
     records, their stamps and the applications as they were.
-    Verifies: FE-007 -/
+    Verifies: FE-010 -/
 theorem submit_not_ok_unchanged (s : Srv) (allow : Bool) (w : Write) (h : (s.submit allow w).2 ≠ .ok) :
     (s.submit allow w).1.stamp = s.stamp ∧ (s.submit allow w).1.val = s.val ∧
       (s.submit allow w).1.applied = s.applied := by
@@ -328,7 +328,7 @@ theorem samo_step (W : IKey → Write) (s : Srv) (op : Op) (hk : Keyed W [op]) (
 /-- **A write with a stamp is applied at most once, even after the server forgets its key**: the
     first application moves the record off the stamp for good (Q1), so any later submission of
     the same write is a conflict.
-    Verifies: FE-008 -/
+    Verifies: FE-011 -/
 theorem stamped_at_most_once (W : IKey → Write) (ops : List Op) (hk : Keyed W ops) :
     ∀ s, SAMO W s → SAMO W (run s ops) := by
   induction ops with

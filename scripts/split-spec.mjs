@@ -1,5 +1,6 @@
 // Splits specifications/spec.jsonc into a manifest and part files by the tool that consumes each
-// section (WG-5386; the table is in specifications/README.md).
+// section (WG-5386; the table is in specifications/README.md), and an area part for each area that
+// AREA_PARTS names: the items of every section whose id has the area's prefix (WG-5415).
 //
 //   node scripts/split-spec.mjs                     split specifications/spec.jsonc in place
 //   node scripts/split-spec.mjs --spec <file>       split another file (its parts go beside it)
@@ -27,6 +28,7 @@ export const PARTS = [
   ['behaviour.jsonc', 'what Exegra runs: events, behaviours, faults, scenarios, failure models and the claims it evaluates itself (m-...)'],
   ['requirements.jsonc', 'the requirements the gate reconciles with the code and the recorded tests, and their case tables'],
   ['functions.jsonc', 'the transcribed function layer and its example fixtures'],
+  ['frontend.jsonc', 'the browser client: its decisions, the copies it keeps, and the requirements its model is held to (an area part: items whose id starts fe-, d-fe- or copy-browser-)'],
 ];
 
 const intent = 'intent.jsonc';
@@ -55,6 +57,27 @@ export const SECTION_PART = {
   functions, exampleFixtures: functions,
 };
 
+/**
+ * The area parts: an item of any array section whose id matches goes to the area's part, whatever
+ * its section. An area part reads as one place for the area; the tools read the resolved manifest,
+ * so it changes nothing they compute. Exegra's `apply` places a new item by `specSections`, that is
+ * by consumer; move it with this script afterwards.
+ */
+export const AREA_PARTS = [['frontend.jsonc', /^(fe-|d-fe-|copy-browser-)/]];
+
+/** The area part an item belongs to, or null. */
+export function areaPart(item) {
+  const id = item?.id;
+  if (typeof id !== 'string') return null;
+  const hit = AREA_PARTS.find(([, pattern]) => pattern.test(id));
+  return hit ? hit[0] : null;
+}
+
+/** The part of one item of an array section: its area part, else the part of its section (by kind, for `claims`). */
+export function itemPart(key, item) {
+  return areaPart(item) ?? (key === 'claims' ? claimPart(item) : SECTION_PART[key]);
+}
+
 /** Where `claims` go, in the manifest's placement table: by the item's `kind`, as `claimPart` decides. */
 export const CLAIMS_PLACEMENT = { by: 'kind', values: { requirement: requirements }, default: behaviour };
 
@@ -78,20 +101,21 @@ export function splitText(text, header) {
     const body = top.src;
     if (m.key === MANIFEST_KEY) throw new SpecPartsError('nested-manifest', 'the input is itself a manifest after resolving');
     const render = (items) => (items.length ? `  ${JSON.stringify(m.key)}: [\n${items.map((t) => `    ${t}`).join(',\n')}\n  ]` : `  ${JSON.stringify(m.key)}: []`);
-    if (m.key === 'claims') {
-      const items = new Map(PARTS.map(([name]) => [name, []]));
-      for (const item of m.items ?? []) {
-        const t = body.slice(item.start, item.end);
-        items.get(claimPart(parseJsonc(t))).push(t);
-      }
-      for (const [name, list] of items) if (list.length) bySection.get(name).push(render(list));
-      continue;
-    }
-    const part = SECTION_PART[m.key];
-    if (!part) {
+    const part = m.key === 'claims' ? null : SECTION_PART[m.key];
+    if (m.key !== 'claims' && !part) {
       throw new SpecPartsError('unassigned-section', `the section "${m.key}" is in no part; add it to SECTION_PART in scripts/split-spec.mjs and to specifications/README.md`);
     }
-    bySection.get(part).push(m.items === null ? `  ${JSON.stringify(m.key)}: ${body.slice(m.start, m.end)}` : render(m.items.map((i) => body.slice(i.start, i.end))));
+    if (m.items === null) {
+      bySection.get(part).push(`  ${JSON.stringify(m.key)}: ${body.slice(m.start, m.end)}`);
+      continue;
+    }
+    // An array section: each item to its part. The section's own part keeps it even when empty.
+    const items = new Map(PARTS.map(([name]) => [name, []]));
+    for (const item of m.items) {
+      const t = body.slice(item.start, item.end);
+      items.get(itemPart(m.key, parseJsonc(t))).push(t);
+    }
+    for (const [name, list] of items) if (list.length || name === part) bySection.get(name).push(render(list));
   }
   const parts = new Map();
   for (const [name, what] of PARTS) {
@@ -143,8 +167,8 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * Compares the specification at `specPath` (resolved) with a monolithic file. Equal when both have the
- * same sections, a section held in one part has the same items in the same order, and a section held
- * in several (claims) has the same items with each part's items in the monolith's relative order.
+ * same sections, and an array section has the same items with each part's items in the monolith's
+ * relative order (a section is in several parts when it holds claims of both kinds or items of an area).
  * @returns {string[]} the differences, none when equal
  */
 export function checkAgainst(specPath, monolithPath) {
@@ -157,12 +181,12 @@ export function checkAgainst(specPath, monolithPath) {
   for (const key of b.filter((k) => a.includes(k))) {
     const x = resolved[key];
     const y = original[key];
-    if (key === 'claims') {
+    if (Array.isArray(x) && Array.isArray(y)) {
       const sorted = (list) => list.map((v) => JSON.stringify(v)).sort();
-      if (!same(sorted(x), sorted(y))) problems.push('claims: the items differ');
+      if (!same(sorted(x), sorted(y))) problems.push(`${key}: the items differ`);
       for (const [name] of PARTS) {
-        const sel = (list) => list.filter((c) => claimPart(c) === name).map((v) => JSON.stringify(v));
-        if (!same(sel(x), sel(y))) problems.push(`claims: the order of the items in ${name} differs`);
+        const sel = (list) => list.filter((c) => itemPart(key, c) === name).map((v) => JSON.stringify(v));
+        if (!same(sel(x), sel(y))) problems.push(`${key}: the order of the items in ${name} differs`);
       }
     } else if (!same(x, y)) {
       problems.push(`${key}: differs`);

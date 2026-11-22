@@ -55,7 +55,8 @@ accepted and a refused fixture of each, are in `crates/spec-compiler/src/layers.
 `spec.jsonc` holds one member, `"specParts"`, the part files in order, and an optional `"specSections"`
 table saying which part each section belongs to (Exegra's `apply` uses it to place a new section or
 entity; the other readers ignore it). Every top-level section of the specification is in exactly one
-part, except `claims`, which is in two:
+consumer part, except `claims`, which is in two; an area part (the last row) also holds, from any
+section, the items of its area:
 
 | Part | Sections | Read by |
 |---|---|---|
@@ -64,6 +65,14 @@ part, except `claims`, which is in two:
 | `behaviour.jsonc` | `events`, `behaviors`, `faults`, `scenarios`, `uiScenarios`, `failureModes`, `faultModels`, and the `claims` that are not requirements (`m-...`) | Exegra, which runs them |
 | `requirements.jsonc` | the `claims` with `"kind": "requirement"`, `caseTables` | the gate's evidence check |
 | `functions.jsonc` | `functions`, `exampleFixtures` | specc (the transcribed function layer) |
+| `frontend.jsonc` | an area part: the items of any section whose id starts `fe-`, `d-fe-` or `copy-browser-` (today decisions, copies and requirements of the browser client; docs/frontend.md) | each item's consumer, as above, through the manifest |
+
+An area part keeps one area's items in one file for the people who work on it. The tools resolve the
+manifest, so it changes nothing they compute: an array section may be in several parts, and an id in
+two of them is refused. The area's prefixes are `AREA_PARTS` in `scripts/split-spec.mjs`, which places
+every matching item in the area part and every other item by its consumer. Exegra's `apply` places a
+new entity by `specSections`, that is by consumer; run `node scripts/split-spec.mjs` afterwards to
+move an area's new item into its part.
 
 Resolving the manifest gives the single document one file would hold, and every tool does it by the
 same rule:

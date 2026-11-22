@@ -232,7 +232,7 @@ theorem step_coh (sc : Server K V × Cache K V) (op : Op K V) (h : Coh sc.1 sc.2
 
 /-- **Coherence holds at every step of every schedule** of commits, replies, notices and losses,
     in any order.
-    Verifies: FE-001 -/
+    Verifies: FE-001, FE-009 -/
 theorem run_coh (ops : List (Op K V)) :
     ∀ sc : Server K V × Cache K V, Coh sc.1 sc.2 → Coh (run sc ops).1 (run sc ops).2 := by
   induction ops with
@@ -262,7 +262,7 @@ theorem read_current_eq (s : Server K V) (c : Cache K V) (k : K) (v : V) (h : Co
 /-- **Never staler than the last known generation, unlabelled**: an answer served as current is
     stamped with the last known generation, and any other held entry is strictly older and is
     returned labelled with its stamp.
-    Verifies: FE-001 -/
+    Verifies: FE-009 -/
 theorem read_stale_older (s : Server K V) (c : Cache K V) (k : K) (v : V) (g : Nat) (h : Coh s c)
     (hr : read c k = .stale v g) : g < c.known ∧ v = s.hist g k := by
   unfold read at hr
