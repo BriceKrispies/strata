@@ -982,8 +982,10 @@ fields):
 product and the tenant's interface (a new product and the audience group of its soft launch) is a **draft
 set**: a **named, stored** set of drafts, **hashed over its members' snapshot hashes**, previewed as one
 projection and approved once; publishing binds to the **set hash**. It is applied in dependency order:
-**groups and the shell list** (from the interface draft) **first**, then the product drafts (each staged
-within the cap), then **overlays** last. An audience that names a group neither the set nor the tenant
+**newly created groups that nothing live references** first (no member sees a difference, since no element
+names them yet), then the product drafts (each staged within the cap), then, last, **changes to existing
+groups, to the shell list** (shell selection is first-match on audience, so a change there is visible to
+members at once) **and to overlays**. An audience that names a group neither the set nor the tenant
 defines is refused with `ui.audience.unknown-group`, naming the group and the element. If applying stops,
 what was created and not yet granted is unreachable; the owner resumes, or rolls back by removal upgrades in
 reverse order.
@@ -1372,9 +1374,14 @@ A rename or a type change is a sequence of ordinary approved upgrades with expli
 
 1. **Expand.** The new field is added **optional** (adding a required field to a type with records is
    refused, `ExistingData::Reject`, `product.rs:2090-2096`). Its read rule and personal declaration must be
-   the same as or stricter than the source field's (refused otherwise). The same upgrade carries,
-   atomically, the changes that make the product's own operations **write both fields**, and declares the
-   **migration job** (WG-5514).
+   the same as or stricter than the source field's (refused otherwise), and the expand upgrade **raises the
+   old field** to the new field's read rule and personal declaration, kept until contract: a copy is never
+   less protected than the value it came from, and erasure, retention and restriction, which act only on
+   fields declared personal (`erasure.rs`, `retention.rs`, `subject_rights.rs` `hide`), reach both copies.
+   Raising rather than clearing old values as they are copied is chosen because the still-bound screens read
+   the old field until the rebind commit. The raise narrows a live read, so it is in the permission delta and
+   the classification like any other change. The same upgrade carries, atomically, the changes that make the
+   product's own operations **write both fields**, and declares the **migration job** (WG-5514).
 2. **Bulk copy.** The job copies or converts the old field into the new one in batches of `erasure::BATCH`
    records, with a conversion from an **open, platform-released vocabulary** (first: identity, integer to
    text, text to integer, time to date, choice renaming); it is durable and resumable after a crash, has an
@@ -1385,17 +1392,30 @@ A rename or a type change is a sequence of ordinary approved upgrades with expli
    the product (generic record intents, other products, automations, imports, `write-answers`) can make the
    fields differ, and the catch-up passes copy what they changed.
 3. **Freeze, last pass and rebind in one commit** (the chosen design). One owner-approved upgrade, the
-   **rebind** upgrade, does three things in **one commit**: it **freezes** the old field, runs the **last
-   pass** (copying every record whose version is above its mark), and **rebinds** the screens to the new
-   field, with the owner-approved **overlay rebind** steps applied in the same commit. It is accepted only
-   when the job reports **at most one batch** (`erasure::BATCH` records) left, so the commit stays bounded;
-   otherwise it is refused with `migration.not-ready` and the count, and the catch-up passes go on.
-   *Why this and not a separate freeze step*: with a separate freeze first, every record written between
-   the freeze and the rebind would show its pre-freeze value on the still-bound screens (writes would go to
-   the new field only), a window of stale reads members could see; doing all three in one commit leaves no
-   such window. *Fallback*: if writers outside the product keep the count above one batch (the job reports
-   `migration.not-ready` repeatedly), the owner may choose the separate sequence (freeze as its own
-   approved step, then the last pass, then the rebind), accepting the stated stale-read window.
+   **rebind** upgrade, does all of this in **one commit**:
+   - **changes the writers**: it replaces the product's operations, forms and actions with versions that
+     write **only the new field**, and relaxes the old field to **optional** if it was required. Operation
+     steps are validated like any record change (`validate_record`, `operations.rs:618`, `:737`), so a
+     dual-writing operation would hit the freeze, and a required old field would leave no valid write (a
+     create setting it is a change of value). The planner refuses a rebind commit while any of the product's
+     own writers still writes the field being frozen (`migration.writers-remain`, naming them). These writer
+     changes are in the commit's diff, so they appear in the permission delta and the classification;
+   - **freezes** the old field;
+   - runs the **last pass**, computed by the kernel inside the commit, not from a list made at plan time
+     (record writes do not move the schema version, so a plan-time list would miss records written between
+     the job's report and the commit). The commit declares a **Need**: the record events of the type after
+     the event sequence of the job's last report, and those records, so the kernel's coverage holds and
+     nothing is read outside the commit's own snapshot. If more than one batch (`erasure::BATCH`) of records
+     changed since the report, the commit is refused with `migration.not-ready` without loading them;
+     otherwise, for every loaded record where the new field differs from the conversion of the old one, the
+     new field is set to that conversion;
+   - **rebinds** the screens to the new field, with the owner-approved **overlay rebind** steps.
+
+   *Why this and not a separate freeze step*: with a separate freeze first, records written between the
+   freeze and the rebind would show their pre-freeze value on the still-bound screens. *Fallback*: if
+   writers outside the product keep more than one batch changing between reports, the owner may choose the
+   separate sequence (freeze as its own approved step, then the last pass, then the rebind), accepting that
+   window.
 4. **Contract.** A later upgrade removes the old field and may tighten the new one to required; the removal
    guard passes because no published screen names the old field.
 
@@ -1419,10 +1439,13 @@ among them, go through.
   old field is still the bound and written one, and the job is cancelled.
 - **After the rebind commit and before contract**, undoing the rebind needs a **reverse migration**: the
   undo upgrade declares a job copying new to old with the **inverse conversion**, and its own rebind commit
-  lifts the freeze on the old field, freezes the new one, runs the last pass and binds the screens back,
-  by the same rule (at most one batch left). An undo whose conversion has no inverse in the vocabulary
-  (text to integer has one only for values that parse; a choice renaming has one; time to date does not)
-  is refused with `migration.not-invertible`, naming the conversion.
+  does the same four things the other way: changes the product's writers to write only the old field and
+  relaxes the new field to optional, lifts the freeze on the old field and freezes the new one, runs the last
+  pass by predicate under the same Need and the same one-batch bound, and binds the screens back. The reverse
+  destination must be the same as or stricter than its source; since expand raised the old field to the new
+  field's protection, the two are equal and the reverse is legal. An undo whose conversion has no inverse
+  in the vocabulary (time to date has none; text to integer has one only for values that parse), or whose
+  destination would be less protected, is refused with `migration.not-invertible`.
 - **After contract**, the old field is gone; going back is a new restructure.
 
 **The migration event.** Job writes emit an event of kind `migration`. Per consumer: **triggers and
@@ -1715,7 +1738,8 @@ line. Requirements checked by tests are added with those tests:
 | A preview is built from a viewer-scoped redacted snapshot; a widening draft policy shows no extra row | backend tests | WG-5464, WG-5470 |
 | A staged upgrade at the product entity limits commits in stages and members see nothing new before the last; an early operation's only invoker is the reserved staging role | substrate fixtures | WG-5472 |
 | The permission delta reports each source (role permissions, policies, invokers, operation conditions, written types, transition guards, read rules, audiences) and derived-admin changes | kernel fixtures, one per source | WG-5471 |
-| The rebind commit freezes, runs the last pass and rebinds only with at most one batch left; `field.frozen` refuses only a change of value and spares erasure and retention | kernel tests | WG-5514 |
+| The rebind commit changes the product's writers, relaxes and freezes the old field, runs the last pass from the record events since the report (a record written after the report is still copied, or the commit is refused) and rebinds; `field.frozen` refuses only a change of value and spares erasure and retention | kernel tests, and a fixture renaming a required field through every phase with a live writer | WG-5514 |
+| Expand raises the old field to the new field's protection; subject erasure after rebind removes both copies; a reverse migration of a personal field is legal and of a less protected destination refused | kernel tests | WG-5514 |
 | A three-stage upgrade passes `foreign_change` with per-stage pre-release versions; abandon removes what stages created | kernel tests | WG-5472 |
 | Publishing takes the revision id and hash, refuses a mismatch, and re-plans once on a race | backend tests | WG-5471 |
 | A withheld marker appears only for required fields withheld by a read rule | backend test with a restricted subject | WG-5463 |
@@ -1838,6 +1862,18 @@ Each is a Workgraph task under WG-5457 with testable acceptance criteria (Workgr
   content at rest for photos and large uploads (see "Reserved entries")?
 
 ## Answers to the reviews
+
+### Eighth review
+
+Each claim was re-checked against the code; all hold.
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | The rebind commit must change the writers | Confirmed (operation steps go through `validate_record`, `operations.rs:618`, `:737`). Fixed: the rebind commit replaces the product's operations, forms and actions with versions writing only the new field and relaxes the old field to optional; the planner refuses a rebind commit while a product writer still writes the field being frozen (`migration.writers-remain`); the changes are in the permission delta and classification; the reverse migration's commit does the same for the new field; a fixture renames a required field through every phase with a live writer |
+| 2 | The last pass's source | Confirmed. Fixed: the last pass is computed by the kernel inside the commit from a declared Need (the record events of the type after the job's report, and those records), refused with `migration.not-ready` if more than one batch changed; a kernel test writes a record after the report |
+| 3 | The old field stays at its looser protection | Confirmed (erasure, retention and restriction act on personal fields only). Fixed: expand raises the old field to the new field's read rule and personal declaration until contract (chosen over clearing old values, which the still-bound screens read); the raise is in the permission delta; a test erases a subject after rebind and finds both copies gone |
+| 4 | Reverse migration into a looser field | Fixed: the reverse destination must be same or stricter; after the raise at expand the two fields are equal, so the reverse is legal; otherwise `migration.not-invertible`; reverse tests include a personal field |
+| 5 | Draft-set order is member-visible | Confirmed (shell selection is first-match on audience). Fixed: only newly created groups nothing live references go first; changes to existing groups, the shell list and overlays go last |
 
 ### Seventh review
 
