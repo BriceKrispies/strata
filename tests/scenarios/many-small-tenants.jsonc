@@ -1,6 +1,7 @@
 // Many small tenants. The primary tenant and a population of small tenants share one budget.
 // Tenant popularity is skewed, so a few small tenants are hot and most are touched rarely. Each
 // tenant has its own file and header, so header residency and per-tenant overhead show up here.
+// A second node commits to the large tenant and to the most popular small one.
 {
   "name": "many-small-tenants",
   "description": "One large tenant and two hundred small ones under one budget, tenant popularity skewed.",
@@ -18,13 +19,17 @@
     { "op": "create", "object": "crm__contact", "weight": 5, "actor": "editor" },
     { "op": "page", "object": "content__article", "weight": 12, "page-size": 10, "actor": "reader" }
   ],
-  "faults": [],
+  "faults": [
+    { "kind": "foreign-commit", "every": 300, "object": "content__article", "tenant": 0 },
+    { "kind": "foreign-commit", "every": 200, "object": "content__article", "tenant": 1 }
+  ],
   "measures": [
     "store_side.schema_decodes",
     "store_side.loads_by_need",
     "wrapper.resident_bytes",
     "wrapper.hit_rate_by_count",
-    "timing.overall"
+    "timing.overall",
+    "coherence.divergences"
   ],
   "refutation": {
     "criterion": "The arbiter not beating a static split: static budgets with ceilings.",

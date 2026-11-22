@@ -19,11 +19,12 @@
 use crate::rng::{hash_text, Rng};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use strata_kernel::ext::RecordExt;
+use strata_kernel::ext::{RecordExt, TenantStateExt};
 use strata_kernel::testkit;
 use strata_kernel::{
-    Context, ExistingData, FieldId, FieldType, Intent, Need, ObjectTypeId, Principal, PrincipalId,
-    ReadRequest, RecordId, SchemaChange, TenantId, Timestamp, Value,
+    Context, DataSubject, ExistingData, FieldDef, FieldId, FieldType, Intent, Need, ObjectTypeId,
+    PersonalDeclaration, PersonalKind, Principal, PrincipalId, ReadRequest, RecordId,
+    RetentionRule, RetentionStart, SchemaChange, TenantId, Timestamp, Value,
 };
 use strata_storage_api::{execute, Store};
 
@@ -165,7 +166,13 @@ pub trait CorpusTenant: Send + Sync {
     fn ledger_intent(&self, n: u64) -> Option<Intent>;
     /// A data subject whose erasure the tenant can show.
     fn erasure(&self, n: u64) -> Option<Erasure>;
-    /// An additive schema change (a product upgrade).
+    /// Evolve the tenant schema the way it is really evolved (a product upgrade), through the
+    /// handle the tenant was populated through. `None` when the tenant has no such path; it is
+    /// then changed with [`CorpusTenant::schema_change`]. The text says what was done.
+    fn evolve(&self, _n: u64) -> Option<Result<String, String>> {
+        None
+    }
+    /// An additive schema change, for a tenant that has no upgrade path.
     fn schema_change(&self, n: u64) -> Option<Vec<SchemaChange>>;
 }
 
@@ -177,6 +184,9 @@ pub struct NotesLoader;
 pub struct NotesTenant {
     id: TenantId,
     catalogue: Catalogue,
+    store: Arc<dyn Store>,
+    /// The person type carries a personal field (`nick`), so an erasure can be shown.
+    personal: bool,
 }
 
 fn ctx_for(tenant: &TenantId, principal: Principal, now: i64) -> Context {
@@ -199,6 +209,7 @@ impl CorpusLoader for NotesLoader {
         store: Arc<dyn Store>,
         request: &TenantRequest,
     ) -> Result<Box<dyn CorpusTenant>, String> {
+        let shared = store.clone();
         let store = store.as_ref();
         let id = TenantId::new(&request.name).map_err(|e| format!("tenant id: {e:?}"))?;
         store.reset_tenant(&id).map_err(|e| e.to_string())?;
@@ -239,17 +250,51 @@ impl CorpusLoader for NotesLoader {
                 },
             )?;
         }
+        // A personal field on the person type, so that an erasure has something to erase. If the
+        // kernel refuses it the stand-in simply offers no erasure.
+        let personal = step(
+            owner_p.clone(),
+            Intent::ChangeSchema {
+                changes: vec![
+                    SchemaChange::DefineField {
+                        object: testkit::object("person"),
+                        field: FieldDef {
+                            personal: Some(PersonalDeclaration {
+                                kind: PersonalKind::Name,
+                                subject: DataSubject::Field {
+                                    field: testkit::field("nick"),
+                                },
+                                searchable: true,
+                            }),
+                            ..testkit::field_def("nick", FieldType::Str, false)
+                        },
+                    },
+                    SchemaChange::SetRetention {
+                        object: testkit::object("person"),
+                        retention: RetentionRule {
+                            days: 365,
+                            from: RetentionStart::Created,
+                        },
+                    },
+                ],
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
+        )
+        .is_ok();
         let editor = testkit::user(&format!("{}:editor", request.name));
         let people = (request.scale / 10).max(1);
         for i in 0..people {
+            let mut fields =
+                BTreeMap::from([(testkit::field("name"), testkit::text(&format!("P{i}")))]);
+            if personal {
+                fields.insert(testkit::field("nick"), testkit::text(&format!("Nick{i}")));
+            }
             step(
                 editor.clone(),
                 Intent::CreateRecord {
                     object: testkit::object("person"),
-                    fields: BTreeMap::from([(
-                        testkit::field("name"),
-                        testkit::text(&format!("P{i}")),
-                    )]),
+                    fields,
                 },
             )?;
         }
@@ -289,6 +334,8 @@ impl CorpusLoader for NotesLoader {
         Ok(Box::new(NotesTenant {
             id,
             catalogue: Catalogue { objects },
+            store: shared,
+            personal,
         }))
     }
 }
@@ -360,10 +407,41 @@ impl CorpusTenant for NotesTenant {
         None
     }
 
-    fn erasure(&self, _n: u64) -> Option<Erasure> {
+    fn erasure(&self, n: u64) -> Option<Erasure> {
+        if !self.personal {
+            return None;
+        }
+        let person = testkit::object("person");
+        let ids = &self.catalogue.objects.get(&person)?.ids;
+        let id = *ids.get(n as usize % ids.len().max(1))?;
+        let nick = testkit::field("nick");
+        let state = self
+            .store
+            .load(
+                &self.id,
+                &[Need::Record {
+                    object: person.clone(),
+                    id,
+                }],
+            )
+            .ok()?;
+        let plaintext = state
+            .tenant
+            .as_deref()?
+            .record(&person, id)?
+            .get(&nick)
+            .clone();
+        let Value::Str(text) = &plaintext else {
+            return None;
+        };
         Some(Erasure {
-            subject: testkit::principal_id(&format!("{}:writer1", self.id)),
-            probes: Vec::new(),
+            subject: PrincipalId::new(text.clone()).ok()?,
+            probes: vec![Probe {
+                object: person,
+                id,
+                field: nick,
+                plaintext,
+            }],
         })
     }
 

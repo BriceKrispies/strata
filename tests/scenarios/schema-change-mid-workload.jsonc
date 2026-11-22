@@ -1,9 +1,10 @@
-// Schema change mid-workload. A product upgrade changes the tenant's schema twice while
-// readers and writers run. The resident header (schema, members, setting values) must refresh at
+// Schema change mid-workload. The content product is upgraded twice (a later version of its
+// bundle with one more optional field on content__article, through the install path the corpus
+// loader uses) while readers and writers run. The resident header (schema, members, setting values) must refresh at
 // each change, and the schema must be decoded once per generation, not once per read.
 {
   "name": "schema-change-mid-workload",
-  "description": "A product upgrade changes the schema twice mid-run through a second handle; the resident header must refresh and answers must match.",
+  "description": "The content product is upgraded twice mid-run through a second handle; the resident header must decode again after each and answers must match.",
   "modules": ["people", "content"],
   "scale": 1500,
   "length": 3000,

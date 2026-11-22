@@ -9,7 +9,7 @@ use strata_ws_bench::modes::Mode;
 use strata_ws_bench::report::{Latency, Report};
 use strata_ws_bench::rng::{Rng, Zipf};
 use strata_ws_bench::runner::{run, CoherenceLevel, Config};
-use strata_ws_bench::scenario::{strip_jsonc, OpKind, Scenario};
+use strata_ws_bench::scenario::{strip_jsonc, Fault, OpKind, Scenario, SmallTenants};
 use strata_ws_bench::stores::StoreSpec;
 
 fn repo(path: &str) -> PathBuf {
@@ -472,19 +472,77 @@ fn a_restart_is_cold_and_the_stale_cache_that_survives_it_is_caught() {
 }
 
 #[test]
-fn a_fault_that_does_nothing_is_reported_as_ineffective() {
-    // The stand-in tenant offers an erasure with no probe records: it cannot show an effect.
-    let scenario = tiny(r#"[{ "kind": "erasure", "at": 0.5 }]"#);
-    let report = play(&scenario, Mode::None, 2, StoreSpec::Memory);
-    assert_eq!(report.faults_ineffective, 1, "{:?}", report.faults);
-    assert!(!report.faults[0].effective);
-    // The others take effect on the stand-in.
+fn every_fault_takes_effect_on_the_stand_in_and_an_erasure_leaks_nothing_unless_stale() {
     let scenario = tiny(
         r#"[{ "kind": "foreign-commit", "at": 0.2, "object": "note" },
-            { "kind": "restore", "at": 0.5, "object": "note" },
+            { "kind": "restore", "at": 0.4, "object": "note" },
+            { "kind": "erasure", "at": 0.6 },
             { "kind": "schema-change", "at": 0.7 },
             { "kind": "reopen", "at": 0.8 }]"#,
     );
-    let report = play(&scenario, Mode::None, 2, StoreSpec::Sqlite(None));
-    assert_eq!(report.faults_ineffective, 0, "{:?}", report.faults);
+    let none = play(&scenario, Mode::None, 2, StoreSpec::Sqlite(None));
+    assert_eq!(none.faults_ineffective, 0, "{:?}", none.faults);
+    assert_eq!(none.coherence.plaintext_leaks, 0);
+    assert!(none.coherence.erasure_probes_read > 0);
+    let stale = play(&scenario, Mode::Stale, 2, StoreSpec::Memory);
+    assert!(stale.coherence.plaintext_leaks > 0, "{:?}", stale.coherence);
+}
+
+#[test]
+fn a_fault_with_nothing_to_write_to_or_a_tenant_that_is_not_there_is_refused_at_load() {
+    let text = r#"{
+        "name": "bad", "description": "unit", "modules": ["content"],
+        "scale": 10, "length": 10, "skew": 1.0,
+        "mix": [{ "op": "header", "weight": 1 }],
+        "faults": [{ "kind": "foreign-commit", "every": 3, "tenant": 2 }],
+        "measures": ["x"], "refutation": { "criterion": "u", "result": "u" }
+    }"#;
+    let refused = Scenario::parse(text).expect_err("a tenant the scenario lacks");
+    assert!(refused.contains("tenant"));
+}
+
+/// The self-check of the harness: whatever fault a scenario file declares, the stale wrapper must
+/// be caught under it (a divergence, or a plaintext leak after an erasure), and the fault must
+/// take effect with no wrapper. A scenario whose faults could not catch a broken cache fails here.
+#[test]
+fn the_stale_wrapper_is_caught_under_the_faults_of_every_scenario() {
+    for scenario in scenarios().iter().filter(|s| !s.faults.is_empty()) {
+        let mut probe = tiny("[]");
+        probe.name = scenario.name.clone();
+        probe.length = 300;
+        probe.faults = scenario
+            .faults
+            .iter()
+            .map(|f| Fault {
+                object: None,
+                every: f.every.map(|e| e.min(40)),
+                ..f.clone()
+            })
+            .collect();
+        probe.small_tenants = scenario.small_tenants.as_ref().map(|s| SmallTenants {
+            count: 3,
+            scale: 20,
+            skew: s.skew,
+        });
+        probe.validate().expect("the probe scenario");
+        let none = play(&probe, Mode::None, 3, StoreSpec::Memory);
+        assert_eq!(
+            none.coherence.divergences, 0,
+            "{}: {:?}",
+            scenario.name, none.coherence.first
+        );
+        assert_eq!(none.coherence.plaintext_leaks, 0, "{}", scenario.name);
+        assert_eq!(
+            none.faults_ineffective, 0,
+            "{}: {:?}",
+            scenario.name, none.faults
+        );
+        let stale = play(&probe, Mode::Stale, 3, StoreSpec::Memory);
+        assert!(
+            stale.coherence.divergences > 0 || stale.coherence.plaintext_leaks > 0,
+            "{}: the stale wrapper went undetected under {:?}",
+            scenario.name,
+            scenario.faults
+        );
+    }
 }

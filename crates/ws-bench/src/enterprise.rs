@@ -140,6 +140,8 @@ pub struct EnterpriseTenant {
     /// The member that acts as an editor or a reader of a module.
     actors: BTreeMap<(String, Actor), PrincipalId>,
     upgrade: Option<ObjectTypeId>,
+    /// Compiled bundles of the products an upgrade needs, by product id, compiled on first use.
+    products: std::sync::Mutex<BTreeMap<String, strata_corpus::CompiledProduct>>,
     /// What the opening found it could not map, for the log.
     pub unmapped: Vec<String>,
 }
@@ -523,6 +525,7 @@ impl EnterpriseTenant {
             ledger,
             actors,
             upgrade,
+            products: std::sync::Mutex::new(BTreeMap::new()),
             unmapped,
         }))
     }
@@ -737,6 +740,54 @@ impl CorpusTenant for EnterpriseTenant {
             }
         }
         (!probes.is_empty()).then_some(Erasure { subject, probes })
+    }
+
+    /// A product upgrade: the product that owns the upgrade object type is re-installed at a later
+    /// version of its bundle with one more optional field on that type, through the install path
+    /// the loader uses (plan, one change-schema intent, ownership record).
+    fn evolve(&self, n: u64) -> Option<Result<String, String>> {
+        let object = self.upgrade.clone()?;
+        let module = object.as_str().split("__").next()?.to_string();
+        let product = {
+            let mut cache = self.products.lock().ok()?;
+            if !cache.contains_key(&module) {
+                match strata_corpus::compile_product(&CorpusPaths::default(), &module) {
+                    Ok(compiled) => {
+                        cache.insert(module.clone(), compiled);
+                    }
+                    Err(e) => return Some(Err(e.to_string())),
+                }
+            }
+            cache.get(&module)?.clone()
+        };
+        let field = FieldDef {
+            id: FieldId::new(format!("ws_upgrade_{n}")).ok()?,
+            label: format!("Upgrade {n}"),
+            ty: FieldType::Str,
+            required: false,
+            unique: false,
+            default: None,
+            read: None,
+            personal: None,
+        };
+        // Later than any version the file declares, and rising with every upgrade of the run.
+        let version = format!("99.0.{n}");
+        Some(
+            strata_corpus::upgrade_product_with_field(
+                self.store.as_ref(),
+                &self.tenant,
+                &self.owner,
+                TRIAL_NOW + n as i64 * 10,
+                &product,
+                &object,
+                field,
+                &version,
+            )
+            .map(|schema| {
+                format!("product {module} upgraded to {version} (schema version {schema})")
+            })
+            .map_err(|problems| problems.join("; ")),
+        )
     }
 
     fn schema_change(&self, n: u64) -> Option<Vec<SchemaChange>> {

@@ -25,9 +25,9 @@ pub mod text;
 
 pub use catalogue::{Catalogue, HotPerson, RefEdge, TypeEntry};
 pub use load::{
-    check_corpus, compile_corpus, install_product_into, load_corpus, tenant_hash, verify_loaded,
-    workspace_root, CheckReport, CompiledProduct, CorpusPaths, LoadOptions, LoadedCorpus,
-    ProductReport, Verification,
+    check_corpus, compile_corpus, compile_product, install_product_into, load_corpus, tenant_hash,
+    upgrade_product_with_field, verify_loaded, workspace_root, CheckReport, CompiledProduct,
+    CorpusPaths, LoadOptions, LoadedCorpus, ProductReport, Verification,
 };
 pub use populate::{planned_counts, populate, populate_with, PopulateOptions, Progress};
 pub use scale::Scale;

@@ -154,6 +154,8 @@ struct Runner<'a> {
     aliases: BTreeMap<String, String>,
     /// The object type or query the operation in hand is about: which module's actor acts.
     subject: Option<String>,
+    /// The object type each foreign-commit fault writes to, by the fault's index.
+    fault_targets: BTreeMap<usize, ObjectTypeId>,
 }
 
 /// Run `scenario` under `cfg`, populating through `loader`.
@@ -241,6 +243,7 @@ pub fn run(
         timed: std::time::Duration::ZERO,
         aliases: BTreeMap::new(),
         subject: None,
+        fault_targets: BTreeMap::new(),
     };
     runner.play()?;
     let mut report = runner.finish(wall.elapsed().as_secs_f64() * 1e3, populate_ms);
@@ -269,21 +272,23 @@ impl Runner<'_> {
                 .map_err(|e| format!("snapshot: {e}"))?;
             self.snapshot = Some(info.id);
         }
+        self.resolve_fault_targets()?;
         let total: u64 = self.scenario.mix.iter().map(|m| u64::from(m.weight)).sum();
         for i in 0..length {
-            let due: Vec<Fault> = self
+            let due: Vec<(usize, Fault)> = self
                 .scenario
                 .faults
                 .iter()
-                .filter(|f| match (f.at, f.every) {
+                .enumerate()
+                .filter(|(_, f)| match (f.at, f.every) {
                     (Some(at), _) => ((at * length as f64) as usize).min(length - 1) == i,
                     (_, Some(every)) => i > 0 && i % every == 0,
                     _ => false,
                 })
-                .cloned()
+                .map(|(idx, f)| (idx, f.clone()))
                 .collect();
-            for fault in &due {
-                self.apply_fault(fault, i as u64)?;
+            for (idx, fault) in &due {
+                self.apply_fault(*idx, fault, i as u64)?;
             }
             let client = self.rng.below(self.clients.len() as u64) as usize;
             let mut at = self.rng.below(total);
@@ -1060,16 +1065,91 @@ impl Runner<'_> {
         Some(state.tenant.as_deref()?.schema.version.0)
     }
 
-    fn apply_fault(&mut self, fault: &Fault, op: u64) -> Result<(), String> {
+    /// Choose, before the first operation, the object type each foreign commit writes to: the
+    /// fault's own if the tenant can update it, else one the mix reads, then one the mix writes,
+    /// then any of the scenario's modules, then any in the catalogue. A fault with nothing to
+    /// write to is an error of the scenario, raised here and not in the middle of a run.
+    fn resolve_fault_targets(&mut self) -> Result<(), String> {
+        let faults = self.scenario.faults.clone();
+        let mix = self.scenario.mix.clone();
+        let modules = self.scenario.modules.clone();
+        for (idx, fault) in faults.iter().enumerate() {
+            if !matches!(
+                fault.kind,
+                FaultKind::ForeignCommit | FaultKind::Restore | FaultKind::Restart
+            ) {
+                continue;
+            }
+            let t = fault.tenant.unwrap_or(0);
+            let mut names: Vec<String> = fault.object.iter().cloned().collect();
+            for reading in [true, false] {
+                for entry in &mix {
+                    if let (Some(object), true) = (&entry.object, entry.op.is_write() != reading) {
+                        names.push(object.clone());
+                    }
+                }
+            }
+            let catalogue: Vec<String> = self.tenants[t]
+                .catalogue()
+                .objects
+                .keys()
+                .map(|o| o.to_string())
+                .collect();
+            names.extend(
+                catalogue
+                    .iter()
+                    .filter(|o| {
+                        o.split("__")
+                            .next()
+                            .is_some_and(|m| modules.iter().any(|x| x == m))
+                    })
+                    .cloned(),
+            );
+            names.extend(catalogue);
+            let mut found = None;
+            for name in &names {
+                let Some(object) = self.resolve(t, name) else {
+                    continue;
+                };
+                let Some(id) = self.live[t]
+                    .get(&object)
+                    .and_then(|ids| ids.first().copied())
+                else {
+                    continue;
+                };
+                if self.tenants[t].update_fields(&object, id, 0).is_some() {
+                    found = Some(object);
+                    break;
+                }
+            }
+            match found {
+                Some(object) => {
+                    self.fault_targets.insert(idx, object);
+                }
+                None => {
+                    return Err(format!(
+                        "scenario {}: the {:?} fault {idx} has no object type tenant {t} can update; tried {} names",
+                        self.scenario.name,
+                        fault.kind,
+                        names.len()
+                    ))
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_fault(&mut self, idx: usize, fault: &Fault, op: u64) -> Result<(), String> {
         let tid = self.tenants[0].tenant().clone();
         let name = format!("{:?}", fault.kind);
         self.counter += 1;
         self.clock += 10;
         self.subject = None;
+        let mut decodes_before = None;
         let (outcome, effective) = match fault.kind {
-            FaultKind::ForeignCommit => self.foreign_commit(fault),
+            FaultKind::ForeignCommit => self.foreign_commit(idx, fault),
             FaultKind::Restore => {
-                let (marker, marked) = self.foreign_commit(fault);
+                let (marker, marked) = self.foreign_commit(idx, fault);
                 let before = self.revision();
                 let (restored, done) = match self.snapshot {
                     Some(id) => match self.opened.reference.restore_snapshot(&tid, id, None) {
@@ -1098,29 +1178,42 @@ impl Runner<'_> {
             }
             FaultKind::SchemaChange => {
                 let n = self.counter;
-                match self.tenants[0].schema_change(n) {
-                    None => ("the tenant offers no schema change".to_string(), false),
-                    Some(changes) => {
-                        let ctx = self.ctx(0, Actor::Owner);
-                        let before = self.schema_version();
-                        let done = execute(
-                            self.opened.reference.as_ref(),
-                            &Intent::ChangeSchema {
-                                changes,
-                                expected_version: None,
-                                existing: strata_kernel::ExistingData::Reject,
-                            },
-                            &ctx,
-                        );
+                let before = self.schema_version();
+                decodes_before = self.built.wrapper_stats(self.cfg.mode).decodes;
+                // The tenant's own path first (a product upgrade); a stand-in tenant changes its
+                // schema directly.
+                match self.tenants[0].evolve(n) {
+                    Some(Ok(what)) => {
                         let after = self.schema_version();
-                        match done {
-                            Ok(_) => (
-                                format!("schema version {before:?} -> {after:?}"),
-                                matches!((before, after), (Some(b), Some(a)) if a > b),
-                            ),
-                            Err(e) => (format!("refused: {e}"), false),
-                        }
+                        (
+                            format!("{what}; schema version {before:?} -> {after:?}"),
+                            matches!((before, after), (Some(b), Some(a)) if a > b),
+                        )
                     }
+                    Some(Err(e)) => (format!("upgrade refused: {e}"), false),
+                    None => match self.tenants[0].schema_change(n) {
+                        None => ("the tenant offers no schema change".to_string(), false),
+                        Some(changes) => {
+                            let ctx = self.ctx(0, Actor::Owner);
+                            let done = execute(
+                                self.opened.reference.as_ref(),
+                                &Intent::ChangeSchema {
+                                    changes,
+                                    expected_version: None,
+                                    existing: strata_kernel::ExistingData::Reject,
+                                },
+                                &ctx,
+                            );
+                            let after = self.schema_version();
+                            match done {
+                                Ok(_) => (
+                                    format!("schema version {before:?} -> {after:?}"),
+                                    matches!((before, after), (Some(b), Some(a)) if a > b),
+                                ),
+                                Err(e) => (format!("refused: {e}"), false),
+                            }
+                        }
+                    },
                 }
             }
             FaultKind::Reopen => {
@@ -1136,7 +1229,7 @@ impl Runner<'_> {
             FaultKind::Restart => {
                 // The stack is down: nothing reads through it while another handle commits.
                 let stale = self.built.stale.clone();
-                let (marker, marked) = self.foreign_commit(fault);
+                let (marker, marked) = self.foreign_commit(idx, fault);
                 self.opened
                     .reopen_primary()
                     .map_err(|e| format!("restart: {e}"))?;
@@ -1167,7 +1260,22 @@ impl Runner<'_> {
         // A restart is not warmed by a probe: the first operations after it are the measurement,
         // and they are compared like any other.
         if fault.kind != FaultKind::Restart {
-            self.probe_after(&name, op);
+            self.probe_after(fault.tenant.unwrap_or(0), &name, op);
+        }
+        // A resident header must be decoded again after a schema change: the probe above read
+        // the header through the store under test.
+        if fault.kind == FaultKind::SchemaChange && self.cfg.coherence != CoherenceLevel::Off {
+            let after = self.built.wrapper_stats(self.cfg.mode).decodes;
+            if let (Some(b), Some(a), Some(record)) =
+                (decodes_before, after, self.report.faults.last_mut())
+            {
+                record
+                    .outcome
+                    .push_str(&format!("; header decodes {b} -> {a}"));
+                if a <= b {
+                    record.effective = false;
+                }
+            }
         }
         Ok(())
     }
@@ -1177,6 +1285,16 @@ impl Runner<'_> {
     fn erase(&mut self, erasure: crate::corpus::Erasure) -> (String, bool) {
         if erasure.probes.is_empty() {
             return ("the subject has no probe records".to_string(), false);
+        }
+        // The subject records are being read when the request lands: read each through the store
+        // under test, as the workload would have, so that whatever it keeps resident holds them.
+        let subject_tenant = self.tenants[0].tenant().clone();
+        for probe in &erasure.probes {
+            let need = [Need::Record {
+                object: probe.object.clone(),
+                id: probe.id,
+            }];
+            let _ = self.built.store.load(&subject_tenant, &need);
         }
         let ctx = self.ctx(0, Actor::Owner);
         let (mut object, mut after) = (None, None);
@@ -1253,34 +1371,28 @@ impl Runner<'_> {
         }
     }
 
-    /// An update of one of the hottest records through the reference handle; effective when the
-    /// tenant's generation moved.
-    fn foreign_commit(&mut self, fault: &Fault) -> (String, bool) {
-        let name = fault
-            .object
-            .clone()
-            .or_else(|| self.scenario.mix.iter().find_map(|m| m.object.clone()));
-        let Some(name) = name else {
-            return ("no object".to_string(), false);
+    /// An update of one of the hottest records of the fault target through the reference
+    /// handle; effective when the tenant generation moved.
+    fn foreign_commit(&mut self, idx: usize, fault: &Fault) -> (String, bool) {
+        let t = fault.tenant.unwrap_or(0);
+        let Some(object) = self.fault_targets.get(&idx).cloned() else {
+            return ("no target object".to_string(), false);
         };
-        let Some(object) = self.resolve(0, &name) else {
-            return ("no such object".to_string(), false);
-        };
-        let width = self.live[0].get(&object).map_or(0, |ids| ids.len().min(3));
+        let width = self.live[t].get(&object).map_or(0, |ids| ids.len().min(3));
         if width == 0 {
-            return ("no records".to_string(), false);
+            return (format!("no records of {object}"), false);
         }
-        let id = self.live[0][&object][self.rng.below(width as u64) as usize];
-        let Some(fields) = self.tenants[0].update_fields(&object, id, self.counter) else {
+        let id = self.live[t][&object][self.rng.below(width as u64) as usize];
+        let Some(fields) = self.tenants[t].update_fields(&object, id, self.counter) else {
             return (format!("no update field for {object}"), false);
         };
-        let tid = self.tenants[0].tenant().clone();
-        let ctx = self.ctx(0, Actor::Owner);
+        let tid = self.tenants[t].tenant().clone();
+        let ctx = self.ctx(t, Actor::Owner);
         let before = self.generation(&tid);
         let done = execute(
             self.opened.reference.as_ref(),
             &Intent::UpdateRecord {
-                object,
+                object: object.clone(),
                 id,
                 fields,
                 expected_version: None,
@@ -1290,15 +1402,18 @@ impl Runner<'_> {
         let after = self.generation(&tid);
         match done {
             Ok(done) => (
-                format!("foreign commit at revision {}", done.receipt.revision.0),
+                format!(
+                    "foreign commit to {object} in {tid} at revision {}",
+                    done.receipt.revision.0
+                ),
                 before != after,
             ),
-            Err(e) => (format!("foreign commit refused: {e}"), false),
+            Err(e) => (format!("foreign commit to {object} refused: {e}"), false),
         }
     }
 
     /// Read the header and the hottest records straight after a fault, through both handles.
-    fn probe_after(&mut self, fault: &str, op: u64) {
+    fn probe_after(&mut self, t: usize, fault: &str, op: u64) {
         if self.cfg.coherence == CoherenceLevel::Off {
             return;
         }
@@ -1311,22 +1426,31 @@ impl Runner<'_> {
             .collect();
         let mut seen = std::collections::BTreeSet::new();
         for name in names {
-            let Some(object) = self.resolve(0, &name) else {
+            let Some(object) = self.resolve(t, &name) else {
                 continue;
             };
             if !seen.insert(object.clone()) {
                 continue;
             }
-            for id in self.live[0].get(&object).into_iter().flatten().take(4) {
+            for id in self.live[t].get(&object).into_iter().flatten().take(4) {
                 probes.push(vec![Need::Record {
                     object: object.clone(),
                     id: *id,
                 }]);
             }
         }
+        // After an erasure: every record of the erased subject, through the store under test.
+        if fault == "Erasure" {
+            for probe in &self.erased {
+                probes.push(vec![Need::Record {
+                    object: probe.object.clone(),
+                    id: probe.id,
+                }]);
+            }
+        }
         for needs in probes {
             let label = format!("probe after {fault}");
-            self.read_pair(op, 0, 0, OpKind::Header, &label, &needs, false, Some(fault));
+            self.read_pair(op, 0, t, OpKind::Header, &label, &needs, false, Some(fault));
         }
         self.sweep_erased(op);
     }
@@ -1348,7 +1472,22 @@ impl Runner<'_> {
                 .as_deref()
                 .and_then(|t| t.record(&probe.object, probe.id))
                 .map(|record| record.get(&probe.field).clone());
-            if held.as_ref() == Some(&probe.plaintext) {
+            // A leak is plaintext the store under test serves that the reference no longer holds.
+            let reference_held = self
+                .opened
+                .reference
+                .load(&tid, &need)
+                .ok()
+                .and_then(|state| {
+                    state
+                        .tenant
+                        .as_deref()
+                        .and_then(|t| t.record(&probe.object, probe.id))
+                        .map(|record| record.get(&probe.field).clone())
+                });
+            if held.as_ref() == Some(&probe.plaintext)
+                && reference_held.as_ref() != Some(&probe.plaintext)
+            {
                 self.report.coherence.plaintext_leaks += 1;
                 self.diverge(
                     op,

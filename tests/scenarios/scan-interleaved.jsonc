@@ -1,6 +1,6 @@
 // Scan interleaved with point reads. A report job scans whole object types while users read
 // hot records. A scan touches every record once and should not push the hot set out: this is
-// what an admission filter is for.
+// what an admission filter is for. A second node updates the hot articles and renditions.
 {
   "name": "scan-interleaved",
   "description": "Whole-type scans and long pages interleaved with hot point reads, to see whether the scan evicts the hot set.",
@@ -16,12 +16,16 @@
     { "op": "page", "object": "content__block", "weight": 14, "page-size": 100, "skew": 0.0, "actor": "reader" },
     { "op": "get", "object": "assets__rendition", "weight": 20, "within": "hot", "actor": "reader" }
   ],
-  "faults": [],
+  "faults": [
+    { "kind": "foreign-commit", "every": 300, "object": "content__article" },
+    { "kind": "foreign-commit", "every": 500, "object": "assets__rendition" }
+  ],
   "measures": [
     "timing.by_kind.get",
     "wrapper.hit_rate_by_cost",
     "wrapper.resident_bytes",
-    "store_side.loads_by_need"
+    "store_side.loads_by_need",
+    "coherence.divergences"
   ],
   "refutation": {
     "criterion": "The cost-aware TinyLFU and GDSF combination not beating CLOCK clearly on SQLCipher and PostgreSQL: use CLOCK.",
