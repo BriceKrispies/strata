@@ -565,7 +565,7 @@ event delivery.
 - Wall-clock behaviour: CPU, database latency, contention, network delay.
 - Concurrency: operations run one at a time in schedule order.
 - The shell: sessions, cookies, CSRF, the WebSocket relay, the browser.
-- External effects beyond delivered, dropped or retried.
+- External effects: with faults on, publication runs through the backend's own publisher over an in-memory store; what a subscriber does with an event is not modelled.
 - Operations nobody generated or recorded.
 - Parameterised queries, other than through the views that bind their arguments.
 

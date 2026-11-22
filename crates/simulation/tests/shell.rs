@@ -12,7 +12,7 @@ use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_protocol::tenants::load_all;
 use strata_simulation::engine::Scheduled;
-use strata_simulation::engine::{run as run_kernel, Faults as KernelFaults, Outcome, Scenario};
+use strata_simulation::engine::{run as run_kernel, Outcome, Scenario};
 use strata_simulation::faults::{StoreFault, StoreFaults};
 use strata_simulation::journal::replay_journal;
 use strata_simulation::shell::{
@@ -142,7 +142,6 @@ fn the_shell_path_decides_as_the_kernel_does() {
         seed: scenario.seed,
         initial: kernel_seeded(),
         schedule: scenario.schedule.clone(),
-        faults: KernelFaults::default(),
     });
     let answers = shell.trace.last_answers();
     for step in &kernel.steps {

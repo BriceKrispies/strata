@@ -59,7 +59,7 @@ pub fn unmodelled() -> Vec<&'static str> {
         "Wall-clock time: CPU use, database latency, lock contention and network delay are not simulated.",
         "Concurrency: operations run one at a time in schedule order. Interleavings the schedule does not contain are not explored.",
         "The shell around the kernel: sessions, cookies, CSRF checks, the WebSocket relay and the browser are not part of a simulation.",
-        "External effects: delivery of events is simulated as success, drop or retry only; what a subscriber does with an event is not.",
+        "External effects: with faults on, publication runs through the backend's own publisher over an in-memory store; what a subscriber does with an event is not modelled.",
         "Future operations: only the operations in the schedule are executed. Operations nobody generated or recorded are not predicted.",
         "Parameterised queries are compared only for the argument values listed in the report.",
     ]

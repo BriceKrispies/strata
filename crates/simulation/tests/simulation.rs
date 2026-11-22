@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use strata_backend::simulated::Backend;
 use strata_kernel::*;
 use strata_protocol::tenants::load_all;
-use strata_simulation::engine::{run, Faults, Outcome, Scenario, Scheduled, Trace};
+use strata_simulation::engine::{run, Outcome, Scenario, Scheduled, Trace};
 use strata_simulation::journal::{replay_journal, Recorded};
 use strata_simulation::project::{project, Proposal};
 use strata_simulation::shell::{
@@ -48,7 +48,7 @@ fn schedule_of(seed: u64, steps: usize) -> Vec<Scheduled> {
         .clone()
 }
 
-fn scenario(seed: u64, steps: usize, faults: Faults) -> Scenario {
+fn scenario(seed: u64, steps: usize) -> Scenario {
     let initial = seeded();
     let schedule = schedule_of(seed, steps);
     Scenario {
@@ -56,7 +56,6 @@ fn scenario(seed: u64, steps: usize, faults: Faults) -> Scenario {
         seed,
         initial,
         schedule,
-        faults,
     }
 }
 
@@ -90,21 +89,12 @@ fn require_excerpt(existing: ExistingData, before_step: usize) -> Proposal {
 /// Verifies: SIM-001
 #[test]
 fn the_same_scenario_gives_the_same_trace() {
-    // Two runs of each of several scenarios: different seeds, lengths and fault rates, none of
-    // them and heavy ones. Each pair has equal trace hashes and equal final worlds.
-    let rough = Faults {
-        commit_conflict: 300_000,
-        delivery_drop: 400_000,
-    };
+    // Two runs of each of several scenarios, differing in seed and length. Each pair has equal
+    // trace hashes and equal final worlds.
     let mut hashes = BTreeSet::new();
-    for (seed, steps, faults) in [
-        (1, 30, Faults::default()),
-        (2, 80, Faults::default()),
-        (21, 50, rough),
-        (34, 70, rough),
-    ] {
-        let (first, world_a) = run(&scenario(seed, steps, faults));
-        let (second, world_b) = run(&scenario(seed, steps, faults));
+    for (seed, steps) in [(1, 30), (2, 80), (21, 50), (34, 70)] {
+        let (first, world_a) = run(&scenario(seed, steps));
+        let (second, world_b) = run(&scenario(seed, steps));
         assert_eq!(first.hash(), second.hash(), "seed {seed}");
         assert_eq!(world_a.hash(), world_b.hash(), "seed {seed}");
         assert_eq!(first, second, "seed {seed}: the traces themselves differ");
@@ -116,12 +106,8 @@ fn the_same_scenario_gives_the_same_trace() {
         "four different scenarios, four different traces"
     );
 
-    let faults = Faults {
-        commit_conflict: 150_000,
-        delivery_drop: 250_000,
-    };
-    let (first, world_a) = run(&scenario(7, 60, faults));
-    let (second, world_b) = run(&scenario(7, 60, faults));
+    let (first, world_a) = run(&scenario(7, 60));
+    let (second, world_b) = run(&scenario(7, 60));
     assert_eq!(first.hash(), second.hash());
     assert_eq!(world_a.hash(), world_b.hash());
     assert_eq!(first.kernel_version, KERNEL_VERSION);
@@ -135,7 +121,7 @@ fn the_same_scenario_gives_the_same_trace() {
         "and some of it is refused, as real traffic is"
     );
 
-    let (other, _) = run(&scenario(8, 60, faults));
+    let (other, _) = run(&scenario(8, 60));
     assert_ne!(
         first.hash(),
         other.hash(),
@@ -248,14 +234,7 @@ fn neutral_changes(schema: &TenantSchema) -> Vec<(&'static str, Vec<SchemaChange
 /// whether it lands before the first step or in the middle of the schedule.
 #[test]
 fn a_branch_with_a_change_that_changes_nothing_equals_its_baseline() {
-    let scenario = scenario(
-        5,
-        40,
-        Faults {
-            commit_conflict: 100_000,
-            delivery_drop: 100_000,
-        },
-    );
+    let scenario = scenario(5, 40);
     let changes = neutral_changes(&scenario.initial.tenants[&tenant()].schema);
     assert!(changes.len() >= 8);
     for (what, changes) in changes {
@@ -317,7 +296,7 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     let mut diverged = 0;
     for seed in [5, 9, 14] {
         for before_step in [0, 25] {
-            let scenario = scenario(seed, 50, Faults::default());
+            let scenario = scenario(seed, 50);
             let projection = project(
                 &scenario,
                 &require_excerpt(ExistingData::Grandfather, before_step),
@@ -348,7 +327,7 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     assert!(diverged >= 2, "the change diverged only {diverged} times");
     // A change that is refused diverges nowhere, and says so.
     let refused = project(
-        &scenario(5, 50, Faults::default()),
+        &scenario(5, 50),
         &require_excerpt(ExistingData::Reject, 0),
         &mut |_, _, _| true,
     )
@@ -356,7 +335,7 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     assert_eq!(first_difference(&refused.baseline, &refused.branch), None);
     assert_eq!(refused.comparison.first_divergence, None);
 
-    let scenario = scenario(5, 50, Faults::default());
+    let scenario = scenario(5, 50);
     let proposal = require_excerpt(ExistingData::Grandfather, 0);
     let projection = project(&scenario, &proposal, &mut |_, _, _| true).unwrap();
     assert!(projection.change_outcome.accepted());

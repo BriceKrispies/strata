@@ -5,16 +5,14 @@
 //! counterfactual branches run on ([`crate::project`]), where only the kernel's verdicts are
 //! compared, and the verdicts and deltas it reports are the kernel's.
 //!
-//! It is not the deployment. Its [`Faults`] are imitations kept for the Impact Lab's `faults`
-//! option (CT-391): a "commit conflict" decides the same intent again on the same world, and the
-//! "outbox" is a queue of this module's own that drops and retries deliveries, so its conflict
-//! counts, its deliveries and its `events_delivered_once_in_order` invariant are properties of
-//! this module, not of Strata. What the deployment does under those faults is
-//! [`crate::shell`]'s: the backend's own request path, worker and publisher over the store
-//! contract. See `crates/simulation/README.md`.
+//! It is not the deployment, and it injects no faults: a run here is the kernel's verdicts on a
+//! schedule, nothing more. What the deployment does under a lost race, a lost reply, a stopped
+//! process or a failing outbox is [`crate::shell`]'s: the backend's own request path, worker and
+//! publisher over the store contract, with the fault store of [`crate::faults`]. See
+//! `crates/simulation/README.md`.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use strata_kernel::{
     canon, Check, Context, DomainEvent, Effect, ErrorKind, EventBody, Intent, Output, TenantId,
     World, KERNEL_VERSION,
@@ -56,15 +54,6 @@ pub(crate) fn decide(seed: u64, kind: u64, subject: u64, attempt: u64, per_milli
     rng.chance(per_million)
 }
 
-/// Faults the environment injects, in events per million.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Faults {
-    /// A commit loses a race and the intent is decided again against fresh state.
-    pub commit_conflict: u32,
-    /// Delivery of an event to the subscriber fails and is retried later.
-    pub delivery_drop: u32,
-}
-
 /// One intent on the schedule, with the exact context it runs in.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scheduled {
@@ -80,7 +69,6 @@ pub struct Scenario {
     pub initial: World,
     /// Run in order of `context.now`; ties keep their order here.
     pub schedule: Vec<Scheduled>,
-    pub faults: Faults,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,26 +155,7 @@ pub struct Step {
     pub label: String,
     pub context: Context,
     pub intent: Intent,
-    /// How many simulated commit conflicts preceded the decision recorded here.
-    pub conflicts: u32,
     pub outcome: Outcome,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeliveryResult {
-    Delivered,
-    Dropped,
-}
-
-/// The simulated completion of a `Publish` effect.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Delivery {
-    pub at: i64,
-    pub tenant: TenantId,
-    pub seq: u64,
-    pub attempt: u32,
-    pub result: DeliveryResult,
 }
 
 /// Everything needed to run an execution again and to check that it came out the same.
@@ -195,12 +164,10 @@ pub struct Trace {
     pub kernel_version: String,
     pub scenario: String,
     pub seed: u64,
-    pub faults: Faults,
     /// Canonical hash of the initial world. The world itself travels with the scenario.
     pub initial_hash: String,
     pub initial_schema_versions: BTreeMap<TenantId, u64>,
     pub steps: Vec<Step>,
-    pub deliveries: Vec<Delivery>,
     pub final_hash: String,
     pub final_schema_versions: BTreeMap<TenantId, u64>,
     pub final_revisions: BTreeMap<TenantId, u64>,
@@ -266,87 +233,16 @@ pub fn run_with(
 ) -> Result<(Trace, World), Cancelled> {
     let mut world = scenario.initial.clone();
     let mut steps = Vec::new();
-    let mut deliveries = Vec::new();
-    // Per tenant: committed events waiting for delivery, oldest first, with attempts so far.
-    let mut outbox: BTreeMap<TenantId, VecDeque<(u64, u32)>> = BTreeMap::new();
-    let mut delivered: BTreeMap<TenantId, u64> = BTreeMap::new();
 
     let mut order: Vec<usize> = (0..scenario.schedule.len()).collect();
     order.sort_by_key(|i| (scenario.schedule[*i].context.now.0, *i));
     let total = order.len();
 
-    // Deliver waiting events in order until one is dropped. A drop holds back everything
-    // behind it, exactly as an unacknowledged outbox position does.
-    let pump = |at: i64,
-                final_pass: bool,
-                outbox: &mut BTreeMap<TenantId, VecDeque<(u64, u32)>>,
-                delivered: &mut BTreeMap<TenantId, u64>,
-                deliveries: &mut Vec<Delivery>| {
-        for (tenant, queue) in outbox.iter_mut() {
-            while let Some((seq, attempt)) = queue.front().copied() {
-                let subject = seq ^ (tenant.as_str().len() as u64) << 48;
-                let dropped = attempt < 5
-                    && decide(
-                        scenario.seed,
-                        2,
-                        subject,
-                        u64::from(attempt),
-                        scenario.faults.delivery_drop,
-                    );
-                let result = if dropped {
-                    DeliveryResult::Dropped
-                } else {
-                    DeliveryResult::Delivered
-                };
-                deliveries.push(Delivery {
-                    at,
-                    tenant: tenant.clone(),
-                    seq,
-                    attempt,
-                    result: result.clone(),
-                });
-                if dropped {
-                    queue.front_mut().expect("front exists").1 += 1;
-                    if !final_pass {
-                        break;
-                    }
-                } else {
-                    queue.pop_front();
-                    delivered.insert(tenant.clone(), seq);
-                }
-            }
-        }
-    };
-
-    let mut execute =
+    let execute =
         |index: Option<usize>, scheduled: &Scheduled, world: &mut World, steps: &mut Vec<Step>| {
-            let subject = index.map_or(u64::MAX, |i| i as u64);
-            let mut conflicts = 0u32;
-            // A simulated lost race: the decision is discarded and made again. With one writer the
-            // state has not changed, so the second decision equals the first; what the fault shows
-            // is that a retry is harmless.
-            while conflicts < 3
-                && index.is_some()
-                && decide(
-                    scenario.seed,
-                    1,
-                    subject,
-                    u64::from(conflicts),
-                    scenario.faults.commit_conflict,
-                )
-            {
-                let _ = world.step(&scheduled.intent, &scheduled.context);
-                conflicts += 1;
-            }
             let outcome = match world.step(&scheduled.intent, &scheduled.context) {
                 Ok((next, transition)) => {
                     *world = next;
-                    let queue = outbox.entry(scheduled.context.tenant.clone()).or_default();
-                    for effect in &transition.effects {
-                        if let Effect::Publish { seq } = effect {
-                            queue.push_back((*seq, 0));
-                        }
-                    }
                     Outcome::Accepted {
                         revision: transition.delta.new_revision.0,
                         delta_hash: canon::hash_of(&transition.delta),
@@ -374,16 +270,8 @@ pub fn run_with(
                 label: scheduled.label.clone(),
                 context: scheduled.context.clone(),
                 intent: scheduled.intent.clone(),
-                conflicts,
                 outcome,
             });
-            pump(
-                scheduled.context.now.0,
-                false,
-                &mut outbox,
-                &mut delivered,
-                &mut deliveries,
-            );
         };
 
     for (done, index) in order.iter().enumerate() {
@@ -403,62 +291,17 @@ pub fn run_with(
     if let Some(injection) = injection.filter(|injection| injection.before >= total) {
         execute(None, &injection.scheduled, &mut world, &mut steps);
     }
-    // End the closure's borrows of the outbox and the delivery log.
-    #[allow(clippy::drop_non_drop)]
-    drop(execute);
-    let end = steps.last().map_or(0, |step| step.at) + 1;
-    pump(end, true, &mut outbox, &mut delivered, &mut deliveries);
     progress(total, total);
 
-    // Delivery is part of what a run must get right: every committed event reaches the
-    // subscriber exactly once, in order, whatever was dropped along the way.
-    let mut invariants = check_world(&world);
-    let mut delivery_problems = Vec::new();
-    for (tenant, queue) in &outbox {
-        let got: Vec<u64> = deliveries
-            .iter()
-            .filter(|d| d.tenant == *tenant && d.result == DeliveryResult::Delivered)
-            .map(|d| d.seq)
-            .collect();
-        if !queue.is_empty() {
-            delivery_problems.push(format!(
-                "{tenant}: {} event(s) never delivered",
-                queue.len()
-            ));
-        }
-        if got.windows(2).any(|pair| pair[1] != pair[0] + 1) {
-            delivery_problems.push(format!(
-                "{tenant}: delivered out of order or with a gap: {got:?}"
-            ));
-        }
-        let committed = world.tenants.get(tenant).map_or(0, |t| t.event_seq);
-        if got.last().copied().unwrap_or(committed) != committed {
-            delivery_problems.push(format!(
-                "{tenant}: last delivered {:?}, last committed {committed}",
-                got.last()
-            ));
-        }
-    }
-    invariants.push(InvariantResult {
-        id: "events_delivered_once_in_order".into(),
-        statement:
-            "Every committed event is delivered to the subscriber exactly once, in sequence order"
-                .into(),
-        holds: delivery_problems.is_empty(),
-        violation_count: delivery_problems.len(),
-        violations: delivery_problems,
-        class: strata_verification::evidence::Class::Reproduced,
-    });
+    let invariants = check_world(&world);
 
     let trace = Trace {
         kernel_version: KERNEL_VERSION.to_string(),
         scenario: scenario.name.clone(),
         seed: scenario.seed,
-        faults: scenario.faults,
         initial_hash: scenario.initial.hash(),
         initial_schema_versions: versions(&scenario.initial),
         steps,
-        deliveries,
         final_hash: world.hash(),
         final_schema_versions: versions(&world),
         final_revisions: world

@@ -629,6 +629,21 @@ pub fn run_shell_with(
     scenario: &ShellScenario,
     follow: FollowUp<'_>,
 ) -> Result<ShellRun, String> {
+    run_shell_after(deploy, scenario, &[], follow)
+}
+
+/// [`run_shell_with`] over a tenant that already has a history. The `history` is a journal as the
+/// store wrote it (a [`Recording`]'s entries): the fresh process is sent each entry through its
+/// request path at the entry's recorded time, with no faults, before the scenario's faults apply
+/// and its schedule begins. The run then starts from a copy of that tenant, made by the
+/// deployment's own code. An entry the process does not answer as committed at its recorded
+/// revision is an error: the copy would not be the tenant.
+pub fn run_shell_after(
+    deploy: &dyn Deploy,
+    scenario: &ShellScenario,
+    history: &[Recorded],
+    follow: FollowUp<'_>,
+) -> Result<ShellRun, String> {
     let clock = LogicalClock::at(scenario.start);
     let store = Arc::new(FaultyStore::new(
         Arc::new(MemoryStore::new()),
@@ -644,6 +659,26 @@ pub fn run_shell_with(
     ));
     store.arm(true);
     let process = deploy.start(&environment(&store, &clock, &adapters, scenario, 0))?;
+    for entry in history {
+        clock.advance_to(entry.context.now.0);
+        match process.request(&entry.intent, &entry.context) {
+            Answer::Committed {
+                revision,
+                replayed: false,
+                ..
+            } if revision == entry.revision.0 => {}
+            other => {
+                return Err(format!(
+                    "the history does not replay: revision {} was answered {}",
+                    entry.revision.0,
+                    other.verdict()
+                ))
+            }
+        }
+    }
+    if !history.is_empty() {
+        process.committed()?;
+    }
     store.set_faults(scenario.faults.store);
     let mut run = Run {
         deploy,
