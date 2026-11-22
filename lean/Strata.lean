@@ -12,3 +12,6 @@ import Strata.Evolution.Commute
 import Strata.WorkingSet
 import Strata.WorkingSet.Leases
 import Strata.WorkingSet.Arbiter
+import Strata.Client.Cache
+import Strata.Client.Privacy
+import Strata.Client.Queue
