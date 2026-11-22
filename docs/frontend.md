@@ -6,7 +6,7 @@ written there, and how it is tested. This is a design. Its safety properties are
 (`lean/Strata/Client/`), its requirements are in `specifications/frontend.jsonc`, and the work is
 listed at the end in dependency order. The coherence model is the backend working set's
 (`docs/working-set.md`, `lean/Strata/WorkingSet.lean`) seen from outside the server. The design was
-revised after four adversarial reviews; the answers are in the last section, and everything above it
+revised after five adversarial reviews; the answers are in the last section, and everything above it
 is the current design.
 
 ## The recommendation in one page
@@ -291,12 +291,18 @@ The kernel stays `update(state, msg) -> {state, effects}`. New messages: `store_
 
 The browser holds entries stamped `(e, g, x)`, and for the current tenant epoch `e` its known
 generation, its erasure epochs, its **floor** and the time of its last contact. Generations are
-ordered only within a tenant epoch: a restore or a re-created tenant starts a new one, whose counter
-starts again from 1 under a new nonce. On a message of another epoch the browser purges every entry
-and resets its known generation, floor and erasure epochs together, in one transaction, and remembers
-the epoch it left; anything still arriving from a left epoch is ignored (`tenant_epoch_purges`,
-`retired_epoch_ignored`, `rest_same_tenant_epoch`). Without the reset, the new tenant's replies at
-generation 1 fall below the old floor and are all dropped (`restarted_counter_dropped_without_reset`).
+ordered only within a tenant epoch: a restore, a re-created tenant or a lease acquisition rotates the
+nonce and starts a new one, whose counter may start again from 1. The tag `e` is random and unordered,
+so with it the server sends the epoch's **ordinal**, raised at every nonce rotation and never reset.
+On a higher ordinal the browser purges every entry and resets its known generation, floor and erasure
+epochs together, in one transaction; a lower ordinal, or an equal ordinal with a different tag, is
+ignored. No list of left epochs is kept (`tenant_epoch_purges`, `older_epoch_ignored`,
+`rest_same_tenant_epoch`). **Recovery**: whatever arrived before, any answer sent in the server's current
+epoch brings the client to that epoch (`contact_reaches_current_epoch`); after two rotations with
+answers arriving out of order (epoch 2, then a late 1, then 2) the client ends current in epoch 2
+(`out_of_order_epochs_recover`). Without the reset, the new tenant's replies at generation 1 fall below
+the old floor and are all dropped (`restarted_counter_dropped_without_reset`). Every lease failover
+rotates the nonce, so it resets every connected client's cache; its rate is measured in WG-5435.
 Three kinds of message carry stamps, each after a delay the browser cannot measure:
 
 - an **answer to a request** the browser sent, a pong to a ping or a reply to a read, carries the
@@ -306,10 +312,12 @@ Three kinds of message carry stamps, each after a delay the browser cannot measu
   (its last change of a Read policy, or of the teams and roles a policy reads, which changes what
   every principal may read without a new schema version). It is a **contact**, dated by the request's send time, which the
   browser measured itself: however late it arrives, everything newer than its stamp began after that
-  time. A reply also carries the stamp it was read at, which stamps the entry. A view reply is sent
-  `Cache-Control: no-store`, and the kernel ignores a 304 or any reply the HTTP cache answered: a
-  cached reply carries an old stamp, and dating it by a new request would make it a false contact
-  (C6);
+  time. A reply also carries the stamp it was read at, which stamps the entry. A cached answer would
+  carry an old stamp, and dating it by a new request would make it a false contact. `fetch` does not
+  say whether a response came from the HTTP cache, so the driver issues view reads with
+  `cache: 'no-store'`, every request carries a fresh nonce, and the server echoes it in the answer's
+  stamp; the kernel takes an answer as a contact only when the nonce matches the request it is
+  answering (C6);
 - a **frame** (a notice or a heartbeat) carries the stamp it was sent with, its `from`, the floor
   generation and every key touched at any point in `(from, to]` (C2); it carries entries forward and raises what the browser
   knows, but it is **not a contact**, because nothing in it says when it was sent.
@@ -360,7 +368,8 @@ complete, CPY-004).
 
 - **Stamps** on replies (read stamp and sent stamp), receipts, frames and pongs: `e` (a keyed tag of
   the generation nonce), `g` (WG-5389), the erasure epochs of the types concerned, and the floor
-  generation. View replies are `no-store`.
+  generation, the tenant epoch's ordinal, and the nonce the request carried. View replies are
+  `Cache-Control: no-store`.
 - **Erasure epochs per object type, read before opening.** The server keeps a destruction log keyed by
   object type and sealed field, and derives an epoch per type from it: no audience class is
   enumerated (the kernel computes audience classes per result, and individual classes are unbounded).
@@ -370,10 +379,13 @@ complete, CPY-004).
   the browser's known epochs never go down. **Disclosure**: a reader of a type learns that an erasure
   touched that type, not whose data it was. **Cost**: a raised epoch makes browsers refetch the views
   of that type; a purge scoped to the affected records stays an open question.
-- **The floor generation.** A membership, role, restriction (PRV-352) or permission change for a
-  principal raises that principal's access generation; a change of a Read policy, or of the teams and
-  roles a policy reads (which, per `crates/backend/src/aggregates.rs`, changes the schema without a new
-  version), raises the tenant's policy generation, one tenant-wide write rather than one per principal.
+- **The floor generation.** These events, and no others, raise the tenant's **policy generation**, one
+  tenant-wide write rather than one per principal: a change of a Read policy, and a change of the
+  definition of a team or a role that a policy reads (which, per `crates/backend/src/aggregates.rs`,
+  changes the schema without a new version). Adding or removing a member of a team, granting or
+  revoking a role, a restriction (PRV-352) and a permission change raise only the **access generation**
+  of the principals concerned; if team membership raised the policy generation, every member change
+  would purge every browser of the tenant. The purge rate under both is measured in WG-5435.
   Every answer and frame carries the greater of the two; the browser purges everything read below it
   and keeps that floor persisted, so a late reply read before the change is dropped
   (`rest_above_floor`, `contact_floor`). A role change purges and raises the floor, and never lowers a
@@ -383,7 +395,8 @@ complete, CPY-004).
   checked in the same store transaction as a commit: a request held up in the network past the
   gateway's deadline still finds the tombstone and is refused. `fence_holds` models a tombstone that
   outlives every submission of its key, which this retention provides as long as the client never
-  sends a key past its retention (`at_most_once`'s client rule).
+  sends a key past its retention (`at_most_once`'s client rule); a client whose clock is set back could
+  break that rule, which is why the client measures retention on the server's clock (Q4).
 - **Frames chained per connection**, `from` and stamp on each; a heartbeat is a frame with no keys; on
   reconnect with `after = seq` the server replays from the generation recorded with that event, or
   answers `resync`.
@@ -392,7 +405,10 @@ complete, CPY-004).
   restriction notice, evaluation with the schema and members recorded with the event, a `resync` for
   out-of-commit writes, the three undocumented kinds documented; reference-following policies by
   **type-level frames** from `depends_on` (AGG-042), **coalesced per connection within a window** so
-  a hot type costs at most one frame per window, with a measured rate criterion in WG-5435; and
+  a hot type costs at most one frame per window, with a measured rate criterion in WG-5435. Coalescing
+  must not break C2: while a commit is deferred, every frame sent on that connection (the coalesced one
+  and every heartbeat inside the window) names the union of what is deferred over its whole interval,
+  or holds its `to` below the deferred commit; and
   clock-reading or unresolvable views marked **volatile** by the existing aggregates classifier less
   its principal condition, with a negative case.
 
@@ -657,8 +673,8 @@ as another person (nothing of the first); erase a subject while a reader is offl
 `specifications/frontend.jsonc` is an area part. It holds thirteen decisions: D-FE-11 and D-FE-13 are
 the owner's (decided 2026-11-22, D-FE-11 extended the same day to restriction and loss of permission,
 D-FE-13 read as the orphaning state machine); the others are proposals of this design, with no
-decision date and a source saying so. It holds three copy classes and eighteen requirements, FE-001
-to FE-018, milestone 6, each naming Lean theorems with a `Verifies:` line as its check and stated of
+decision date and a source saying so. It holds three copy classes and nineteen requirements, FE-001
+to FE-019, milestone 6, each naming Lean theorems with a `Verifies:` line as its check and stated of
 its model with the model's hypotheses. Requirements whose checks are web tests are added with those
 tests (follow-up 1):
 
@@ -688,7 +704,8 @@ that pins it is WG-5450.
 | Every generation and erasure epoch newer than a current answer's stamp began within the contact bound; no assumption on notices; a bound on the stamp, not the value | `current_recent` |
 | Under complete notices, a current or checked answer is the server's opened value at the known stamp | `current_value`, `run_coh`, `current_answer`, `current_fetch` |
 | A non-current answer is labelled with its generation | `read_stale_older` |
-| Nothing at rest from an older erasure epoch, read below the floor, or from another tenant epoch; hearing any of them purges at once; the floor covers a policy change for every principal | `rest_one_epoch`, `rest_above_floor`, `rest_same_tenant_epoch`, `hear_purges`, `hear_access_purges`, `tenant_epoch_purges`, `retired_epoch_ignored`, `contact_floor` |
+| Nothing at rest from an older erasure epoch, read below the floor, or from another tenant epoch; hearing any of them purges at once; the floor covers a policy change for every principal | `rest_one_epoch`, `rest_above_floor`, `rest_same_tenant_epoch`, `hear_purges`, `hear_access_purges`, `tenant_epoch_purges`, `older_epoch_ignored`, `contact_floor` |
+| Recovery: an answer of the server's current tenant epoch brings the client to it; out-of-order answers across two rotations end current in the newest epoch | `contact_reaches_current_epoch`, `out_of_order_epochs_recover` |
 | A re-created tenant compared with the old epoch's numbers drops everything; with the reset it is kept | `restarted_counter_dropped_without_reset`, `reset_accepts` |
 | A reply read and sent at the current stamp is read back as current | `receipt_read`, `read_after_commit` |
 | Counterexamples: incomplete notice, incomplete notice despite fresh contacts, epoch read after opening, unguarded put, unfloored put, generation alone | `incomplete_notice_serves_stale`, `fresh_contact_still_stale`, `stamp_after_open_serves_erased`, `unguarded_put_resurrects`, `unfloored_put_resurrects` (and `guarded_put_drops`, `floored_put_drops`), `browser_generation_only_serves_erased` |
@@ -796,6 +813,17 @@ record). Server items unblock client items; within the client, the stores preced
   enforced rather than "at the next connection"?
 
 ## Answers to the reviews
+
+### Fifth review
+
+| Item | Answer |
+|---|---|
+| Tenant epoch ordering could leave a client stuck | Fixed: the server sends a monotone epoch ordinal with the tag; the client switches only to a higher ordinal and ignores a lower or equal one with a different tag; the retired list is gone. Recovery is proved in general (`contact_reaches_current_epoch`) and on the review's schedule (`out_of_order_epochs_recover`); FE-019; the ordinal is in WG-5435's stamp and the purge rule in WG-5441 |
+| C6 could not be implemented | Reworded: view reads use `cache: 'no-store'` and the server echoes a per-request nonce, which the kernel checks; WG-5441's negative test is a replayed answer with a stale nonce |
+| Coalescing against C2 | Every frame sent while a commit is deferred names the union of what is deferred over its interval, or holds `to` below it; criterion and test in WG-5435 |
+| Policy generation events | Listed: Read-policy changes and team or role definition changes raise it; team membership, role grants, restrictions and permission changes raise only the members' access generation; purge rate measured in WG-5435 |
+| Tombstone expiry and clocks | Stated: expiry at retention relies on the client rule, which a clock set back could break; the client measures retention on the server's clock |
+| Lease failover resets every client | Stated, with a measured rate in WG-5435 |
 
 ### Fourth review
 

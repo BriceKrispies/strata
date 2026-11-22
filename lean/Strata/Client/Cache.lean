@@ -891,7 +891,7 @@ theorem older_epoch_ignored (c : Cache K V) (e : Nat) (hlt : e < c.ce)
 
 /-- **Recovery across tenant epochs**: whatever arrived before, an answer sent in the server's
     current epoch brings the client to that epoch.
-    Verifies: FE-018 -/
+    Verifies: FE-019 -/
 theorem contact_reaches_current_epoch (s : Server K V) (c : Cache K V) (h : Base s c)
     (t gp xp fp : Nat) : (contactIn c t gp xp fp s.ep).ce = s.ep := by
   unfold contactIn
@@ -915,6 +915,7 @@ theorem contact_reaches_current_epoch (s : Server K V) (c : Cache K V) (h : Base
 def cx0 : Cache Nat Nat :=
   { known := 0, knownX := 0, floor := 0, contact := 0, ce := 0, entries := fun _ => none }
 
+/-- Verifies: FE-019 -/
 theorem out_of_order_epochs_recover :
     let c1 := contactIn cx0 5 10 0 0 2
     let c2 := contactIn c1 6 3 0 0 1
