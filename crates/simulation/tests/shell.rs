@@ -276,12 +276,12 @@ fn a_process_stopped_before_its_write_commits_nothing_and_the_retry_commits_once
 fn a_commit_whose_answer_is_lost_is_answered_from_its_key() {
     // fm: the process stops after the write and before it answers. The client's retry finds the
     // first result under its key; nothing is committed twice.
-    let clean = run(&backend(), &editorial(8, 20, Faults::default()));
+    let clean = run(&backend(), &editorial(8, 30, Faults::default()));
     let lost = run(
         &backend(),
         &editorial(
             8,
-            20,
+            30,
             store_faults(StoreFaults {
                 commit_reply_lost: 300_000,
                 ..StoreFaults::default()
