@@ -649,64 +649,64 @@ Not proved, each with the follow-up that carries it:
 Each is a Workgraph task under WG-5415 with its acceptance criteria. Server items unblock client items;
 within the client, the stores precede the queue.
 
-1. **Evidence check indexes web tests.** `scripts/gate-evidence.mjs` indexes `web/test/**/*.test.js`
+1. (WG-5434) **Evidence check indexes web tests.** `scripts/gate-evidence.mjs` indexes `web/test/**/*.test.js`
    tests whose leading comment holds `Verifies: <REF>` and reads `node --test` results recorded by
    the gate. *Accepted when*: a requirement whose `checkedBy` names a web test passes with a passing
    result and fails with a failing or missing one (negative fixtures in
    `scripts/gate-evidence.test.mjs`); `specc lint` accepts the name form.
-2. **Stamps, notices and the erasure epoch on the server.** Needs WG-5389. View replies, receipts and
+2. (WG-5435) **Stamps, notices and the erasure epoch on the server.** Needs WG-5389. View replies, receipts and
    `welcome`/`pong`/`event` frames carry `{e, g, x}`; events carry `from`/`to`; out-of-commit changes
    send `resync`; key destruction raises `x` in its transaction. *Accepted when*: a conformance case
    shows a view reply's stamp is the generation it was read at; destroying a subject key raises `x`
    and changes no `g`; a restore changes `e`; a commit invisible to a subscriber sends it no frame and
    the next frame's `from` covers it.
-3. **`expected-epoch` on write contracts.** *Accepted when*: an update carrying a stale epoch tag
+3. (WG-5436) **`expected-epoch` on write contracts.** *Accepted when*: an update carrying a stale epoch tag
    with a matching version is refused `conflict` (test at the boundary), and a correct one commits.
-4. **Pure `cache.js` in the kernel**, the JavaScript of `Strata.Client.Cache`. Needs 2. *Accepted
+4. (WG-5441) **Pure `cache.js` in the kernel**, the JavaScript of `Strata.Client.Cache`. Needs 1 and 2. *Accepted
    when*: kernel tests from FE-001, FE-009 and FE-002's wording (current only at `known`; older
    labelled; receipt read back; notice carry-forward; purge on new `x`; delete on membership notice)
    pass, and the kernel imports no storage or crypto API (source scan).
-5. **Differential check of the client models.** `lean/Main.lean` gains the client operations; a Node
+5. (WG-5448) **Differential check of the client models.** `lean/Main.lean` gains the client operations; a Node
    test runs `cache.js` and `queue.js` and the Lean executable on the same generated schedules.
    Needs 4 and 9. *Accepted when*: 10,000 seeded schedules agree, and a mutant `cache.js` that skips
    the stamp check is caught.
-6. **Contracts say whether they may be queued.** A contract property (`offline: "queue"`, default
+6. (WG-5437) **Contracts say whether they may be queued.** A contract property (`offline: "queue"`, default
    never), generated into `web/src/generated/contracts.js`. *Accepted when*: specc refuses the
    property on the never-queued kinds (D-FE-6) with a negative fixture, and the generated module
    lists exactly the marked contracts.
-7. **Key share and encrypted IndexedDB.** `POST /api/session/device-key` in the identity service and
+7. (WG-5442) **Key share and encrypted IndexedDB.** `POST /api/session/device-key` in the identity service and
    gateway; the key and storage drivers; partitions; sign-out and expiry erasure; offline kept as an
    opt-in a realm can forbid. Needs 1. *Accepted when*: Playwright reads IndexedDB and finds no
    plaintext; after sign-out no record decrypts with any key present (FE-005's check in the browser);
    a second principal on the profile reads nothing; a revoked share makes records unreadable after a
    reload.
-8. **Leader tab.** Web Locks, BroadcastChannel, bfcache release. Needs 7. *Accepted when*: with two
+8. (WG-5444) **Leader tab.** Web Locks, BroadcastChannel, bfcache release. Needs 7. *Accepted when*: with two
    tabs one socket is open; closing the leader moves the socket within one lock grant; notices reach
    the follower; no record data crosses the channel (test inspecting messages).
-9. **The write queue.** Durable queue, keys drawn once, decided stamps, drain order per record, the
+9. (WG-5447) **The write queue.** Durable queue, keys drawn once, decided stamps, drain order per record, the
    conflict classes and their screens, outcome unknown for creates past the retention less one
    hour. Needs 3, 6, 7, 8. *Accepted when*: the headless fault runs of the offline table pass,
    including reload while `sending` (applied once) and an old create (not resent, "outcome unknown"
    shown).
-10. **Service worker and the shell.** `/sw.js`, the content-addressed caches, `GET /app-shell` with
+10. (WG-5445) **Service worker and the shell.** `/sw.js`, the content-addressed caches, `GET /app-shell` with
     the page's CSP, offline reload, update flow, the Trusted Types acceptance of `/sw.js`. Needs 7
     for offline mode. *Accepted when*: Playwright reloads offline and reaches the shell; no
     bootstrapped page or `/api/view` reply is ever in the Cache API (test enumerating caches); a new
     build waits until the drain finishes.
-11. **In-house QR encoder.** Needs nothing. *Accepted when*: the ISO/IEC 18004 worked example and
+11. (WG-5438) **In-house QR encoder.** Needs nothing. *Accepted when*: the ISO/IEC 18004 worked example and
     frozen fixtures for versions 1 to 10 match; `uqr` is gone from `package.json`.
-12. **Vendored fonts and the bundle check.** Needs nothing. *Accepted when*: the fonts load from
+12. (WG-5439) **Vendored fonts and the bundle check.** Needs nothing. *Accepted when*: the fonts load from
     `web/src/fonts`; the `@fontsource-variable/*` packages are gone; a script fails the build when the
     bundle holds a module from `node_modules`, with a negative fixture.
-13. **Headless uiScenarios.** The Node runner, the vnode role table, the step interpreter, the fault
+13. (WG-5443) **Headless uiScenarios.** The Node runner, the vnode role table, the step interpreter, the fault
     layer. Needs 4 for cache-aware runs, nothing for the first run. *Accepted when*: every scenario
     runs headlessly with its browser-only steps reported as skipped with a reason; a seeded fault run
     of `ui-reconnect-catches-up` passes; deliberately breaking the kernel's reconnect fails it.
-14. **Web Components.** The property channel in `dom.js`, `<strata-qr>`, the connection indicator
+14. (WG-5446) **Web Components.** The property channel in `dom.js`, `<strata-qr>`, the connection indicator
     with the queue count, the form-associated record picker. Needs 11 for the QR element.
     *Accepted when*: axe passes on the desk pages; the record picker submits through the native form
     and its validity shows as `:invalid`; the uiScenarios' role queries find it.
-15. **Structured clone of the view model once.** *Accepted when*: the driver posts the string it
+15. (WG-5440) **Structured clone of the view model once.** *Accepted when*: the driver posts the string it
     compared, the main thread parses it, and a kernel test shows an unchanged model posts nothing.
 
 ## Open questions
