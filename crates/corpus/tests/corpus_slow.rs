@@ -22,7 +22,7 @@ fn built(store: &dyn strata_storage_api::Store, seed: u64) -> strata_corpus::Bui
         store,
         products(),
         &LoadOptions::default(),
-        &PopulateOptions::new(Scale::Small, seed),
+        &PopulateOptions::new(Scale::Tiny, seed),
     )
     .unwrap_or_else(|e| panic!("{e}"))
 }

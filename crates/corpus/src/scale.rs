@@ -1,10 +1,12 @@
-//! The three scales, and the share each object type takes of a population.
+//! The scales, and the share each object type takes of a population.
 
 use std::fmt;
 use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Scale {
+    /// A few hundred records, every type present: for tests that need a populated tenant fast.
+    Tiny,
     Small,
     Medium,
     Large,
@@ -15,6 +17,7 @@ impl Scale {
     /// of this, with a floor (see [`Scale::floor`]), so the total is a little above it.
     pub fn target(self) -> u64 {
         match self {
+            Scale::Tiny => 300,
             Scale::Small => 3_000,
             Scale::Medium => 30_000,
             Scale::Large => 130_000,
@@ -25,6 +28,7 @@ impl Scale {
     /// reference pools are never empty.
     pub fn floor(self) -> u64 {
         match self {
+            Scale::Tiny => 2,
             Scale::Small => 4,
             Scale::Medium => 6,
             Scale::Large => 10,
@@ -33,6 +37,7 @@ impl Scale {
 
     pub fn name(self) -> &'static str {
         match self {
+            Scale::Tiny => "tiny",
             Scale::Small => "small",
             Scale::Medium => "medium",
             Scale::Large => "large",
@@ -51,11 +56,12 @@ impl FromStr for Scale {
 
     fn from_str(text: &str) -> Result<Self, String> {
         match text {
+            "tiny" => Ok(Scale::Tiny),
             "small" => Ok(Scale::Small),
             "medium" => Ok(Scale::Medium),
             "large" => Ok(Scale::Large),
             other => Err(format!(
-                "{other:?} is not a scale; use small, medium or large"
+                "{other:?} is not a scale; use tiny, small, medium or large"
             )),
         }
     }
