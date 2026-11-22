@@ -5,7 +5,7 @@ primitives, the patterns and how products extend them, the app shell and templat
 that turns data into interface, interaction, wireframes, who sees what (public and private, role by
 role), the layouts a tenant arranges, how all of it is versioned, and the loop in which an agent
 builds a tenant's screens while the tenant watches. This is a design. Its requirements are in
-`specifications/design-system.jsonc` (DS-001 to DS-018, D-DS-1 to D-DS-24), the properties that can
+`specifications/design-system.jsonc` (DS-001 to DS-018, D-DS-1 to D-DS-27), the properties that can
 be stated precisely are proved in Lean (`lean/Strata/UI/`), and the work is listed at the end in
 dependency order, each item a Workgraph task under WG-5457. It was revised after three adversarial
 review rounds; the answers are in the last section, and everything above it is the current design.
@@ -63,6 +63,10 @@ D-DS-* is a proposal of this design.
   upgrades bound to the diff the owner saw (`approve_applies_held`); a bounded, typed field copy for
   restructures; diagnostics that point into the product file.
 - **Product versions are ordered apart from platform releases; large installs are staged** (D-DS-16).
+- **Reserved for the enterprise work** (D-DS-25 to D-DS-27): a task inbox, decision form and `decide`
+  action for WG-5496, a process timeline for WG-5507, an acting-as indicator for WG-5499; class keys that
+  stay shareable under principal attributes and time-bound grants; display types neutral to WG-5494's
+  exact numbers and civil dates.
 
 ## Where the framing should change
 
@@ -273,6 +277,9 @@ A pattern is a composition of primitives bound to a kind of data. It is what an 
 | `stat-tile` | an aggregate or a count | one number with its label and unit | `label`, `unit`, `display` |
 | `aggregate-bars` | an aggregate grouped by a field | a ranked bar list | `label`, `limit` |
 | `filter-bar` | the screen's filter state | controls that set query parameters shared by the screen's sections | `filters` |
+| `task-inbox` (reserved) | the platform source `tasks` (WG-5496's pending-for-me contract) | the viewer's open human tasks, with claim, release and reassign, opening a `decision-form` | `columns`, `group` |
+| `decision-form` (reserved) | one task of the `tasks` source | the task's subject (a reference), its declared outcomes as buttons and an optional comment, submitted by a `decide` action | `subject`, `comment` |
+| `process-timeline` (reserved) | a list section over WG-5507's run and step objects | a run's steps in order with state, actor (person), start and end times | `run`, `step`, `state`, `actor`, `start`, `end` |
 | `markdown-block` | nothing (static text in props), or a `markdown` field | prose blocks | `text` |
 | `link-list` | nothing: screens of the tenant | links to screens by id | `links` |
 | `nav-menu` | navigation entries | a navigation group | `group` |
@@ -305,6 +312,14 @@ audience (`[{ "audience": { "groups": ["staff"] }, "shell": "rail" }, { "audienc
 "top-nav" }]`); the first whose audience holds the viewer is used (`select_sees`, `select_first`). The
 list must end with an entry whose audience holds everyone the app is for, or the kernel refuses it
 (`ui.shell.uncovered`). A product never sets the shell.
+
+**The acting-as indicator (reserved in the shell contract).** Every shell variant has a slot
+`header.actingAs`, filled by the platform, never by a product or an overlay, whenever the session's
+effective principal differs from the person who signed in (delegated acting-as, WG-5499): a persistent
+banner naming both people ("You are acting for Ada Lovelace"), announced once in a polite live region,
+with a "Stop acting" control, drawn above everything else in the header and in `bottom-tab` and
+`full-bleed` shells too (as a top bar). No tenant setting or overlay can hide it. Until WG-5499 exists
+the slot is empty.
 
 **Screen variants (D-DS-20).** A route may have an ordered list of screen variants, each with an
 audience, its own template, its own composition and its own content lint. The variant served is the
@@ -354,11 +369,11 @@ the field types it applies to, its props, and what the server must provide.
 | `text` | str | the text; `multiline` keeps line breaks | |
 | `rich-text` | str with `markdown` in the view section | prose blocks | `blocks` (exists) |
 | `datetime` | time | `<time datetime>`, `relative` ("3 hours ago", absolute in the tooltip) or `absolute` ("22 Nov 2026, 14:05"), in the request language and the realm's time zone; the kernel relabels relative times on its heartbeat timer | |
-| `date` | time | the day only | |
+| `date` | time (and, when WG-5494 adds it, a civil date type) | the day only; a civil date is formatted as itself, never converted through a UTC instant | |
 | `duration` | int (seconds) | "2 h 5 min" | |
 | `count` | int | grouped digits, or compact ("1.2k") | |
-| `number` | int | grouped digits with a declared scale (an int of hundredths shown as 12.50) | |
-| `money` | int (minor units) | `Intl.NumberFormat` currency; the currency is a prop or names a sibling field | |
+| `number` | int with a declared scale (and, when WG-5494 adds it, a decimal type) | grouped digits; the formatter takes the value as an exact decimal string and never as a floating-point number | |
+| `money` | int of minor units with a currency (and, when WG-5494 adds it, a money type) | `Intl.NumberFormat` currency style, fed an exact decimal string; currency, scale and rounding mode come from the field's type when it has them, otherwise from props (`currency` as a literal or a sibling field, `scale`, `rounding`, default half-even) | |
 | `percent` | int | with a declared scale | |
 | `boolean` | bool | "Yes"/"No", a check mark with text, or a switch's state | |
 | `status` | str (workflow state or choice) | a badge; each value has a label and a tone (`neutral`, `info`, `success`, `warning`, `danger`) | |
@@ -567,6 +582,7 @@ A binding names what a widget shows. The kinds, each with its server contract:
 | `record-form` | a single section of form definitions and a list section of their field records | the operation that takes the answers | at most 100 fields per definition |
 | `action` | an action of the screen | the operation | |
 | `source` | `inbox`, `navigation` | the platform | |
+| `source` (reserved) | `tasks`: the viewer's human tasks (WG-5496) | the platform | the contract's own page bound |
 | `static` | nothing | | |
 | `placeholder` | nothing yet; a sample shape | | drafts only |
 
@@ -1277,6 +1293,90 @@ Exegra's agent interface (`C:\dev\exegra\docs\agent-interface.md`): one envelope
 positions. The showcase's live driver (`tests/corpus/showcase/live.mjs`) shows every step can go
 through public routes; the corpus loader's staged install is D-DS-16 by hand.
 
+## Reserved entries and the enterprise work they wait for
+
+The enterprise sweep (WG-5484) found needs the platform's backend does not meet yet. The design reserves
+their interface shape now, so each becomes a catalogue **minor** change when its backend lands, and
+states what it relies on. A **reserved** catalogue entry has its schema and examples from the first
+catalogue version and the status `reserved`; the kernel refuses a published composition that uses one
+(`ui.catalogue.reserved`, naming the backend task), and a draft may hold it only as a placeholder.
+
+**Human tasks: the task inbox, the decision form and the `decide` action** (waits for WG-5496). Today a
+tenant action can only invoke an operation (`UiAction`, `crates/model-core/src/types.rs:9700`), and
+`approve-workflow-step` is a gateway route (`crates/bff/src/routes.rs`) the interpreter never calls.
+Reserved:
+
+- a platform source **`tasks`**, bound to WG-5496's pending-for-me contract;
+- the **`task-inbox`** pattern over it, with claim, release and reassign as actions on each task;
+- the **`decision-form`** pattern for one task: the task's subject as a reference, its declared outcomes
+  as buttons, an optional comment;
+- a new **action kind `decide`** in the `ui-action` union, beside today's operation action:
+  `{ "kind": "decide", "task": "row.id", "outcome": "<one declared outcome>", "comment": "form.<field>" }`.
+
+The shape assumes only what WG-5496's acceptance criteria name: a list of the viewer's open tasks with an
+id, a title, a subject reference, whether the viewer is the assignee or a candidate, and an optional due
+time; claim, release and reassign; and a decision with an outcome from the task's declared set and an
+optional comment. It assumes nothing about escalation, deadlines enforced by the platform, delegation of
+tasks or bulk decisions; those would be further minor additions. Who sees a task is the backend's
+assignee expression, evaluated by the server for the pending-for-me read, so the inbox is a data
+audience like any other and the admin rules apply unchanged: a `decide` action is not admin by itself,
+and the task's operation's own effects are classified by its definition.
+
+**Process timeline** (waits for WG-5507). Runs and steps live in the job store, not in tenant records,
+so nothing can bind to them today. Reserved: the **`process-timeline`** pattern, bound to a list section
+over WG-5507's run and step object types (state, actor, start and end times), ordered by step start.
+Until the projection exists **nothing renders**: the entry is reserved, a published screen cannot use it,
+and a builder may keep a placeholder for it in a draft. A run's status can be shown meanwhile only
+through fields a product's own operations write to its records.
+
+**Audience classes under principal attributes and time-bound grants** (WG-5500, WG-5499). Any condition
+that names `principal` or `now` makes a data read's audience class individual (`audience.rs` `scan`), so
+such reads are never shared. The interface stays shareable because of D-DS-24, and the rule is stated:
+
+- **A class key holds only the screen's deciding groups and builder status.** Nothing that depends on a
+  principal attribute, on the clock, on an individual grant, or on team membership may enter it.
+- Principal attributes, time-bound grants and conditions naming `principal` or `now` act only in the
+  **per-request narrowing** of a class's cached part by the viewer's data audiences, and in the data
+  reads themselves; they never split the class cache.
+- Declared audiences name roles and groups only. If audiences ever need attributes, they will be a new
+  group kind evaluated per request in the narrowing step, not a class dimension.
+- A time-bound grant that starts or ends must raise the access generation of the principals concerned
+  at that moment (so browsers purge and read their new manifest, D-FE-12); the design relies on WG-5499
+  doing that and does not poll clocks itself.
+
+**Teams and invitations change the schema without a new version** (`put_team` and `put_invitation`
+write `PutSchema`, `crates/kernel/src/transition.rs`). The design relies on the following, and on
+nothing keyed by the whole schema's version or hash:
+
+- the gateway's interface definition cache and class cache are keyed by a hash of the **interface-relevant
+  parts** of the schema (interface elements, groups, and the object types, policies, queries, views and
+  operations their bindings name), which excludes teams and invitations, so a membership change does not
+  invalidate them;
+- a viewer's roles, and so their groups and class, are computed **per request** with `roles_of`, which
+  includes team roles, so a team change takes effect at the viewer's next request;
+- a team membership or definition change raises the access generation of the principals concerned
+  (D-FE-12, WG-5435), so their browsers purge and read the manifest again;
+- the held-upgrade digest covers the product's diff, which never contains teams or invitations;
+- if WG-5500 moves teams and invitations out of the schema document, none of this changes.
+
+**Exact numbers and civil time** (WG-5494). The display types do not lock in a representation: `number`
+and `money` format an exact decimal string (never a floating-point number), take currency, scale and
+rounding from the field's type once it has them and from props until then, and `date` formats a civil
+date as itself rather than through a UTC instant. Each display type's list of accepted field types is
+additive, so WG-5494's decimal, money, date and duration types are a minor change to the catalogue.
+
+**Field work offline: named gaps.** None of these falls out of the existing design, and each waits for
+a decision:
+
+- a **work pack** (a declared set of views downloaded for use offline beyond a session) waits for the
+  realm opt-in of D-FE-11 to be extended to a declared pack element and its size bound;
+- a **camera and photo queue** waits for a decision to queue file content at rest in the browser
+  (encrypted, under a stated quota), which D-FE-5's queue of intents does not cover;
+- a **large-file upload queue** waits for a resumable upload contract in the file store (B-14) and the
+  same decision on queued file content.
+
+**Acting as another person** (WG-5499): the shell's `header.actingAs` slot is reserved (see "Layer 4").
+
 ## Governance
 
 - **The gallery** (`/design`, builder-only) draws every catalogue example in every state and every
@@ -1345,7 +1445,7 @@ platform admin role (WG-5474) and gap 6's reference coercion (in WG-5466).
 
 `specifications/design-system.jsonc` is an area part (`AREA_PARTS` in `scripts/split-spec.mjs`: ids that
 are `ds-` and a number, or start `d-ds-`; the behaviour-model ids `ds-save`, `ds-open` and so on are not
-in it). It holds twenty-four decisions: D-DS-1 to D-DS-6 and D-DS-20 to D-DS-22 are the owner's, decided
+in it). It holds twenty-seven decisions: D-DS-1 to D-DS-6 and D-DS-20 to D-DS-22 are the owner's, decided
 2026-11-22; the others are proposals, with a source saying so. It holds eighteen requirements, DS-001 to
 DS-018, milestone 7, each stated of its Lean model and checked by the theorems that carry its `Verifies:`
 line. Requirements checked by tests are added with those tests:
@@ -1449,6 +1549,8 @@ Each is a Workgraph task under WG-5457 with testable acceptance criteria (Workgr
 24. (WG-5474) **A platform admin role products may name (showcase gap 2, backend half).** No dependency.
 25. (WG-5475) **The showcase re-expressed and built by an agent script: the acceptance target.** Needs
     10, 13, 14, 16, 17, 18, 21, 22, 23, 24.
+26. (WG-5511) **Task inbox, decision form and the `decide` action.** Needs WG-5496, 11, 9.
+27. (WG-5512) **Process timeline pattern.** Needs WG-5507, 11.
 
 ## Open questions
 
@@ -1459,8 +1561,22 @@ Each is a Workgraph task under WG-5457 with testable acceptance criteria (Workgr
 - Should tenants upload fonts, with a server-side font sanitiser?
 - Should product segments move inside the schema change, so a step is atomic for its segments too?
 - Collaborative editing (a named gap): which shape, if any, should the platform offer?
+- Field work offline: should a realm be able to declare a work pack, and should the browser queue file
+  content at rest for photos and large uploads (see "Reserved entries")?
 
 ## Answers to the reviews
+
+### Enterprise sweep (WG-5484)
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | No task inbox or approval pattern | Confirmed (`UiAction` invokes operations only; `approve-workflow-step` is a gateway route the interpreter never calls). Reserved: the `tasks` source, `task-inbox`, `decision-form` and a `decide` action kind, assuming only WG-5496's named contracts |
+| 2 | No process timeline | Confirmed (runs and steps are in the job store). Reserved `process-timeline` over WG-5507's projection; nothing renders until it exists |
+| 3 | Audience classes under ABAC and time-bound grants | Confirmed that principal or clock conditions make reads individual. The interface stays shareable: class keys hold only deciding groups and builder status; attributes, time and individual grants act only in per-request narrowing; time-bound grant boundaries must raise the access generation (WG-5499) |
+| 4 | Teams and invitations change the schema without a version | Confirmed (`put_team`, `put_invitation` write `PutSchema`). The interface caches are keyed by a hash of interface-relevant parts excluding teams; roles are computed per request; team changes raise the access generation; the held digest never contains teams |
+| 5 | Money and number over scaled ints | Fixed: exact decimal strings, currency, scale and rounding from the type when it has them, civil dates formatted as themselves, additive accepted types |
+| 6 | Field work offline | Named as gaps with the decision each waits for (work pack, photo queue, large-file upload queue) |
+| 7 | Acting-as indicator | Reserved `header.actingAs`, filled by the platform, not hideable |
 
 ### Third review (four directions)
 
