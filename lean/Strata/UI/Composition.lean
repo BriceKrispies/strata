@@ -2,8 +2,8 @@
 Compositions and wireframe fidelity (docs/design-system.md, "Screens as compositions",
 "Wireframes and fidelity" and "Tenant-arranged layouts").
 
-A screen (a published body, a draft body, or a product screen as a tenant arrangement leaves it) is a
-template and a list of widgets. A widget has an id, unique in its screen, by which an arrangement
+A screen (a published body, a draft body, or a product screen as a tenant overlay leaves it) is a
+template and a list of widgets. A widget has an id, unique in its screen, by which an overlay
 addresses it; a pattern of the catalogue; the region it is placed in; and a binding:
 
 - `placeholder`: a wireframe placeholder, drawn from its sample shape, naming nothing;
@@ -40,7 +40,7 @@ Proved:
   catalogue and schema leaves a valid screen with distinct ids (`orphan_valid`), removes only those
   (`orphan_removes_only_failing`), and removes nothing from a screen that still passes (`orphan_keeps_valid`).
 
-Not modelled: the content of props beyond what `accepts` decides, arrangement operations other than
+Not modelled: the content of props beyond what `accepts` decides, overlay operations other than
 dropping a widget, and the screens' visibility (Visibility.lean). No `sorry`, no added axioms.
 -/
 
