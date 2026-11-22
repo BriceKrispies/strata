@@ -6,7 +6,7 @@ written there, and how it is tested. This is a design. Its safety properties are
 (`lean/Strata/Client/`), its requirements are in `specifications/frontend.jsonc`, and the work is
 listed at the end in dependency order. The coherence model is the backend working set's
 (`docs/working-set.md`, `lean/Strata/WorkingSet.lean`) seen from outside the server. The design was
-revised after three adversarial reviews; the answers are in the last section, and everything above it
+revised after four adversarial reviews; the answers are in the last section, and everything above it
 is the current design.
 
 ## The recommendation in one page
@@ -180,7 +180,7 @@ transactions), IndexedDB, the Origin Private File System (no transactions across
 
 | Store | Key | Value | Encrypted |
 |---|---|---|---|
-| `partitions` | principal tag | device id, current key id, known stamp `{e, g, x per type}`, access floor, time of the last contact, leader heartbeat, offline flag | no personal data; the device secret is encrypted under a key derived from the share |
+| `partitions` | principal tag | device id and device secret (in the clear: fetching the share needs the secret, so it cannot be under a key derived from the share), current key id, the tenant epoch `e` with the known generation, floor and erasure epochs of that epoch, time of the last contact, leader heartbeat, offline flag | no personal data; the secret is protected as the threat table says |
 | `keys` | principal tag | the non-extractable derived keys, only when the realm opted in and the person kept them | the keys themselves |
 | `views` | `[principal tag, HMAC(index key, view key)]` | the stamp it was read at, last read, bytes, IV, ciphertext | yes |
 | `queue` | `[principal tag, local id]` | state, attempts, first-sending time (server clock, written before the first byte), key (absent until the input is final), dependency, decided stamp, IV, ciphertext of the intent and of the base values | yes |
@@ -200,7 +200,7 @@ outside, then **verified and written in one short `readwrite` transaction** over
 the target store, which reads and compares before writing:
 
 - a put drops a value whose erasure epoch or tenant epoch is older than the known one, or read below
-  the access floor, raises the known stamp, deletes what an older epoch or floor left, and writes the
+  the floor, raises the known stamp, deletes what an older epoch or floor left, and writes the
   value unless the store holds it at a later generation (`Cache.put`; `rest_one_epoch`,
   `rest_above_floor`; without the checks a purge is undone, `unguarded_put_resurrects`,
   `unfloored_put_resurrects`);
@@ -289,19 +289,29 @@ The kernel stays `update(state, msg) -> {state, effects}`. New messages: `store_
 
 ### The model
 
-The browser holds entries stamped `(g, x)` (the model's `g` stands for the tenant epoch and
-generation together; its only property used is that a stamp never repeats), its known stamp, an
-**access floor**, and the time of its last contact. Three kinds of message carry stamps, each after a
-delay the browser cannot measure:
+The browser holds entries stamped `(e, g, x)`, and for the current tenant epoch `e` its known
+generation, its erasure epochs, its **floor** and the time of its last contact. Generations are
+ordered only within a tenant epoch: a restore or a re-created tenant starts a new one, whose counter
+starts again from 1 under a new nonce. On a message of another epoch the browser purges every entry
+and resets its known generation, floor and erasure epochs together, in one transaction, and remembers
+the epoch it left; anything still arriving from a left epoch is ignored (`tenant_epoch_purges`,
+`retired_epoch_ignored`, `rest_same_tenant_epoch`). Without the reset, the new tenant's replies at
+generation 1 fall below the old floor and are all dropped (`restarted_counter_dropped_without_reset`).
+Three kinds of message carry stamps, each after a delay the browser cannot measure:
 
 - an **answer to a request** the browser sent, a pong to a ping or a reply to a read, carries the
-  stamp current when the server answered: its generation, the erasure epochs of the types concerned,
-  and the principal's **access generation** (the generation of its last membership, role,
-  restriction or permission change). It is a **contact**, dated by the request's send time, which the
+  stamp current when the server answered: its tenant epoch, generation, the erasure epochs of the
+  types concerned, and the **floor generation**: the greater of the principal's access generation (its
+  last membership, role, restriction or permission change) and the tenant's **policy generation**
+  (its last change of a Read policy, or of the teams and roles a policy reads, which changes what
+  every principal may read without a new schema version). It is a **contact**, dated by the request's send time, which the
   browser measured itself: however late it arrives, everything newer than its stamp began after that
-  time. A reply also carries the stamp it was read at, which stamps the entry;
-- a **frame** (a notice or a heartbeat) carries the stamp it was sent with, its `from`, the access
-  generation and the keys that may differ; it carries entries forward and raises what the browser
+  time. A reply also carries the stamp it was read at, which stamps the entry. A view reply is sent
+  `Cache-Control: no-store`, and the kernel ignores a 304 or any reply the HTTP cache answered: a
+  cached reply carries an old stamp, and dating it by a new request would make it a false contact
+  (C6);
+- a **frame** (a notice or a heartbeat) carries the stamp it was sent with, its `from`, the floor
+  generation and every key touched at any point in `(from, to]` (C2); it carries entries forward and raises what the browser
   knows, but it is **not a contact**, because nothing in it says when it was sent.
 
 An answer is **current** iff its stamp is the known stamp and the last contact is at most `B` old;
@@ -328,8 +338,9 @@ Proved, in one model of the whole stamp with carry-forward (`lean/Strata/Client/
 - **the value, under complete notices** (C2, a hypothesis, never a filter): a current or checked
   answer is the server's opened value at the known stamp (`current_value`, `run_coh`,
   `current_answer`);
-- nothing at rest from an older erasure epoch, or read before the access floor; hearing either
-  purges at once (`rest_one_epoch`, `rest_above_floor`, `hear_purges`, `hear_access_purges`);
+- nothing at rest from an older erasure epoch, read below the floor, or from another tenant epoch;
+  hearing any of them purges at once, and the floor covers a policy change for every principal
+  (`contact_floor`) (`rest_one_epoch`, `rest_above_floor`, `hear_purges`, `hear_access_purges`);
 - a reply read and sent at the current stamp is read back as current (`receipt_read`,
   `read_after_commit`).
 
@@ -339,13 +350,17 @@ without the persisted epoch (`unguarded_put_resurrects`) or without the floor
 (`unfloored_put_resurrects`).
 
 The model is that of one object type's erasure epoch; a view that depends on several types is
-governed by each type's epoch, and the per-type instances compose by conjunction (C5, argued).
+governed by each type's epoch, and the per-type instances compose by conjunction (C5, argued; the
+server side is a conformance case in WG-5435: for a view that joins or follows references,
+destroying a key changes the reply's epoch vector if and only if a sealed field the view opens
+changes, including fields a Read policy or a derivation reads, which relies on `depends_on` being
+complete, CPY-004).
 
 ### What the server adds (follow-up 2)
 
 - **Stamps** on replies (read stamp and sent stamp), receipts, frames and pongs: `e` (a keyed tag of
-  the generation nonce), `g` (WG-5389), the erasure epochs of the types concerned, and the access
-  generation.
+  the generation nonce), `g` (WG-5389), the erasure epochs of the types concerned, and the floor
+  generation. View replies are `no-store`.
 - **Erasure epochs per object type, read before opening.** The server keeps a destruction log keyed by
   object type and sealed field, and derives an epoch per type from it: no audience class is
   enumerated (the kernel computes audience classes per result, and individual classes are unbounded).
@@ -355,11 +370,20 @@ governed by each type's epoch, and the per-type instances compose by conjunction
   the browser's known epochs never go down. **Disclosure**: a reader of a type learns that an erasure
   touched that type, not whose data it was. **Cost**: a raised epoch makes browsers refetch the views
   of that type; a purge scoped to the affected records stays an open question.
-- **The access generation.** A membership, role, restriction (PRV-352) or permission change for a
-  principal raises that principal's access generation (to the generation of the change). Every answer
-  and frame carries it; the browser purges everything read before it and keeps that floor persisted,
-  so a late reply read before the change is dropped (`rest_above_floor`). This replaces any per-class
-  epoch: a role change purges and raises the floor, and never lowers a known epoch.
+- **The floor generation.** A membership, role, restriction (PRV-352) or permission change for a
+  principal raises that principal's access generation; a change of a Read policy, or of the teams and
+  roles a policy reads (which, per `crates/backend/src/aggregates.rs`, changes the schema without a new
+  version), raises the tenant's policy generation, one tenant-wide write rather than one per principal.
+  Every answer and frame carries the greater of the two; the browser purges everything read below it
+  and keeps that floor persisted, so a late reply read before the change is dropped
+  (`rest_above_floor`, `contact_floor`). A role change purges and raises the floor, and never lowers a
+  known erasure epoch.
+- **The lookup fence.** A lookup of an uncommitted idempotency key records a tombstone for it, kept for
+  the key's idempotency retention, scoped like the key to the tenant, principal and contract, and
+  checked in the same store transaction as a commit: a request held up in the network past the
+  gateway's deadline still finds the tombstone and is refused. `fence_holds` models a tombstone that
+  outlives every submission of its key, which this retention provides as long as the client never
+  sends a key past its retention (`at_most_once`'s client rule).
 - **Frames chained per connection**, `from` and stamp on each; a heartbeat is a frame with no keys; on
   reconnect with `after = seq` the server replays from the generation recorded with that event, or
   answers `resync`.
@@ -374,15 +398,17 @@ governed by each type's epoch, and the per-type instances compose by conjunction
 
 ### What the browser does
 
-- A frame raises the known stamp, carries forward in memory the entries at its `from` that it does not
-  name, and drops the ones it names.
+- A frame raises the known stamp, carries forward in memory every entry read in `[from, to]` that it
+  does not name, and drops those read in that interval that it names; entries read before `from`
+  stay as they are. On a busy tenant an entry fetched between heartbeats is therefore carried forward
+  by the next heartbeat, instead of going stale.
 - A new erasure epoch for a type deletes, in the same transaction, every view result, base value and
   server value in a draft of that type stamped with an older one; the person's own typed text follows
   D-FE-13.
-- A new access generation (a membership, role, restriction or permission change) deletes every view
-  result, base value and server value in a draft read before it, and raises the floor, in one
+- A new floor generation (a membership, role, restriction, permission or policy change) deletes every
+  view result, base value and server value in a draft read below it, and raises the floor, in one
   transaction.
-- A different `e` or a `resync`: every entry becomes stale and is read again.
+- A different `e`: purge and reset, as above. A `resync`: every entry becomes stale and is read again.
 - **After signing in again** (or unlocking after expiry), the worker purges by the first answer's stamp
   and floor before it decrypts or draws anything from the partition.
 
@@ -451,8 +477,9 @@ a key a margin before its retention ends. A create whose first-sending record is
 between drawing the key and making the record durable) or older than the retention less the margin is
 never resent until the server has been asked for the recorded outcome of its key. The lookup returns
 the outcome and the record id, and says so when the record was created and has since been deleted.
-When the key is not committed, the lookup **fences** it: the server records a tombstone, kept at
-least as long as the request deadline, and refuses any later submission of that key, so the original
+When the key is not committed, the lookup **fences** it: the server records a tombstone, kept for the
+key's idempotency retention and checked in the same store transaction as a commit (server work in
+WG-5435), and refuses any later submission of that key, so the original
 request still in flight cannot commit after the "not found" (`fence_holds`); the client then resends
 under a new key. Without the fence a late original and the resend both apply
 (`unfenced_lookup_applies_twice`). A lookup past the key's retention cannot fence a key that was
@@ -550,8 +577,9 @@ the next connection a new erasure epoch, a notice or a resync deletes or refresh
 the copy is drawn only labelled, and when the idle session lifetime passes the session ends locally,
 which locks the copy in online-keyed mode. A device whose realm opted in to keeping data offline is
 reached only when it next connects. Ciphertexts left on disk after a session ended without sign-out are consistent with
-this: their key is gone, so they cannot be read until the same person signs in again, and then the
-first answer's stamp and floor purge them before anything is drawn. PRV-351, PRV-352, PRV-353 and, as
+this: their key is gone, so they cannot be read; their device id and secret remain, so the same person
+signing in again unlocks them, and then the first answer's stamp and floor purge them before anything
+is drawn. PRV-351, PRV-352, PRV-353 and, as
 needed, CPY-013 and the permission-change requirements are amended to say this (WG-5449).
 
 ### The person's own typed text (D-FE-13)
@@ -560,9 +588,9 @@ The owner's decision, as a small state machine (`lean/Strata/Client/Drafts.lean`
 
 | State | Event | Next |
 |---|---|---|
-| normal | a revocation or an erasure touching the draft | orphaned, recording the erasure epoch after it and the time; server values deleted at once |
-| orphaned `(x0, t0)` | an erasure epoch `x ≤ x0` heard, before `t0 + idle` | orphaned (the text survives the change that orphaned it) |
-| orphaned `(x0, t0)` | an erasure epoch `x > x0` heard | typed text deleted |
+| normal | a revocation or an erasure touching the draft | orphaned, recording the time and the erasure epoch, after the change, of the object type of the record the draft edits; server values deleted at once |
+| orphaned `(x0, t0)` | an erasure epoch `x ≤ x0` of that type heard, before `t0 + idle` | orphaned (the text survives the change that orphaned it) |
+| orphaned `(x0, t0)` | an erasure epoch `x > x0` of that type heard | typed text deleted |
 | orphaned `(x0, t0)` | the time reaches `t0 + idle` | typed text deleted |
 | any | "copy and dismiss" | typed text deleted |
 
@@ -629,8 +657,8 @@ as another person (nothing of the first); erase a subject while a reader is offl
 `specifications/frontend.jsonc` is an area part. It holds thirteen decisions: D-FE-11 and D-FE-13 are
 the owner's (decided 2026-11-22, D-FE-11 extended the same day to restriction and loss of permission,
 D-FE-13 read as the orphaning state machine); the others are proposals of this design, with no
-decision date and a source saying so. It holds three copy classes and seventeen requirements, FE-001
-to FE-017, milestone 6, each naming Lean theorems with a `Verifies:` line as its check and stated of
+decision date and a source saying so. It holds three copy classes and eighteen requirements, FE-001
+to FE-018, milestone 6, each naming Lean theorems with a `Verifies:` line as its check and stated of
 its model with the model's hypotheses. Requirements whose checks are web tests are added with those
 tests (follow-up 1):
 
@@ -660,7 +688,8 @@ that pins it is WG-5450.
 | Every generation and erasure epoch newer than a current answer's stamp began within the contact bound; no assumption on notices; a bound on the stamp, not the value | `current_recent` |
 | Under complete notices, a current or checked answer is the server's opened value at the known stamp | `current_value`, `run_coh`, `current_answer`, `current_fetch` |
 | A non-current answer is labelled with its generation | `read_stale_older` |
-| Nothing at rest from an older erasure epoch or read before the access floor; hearing either purges at once | `rest_one_epoch`, `rest_above_floor`, `hear_purges`, `hear_access_purges` |
+| Nothing at rest from an older erasure epoch, read below the floor, or from another tenant epoch; hearing any of them purges at once; the floor covers a policy change for every principal | `rest_one_epoch`, `rest_above_floor`, `rest_same_tenant_epoch`, `hear_purges`, `hear_access_purges`, `tenant_epoch_purges`, `retired_epoch_ignored`, `contact_floor` |
+| A re-created tenant compared with the old epoch's numbers drops everything; with the reset it is kept | `restarted_counter_dropped_without_reset`, `reset_accepts` |
 | A reply read and sent at the current stamp is read back as current | `receipt_read`, `read_after_commit` |
 | Counterexamples: incomplete notice, incomplete notice despite fresh contacts, epoch read after opening, unguarded put, unfloored put, generation alone | `incomplete_notice_serves_stale`, `fresh_contact_still_stale`, `stamp_after_open_serves_erased`, `unguarded_put_resurrects`, `unfloored_put_resurrects` (and `guarded_put_drops`, `floored_put_drops`), `browser_generation_only_serves_erased` |
 | The privacy invariant; separation; sign-out online and offline against any later state and any session knowing the device id; expiry; revocation | `reachable_inv`, `no_cross_principal`, `served_own`, `signout_erases`, `offline_signout_erases`, `expire_locks`, `unlock_needs_own_session`, `expire_then_same_principal_unlocks`, `revoke_device_erases`, `revoke_all_erases`, `offline_key_survives_reload` |
@@ -718,7 +747,10 @@ Not proved, each with the follow-up that carries it:
 
 - **The JavaScript against the models** (D20): follow-up 5.
 - **C2 and C3** and the stamps in the server: follow-up 2 and WG-5389.
-- **C5**, the composition of the per-type erasure epochs.
+- **C5**, the composition of the per-type erasure epochs (a conformance case in WG-5435 checks the
+  server side), and **C6**, that no cached or conditional reply is taken as a contact (WG-5441).
+- **The fence model has no expiry**: it holds while the tombstone outlives every submission of its
+  key, which the server provides by keeping it for the key's retention (WG-5435).
 - **The client's write-ahead record equals the queue model's `firstSent`** (up to Q4's margin), and the
   write-ahead and lookup paths are in no model; `q2_sent` holds because no client operation edits a
   keyed write. The fence model is separate from the queue model.
@@ -764,6 +796,19 @@ record). Server items unblock client items; within the client, the stores preced
   enforced rather than "at the next connection"?
 
 ## Answers to the reviews
+
+### Fourth review
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | The device secret was "encrypted under a key derived from the share", which is circular | Fixed: the secret is stored in the clear in `partitions`; the threat table is unchanged |
+| 2 | Policy changes fell out of the floor | Fixed: the floor is the greater of the principal's access generation and the tenant's policy generation, one tenant-wide write per policy change; modelled (`Server.policy`, `contact_floor`), in WG-5435 and WG-5441 |
+| 3 | Ordering across tenant epochs undefined | Fixed: known generation, floor and erasure epochs are kept per tenant epoch and purged and reset together on another epoch, and left epochs are ignored; modelled (`epochOf`, `tenant_epoch_purges`, `retired_epoch_ignored`, `rest_same_tenant_epoch`, `restarted_counter_dropped_without_reset`), in WG-5441 |
+| 4 | Carry-forward only for entries read exactly at `from` | Fixed: C2 now names every key touched in `(from, to]`, and every entry read in `[from, to]` and not named is carried forward; modelled (`carry`, `frame_vals`), in WG-5441 |
+| 5 | The fence tombstone's lifetime was too short | Fixed: kept for the key's idempotency retention, scoped per tenant, principal and contract, checked in the commit's store transaction; moved to WG-5435 as server work; the doc states that `fence_holds` assumes a tombstone outliving every submission |
+| 6 | C5 needs a conformance case | Added to WG-5435 |
+| 7 | D-FE-13 type; D-FE-11 sentence | The draft records the epoch of the type of the record it edits; D-FE-11 says the device id and secret remain, so the same principal unlocks the copy |
+| 8 | A cached or conditional reply must not count as contact | View replies are `no-store` and the kernel ignores a 304 (C6); in WG-5441 |
 
 ### Third review
 
