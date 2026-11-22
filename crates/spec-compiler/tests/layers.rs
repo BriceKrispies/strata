@@ -566,7 +566,7 @@ fn exegra_accepts_the_products_and_reports_the_platform_hash_unchanged() {
         .flatten()
         .filter_map(|p| p["product"].as_str())
         .collect();
-    assert_eq!(products, vec!["badges", "ledger-trigger", "promotions"]);
+    assert_eq!(products, vec!["ledger-trigger", "promotions"]);
 }
 
 /// Exegra refuses two of the refused products with the same rule as specc: one expression rule

@@ -256,14 +256,16 @@ fn install_all(
         strata_substrate::plain::parse_time(&options.created_at).map_err(CorpusError::new)?;
     install::<String>(&bundle, &mut |ctx, intent| {
         let creates = matches!(intent, Intent::CreateTenant { .. });
-        let output = run(store, &ctx, &intent)?;
-        commits += 1;
         if creates {
+            // The store is told first, so that the creating commit itself writes the directory
+            // row as provisioning, as the backend's install does.
             *begun = true;
             store
                 .begin_provisioning(&ctx.tenant)
                 .map_err(|e| e.to_string())?;
         }
+        let output = run(store, &ctx, &intent)?;
+        commits += 1;
         Ok(output)
     })
     .map_err(|e| CorpusError::new(format!("creating the tenant: {e}")))?;
