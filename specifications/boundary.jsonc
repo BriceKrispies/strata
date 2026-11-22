@@ -5722,6 +5722,23 @@
       "schemaVersion": 1,
       "realisation": "shipped",
       "owner": "sqlite-adapter",
+      "id": "tbl-generation",
+      "name": "Tenant generation (tenant file)",
+      "scope": "platform",
+      "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "i64", "description": "Always 1: the table holds one row." },
+        { "name": "nonce", "type": "string", "description": "128 bits as 32 hex digits, drawn at create, restore, import and lease acquisition." },
+        { "name": "counter", "type": "i64", "description": "Raised by every write transaction that changes what a load returns for the tenant." },
+        { "name": "fence", "type": "i64", "description": "The lease's fence token; compared on counter-raising writes made under a lease (WG-5401)." }
+      ],
+      "retention": "As long as the tenant file; it goes with the file.",
+      "description": "Table generation of a tenant file: the tenant's generation, a nonce and a counter, which a load returns in its own read transaction and a commit compares in its own write transaction (docs/working-set.md, item 1). It holds no tenant content."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
       "id": "tbl-control-migrations",
       "name": "Control migrations (control database)",
       "scope": "platform",
