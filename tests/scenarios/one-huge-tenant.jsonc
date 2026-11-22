@@ -1,5 +1,6 @@
 // One huge tenant. A single tenant far larger than any budget, with reads concentrated on a
-// small hot set and a tail that cannot be held. Accounting is under the most strain here.
+// small hot set and a tail that cannot be held. Accounting is under the most strain here. A
+// second node updates hot assets and articles in the background.
 {
   "name": "one-huge-tenant",
   "description": "A single tenant of tens of thousands of records, hot-set reads, a long tail and a few pages and scans.",
@@ -18,12 +19,16 @@
     { "op": "update", "object": "assets__asset", "weight": 5, "actor": "editor" },
     { "op": "header", "weight": 2 }
   ],
-  "faults": [],
+  "faults": [
+    { "kind": "foreign-commit", "every": 300, "object": "assets__asset" },
+    { "kind": "foreign-commit", "every": 450, "object": "content__article" }
+  ],
   "measures": [
     "wrapper.resident_bytes",
     "wrapper.hit_rate_by_cost",
     "store_side.bytes_read",
-    "timing.overall"
+    "timing.overall",
+    "coherence.divergences"
   ],
   "refutation": {
     "criterion": "Measured RSS exceeding accounted bytes plus reserves by more than the calibrated tolerance.",

@@ -174,6 +174,10 @@ pub struct Fault {
     /// The object type a foreign commit writes to, when it should be a given one.
     #[serde(default)]
     pub object: Option<String>,
+    /// The tenant a foreign commit lands on: 0 is the primary tenant (the default), 1 the most
+    /// popular small tenant, and so on.
+    #[serde(default)]
+    pub tenant: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -232,7 +236,14 @@ impl Scenario {
                 return fail("query needs a query");
             }
         }
+        let tenants = 1 + self.small_tenants.as_ref().map_or(0, |s| s.count as usize);
         for fault in &self.faults {
+            if fault.tenant.unwrap_or(0) >= tenants {
+                return fail("a fault names a tenant the scenario does not have");
+            }
+            if fault.tenant.unwrap_or(0) != 0 && fault.kind != FaultKind::ForeignCommit {
+                return fail("only a foreign commit can land on a small tenant");
+            }
             match (fault.at, fault.every) {
                 (Some(at), None) if (0.0..=1.0).contains(&at) => {}
                 (None, Some(every)) if every > 0 => {}

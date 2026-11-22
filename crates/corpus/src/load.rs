@@ -22,8 +22,8 @@ use strata_spec_compiler::layers::{prepare_platform, ProductFile};
 use strata_storage_api::segments as kept;
 use strata_storage_api::{execute, Store};
 use strata_substrate::bundle::{
-    install, plan_install, run_planned, Bundle, InstalledRecord, Planned, ProductBundle,
-    ProductInstall, ProductTarget,
+    install, plan_install, plan_upgrade, run_planned, Bundle, InstalledRecord, Planned,
+    ProductBundle, ProductInstall, ProductTarget,
 };
 
 /// The platform release this loader installs against, which a bundle's platform range is checked
@@ -67,6 +67,21 @@ pub struct CompiledProduct {
 /// order. The specification is read and parsed once for all of them. Any diagnostic specc gives
 /// refuses the whole corpus: nothing is skipped.
 pub fn compile_corpus(paths: &CorpusPaths) -> Result<Vec<CompiledProduct>, CorpusError> {
+    compile_files(paths, None)
+}
+
+/// Compile one product of the corpus directory (`<id>.jsonc`) to its bundle.
+pub fn compile_product(paths: &CorpusPaths, id: &str) -> Result<CompiledProduct, CorpusError> {
+    compile_files(paths, Some(id))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| CorpusError::new(format!("the corpus holds no product {id}")))
+}
+
+fn compile_files(
+    paths: &CorpusPaths,
+    only: Option<&str>,
+) -> Result<Vec<CompiledProduct>, CorpusError> {
     let spec_text = strata_spec_parts::read_spec_text(&paths.spec)
         .map_err(|e| CorpusError::new(format!("{}: {e}", paths.spec.display())))?;
     let spec_path = paths.spec.to_string_lossy().replace('\\', "/");
@@ -78,6 +93,12 @@ pub fn compile_corpus(paths: &CorpusPaths) -> Result<Vec<CompiledProduct>, Corpu
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "jsonc"))
+        .filter(|path| {
+            only.is_none_or(|id| {
+                path.file_stem()
+                    .is_some_and(|stem| stem.to_string_lossy() == id)
+            })
+        })
         .collect();
     files.sort();
     if files.is_empty() {
@@ -317,6 +338,72 @@ fn rejection_problems(error: &strata_storage_api::ExecuteError) -> Vec<String> {
             out
         }
         other => vec![other.to_string()],
+    }
+}
+
+/// Upgrade an installed product to a later version of its bundle that adds one optional text
+/// field to one of its object types: the realistic way a corpus object type changes, through the
+/// product's own upgrade (the objects of a product change only through it). The bundle is the
+/// compiled one with `version` and the field edited in; the plan, the one `change-schema` intent
+/// and its ownership record are the install path's. Returns the version the upgrade reached.
+pub fn upgrade_product_with_field(
+    store: &dyn Store,
+    tenant: &TenantId,
+    owner: &PrincipalId,
+    clock: i64,
+    product: &CompiledProduct,
+    object: &strata_kernel::ObjectTypeId,
+    field: strata_kernel::FieldDef,
+    version: &str,
+) -> Result<u64, Vec<String>> {
+    let one = |message: String| vec![message];
+    let state = store.load(tenant, &[]).map_err(|e| one(e.to_string()))?;
+    let held = state
+        .tenant
+        .ok_or_else(|| one("the tenant does not exist".to_string()))?;
+    let schema = held.schema.clone();
+    let target = ProductTarget {
+        tenant,
+        principal: Principal::User(owner.clone()),
+        now: clock,
+        release: PLATFORM_RELEASE,
+        schema: &schema,
+        installed: None,
+        expected_version: None,
+        idempotency_key: None,
+    };
+    let mut parsed = ProductBundle::from_json(&product.bundle).map_err(|e| one(e.to_string()))?;
+    parsed.version = version.to_string();
+    parsed
+        .objects
+        .get_mut(object)
+        .ok_or_else(|| {
+            one(format!(
+                "the product {} declares no object {object}",
+                product.id
+            ))
+        })?
+        .fields
+        .insert(field.id.clone(), field);
+    let planned = plan_upgrade(&parsed, &target).map_err(|e| one(e.to_string()))?;
+    let mut refused: Vec<String> = Vec::new();
+    let applied = run_planned(planned, &target, &mut |ctx, intent| match execute(
+        store, &intent, &ctx,
+    ) {
+        Ok(done) => Ok(done.transition.output),
+        Err(error) => {
+            refused = rejection_problems(&error);
+            Err(error.to_string())
+        }
+    });
+    match applied {
+        Ok(ProductInstall::Applied { schema_version, .. })
+        | Ok(ProductInstall::Unchanged { schema_version }) => Ok(schema_version),
+        Err(error) => Err(if refused.is_empty() {
+            one(error.to_string())
+        } else {
+            refused
+        }),
     }
 }
 

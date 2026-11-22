@@ -1,7 +1,7 @@
 // Marketing segment send. A campaign evaluates a segment over many contacts and sends email to
 // the members. The workload is mostly reads over a large population with a long tail (low
 // skew), so most of it does not fit a small budget; the send writes one email-send record per
-// member.
+// member. A second node updates audience members and contacts in the background.
 {
   "name": "marketing-segment-send",
   "description": "Marketing and CRM: segment evaluation over many contacts, email sends and a mostly-read workload with a long tail.",
@@ -22,10 +22,14 @@
     { "op": "get", "object": "marketing__campaign", "weight": 5, "within": "hot", "actor": "editor" },
     { "op": "get", "object": "marketing__journey", "weight": 2, "actor": "editor" }
   ],
-  "faults": [],
+  "faults": [
+    { "kind": "foreign-commit", "every": 400, "object": "marketing__audience_member" },
+    { "kind": "foreign-commit", "every": 900, "object": "crm__contact" }
+  ],
   "measures": [
     "wrapper.hit_rate_by_count",
     "wrapper.hit_rate_by_cost",
+    "coherence.divergences",
     "wrapper.resident_bytes",
     "store_side.bytes_read",
     "timing.by_kind.page",
