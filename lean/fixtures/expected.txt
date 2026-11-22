@@ -24,10 +24,10 @@ err invalid
 err unauthorized
 state
 tenant 1 next=5 required=1,3
-record 1 owner=101 1=s:yew 2=i:26 3=b:0
-record 2 owner=102 1=s:oak 2=i:16 3=b:0
-record 3 owner=103 1=s:elm 2=i:22 3=b:1
-record 4 owner=103 1=s:elm 3=b:1
+record 1 owner=101 v=1 1=s:yew 2=i:26 3=b:0 6=i:7
+record 2 owner=102 v=1 1=s:oak 2=i:16 3=b:0 6=i:7
+record 3 owner=103 v=1 1=s:elm 2=i:22 3=b:1 6=i:7
+record 4 owner=103 v=1 1=s:elm 3=b:1 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s1
@@ -47,8 +47,8 @@ err not_found
 ok
 state
 tenant 1 next=3 required=1,2
-record 1 owner=101 1=s:fir 3=b:0
-record 2 owner=103 1=s:yew 2=i:27 3=b:1
+record 1 owner=101 v=1 1=s:fir 3=b:0 6=i:7
+record 2 owner=103 v=2 1=s:yew 2=i:27 3=b:1
 tenant 2 next=1 required=1
 end
 scenario s2
@@ -75,7 +75,7 @@ err not_found
 err unauthorized
 state
 tenant 1 next=2 required=1,3
-record 1 owner=102 1=s:fir 3=b:1
+record 1 owner=102 v=1 1=s:fir 3=b:1 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s3
@@ -97,7 +97,7 @@ err unauthorized
 err invalid
 state
 tenant 1 next=2 required=1,2
-record 1 owner=100 1=s:oak 3=b:0
+record 1 owner=100 v=1 1=s:oak 3=b:0 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s4
@@ -124,9 +124,9 @@ err invalid
 err invalid
 state
 tenant 1 next=4 required=1,3
-record 1 owner=101 1=s:oak 3=b:1
-record 2 owner=102 1=s:oak 3=b:1
-record 3 owner=103 1=s:ash 3=b:0
+record 1 owner=101 v=1 1=s:oak 3=b:1 6=i:7
+record 2 owner=102 v=1 1=s:oak 3=b:1 6=i:7
+record 3 owner=103 v=1 1=s:ash 3=b:0 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s5
@@ -148,8 +148,8 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=3 required=1,3
-record 1 owner=100 1=s:oak 3=b:1
-record 2 owner=103 1=s:fir 2=i:18 3=b:0
+record 1 owner=100 v=1 1=s:oak 3=b:1 6=i:7
+record 2 owner=103 v=1 1=s:fir 2=i:18 3=b:0 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s6
@@ -170,8 +170,8 @@ ok
 ok
 state
 tenant 1 next=3 required=1,3
-record 1 owner=100 1=s:fir 2=i:30 3=b:0
-record 2 owner=103 1=s:oak 2=i:-3 3=b:0
+record 1 owner=100 v=1 1=s:fir 2=i:30 3=b:0 6=i:7
+record 2 owner=103 v=1 1=s:oak 2=i:-3 3=b:0 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s7
@@ -191,11 +191,11 @@ err unauthorized
 ok
 state
 tenant 1 next=4 required=1
-record 1 owner=100 1=s:oak 2=i:18 3=b:1
-record 2 owner=102 1=s:ash 2=i:13 3=b:1
-record 3 owner=103 1=s:fir
+record 1 owner=100 v=1 1=s:oak 2=i:18 3=b:1 6=i:7
+record 2 owner=102 v=1 1=s:ash 2=i:13 3=b:1 6=i:7
+record 3 owner=103 v=1 1=s:fir 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=202 1=s:elm
+record 1 owner=202 v=1 1=s:elm 6=i:7
 end
 scenario s8
 err unauthorized
@@ -216,12 +216,12 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=4 required=1
-record 1 owner=102 1=s:fir 2=i:21
-record 2 owner=101 1=s:oak
-record 3 owner=100 1=s:yew 2=i:3
+record 1 owner=102 v=1 1=s:fir 2=i:21 6=i:7
+record 2 owner=101 v=1 1=s:oak 6=i:7
+record 3 owner=100 v=1 1=s:yew 2=i:3 6=i:7
 tenant 2 next=3 required=1
-record 1 owner=203 1=s:yew 2=i:-4 3=b:1
-record 2 owner=203 1=s:fir
+record 1 owner=203 v=1 1=s:yew 2=i:-4 3=b:1 6=i:7
+record 2 owner=203 v=1 1=s:fir 6=i:7
 end
 scenario s9
 err unauthorized
@@ -237,7 +237,7 @@ ok
 state
 tenant 1 next=1 required=1
 tenant 2 next=2 required=1
-record 1 owner=202 1=s:oak 2=i:34
+record 1 owner=202 v=1 1=s:oak 2=i:34 6=i:7
 end
 scenario s10
 err unauthorized
@@ -254,7 +254,7 @@ err unauthorized
 ok
 state
 tenant 1 next=2 required=1
-record 1 owner=102 1=s:oak 2=i:16
+record 1 owner=102 v=1 1=s:oak 2=i:16 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s11
@@ -277,10 +277,10 @@ err not_found
 err invalid
 state
 tenant 1 next=3 required=1
-record 1 owner=101 1=s:fir 3=b:1
-record 2 owner=103 1=s:elm 3=b:0
+record 1 owner=101 v=1 1=s:fir 3=b:1 6=i:7
+record 2 owner=103 v=1 1=s:elm 3=b:0 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=201 1=s:oak
+record 1 owner=201 v=1 1=s:oak 6=i:7
 end
 scenario s12
 err unauthorized
@@ -302,12 +302,12 @@ err unauthorized
 ok
 state
 tenant 1 next=5 required=1
-record 1 owner=103 1=s:yew 2=i:12 3=b:0
-record 2 owner=102 1=s:elm 2=i:28
-record 3 owner=103 1=s:oak 2=i:-3
-record 4 owner=100 1=s:ash 2=i:-2
+record 1 owner=103 v=1 1=s:yew 2=i:12 3=b:0 6=i:7
+record 2 owner=102 v=1 1=s:elm 2=i:28 6=i:7
+record 3 owner=103 v=1 1=s:oak 2=i:-3 6=i:7
+record 4 owner=100 v=1 1=s:ash 2=i:-2 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=201 1=s:yew
+record 1 owner=201 v=1 1=s:yew 6=i:7
 end
 scenario s13
 err unauthorized
@@ -332,10 +332,10 @@ err no_tenant
 err unauthorized
 state
 tenant 1 next=5 required=1,3
-record 1 owner=103 1=s:yew
-record 2 owner=100 1=s:ash
-record 3 owner=103 1=s:fir 2=i:14 3=b:1
-record 4 owner=103 1=s:oak 3=b:0
+record 1 owner=103 v=1 1=s:yew 6=i:7
+record 2 owner=100 v=1 1=s:ash 6=i:7
+record 3 owner=103 v=2 1=s:fir 2=i:14 3=b:1
+record 4 owner=103 v=1 1=s:oak 3=b:0 6=i:7
 tenant 2 next=1 required=1,2
 end
 scenario s14
@@ -356,7 +356,7 @@ err invalid
 err no_tenant
 state
 tenant 1 next=2 required=1,3
-record 1 owner=100 1=s:elm 2=i:9 3=b:0
+record 1 owner=100 v=1 1=s:elm 2=i:9 3=b:0 6=i:7
 tenant 2 next=1 required=1,3
 end
 scenario s15
@@ -381,13 +381,13 @@ err unauthorized
 ok
 state
 tenant 1 next=8 required=1
-record 1 owner=100 1=s:ash 2=i:27
-record 2 owner=100 1=s:yew 2=i:20
-record 3 owner=103 1=s:elm
-record 4 owner=101 1=s:fir
-record 5 owner=101 1=s:elm
-record 6 owner=100 1=s:ash
-record 7 owner=103 1=s:elm
+record 1 owner=100 v=1 1=s:ash 2=i:27 6=i:7
+record 2 owner=100 v=1 1=s:yew 2=i:20 6=i:7
+record 3 owner=103 v=1 1=s:elm 6=i:7
+record 4 owner=101 v=1 1=s:fir 6=i:7
+record 5 owner=101 v=1 1=s:elm 6=i:7
+record 6 owner=100 v=1 1=s:ash 6=i:7
+record 7 owner=103 v=1 1=s:elm 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s16
@@ -413,10 +413,10 @@ err unauthorized
 ok
 state
 tenant 1 next=3 required=1
-record 1 owner=101 1=s:elm 2=i:5
-record 2 owner=101 1=s:ash
+record 1 owner=101 v=1 1=s:elm 2=i:5 6=i:7
+record 2 owner=101 v=1 1=s:ash 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=203 1=s:ash
+record 1 owner=203 v=2 1=s:ash
 end
 scenario s17
 ok
@@ -435,8 +435,8 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=3 required=1,2,3
-record 1 owner=103 1=s:fir 3=b:1
-record 2 owner=103 1=s:ash 3=b:1
+record 1 owner=103 v=1 1=s:fir 3=b:1 6=i:7
+record 2 owner=103 v=1 1=s:ash 3=b:1 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s18
@@ -467,11 +467,11 @@ err invalid
 err unauthorized
 state
 tenant 1 next=6 required=1
-record 1 owner=102 1=s:oak 2=i:32
-record 3 owner=102 1=s:elm 2=i:4 3=b:1
-record 5 owner=101 1=s:fir 2=i:12
+record 1 owner=102 v=2 1=s:oak 2=i:32
+record 3 owner=102 v=1 1=s:elm 2=i:4 3=b:1 6=i:7
+record 5 owner=101 v=1 1=s:fir 2=i:12 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=203 1=s:elm
+record 1 owner=203 v=1 1=s:elm 6=i:7
 end
 scenario s19
 ok
@@ -489,9 +489,9 @@ err unauthorized
 state
 tenant 1 next=1 required=1,3
 tenant 2 next=4 required=1
-record 1 owner=202 1=s:fir
-record 2 owner=200 1=s:oak
-record 3 owner=203 1=s:ash 2=i:32
+record 1 owner=202 v=1 1=s:fir 6=i:7
+record 2 owner=200 v=1 1=s:oak 6=i:7
+record 3 owner=203 v=1 1=s:ash 2=i:32 6=i:7
 end
 scenario s20
 err unauthorized
@@ -510,10 +510,10 @@ ok
 ok
 state
 tenant 1 next=5 required=1,3
-record 1 owner=102 1=s:oak 2=i:30 3=b:0
-record 2 owner=103 1=s:elm 2=i:29 3=b:0
-record 3 owner=103 1=s:ash 3=b:0
-record 4 owner=102 1=s:fir 3=b:1
+record 1 owner=102 v=1 1=s:oak 2=i:30 3=b:0 6=i:7
+record 2 owner=103 v=1 1=s:elm 2=i:29 3=b:0 6=i:7
+record 3 owner=103 v=2 1=s:ash 3=b:0
+record 4 owner=102 v=1 1=s:fir 3=b:1 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s21
@@ -536,11 +536,11 @@ err unauthorized
 ok
 state
 tenant 1 next=3 required=1
-record 1 owner=103 1=s:fir
-record 2 owner=103 1=s:oak 2=i:10
+record 1 owner=103 v=1 1=s:fir 6=i:7
+record 2 owner=103 v=1 1=s:oak 2=i:10 6=i:7
 tenant 2 next=4 required=1
-record 1 owner=200 1=s:elm
-record 2 owner=203 1=s:oak 3=b:0
+record 1 owner=200 v=1 1=s:elm 6=i:7
+record 2 owner=203 v=1 1=s:oak 3=b:0 6=i:7
 end
 scenario s22
 err unauthorized
@@ -566,7 +566,7 @@ ok
 err no_tenant
 state
 tenant 1 next=2 required=1,2
-record 1 owner=101 1=s:oak 2=i:26
+record 1 owner=101 v=1 1=s:oak 2=i:26 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s23
@@ -588,10 +588,10 @@ ok
 err unauthorized
 state
 tenant 1 next=5 required=1,3
-record 1 owner=102 1=s:elm 2=i:1
-record 2 owner=100 1=s:elm 2=i:14
-record 3 owner=101 1=s:oak 3=b:1
-record 4 owner=101 1=s:elm 3=b:0
+record 1 owner=102 v=1 1=s:elm 2=i:1 6=i:7
+record 2 owner=100 v=1 1=s:elm 2=i:14 6=i:7
+record 3 owner=101 v=1 1=s:oak 3=b:1 6=i:7
+record 4 owner=101 v=1 1=s:elm 3=b:0 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s24
@@ -637,7 +637,7 @@ err unauthorized
 ok
 state
 tenant 1 next=2 required=1,3
-record 1 owner=103 1=s:yew 2=i:23 3=b:0
+record 1 owner=103 v=1 1=s:yew 2=i:23 3=b:0 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s26
@@ -659,10 +659,10 @@ ok
 ok
 state
 tenant 1 next=6 required=1
-record 2 owner=102 1=s:oak 2=i:20 3=b:0
-record 3 owner=101 1=s:oak
-record 4 owner=102 1=s:yew 2=i:3 3=b:0
-record 5 owner=101 1=s:oak 2=i:20 3=b:1
+record 2 owner=102 v=1 1=s:oak 2=i:20 3=b:0 6=i:7
+record 3 owner=101 v=1 1=s:oak 6=i:7
+record 4 owner=102 v=1 1=s:yew 2=i:3 3=b:0 6=i:7
+record 5 owner=101 v=1 1=s:oak 2=i:20 3=b:1 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s27
@@ -681,9 +681,9 @@ err unauthorized
 ok
 state
 tenant 1 next=2 required=1,2
-record 1 owner=100 1=s:oak
+record 1 owner=100 v=1 1=s:oak 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=200 1=s:yew 2=i:25
+record 1 owner=200 v=1 1=s:yew 2=i:25 6=i:7
 end
 scenario s28
 err invalid
@@ -712,12 +712,12 @@ err unauthorized
 err not_found
 state
 tenant 1 next=5 required=1
-record 1 owner=101 1=s:elm 2=i:24 3=b:1
-record 2 owner=100 1=s:fir 2=i:12
-record 3 owner=103 1=s:elm 3=b:0
-record 4 owner=101 1=s:elm 2=i:10 3=b:0
+record 1 owner=101 v=1 1=s:elm 2=i:24 3=b:1 6=i:7
+record 2 owner=100 v=1 1=s:fir 2=i:12 6=i:7
+record 3 owner=103 v=1 1=s:elm 3=b:0 6=i:7
+record 4 owner=101 v=1 1=s:elm 2=i:10 3=b:0 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=202 1=s:elm
+record 1 owner=202 v=1 1=s:elm 6=i:7
 end
 scenario s29
 err unauthorized
@@ -732,11 +732,11 @@ err invalid
 ok
 state
 tenant 1 next=4 required=1
-record 1 owner=103 1=s:ash
-record 2 owner=102 1=s:fir
-record 3 owner=102 1=s:ash 2=i:-1
+record 1 owner=103 v=1 1=s:ash 6=i:7
+record 2 owner=102 v=1 1=s:fir 6=i:7
+record 3 owner=102 v=1 1=s:ash 2=i:-1 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=203 1=s:fir 2=i:34 3=b:1
+record 1 owner=203 v=1 1=s:fir 2=i:34 3=b:1 6=i:7
 end
 scenario s30
 ok
@@ -777,12 +777,12 @@ err unauthorized
 err invalid
 state
 tenant 1 next=4 required=1,3
-record 1 owner=103 1=s:oak 2=i:8
-record 2 owner=103 1=s:oak 2=i:20
-record 3 owner=100 1=s:ash 2=i:17
+record 1 owner=103 v=1 1=s:oak 2=i:8 6=i:7
+record 2 owner=103 v=1 1=s:oak 2=i:20 6=i:7
+record 3 owner=100 v=1 1=s:ash 2=i:17 6=i:7
 tenant 2 next=3 required=1
-record 1 owner=200 1=s:oak
-record 2 owner=202 1=s:oak 3=b:1
+record 1 owner=200 v=1 1=s:oak 6=i:7
+record 2 owner=202 v=1 1=s:oak 3=b:1 6=i:7
 end
 scenario s32
 ok
@@ -808,15 +808,15 @@ err no_tenant
 err invalid
 state
 tenant 1 next=8 required=1
-record 1 owner=101 1=s:yew 3=b:1
-record 2 owner=103 1=s:fir 2=i:26
-record 3 owner=101 1=s:elm 3=b:1
-record 4 owner=102 1=s:fir 2=i:23
-record 5 owner=102 1=s:fir
-record 6 owner=102 1=s:oak 2=i:4 3=b:1
-record 7 owner=100 1=s:yew 3=b:1
+record 1 owner=101 v=1 1=s:yew 3=b:1 6=i:7
+record 2 owner=103 v=1 1=s:fir 2=i:26 6=i:7
+record 3 owner=101 v=1 1=s:elm 3=b:1 6=i:7
+record 4 owner=102 v=1 1=s:fir 2=i:23 6=i:7
+record 5 owner=102 v=1 1=s:fir 6=i:7
+record 6 owner=102 v=1 1=s:oak 2=i:4 3=b:1 6=i:7
+record 7 owner=100 v=1 1=s:yew 3=b:1 6=i:7
 tenant 2 next=2 required=1,2,3
-record 1 owner=202 1=s:yew 2=i:20 3=b:0
+record 1 owner=202 v=1 1=s:yew 2=i:20 3=b:0 6=i:7
 end
 scenario s33
 err unauthorized
@@ -833,8 +833,8 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=3 required=1,2
-record 1 owner=103 1=s:ash 2=i:5 3=b:1
-record 2 owner=102 1=s:fir 2=i:6 3=b:0
+record 1 owner=103 v=1 1=s:ash 2=i:5 3=b:1 6=i:7
+record 2 owner=102 v=1 1=s:fir 2=i:6 3=b:0 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s34
@@ -850,10 +850,10 @@ err unauthorized
 ok
 state
 tenant 1 next=5 required=1
-record 1 owner=103 1=s:ash 2=i:13 3=b:0
-record 2 owner=101 1=s:elm 2=i:27
-record 3 owner=100 1=s:ash 2=i:5
-record 4 owner=103 1=s:oak 2=i:29
+record 1 owner=103 v=2 1=s:ash 2=i:13 3=b:0
+record 2 owner=101 v=1 1=s:elm 2=i:27 6=i:7
+record 3 owner=100 v=1 1=s:ash 2=i:5 6=i:7
+record 4 owner=103 v=1 1=s:oak 2=i:29 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s35
@@ -870,7 +870,7 @@ err invalid
 err unauthorized
 state
 tenant 1 next=2 required=1
-record 1 owner=102 1=s:elm
+record 1 owner=102 v=1 1=s:elm 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s36
@@ -889,8 +889,8 @@ err unauthorized
 state
 tenant 1 next=1 required=1,3
 tenant 2 next=3 required=1
-record 1 owner=200 1=s:fir
-record 2 owner=203 1=s:fir 2=i:2
+record 1 owner=200 v=1 1=s:fir 6=i:7
+record 2 owner=203 v=1 1=s:fir 2=i:2 6=i:7
 end
 scenario s37
 err unauthorized
@@ -915,9 +915,9 @@ err unauthorized
 err invalid
 state
 tenant 1 next=4 required=1,2
-record 1 owner=102 1=s:ash 3=b:1
-record 2 owner=102 1=s:elm 3=b:1
-record 3 owner=100 1=s:yew
+record 1 owner=102 v=1 1=s:ash 3=b:1 6=i:7
+record 2 owner=102 v=1 1=s:elm 3=b:1 6=i:7
+record 3 owner=100 v=1 1=s:yew 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s38
@@ -939,10 +939,10 @@ err unauthorized
 ok
 state
 tenant 1 next=5 required=1,3
-record 1 owner=100 1=s:ash 3=b:1
-record 2 owner=103 1=s:elm 2=i:14 3=b:0
-record 3 owner=102 1=s:oak 2=i:0 3=b:0
-record 4 owner=101 1=s:elm 2=i:27 3=b:0
+record 1 owner=100 v=1 1=s:ash 3=b:1 6=i:7
+record 2 owner=103 v=1 1=s:elm 2=i:14 3=b:0 6=i:7
+record 3 owner=102 v=1 1=s:oak 2=i:0 3=b:0 6=i:7
+record 4 owner=101 v=1 1=s:elm 2=i:27 3=b:0 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s39
@@ -967,9 +967,9 @@ err invalid
 ok
 state
 tenant 1 next=4 required=1,3
-record 1 owner=102 1=s:ash 3=b:0
-record 2 owner=103 1=s:elm 2=i:15
-record 3 owner=103 1=s:oak 3=b:1
+record 1 owner=102 v=3 1=s:ash 3=b:0
+record 2 owner=103 v=1 1=s:elm 2=i:15 6=i:7
+record 3 owner=103 v=1 1=s:oak 3=b:1 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s40
@@ -993,7 +993,7 @@ err not_found
 err invalid
 state
 tenant 1 next=2 required=1,2
-record 1 owner=103 1=s:yew 2=i:29
+record 1 owner=103 v=1 1=s:yew 2=i:29 6=i:7
 tenant 2 next=1 required=1,3
 end
 scenario s41
@@ -1023,15 +1023,15 @@ err invalid
 ok
 state
 tenant 1 next=9 required=1
-record 1 owner=103 1=s:fir
-record 2 owner=100 1=s:ash
-record 3 owner=103 1=s:oak
-record 5 owner=102 1=s:oak 3=b:0
-record 7 owner=103 1=s:elm 3=b:1
-record 8 owner=102 1=s:fir
+record 1 owner=103 v=1 1=s:fir 6=i:7
+record 2 owner=100 v=1 1=s:ash 6=i:7
+record 3 owner=103 v=1 1=s:oak 6=i:7
+record 5 owner=102 v=1 1=s:oak 3=b:0 6=i:7
+record 7 owner=103 v=1 1=s:elm 3=b:1 6=i:7
+record 8 owner=102 v=1 1=s:fir 6=i:7
 tenant 2 next=3 required=1
-record 1 owner=200 1=s:ash 2=i:32 3=b:1
-record 2 owner=200 1=s:yew 3=b:1
+record 1 owner=200 v=1 1=s:ash 2=i:32 3=b:1 6=i:7
+record 2 owner=200 v=1 1=s:yew 3=b:1 6=i:7
 end
 scenario s42
 err unauthorized
@@ -1060,7 +1060,7 @@ ok
 state
 tenant 1 next=1 required=1,2,3
 tenant 2 next=2 required=1
-record 1 owner=203 1=s:ash 2=i:19 3=b:1
+record 1 owner=203 v=1 1=s:ash 2=i:19 3=b:1 6=i:7
 end
 scenario s43
 err unauthorized
@@ -1077,9 +1077,9 @@ err not_found
 err unauthorized
 state
 tenant 1 next=2 required=1
-record 1 owner=102 1=s:elm 2=i:-4
+record 1 owner=102 v=1 1=s:elm 2=i:-4 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=203 1=s:elm 2=i:25
+record 1 owner=203 v=1 1=s:elm 2=i:25 6=i:7
 end
 scenario s44
 err unauthorized
@@ -1099,7 +1099,7 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=2 required=1
-record 1 owner=103 1=s:elm 2=i:28 3=b:1
+record 1 owner=103 v=1 1=s:elm 2=i:28 3=b:1 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s45
@@ -1122,10 +1122,10 @@ ok
 ok
 state
 tenant 1 next=6 required=1,3
-record 1 owner=102 1=s:ash
-record 2 owner=101 1=s:elm 2=i:10 3=b:0
-record 4 owner=100 1=s:oak
-record 5 owner=103 1=s:elm 2=i:-5
+record 1 owner=102 v=1 1=s:ash 6=i:7
+record 2 owner=101 v=1 1=s:elm 2=i:10 3=b:0 6=i:7
+record 4 owner=100 v=1 1=s:oak 6=i:7
+record 5 owner=103 v=1 1=s:elm 2=i:-5 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s46
@@ -1151,14 +1151,14 @@ err invalid
 ok
 state
 tenant 1 next=7 required=1
-record 1 owner=102 1=s:oak 2=i:27 3=b:1
-record 2 owner=103 1=s:fir
-record 3 owner=103 1=s:fir 2=i:-4 3=b:0
-record 4 owner=102 1=s:ash
-record 5 owner=101 1=s:elm 2=i:-1
-record 6 owner=102 1=s:oak
+record 1 owner=102 v=1 1=s:oak 2=i:27 3=b:1 6=i:7
+record 2 owner=103 v=1 1=s:fir 6=i:7
+record 3 owner=103 v=1 1=s:fir 2=i:-4 3=b:0 6=i:7
+record 4 owner=102 v=1 1=s:ash 6=i:7
+record 5 owner=101 v=1 1=s:elm 2=i:-1 6=i:7
+record 6 owner=102 v=1 1=s:oak 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=200 1=s:ash 3=b:0
+record 1 owner=200 v=1 1=s:ash 3=b:0 6=i:7
 end
 scenario s47
 err not_found
@@ -1183,10 +1183,10 @@ err unauthorized
 ok
 state
 tenant 1 next=3 required=1,2,3
-record 1 owner=102 1=s:oak 2=i:28
-record 2 owner=103 1=s:ash 2=i:3 3=b:1
+record 1 owner=102 v=1 1=s:oak 2=i:28 6=i:7
+record 2 owner=103 v=1 1=s:ash 2=i:3 3=b:1 6=i:7
 tenant 2 next=2 required=1,3
-record 1 owner=203 1=s:ash 2=i:10
+record 1 owner=203 v=1 1=s:ash 2=i:10 6=i:7
 end
 scenario s48
 ok
@@ -1205,12 +1205,12 @@ ok
 err no_tenant
 state
 tenant 1 next=5 required=1
-record 1 owner=102 1=s:yew
-record 2 owner=101 1=s:yew 3=b:0
-record 3 owner=103 1=s:oak 2=i:0 3=b:0
-record 4 owner=100 1=s:yew
+record 1 owner=102 v=1 1=s:yew 6=i:7
+record 2 owner=101 v=1 1=s:yew 3=b:0 6=i:7
+record 3 owner=103 v=1 1=s:oak 2=i:0 3=b:0 6=i:7
+record 4 owner=100 v=1 1=s:yew 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=202 1=s:ash 3=b:1
+record 1 owner=202 v=1 1=s:ash 3=b:1 6=i:7
 end
 scenario s49
 err not_found
@@ -1232,8 +1232,8 @@ err invalid
 err no_tenant
 state
 tenant 1 next=3 required=1,3
-record 1 owner=102 1=s:yew
-record 2 owner=102 1=s:oak 2=i:33 3=b:0
+record 1 owner=102 v=1 1=s:yew 6=i:7
+record 2 owner=102 v=1 1=s:oak 2=i:33 3=b:0 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s50
@@ -1271,8 +1271,8 @@ err unauthorized
 ok
 state
 tenant 1 next=4 required=1
-record 1 owner=102 1=s:elm
-record 3 owner=103 1=s:oak
+record 1 owner=102 v=1 1=s:elm 6=i:7
+record 3 owner=103 v=1 1=s:oak 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s52
@@ -1288,8 +1288,8 @@ err unauthorized
 ok
 state
 tenant 1 next=3 required=1
-record 1 owner=102 1=s:yew
-record 2 owner=101 1=s:fir 2=i:29
+record 1 owner=102 v=2 1=s:yew
+record 2 owner=101 v=1 1=s:fir 2=i:29 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s53
@@ -1316,7 +1316,7 @@ err no_tenant
 state
 tenant 1 next=2 required=1,2
 tenant 2 next=2 required=1
-record 1 owner=202 1=s:fir 3=b:0
+record 1 owner=202 v=1 1=s:fir 3=b:0 6=i:7
 end
 scenario s54
 err unauthorized
@@ -1345,8 +1345,8 @@ err not_found
 state
 tenant 1 next=1 required=1,2,3
 tenant 2 next=3 required=1
-record 1 owner=200 1=s:fir 3=b:0
-record 2 owner=201 1=s:oak 3=b:0
+record 1 owner=200 v=1 1=s:fir 3=b:0 6=i:7
+record 2 owner=201 v=1 1=s:oak 3=b:0 6=i:7
 end
 scenario s55
 err invalid
@@ -1372,9 +1372,9 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=4 required=1,2
-record 1 owner=103 1=s:oak 2=i:21
-record 2 owner=103 1=s:yew 2=i:24
-record 3 owner=100 1=s:yew 2=i:8
+record 1 owner=103 v=1 1=s:oak 2=i:21 6=i:7
+record 2 owner=103 v=1 1=s:yew 2=i:24 6=i:7
+record 3 owner=100 v=1 1=s:yew 2=i:8 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s56
@@ -1393,9 +1393,9 @@ ok
 ok
 state
 tenant 1 next=4 required=1
-record 1 owner=100 1=s:oak 2=i:-3
-record 2 owner=102 1=s:elm
-record 3 owner=102 1=s:ash 2=i:15
+record 1 owner=100 v=1 1=s:oak 2=i:-3 6=i:7
+record 2 owner=102 v=1 1=s:elm 6=i:7
+record 3 owner=102 v=1 1=s:ash 2=i:15 6=i:7
 tenant 2 next=1 required=1
 end
 scenario s57
@@ -1415,10 +1415,10 @@ ok
 err invalid
 state
 tenant 1 next=5 required=1
-record 1 owner=103 1=s:ash 2=i:20 3=b:1
-record 2 owner=101 1=s:oak 3=b:0
-record 3 owner=103 1=s:oak
-record 4 owner=101 1=s:oak
+record 1 owner=103 v=1 1=s:ash 2=i:20 3=b:1 6=i:7
+record 2 owner=101 v=1 1=s:oak 3=b:0 6=i:7
+record 3 owner=103 v=1 1=s:oak 6=i:7
+record 4 owner=101 v=1 1=s:oak 6=i:7
 tenant 2 next=1 required=1,3
 end
 scenario s58
@@ -1442,11 +1442,11 @@ err no_tenant
 err unauthorized
 state
 tenant 1 next=4 required=1,2
-record 1 owner=103 1=s:oak
-record 2 owner=103 1=s:yew 3=b:0
-record 3 owner=101 1=s:fir 2=i:17
+record 1 owner=103 v=1 1=s:oak 6=i:7
+record 2 owner=103 v=1 1=s:yew 3=b:0 6=i:7
+record 3 owner=101 v=1 1=s:fir 2=i:17 6=i:7
 tenant 2 next=2 required=1
-record 1 owner=202 1=s:fir 3=b:1
+record 1 owner=202 v=1 1=s:fir 3=b:1 6=i:7
 end
 scenario s59
 ok
@@ -1470,8 +1470,463 @@ err invalid
 err invalid
 state
 tenant 1 next=2 required=1,2,3
-record 1 owner=102 1=s:yew 3=b:0
+record 1 owner=102 v=1 1=s:yew 3=b:0 6=i:7
 tenant 2 next=3 required=1
-record 1 owner=202 1=s:oak
-record 2 owner=203 1=s:elm
+record 1 owner=202 v=1 1=s:oak 6=i:7
+record 2 owner=203 v=1 1=s:elm 6=i:7
+end
+scenario h-default-relied-on
+ok
+ok
+ok
+err invalid
+ok
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=6 required=1
+record 1 owner=100 v=3 1=s:oak 2=i:4
+record 2 owner=100 v=2 1=s:oak 6=i:9
+record 3 owner=100 v=2 1=s:ash
+record 4 owner=101 v=1 1=s:elm 6=i:7
+record 5 owner=102 v=1 1=s:yew 3=b:1 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-patch-keeps-and-removes
+ok
+ok
+ok
+err invalid
+ok
+err invalid
+ok
+err invalid
+err not_found
+err unauthorized
+ok
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=9 1=s:ash
+tenant 2 next=1 required=1
+end
+scenario h-patch-by-a-writer-on-its-own-record
+ok
+ok
+ok
+err unauthorized
+err unauthorized
+ok
+err unauthorized
+err unauthorized
+err unauthorized
+err not_found
+state
+tenant 1 next=3 required=1
+record 1 owner=102 v=2 1=s:oak 2=i:1 6=i:7
+record 2 owner=103 v=2 1=s:ash 2=i:1 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-expected-version
+ok
+ok
+err version_conflict
+ok
+err version_conflict
+err version_conflict
+err version_conflict
+err version_conflict
+err version_conflict
+ok
+err not_found
+state
+tenant 1 next=2 required=1
+tenant 2 next=1 required=1
+end
+scenario h-expected-version-checks-in-order
+ok
+ok
+err unauthorized
+ok
+err version_conflict
+err version_conflict
+err unauthorized
+err unauthorized
+err unauthorized
+err not_found
+err not_found
+err not_found
+err version_conflict
+err invalid
+err version_conflict
+err limit_exceeded
+err version_conflict
+ok
+err version_conflict
+ok
+state
+tenant 1 next=4 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7
+record 3 owner=103 v=1 1=s:elm 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-expected-version-with-a-referrer
+ok
+ok
+err version_conflict
+err still_referenced
+ok
+ok
+state
+tenant 1 next=3 required=1
+record 2 owner=100 v=2 1=s:ash 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-delete-raises-the-version-of-a-referrer-once
+ok
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=4 required=1
+record 2 owner=100 v=3 1=s:ash 2=i:1 6=i:7 8=l:
+record 3 owner=100 v=3 1=s:elm 2=i:1 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-delete-leaves-the-version-of-an-unrelated-record
+ok
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=4 required=1
+record 2 owner=100 v=3 1=s:ash 2=i:1 6=i:7
+record 3 owner=100 v=2 1=s:elm 2=i:1 4=r:2 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-a-list-of-strings
+ok
+ok
+err invalid
+err invalid
+err invalid
+err invalid
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=5 required=1
+record 1 owner=100 v=3 1=s:oak 6=i:7
+record 2 owner=100 v=2 1=s:oak 6=i:7 7=l:
+record 3 owner=100 v=1 1=s:oak 6=i:7 7=l:s:a,s:a,s:a
+record 4 owner=100 v=1 1=s:oak 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-a-list-of-the-wrong-type
+ok
+err invalid
+err invalid
+err invalid
+err invalid
+err invalid
+err invalid
+err invalid
+err invalid
+err invalid
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-a-list-of-references-that-dangle
+ok
+err dangling_reference
+err dangling_reference
+err dangling_reference
+err dangling_reference
+err dangling_reference
+err dangling_reference
+ok
+err dangling_reference
+ok
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=2 1=s:oak 6=i:7 8=l:r:1
+tenant 2 next=3 required=1
+record 1 owner=200 v=1 1=s:oak 6=i:7
+record 2 owner=200 v=1 1=s:oak 6=i:7 8=l:r:1
+end
+scenario h-a-set-null-list-loses-an-element
+ok
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=4 required=1
+record 3 owner=100 v=4 1=s:elm 2=i:1 6=i:7 8=l:
+tenant 2 next=1 required=1
+end
+scenario h-a-restricting-list-blocks-a-delete
+ok
+ok
+ok
+err still_referenced
+err still_referenced
+ok
+ok
+err still_referenced
+ok
+ok
+ok
+state
+tenant 1 next=4 required=1
+record 3 owner=100 v=4 1=s:elm 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-a-restricting-list-wins-over-a-set-null-list
+ok
+ok
+ok
+err still_referenced
+ok
+ok
+state
+tenant 1 next=4 required=1
+record 2 owner=100 v=3 1=s:ash 6=i:7 8=l:
+record 3 owner=100 v=2 1=s:elm 6=i:7 8=l:
+tenant 2 next=1 required=1
+end
+scenario h-a-list-may-hold-the-record-itself
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+tenant 2 next=1 required=1
+end
+scenario h-a-required-list-does-not-block-a-delete
+ok
+ok
+err migration_rejected
+ok
+ok
+ok
+err invalid
+err invalid
+ok
+ok
+state
+tenant 1 next=4 required=1,8
+record 2 owner=100 v=4 1=s:ash 6=i:7 8=l:
+tenant 2 next=1 required=1
+end
+scenario h-a-required-restricting-list
+ok
+ok
+err migration_rejected
+ok
+ok
+err still_referenced
+err still_referenced
+ok
+ok
+ok
+state
+tenant 1 next=3 required=0,1
+record 2 owner=100 v=2 0=l: 1=s:ash 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-a-required-list-of-strings
+ok
+ok
+err migration_rejected
+ok
+ok
+err invalid
+ok
+err invalid
+state
+tenant 1 next=4 required=1,7
+record 1 owner=100 v=1 1=s:oak 6=i:7 7=l:s:a
+record 2 owner=100 v=2 1=s:ash 6=i:7 7=l:
+record 3 owner=100 v=1 1=s:elm 6=i:7 7=l:
+tenant 2 next=1 required=1
+end
+scenario h-the-string-bound-is-in-bytes
+ok
+ok
+err limit_exceeded
+ok
+err limit_exceeded
+ok
+err limit_exceeded
+err limit_exceeded
+ok
+err limit_exceeded
+ok
+ok
+ok
+state
+tenant 1 next=5 required=1
+record 1 owner=100 v=2 1=s*65536:y
+record 2 owner=100 v=2 1=s*65536:z 6=i:7
+record 3 owner=100 v=3 1=s:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq 6=i:7
+record 4 owner=100 v=1 1=s*21845:€ 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-the-string-bound-for-a-string-in-a-list
+ok
+ok
+err limit_exceeded
+err limit_exceeded
+err limit_exceeded
+err limit_exceeded
+err limit_exceeded
+ok
+ok
+state
+tenant 1 next=4 required=1
+record 1 owner=100 v=2 1=s:oak 6=i:7 7=l:s*65536:x
+record 2 owner=100 v=1 1=s:oak 6=i:7 7=l:s:a,s*65536:x
+record 3 owner=100 v=1 1=s:oak 6=i:7 7=l:s*60000:x,s*60000:x
+tenant 2 next=1 required=1
+end
+scenario h-the-list-bound
+ok
+ok
+ok
+err limit_exceeded
+ok
+err limit_exceeded
+ok
+err limit_exceeded
+err limit_exceeded
+err limit_exceeded
+ok
+ok
+ok
+err limit_exceeded
+ok
+err limit_exceeded
+ok
+ok
+err limit_exceeded
+err still_referenced
+ok
+state
+tenant 1 next=9 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7
+record 3 owner=100 v=1 1=s:oak 6=i:7 7=l*1000:s:a
+record 4 owner=100 v=1 0=l*1000:r:1 1=s:oak 6=i:7
+record 5 owner=100 v=1 1=s:oak 6=i:7 8=l*1000:r:1
+record 6 owner=100 v=1 1=s:oak 6=i:7 7=l*100:s:b
+record 7 owner=100 v=1 1=s:oak 6=i:7 7=l:s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b
+record 8 owner=100 v=1 1=s:oak 6=i:7 7=l*100:s:b,s:c
+tenant 2 next=1 required=1
+end
+scenario h-a-list-bound-with-an-element-deleted
+ok
+ok
+ok
+ok
+err still_referenced
+ok
+ok
+ok
+state
+tenant 1 next=4 required=1
+record 3 owner=100 v=3 1=s:elm 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-the-record-bound
+err limit_exceeded
+err limit_exceeded
+ok
+ok
+ok
+err limit_exceeded
+err limit_exceeded
+ok
+ok
+ok
+state
+tenant 1 next=4 required=1
+record 1 owner=100 v=1 1=s*65536:x 6=i:7 7=l:s*64000:x,s*64000:x,s*64000:x
+record 2 owner=100 v=1 1=s*65536:x 6=i:7 7=l:s*65536:x,s*65536:x
+record 3 owner=100 v=4 1=s:oak 2=i:1
+tenant 2 next=1 required=1
+end
+scenario h-the-record-bound-comes-first
+ok
+err limit_exceeded
+err limit_exceeded
+err limit_exceeded
+err limit_exceeded
+err limit_exceeded
+err limit_exceeded
+err unauthorized
+err version_conflict
+err limit_exceeded
+err unauthorized
+err not_found
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-a-limit-in-one-tenant-leaves-the-other-alone
+err limit_exceeded
+ok
+err limit_exceeded
+ok
+err no_tenant
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 7=l*1000:s:a
+tenant 2 next=2 required=1
+record 1 owner=200 v=1 1=s*65536:x 6=i:7
+end
+scenario h-update-replaces-every-field
+ok
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=3 required=1
+record 1 owner=100 v=4 1=s:yew 8=l:r:2
+record 2 owner=100 v=2 1=s:elm
+tenant 2 next=1 required=1
+end
+scenario h-the-first-failing-field-decides
+ok
+err dangling_reference
+err limit_exceeded
+err limit_exceeded
+err limit_exceeded
+err dangling_reference
+err invalid
+err limit_exceeded
+err invalid
+err invalid
+err invalid
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7
+tenant 2 next=1 required=1
 end

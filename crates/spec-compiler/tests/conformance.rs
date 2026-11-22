@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use strata_spec_compiler::conformance::{self, Options};
-use strata_spec_compiler::{jsonc, output};
+use strata_spec_compiler::output;
 
 const FIXTURE_SPEC: &str = "crates/bff/tests/conformance/fixtures/spec.jsonc";
 const FIXTURE_OUT: &str = "crates/bff/tests/conformance/fixtures/generated";

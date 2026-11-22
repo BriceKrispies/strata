@@ -26,12 +26,13 @@
 
 use crate::engine::decide;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use strata_kernel::segments as seg;
 use strata_kernel::{
-    DomainEvent, Need, PrincipalId, Record, SessionId, SettingId, TenantId, TenantState, Timestamp,
-    Value, WorkflowId,
+    DeltaOp, DomainEvent, Need, PrincipalId, Record, SessionId, SettingId, TenantId, TenantState,
+    Timestamp, Value, WorkflowId,
 };
 use strata_storage_api::jobs::{
     ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported, RunRecord,
@@ -53,6 +54,12 @@ pub struct StoreFaults {
     /// over every commit the store is asked to make while these faults apply.
     #[serde(default)]
     pub stop_before_commit: Option<u64>,
+    /// A scripted crash: the process stops right after the write of this commit, counted as
+    /// `stop_before_commit` is. The commit is durable and its caller hears nothing; the process
+    /// then does nothing more (every later write is refused, and so is a removal of a tenant)
+    /// until the faults are set again, which is the restart.
+    #[serde(default)]
+    pub stop_after_commit: Option<u64>,
 }
 
 /// The kinds of store fault.
@@ -125,6 +132,13 @@ pub struct FaultyStore {
     held: Mutex<Vec<HeldReport>>,
     injected: Mutex<Vec<Injected>>,
     clock: LayerClock,
+    /// Whether the process was stopped by `stop_after_commit` and has not been started again.
+    halted: AtomicBool,
+    /// Tenants an install announced whose creating commit was not yet made, and tenants whose
+    /// install is not finished. A persistent adapter keeps the second in its directory; the
+    /// in-memory adapter keeps nothing, so the layer stands in for it: a restart rolls them back.
+    announced: Mutex<BTreeSet<TenantId>>,
+    provisioning: Mutex<BTreeSet<TenantId>>,
 }
 
 impl FaultyStore {
@@ -141,6 +155,9 @@ impl FaultyStore {
             held: Mutex::new(Vec::new()),
             injected: Mutex::new(Vec::new()),
             clock,
+            halted: AtomicBool::new(false),
+            announced: Mutex::new(BTreeSet::new()),
+            provisioning: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -150,6 +167,11 @@ impl FaultyStore {
             *slot = faults;
         }
         self.attempts.store(0, Ordering::SeqCst);
+        self.halted.store(false, Ordering::SeqCst);
+    }
+
+    fn stopped() -> StoreError {
+        StoreError::Unavailable("simulated: the process is stopped".into())
     }
 
     /// Start or stop injecting faults.
@@ -228,8 +250,45 @@ impl FaultyStore {
         hit
     }
 
+    /// A commit that was written: if it created a tenant whose install was announced, the tenant
+    /// is now `provisioning`, as the directory of a persistent adapter would have it.
+    fn note_creation(&self, commit: &Commit) {
+        if !commit
+            .delta
+            .ops
+            .iter()
+            .any(|op| matches!(op, DeltaOp::CreateTenant { .. }))
+        {
+            return;
+        }
+        let tenant = &commit.delta.tenant;
+        let announced = self
+            .announced
+            .lock()
+            .map(|mut set| set.remove(tenant))
+            .unwrap_or(false);
+        if announced {
+            if let Ok(mut set) = self.provisioning.lock() {
+                set.insert(tenant.clone());
+            }
+        }
+    }
+
+    /// An install of `tenant` is over, finished or removed: nothing of it is pending any more.
+    fn forget_install(&self, tenant: &TenantId) {
+        if let Ok(mut set) = self.announced.lock() {
+            set.remove(tenant);
+        }
+        if let Ok(mut set) = self.provisioning.lock() {
+            set.remove(tenant);
+        }
+    }
+
     /// A commit made by `write`, with the commit faults around it.
     fn commit_through(&self, write: impl FnOnce() -> StoreResult<Receipt>) -> StoreResult<Receipt> {
+        if self.halted.load(Ordering::SeqCst) {
+            return Err(Self::stopped());
+        }
         let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
         let scripted = self
             .faults
@@ -262,6 +321,24 @@ impl FaultyStore {
         }
         let receipt = write()?;
         self.commits.fetch_add(1, Ordering::SeqCst);
+        let crash = self
+            .faults
+            .lock()
+            .map(|faults| faults.stop_after_commit == Some(attempt))
+            .unwrap_or(false);
+        if crash && self.armed.load(Ordering::SeqCst) {
+            self.halted.store(true, Ordering::SeqCst);
+            if let Ok(mut injected) = self.injected.lock() {
+                injected.push(Injected {
+                    fault: StoreFault::CommitReplyLost,
+                    call: attempt,
+                    at: (self.clock)().0,
+                });
+            }
+            return Err(StoreError::Unavailable(
+                "simulated: the process stopped after the write; the commit was made".into(),
+            ));
+        }
         if self.hit(StoreFault::CommitReplyLost) {
             return Err(StoreError::Unavailable(
                 "simulated: the commit was made and its answer was lost".into(),
@@ -337,7 +414,11 @@ impl Store for FaultyStore {
     }
 
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
-        self.commit_through(|| self.inner.commit(commit))
+        self.commit_through(|| {
+            let receipt = self.inner.commit(commit)?;
+            self.note_creation(commit);
+            Ok(receipt)
+        })
     }
 
     fn idempotent_result(
@@ -823,6 +904,10 @@ impl Store for FaultyStore {
     }
 
     fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()> {
+        if self.halted.load(Ordering::SeqCst) {
+            return Err(Self::stopped());
+        }
+        self.forget_install(tenant);
         self.inner.reset_tenant(tenant)
     }
 
@@ -1025,15 +1110,38 @@ impl Store for FaultyStore {
     }
 
     fn begin_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {
+        if self.halted.load(Ordering::SeqCst) {
+            return Err(Self::stopped());
+        }
+        if let Ok(mut set) = self.announced.lock() {
+            set.insert(tenant.clone());
+        }
         self.inner.begin_provisioning(tenant)
     }
 
     fn finish_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {
+        if self.halted.load(Ordering::SeqCst) {
+            return Err(Self::stopped());
+        }
+        self.forget_install(tenant);
         self.inner.finish_provisioning(tenant)
     }
 
     fn rollback_provisioning(&self) -> StoreResult<Vec<TenantId>> {
-        self.inner.rollback_provisioning()
+        let pending: Vec<TenantId> = self
+            .provisioning
+            .lock()
+            .map(|mut set| std::mem::take(&mut *set).into_iter().collect())
+            .unwrap_or_default();
+        if let Ok(mut set) = self.announced.lock() {
+            set.clear();
+        }
+        for tenant in &pending {
+            self.inner.reset_tenant(tenant)?;
+        }
+        let mut removed = self.inner.rollback_provisioning()?;
+        removed.extend(pending);
+        Ok(removed)
     }
 
     fn segment_catalog(&self, tenant: &TenantId) -> StoreResult<Vec<seg::Segment>> {
@@ -1127,7 +1235,11 @@ impl Store for FaultyStore {
         commit: &Commit,
         write: &seg::SegmentWrite,
     ) -> StoreResult<Receipt> {
-        self.commit_through(|| self.inner.commit_with_segments(commit, write))
+        self.commit_through(|| {
+            let receipt = self.inner.commit_with_segments(commit, write)?;
+            self.note_creation(commit);
+            Ok(receipt)
+        })
     }
 
     fn commit_segments(&self, commit: &segments::SegmentCommit) -> StoreResult<Receipt> {

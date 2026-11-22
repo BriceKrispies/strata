@@ -13,9 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use strata_kernel::query_plan::{
-    self, plan_query, IndexPlan, PlanOrder, Probe, QueryPlan, INDEX_PAGE, MAX_PLAN_CANDIDATES,
-};
+use strata_kernel::query_plan::{self, plan_query};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 
@@ -764,7 +762,6 @@ fn a_schema_change_says_which_queries_are_scans_and_why() {
 }
 
 // Verifies: KRN-2523
-// Verifies: KRN-2521
 #[test]
 fn every_plan_returns_the_rows_of_a_scan_in_the_same_order_across_pages() {
     let world = item_world();
@@ -772,7 +769,9 @@ fn every_plan_returns_the_rows_of_a_scan_in_the_same_order_across_pages() {
     let mut compared = 0;
     let mut nonempty = 0;
     for dataset in 0..30 {
-        let count = 150 + rng.below(250);
+        // Enough items for several pages of every size drawn (up to 25) and for every plan to
+        // match some of them; the cost of a page grows with the items, so no more.
+        let count = 60 + rng.below(60);
         let tenant = with_items(&world, (1..=count).map(|id| random_item(&mut rng, id)));
         for def in planned_queries() {
             let name = def.id.as_str().to_string();
@@ -798,14 +797,116 @@ fn every_plan_returns_the_rows_of_a_scan_in_the_same_order_across_pages() {
     );
 }
 
+// Verifies: KRN-2521
+#[test]
+fn an_index_read_examines_at_most_1600_candidates_and_its_cursor_is_a_position() {
+    let world = item_world();
+    // Two thousand items scored id % 37, so the score index holds them in the order (score, id).
+    let tenant = with_items(
+        &world,
+        (1..=2_000).map(|id| {
+            item(
+                id,
+                &[
+                    ("owner", text("x")),
+                    ("grp", text("g1")),
+                    ("score", Value::Int((id % 37) as i64)),
+                    ("status", text("open")),
+                    ("secret", Value::Int((id % 10) as i64)),
+                ],
+            )
+        }),
+    );
+    let mut candidates: Vec<(i64, u64)> = (1..=2_000).map(|id| ((id % 37) as i64, id)).collect();
+    candidates.sort();
+    // The anonymous reader may not read `secret`, so `hidden_residual` rejects every candidate.
+    let context = ctx(TENANT, Principal::Anonymous, 9_000);
+    let mut cursor = None;
+    let mut examined_before = 0;
+    let mut pages = 0;
+    loop {
+        let (page, _) = run(
+            &tenant,
+            &named("hidden_residual", &BTreeMap::new(), 10, cursor.clone()),
+            &context,
+        );
+        pages += 1;
+        assert!(page.rows.is_empty(), "no candidate passes the filter");
+        let Some(next) = page.next else { break };
+        let PageCursor::At(position) = &next else {
+            panic!("the cursor of an index read is a position, got {next:?}");
+        };
+        let Value::Int(score) = position.value else {
+            panic!("the position holds the score: {position:?}");
+        };
+        let at = candidates
+            .iter()
+            .position(|c| *c == (score, position.id.0))
+            .expect("the position is a candidate")
+            + 1;
+        // Fewer rows than the page size (here none) only because 1600 were examined.
+        assert_eq!(at - examined_before, if pages == 1 { 1_600 } else { 400 });
+        examined_before = at;
+        cursor = Some(next);
+    }
+    assert_eq!(pages, 2, "1600 candidates, then the 400 that remain");
+}
+
+// Verifies: KRN-2521
+#[test]
+fn an_index_cursor_continues_after_its_position_whatever_changed_in_between() {
+    let world = item_world();
+    let group_item = |id: u64| {
+        item(
+            id,
+            &[
+                ("owner", text("x")),
+                ("grp", text("g1")),
+                ("score", Value::Int(1)),
+                ("status", text("open")),
+            ],
+        )
+    };
+    // Even ids only.
+    let before = with_items(&world, (1..=60).map(|n| group_item(2 * n)));
+    let context = ctx(TENANT, owner(), 9_000);
+    let params = BTreeMap::from([("g".to_string(), text("g1"))]);
+    let (first, _) = run(&before, &named("group_ordered", &params, 5, None), &context);
+    let ids = |rows: &[Arc<Record>]| rows.iter().map(|r| r.id.0).collect::<Vec<_>>();
+    assert_eq!(ids(&first.rows), [2, 4, 6, 8, 10]);
+    let cursor = first.next.expect("more rows may follow");
+    assert!(
+        matches!(&cursor, PageCursor::At(p) if p.id == RecordId(10) && p.value == text("g1")),
+        "{cursor:?}"
+    );
+    // Before the next read: odd ids inserted on both sides of the position, and the records 4
+    // (before it) and 12 (after it) deleted.
+    let mut after = TenantState::clone(&before);
+    let records = after.records.get_mut(&object("item")).unwrap();
+    for id in [1, 3, 9, 11, 13, 121] {
+        records.insert(RecordId(id), group_item(id));
+    }
+    records.remove(&RecordId(4));
+    records.remove(&RecordId(12));
+    let (second, _) = run(
+        &Arc::new(after),
+        &named("group_ordered", &params, 5, Some(cursor)),
+        &context,
+    );
+    assert_eq!(ids(&second.rows), [11, 13, 14, 16, 18]);
+}
+
 // Verifies: KRN-2522
 #[test]
 fn a_field_the_reader_may_not_read_does_not_show_through_rows_order_or_pages() {
     let world = item_world();
-    let make = |secret: &dyn Fn(u64) -> i64| {
+    // `count` items: two thousand for the index read, which has to examine more than 1600
+    // candidates for its cursor to be a position that could carry the hidden field, and a
+    // hundred for the scans, whose every page reads the whole tenant.
+    let make = |count: u64, secret: &dyn Fn(u64) -> i64| {
         with_items(
             &world,
-            (1..=2_000).map(|id| {
+            (1..=count).map(|id| {
                 item(
                     id,
                     &[
@@ -819,8 +920,11 @@ fn a_field_the_reader_may_not_read_does_not_show_through_rows_order_or_pages() {
             }),
         )
     };
-    let one = make(&|id| (id % 10) as i64);
-    let other = make(&|id| ((id * 7 + 3) % 10) as i64);
+    let by_id = |id: u64| (id % 10) as i64;
+    let by_mix = |id: u64| ((id * 7 + 3) % 10) as i64;
+    let one = make(2_000, &by_id);
+    let other = make(2_000, &by_mix);
+    let (small_one, small_other) = (make(100, &by_id), make(100, &by_mix));
     let filtered_by_secret = query(
         "by_secret",
         cmp(CmpOp::Gt, rec("secret"), int(3)),
@@ -859,7 +963,7 @@ fn a_field_the_reader_may_not_read_does_not_show_through_rows_order_or_pages() {
                 tenant.schema = Arc::new(schema);
                 tenant
             };
-            let (a, b) = (with(&one), with(&other));
+            let (a, b) = (with(&small_one), with(&small_other));
             let x = page_all(&a, def.id.as_str(), &BTreeMap::new(), 9, &context);
             let y = page_all(&b, def.id.as_str(), &BTreeMap::new(), 9, &context);
             assert_eq!(x, y, "{} as {reader:?}", def.id);
@@ -1006,7 +1110,8 @@ fn a_read_whose_rows_follow_references_loads_exactly_the_records_they_name() {
     let complete = State::complete(tenant.clone());
     let who = BTreeMap::from([("who".to_string(), text("x"))]);
     let context = ctx(TENANT, user("alpha:editor"), 9_000);
-    let examined = (MAX_PLAN_CANDIDATES + INDEX_PAGE) as usize;
+    // 1600 candidates examined, and the page of candidates the read stopped at: 200.
+    let examined = 1_600 + 200;
     let mut cursor = None;
     for size in [1, 20, 200, 200] {
         let request = named("owner_open_team", &who, size, cursor.clone());
@@ -1044,7 +1149,7 @@ fn a_read_whose_rows_follow_references_loads_exactly_the_records_they_name() {
             "pages of {size}: {teams} of 20000 teams loaded"
         );
         assert!(
-            loaded.rounds <= 2 + (MAX_PLAN_CANDIDATES / INDEX_PAGE) as usize,
+            loaded.rounds <= 2 + 8,
             "pages of {size}: {} rounds",
             loaded.rounds
         );

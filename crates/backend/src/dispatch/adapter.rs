@@ -215,7 +215,7 @@ impl LocalAdapter {
         if size > self.limit {
             return Err(Refusal::Oversized);
         }
-        if inner.rejected.iter().any(|address| *address == mail.to) {
+        if inner.rejected.contains(&mail.to) {
             return Err(Refusal::Permanent("the mailbox does not exist".into()));
         }
         let lost = inner.refuse_next > 0 && inner.answer_lost;

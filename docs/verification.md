@@ -14,10 +14,13 @@ confidence scores.
 ## The Lean model
 
 `lean/Strata/Model.lean` defines a small model: tenants as a function from ids, one object type
-per tenant with typed fields that may be required, records with an owner, an owner, editors and
-writers, and four intents: create, update, delete, and make a field required (strictly or not).
+per tenant with typed fields that may be required, records with an owner and a version, an owner,
+editors and writers, and four intents: create (filling constant defaults), update (a patch),
+delete (both naming an expected version or not), and make a field required (strictly or not).
 Fields may be references to records of the same type, which a delete either refuses to break or
-clears (slice 1, below). `step` is a total, computable function. It has no constraints,
+clears (slice 1, below), and lists of scalars or of references, whose elements a delete removes
+(slice 2). Written values and records are held to the kernel's size limits, as an abstract bound
+(slice 2). `step` is a total, computable function. It has no constraints,
 workflows, uniqueness, queries, events or policy conditions: the assumptions below list each
 omission, and the gap analysis further down says which slice will add each. The theorems are
 about this model. The Rust kernel is compared with it on generated scenarios, which is evidence and
@@ -26,7 +29,7 @@ not a proof.
 The specification's `Verifies:` lines on these theorems count them as passing when `lake build`
 builds their module, without reading the statements (`specifications/README.md`).
 
-`lean/Strata/Proofs.lean` and `lean/Strata/References.lean` prove:
+`lean/Strata/Proofs.lean`, `lean/Strata/References.lean` and `lean/Strata/Writes.lean` prove:
 
 | Property | Theorems | Statement |
 |---|---|---|
@@ -36,11 +39,18 @@ builds their module, without reading the statements (`specifications/README.md`)
 | | `missing_record_hidden_on_update`, `missing_record_hidden_on_delete` | The permission is asked before the record is looked up: one who could edit no record it did not create is refused a missing record with `unauthorized`, as for an existing one, and cannot probe which ids exist |
 | Tenant isolation | `step_isolated`, `step_local` | An accepted step leaves every other tenant unchanged, and its result for its own tenant does not depend on any other tenant |
 | Determinism | `step_deterministic` | Equal arguments give equal results |
-| Referential integrity (slice 1) | `step_preserves_refs`, `stepTenant_preserves_refs` | If every reference held by a record names an existing record, the same holds after any accepted step, strict or not: it needs no conformance and no exclusion of the non-strict schema change |
-| | `problem_none` | A record the write checks find nothing wrong with conforms to the schema and names only existing records |
-| A delete does not break a reference it may not break (slice 1) | `delete_refused_while_referenced` | A record that another record names through a restricting or required field is refused deletion with `stillReferenced`, to one who may delete it |
-| | `delete_leaves_no_reference` | After an accepted delete the record is gone and no record names it, whatever the state was |
-| | `conforms_afterDelete` | The clearing a delete does keeps a conforming record conforming (a required field is never cleared, because it blocks) |
+| Referential integrity (slices 1, 2) | `step_preserves_refs`, `stepTenant_preserves_refs` | If every reference held by a record, single or as a list element, names an existing record, the same holds after any accepted step, strict or not: it needs no conformance and no exclusion of the non-strict schema change |
+| | `problem_none` | A record the write checks find nothing wrong with conforms to the schema (lists typed elementwise) and names only existing records |
+| A delete does not break a reference it may not break (slices 1, 2) | `delete_refused_while_referenced` | A record that another record names through a restricting field (single or list) or a required single reference is refused deletion with `stillReferenced`, to one who may delete it and names no other version |
+| | `delete_leaves_no_reference` | After an accepted delete the record is gone and no record names it, through a field or a list element, whatever the state was |
+| | `conforms_afterDelete` | The clearing a delete does keeps a conforming record conforming (a required single reference is never cleared, because it blocks; a required list keeps its field, possibly empty) |
+| | `required_list_never_blocks` | A reference held in a list forbids a delete only through a restricting definition, never because the list is required |
+| Updates are patches (slice 2) | `update_writes_patched`, `update_keeps_unnamed`, `patch_keeps_unnamed`, `patch_last_wins` | The record an accepted update writes is the stored one patched; a field the patch does not name keeps its values; the value named last for a field is its value afterwards, `null` removing it |
+| Versions (slice 2) | `update_raises_version`, `delete_raises_referrer_version` | An accepted update raises the record's version by exactly one; an accepted delete rewrites each other record whose reference it clears, at its version plus one |
+| | `version_conflict_on_update`, `version_conflict_on_delete` | One who may act on a record and names a version it is not at is refused with `versionConflict`, whatever the patch, and no state follows; the version is asked after the permission (`unauthorized_cannot_update`, `unauthorized_cannot_delete` hold for every expected version) |
+| Defaults (slice 2) | `create_fills_default` | An accepted create writes, at version 1 under the next id, the constant default of every field of the schema the intent does not name |
+| Size limits (slice 2) | `create_refused_over_record_bound` | A record over the record bound is refused with `limitExceeded` before its fields are checked |
+| | `create_within_limits`, `update_within_limits`, `problem_none_within` | Every record an accepted create or update writes is within the record bound and holds no value over the string or list bound |
 
 `lake build` checks them. `lake env lean Audit.lean` prints the axioms each depends on: only
 Lean's standard `propext`, `Classical.choice` and `Quot.sound`. There is no `sorry`, no `admit`
@@ -50,11 +60,13 @@ and no added axiom; a test fails if the sources contain one or the audit reports
 
 1. The object of every theorem is the model, not the Rust source.
 2. The model has no constraints, workflows, uniqueness, queries or events. Its references are
-   single references to records of the tenant's one object type; lists of references and
-   references between types are not modelled (see slice 1's review note).
+   references, single or in lists, to records of the tenant's one object type; references between
+   types are not modelled (see the review notes of slices 1 and 2).
 3. Its authorization is owner, editors, and writers on their own records. The kernel's policies
    are data with arbitrary conditions.
-4. Its update replaces a record's fields; the kernel's is a patch.
+4. Its size limits are the kernel's numbers over an abstract measure, not over the kernel's
+   encodings (slice 2's review note): a string's bytes and a list's length are exact, a record's
+   and a unique value's encoded size are bounded below.
 5. `step_deterministic` is true of any Lean function. The substance of determinism is on the Rust
    side, where it is tested, not proved.
 6. Lean's kernel and its three standard axioms are trusted.
@@ -158,21 +170,24 @@ and `Quot.sound`.
 |---|---|
 | `World := TenantId → Option Tenant` | `World { tenants: BTreeMap<TenantId, Arc<TenantState>> }` |
 | `Tenant.schema` | one `ObjectTypeDef` of `TenantSchema.objects` |
-| `FieldDef { ty, required }` | `FieldDef { ty, required, .. }` |
+| `FieldDef { ty, required, unique, default }` | `FieldDef { ty, required, unique, default, .. }`, `default` a constant |
 | `Ty.ref onDelete` | `FieldType::Ref { target, on_delete }` with `target` the tenant's one object type |
-| `Val` | `Value` restricted to `Null`, `Int`, `Str`, `Bool`, `Ref` |
-| `Record { owner, fields }` | `Record { created_by, fields, .. }` |
+| `Ty.list elem` | `FieldType::List(elem)`, `elem` a scalar or reference type |
+| `Val` | `Value` restricted to `Null`, `Int`, `Str`, `Bool`, `Ref` and `List` of those (`Elem`) |
+| `Record { owner, version, fields }` | `Record { created_by, version, fields, .. }` |
+| `Limits`, `Limits.kernel` | the constants of `limits.rs` |
 | `Tenant.owner`, `editors`, `writers` | members holding `owner`; a role with an unconditional policy; a role with a policy conditioned on `record.$created_by == principal` |
 | `Ctx { tenant, principal }` | `Context { tenant, principal, .. }` |
-| `Intent.create / update / delete` | `Intent::CreateRecord / UpdateRecord / DeleteRecord` |
+| `Intent.create / update / delete` | `Intent::CreateRecord / UpdateRecord / DeleteRecord`, with `expected_version` |
 | `Intent.setRequired f strict` | `Intent::ChangeSchema` with `Reject` or `Grandfather` |
 | `step` | `World::step`, that is `apply_delta ∘ transition` |
-| `problem` | `rules::validate_record`, restricted to unknown-field, required, type and reference checks; the first failure names the refusal |
+| `problem` | `rules::validate_record`, restricted to the record bound, unknown-field, required, value bound, unique-value bound, type and reference checks; the first failure names the refusal |
 | `conforms` | the type and required checks of `rules::validate_record` |
 | `blocks`, `clearRef` | the referrer scan of `transition::delete_record` |
 | `Tenant.WF` | the `records_conform` and `records_placed` invariants of `verification::invariants`, and referential integrity |
 | `Err.invalid` | `TypeMismatch`, `MissingRequired`, `UnknownField` |
 | `Err.danglingReference`, `Err.stillReferenced` | `DanglingReference`, `StillReferenced` |
+| `Err.versionConflict`, `Err.limitExceeded` | `VersionConflict` (from `check_version`, not from `apply_delta`), `LimitExceeded` |
 
 The two are different programs, so the correspondence is exercised rather than assumed.
 `strata_verification::lean::scenarios` generates 60 scenarios (over a thousand operations: valid
@@ -185,12 +200,32 @@ side runs everywhere; the Lean side runs wherever `lake` is installed.
 This is evidence that the kernel behaves like the model on the modelled fragment. It is not a
 proof, and a passing run says nothing about the parts of the kernel the model leaves out.
 
-The fixture tenants of `lean/Main.lean` declare five fields: `1` a required string, `2` an
+The fixture tenants of `lean/Main.lean` declare nine fields, in id order: `0` an optional list of
+references that restricts the delete of an element's target, `1` a required string, `2` an
 optional integer, `3` an optional boolean, `4` an optional reference to the tenant's own records
-that a delete clears (`set-null`), and `5` an optional reference that restricts the delete
-(`restrict`). A reference value is written `r:<id>` in the scenario format; the refusals of
-slice 1 print as `err dangling_reference` and `err still_referenced`. An update replaces the
-record, so the Rust side names all five fields, absent ones as `null`.
+that a delete clears (`set-null`), `5` an optional reference that restricts the delete
+(`restrict`), `6` an optional integer whose default is the constant `7`, `7` an optional list of
+strings, and `8` an optional list of references whose elements a delete removes (`set-null`).
+Field `9` is undeclared. A reference value is written `r:<id>` in the scenario format; the
+refusals of slice 1 print as `err dangling_reference` and `err still_referenced`, those of slice 2
+as `err version_conflict` and `err limit_exceeded`.
+
+Slice 2's additions to the scenario format:
+
+- A list value is `l:` followed by element tokens separated by commas (`7=l:s:oak,s:ash`,
+  `8=l:r:1,r:2`, the empty list `7=l:`); `l*<n>:<element>` is a list of `n` copies of one
+  element (`7=l*1001:s:a`). An element is any scalar token or `n`, never a list, and contains no
+  comma.
+- `s*<n>:<text>` is the string of `n` copies of `<text>` (`1=s*65537:x`), for the size limits.
+- `update <id> [v=<n>] <fields>` replaces the record, as before: the model reads it as the patch
+  that names every fixture field, those the line leaves out as `null`, so the Rust side names
+  fields `0` to `8`, absent ones as `null`. `patch <id> [v=<n>] <fields>` is a patch: only the
+  named fields change, `n` removing one. `delete <id> [v=<n>]` deletes. `v=<n>`, only directly
+  after the id, is the expected version.
+- A record prints its version after its owner: `record 1 owner=102 v=2 1=s:oak 6=i:7`. A string of
+  at least 100 characters that repeats one character prints as `s*<n>:<c>`, a list of at least
+  100 equal elements as `l*<n>:<element>`; other lists as `l:` and their elements joined by
+  commas.
 
 ## Gap analysis: the kernel's decisions against the model
 
@@ -242,23 +277,23 @@ From `transition::create_record`, `update_record`, `delete_record` and `rules::v
 | The object type does not exist; the refusal is `Unauthorized` unless the caller could act on that type, so a refusal never reveals which types exist | `UnknownObject` / `Unauthorized` | not covered (one object type) | 4 |
 | Update or delete of a record that does not exist; `Unauthorized` unless the caller could act on some record of the type | `UnknownRecord` / `Unauthorized` | covered (`missingRecord`) | 0 |
 | The caller may not create, update (judged on the old and the new record) or delete | `Unauthorized` | partly: owner, editors, writers on their own records | 6 |
-| `expected_version` given and not the stored version, checked after authorization | `VersionConflict` | not covered (no versions) | 2 |
-| Update is a patch: named fields replaced, `null` removes, others kept; version + 1 | | partly: update replaces | 2 |
-| Create fills absent fields from their defaults; a default that fails to evaluate | `Evaluation` | not covered | 2 (constant), 5 (expression) |
+| `expected_version` given and not the stored version, checked after authorization | `VersionConflict` | covered (`versionClash`) | 2 |
+| Update is a patch: named fields replaced, `null` removes, others kept; version + 1 | | covered (`patched`) | 2 |
+| Create fills absent fields from their defaults; a default that fails to evaluate | `Evaluation` | partly: constant defaults (`withDefaults`, a field named as `null` gets none); expressions not | 2 (constant), 5 (expression) |
 | A new record's workflow field is not an initial state | `WorkflowViolation` | not covered | 8 |
 | An update that changes a workflow field needs a declared transition whose guard is true; its assignments apply; the update is authorized again if they changed the record | `WorkflowViolation`, `Evaluation`, `Unauthorized` | not covered | 8 |
 | Validation; the first failure names the refusal, in this order: | | | |
-| 1. the record is larger than `MAX_RECORD_BYTES` | `LimitExceeded` | not covered | 2 |
+| 1. the record is larger than `MAX_RECORD_BYTES` | `LimitExceeded` | partly: over an abstract size that bounds the encoding below (slice 2's note) | 2 |
 | 2. a field the type does not declare | `UnknownField` | covered (`invalid`) | 0 |
-| 3. per field in id order: required and absent; a value over the string or list limits; a unique value over `MAX_UNIQUE_BYTES`; the wrong type | `MissingRequired`, `LimitExceeded`, `TypeMismatch` | covered for required and type (`invalid`); limits not | 0, 2 |
+| 3. per field in id order: required and absent; a value over the string or list limits; a unique value over `MAX_UNIQUE_BYTES`; the wrong type | `MissingRequired`, `LimitExceeded`, `TypeMismatch` | covered for required, type (lists elementwise) and the string and list limits; partly for the unique-value limit (abstract size; no fixture field is unique until slice 3) | 0, 2 |
 | 4. per field in id order, after its type: a unique value another record holds | `UniqueViolated` | not covered | 3 |
-| 5. per field in id order, after its type: a reference to a record that does not exist | `DanglingReference` | covered for single references within the one type | 1 (lists 2, across types 4) |
+| 5. per field in id order, after its type: a reference to a record that does not exist | `DanglingReference` | covered for single references and list elements within the one type | 1, 2 (across types 4) |
 | 6. composite unique constraints whose fields all have values, held by another record | `UniqueViolated` | not covered | 3 |
 | 7. a workflow field holding a value that is not one of its states | `WorkflowViolation` | not covered | 8 |
 | 8. only if nothing above failed: constraints, failing on `false`; `Evaluation` when one cannot be evaluated | `ConstraintViolated`, `Evaluation` | not covered | 5 |
 | Accepted create: the record under the next id, `created_by` the caller (none for the system), counter + 1 | | covered (owner = caller) | 0 |
-| Delete: another record of any type referring through a `restrict` field, or through a required single reference, blocks it; a record referring to itself does not | `StillReferenced` | covered for references within the one type | 1 (lists 2, across types 4) |
-| Accepted delete: the record removed; every other reference to it cleared (a list loses the element); each cleared record's version + 1 | | covered for single references; versions not | 1, 2 |
+| Delete: another record of any type referring through a `restrict` field, or through a required single reference, blocks it; a record referring to itself does not | `StillReferenced` | covered for references and lists within the one type (a required list never blocks) | 1, 2 (across types 4) |
+| Accepted delete: the record removed; every other reference to it cleared (a list loses the element); each cleared record's version + 1 | | covered within the one type | 1, 2 |
 | Events: `RecordCreated`, `RecordUpdated` (naming the transitions fired), `RecordDeleted`, an update event per cleared referrer; revision + 1; one `Publish` effect per event | | not covered | 9 |
 
 ### Schema: `ChangeSchema`
@@ -405,7 +440,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 |---|---|---|
 | 0 (before WG-5373) | One object type, scalar fields, the type, required and unknown-field checks, owner, editors and writers, create, update as replacement, delete, making a field required strictly or not, the missing-record rule | |
 | **1 (done)** | Single references within the one type: `DanglingReference` on write in field order, `StillReferenced` for restricting or required fields, clearing on delete; referential integrity as an invariant | 0 |
-| 2 | Record writes in full: patch updates, versions and `expected_version`, constant defaults, lists (of scalars and of references: element removal on delete, a required list never blocks), the size limits as an abstract bound | 1 |
+| **2 (done)** | Record writes in full: patch updates, versions and `expected_version`, constant defaults, lists (of scalars and of references: element removal on delete, a required list never blocks), the size limits as an abstract bound | 1 |
 | 3 | Uniqueness: single-field and composite (only when every field has a value), on write and on defining a constraint over existing data | 2 |
 | 4 | Several object types: `UnknownObject` with its hiding rule, references and referrers across types | 1 |
 | 5 | Expressions as an abstract three-valued language over record, old, new, principal, roles and `now`, with evaluation errors; constraints (checked last); expression defaults | 2, 4 |
@@ -448,6 +483,52 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
   migration check re-validates references too; the model's checks conformance only. The two agree
   on every state where integrity holds, which are the only states the model reaches.
 
+### Slice 2 review note: what was abstracted
+
+- **Outcomes, not the patch loop.** The kernel copies the stored record and inserts or removes each
+  named field. The model applies the patch entry by entry (`Fields.patch`) and states the outcome:
+  unnamed fields keep their values, the last value named wins, `null` removes. The kernel's patch
+  is a map, so it never names a field twice; the model's statements hold either way.
+- **Check order.** An update or delete asks, in the kernel's order: does the record exist (the
+  missing-record rule), may the caller act on it, is it at the expected version, then (update) the
+  validation of the patched record or (delete) whether anything blocks it. Workflow transitions,
+  which the kernel runs between the version check and validation, are slice 8.
+- **Versions.** A created record is at version 1; an accepted update writes version + 1; a delete
+  raises the version of each record whose reference it clears, once however many of its fields
+  named the deleted record (`clearRef` raises it only for a record that refers). The update events
+  the kernel emits for those records are slice 9.
+- **Constant defaults only.** A default is a value of the field's definition, `null` for none. The
+  kernel evaluates an expression, which can fail with `Evaluation`; expressions are slice 5. The
+  kernel fills a default only when the intent does not name the field at all: a field named as
+  `null` gets no default, and so it is in the model. A default goes through validation like any
+  other value, so a default of the wrong type is refused with `invalid` on create.
+- **Lists hold scalars or references.** List elements are a type of their own (`Elem`), so a list
+  never holds a list, matching the kernel's schema rule against nested lists. A list type checks
+  when every element has the element type; a `null` element has no type, as in the kernel. The
+  type is checked over the whole list before any element's reference is resolved, so a list with
+  an element of the wrong type and a dangling element is `invalid`, as in the kernel.
+- **What forbids a delete, for lists.** A restricting list blocks; a required list never does
+  (the element is removed and the field stays, possibly as the empty list, which is present).
+  `forbidsDelete` asks whether the value held is a list rather than whether the definition is a
+  list type; on records of the declared types, the only ones the model reaches, the two agree,
+  and the value form keeps the proofs free of an assumption that field ids are unique.
+- **Size limits as an abstract bound.** The bounds are numbers of the tenant (`Limits`, the
+  kernel's constants in the fixtures). A string's UTF-8 bytes and a list's length are measured
+  exactly, so the string and list limits agree with the kernel everywhere. The record size and a
+  unique value's size are measured by `Val.size` (a string's bytes, one for any other scalar, a
+  list the sum of its elements), not by the kernel's JSON encoding, which also counts quotes,
+  separators, field names, the id, the timestamps and so on. The encoding is never shorter than
+  `Val.size`, so whenever the model refuses for size the kernel does too, at the same step of the
+  validation order (the record bound first, the value bounds in each field's step, before its
+  type). The kernel can refuse a record the model accepts when the encoding's overhead crosses the
+  bound: scenarios that compare the record bound keep the model's size either above it or below
+  it by more than the overhead (a few hundred bytes plus a few bytes per value). The unique-value
+  bound waits for slice 3 to be driven, since a unique fixture field would bring uniqueness with it.
+- **Statement changes.** `delete_refused_while_referenced` now takes the delete's expected version
+  and a hypothesis that it does not clash; `delete_leaves_no_reference` states that no field
+  `refersTo` the deleted record, which covers list elements and implies the slice-1 statement; the
+  authorization theorems take any expected version. No statement was weakened.
+
 ## What covers the rest
 
 | Kernel behaviour | Evidence |
@@ -484,7 +565,7 @@ event delivery.
 - Wall-clock behaviour: CPU, database latency, contention, network delay.
 - Concurrency: operations run one at a time in schedule order.
 - The shell: sessions, cookies, CSRF, the WebSocket relay, the browser.
-- External effects beyond delivered, dropped or retried.
+- External effects: with faults on, publication runs through the backend's own publisher over an in-memory store; what a subscriber does with an event is not modelled.
 - Operations nobody generated or recorded.
 - Parameterised queries, other than through the views that bind their arguments.
 

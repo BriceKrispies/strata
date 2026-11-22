@@ -1895,7 +1895,7 @@ impl Store for MemoryStore {
         };
         *job = next.clone();
         inner.write(tenant, writes, now);
-        Ok(Reported::Recorded(next))
+        Ok(Reported::Recorded(Box::new(next)))
     }
 
     fn job_cancel(

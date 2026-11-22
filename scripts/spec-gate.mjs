@@ -108,14 +108,30 @@ function detail(lines) {
 // Runs a command with an argument array and no shell (`options.shell` is for `npm` on Windows only,
 // with constant arguments). `ok` is true only when it started, was not killed, did not time out and
 // exited with 0. A timeout kills it and is reported as `timedOut`.
+// Every command's wall time, printed at the end so a slow step is visible (WG-5411).
+const timings = [];
 function run(command, commandArgs, options = {}) {
-  return runCommand(command, commandArgs, {
+  const started = Date.now();
+  const result = runCommand(command, commandArgs, {
     cwd: options.cwd ?? root,
     env: { ...process.env, ...options.env },
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     shell: options.shell === true,
     interleaved: options.interleaved === true,
   });
+  timings.push({ what: [command, ...commandArgs].join(' ').slice(0, 110), seconds: (Date.now() - started) / 1000 });
+  return result;
+}
+
+// One Exegra command on the project, run once per gate: the evidence step and the Exegra step both
+// read `claims`, which is the same answer for the same specification (WG-5411).
+const exegraRuns = new Map();
+function runExegra(command) {
+  if (!exegraRuns.has(command)) {
+    const cli = resolve(exegraHome, 'cli/exegra.js');
+    exegraRuns.set(command, run(process.execPath, [cli, command, '--project', exegraProject, ...(process.env.EXEGRA_SPECS ? ['--specs', process.env.EXEGRA_SPECS] : [])], { cwd: exegraHome }));
+  }
+  return exegraRuns.get(command);
 }
 
 // Whether a tool is installed: its version command starts and exits 0.
@@ -179,7 +195,12 @@ function workspacePackages() {
   const manifest = readFileSync(resolve(root, 'Cargo.toml'), 'utf8');
   const members = [...(manifest.match(/^members\s*=\s*\[([^\]]*)\]/m)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1]);
   // crates/model/<area> are the crates by area of the generated model (WG-5371).
-  const isGenerated = (dir) => dir === 'crates/model' || dir === 'crates/model-core' || dir.startsWith('crates/model/');
+  // A crate whose src/lib.rs carries the @generated header is specc output too (the fixture crates).
+  const hasGeneratedHeader = (dir) => {
+    const lib = resolve(root, dir, 'src/lib.rs');
+    return existsSync(lib) && readFileSync(lib, 'utf8').split(/\r?\n/, 3).some((line) => line.includes('@generated'));
+  };
+  const isGenerated = (dir) => dir === 'crates/model' || dir === 'crates/model-core' || dir.startsWith('crates/model/') || hasGeneratedHeader(dir);
   const all = [];
   const handWritten = [];
   for (const dir of members) {
@@ -438,7 +459,7 @@ if (!noTest) {
   if (!hasTool('cargo', ['clippy', '--version'])) {
     skipCheck('cargo clippy -D warnings', 'clippy is not installed (rustup component add clippy)');
   } else {
-    const clippy = run('cargo', ['clippy', '--workspace', ...packages.generated.flatMap((name) => ['--exclude', name]), '--all-targets', '--', '-D', 'warnings'], { env: lintEnv, timeoutMs: LONG_TIMEOUT_MS });
+    const clippy = run('cargo', ['clippy', '--no-deps', '--workspace', ...packages.generated.flatMap((name) => ['--exclude', name]), '--all-targets', '--', '-D', 'warnings'], { env: lintEnv, timeoutMs: LONG_TIMEOUT_MS });
     check('cargo clippy -D warnings (hand-written crates)', clippy.ok, clippy.ok ? `${packages.handWritten.length} crates` : `${exitText(clippy)}: ${lastLine(clippy.out)}`);
   }
   if (!hasTool('cargo', ['audit', '--version'])) {
@@ -540,7 +561,7 @@ if (withBrowser) {
 // the gate's output can see them.
 {
   const cli = resolve(exegraHome, 'cli/exegra.js');
-  const verdicts = existsSync(cli) ? run(process.execPath, [cli, 'claims', '--project', exegraProject, ...(process.env.EXEGRA_SPECS ? ['--specs', process.env.EXEGRA_SPECS] : [])], { cwd: exegraHome }) : null;
+  const verdicts = existsSync(cli) ? runExegra('claims') : null;
   let claims = null;
   try {
     claims = verdicts ? JSON.parse(verdicts.stdout).result : null;
@@ -573,7 +594,7 @@ if (!exegraFound) {
   check('Exegra checkout', false, `no cli/exegra.js under ${exegraHome} (set EXEGRA_HOME)`);
 } else {
   const exegra = (command) => {
-    const r = run(process.execPath, [exegraCli, command, '--project', exegraProject, ...(process.env.EXEGRA_SPECS ? ['--specs', process.env.EXEGRA_SPECS] : [])], { cwd: exegraHome });
+    const r = runExegra(command);
     let json = null;
     try {
       json = JSON.parse(r.stdout);
@@ -682,6 +703,9 @@ else console.log(`generated tests: ${genTests.passed} of ${genTests.total} passe
 if (noTest) console.log('RECORDED TEST RESULTS, NOT A RUN OF THE TESTS ON THIS CODE. Accepted only because --allow-recorded was given.');
 for (const note of notes) console.log(`note: ${note}`);
 if (notRun.length) console.log(`NOT RUN: ${notRun.length} check${notRun.length === 1 ? '' : 's'} did not run (${notRun.join('; ')}). A pass below does not cover them.`);
+const timed = [...timings].sort((a, b) => b.seconds - a.seconds).filter((t) => t.seconds >= 1);
+console.log(`time: ${process.uptime().toFixed(0)} s in all; commands of a second or more:`);
+for (const t of timed) console.log(`  ${t.seconds.toFixed(1).padStart(7)} s  ${t.what}`);
 console.log(passed ? (notRun.length ? `GATE PASSED, with ${notRun.length} not run` : 'GATE PASSED') : `GATE FAILED: ${failures.join('; ') || 'recorded test results not accepted'}`);
 
 if (passed && !noTest) {

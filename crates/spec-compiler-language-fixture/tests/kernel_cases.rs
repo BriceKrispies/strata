@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value as Json;
 use strata_spec_compiler_language_fixture::rule_language::{
-    check, eval, parse, Env, EvalError, Record, Shape, TypeEnv,
+    eval, parse, Env, EvalError, Record, Shape, TypeEnv,
 };
 use strata_spec_compiler_language_fixture::types::{Expr, Scope, Value};
 

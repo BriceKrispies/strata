@@ -1257,6 +1257,9 @@ pub struct PostgresStore {
     /// Where the nonce of a new generation comes from: the operating system's random source
     /// unless a test or the simulator gives a seeded one ([`PostgresStore::with_nonces`]).
     nonces: Arc<dyn NonceSource>,
+    /// Tenants an install announced ([`Store::begin_provisioning`]) whose creating commit has not
+    /// happened yet: that commit writes their directory row as `provisioning`.
+    announced: Mutex<BTreeSet<TenantId>>,
 }
 
 impl PostgresStore {
@@ -1315,6 +1318,7 @@ impl PostgresStore {
             pools: Mutex::new(pools),
             open: Mutex::new(BTreeMap::new()),
             creating: Mutex::new(()),
+            announced: Mutex::new(BTreeSet::new()),
             sweep: AtomicUsize::new(0),
             faults: Mutex::new(Vec::new()),
             durable,
@@ -1510,12 +1514,22 @@ impl PostgresStore {
             schema: location.schema.clone(),
         };
         self.check_collision(tenant, &scope)?;
+        let state = if self
+            .announced
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(tenant)
+        {
+            "provisioning"
+        } else {
+            "active"
+        };
         // The directory row claims the tenant first: a second creator, in another process, fails
         // on its key and finds the tenant made.
         let claimed = self.control.write(|t| {
             t.execute(
-                "INSERT INTO tenant_directory (id, state, schema_name, created_at) VALUES ($1, 'active', $2, $3)",
-                &[&tenant.as_str(), &scope.schema, &now.0],
+                "INSERT INTO tenant_directory (id, state, schema_name, created_at) VALUES ($1, $4, $2, $3)",
+                &[&tenant.as_str(), &scope.schema, &now.0, &state],
             )
             .map_err(db)?;
             Ok(())
@@ -1541,6 +1555,10 @@ impl PostgresStore {
     /// session directory and the wake index follow by cascade). A tenant that is not there is
     /// fine.
     fn remove_tenant(&self, tenant: &TenantId) -> StoreResult<()> {
+        self.announced
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(tenant);
         let schema = self.control.read(|t| {
             let found = select_strings(
                 t,
@@ -4622,7 +4640,7 @@ impl Store for PostgresStore {
                 };
                 put_job(t, &next)?;
                 write_automation(t, tenant, writes, now)?;
-                Ok(Reported::Recorded(next))
+                Ok(Reported::Recorded(Box::new(next)))
             })?
             .unwrap_or_else(|| Reported::Refused(format!("no tenant {tenant}"))))
     }
@@ -5054,7 +5072,11 @@ impl Store for PostgresStore {
     }
 
     fn begin_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {
-        self.set_directory_state(tenant, "active", "provisioning")
+        self.announced
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(tenant.clone());
+        Ok(())
     }
 
     fn finish_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {

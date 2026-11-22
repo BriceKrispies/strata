@@ -66,7 +66,7 @@
  *   | { type: 'http_result', id: number, ok: boolean, status: number, body: any }
  *   | { type: 'ws_open' }
  *   | { type: 'ws_message', message: any }
- *   | { type: 'ws_closed' }
+ *   | { type: 'ws_closed', refused?: boolean }
  *   | { type: 'timer', name: string, token: number }
  *   | { type: 'passkey_result', id: number, ok: boolean, credential?: any, cancelled?: boolean }
  * ) & Stamp} Message

@@ -79,15 +79,17 @@ structure Header where
   owner : PrincipalId
   editors : List PrincipalId
   writers : List PrincipalId
+  limits : Limits := Limits.kernel
 
 def _root_.Strata.Tenant.header (t : Tenant) : Header :=
-  { schema := t.schema, owner := t.owner, editors := t.editors, writers := t.writers }
+  { schema := t.schema, owner := t.owner, editors := t.editors, writers := t.writers,
+    limits := t.limits }
 
 /-- A header as a tenant with no records, so the model's permission functions apply to it. They
     read neither records nor the counter. -/
 def Header.asTenant (h : Header) : Tenant :=
   { schema := h.schema, owner := h.owner, editors := h.editors, writers := h.writers,
-    records := [], nextId := 0 }
+    records := [], nextId := 0, limits := h.limits }
 
 /-! ## Keys, values and the store -/
 
@@ -194,39 +196,51 @@ def Delta.apply (t : Tenant) : Delta → Tenant
 record it references exists. These are the same functions with existence given as a lookup, so a
 decision can be made from the referenced records alone. -/
 
-def resolvesVia (has : RecordId → Bool) : Val → Bool
+def elemResolvesVia (has : RecordId → Bool) : Elem → Bool
   | .ref id => has id
   | _ => true
 
-def valueProblemVia (has : RecordId → Bool) (ty : Ty) (v : Val) : Option Err :=
-  if !v.hasType ty then some .invalid
+def resolvesVia (has : RecordId → Bool) : Val → Bool
+  | .ref id => has id
+  | .list vs => vs.all (elemResolvesVia has)
+  | _ => true
+
+def valueProblemVia (L : Limits) (has : RecordId → Bool) (d : FieldDef) (v : Val) : Option Err :=
+  if v.overLimit L then some .limitExceeded
+  else if d.unique && decide (L.maxUnique < v.size) then some .limitExceeded
+  else if !v.hasType d.ty then some .invalid
   else if !resolvesVia has v then some .danglingReference
   else none
 
-def fieldProblemVia (has : RecordId → Bool) (fs : Fields) (fd : FieldId × FieldDef) : Option Err :=
+def fieldProblemVia (L : Limits) (has : RecordId → Bool) (fs : Fields) (fd : FieldId × FieldDef) :
+    Option Err :=
   if fd.2.required && (fs.valuesOf fd.1).isEmpty then some .invalid
-  else (fs.valuesOf fd.1).findSome? (valueProblemVia has fd.2.ty)
+  else (fs.valuesOf fd.1).findSome? (valueProblemVia L has fd.2)
 
-def problemVia (schema : Schema) (has : RecordId → Bool) (r : Record) : Option Err :=
-  if r.fields.all (fun fv => (schema.lookup fv.1).isSome) then
-    schema.findSome? (fieldProblemVia has r.fields)
+def problemVia (L : Limits) (schema : Schema) (has : RecordId → Bool) (r : Record) : Option Err :=
+  if decide (L.maxRecord < r.size) then some .limitExceeded
+  else if r.fields.all (fun fv => (schema.lookup fv.1).isSome) then
+    schema.findSome? (fieldProblemVia L has r.fields)
   else some .invalid
 
 /-- The validity of a written record depends on the other records only through whether the records
     it references exist. -/
-theorem problem_eq_via (schema : Schema) (rs : Records) (r : Record) :
-    problem schema rs r = problemVia schema (fun id => (rs.lookup id).isSome) r := by
+theorem problem_eq_via (L : Limits) (schema : Schema) (rs : Records) (r : Record) :
+    problem L schema rs r = problemVia L schema (fun id => (rs.lookup id).isSome) r := by
+  have he : Elem.resolves rs = elemResolvesVia (fun id => (rs.lookup id).isSome) := by
+    funext e; cases e <;> rfl
   have h0 : Val.resolves rs = resolvesVia (fun id => (rs.lookup id).isSome) := by
-    funext v; cases v <;> rfl
-  have h1 : valueProblem rs = valueProblemVia (fun id => (rs.lookup id).isSome) := by
-    funext ty v; simp only [valueProblem, valueProblemVia, h0]
-  have h2 : fieldProblem rs = fieldProblemVia (fun id => (rs.lookup id).isSome) := by
+    funext v; cases v <;> simp [Val.resolves, resolvesVia, he, Records.has]
+  have h1 : valueProblem L rs = valueProblemVia L (fun id => (rs.lookup id).isSome) := by
+    funext d v; simp only [valueProblem, valueProblemVia, h0]
+  have h2 : fieldProblem L rs = fieldProblemVia L (fun id => (rs.lookup id).isSome) := by
     funext fs fd; simp only [fieldProblem, fieldProblemVia, h1]
   simp only [problem, problemVia, h2]
 
-/-- The records that hold a reference to `id`: the ones a delete of `id` clears. -/
+/-- The records that hold a reference to `id`, single or in a list: the ones a delete of `id`
+    clears. -/
 def referrers (all : List (RecordId × Record)) (id : RecordId) : List RecordId :=
-  (all.filter (fun q => q.2.fields.any (fun fv => fv.2 == .ref id))).map Prod.fst
+  (all.filter (fun q => q.2.refersTo id)).map Prod.fst
 
 def applyWorld (w : World) (x : TenantId) (d : Delta) : World :=
   upd w x ((w x).map (fun t => d.apply t))
@@ -247,25 +261,27 @@ def decideTenant (h : Header) (n : Nat) (look : RecordId → Option Record)
   | .create fs =>
     if !canCreate h.asTenant p then .error .unauthorized
     else
-      let r : Record := { owner := p, fields := normalise fs }
-      match problemVia h.schema (fun id => (look id).isSome) r with
+      let r := newRecord h.schema p fs
+      match problemVia h.limits h.schema (fun id => (look id).isSome) r with
       | some e => .error e
       | none => .ok (.create n r)
-  | .update id fs =>
+  | .update id fs ev =>
     match look id with
     | none => .error (missingRecord h.asTenant p)
     | some old =>
       if !canEdit h.asTenant p old then .error .unauthorized
+      else if versionClash ev old then .error .versionConflict
       else
-        let r : Record := { owner := old.owner, fields := normalise fs }
-        match problemVia h.schema (fun id => (look id).isSome) r with
+        let r := patched old fs
+        match problemVia h.limits h.schema (fun id => (look id).isSome) r with
         | some e => .error e
         | none => .ok (.replace id r)
-  | .delete id =>
+  | .delete id ev =>
     match look id with
     | none => .error (missingRecord h.asTenant p)
     | some old =>
       if !canEdit h.asTenant p old then .error .unauthorized
+      else if versionClash ev old then .error .versionConflict
       else if all.any (blocks h.schema id) then .error .stillReferenced
       else .ok (.remove id (referrers all id))
   | .setRequired f strict =>
@@ -299,14 +315,8 @@ theorem decideOn_congr (get get' : Key → Payload) (x : TenantId) (p : Principa
   simp only [decideOn, hh, hc, ha, hr]
 
 private theorem clearRef_none (id : RecordId) (r : Record)
-    (h : r.fields.any (fun fv => fv.2 == .ref id) = false) : clearRef id r = r := by
-  cases r with
-  | mk o fs =>
-    simp only [clearRef, Record.mk.injEq, true_and]
-    apply List.filter_eq_self.mpr
-    intro fv hfv
-    have := List.any_eq_false.mp h fv hfv
-    simpa using this
+    (h : r.refersTo id = false) : clearRef id r = r := by
+  simp [clearRef, h]
 
 /-- Clearing only the records `referrers` names is clearing every record: the others hold no
     reference to clear. -/
@@ -321,8 +331,8 @@ private theorem remove_map_eq (rs : Records) (id : RecordId) :
   · have hc' : q.1 ∈ referrers rs id := by simpa using hc
     simp [hc']
   · simp only [hc, Bool.false_eq_true, ite_false]
-    have hn : q.2.fields.any (fun fv => fv.2 == .ref id) = false := by
-      cases hq2 : q.2.fields.any (fun fv => fv.2 == .ref id) with
+    have hn : q.2.refersTo id = false := by
+      cases hq2 : q.2.refersTo id with
       | false => rfl
       | true =>
         exfalso
@@ -333,6 +343,7 @@ private theorem remove_map_eq (rs : Records) (id : RecordId) :
 
 @[simp] private theorem header_schema (t : Tenant) : t.header.schema = t.schema := rfl
 @[simp] private theorem header_owner (t : Tenant) : t.header.owner = t.owner := rfl
+@[simp] private theorem header_limits (t : Tenant) : t.header.limits = t.limits := rfl
 @[simp] private theorem canCreate_asTenant (t : Tenant) (p : PrincipalId) :
     canCreate t.header.asTenant p = canCreate t p := rfl
 @[simp] private theorem canEdit_asTenant (t : Tenant) (p : PrincipalId) (r : Record) :
@@ -351,37 +362,44 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
       (Delta.apply t) = stepTenant t p i := by
   cases i with
   | create fs =>
-    simp only [decideTenant, stepTenant, canCreate_asTenant, header_schema, problem_eq_via]
+    simp only [decideTenant, stepTenant, canCreate_asTenant, header_schema, header_limits,
+      problem_eq_via]
     by_cases hc : canCreate t p = true
-    · cases hk : problemVia t.schema (fun id => (t.records.lookup id).isSome)
-        { owner := p, fields := normalise fs } with
+    · cases hk : problemVia t.limits t.schema (fun id => (t.records.lookup id).isSome)
+        (newRecord t.schema p fs) with
       | none => simp [hc, Delta.apply, Except.map]
       | some e => simp [hc, Except.map]
     · simp [hc, Except.map]
-  | update id fs =>
+  | update id fs ev =>
     simp only [decideTenant, stepTenant, canEdit_asTenant, missingRecord_asTenant, header_schema,
-      problem_eq_via]
+      header_limits, problem_eq_via]
     cases hl : t.records.lookup id with
     | none => simp [Except.map]
     | some old =>
       by_cases hc : canEdit t p old = true
-      · cases hk : problemVia t.schema (fun id => (t.records.lookup id).isSome)
-          { owner := old.owner, fields := normalise fs } with
-        | none => simp [hc, hk, Delta.apply, Except.map]
-        | some e => simp [hc, hk, Except.map]
+      · by_cases hv : versionClash ev old = true
+        · simp [hc, hv, Except.map]
+        · have hv' : versionClash ev old = false := by simpa using hv
+          cases hk : problemVia t.limits t.schema (fun id => (t.records.lookup id).isSome)
+            (patched old fs) with
+          | none => simp [hc, hv', hk, Delta.apply, Except.map]
+          | some e => simp [hc, hv', hk, Except.map]
       · simp [hc, Except.map]
-  | delete id =>
+  | delete id ev =>
     simp only [decideTenant, stepTenant, canEdit_asTenant, missingRecord_asTenant, header_schema]
     cases hl : t.records.lookup id with
     | none => simp [Except.map]
     | some old =>
       by_cases hc : canEdit t p old = true
-      · by_cases hb : t.records.any (blocks t.schema id) = true
-        · simp [hc, hb, Except.map]
-        · have hb' : t.records.any (blocks t.schema id) = false := by simpa using hb
-          simp only [hc, hb', Bool.not_true, Bool.false_eq_true, ite_false, Except.map,
-            Delta.apply, Except.ok.injEq]
-          simp only [removeRecords, remove_map_eq]
+      · by_cases hv : versionClash ev old = true
+        · simp [hc, hv, Except.map]
+        · have hv' : versionClash ev old = false := by simpa using hv
+          by_cases hb : t.records.any (blocks t.schema id) = true
+          · simp [hc, hv', hb, Except.map]
+          · have hb' : t.records.any (blocks t.schema id) = false := by simpa using hb
+            simp only [hc, hv', hb', Bool.not_true, Bool.false_eq_true, ite_false, Except.map,
+              Delta.apply, Except.ok.injEq]
+            simp only [removeRecords, remove_map_eq]
       · simp [hc, Except.map]
   | setRequired f strict =>
     simp only [decideTenant, stepTenant, header_owner, header_schema]

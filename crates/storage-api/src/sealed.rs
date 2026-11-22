@@ -964,7 +964,7 @@ impl SealedStore {
             let Some(subject) = named(&member) else {
                 continue;
             };
-            if let Some(sealed) = seal(*name, &subject, &member)? {
+            if let Some(sealed) = seal(name, &subject, &member)? {
                 members.insert((*name).to_string(), sealed);
                 changed = true;
             }
@@ -980,7 +980,7 @@ impl SealedStore {
             {
                 continue;
             }
-            if let Some(sealed) = seal(*name, &first, &member)? {
+            if let Some(sealed) = seal(name, &first, &member)? {
                 members.insert((*name).to_string(), sealed);
                 changed = true;
             }

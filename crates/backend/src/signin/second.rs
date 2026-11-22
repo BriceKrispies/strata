@@ -320,7 +320,8 @@ pub fn verify(app: &App, caller: &Caller, request: &Json) -> Result<SignInOutcom
         &["well-formed", "throttle", "credential", "second-factor"],
         &caller.correlation,
     );
-    auth::start_session(app, caller, &tenant, account, &pending.method).map(SignInOutcome::Session)
+    auth::start_session(app, caller, &tenant, account, &pending.method)
+        .map(|reply| SignInOutcome::Session(Box::new(reply)))
 }
 
 /// What the signed-in person's factors are: for the desk's section.

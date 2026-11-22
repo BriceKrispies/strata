@@ -140,7 +140,7 @@ function form(page) {
         'div',
         { class: 'field field--check' },
         h('input', { id: 'lab-faults', name: 'faults', type: 'checkbox', checked: f.faults === true }),
-        h('label', { for: 'lab-faults' }, 'Inject faults: lost commit races and dropped event deliveries'),
+        h('label', { for: 'lab-faults' }, 'Inject faults: lost commit races, lost replies, a stopped process and a failing outbox, run through the request path of the backend itself'),
       ),
     ),
     h(
@@ -385,11 +385,19 @@ function result(page) {
       h('div', null, h('dt', null, 'Baseline trace'), h('dd', null, short(r.baseline.trace_hash), ` ${r.baseline.accepted} accepted, ${r.baseline.rejected} rejected`)),
       h('div', null, h('dt', null, 'Branch trace'), h('dd', null, short(r.branch.trace_hash), ` ${r.branch.accepted} accepted, ${r.branch.rejected} rejected`)),
       h('div', null, h('dt', null, 'Trace replay'), h('dd', null, `${r.trace_replay.agreed} of ${r.trace_replay.steps} steps agree when re-run against the bare kernel`)),
-      r.request.faults.delivery_drop
-        ? h('div', null, h('dt', null, 'Faults'), h('dd', null, `${r.baseline.dropped} of ${r.baseline.deliveries} event deliveries dropped and retried; every event still arrived once, in order`))
+      r.faults
+        ? h('div', null, h('dt', null, 'Faults'), h('dd', null, faultsText(r.faults)))
         : null,
     ),
   );
+}
+
+/** What the run through the deployment's own code reported, as a sentence. */
+function faultsText(f) {
+  const injected = Object.values(f.injected).reduce((a, b) => a + b, 0);
+  const p = f.publications;
+  const held = f.invariants.every((i) => i.holds) && f.quiesced;
+  return `${injected} store faults injected and ${f.process_stops} process stops over ${f.requests} requests sent ${f.sent} times: ${f.conflicts_retried} commit races retried, ${f.answered_from_key} lost replies answered from their idempotency key; ${p.heard} of ${p.committed} committed events published (${p.offered_again} offered again); ${held ? 'every check of the run held' : 'a check of the run failed'}`;
 }
 
 function projection(page) {

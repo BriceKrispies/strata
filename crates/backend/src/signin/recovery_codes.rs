@@ -15,13 +15,12 @@
 //! Implements: IDN-018
 
 use super::stepup;
-use super::{rules, throttled, totp};
+use super::totp;
 use crate::app::{ApiError, App};
 use crate::auth::{Caller, Identity};
 use serde_json::{json, Value as Json};
 use strata_kernel::{canon, PrincipalId, TenantId};
 use strata_protocol::api::ErrorCode;
-use strata_storage_api::{ThrottleSettle, ThrottleVerdict};
 
 /// How many codes a set holds.
 pub const SET_SIZE: usize = 10;
@@ -94,44 +93,6 @@ pub(super) fn generate(
     app.store
         .replace_recovery_codes(tenant, principal, &hashes, app.now())?;
     Ok(codes)
-}
-
-/// Spend a code with the limits that apply to presentations of a secret. Returns whether it was
-/// one of the person's unspent codes.
-///
-/// Implements: IDN-008
-pub(super) fn present(
-    app: &App,
-    caller: &Caller,
-    principal: &PrincipalId,
-    code: &str,
-) -> Result<bool, ApiError> {
-    let rules = rules(app, "recovery-code", principal.as_str(), &caller.source);
-    if let ThrottleVerdict::Refused { .. } =
-        app.store
-            .throttle_reserve(&caller.site, &rules, app.now())?
-    {
-        return Err(throttled());
-    }
-    if !app.store.spend_recovery_code(
-        &caller.site,
-        principal,
-        &hash(&caller.site, principal, code),
-    )? {
-        return Ok(false);
-    }
-    let [account_rule, source_rule, realm_rule] = &rules;
-    app.store.throttle_settle(
-        &caller.site,
-        &account_rule.key,
-        account_rule.max,
-        ThrottleSettle::Clear,
-    )?;
-    for rule in [source_rule, realm_rule] {
-        app.store
-            .throttle_settle(&caller.site, &rule.key, rule.max, ThrottleSettle::Refund)?;
-    }
-    Ok(true)
 }
 
 /// Make a new set of recovery codes for the signed-in person. A sensitive operation, because it

@@ -118,7 +118,7 @@ fn fresh_database() -> String {
     url_of_database(&url, &name)
 }
 
-/// Verifies: STO-002
+/// Verifies: STO-004
 ///
 /// Every row of the table in the specification has a check and every check has a row, and each
 /// check runs on a database of its own.

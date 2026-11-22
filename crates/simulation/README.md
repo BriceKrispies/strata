@@ -50,7 +50,11 @@ Where the logic lives:
 
 What the kernel-level engine is still for: `engine::run_with` and `project::project` decide
 counterfactual branches for the Impact Lab (`lab.rs`, CT-391) on a copy of a tenant's state, where
-only the kernel's verdicts are compared. That is a statement about the kernel, and it stays.
+only the kernel's verdicts are compared. That is a statement about the kernel, and it stays. The
+engine injects no faults and keeps no queue of its own (WG-5388): the Impact Lab's faults option
+runs the schedule through `shell::run_shell_after` instead, on a copy of the tenant made by
+sending the fresh process the tenant's recorded history, and reports only what that run's trace
+holds.
 
 ## The shell path (since WG-5378)
 
@@ -116,6 +120,5 @@ first time in order without a gap, and that no request with an idempotency key c
   (gateway), fm-migration-interrupted (segment migration runs), fm-bad-layout-change (storage
   migrations), fm-move-copy-fails and fm-move-concurrent-write (tenant moves). fm-mail-outage and
   fm-provider-outage are provider-scope; the mail adapter is simulated but no test sends mail.
-- The Impact Lab's kernel-level engine keeps its imitated `Faults` (WG-5388).
 - Finding: a lost answer to the create-tenant commit of an installation leaves a half tenant
   that is never rolled back (WG-5387).

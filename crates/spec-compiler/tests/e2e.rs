@@ -25,14 +25,6 @@ fn fixture_files() -> Vec<GeneratedFile> {
     e2e::generate(FIXTURE_SPEC, &fixture_text()).unwrap().files
 }
 
-fn contents<'a>(files: &'a [GeneratedFile], path: &str) -> &'a str {
-    &files
-        .iter()
-        .find(|f| f.path == path)
-        .unwrap_or_else(|| panic!("no file {path}"))
-        .contents
-}
-
 #[test]
 fn golden_output_matches_the_expected_files() {
     let dir = manifest_dir().join("tests/fixtures/e2e/expected");
@@ -47,16 +39,4 @@ fn golden_output_matches_the_expected_files() {
         "tests/fixtures/e2e/expected is not what specc e2e generates: {differences:?}. \
          Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
     );
-}
-
-fn repo_root() -> PathBuf {
-    manifest_dir().join("../..")
-}
-
-/// The files `specc e2e` writes from a specification of the repository, with its options.
-fn generated(spec: &str, options: &e2e::Options) -> Vec<GeneratedFile> {
-    let text = fs::read_to_string(repo_root().join(spec)).unwrap();
-    e2e::generate_with(spec, &text, options)
-        .unwrap_or_else(|d| panic!("specc e2e refuses {spec}: {d:#?}"))
-        .files
 }

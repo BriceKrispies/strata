@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use strata_kernel::segments::{
     self as seg, Batch, BatchLoad, BatchScope, Definition, Occasion, Segment, SegmentDirection,
-    SegmentId, SegmentKey, SegmentMembershipEvent, SegmentReason, SegmentTables, SegmentWrite,
+    SegmentId, SegmentMembershipEvent, SegmentReason, SegmentTables, SegmentWrite,
 };
 use strata_kernel::testkit::{ctx, field, field_def, object, principal_id, role, tenant_id, text};
 use strata_kernel::*;

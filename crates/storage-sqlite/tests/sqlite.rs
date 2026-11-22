@@ -27,6 +27,31 @@ fn fresh_path(name: &str) -> PathBuf {
     path
 }
 
+/// Verifies: STO-002
+///
+/// Every row of the table in the specification has a check and every check has a row, and each
+/// check runs on a database file.
+#[test]
+fn sqlite_store_conforms_on_disk() {
+    let ran = conformance::run(&|| {
+        Box::new(SqliteStore::open(&fresh_path("conformance"), Timestamp(1)).unwrap())
+            as Box<dyn Store>
+    });
+    let spec = strata_spec_parts::read_spec_text(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../specifications/spec.jsonc"
+    )))
+    .expect("the specification file");
+    let (mut ran, mut rows) = (ran, conformance::spec_cases(&spec));
+    assert!(rows.len() >= 13, "the table was not read: {rows:?}");
+    ran.sort();
+    rows.sort();
+    assert_eq!(
+        ran, rows,
+        "the checks that ran are not the rows of the conformance table"
+    );
+}
+
 /// Verifies: OPS-318
 ///
 /// A retried create after the process restarted: the key was recorded in the tenant's file by the
@@ -734,4 +759,44 @@ fn resident_store_over_sqlite_serves_records_at_one_generation() {
     let first = Arc::new(SqliteStore::open(&path, Timestamp(1)).unwrap());
     let second = SqliteStore::open(&path, Timestamp(2)).unwrap();
     conformance::a_foreign_commit_refreshes_the_resident_records(first, &second);
+}
+
+/// Verifies: fm-provisioning-step-fails
+///
+/// An install announced before its creating commit is `provisioning` from that commit on: a
+/// process that stops before finishing leaves a tenant the next start rolls back to absent, and
+/// an install that finishes is `active` after a reopen.
+#[test]
+fn an_unfinished_install_is_rolled_back_after_a_restart_and_a_finished_one_stays() {
+    let path = fresh_path("provisioning");
+    let half = tenant_id("half");
+    let whole = tenant_id("whole");
+    let create = |store: &SqliteStore, tenant: &TenantId| {
+        store.begin_provisioning(tenant).unwrap();
+        execute(
+            store,
+            &Intent::CreateTenant {
+                name: tenant.as_str().into(),
+                owner: principal_id("owner"),
+            },
+            &ctx(tenant.as_str(), Principal::System, 10),
+        )
+        .unwrap();
+    };
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        create(&store, &half);
+        create(&store, &whole);
+        store.finish_provisioning(&whole).unwrap();
+        // The process stops here: `half` is never finished.
+    }
+    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    assert_eq!(store.rollback_provisioning().unwrap(), vec![half.clone()]);
+    assert!(store.load_complete(&half).unwrap().tenant.is_none());
+    assert!(store.load_complete(&whole).unwrap().tenant.is_some());
+    assert!(store.rollback_provisioning().unwrap().is_empty());
+    drop(store);
+    let store = SqliteStore::open(&path, Timestamp(3)).unwrap();
+    assert!(store.load_complete(&half).unwrap().tenant.is_none());
+    assert!(store.load_complete(&whole).unwrap().tenant.is_some());
 }

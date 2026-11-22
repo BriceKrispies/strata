@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use strata_kernel::query_plan::{self, IndexBound, IndexPosition, INDEX_PAGE};
+use strata_kernel::query_plan::{self, IndexBound, IndexPosition};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_storage_api::covering::{load_covering, read_asking, Covered};
@@ -336,17 +336,6 @@ fn put(store: &dyn Store, tenant: &str, items: Vec<Arc<Record>>) {
     }
 }
 
-fn delete(store: &dyn Store, tenant: &str, ids: impl IntoIterator<Item = u64>) {
-    let ops = ids
-        .into_iter()
-        .map(|id| DeltaOp::DeleteRecord {
-            object: object("item"),
-            id: RecordId(id),
-        })
-        .collect();
-    commit_ops(store, tenant, ops);
-}
-
 struct Lcg(u64);
 
 impl Lcg {
@@ -411,18 +400,6 @@ fn random_item(rng: &mut Lcg, id: u64) -> Arc<Record> {
 
 /// The teams of the random items; an even one is open.
 const TEAMS: u64 = 5;
-
-fn team(id: u64) -> Arc<Record> {
-    Arc::new(Record {
-        id: RecordId(id),
-        object: object("team"),
-        version: 1,
-        created_by: None,
-        created_at: Timestamp(1),
-        updated_at: Timestamp(1),
-        fields: BTreeMap::from([(field("open"), Value::Bool(id % 2 == 0))]),
-    })
-}
 
 fn named(
     name: &str,
@@ -577,7 +554,9 @@ fn every_store_answers_an_index_page_alike() {
         .map(|r| r.id.0)
         .collect();
         for (name, store) in &made {
-            let loaded = store.load(&tenant_id("alpha"), &[need.clone()]).unwrap();
+            let loaded = store
+                .load(&tenant_id("alpha"), std::slice::from_ref(&need))
+                .unwrap();
             let ids: BTreeSet<u64> = loaded
                 .tenant
                 .unwrap()
@@ -622,7 +601,8 @@ fn reads_and_views_over_a_hundred_thousand_records_load_a_bounded_number() {
         let store = store.as_ref();
         crowded(store, "alpha");
         let context = ctx("alpha", Principal::Anonymous, 9_000);
-        let per_page = INDEX_PAGE as usize;
+        // The most records a page of candidates holds (KRN-2520).
+        let per_page = 200;
         // Posts by this author, newest first (WG-5181): one page of candidates per page of rows,
         // and the rows the kernel reads from the whole table.
         let complete = store.load_complete(&tenant_id("alpha")).unwrap();

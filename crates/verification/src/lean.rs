@@ -12,14 +12,16 @@
 //! | Lean model | Rust kernel in these fixtures |
 //! |---|---|
 //! | tenant `n` | tenant `t<n>` with one object type `item` |
-//! | fields 1 to 5 | `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict` |
+//! | fields 0 to 8 | `f0: list of ref item, restrict`, `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict`, `f6: int, default 7`, `f7: list of string`, `f8: list of ref item, set-null` |
 //! | owner, editors, writers | the `owner` role; an `editor` role allowed everything on `item`; a `writer` role allowed to create, and to update or delete where `record.$created_by == principal` |
 //! | `create fs` | `CreateRecord` |
-//! | `update id fs` | `UpdateRecord` naming all three fields, absent ones as `null` |
-//! | `delete id` | `DeleteRecord` |
+//! | `update id [v=n] fs` | `UpdateRecord` naming fields `f0` to `f8`, absent ones as `null` |
+//! | `patch id [v=n] fs` | `UpdateRecord` naming only the fields given, `n` removing one |
+//! | `delete id [v=n]` | `DeleteRecord` |
 //! | `setRequired f strict` | `ChangeSchema [DefineField f required]` with `Reject` or `Grandfather` |
 //! | `Err.danglingReference`, `Err.stillReferenced` | `DanglingReference`, `StillReferenced` |
 //! | `Err.invalid` | `TypeMismatch`, `MissingRequired`, `UnknownField` |
+//! | `Err.versionConflict`, `Err.limitExceeded` | `VersionConflict`, `LimitExceeded` |
 //!
 //! # The Main.lean protocol
 //!
@@ -29,10 +31,14 @@
 //! ```text
 //! scenario <name>              starts a scenario from the initial world
 //! op <tenant> <principal> <intent> [args]
-//!                              one intent, as `create f=v ..`, `update <id> f=v ..`,
-//!                              `delete <id>`, `require <field> strict|lax`
+//!                              one intent, as `create f=v ..`, `update <id> [v=n] f=v ..`,
+//!                              `patch <id> [v=n] f=v ..`, `delete <id> [v=n]`,
+//!                              `require <field> strict|lax`
 //! end                          prints the final state and returns to the initial world
 //! ```
+//!
+//! A value is `n`, `i:<int>`, `s:<text>`, `s*<count>:<text>` (the text repeated), `b:1`, `b:0`,
+//! `r:<id>`, or a list: `l:<element>,<element>,..` (`l:` is empty) or `l*<count>:<element>`.
 //!
 //! Output: `scenario <name>`, then `ok` or `err <kind>` per op (`unparsed <line>` for a line it
 //! cannot read), then `state`, the state lines and `end`. A new intent is a new `op` arm in
@@ -166,19 +172,21 @@ fn field_id(n: u64) -> FieldId {
 }
 
 fn field_type(n: u64) -> FieldType {
+    let reference = |on_delete| FieldType::Ref {
+        target: item(),
+        on_delete,
+    };
     match n {
+        0 => FieldType::List(Box::new(reference(OnDelete::Restrict))),
         1 => FieldType::Str,
-        2 => FieldType::Int,
+        2 | 6 => FieldType::Int,
         3 => FieldType::Bool,
         // Field 4 clears itself when its target is deleted; field 5 refuses the delete.
-        4 | 5 => FieldType::Ref {
-            target: item(),
-            on_delete: if n == 4 {
-                OnDelete::SetNull
-            } else {
-                OnDelete::Restrict
-            },
-        },
+        4 => reference(OnDelete::SetNull),
+        5 => reference(OnDelete::Restrict),
+        7 => FieldType::List(Box::new(FieldType::Str)),
+        // Field 8 loses an element when that element's record is deleted.
+        8 => FieldType::List(Box::new(reference(OnDelete::SetNull))),
         _ => FieldType::Bool,
     }
 }
@@ -190,7 +198,8 @@ fn field_def(n: u64, required: bool) -> FieldDef {
         ty: field_type(n),
         required,
         unique: false,
-        default: None,
+        // Field 6 has the constant default 7.
+        default: (n == 6).then_some(Expr::Lit(Value::Int(7))),
         read: None,
         personal: None,
     }
@@ -262,22 +271,15 @@ fn initial_world() -> World {
                 object: item(),
                 field: field_def(1, true),
             },
-            SchemaChange::DefineField {
+        ];
+        let mut changes = changes;
+        changes.extend(
+            [0u64, 2, 3, 4, 5, 6, 7, 8].map(|n| SchemaChange::DefineField {
                 object: item(),
-                field: field_def(2, false),
-            },
-            SchemaChange::DefineField {
-                object: item(),
-                field: field_def(3, false),
-            },
-            SchemaChange::DefineField {
-                object: item(),
-                field: field_def(4, false),
-            },
-            SchemaChange::DefineField {
-                object: item(),
-                field: field_def(5, false),
-            },
+                field: field_def(n, false),
+            }),
+        );
+        changes.extend([
             policy(
                 "editors_all",
                 "editor",
@@ -296,7 +298,7 @@ fn initial_world() -> World {
                 &[Action::Update, Action::Delete],
                 Some(own),
             ),
-        ];
+        ]);
         world = run(
             &world,
             principal(owner),
@@ -324,7 +326,14 @@ fn initial_world() -> World {
     world
 }
 
-fn parse_value(token: &str) -> Value {
+/// A scalar, reference or `n`: the element of a list, or a whole value. Garbage reads as `null`,
+/// which the generator never writes.
+fn parse_elem(token: &str) -> Value {
+    if let Some(rest) = token.strip_prefix("s*") {
+        if let Some((count, text)) = rest.split_once(':') {
+            return Value::Str(text.repeat(count.parse().expect("fixture count")));
+        }
+    }
     match token.split_once(':') {
         Some(("i", n)) => Value::Int(n.parse().expect("fixture integer")),
         Some(("s", s)) => Value::Str(s.to_string()),
@@ -332,6 +341,25 @@ fn parse_value(token: &str) -> Value {
         Some(("r", r)) => Value::Ref(RecordId(r.parse().expect("fixture record id"))),
         _ => Value::Null,
     }
+}
+
+/// A value: an element, or a list: `l:` and elements separated by commas (`l:` is the empty
+/// list), or `l*<count>:<element>`.
+fn parse_value(token: &str) -> Value {
+    if let Some(rest) = token.strip_prefix("l*") {
+        if let Some((count, element)) = rest.split_once(':') {
+            let n: usize = count.parse().expect("fixture count");
+            return Value::List(vec![parse_elem(element); n]);
+        }
+    }
+    if let Some(body) = token.strip_prefix("l:") {
+        return Value::List(if body.is_empty() {
+            Vec::new()
+        } else {
+            body.split(',').map(parse_elem).collect()
+        });
+    }
+    parse_elem(token)
 }
 
 fn parse_fields(tokens: &[&str]) -> BTreeMap<FieldId, Value> {
@@ -347,12 +375,44 @@ fn parse_fields(tokens: &[&str]) -> BTreeMap<FieldId, Value> {
         .collect()
 }
 
+/// The optional `v=<n>` at the head of the tokens after a record id, and the tokens after it.
+fn split_expected_version<'a, 'b>(tokens: &'b [&'a str]) -> (Option<u64>, &'b [&'a str]) {
+    match tokens.split_first() {
+        Some((first, rest)) => match first.strip_prefix("v=") {
+            Some(n) => (Some(n.parse().expect("fixture version")), rest),
+            None => (None, tokens),
+        },
+        None => (None, tokens),
+    }
+}
+
+/// A string of at least 100 characters that repeats one character prints as `s*<count>:<c>`.
+fn show_str(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) if s.chars().count() >= 100 && chars.all(|c| c == first) => {
+            format!("s*{}:{first}", s.chars().count())
+        }
+        _ => format!("s:{s}"),
+    }
+}
+
 fn show_value(value: &Value) -> String {
     match value {
         Value::Int(i) => format!("i:{i}"),
-        Value::Str(s) => format!("s:{s}"),
+        Value::Str(s) => show_str(s),
         Value::Bool(b) => format!("b:{}", u8::from(*b)),
         Value::Ref(r) => format!("r:{}", r.0),
+        // At least 100 equal elements print as `l*<count>:<element>`.
+        Value::List(items) => match items.split_first() {
+            Some((first, rest)) if items.len() >= 100 && rest.iter().all(|v| v == first) => {
+                format!("l*{}:{}", items.len(), show_value(first))
+            }
+            _ => format!(
+                "l:{}",
+                items.iter().map(show_value).collect::<Vec<_>>().join(",")
+            ),
+        },
         _ => "n".to_string(),
     }
 }
@@ -366,6 +426,8 @@ fn show_error(kind: ErrorKind) -> &'static str {
         ErrorKind::MigrationRejected => "migration_rejected",
         ErrorKind::DanglingReference => "dangling_reference",
         ErrorKind::StillReferenced => "still_referenced",
+        ErrorKind::VersionConflict => "version_conflict",
+        ErrorKind::LimitExceeded => "limit_exceeded",
         _ => "unmodelled",
     }
 }
@@ -400,9 +462,14 @@ fn show_world(world: &World) -> Vec<String> {
                 .map(|(field, value)| format!("{}={}", &field.as_str()[1..], show_value(value)))
                 .collect();
             out.push(
-                format!("record {} owner={owner} {}", record.id, fields.join(" "))
-                    .trim_end()
-                    .to_string(),
+                format!(
+                    "record {} owner={owner} v={} {}",
+                    record.id,
+                    record.version,
+                    fields.join(" ")
+                )
+                .trim_end()
+                .to_string(),
             );
         }
     }
@@ -447,23 +514,40 @@ pub fn kernel_output(scenarios: &str) -> String {
                         object: item(),
                         fields: parse_fields(fields),
                     },
-                    ["update", record, fields @ ..] => {
+                    ["update", record, after_id @ ..] => {
                         // The model replaces a record; a patch that names every field does too.
+                        let (expected_version, fields) = split_expected_version(after_id);
                         let mut all: BTreeMap<FieldId, Value> =
-                            (1..=5).map(|n| (field_id(n), Value::Null)).collect();
+                            (0..=8).map(|n| (field_id(n), Value::Null)).collect();
                         all.extend(parse_fields(fields));
                         Intent::UpdateRecord {
                             object: item(),
                             id: RecordId(record.parse().expect("id")),
                             fields: all,
-                            expected_version: None,
+                            expected_version,
                         }
                     }
-                    ["delete", record] => Intent::DeleteRecord {
-                        object: item(),
-                        id: RecordId(record.parse().expect("id")),
-                        expected_version: None,
-                    },
+                    ["patch", record, after_id @ ..] => {
+                        let (expected_version, fields) = split_expected_version(after_id);
+                        Intent::UpdateRecord {
+                            object: item(),
+                            id: RecordId(record.parse().expect("id")),
+                            fields: parse_fields(fields),
+                            expected_version,
+                        }
+                    }
+                    ["delete", record, after_id @ ..] => {
+                        let (expected_version, more) = split_expected_version(after_id);
+                        if !more.is_empty() {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        }
+                        Intent::DeleteRecord {
+                            object: item(),
+                            id: RecordId(record.parse().expect("id")),
+                            expected_version,
+                        }
+                    }
                     ["require", field, mode] => {
                         let n: u64 = field.parse().expect("field");
                         Intent::ChangeSchema {
@@ -640,7 +724,16 @@ pub struct Report {
     pub problem: Option<String>,
 }
 
-/// The seed and size of the committed fixture file `lean/fixtures/scenarios.txt`.
+/// The hand-written scenarios of a committed fixture file: everything from its first scenario
+/// named `h-...`. The generator writes the scenarios before them.
+pub fn hand_written(file: &str) -> &str {
+    if file.starts_with("scenario h-") {
+        return file;
+    }
+    file.find("\nscenario h-").map_or("", |at| &file[at + 1..])
+}
+
+/// The seed and size of the generated part of the committed fixture file `lean/fixtures/scenarios.txt`.
 pub const FIXTURE_SEED: u64 = 20_261_118;
 pub const FIXTURE_COUNT: usize = 60;
 
@@ -690,7 +783,9 @@ pub fn verify(lean_dir: &Path, checked_at: i64) -> Report {
             .filter(|name| !found.contains(name.as_str()))
             .cloned()
             .collect();
-        let text = scenarios(FIXTURE_SEED, FIXTURE_COUNT);
+        let text = std::fs::read_to_string(lean_dir.join("fixtures/scenarios.txt"))
+            .map_err(|e| format!("cannot read fixtures/scenarios.txt: {e}"))?
+            .replace("\r\n", "\n");
         let lean = model_output(lean_dir, "fixtures/scenarios.txt")?;
         report.correspondence = Some(compare_outputs(&text, &lean, &kernel_output(&text)));
         Ok(())

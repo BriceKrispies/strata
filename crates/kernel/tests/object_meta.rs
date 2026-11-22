@@ -175,22 +175,16 @@ fn notice(id: &str) -> NoticeTemplateDecl {
 
 /// An edit of the templates and tokens of a schema, as one schema change.
 enum Edit {
-    DefineMailTemplate(MailTemplateDecl),
-    RemoveMailTemplate(TemplateId),
-    DefineNoticeTemplate(NoticeTemplateDecl),
-    RemoveNoticeTemplate(TemplateId),
-    DefineToken(TokenDecl),
-    RemoveToken(String),
+    MailTemplate(MailTemplateDecl),
+    NoticeTemplate(NoticeTemplateDecl),
+    Token(TokenDecl),
 }
 
 fn catalogue(edit: Edit) -> SchemaChange {
     match edit {
-        Edit::DefineMailTemplate(d) => SchemaChange::DefineMailTemplate(d),
-        Edit::RemoveMailTemplate(id) => SchemaChange::RemoveMailTemplate(id),
-        Edit::DefineNoticeTemplate(d) => SchemaChange::DefineNoticeTemplate(d),
-        Edit::RemoveNoticeTemplate(id) => SchemaChange::RemoveNoticeTemplate(id),
-        Edit::DefineToken(d) => SchemaChange::DefineToken(d),
-        Edit::RemoveToken(name) => SchemaChange::RemoveToken(name),
+        Edit::MailTemplate(d) => SchemaChange::DefineMailTemplate(d),
+        Edit::NoticeTemplate(d) => SchemaChange::DefineNoticeTemplate(d),
+        Edit::Token(d) => SchemaChange::DefineToken(d),
     }
 }
 
@@ -200,8 +194,8 @@ fn a_template_id_is_used_by_one_kind_of_template_only() {
     let error = refused(
         &notes_world(),
         vec![
-            catalogue(Edit::DefineMailTemplate(mail("welcome"))),
-            catalogue(Edit::DefineNoticeTemplate(notice("welcome"))),
+            catalogue(Edit::MailTemplate(mail("welcome"))),
+            catalogue(Edit::NoticeTemplate(notice("welcome"))),
         ],
     );
     assert_eq!(error.kind, ErrorKind::InvalidSchema);
@@ -216,7 +210,7 @@ fn a_template_id_is_used_by_one_kind_of_template_only() {
 fn a_token_whose_expression_does_not_parse_is_refused() {
     let error = refused(
         &notes_world(),
-        vec![catalogue(Edit::DefineToken(TokenDecl {
+        vec![catalogue(Edit::Token(TokenDecl {
             name: "broken".into(),
             expression: Expression("record.title ==".into()),
             fallback: "".into(),
@@ -240,7 +234,7 @@ fn body(json: &str) -> StructuredBlocks {
 }
 
 fn notice_with(body_json: &str) -> SchemaChange {
-    catalogue(Edit::DefineNoticeTemplate(NoticeTemplateDecl {
+    catalogue(Edit::NoticeTemplate(NoticeTemplateDecl {
         body: body(body_json),
         ..notice("greeting")
     }))
@@ -254,7 +248,7 @@ fn a_token_expression_cannot_name_another_token() {
     for expression in ["token.first_name", "token.other + token.first_name"] {
         let error = refused(
             &notes_world(),
-            vec![catalogue(Edit::DefineToken(TokenDecl {
+            vec![catalogue(Edit::Token(TokenDecl {
                 name: "first_name".into(),
                 expression: Expression(expression.into()),
                 fallback: "".into(),

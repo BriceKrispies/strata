@@ -1,0 +1,268 @@
+/-
+Slice 2 of the reference model: record writes in full.
+
+What the slice claims, about the model in `Strata/Model.lean`:
+
+- An update is a patch. The record an accepted update writes is the old one patched and one
+  version on (`update_writes_patched`); a field the patch does not name keeps its values
+  (`update_keeps_unnamed`, from `patch_keeps_unnamed`); the value named last for a field is its
+  value afterwards, and a named `null` removes it (`patch_last_wins`).
+- Versions. An accepted update raises the record's version by one (`update_raises_version`); an
+  accepted delete raises the version of every record whose reference it clears
+  (`delete_raises_referrer_version`); a created record is at version 1 (`create_fills_default`).
+- `expected_version`. One who may act on the record and names another version is refused with
+  `versionConflict`, whatever the patch, so no state follows (`version_conflict_on_update`,
+  `version_conflict_on_delete`); the version is asked after the permission, so one who may not act
+  is refused `unauthorized` whatever version it names (`unauthorized_cannot_update` and
+  `unauthorized_cannot_delete` in `Strata/Proofs.lean`, which take any expected version).
+- Defaults. An accepted create gives every field of the schema it does not name the field's
+  constant default (`create_fills_default`).
+- Lists. A required list never forbids a delete: only a restricting definition does
+  (`required_list_never_blocks`). Typing elementwise, dangling elements refused, elements removed
+  on delete and referential integrity over lists are the slice 1 theorems, whose definitions now
+  read list elements (`problem_none`, `step_preserves_refs`, `delete_leaves_no_reference`).
+- Size limits. A record over the record bound is refused with `limitExceeded` before anything
+  else about it is checked (`create_refused_over_record_bound`); every record an accepted create or
+  update writes is within the record bound and holds no value over the string or list bound
+  (`create_within_limits`, `update_within_limits`).
+
+No `sorry`, no added axioms. `Audit.lean` prints the axioms each theorem depends on.
+-/
+
+import Strata.Model
+import Strata.References
+
+namespace Strata
+
+/-! ## Lemmas: patches -/
+
+private theorem valuesOf_filter_ne (fs : Fields) (f g : FieldId) (h : g ≠ f) :
+    Fields.valuesOf (fs.filter (fun e => e.1 != g)) f = fs.valuesOf f := by
+  unfold Fields.valuesOf
+  rw [List.filter_filter]
+  congr 1
+  apply List.filter_congr
+  intro e _
+  by_cases he : e.1 = f
+  · subst he
+    have : e.1 ≠ g := fun h' => h h'.symm
+    simp [this]
+  · simp [he]
+
+theorem valuesOf_set_ne (fs : Fields) (fv : FieldId × Val) (f : FieldId) (h : fv.1 ≠ f) :
+    (fs.set fv).valuesOf f = fs.valuesOf f := by
+  unfold Fields.set
+  split
+  · exact valuesOf_filter_ne fs f fv.1 h
+  · rw [← valuesOf_filter_ne fs f fv.1 h]
+    simp [Fields.valuesOf, h]
+
+/-- A patch leaves every field it does not name exactly as it was. -/
+theorem patch_keeps_unnamed (f : FieldId) :
+    ∀ (ps fs : Fields), f ∉ ps.map Prod.fst → (fs.patch ps).valuesOf f = fs.valuesOf f
+  | [], fs, _ => rfl
+  | p :: ps, fs, h => by
+    simp only [List.map_cons, List.mem_cons, not_or] at h
+    unfold Fields.patch
+    rw [List.foldl_cons]
+    have ih := patch_keeps_unnamed f ps (fs.set p) h.2
+    unfold Fields.patch at ih
+    rw [ih]
+    exact valuesOf_set_ne fs p f (fun he => h.1 he.symm)
+
+theorem get_set_same (fs : Fields) (f : FieldId) (v : Val) : (fs.set (f, v)).get f = v := by
+  have hnone : (fs.filter (fun g => g.1 != f)).lookup f = none := by
+    induction fs with
+    | nil => rfl
+    | cons q fs ih =>
+      obtain ⟨k, w⟩ := q
+      rw [List.filter_cons]
+      by_cases hk : k = f
+      · subst hk; simpa using ih
+      · simp only [bne_iff_ne, ne_eq, hk, not_false_eq_true, ite_true]
+        rw [lookup_cons_nat]
+        simp [Ne.symm hk, ih]
+  unfold Fields.set
+  split
+  · rename_i hv
+    have : v = .null := by simpa using hv
+    subst this
+    simp [Fields.get, hnone]
+  · simp [Fields.get]
+
+/-- The value a patch names last for a field is the field's value afterwards; a `null` there
+    leaves the field absent. -/
+theorem patch_last_wins (fs ps : Fields) (f : FieldId) (v : Val) :
+    (fs.patch (ps ++ [(f, v)])).get f = v := by
+  unfold Fields.patch
+  rw [List.foldl_append, List.foldl_cons, List.foldl_nil]
+  exact get_set_same _ f v
+
+/-! ## Lemmas: the records after a write -/
+
+theorem lookup_map_replace (rs : Records) (id : RecordId) (r : Record) :
+    (rs.map (fun q => if q.1 == id then (q.1, r) else q)).lookup id = (rs.lookup id).map (fun _ => r) := by
+  induction rs with
+  | nil => rfl
+  | cons q rs ih =>
+    obtain ⟨k, w⟩ := q
+    by_cases hk : k = id
+    · subst hk; simp [List.lookup]
+    · have hk' : (k == id) = false := by simpa using hk
+      simp only [List.map_cons, hk', Bool.false_eq_true, ite_false]
+      rw [lookup_cons_nat, lookup_cons_nat]
+      simp only [Ne.symm hk, ite_false]
+      exact ih
+
+/-- The record an accepted update writes is the stored one patched, one version on. -/
+theorem update_writes_patched (t t' : Tenant) (p : PrincipalId) (id : RecordId) (ps : Fields)
+    (ev : Option Nat) (old : Record) (hl : t.records.lookup id = some old)
+    (h : stepTenant t p (.update id ps ev) = .ok t') :
+    t'.records.lookup id = some (patched old ps) := by
+  simp only [stepTenant, hl] at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · split at h
+      · cases h
+      · cases h
+        show (t.records.map (fun q => if q.1 == id then (q.1, patched old ps) else q)).lookup id = _
+        rw [lookup_map_replace, hl]
+        rfl
+
+/-- A field an accepted update does not name keeps its values. -/
+theorem update_keeps_unnamed (t t' : Tenant) (p : PrincipalId) (id : RecordId) (ps : Fields)
+    (ev : Option Nat) (old : Record) (f : FieldId) (hl : t.records.lookup id = some old)
+    (hf : f ∉ ps.map Prod.fst) (h : stepTenant t p (.update id ps ev) = .ok t') :
+    ∃ r, t'.records.lookup id = some r ∧ r.fields.valuesOf f = old.fields.valuesOf f :=
+  ⟨_, update_writes_patched t t' p id ps ev old hl h, patch_keeps_unnamed f ps old.fields hf⟩
+
+/-- An accepted update raises the record's version by exactly one: versions strictly increase. -/
+theorem update_raises_version (t t' : Tenant) (p : PrincipalId) (id : RecordId) (ps : Fields)
+    (ev : Option Nat) (old : Record) (hl : t.records.lookup id = some old)
+    (h : stepTenant t p (.update id ps ev) = .ok t') :
+    ∃ r, t'.records.lookup id = some r ∧ r.version = old.version + 1 ∧ old.version < r.version :=
+  ⟨_, update_writes_patched t t' p id ps ev old hl h, rfl, Nat.lt_succ_self _⟩
+
+/-- An accepted delete rewrites every other record that named the deleted one: the references
+    cleared and the version one on. -/
+theorem delete_raises_referrer_version (t t' : Tenant) (p : PrincipalId) (id : RecordId)
+    (ev : Option Nat) (x : RecordId) (q : Record) (hq : (x, q) ∈ t.records) (hx : x ≠ id)
+    (hr : q.refersTo id = true) (h : stepTenant t p (.delete id ev) = .ok t') :
+    (x, { q with fields := clearFields id q.fields, version := q.version + 1 }) ∈ t'.records := by
+  simp only [stepTenant] at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · split at h
+      · cases h
+      · split at h
+        · cases h
+        · cases h
+          refine List.mem_map.mpr ⟨(x, q), List.mem_filter.mpr ⟨hq, by simpa using hx⟩, ?_⟩
+          simp [clearRef, hr]
+
+/-! ## Expected versions -/
+
+/-- One who may change a record and names a version it is not at is refused with
+    `versionConflict`, whatever the patch: no state follows, so nothing changes. -/
+theorem version_conflict_on_update (w : World) (c : Ctx) (t : Tenant) (id : RecordId)
+    (old : Record) (ps : Fields) (v : Nat)
+    (ht : w c.tenant = some t) (hl : t.records.lookup id = some old)
+    (hcan : canEdit t c.principal old = true) (hv : v ≠ old.version) :
+    step w (.update id ps (some v)) c = .error .versionConflict ∧
+      ∀ w', step w (.update id ps (some v)) c ≠ .ok w' := by
+  have hc : versionClash (some v) old = true := by simpa [versionClash] using hv
+  have : step w (.update id ps (some v)) c = .error .versionConflict := by
+    simp [step, ht, stepTenant, hl, hcan, hc]
+  exact ⟨this, fun w' h => by rw [this] at h; cases h⟩
+
+theorem version_conflict_on_delete (w : World) (c : Ctx) (t : Tenant) (id : RecordId)
+    (old : Record) (v : Nat)
+    (ht : w c.tenant = some t) (hl : t.records.lookup id = some old)
+    (hcan : canEdit t c.principal old = true) (hv : v ≠ old.version) :
+    step w (.delete id (some v)) c = .error .versionConflict ∧
+      ∀ w', step w (.delete id (some v)) c ≠ .ok w' := by
+  have hc : versionClash (some v) old = true := by simpa [versionClash] using hv
+  have : step w (.delete id (some v)) c = .error .versionConflict := by
+    simp [step, ht, stepTenant, hl, hcan, hc]
+  exact ⟨this, fun w' h => by rw [this] at h; cases h⟩
+
+/-! ## Defaults -/
+
+/-- An accepted create writes, under the next id and at version 1, the default of every field of
+    the schema the intent does not name. -/
+theorem create_fills_default (t t' : Tenant) (p : PrincipalId) (fs : Fields) (f : FieldId)
+    (d : FieldDef) (hd : (f, d) ∈ t.schema) (hdef : d.default ≠ .null)
+    (hn : fs.any (fun fv => fv.1 == f) = false) (h : stepTenant t p (.create fs) = .ok t') :
+    ∃ r, t'.records.lookup t.nextId = some r ∧ r.version = 1 ∧ (f, d.default) ∈ r.fields := by
+  simp only [stepTenant] at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · cases h
+      refine ⟨newRecord t.schema p fs, by simp [List.lookup], rfl, ?_⟩
+      simp only [newRecord, withDefaults, List.mem_append]
+      right
+      refine List.mem_filterMap.mpr ⟨(f, d), hd, ?_⟩
+      have hdef' : (d.default == Val.null) = false := by simpa using hdef
+      simp [hn, hdef']
+
+/-! ## Lists -/
+
+/-- A required list never forbids a delete: a reference held in a list forbids it only through a
+    definition of the field that restricts deletion. -/
+theorem required_list_never_blocks (schema : Schema) (f : FieldId) (vs : List Elem) :
+    forbidsDelete schema f (.list vs) = schema.any (fun fd => fd.1 == f && fd.2.ty.restricts) := by
+  simp [forbidsDelete, Val.isList]
+
+/-! ## Size limits -/
+
+theorem problem_none_within {L : Limits} {schema : Schema} {rs : Records} {r : Record}
+    (h : problem L schema rs r = none) :
+    r.size ≤ L.maxRecord ∧ ∀ fv ∈ r.fields, fv.2.overLimit L = false := by
+  obtain ⟨hs, hval, -⟩ := problem_none_parts h
+  refine ⟨hs, fun fv hfv => ?_⟩
+  obtain ⟨d, -, hp⟩ := hval fv hfv
+  exact (valueProblem_none hp).1
+
+/-- A create whose record is over the record bound is refused with `limitExceeded`, before its
+    fields are checked. -/
+theorem create_refused_over_record_bound (t : Tenant) (p : PrincipalId) (fs : Fields)
+    (hc : canCreate t p = true) (hs : t.limits.maxRecord < (newRecord t.schema p fs).size) :
+    stepTenant t p (.create fs) = .error .limitExceeded := by
+  simp [stepTenant, hc, problem, hs]
+
+/-- Every record an accepted create writes is within the record bound and holds no value over the
+    string or list bound. -/
+theorem create_within_limits (t t' : Tenant) (p : PrincipalId) (fs : Fields)
+    (h : stepTenant t p (.create fs) = .ok t') :
+    (newRecord t.schema p fs).size ≤ t.limits.maxRecord ∧
+      ∀ fv ∈ (newRecord t.schema p fs).fields, fv.2.overLimit t.limits = false := by
+  simp only [stepTenant] at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · rename_i hp
+      exact problem_none_within hp
+
+theorem update_within_limits (t t' : Tenant) (p : PrincipalId) (id : RecordId) (ps : Fields)
+    (ev : Option Nat) (old : Record) (hl : t.records.lookup id = some old)
+    (h : stepTenant t p (.update id ps ev) = .ok t') :
+    (patched old ps).size ≤ t.limits.maxRecord ∧
+      ∀ fv ∈ (patched old ps).fields, fv.2.overLimit t.limits = false := by
+  simp only [stepTenant, hl] at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · split at h
+      · cases h
+      · rename_i hp
+        exact problem_none_within hp
+
+end Strata

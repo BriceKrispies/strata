@@ -348,7 +348,7 @@ pub enum JobReport {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reported {
     /// The outcome was recorded; the job as it is now.
-    Recorded(Job),
+    Recorded(Box<Job>),
     /// The report was refused and nothing was written (SCH-011): the reason.
     Refused(String),
 }

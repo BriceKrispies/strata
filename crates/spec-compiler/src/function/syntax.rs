@@ -167,21 +167,16 @@ pub(crate) enum Kind {
     Try(Box<Expr>),
 }
 
-/// An expression with its position and, once typed, its type.
+/// An expression and, once typed, its type.
 #[derive(Debug, Clone)]
 pub(crate) struct Expr {
     pub kind: Kind,
-    pub pos: usize,
     pub ty: Option<Ty>,
 }
 
 impl Expr {
-    fn new(kind: Kind, pos: usize) -> Self {
-        Expr {
-            kind,
-            pos,
-            ty: None,
-        }
+    fn new(kind: Kind) -> Self {
+        Expr { kind, ty: None }
     }
 
     /// The type the checker gave this node; `Unknown` before checking.
@@ -443,24 +438,19 @@ impl Parser {
                 Tok::Op(o) if BINARY[level].contains(o) => *o,
                 _ => break,
             };
-            let pos = self.pos();
             self.p += 1;
             let bin = BinOp::parse(op).expect("a binary operator of the table");
             if bin == BinOp::Implies {
                 let right = self.binary(level)?;
-                return Ok(Expr::new(
-                    Kind::Bin(bin, Box::new(left), Box::new(right)),
-                    pos,
-                ));
+                return Ok(Expr::new(Kind::Bin(bin, Box::new(left), Box::new(right))));
             }
             let right = self.binary(level + 1)?;
-            left = Expr::new(Kind::Bin(bin, Box::new(left), Box::new(right)), pos);
+            left = Expr::new(Kind::Bin(bin, Box::new(left), Box::new(right)));
         }
         Ok(left)
     }
 
     fn unary(&mut self) -> Parsed<Expr> {
-        let pos = self.pos();
         if self.is_op("!") || self.is_op("-") {
             let op = if self.is_op("!") {
                 UnOp::Not
@@ -469,12 +459,12 @@ impl Parser {
             };
             self.p += 1;
             let a = self.unary()?;
-            return Ok(Expr::new(Kind::Un(op, Box::new(a)), pos));
+            return Ok(Expr::new(Kind::Un(op, Box::new(a))));
         }
         if self.is_word("try") {
             self.p += 1;
             let a = self.unary()?;
-            return Ok(Expr::new(Kind::Try(Box::new(a)), pos));
+            return Ok(Expr::new(Kind::Try(Box::new(a))));
         }
         self.postfix()
     }
@@ -483,9 +473,8 @@ impl Parser {
         let mut e = self.primary()?;
         while self.is_op(".") {
             self.p += 1;
-            let pos = self.pos();
             let name = self.field_name("a field name after \".\"")?;
-            e = Expr::new(Kind::Field(Box::new(e), name), pos);
+            e = Expr::new(Kind::Field(Box::new(e), name));
         }
         Ok(e)
     }
@@ -555,7 +544,7 @@ impl Parser {
         Ok(items)
     }
 
-    fn builtin(&mut self, name: String, pos: usize) -> Parsed<Expr> {
+    fn builtin(&mut self, name: String) -> Parsed<Expr> {
         self.expect_op("(")?;
         self.nested(|p| {
             let mut op = Op {
@@ -582,7 +571,7 @@ impl Parser {
             } else {
                 op.args = p.list_of_exprs(")")?;
             }
-            Ok(Expr::new(Kind::Op(op), pos))
+            Ok(Expr::new(Kind::Op(op)))
         })
     }
 
@@ -591,17 +580,17 @@ impl Parser {
         match self.peek().clone() {
             Tok::Num(n) => {
                 self.p += 1;
-                return Ok(Expr::new(Kind::Num(n), pos));
+                return Ok(Expr::new(Kind::Num(n)));
             }
             Tok::Str(s) => {
                 self.p += 1;
-                return Ok(Expr::new(Kind::Str(s), pos));
+                return Ok(Expr::new(Kind::Str(s)));
             }
             Tok::Op("(") => {
                 self.p += 1;
                 if self.is_op(")") {
                     self.p += 1;
-                    return Ok(Expr::new(Kind::Unit, pos));
+                    return Ok(Expr::new(Kind::Unit));
                 }
                 let inner = self.nested(|p| p.expr())?;
                 self.expect_op(")")?;
@@ -610,12 +599,12 @@ impl Parser {
             Tok::Op("[") => {
                 self.p += 1;
                 let items = self.nested(|p| p.list_of_exprs("]"))?;
-                return Ok(Expr::new(Kind::List(items), pos));
+                return Ok(Expr::new(Kind::List(items)));
             }
             Tok::Op("{") => {
                 self.p += 1;
                 self.expect_op("}")?;
-                return Ok(Expr::new(Kind::EmptyMap, pos));
+                return Ok(Expr::new(Kind::EmptyMap));
             }
             Tok::Id(_) => {}
             Tok::End => return Err(self.error("Unexpected end of expression".to_string())),
@@ -627,11 +616,11 @@ impl Parser {
         match w.as_str() {
             "true" | "false" => {
                 self.p += 1;
-                return Ok(Expr::new(Kind::Bool(w == "true"), pos));
+                return Ok(Expr::new(Kind::Bool(w == "true")));
             }
             "null" => {
                 self.p += 1;
-                return Ok(Expr::new(Kind::Null, pos));
+                return Ok(Expr::new(Kind::Null));
             }
             "if" => {
                 self.p += 1;
@@ -640,10 +629,7 @@ impl Parser {
                 let a = self.nested(|p| p.expr())?;
                 self.expect_word("else")?;
                 let b = self.expr()?;
-                return Ok(Expr::new(
-                    Kind::If(Box::new(c), Box::new(a), Box::new(b)),
-                    pos,
-                ));
+                return Ok(Expr::new(Kind::If(Box::new(c), Box::new(a), Box::new(b))));
             }
             "let" => {
                 self.p += 1;
@@ -652,10 +638,7 @@ impl Parser {
                 let value = self.nested(|p| p.expr())?;
                 self.expect_word("in")?;
                 let body = self.expr()?;
-                return Ok(Expr::new(
-                    Kind::Let(n, Box::new(value), Box::new(body)),
-                    pos,
-                ));
+                return Ok(Expr::new(Kind::Let(n, Box::new(value), Box::new(body))));
             }
             "match" => {
                 self.p += 1;
@@ -686,14 +669,14 @@ impl Parser {
                         pos,
                     });
                 }
-                return Ok(Expr::new(Kind::Match(Box::new(e), arms), pos));
+                return Ok(Expr::new(Kind::Match(Box::new(e), arms)));
             }
             "call" => {
                 self.p += 1;
                 let f = self.name("the id of the function to call")?;
                 self.expect_op("(")?;
                 let args = self.nested(|p| p.list_of_exprs(")"))?;
-                return Ok(Expr::new(Kind::Call(f, args), pos));
+                return Ok(Expr::new(Kind::Call(f, args)));
             }
             _ => {}
         }
@@ -702,7 +685,7 @@ impl Parser {
         }
         self.p += 1;
         if self.is_op("(") {
-            return self.builtin(w, pos);
+            return self.builtin(w);
         }
         let mut path = vec![w];
         while self.is_op(".") {
@@ -714,21 +697,20 @@ impl Parser {
             self.p += 1;
             let arg = self.nested(|p| p.expr())?;
             self.expect_op(")")?;
-            return Ok(Expr::new(Kind::Newtype(path, Box::new(arg)), pos));
+            return Ok(Expr::new(Kind::Newtype(path, Box::new(arg))));
         }
         if self.is_op("{") && !self.no_struct {
             self.p += 1;
             let fields = self.nested(|p| {
                 let mut fields = Vec::new();
                 while !p.is_op("}") {
-                    let fpos = p.pos();
                     let f = p.field_name("a field name")?;
                     if p.is_op(":") {
                         p.p += 1;
                         let e = p.expr()?;
                         fields.push((f, e));
                     } else {
-                        let e = Expr::new(Kind::Ref(vec![f.clone()], Res::Unresolved), fpos);
+                        let e = Expr::new(Kind::Ref(vec![f.clone()], Res::Unresolved));
                         fields.push((f, e));
                     }
                     if !p.is_op(",") {
@@ -739,9 +721,9 @@ impl Parser {
                 p.expect_op("}")?;
                 Ok(fields)
             })?;
-            return Ok(Expr::new(Kind::Ctor(path, fields), pos));
+            return Ok(Expr::new(Kind::Ctor(path, fields)));
         }
-        Ok(Expr::new(Kind::Ref(path, Res::Unresolved), pos))
+        Ok(Expr::new(Kind::Ref(path, Res::Unresolved)))
     }
 }
 

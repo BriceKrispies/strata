@@ -3,6 +3,12 @@
 //! Everything here reads the store and never writes it. A projection loads a complete snapshot,
 //! hands it to the simulator, and the simulator works on that copy with the same kernel the
 //! backend uses. Live tenant state cannot be changed from this module: it calls no `commit`.
+//!
+//! A projection that asks for faults also runs its schedule through the deployment's own code
+//! ([`crate::simulated::Backend`], driven by `strata_simulation::shell`): a fresh in-memory store
+//! made into a copy of the tenant by sending it the tenant's recorded history, then the schedule
+//! through the request path, the worker and the publisher, with the store faults a deployment
+//! meets. What the Lab reports of faults is read from that run's trace and from nothing else.
 
 use crate::app::{ApiError, App, Shared, LOG};
 use crate::auth::Identity;
@@ -17,9 +23,13 @@ use std::sync::{Arc, Mutex};
 use strata_kernel::ext::*;
 use strata_kernel::{ExistingData, Principal, PrincipalId, TenantId, TenantState, World};
 use strata_protocol::api::ErrorCode;
-use strata_simulation::engine::{replay as replay_trace, Faults, Scenario, Scheduled};
+use strata_simulation::engine::{replay as replay_trace, Scenario, Scheduled};
+use strata_simulation::faults::StoreFaults;
 use strata_simulation::journal::{replay_journal_with, JournalReplay, Recorded};
 use strata_simulation::project::{project, Projection, Proposal};
+use strata_simulation::shell::{
+    run_shell_after, Answer, Faults as ShellFaults, ShellRun, ShellScenario,
+};
 use strata_simulation::workload::generate;
 use strata_substrate::proposal;
 use strata_verification::evidence::Class;
@@ -324,6 +334,7 @@ impl Lab {
             .unwrap_or(0)
     }
 
+    #[cfg(test)]
     fn insert(&self, id: &str, run: Run) {
         let _ = self.insert_within(id, run, usize::MAX);
     }
@@ -676,7 +687,9 @@ fn present(
     scenario: &Scenario,
     request: &RunRequest,
     snapshot: Json,
+    faulted: Option<&Faulted>,
 ) -> Json {
+    let per_request = faulted.map(|faulted| faulted.per_request());
     let branch: BTreeMap<usize, &strata_simulation::engine::Step> = projection
         .branch
         .steps
@@ -706,7 +719,7 @@ fn present(
                 "baseline": a,
                 "branch": b,
                 "diverged": projection.comparison.outcome_changes.iter().any(|c| c.step == index),
-                "conflicts": step.conflicts,
+                "faulted": per_request.as_ref().and_then(|each| each.get(&index)),
             })
         })
         .collect();
@@ -718,7 +731,7 @@ fn present(
             "source": request.source,
             "steps": scenario.schedule.len(),
             "seed": scenario.seed,
-            "faults": scenario.faults,
+            "faults": request.faults,
             "apply_at": projection.proposal.before_step,
             "revision": request.revision,
             "require_current": request.require_current,
@@ -735,8 +748,6 @@ fn present(
             "final_hash": projection.baseline.final_hash,
             "accepted": projection.baseline.accepted(),
             "rejected": projection.baseline.rejected(),
-            "deliveries": projection.baseline.deliveries.len(),
-            "dropped": projection.baseline.deliveries.iter().filter(|d| d.result == strata_simulation::engine::DeliveryResult::Dropped).count(),
         },
         "branch": {
             "trace_hash": projection.branch_hash,
@@ -746,6 +757,7 @@ fn present(
         },
         "trace_replay": { "steps": check.steps, "agreed": check.agreed, "final_hash_matches": check.final_hash_matches },
         "timeline": timeline,
+        "faults": faulted.map(Faulted::report),
         "comparison": projection.comparison,
         "counterexample": projection.counterexample,
         "findings": projection.findings,
@@ -767,14 +779,6 @@ fn build_scenario(
     basis: &Basis,
 ) -> Result<Scenario, ApiError> {
     let seed = request.seed.unwrap_or(1);
-    let faults = if request.faults {
-        Faults {
-            commit_conflict: 100_000,
-            delivery_drop: 200_000,
-        }
-    } else {
-        Faults::default()
-    };
     match request.source.as_str() {
         "generated" => {
             // The simulated world holds the requesting tenant alone: a run never reads, and the
@@ -787,7 +791,6 @@ fn build_scenario(
                 seed,
                 initial: world,
                 schedule,
-                faults,
             })
         }
         "journal" => {
@@ -808,13 +811,207 @@ fn build_scenario(
                 seed,
                 initial: World::default(),
                 schedule,
-                faults,
             })
         }
         other => Err(ApiError::new(
             ErrorCode::Invalid,
             format!("unknown schedule source {other:?}"),
         )),
+    }
+}
+
+/// The faults a projection that asks for them meets, as a deployment meets them: a commit that
+/// loses a race to another writer, a commit whose reply is lost after the write is durable, a
+/// process that stops right after it answered, and an outbox that cannot be read or whose
+/// acknowledgement is lost. In events per million of each kind of call; the schedule, the seed and
+/// these rates decide where each fault falls.
+fn lab_faults() -> ShellFaults {
+    ShellFaults {
+        store: StoreFaults {
+            commit_conflict: 100_000,
+            commit_reply_lost: 100_000,
+            publish_unavailable: 100_000,
+            publish_ack_lost: 100_000,
+            ..StoreFaults::default()
+        },
+        crash: 50_000,
+        ..ShellFaults::default()
+    }
+}
+
+/// What a faulted projection runs on besides the schedule: the tenant's recorded history, which
+/// makes the fresh process's store a copy of the tenant, and the last event sequence number that
+/// history holds (the publications of the schedule are the ones after it).
+struct ShellInput {
+    history: Vec<Recorded>,
+    base_event_seq: u64,
+}
+
+fn shell_input(
+    app: &App,
+    identity: &Identity,
+    request: &RunRequest,
+    basis: &Basis,
+) -> Result<Option<ShellInput>, ApiError> {
+    if !request.faults {
+        return Ok(None);
+    }
+    if request.source == "journal" {
+        // The schedule is the journal itself, from nothing: there is no history before it.
+        return Ok(Some(ShellInput {
+            history: Vec::new(),
+            base_event_seq: 0,
+        }));
+    }
+    let history = journal_through(app, &identity.tenant, basis.revision)?
+        .into_iter()
+        .map(|e| Recorded {
+            revision: e.revision,
+            kernel_version: e.kernel_version,
+            intent: e.intent,
+            context: e.context,
+            delta_hash: e.delta_hash,
+            events_hash: e.events_hash,
+        })
+        .collect();
+    Ok(Some(ShellInput {
+        history,
+        base_event_seq: basis.state.event_seq,
+    }))
+}
+
+/// A projection's schedule as the deployment ran it with faults: the shell run, whose trace is
+/// the only source of what the Lab reports about faults.
+struct Faulted {
+    tenant: TenantId,
+    base_event_seq: u64,
+    run: ShellRun,
+}
+
+/// Run `scenario`'s schedule through the deployment on a copy of the tenant, with
+/// [`lab_faults`] and a client that retries with idempotency keys.
+fn run_faulted(
+    tenant: &TenantId,
+    scenario: &Scenario,
+    input: &ShellInput,
+) -> Result<Faulted, String> {
+    let first = input
+        .history
+        .iter()
+        .map(|entry| entry.context.now.0)
+        .chain(scenario.schedule.iter().map(|step| step.context.now.0))
+        .min()
+        .unwrap_or(0);
+    let shell = ShellScenario {
+        name: scenario.name.clone(),
+        seed: scenario.seed,
+        start: first,
+        schedule: scenario.schedule.clone(),
+        faults: lab_faults(),
+        listen: vec![tenant.clone()],
+        keys: true,
+        start_faults: StoreFaults::default(),
+        operations: Vec::new(),
+    };
+    let run = run_shell_after(
+        &crate::simulated::Backend::new(None),
+        &shell,
+        &input.history,
+        &|_, _| Vec::new(),
+    )?;
+    Ok(Faulted {
+        tenant: tenant.clone(),
+        base_event_seq: input.base_event_seq,
+        run,
+    })
+}
+
+impl Faulted {
+    /// What happened to each scheduled request: how often it was sent, the commit races its
+    /// commits lost and retried, and the answer the client finally had.
+    fn per_request(&self) -> BTreeMap<usize, Json> {
+        let trace = &self.run.trace;
+        let last = trace.last_answers();
+        let mut each: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+        for step in &trace.steps {
+            let entry = each.entry(step.index).or_default();
+            entry.0 += 1;
+            if let Answer::Committed { conflicts, .. } = &step.answer {
+                entry.1 += conflicts;
+            }
+        }
+        each.into_iter()
+            .map(|(index, (sent, conflicts))| {
+                (
+                    index,
+                    json!({
+                        "sent": sent,
+                        "conflicts_retried": conflicts,
+                        "answer": last.get(&index).map(|answer| answer.verdict()),
+                    }),
+                )
+            })
+            .collect()
+    }
+
+    /// The report of the run, counted from its trace.
+    fn report(&self) -> Json {
+        let trace = &self.run.trace;
+        let mut injected: BTreeMap<String, usize> = BTreeMap::new();
+        for fault in &trace.injected {
+            let name = serde_json::to_value(fault.fault)
+                .ok()
+                .and_then(|name| name.as_str().map(str::to_string))
+                .unwrap_or_default();
+            *injected.entry(name).or_default() += 1;
+        }
+        let (mut conflicts_retried, mut unavailable, mut answered_from_key) =
+            (0usize, 0usize, 0usize);
+        for step in &trace.steps {
+            match &step.answer {
+                Answer::Committed {
+                    conflicts,
+                    replayed,
+                    ..
+                } => {
+                    conflicts_retried += conflicts;
+                    answered_from_key += usize::from(*replayed);
+                }
+                answer => unavailable += usize::from(answer.unavailable()),
+            }
+        }
+        let heard: Vec<u64> = trace
+            .heard
+            .iter()
+            .filter(|h| h.event.tenant == self.tenant && h.event.seq > self.base_event_seq)
+            .map(|h| h.event.seq)
+            .collect();
+        let distinct: BTreeSet<u64> = heard.iter().copied().collect();
+        let committed = self
+            .run
+            .world
+            .tenants
+            .get(&self.tenant)
+            .map_or(0, |state| state.event_seq)
+            .saturating_sub(self.base_event_seq);
+        json!({
+            "trace_hash": trace.hash(),
+            "requests": trace.last_answers().len(),
+            "sent": trace.steps.len(),
+            "injected": injected,
+            "process_stops": trace.restarts.len(),
+            "conflicts_retried": conflicts_retried,
+            "unavailable_answers": unavailable,
+            "answered_from_key": answered_from_key,
+            "publications": {
+                "committed": committed,
+                "offered": heard.len(),
+                "heard": distinct.len(),
+                "offered_again": heard.len() - distinct.len(),
+            },
+            "quiesced": trace.quiesced,
+            "invariants": trace.invariants.iter().map(|i| json!({ "id": i.id, "statement": i.statement, "holds": i.holds })).collect::<Vec<_>>(),
+        })
     }
 }
 
@@ -874,6 +1071,7 @@ fn start_once(
         }
     };
     let scenario = build_scenario(app, identity, &request, &basis)?;
+    let shell = shell_input(app, identity, &request, &basis)?;
     // A recorded journal starts from nothing, so the change can only apply once the tenant and
     // its schema exist: after the first two entries.
     let earliest = if request.source == "journal" { 2 } else { 0 };
@@ -981,7 +1179,27 @@ fn start_once(
         });
         match outcome {
             Ok(projection) => {
-                let result = present(&projection, &scenario, &request, snapshot);
+                let faulted = match shell
+                    .as_ref()
+                    .map(|input| run_faulted(&tenant, &scenario, input))
+                    .transpose()
+                {
+                    Ok(faulted) => faulted,
+                    Err(error) => {
+                        // The projection stands, but the faults it asked about were not shown.
+                        let summary = json!({ "change": request.change, "source": request.source, "error": error });
+                        shared.lab.finish(&run_id, "failed", summary, None);
+                        unfinished.armed = false;
+                        LOG.warn(
+                            "lab.faults_failed",
+                            &correlation,
+                            json!({ "run": run_id, "error": error }),
+                        );
+                        send("failed", json!({ "error": error }));
+                        return;
+                    }
+                };
+                let result = present(&projection, &scenario, &request, snapshot, faulted.as_ref());
                 let summary = json!({
                     "change": request.change,
                     "source": request.source,
@@ -1316,5 +1534,130 @@ mod tests {
             .filter(|r| r.tenant.as_str() == "fieldnotes")
             .count();
         assert!(loud <= KEPT_RUNS + 1);
+    }
+
+    /// A projection with faults on reports what the shell trace holds. The expectations follow
+    /// from what the trace means, not from a run: a commit whose reply is lost is answered
+    /// "unavailable" and, the request carrying a key, sent again and answered from its key (one
+    /// of each per lost reply, here, where no worker commits); a commit race retried is one that
+    /// the store refused, so there are no more of them than refusals; every committed event is
+    /// published, so the events heard are the events the committed requests produced, and what was
+    /// offered beyond that was offered again.
+    #[test]
+    fn what_a_faulted_projection_reports_is_what_its_shell_trace_holds() {
+        use strata_kernel::testkit::{add_notes_tenant, ctx, notes_schema, principal_id, role};
+        use strata_kernel::{Intent, KERNEL_VERSION};
+        use strata_simulation::shell::Arrival;
+
+        let alpha = TenantId::new("alpha").unwrap();
+        let owner = principal_id("alpha:owner");
+        let mut intents = vec![
+            (
+                Principal::System,
+                Intent::CreateTenant {
+                    name: "alpha".into(),
+                    owner: owner.clone(),
+                },
+            ),
+            (
+                Principal::User(owner.clone()),
+                Intent::ChangeSchema {
+                    changes: notes_schema(),
+                    expected_version: None,
+                    existing: ExistingData::Reject,
+                },
+            ),
+        ];
+        for (name, member_role) in [
+            ("editor", "editor"),
+            ("writer1", "writer"),
+            ("writer2", "writer"),
+        ] {
+            intents.push((
+                Principal::User(owner.clone()),
+                Intent::AssignRole {
+                    principal: principal_id(&format!("alpha:{name}")),
+                    role: role(member_role),
+                },
+            ));
+        }
+        // The recorded history of the tenant, as `add_notes_tenant` makes it.
+        let history: Vec<Recorded> = intents
+            .into_iter()
+            .enumerate()
+            .map(|(n, (principal, intent))| Recorded {
+                revision: strata_kernel::StateRevision(n as u64 + 1),
+                kernel_version: KERNEL_VERSION.to_string(),
+                intent,
+                context: ctx("alpha", principal, 1_001 + n as i64),
+                delta_hash: String::new(),
+                events_hash: String::new(),
+            })
+            .collect();
+        let world = add_notes_tenant(World::default(), "alpha", 1_000);
+        let base_event_seq = world.tenants[&alpha].event_seq;
+        let schedule = generate(&world, &alpha, 3, 200, 1_000_000, 60_000);
+        let scenario = Scenario {
+            name: "generated-3".into(),
+            seed: 3,
+            initial: world,
+            schedule,
+        };
+        let input = ShellInput {
+            history,
+            base_event_seq,
+        };
+        let faulted = run_faulted(&alpha, &scenario, &input).expect("the history replays");
+        let report = faulted.report();
+        let trace = &faulted.run.trace;
+
+        let count = |fault: &str| report["injected"][fault].as_u64().unwrap_or(0);
+        // The faults were really injected, and the schedule was really sent.
+        assert!(count("commit_reply_lost") > 0 && count("commit_conflict") > 0);
+        assert_eq!(report["requests"], scenario.schedule.len());
+        let retried = trace
+            .steps
+            .iter()
+            .filter(|step| step.arrival == Arrival::Retried)
+            .count();
+        assert_eq!(report["sent"], scenario.schedule.len() + retried);
+        // A lost reply: unavailable, then answered from its key.
+        assert_eq!(report["unavailable_answers"], count("commit_reply_lost"));
+        assert_eq!(report["answered_from_key"], count("commit_reply_lost"));
+        assert!(report["conflicts_retried"].as_u64().unwrap() <= count("commit_conflict"));
+        // Every committed event is published, in order, and what is offered beyond is offered again.
+        // A commit whose reply was lost is answered unavailable first and then, on the retry, from
+        // its key (replayed): its events are counted once, from the replayed answer.
+        let produced: usize = trace
+            .steps
+            .iter()
+            .filter_map(|step| match &step.answer {
+                Answer::Committed { events, .. } => Some(events.len()),
+                _ => None,
+            })
+            .sum();
+        let published = &report["publications"];
+        // A commit whose reply was lost is answered from its key on the retry with its receipt and
+        // no events, so the answers show fewer events than the tenant committed: every lost reply
+        // hides at least one. Every committed event is heard.
+        let committed = published["committed"].as_u64().unwrap();
+        assert!(committed >= produced as u64);
+        assert!(count("commit_reply_lost") == 0 || committed > produced as u64);
+        assert_eq!(published["heard"], published["committed"]);
+        assert_eq!(
+            published["offered"].as_u64().unwrap() - published["heard"].as_u64().unwrap(),
+            published["offered_again"].as_u64().unwrap()
+        );
+        assert_eq!(report["quiesced"], true);
+        assert!(report["invariants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|invariant| invariant["holds"] == true));
+        // The per-request view adds up to the same trace.
+        let each = faulted.per_request();
+        assert_eq!(each.len(), scenario.schedule.len());
+        let sent: u64 = each.values().map(|e| e["sent"].as_u64().unwrap()).sum();
+        assert_eq!(sent as usize, trace.steps.len());
     }
 }

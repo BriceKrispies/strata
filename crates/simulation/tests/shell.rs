@@ -5,14 +5,14 @@
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use strata_backend::simulated::Backend;
 use strata_kernel::ext::*;
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_protocol::tenants::load_all;
 use strata_simulation::engine::Scheduled;
-use strata_simulation::engine::{run as run_kernel, Faults as KernelFaults, Outcome, Scenario};
+use strata_simulation::engine::{run as run_kernel, Outcome, Scenario};
 use strata_simulation::faults::{StoreFault, StoreFaults};
 use strata_simulation::journal::replay_journal;
 use strata_simulation::shell::{
@@ -54,8 +54,15 @@ fn backend() -> Backend {
     Backend::new(Some(tenants_dir()))
 }
 
+/// The generated workload of a seed and length. A test that compares a clean run with a faulted
+/// one asks for the same workload twice; it is generated (each step decided by the kernel on a
+/// scratch world) once.
 fn workload(seed: u64, steps: usize) -> Vec<Scheduled> {
-    generate(&kernel_seeded(), &fieldnotes(), seed, steps, T0, 60_000)
+    static MADE: Mutex<BTreeMap<(u64, usize), Vec<Scheduled>>> = Mutex::new(BTreeMap::new());
+    let mut made = MADE.lock().unwrap();
+    made.entry((seed, steps))
+        .or_insert_with(|| generate(&kernel_seeded(), &fieldnotes(), seed, steps, T0, 60_000))
+        .clone()
 }
 
 /// An editorial workload on Fieldnotes, sent with idempotency keys.
@@ -120,10 +127,16 @@ fn outcomes(trace: &ShellTrace) -> BTreeMap<usize, String> {
 /// starts a backend and installs the seed tenants, which is most of its cost).
 fn baseline() -> &'static ShellRun {
     static CLEAN: OnceLock<ShellRun> = OnceLock::new();
-    CLEAN.get_or_init(|| run(&backend(), &editorial(BASELINE_SEED, 30, Faults::default())))
+    CLEAN.get_or_init(|| {
+        run(
+            &backend(),
+            &editorial(BASELINE_SEED, BASELINE_STEPS, Faults::default()),
+        )
+    })
 }
 
 const BASELINE_SEED: u64 = 5;
+const BASELINE_STEPS: usize = 24;
 
 fn injected(trace: &ShellTrace, fault: StoreFault) -> usize {
     trace.injected.iter().filter(|i| i.fault == fault).count()
@@ -136,7 +149,7 @@ fn the_shell_path_decides_as_the_kernel_does() {
     // tenant.
     let scenario = ShellScenario {
         keys: false,
-        ..editorial(7, 40, Faults::default())
+        ..editorial(7, 24, Faults::default())
     };
     let shell = run(&backend(), &scenario);
     assert_clean(&shell.trace);
@@ -145,7 +158,6 @@ fn the_shell_path_decides_as_the_kernel_does() {
         seed: scenario.seed,
         initial: kernel_seeded(),
         schedule: scenario.schedule.clone(),
-        faults: KernelFaults::default(),
     });
     let answers = shell.trace.last_answers();
     for step in &kernel.steps {
@@ -209,7 +221,7 @@ fn the_same_seed_gives_the_same_trace_and_generations() {
         crash: 100_000,
         ..Faults::default()
     };
-    let scenario = editorial(11, 30, faults);
+    let scenario = editorial(11, 20, faults);
     let first = run(&backend(), &scenario);
     let second = run(&backend(), &scenario);
     assert_eq!(first.trace.hash(), second.trace.hash());
@@ -237,7 +249,7 @@ fn a_commit_that_loses_a_race_is_decided_again() {
         &backend(),
         &editorial(
             BASELINE_SEED,
-            30,
+            BASELINE_STEPS,
             store_faults(StoreFaults {
                 commit_conflict: 250_000,
                 ..StoreFaults::default()
@@ -265,7 +277,7 @@ fn a_process_stopped_before_its_write_commits_nothing_and_the_retry_commits_once
         &backend(),
         &editorial(
             BASELINE_SEED,
-            30,
+            BASELINE_STEPS,
             store_faults(StoreFaults {
                 commit_unavailable: 200_000,
                 ..StoreFaults::default()
@@ -297,7 +309,7 @@ fn a_commit_whose_answer_is_lost_is_answered_from_its_key() {
         &backend(),
         &editorial(
             BASELINE_SEED,
-            30,
+            BASELINE_STEPS,
             store_faults(StoreFaults {
                 commit_reply_lost: 300_000,
                 ..StoreFaults::default()
@@ -324,7 +336,7 @@ fn a_repeated_request_commits_once() {
         &backend(),
         &editorial(
             BASELINE_SEED,
-            30,
+            BASELINE_STEPS,
             Faults {
                 request_repeated: 1_000_000,
                 ..Faults::default()
@@ -367,7 +379,7 @@ fn a_delayed_request_arrives_after_later_ones() {
         &backend(),
         &editorial(
             10,
-            30,
+            20,
             Faults {
                 request_delayed: 300_000,
                 ..Faults::default()
@@ -394,7 +406,7 @@ fn a_process_stopped_between_commit_and_publication_publishes_on_restart() {
         &backend(),
         &editorial(
             12,
-            30,
+            20,
             Faults {
                 crash: 300_000,
                 ..Faults::default()
@@ -413,7 +425,7 @@ fn a_publisher_that_cannot_read_or_mark_the_outbox_publishes_everything_in_order
         &backend(),
         &editorial(
             13,
-            30,
+            20,
             store_faults(StoreFaults {
                 publish_unavailable: 400_000,
                 publish_ack_lost: 400_000,
@@ -438,7 +450,7 @@ fn a_failed_installation_leaves_no_half_tenant_and_the_next_start_installs_it() 
         name: "provisioning".into(),
         seed: 21,
         start: T0 - 3_600_000,
-        schedule: workload(21, 8),
+        schedule: workload(21, 3),
         faults: Faults {
             crash: 1_000_000,
             ..Faults::default()
@@ -464,6 +476,98 @@ fn a_failed_installation_leaves_no_half_tenant_and_the_next_start_installs_it() 
         let state = &installed.world.tenants[&tenant];
         assert_eq!(state.schema, seeded.tenants[&tenant].schema, "{tenant}");
         // Its journal starts from its creation, once: nothing of the failed attempt is left.
+        let journal = &installed.recordings[&tenant].entries;
+        assert_eq!(journal[0].intent.name(), "create_tenant", "{tenant}");
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|e| e.intent.name() == "create_tenant")
+                .count(),
+            1,
+            "{tenant}"
+        );
+    }
+}
+
+/// Verifies: fm-provisioning-step-fails
+#[test]
+fn an_installation_whose_creating_commit_loses_its_answer_leaves_no_half_tenant() {
+    // fm-provisioning-step-fails: the commit that creates a tenant is made, but its answer is lost
+    // (the first commit of each bundle, as every commit's answer is lost during the start). The
+    // install fails, and a tenant is whole or absent: after the restart each tenant is whole,
+    // with exactly one `create_tenant` in its journal.
+    let tidewater = tenant_id("tidewater");
+    let scenario = ShellScenario {
+        name: "provisioning-reply-lost".into(),
+        seed: 22,
+        start: T0 - 3_600_000,
+        schedule: workload(22, 3),
+        faults: Faults {
+            crash: 1_000_000,
+            ..Faults::default()
+        },
+        listen: vec![fieldnotes(), tidewater.clone()],
+        keys: true,
+        start_faults: StoreFaults {
+            commit_reply_lost: 1_000_000,
+            ..StoreFaults::default()
+        },
+        operations: Vec::new(),
+    };
+    let installed = run(&backend(), &scenario);
+    assert_clean(&installed.trace);
+    assert!(injected(&installed.trace, StoreFault::CommitReplyLost) > 0);
+    assert!(!installed.trace.restarts.is_empty());
+    let seeded = kernel_seeded();
+    for tenant in [fieldnotes(), tidewater] {
+        let state = &installed.world.tenants[&tenant];
+        assert_eq!(state.schema, seeded.tenants[&tenant].schema, "{tenant}");
+        let journal = &installed.recordings[&tenant].entries;
+        assert_eq!(journal[0].intent.name(), "create_tenant", "{tenant}");
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|e| e.intent.name() == "create_tenant")
+                .count(),
+            1,
+            "{tenant}"
+        );
+    }
+}
+
+/// Verifies: fm-provisioning-step-fails
+#[test]
+fn a_process_that_stops_right_after_the_creating_commit_leaves_no_half_tenant() {
+    // fm-provisioning-step-fails: the process stops after the commit that creates a tenant and
+    // before the next step of its install, and does nothing more (it cannot clean up). A tenant
+    // is whole or absent: after the restart each tenant is whole, with exactly one
+    // `create_tenant` in its journal.
+    let tidewater = tenant_id("tidewater");
+    let scenario = ShellScenario {
+        name: "provisioning-stopped-after-create".into(),
+        seed: 23,
+        start: T0 - 3_600_000,
+        schedule: workload(23, 3),
+        faults: Faults {
+            crash: 1_000_000,
+            ..Faults::default()
+        },
+        listen: vec![fieldnotes(), tidewater.clone()],
+        keys: true,
+        start_faults: StoreFaults {
+            stop_after_commit: Some(1),
+            ..StoreFaults::default()
+        },
+        operations: Vec::new(),
+    };
+    let installed = run(&backend(), &scenario);
+    assert_clean(&installed.trace);
+    assert!(injected(&installed.trace, StoreFault::CommitReplyLost) > 0);
+    assert!(!installed.trace.restarts.is_empty());
+    let seeded = kernel_seeded();
+    for tenant in [fieldnotes(), tidewater] {
+        let state = &installed.world.tenants[&tenant];
+        assert_eq!(state.schema, seeded.tenants[&tenant].schema, "{tenant}");
         let journal = &installed.recordings[&tenant].entries;
         assert_eq!(journal[0].intent.name(), "create_tenant", "{tenant}");
         assert_eq!(

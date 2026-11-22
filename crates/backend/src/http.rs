@@ -869,7 +869,7 @@ async fn clients_list(
     State(app): State<Shared>,
     headers: HeaderMap,
 ) -> Result<Json<Json_>, ApiError> {
-    as_caller(&app, &headers, |app, identity| clients::all(app, identity)).await
+    as_caller(&app, &headers, clients::all).await
 }
 
 async fn clients_create(

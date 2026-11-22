@@ -8,7 +8,7 @@
 //! function of the records alone: rebuilt, it answers the same. Random data from a fixed seed.
 
 use std::sync::Arc;
-use strata_kernel::search::{self, SearchCursor, SearchRequest, SearchResult};
+use strata_kernel::search::{SearchCursor, SearchRequest, SearchResult};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_storage_api::memory::MemoryStore;
@@ -395,19 +395,4 @@ fn the_entries_of_a_record_follow_its_commits_and_hold_searchable_fields_only() 
         }],
     );
     assert!(entries(1).is_empty());
-}
-
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        self.0 >> 33
-    }
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
 }

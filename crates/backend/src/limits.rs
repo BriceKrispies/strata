@@ -284,7 +284,7 @@ mod tests {
             argon2_wait_ms: 30,
             ..Limits::default()
         });
-        let _first = admission.hashing("a").await.ok().expect("a's share");
+        let _first = admission.hashing("a").await.expect("a's share");
         assert!(admission.hashing("a").await.is_err(), "a's second place");
         assert!(admission.hashing("b").await.is_ok(), "b has the other");
     }
@@ -296,10 +296,10 @@ mod tests {
             blocking_queue: 3,
             ..Limits::default()
         });
-        let a1 = admission.work("a").ok().expect("a1");
-        let _a2 = admission.work("a").ok().expect("a2");
+        let a1 = admission.work("a").expect("a1");
+        let _a2 = admission.work("a").expect("a2");
         assert!(admission.work("a").is_err(), "a's third");
-        let _b1 = admission.work("b").ok().expect("b1");
+        let _b1 = admission.work("b").expect("b1");
         assert!(admission.work("c").is_err(), "the global queue is full");
         drop(a1);
         assert!(admission.work("c").is_ok(), "a place freed");

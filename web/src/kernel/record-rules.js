@@ -143,8 +143,8 @@ function recordOf(values) {
 function envOf(scopes, who) {
   const records = { Record: recordOf(scopes.record), Old: recordOf(scopes.old), New: recordOf(scopes.draft) };
   return {
-    /** @param {'Record' | 'Old' | 'New'} scope */
-    record: (scope) => records[scope],
+    /** @param {string} scope The language names its scopes Record, Old and New; any other has no record. */
+    record: (scope) => (scope === 'Record' || scope === 'Old' || scope === 'New' ? records[scope] : null),
     follow() {
       throw new Undecided('the rule follows a reference');
     },

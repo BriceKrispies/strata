@@ -469,7 +469,7 @@ pub fn decide(
     for d in &declared {
         for link in &d.links {
             for record in lookup.by_field(&d.object.id, link, &value)? {
-                take(d, &**record, &mut plan, &mut held);
+                take(d, record, &mut plan, &mut held);
             }
         }
     }
@@ -506,7 +506,7 @@ pub fn decide(
             let page = lookup.page_of(&d.object.id, after, BATCH as u32)?;
             for record in &page {
                 if record.created_by.as_ref() == Some(subject) {
-                    take(d, &***record, &mut plan, &mut held);
+                    take(d, record, &mut plan, &mut held);
                 }
             }
             let following = declared

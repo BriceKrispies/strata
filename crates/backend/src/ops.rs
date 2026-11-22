@@ -645,7 +645,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         )
     };
     let ctx = identity.context(app);
-    let mut state = crate::view_load::load_view_state(app, &ctx, def, &depends_on, &request_of)?;
+    let mut state = crate::view_load::load_view_state(app, &ctx, def, &depends_on, request_of)?;
     let anonymous = identity.anonymous();
     // A restricted person's personal fields are not shown (PRV-352, subject_rights).
     let restrictions = crate::subject_rights::Rights::load_restrictions(app, &identity.tenant)?;

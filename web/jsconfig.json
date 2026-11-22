@@ -10,7 +10,7 @@
     "strict": true,
     "noImplicitAny": false,
     "skipLibCheck": true,
-    "types": []
+    "types": ["vite/client"]
   },
   "include": ["src/**/*.js"]
 }

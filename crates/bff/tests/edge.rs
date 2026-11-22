@@ -1106,7 +1106,7 @@ async fn assets_are_cached_only_on_success_and_source_maps_are_not_served() {
         reply
             .headers
             .get("cache-control")
-            .map_or(true, |v| !v.to_str().unwrap().contains("immutable")),
+            .is_none_or(|v| !v.to_str().unwrap().contains("immutable")),
         "a failure is not cached for a year"
     );
     let (status, _, _) = edge.get("127.0.0.1", "/assets/app-abc.js.map", None).await;

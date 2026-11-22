@@ -364,7 +364,7 @@ fn define_object(i: usize) -> SchemaChange {
 
 fn define_policy(i: usize) -> SchemaChange {
     SchemaChange::DefinePolicy(PolicyDef {
-        id: PolicyId::new(&format!("pol_{i}")).unwrap(),
+        id: PolicyId::new(format!("pol_{i}")).unwrap(),
         role: role("editor"),
         resource: Resource::Object(object("note")),
         actions: BTreeSet::from([Action::Read]),

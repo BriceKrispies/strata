@@ -1118,3 +1118,321 @@ op 3 102 create 1=s:fir 2=i:13 3=b:0
 op 1 100 create 1=i:34 2=n
 op 1 100 create 1=s:yew
 end
+scenario h-default-relied-on
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:oak 6=n
+op 1 100 create 1=s:oak 6=i:3
+op 1 100 create 1=s:oak 6=s:bad
+op 1 100 patch 1 6=n
+op 1 100 patch 2 6=i:9
+op 1 100 update 3 1=s:ash
+op 1 100 patch 1 2=i:4
+op 1 101 create 1=s:elm 6=i:7
+op 1 102 create 1=s:yew 3=b:1
+end
+scenario h-patch-keeps-and-removes
+op 1 100 create 1=s:oak 2=i:3 3=b:1
+op 1 100 patch 1 2=i:9
+op 1 100 patch 1 3=n
+op 1 100 patch 1 1=n
+op 1 100 patch 1
+op 1 100 patch 1 9=i:1
+op 1 100 patch 1 2=i:1 2=i:2
+op 1 100 patch 1 2=s:wrong
+op 1 100 patch 2 2=i:1
+op 1 102 patch 1 2=i:5
+op 1 100 update 1 1=s:ash
+op 1 100 patch 1 7=l:s:oak,s:ash 6=n
+op 1 100 patch 1 7=l:
+op 1 100 patch 1 7=n
+end
+scenario h-patch-by-a-writer-on-its-own-record
+op 1 102 create 1=s:oak
+op 1 103 create 1=s:ash
+op 1 102 patch 1 2=i:1
+op 1 102 patch 2 2=i:1
+op 1 103 patch 1 2=i:1
+op 1 101 patch 2 2=i:1
+op 1 999 patch 1 2=i:1
+op 1 999 patch 7 2=i:1
+op 1 102 patch 7 2=i:1
+op 1 101 patch 7 2=i:1
+end
+scenario h-expected-version
+op 1 100 create 1=s:oak
+op 1 100 update 1 v=1 1=s:ash
+op 1 100 update 1 v=1 1=s:elm
+op 1 100 patch 1 v=2 2=i:1
+op 1 100 patch 1 v=2 2=i:2
+op 1 100 patch 1 v=9 2=i:2
+op 1 100 patch 1 v=0 2=i:2
+op 1 100 delete 1 v=1
+op 1 100 delete 1 v=4
+op 1 100 delete 1 v=3
+op 1 100 delete 1
+end
+scenario h-expected-version-checks-in-order
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash
+op 1 102 patch 1 v=1 2=i:1
+op 1 103 create 1=s:elm
+op 1 103 patch 3 v=9 2=i:1
+op 1 103 delete 3 v=9
+op 1 103 patch 1 v=1 2=i:1
+op 1 999 delete 1 v=9
+op 1 999 delete 9 v=9
+op 1 100 delete 9 v=1
+op 1 100 patch 9 v=1 2=i:1
+op 1 100 update 9 v=1 1=s:oak
+op 1 100 patch 1 v=7 1=n
+op 1 100 patch 1 v=1 1=n
+op 1 100 update 1 v=7 1=s*65537:x
+op 1 100 update 1 v=1 1=s*65537:x
+op 1 100 update 2 v=9
+op 1 100 update 2 v=1 1=s:elm
+op 1 100 delete 2 v=1
+op 1 100 delete 2 v=2
+end
+scenario h-expected-version-with-a-referrer
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash 5=r:1
+op 1 100 delete 1 v=2
+op 1 100 delete 1 v=1
+op 1 100 patch 2 5=n
+op 1 100 delete 1 v=1
+end
+scenario h-delete-raises-the-version-of-a-referrer-once
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash 4=r:1 8=l:r:1,r:1
+op 1 100 create 1=s:elm 4=r:1
+op 1 100 delete 1
+op 1 100 patch 2 v=2 2=i:1
+op 1 100 patch 3 v=2 2=i:1
+end
+scenario h-delete-leaves-the-version-of-an-unrelated-record
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash 4=r:1
+op 1 100 create 1=s:elm 4=r:2
+op 1 100 delete 1
+op 1 100 patch 3 v=1 2=i:1
+op 1 100 patch 2 v=2 2=i:1
+end
+scenario h-a-list-of-strings
+op 1 100 create 1=s:oak 7=l:s:oak,s:ash
+op 1 100 create 1=s:oak 7=l:
+op 1 100 create 1=s:oak 7=l:s:oak,i:3
+op 1 100 create 1=s:oak 7=l:s:oak,n
+op 1 100 create 1=s:oak 7=s:oak
+op 1 100 create 1=s:oak 7=l:b:1
+op 1 100 create 1=s:oak 7=l:s:a,s:a,s:a
+op 1 100 create 1=s:oak 7=n
+op 1 100 patch 1 7=l:s:a,s:b
+op 1 100 patch 1 7=n
+op 1 100 patch 2 7=l:
+end
+scenario h-a-list-of-the-wrong-type
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:oak 0=l:i:3
+op 1 100 create 1=s:oak 0=i:3
+op 1 100 create 1=s:oak 0=r:1
+op 1 100 create 1=s:oak 8=l:s:oak
+op 1 100 create 1=s:oak 8=l:r:1,n
+op 1 100 create 1=s:oak 8=l:r:90,s:oak
+op 1 100 create 1=s:oak 4=l:r:1
+op 1 100 create 1=s:oak 5=l:r:1
+op 1 100 create 1=s:oak 2=l:i:1
+end
+scenario h-a-list-of-references-that-dangle
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:oak 0=l:r:90
+op 1 100 create 1=s:oak 0=l:r:1,r:90
+op 1 100 create 1=s:oak 8=l:r:90
+op 1 100 create 1=s:oak 8=l:r:3
+op 1 100 create 1=s:oak 8=l:r:1,r:2
+op 1 100 patch 1 8=l:r:1,r:5
+op 1 100 patch 1 8=l:r:1
+op 2 200 create 1=s:oak 8=l:r:1
+op 2 200 create 1=s:oak
+op 2 200 create 1=s:oak 8=l:r:1
+end
+scenario h-a-set-null-list-loses-an-element
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash
+op 1 100 create 1=s:elm 8=l:r:1,r:2,r:1
+op 1 100 delete 1
+op 1 100 delete 2
+op 1 100 patch 3 v=3 2=i:1
+end
+scenario h-a-restricting-list-blocks-a-delete
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash
+op 1 100 create 1=s:elm 0=l:r:1,r:2
+op 1 100 delete 1
+op 1 100 delete 2
+op 1 100 patch 3 0=l:r:2
+op 1 100 delete 1
+op 1 100 delete 2
+op 1 100 patch 3 0=l:
+op 1 100 delete 2
+op 1 100 patch 3 0=n
+end
+scenario h-a-restricting-list-wins-over-a-set-null-list
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash 0=l:r:1 8=l:r:1
+op 1 100 create 1=s:elm 8=l:r:1
+op 1 100 delete 1
+op 1 100 patch 2 0=n
+op 1 100 delete 1
+end
+scenario h-a-list-may-hold-the-record-itself
+op 1 100 create 1=s:oak
+op 1 100 patch 1 0=l:r:1 8=l:r:1
+op 1 100 delete 1
+end
+scenario h-a-required-list-does-not-block-a-delete
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash 8=l:r:1
+op 1 100 require 8 strict
+op 1 100 require 8 lax
+op 1 100 delete 1
+op 1 100 create 1=s:elm 8=l:
+op 1 100 create 1=s:yew
+op 1 100 patch 2 8=n
+op 1 100 patch 2 8=l:r:3
+op 1 100 delete 3
+end
+scenario h-a-required-restricting-list
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash 0=l:r:1
+op 1 100 require 0 strict
+op 1 100 patch 1 0=l:r:2
+op 1 100 require 0 strict
+op 1 100 delete 2
+op 1 100 delete 1
+op 1 100 patch 1 0=l:
+op 1 100 patch 2 0=l:
+op 1 100 delete 1
+end
+scenario h-a-required-list-of-strings
+op 1 100 create 1=s:oak 7=l:s:a
+op 1 100 create 1=s:ash
+op 1 100 require 7 strict
+op 1 100 patch 2 7=l:
+op 1 100 require 7 strict
+op 1 100 create 1=s:elm
+op 1 100 create 1=s:elm 7=l:
+op 1 100 patch 1 7=n
+end
+scenario h-the-string-bound-is-in-bytes
+op 1 100 create 1=s*65535:x
+op 1 100 create 1=s*65536:x
+op 1 100 create 1=s*65537:x
+op 1 100 create 1=s*32768:é
+op 1 100 create 1=s*32769:é
+op 1 100 create 1=s*21845:€
+op 1 100 create 1=s*21846:€
+op 1 100 update 1 1=s*65537:x
+op 1 100 update 1 1=s*65536:y
+op 1 100 patch 2 1=s*65537:x
+op 1 100 patch 2 1=s*65536:z
+op 1 100 patch 3 1=s*100:q
+op 1 100 patch 3 1=s*99:q
+end
+scenario h-the-string-bound-for-a-string-in-a-list
+op 1 100 create 1=s:oak 7=l:s:a,s*65535:x
+op 1 100 create 1=s:oak 7=l:s:a,s*65536:x
+op 1 100 create 1=s:oak 7=l:s:a,s*65537:x
+op 1 100 create 1=s:oak 7=l:s*65537:x,s:a
+op 1 100 create 1=s:oak 7=l:s*65537:x,i:3
+op 1 100 create 1=s:oak 7=l:i:3,s*65537:x
+op 1 100 patch 1 7=l:s*65537:x
+op 1 100 patch 1 7=l:s*65536:x
+op 1 100 create 1=s:oak 7=l*2:s*60000:x
+end
+scenario h-the-list-bound
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:oak 7=l*999:s:a
+op 1 100 create 1=s:oak 7=l*1000:s:a
+op 1 100 create 1=s:oak 7=l*1001:s:a
+op 1 100 create 1=s:oak 0=l*1000:r:1
+op 1 100 create 1=s:oak 0=l*1001:r:1
+op 1 100 create 1=s:oak 8=l*1000:r:1
+op 1 100 create 1=s:oak 8=l*1001:r:1
+op 1 100 create 1=s:oak 8=l*1001:r:90
+op 1 100 create 1=s:oak 7=l*1001:i:1
+op 1 100 create 1=s:oak 7=l*100:s:b
+op 1 100 create 1=s:oak 7=l*99:s:b
+op 1 100 create 1=s:oak 7=l*100:s:b,s:c
+op 1 100 update 2 1=s:oak 7=l*1001:s:a
+op 1 100 update 2 1=s:oak 7=l*1000:s:a
+op 1 100 patch 2 7=l*1001:s:a
+op 1 100 patch 2 7=l*1000:s:b
+op 1 100 patch 2 0=l*1000:r:1
+op 1 100 patch 2 8=l*1001:r:1
+op 1 100 delete 1
+op 1 100 delete 2
+end
+scenario h-a-list-bound-with-an-element-deleted
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash 8=l*1000:r:1
+op 1 100 create 1=s:elm 0=l*1000:r:2
+op 1 100 delete 1
+op 1 100 delete 2
+op 1 100 patch 3 0=l*1000:r:3
+op 1 100 patch 3 0=n
+op 1 100 delete 2
+end
+scenario h-the-record-bound
+op 1 100 create 1=s*65536:x 7=l*4:s*60000:x
+op 1 100 create 1=s:oak 7=l*5:s*60000:x
+op 1 100 create 1=s*65536:x 7=l*3:s*64000:x
+op 1 100 create 1=s*65536:x 7=l*2:s*65536:x
+op 1 100 create 1=s*65536:x 7=l*3:s*60000:x
+op 1 100 create 1=s*65536:x 7=l*4:s*50000:x 0=l*500:r:1
+op 1 100 update 3 1=s*65536:x 7=l*5:s*60000:x
+op 1 100 update 3 1=s*65536:x 7=l*3:s*60000:x
+op 1 100 update 3 1=s:oak
+op 1 100 patch 3 2=i:1
+end
+scenario h-the-record-bound-comes-first
+op 1 100 create 1=s:oak
+op 1 100 create 1=s*65536:x 7=l*4:s*60000:x 4=r:90
+op 1 100 create 1=s*65536:x 7=l*4:s*60000:x 2=s:bad
+op 1 100 create 1=s*65537:x 7=l*4:s*60000:x
+op 1 100 create 1=s:oak 7=l*4:s*65537:x
+op 1 100 create 7=l*5:s*60000:x
+op 1 100 create 1=s*65536:x 7=l*4:s*60000:x 9=i:1
+op 1 999 create 1=s*65536:x 7=l*4:s*60000:x
+op 1 100 update 1 v=9 1=s*65536:x 7=l*4:s*60000:x
+op 1 100 update 1 v=1 1=s*65536:x 7=l*4:s*60000:x
+op 1 999 update 1 1=s*65536:x 7=l*4:s*60000:x
+op 1 100 update 9 1=s*65536:x 7=l*4:s*60000:x
+end
+scenario h-a-limit-in-one-tenant-leaves-the-other-alone
+op 1 100 create 1=s*65537:x
+op 2 200 create 1=s*65536:x
+op 2 200 create 1=s:oak 7=l*1001:s:a
+op 1 100 create 1=s:oak 7=l*1000:s:a
+op 3 100 create 1=s*65537:x
+end
+scenario h-update-replaces-every-field
+op 1 100 create 1=s:oak 2=i:1 3=b:1 6=i:2 7=l:s:a 0=l:
+op 1 100 create 1=s:ash 4=r:1 5=r:1 8=l:r:1
+op 1 100 update 2 1=s:elm
+op 1 100 update 1 1=s:elm 6=i:5
+op 1 100 update 1 1=s:a 2=i:1
+op 1 100 update 1 v=3 1=s:yew 8=l:r:2
+end
+scenario h-the-first-failing-field-decides
+op 1 100 create 1=s:oak
+op 1 100 create 0=l:r:90 1=s*65537:x
+op 1 100 create 1=s*65537:x 2=s:bad
+op 1 100 create 2=s:bad 1=s*65537:x
+op 1 100 create 1=s:oak 7=l*1001:s:a 8=l:r:90
+op 1 100 create 1=s:oak 5=r:90 7=l*1001:s:a
+op 1 100 create 1=s:oak 7=l:i:1 8=l*1001:r:1
+op 1 100 create 1=s:oak 7=l*1001:s:a 8=l:s:oak
+op 1 100 create 3=b:1 7=l*1001:s:a
+op 1 100 create 9=i:1 1=s*65537:x
+op 1 100 create 1=n 2=s:bad
+end

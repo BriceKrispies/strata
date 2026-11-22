@@ -2,11 +2,10 @@
 //! `SPECC_BLESS=1`), the exactness of the generated network policies against the declared
 //! relationships, and the alert rules read from budget statements.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 
-use strata_spec_compiler::deploy::{self, CONNECTING_KINDS, UNIT_CATEGORIES};
+use strata_spec_compiler::deploy;
 use strata_spec_compiler::{output, GeneratedFile};
 
 const FIXTURE_SPEC: &str = "crates/spec-compiler/tests/fixtures/deploy/spec.jsonc";
@@ -25,14 +24,6 @@ fn fixture_files() -> Vec<GeneratedFile> {
         .files
 }
 
-fn contents<'a>(files: &'a [GeneratedFile], path: &str) -> &'a str {
-    &files
-        .iter()
-        .find(|f| f.path == path)
-        .unwrap_or_else(|| panic!("no file {path}"))
-        .contents
-}
-
 #[test]
 fn golden_output_matches_the_expected_files() {
     let dir = manifest_dir().join("tests/fixtures/deploy/expected");
@@ -47,30 +38,4 @@ fn golden_output_matches_the_expected_files() {
         "tests/fixtures/deploy/expected is not what specc deploy generates: {differences:?}. \
          Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
     );
-}
-
-/// The deployable components and, for each, the units that declare a connecting relationship
-/// to it, computed without the compiler's own code.
-fn declared(spec: &serde_json::Value) -> (Vec<String>, BTreeMap<String, BTreeSet<String>>) {
-    let units: Vec<String> = spec["components"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|c| UNIT_CATEGORIES.contains(&c["category"].as_str().unwrap_or("")))
-        .map(|c| c["id"].as_str().unwrap().to_string())
-        .collect();
-    let mut into: BTreeMap<String, BTreeSet<String>> =
-        units.iter().map(|u| (u.clone(), BTreeSet::new())).collect();
-    for r in spec["relationships"].as_array().unwrap() {
-        let (from, to) = (r["from"].as_str().unwrap(), r["to"].as_str().unwrap());
-        if CONNECTING_KINDS.contains(&r["kind"].as_str().unwrap())
-            && from != to
-            && units.iter().any(|u| u == from)
-        {
-            if let Some(set) = into.get_mut(to) {
-                set.insert(from.to_string());
-            }
-        }
-    }
-    (units, into)
 }

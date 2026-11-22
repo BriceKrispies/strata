@@ -5,32 +5,13 @@
 use std::fs;
 use std::path::PathBuf;
 
-use serde_json::{json, Value};
-use strata_spec_compiler::layers::{self};
-use strata_spec_compiler::{generate, jsonc, Diagnostic, Options, RuntimeDependency};
+use strata_spec_compiler::{generate, Diagnostic, Options, RuntimeDependency};
 
 fn options() -> Options {
     Options {
         crate_name: "generated".to_string(),
         runtime: RuntimeDependency::Workspace,
     }
-}
-
-fn spec(sections: Value) -> String {
-    let mut base = json!({
-        "exegra": "0.1",
-        "system": { "id": "sys", "name": "System" },
-        "components": [ { "id": "svc", "name": "Service" } ],
-        "types": [],
-        "records": [],
-        "contracts": []
-    });
-    if let (Some(base), Some(extra)) = (base.as_object_mut(), sections.as_object()) {
-        for (k, v) in extra {
-            base.insert(k.clone(), v.clone());
-        }
-    }
-    base.to_string()
 }
 
 fn refuse(text: &str) -> Vec<Diagnostic> {

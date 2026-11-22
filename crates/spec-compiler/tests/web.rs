@@ -11,14 +11,14 @@
 //! `SPECC_SKIP_NODE_TESTS=1` or `SPECC_SKIP_EXEGRA_TESTS=1` skips them, with a banner.
 //! - a client machine is not generated as Rust, and a specification without one gives no files.
 
-mod support;
+use crate::support;
 
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
 use serde_json::{json, Value};
-use strata_spec_compiler::{generate, jsonc, output, web, GeneratedFile};
+use strata_spec_compiler::{jsonc, output, web, GeneratedFile};
 
 const SPEC: &str = "crates/spec-compiler/tests/fixtures/machines-web/spec.jsonc";
 const MACHINE: &str = "login-form";

@@ -1756,7 +1756,7 @@ pub fn pair_pages_follow_writes_and_definitions(store: &dyn Store) {
                                 limit,
                             };
                             let loaded: Vec<RecordId> = store
-                                .load(&alpha, &[need.clone()])
+                                .load(&alpha, std::slice::from_ref(&need))
                                 .unwrap()
                                 .tenant
                                 .unwrap()
@@ -1905,7 +1905,7 @@ pub fn jobs_conform(store: &dyn Store) {
     };
     let none = WorkerWrites::default();
     let recorded = |reported: Reported| match reported {
-        Reported::Recorded(job) => job,
+        Reported::Recorded(job) => *job,
         Reported::Refused(why) => panic!("the report was refused: {why}"),
     };
 

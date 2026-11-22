@@ -160,7 +160,7 @@ pub fn export_page(
                     if past || found.contains_key(&key) {
                         continue;
                     }
-                    if let Some(entry) = exported(d.object, &**record, subject) {
+                    if let Some(entry) = exported(d.object, record, subject) {
                         found.insert(key, entry);
                     }
                 }
@@ -201,7 +201,7 @@ pub fn export_page(
     let page = lookup.page_of(&d.object.id, after, BATCH as u32)?;
     for record in &page {
         if record.created_by.as_ref() == Some(subject) {
-            if let Some(entry) = exported(d.object, &***record, subject) {
+            if let Some(entry) = exported(d.object, record, subject) {
                 records.push(entry);
             }
         }

@@ -22,6 +22,21 @@ import Strata
 #print axioms Strata.delete_refused_while_referenced
 #print axioms Strata.delete_leaves_no_reference
 #print axioms Strata.conforms_afterDelete
+#print axioms Strata.problem_none_parts
+#print axioms Strata.patch_keeps_unnamed
+#print axioms Strata.patch_last_wins
+#print axioms Strata.update_writes_patched
+#print axioms Strata.update_keeps_unnamed
+#print axioms Strata.update_raises_version
+#print axioms Strata.delete_raises_referrer_version
+#print axioms Strata.version_conflict_on_update
+#print axioms Strata.version_conflict_on_delete
+#print axioms Strata.create_fills_default
+#print axioms Strata.required_list_never_blocks
+#print axioms Strata.problem_none_within
+#print axioms Strata.create_refused_over_record_bound
+#print axioms Strata.create_within_limits
+#print axioms Strata.update_within_limits
 
 #print axioms Strata.Evolution.closure
 #print axioms Strata.Evolution.locality

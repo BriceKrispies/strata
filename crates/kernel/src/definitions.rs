@@ -699,16 +699,22 @@ fn invoke_operation_problems(
 /// down fits any type, a whole number fits a time and a reference (as a record id does), and a
 /// file or a language is text.
 fn shape_fits(shape: Shape, ty: &FieldType) -> bool {
-    match (shape, ty) {
-        (Shape::Any, _) => true,
-        (Shape::Str, FieldType::Str | FieldType::File { .. } | FieldType::Language) => true,
-        (Shape::Int, FieldType::Int | FieldType::Time | FieldType::Ref { .. }) => true,
-        (Shape::Bool, FieldType::Bool) => true,
-        (Shape::Time, FieldType::Time) => true,
-        (Shape::Ref, FieldType::Ref { .. }) => true,
-        (Shape::List, FieldType::List(_)) => true,
-        _ => false,
-    }
+    matches!(
+        (shape, ty),
+        (Shape::Any, _)
+            | (
+                Shape::Str,
+                FieldType::Str | FieldType::File { .. } | FieldType::Language
+            )
+            | (
+                Shape::Int,
+                FieldType::Int | FieldType::Time | FieldType::Ref { .. }
+            )
+            | (Shape::Bool, FieldType::Bool)
+            | (Shape::Time, FieldType::Time)
+            | (Shape::Ref, FieldType::Ref { .. })
+            | (Shape::List, FieldType::List(_))
+    )
 }
 
 /// The problems of the automations of a schema (D-6520 to D-6535, INT-1522, CT-792): the id is not

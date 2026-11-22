@@ -382,7 +382,7 @@ impl Conn {
                 transitions,
                 after,
             } => {
-                let selector = Selector::new(objects, kinds, segments, units, transitions);
+                let selector = Selector::from_request(objects, kinds, segments, units, transitions);
                 self.subscribe(req, sub, selector, after).await
             }
             ClientMessage::Unsubscribe { req, sub } => {

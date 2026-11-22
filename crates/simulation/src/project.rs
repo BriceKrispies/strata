@@ -520,7 +520,6 @@ fn minimise(
         let position = kept.iter().position(|i| *i == diverging)?;
         let sub = Scenario {
             schedule: kept.iter().map(|i| scenario.schedule[*i].clone()).collect(),
-            faults: Default::default(),
             ..scenario.clone()
         };
         let before = kept.iter().filter(|i| **i < proposal.before_step).count();

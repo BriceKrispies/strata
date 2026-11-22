@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 use strata_verification::lean::{
-    compare_outputs, kernel_output, model_output, parse_audit, scenarios, verify, FIXTURE_COUNT,
-    FIXTURE_SEED,
+    compare_outputs, hand_written, kernel_output, model_output, parse_audit, scenarios, verify,
+    FIXTURE_COUNT, FIXTURE_SEED,
 };
 use strata_verification::lean_diff;
 use strata_verification::obligations;
@@ -48,19 +48,28 @@ fn read(name: &str) -> String {
         .replace("\r\n", "\n")
 }
 
+/// The committed scenario file is the generated scenarios followed by the hand-written ones
+/// (scenarios named `h-...`, one or more for each decision of the model that the generator
+/// does not aim at alone). The expected output is what the Lean model prints for the whole file.
 /// This test never writes the committed files. After an intended change, rewrite them with
-/// `cargo run -p strata-verification --example bless_fixtures` and review the diff.
+/// `cargo run -p strata-verification --example bless_fixtures` (the expected file is written
+/// from the Lean model's output, never from the kernel's) and review the diff.
 #[test]
 fn committed_fixtures_match_the_generator_and_the_kernel() {
     let generated = scenarios(FIXTURE_SEED, FIXTURE_COUNT);
-    let expected = kernel_output(&generated);
-    assert_eq!(
-        read("scenarios.txt"),
-        generated,
-        "lean/fixtures/scenarios.txt is stale; run the bless_fixtures example"
+    let committed_scenarios = read("scenarios.txt");
+    assert!(
+        committed_scenarios.starts_with(&generated),
+        "lean/fixtures/scenarios.txt does not begin with what the generator writes; run the bless_fixtures example"
     );
+    assert_eq!(
+        hand_written(&committed_scenarios),
+        &committed_scenarios[generated.len()..],
+        "everything after the generated scenarios must be hand-written scenarios named h-..."
+    );
+    let expected = kernel_output(&committed_scenarios);
     let committed = read("expected.txt");
-    let difference = compare_outputs(&generated, &committed, &expected).first_difference;
+    let difference = compare_outputs(&committed_scenarios, &committed, &expected).first_difference;
     assert_eq!(
         difference, None,
         "the kernel no longer prints lean/fixtures/expected.txt"
@@ -72,20 +81,31 @@ fn committed_fixtures_match_the_generator_and_the_kernel() {
 fn the_lean_model_agrees_with_the_kernel() {
     let _lake = require_lake();
     let generated = scenarios(FIXTURE_SEED, FIXTURE_COUNT);
+    let committed_scenarios = read("scenarios.txt");
     // The scenarios the Lean program is given are the ones the kernel is given.
-    assert_eq!(
-        read("scenarios.txt"),
-        generated,
-        "lean/fixtures/scenarios.txt is not what the generator writes"
+    assert!(
+        committed_scenarios.starts_with(&generated),
+        "lean/fixtures/scenarios.txt does not begin with what the generator writes"
     );
     let lean = model_output(&lean_dir(), "fixtures/scenarios.txt").expect("the model runs");
-    let result = compare_outputs(&generated, &lean, &kernel_output(&generated));
+    let result = compare_outputs(
+        &committed_scenarios,
+        &lean,
+        &kernel_output(&committed_scenarios),
+    );
     assert!(
         result.agree,
         "model and kernel differ at line {:?}",
         result.first_difference
     );
-    assert_eq!(result.scenarios, FIXTURE_COUNT);
+    assert_eq!(
+        result.scenarios,
+        FIXTURE_COUNT
+            + hand_written(&committed_scenarios)
+                .lines()
+                .filter(|l| l.starts_with("scenario "))
+                .count()
+    );
 }
 
 #[test]
@@ -248,12 +268,13 @@ fn the_lean_sources_contain_no_placeholder_proofs() {
             .map(|line| line.split("--").next().unwrap_or(""))
             .collect::<Vec<_>>()
             .join("\n");
-        // Whole words only: `admit_keeps_pinned` or `admitEntry` is a name, not the tactic.
-        let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '\'' || c == '.';
-        let words: Vec<&str> = code.split(|c: char| !ident(c)).collect();
         for forbidden in ["sorry", "admit", "native_decide"] {
-            assert!(!words.contains(&forbidden), "{file} contains `{forbidden}`");
+            assert!(
+                !words(&code).any(|(_, w)| w == forbidden),
+                "{file} contains `{forbidden}`"
+            );
         }
+        // Whole words only: the model's `admitEntry` is a name, not the tactic.
         for forbidden in ["axiom ", "unsafe "] {
             assert!(!code.contains(forbidden), "{file} contains `{forbidden}`");
         }
@@ -318,4 +339,37 @@ fn the_generator_produces_every_intent_the_lean_model_executes() {
             "the generator never produces `{kind}`"
         );
     }
+}
+
+/// The identifiers of Lean source, each with the source before it (trailing spaces removed), so a
+/// check can match whole words and look at what precedes one.
+fn words(code: &str) -> impl Iterator<Item = (&str, &str)> {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '\'';
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in code
+        .char_indices()
+        .chain(std::iter::once((code.len(), ' ')))
+    {
+        match (start, is_word(c)) {
+            (None, true) => start = Some(i),
+            (Some(s), false) => {
+                out.push((code[..s].trim_end(), &code[s..i]));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    out.into_iter()
+}
+
+#[test]
+fn the_placeholder_scan_matches_whole_words() {
+    assert!(words(
+        "theorem t : True := by
+  sorry
+"
+    )
+    .any(|(_, w)| w == "sorry"));
+    assert!(!words("def sorryCount := 1").any(|(_, w)| w == "sorry"));
 }
