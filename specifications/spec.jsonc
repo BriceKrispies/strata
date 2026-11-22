@@ -9,7 +9,8 @@
     "behaviour.jsonc",
     "requirements.jsonc",
     "functions.jsonc",
-    "frontend.jsonc"
+    "frontend.jsonc",
+    "design-system.jsonc"
   ],
   "specSections": {
     "actions": "boundary.jsonc",

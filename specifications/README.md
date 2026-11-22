@@ -55,7 +55,7 @@ accepted and a refused fixture of each, are in `crates/spec-compiler/src/layers.
 `spec.jsonc` holds one member, `"specParts"`, the part files in order, and an optional `"specSections"`
 table saying which part each section belongs to (Exegra's `apply` uses it to place a new section or
 entity; the other readers ignore it). Every top-level section of the specification is in exactly one
-consumer part, except `claims`, which is in two; an area part (the last row) also holds, from any
+consumer part, except `claims`, which is in two; an area part (the last rows) also holds, from any
 section, the items of its area:
 
 | Part | Sections | Read by |
@@ -66,6 +66,7 @@ section, the items of its area:
 | `requirements.jsonc` | the `claims` with `"kind": "requirement"`, `caseTables` | the gate's evidence check |
 | `functions.jsonc` | `functions`, `exampleFixtures` | specc (the transcribed function layer) |
 | `frontend.jsonc` | an area part: the items of any section whose id starts `fe-`, `d-fe-` or `copy-browser-` (today decisions, copies and requirements of the browser client; docs/frontend.md) | each item's consumer, as above, through the manifest |
+| `design-system.jsonc` | an area part: the items of any section whose id is `ds-` and a number or starts `d-ds-` (today decisions and requirements of the design system and agentic composition; docs/design-system.md) | each item's consumer, as above, through the manifest |
 
 An area part keeps one area's items in one file for the people who work on it. The tools resolve the
 manifest, so it changes nothing they compute: an array section may be in several parts, and an id in

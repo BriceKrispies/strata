@@ -32,6 +32,7 @@ export const PARTS = [
   ['requirements.jsonc', 'the requirements the gate reconciles with the code and the recorded tests, and their case tables'],
   ['functions.jsonc', 'the transcribed function layer and its example fixtures'],
   ['frontend.jsonc', 'the browser client: its decisions, the copies it keeps, and the requirements its model is held to (an area part: items whose id starts fe-, d-fe- or copy-browser-)'],
+  ['design-system.jsonc', 'the design system and agentic composition: its decisions and the requirements its models are held to (an area part: items whose id is ds- and a number, or starts d-ds-; docs/design-system.md)'],
 ];
 
 const intent = 'intent.jsonc';
@@ -66,7 +67,10 @@ export const SECTION_PART = {
  * so it changes nothing they compute. Exegra's `apply` places a new item by `specSections`, that is
  * by consumer; move it with this script afterwards.
  */
-export const AREA_PARTS = [['frontend.jsonc', /^(fe-|d-fe-|copy-browser-)/]];
+export const AREA_PARTS = [
+  ['frontend.jsonc', /^(fe-|d-fe-|copy-browser-)/],
+  ['design-system.jsonc', /^(ds-\d|d-ds-)/],
+];
 
 /** The area part an item belongs to, or null. */
 export function areaPart(item) {
