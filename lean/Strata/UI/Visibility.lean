@@ -29,11 +29,14 @@ Proved:
 - **no trace** (`hidden_leaves_no_trace`, `hidden_leaves_no_trace_in`): a node the viewer is not served
   changes nothing the viewer is served, wherever it is among its siblings, including the container;
 - **admin by construction** (`admin_needs_role`): in a composition that passes the admin check (every
-  admin element lies under, or is itself, a declared audience of roles that does not include
-  `public`), an admin element is served only to a viewer holding one of those roles; so a member who
-  holds no such role, and an anonymous visitor, are never served it (`admin_never_to_plain_member`);
-- **first match wins** (`select_sees`, `select_first`): of an ordered list of shells or of screen
-  variants, the one served is the first whose audience holds the viewer;
+  admin element lies under, or is itself, a declared audience of roles none of which is `public` or a
+  role every member holds by default), an admin element is served only to a viewer holding one of
+  those roles; an anonymous visitor and a member holding only default roles are never served one
+  (`admin_never_to_default_member`); an admin audience naming the default role is refused
+  (`admin_default_role_refused`);
+- **shells: first match wins** (`select_sees`, `select_first`); **screen variants: the first that
+  serves the viewer something wins** (`selectServed_sound`, `selectServed_first`), so a viewer in an
+  earlier variant's audience who may read none of its content falls through (`variant_falls_through`);
 - actions follow the kernel's invoker check (`audOf_sees`); data audiences follow grants, the public
   role included (`dataAud_sees`, `public_grant_anon_sees`); content inside data (`contentAud_sub`);
 - the **content lint** (`checked_screen_has_content`) holds for what it reasons on; it is a lint that
@@ -287,46 +290,51 @@ theorem hidden_leaves_no_trace_in (v : Viewer) (l : Nat) (aud : Aud) (nd : Bool)
     render v (.box l aud nd (a ++ h :: b)) = render v (.box l aud nd (a ++ b)) := by
   simp only [render, hidden_leaves_no_trace v a b h hh]
 
-/-- A declared audience that holds only signed-in holders of named roles, `public` not among them. -/
-def strict : Aud → Bool
-  | .roles rs => !(rs.contains pub)
-  | .memberRoles rs => !(rs.contains pub)
+/-- A declared audience that holds only holders of named roles, none of them `public` or a role every
+    member is given by default (`dflt`: the realm's default role, and any role the tenant marks as held
+    by everyone). -/
+def strict (dflt : List Nat) : Aud → Bool
+  | .roles rs => !rs.isEmpty && rs.all (fun r => r != pub && !dflt.contains r)
+  | .memberRoles rs => !rs.isEmpty && rs.all (fun r => r != pub && !dflt.contains r)
   | _ => false
 
-theorem strict_sees (a : Aud) (v : Viewer) (hs : strict a = true) (h : sees v a = true) :
-    ∃ r, r ≠ pub ∧ r ∈ rolesOf v ∧ a ≠ .anyone := by
+/-- The viewer holds a role other than `public` and the default roles. -/
+def HoldsRole (dflt : List Nat) (v : Viewer) : Prop := ∃ r, r ≠ pub ∧ r ∉ dflt ∧ r ∈ rolesOf v
+
+theorem strict_roles (dflt rs : List Nat) (v : Viewer)
+    (hs : (rs.all (fun r => r != pub && !dflt.contains r)) = true)
+    (h : (rs.any (fun r => (rolesOf v).contains r)) = true) : HoldsRole dflt v := by
+  simp only [List.all_eq_true, Bool.and_eq_true, bne_iff_ne, ne_eq, Bool.not_eq_true'] at hs
+  simp only [List.any_eq_true, List.contains_iff_mem] at h
+  obtain ⟨r, hr, hv⟩ := h
+  refine ⟨r, (hs r hr).1, fun hd => ?_, hv⟩
+  have hc : dflt.contains r = true := List.contains_iff_mem.mpr hd
+  rw [(hs r hr).2] at hc
+  cases hc
+
+theorem strict_sees (dflt : List Nat) (a : Aud) (v : Viewer) (hs : strict dflt a = true)
+    (h : sees v a = true) : HoldsRole dflt v := by
   cases a with
   | anyone => simp [strict] at hs
   | signedIn => simp [strict] at hs
   | roles rs =>
-    simp only [strict, Bool.not_eq_true'] at hs
-    simp only [sees, List.any_eq_true, List.contains_iff_mem] at h
-    obtain ⟨r, hr, hv⟩ := h
-    refine ⟨r, fun e => ?_, hv, by simp⟩
-    subst e
-    have hc : rs.contains pub = true := List.contains_iff_mem.mpr hr
-    rw [hc] at hs
-    cases hs
+    simp only [strict, Bool.and_eq_true] at hs
+    exact strict_roles dflt rs v hs.2 h
   | memberRoles rs =>
-    simp only [strict, Bool.not_eq_true'] at hs
-    simp only [sees, Bool.and_eq_true, List.any_eq_true, List.contains_iff_mem] at h
-    obtain ⟨_, r, hr, hv⟩ := h
-    refine ⟨r, fun e => ?_, hv, by simp⟩
-    subst e
-    have hc : rs.contains pub = true := List.contains_iff_mem.mpr hr
-    rw [hc] at hs
-    cases hs
+    simp only [strict, Bool.and_eq_true] at hs
+    simp only [sees, Bool.and_eq_true] at h
+    exact strict_roles dflt rs v hs.2 h.2
 
 mutual
   /-- The admin check: every admin element lies under, or has, a strict declared audience. `g` says a
       strict audience is above. -/
-  def adminOk (g : Bool) : Node → Bool
-    | .box _ a _ ks => adminOkAll (g || strict a) ks
-    | .elem _ a _ _ _ adm => !adm || g || strict a
+  def adminOk (dflt : List Nat) (g : Bool) : Node → Bool
+    | .box _ a _ ks => adminOkAll dflt (g || strict dflt a) ks
+    | .elem _ a _ _ _ adm => !adm || g || strict dflt a
   /-- The admin check of a list of nodes. -/
-  def adminOkAll (g : Bool) : List Node → Bool
+  def adminOkAll (dflt : List Nat) (g : Bool) : List Node → Bool
     | [] => true
-    | n :: ns => adminOk g n && adminOkAll g ns
+    | n :: ns => adminOk dflt g n && adminOkAll dflt g ns
 end
 
 mutual
@@ -340,13 +348,10 @@ mutual
     | o :: os => adminLabels o ++ adminLabelsAll os
 end
 
-/-- The viewer holds a role other than `public`. -/
-def HoldsRole (v : Viewer) : Prop := ∃ r, r ≠ pub ∧ r ∈ rolesOf v
-
 mutual
-  theorem admin_served (v : Viewer) : ∀ (g : Bool) (n : Node) (o : Out) (l : Nat),
-      adminOk g n = true → (g = true → HoldsRole v) → render v n = some o →
-      l ∈ adminLabels o → HoldsRole v
+  theorem admin_served (dflt : List Nat) (v : Viewer) : ∀ (g : Bool) (n : Node) (o : Out) (l : Nat),
+      adminOk dflt g n = true → (g = true → HoldsRole dflt v) → render v n = some o →
+      l ∈ adminLabels o → HoldsRole dflt v
     | g, .box lab a nd ks, o, l, hok, hg, h, hl => by
       simp only [render] at h
       by_cases ha : sees v a = true
@@ -354,12 +359,11 @@ mutual
         obtain ⟨rfl, _, _⟩ := boxOut_some h
         simp only [adminOk] at hok
         simp only [adminLabels] at hl
-        refine adminAll_served v (g || strict a) ks l hok ?_ hl
+        refine adminAll_served dflt v (g || strict dflt a) ks l hok ?_ hl
         intro hg'
         cases hgv : g
         · simp [hgv] at hg'
-          obtain ⟨r, hr, hv, _⟩ := strict_sees a v hg' ha
-          exact ⟨r, hr, hv⟩
+          exact strict_sees dflt a v hg' ha
         · exact hg hgv
       · rw [if_neg ha] at h; cases h
     | g, .elem lab a d c cnt adm, o, l, hok, hg, h, hl => by
@@ -373,69 +377,76 @@ mutual
           rcases hok with hgt | hs
           · exact hg hgt
           · simp only [Bool.and_eq_true] at hv
-            obtain ⟨r, hr, hvr, _⟩ := strict_sees a v hs hv.1
-            exact ⟨r, hr, hvr⟩
+            exact strict_sees dflt a v hs hv.1
       · rw [if_neg hv] at h; cases h
-  theorem adminAll_served (v : Viewer) : ∀ (g : Bool) (ns : List Node) (l : Nat),
-      adminOkAll g ns = true → (g = true → HoldsRole v) →
-      l ∈ adminLabelsAll (renderAll v ns) → HoldsRole v
+  theorem adminAll_served (dflt : List Nat) (v : Viewer) : ∀ (g : Bool) (ns : List Node) (l : Nat),
+      adminOkAll dflt g ns = true → (g = true → HoldsRole dflt v) →
+      l ∈ adminLabelsAll (renderAll v ns) → HoldsRole dflt v
     | g, [], l, _, _, h => by simp [renderAll, adminLabelsAll] at h
     | g, n :: ns, l, hok, hg, h => by
       simp only [adminOkAll, Bool.and_eq_true] at hok
       unfold renderAll at h
       cases hr : render v n with
-      | none => rw [hr] at h; exact adminAll_served v g ns l hok.2 hg h
+      | none => rw [hr] at h; exact adminAll_served dflt v g ns l hok.2 hg h
       | some o =>
         rw [hr] at h
         simp only [adminLabelsAll, List.mem_append] at h
         rcases h with h | h
-        · exact admin_served v g n o l hok.1 hg hr h
-        · exact adminAll_served v g ns l hok.2 hg h
+        · exact admin_served dflt v g n o l hok.1 hg hr h
+        · exact adminAll_served dflt v g ns l hok.2 hg h
 end
 
 /-- In a composition that passes the admin check, an admin element is served only to a viewer who
-    holds a role other than `public`, named in a strict audience above it or on it.
+    holds a role other than `public` and the default roles, named in a strict audience above or on it.
     Verifies: DS-011 -/
-theorem admin_needs_role (v : Viewer) (n : Node) (o : Out) (l : Nat)
-    (hok : adminOk false n = true) (h : render v n = some o) (hl : l ∈ adminLabels o) :
-    HoldsRole v :=
-  admin_served v false n o l hok (by simp) h hl
+theorem admin_needs_role (dflt : List Nat) (v : Viewer) (n : Node) (o : Out) (l : Nat)
+    (hok : adminOk dflt false n = true) (h : render v n = some o) (hl : l ∈ adminLabels o) :
+    HoldsRole dflt v :=
+  admin_served dflt v false n o l hok (by simp) h hl
 
-/-- An anonymous visitor, and a member holding no role but `public`, are never served an admin
-    element.
+/-- An anonymous visitor, and a member holding only the roles every member holds by default, are never
+    served an admin element.
     Verifies: DS-011 -/
-theorem admin_never_to_plain_member (n : Node) (o : Out) (hok : adminOk false n = true) :
-    (render (.member []) n = some o → adminLabels o = []) ∧
+theorem admin_never_to_default_member (dflt : List Nat) (n : Node) (o : Out)
+    (hok : adminOk dflt false n = true) :
+    (render (.member dflt) n = some o → adminLabels o = []) ∧
     (render .anon n = some o → adminLabels o = []) := by
   constructor
   · intro h
     cases hl : adminLabels o with
     | nil => rfl
     | cons l ls =>
-      obtain ⟨r, hr, hv⟩ := admin_needs_role _ n o l hok h (by simp [hl])
-      simp [rolesOf] at hv
-      exact absurd hv hr
+      obtain ⟨r, hr, hd, hv⟩ := admin_needs_role dflt _ n o l hok h (by simp [hl])
+      simp only [rolesOf, List.mem_cons] at hv
+      rcases hv with hv | hv
+      · exact absurd hv hr
+      · exact absurd hv hd
   · intro h
     cases hl : adminLabels o with
     | nil => rfl
     | cons l ls =>
-      obtain ⟨r, hr, hv⟩ := admin_needs_role _ n o l hok h (by simp [hl])
+      obtain ⟨r, hr, _, hv⟩ := admin_needs_role dflt _ n o l hok h (by simp [hl])
       simp [rolesOf] at hv
       exact absurd hv hr
 
-/-- The first review's admin action: an action offered to every signed-in person but derived admin
-    (its conditions test a role) fails the admin check under a box declared for every signed-in
-    person. -/
+/-- The first review's admin action, offered to every signed-in person but derived admin, fails the
+    admin check under a box declared for every signed-in person. -/
 theorem admin_action_for_members_refused :
-    adminOk false (.box 1 .signedIn false [.elem 2 .signedIn .signedIn .signedIn true true]) = false := by
+    adminOk [] false (.box 1 .signedIn false [.elem 2 .signedIn .signedIn .signedIn true true]) = false := by
   simp [adminOk, adminOkAll, strict]
 
-/-- The first audience in order that holds the viewer, with what it selects. -/
+/-- The third review's case: an admin audience naming the default role (5) is not strict, so the admin
+    check refuses it. -/
+theorem admin_default_role_refused :
+    adminOk [5] false (.box 1 (.roles [5]) false [.elem 2 .anyone .anyone .anyone true true]) = false := by
+  simp [adminOk, adminOkAll, strict, pub]
+
+/-- The first audience in order that holds the viewer, with what it selects (shells). -/
 def select {α : Type} (v : Viewer) : List (Aud × α) → Option α
   | [] => none
   | (a, x) :: rest => if sees v a then some x else select v rest
 
-/-- The shell or variant selected has an audience that holds the viewer.
+/-- The shell selected has an audience that holds the viewer.
     Verifies: DS-014 -/
 theorem select_sees {α : Type} (v : Viewer) :
     ∀ (vs : List (Aud × α)) (x : α), select v vs = some x → ∃ a, (a, x) ∈ vs ∧ sees v a = true
@@ -448,7 +459,7 @@ theorem select_sees {α : Type} (v : Viewer) :
       obtain ⟨b, hb, hs⟩ := select_sees v rest x h
       exact ⟨b, List.mem_cons_of_mem _ hb, hs⟩
 
-/-- No earlier entry's audience holds the viewer: the declared order decides, never a union.
+/-- No earlier shell's audience holds the viewer: the declared order decides, never a union.
     Verifies: DS-014 -/
 theorem select_first {α : Type} (v : Viewer) (pre : List (Aud × α)) (a : Aud) (x : α)
     (rest : List (Aud × α)) (hpre : ∀ p ∈ pre, sees v p.1 = false) (ha : sees v a = true) :
@@ -460,6 +471,65 @@ theorem select_first {α : Type} (v : Viewer) (pre : List (Aud × α)) (a : Aud)
     have hb : sees v b = false := hpre (b, y) (by simp)
     simp only [List.cons_append, select, hb]
     exact ih (fun q hq => hpre q (List.mem_cons_of_mem _ hq))
+
+/-- Whether a variant serves the viewer anything: its audience holds the viewer and its screen
+    renders. -/
+def served (v : Viewer) (p : Aud × Node) : Option Out :=
+  if sees v p.1 then render v p.2 else none
+
+/-- Screen variants: the first in declared order that serves the viewer something. -/
+def selectServed (v : Viewer) : List (Aud × Node) → Option Out
+  | [] => none
+  | p :: rest =>
+    match served v p with
+    | some o => some o
+    | none => selectServed v rest
+
+/-- What is served comes from a variant whose audience holds the viewer and whose screen renders.
+    Verifies: DS-014 -/
+theorem selectServed_sound (v : Viewer) :
+    ∀ (vs : List (Aud × Node)) (o : Out), selectServed v vs = some o →
+      ∃ p ∈ vs, sees v p.1 = true ∧ render v p.2 = some o
+  | [], o, h => by simp [selectServed] at h
+  | p :: rest, o, h => by
+    simp only [selectServed] at h
+    cases hp : served v p with
+    | some o' =>
+      rw [hp] at h
+      cases h
+      simp only [served] at hp
+      by_cases ha : sees v p.1 = true
+      · rw [if_pos ha] at hp; exact ⟨p, by simp, ha, hp⟩
+      · rw [if_neg ha] at hp; cases hp
+    | none =>
+      rw [hp] at h
+      obtain ⟨q, hq, hs, hr⟩ := selectServed_sound v rest o h
+      exact ⟨q, List.mem_cons_of_mem _ hq, hs, hr⟩
+
+/-- Earlier variants that serve the viewer nothing are passed over: a viewer in an earlier variant's
+    audience who may read none of its content gets the next variant that serves them, not a page
+    that is not there.
+    Verifies: DS-014 -/
+theorem selectServed_first (v : Viewer) (pre : List (Aud × Node)) (p : Aud × Node) (o : Out)
+    (rest : List (Aud × Node)) (hpre : ∀ q ∈ pre, served v q = none) (hp : served v p = some o) :
+    selectServed v (pre ++ p :: rest) = some o := by
+  induction pre with
+  | nil => simp [selectServed, hp]
+  | cons q qs ih =>
+    have hq : served v q = none := hpre q (by simp)
+    simp only [List.cons_append, selectServed, hq]
+    exact ih (fun r hr => hpre r (List.mem_cons_of_mem _ hr))
+
+/-- The third review's case: a role-7 viewer whose first variant (for role 7) shows only an element
+    readable by role 9 is served the second variant. -/
+theorem variant_falls_through :
+    selectServed (.member [7])
+      [(.roles [7], .box 1 .anyone false [.elem 2 .anyone (.roles [9]) .anyone true false]),
+       (.signedIn, .box 3 .anyone false [.elem 4 .anyone .anyone .anyone true false])] =
+    some (.box 3 [.elem 4 true false]) := by
+  simp [selectServed, served, render, renderAll, sees, rolesOf, pub, boxOut, Viewer.signedIn,
+    countedAll, counted]
+
 
 /-- Who may invoke an operation (D-6547). -/
 structure Invokers where

@@ -5,9 +5,9 @@ primitives, the patterns and how products extend them, the app shell and templat
 that turns data into interface, interaction, wireframes, who sees what (public and private, role by
 role), the layouts a tenant arranges, how all of it is versioned, and the loop in which an agent
 builds a tenant's screens while the tenant watches. This is a design. Its requirements are in
-`specifications/design-system.jsonc` (DS-001 to DS-017, D-DS-1 to D-DS-23), the properties that can
+`specifications/design-system.jsonc` (DS-001 to DS-018, D-DS-1 to D-DS-24), the properties that can
 be stated precisely are proved in Lean (`lean/Strata/UI/`), and the work is listed at the end in
-dependency order, each item a Workgraph task under WG-5457. It was revised after two adversarial
+dependency order, each item a Workgraph task under WG-5457. It was revised after three adversarial
 review rounds; the answers are in the last section, and everything above it is the current design.
 
 It builds on the browser client design (`docs/frontend.md`, WG-5415) and changes none of its
@@ -39,24 +39,29 @@ D-DS-* is a proposal of this design.
   definition.
 - **Primitives are mostly native elements** (D-DS-8), in the light DOM, by a deliberate one-way choice.
 - **Screens are compositions** (D-DS-10) of templates, regions, nestable layout containers and widgets
-  bound by kind (D-DS-17); every interface element has a draft and a published body; draft steps are
-  inert (`dormant_unreachable`); publishing refuses any placeholder (`publishable_no_placeholder`).
-- **Interaction is typed** (D-DS-17): gestures with pure pending-write projections, wizards with a
-  stated state home.
+  bound by kind (D-DS-17); every interface element has a draft and a published body; dormant entities
+  live in a **draft overlay** of the schema that no non-builder evaluation is given
+  (`nonbuilder_reach_active`); publishing is one counted change, `PublishDraft`, refused while any
+  placeholder remains (`publishable_no_placeholder`).
+- **Interaction is typed** (D-DS-17): gestures with pure pending-write projections and fractional ranks,
+  wizards with a stated state home.
 - **Display types end raw values** (D-DS-9).
 - **Visibility is served, not hidden** (D-DS-11): per interface class, containers pruned when empty or
   when they need content they lack (`served_has_element`), nothing left as a trace
-  (`hidden_leaves_no_trace`), no build activity visible to non-builders, withheld values marked by the
-  server, never inferred.
-- **Roles vary one composition** (D-DS-12) through declared audiences and ordered variants
-  (`select_first`); row affordances are advisory.
-- **Tenant layouts are an overlay** (D-DS-13), by id, orphaned per widget check, reported and reversible.
-- **The rendering contract is versioned** with objective majors and a warn-then-migrate lifecycle, and
-  skew never shows revoked content (D-DS-19, D-DS-22).
+  (`hidden_leaves_no_trace`), no build activity, audiences or group names visible to non-builders,
+  withheld values marked by the server for required fields only.
+- **Roles vary one composition** (D-DS-12) through declared audiences; shells by first match, screen
+  variants by the first that serves the viewer something (`selectServed_first`); row affordances are
+  advisory; interface classes are formed from groups only (D-DS-24).
+- **Tenant layouts are an overlay** (D-DS-13), by id, orphaned per widget check, reported, reversible,
+  with the product's base screen as the fallback, so no upgrade is held for an overlay.
+- **The rendering contract is versioned** with objective majors, a warn-then-migrate lifecycle with a
+  grace period for reversal, and skew never shows revoked content (D-DS-19, D-DS-22).
 - **International and accessible by rule** (D-DS-18).
-- **The agent loop** (D-DS-14): classified, fenced product steps into the draft (`no_stale_step_after_acquire`);
-  held upgrades bound to the diff the owner saw (`approve_applies_held`); diagnostics that point into
-  the product file.
+- **The agent loop** (D-DS-14): classified product steps into the draft, fenced by a lease kept in
+  tenant kernel state with an expiry (`no_stale_step_after_acquire`, `no_step_after_expiry`); held
+  upgrades bound to the diff the owner saw (`approve_applies_held`); a bounded, typed field copy for
+  restructures; diagnostics that point into the product file.
 - **Product versions are ordered apart from platform releases; large installs are staged** (D-DS-16).
 
 ## Where the framing should change
@@ -302,10 +307,17 @@ list must end with an entry whose audience holds everyone the app is for, or the
 (`ui.shell.uncovered`). A product never sets the shell.
 
 **Screen variants (D-DS-20).** A route may have an ordered list of screen variants, each with an
-audience, its own template, its own composition and its own content lint; the first whose audience holds
-the viewer is served, and the others are not served to that viewer at all (they are separate elements
-to visibility). Precedence is the declared order, never a union. A route whose variants hold nobody a
-given viewer is the not-found page for that viewer.
+audience, its own template, its own composition and its own content lint. The variant served is the
+**first in declared order whose audience holds the viewer and that serves the viewer something**
+(`selectServed_sound`, `selectServed_first`): a viewer in an earlier variant's audience who may read
+none of that variant's content falls through to the next (`variant_falls_through`, the third review's
+case), rather than getting a page that is not there. Whether a variant serves a viewer something is
+decided per class, from roles and grants, never from rows, so falling through discloses nothing a read
+would not. Precedence is the declared order, never a union: a manager who is also staff is served the
+first variant that serves them, and never sees the staff variant at that route; the preview says so.
+The owner is in every group and so is served the first variant; the preview shows the others on request.
+A route whose variants serve a viewer nothing is the not-found page for that viewer. A navigation entry
+names a route, and shows the label of the variant the viewer is served (each variant states its label).
 
 Each variant states its responsive behaviour. Products contribute **navigation entries** (`navigation`
 section: screen, label, group, order, icon); the tenant's overlay orders and hides them; the
@@ -502,18 +514,44 @@ static tree with a closed set of node kinds and no expressions.**
   a literal `text` or a required slot (a slot whose field is required, so it is never empty), or it is
   refused (`ui.a11y.unnamed-control`); every image has an alt slot or is marked decorative
   (`ui.a11y.image-alt`); headings do not skip levels within the body (`ui.a11y.heading-order`).
+- **Composite-typed host props.** The catalogue marks which props of a host pattern take a composite:
+  `board.card`, `record-list.item`, `data-table.columns[].cell`, `stream.message`, `feed.item`,
+  `time-grid.event`, `plane.marker`. A composite in such a prop is drawn once per item.
+- **Gestures and focus inside a composite.** The host injects the gesture **handle** as the first
+  focusable element of each item; the item is one stop in the host's roving focus; Enter or F2 moves
+  focus into the composite's own interactive primitives (Tab cycles inside the item, Escape returns to
+  the item); the gesture keys belong to the handle only, so a composite's buttons never compete with
+  them.
+- **Reserved extensions** (catalogue minor versions, not in the first): `when` operators beyond
+  `present`, `empty` and `equals` (`not`, `and`, comparisons `lt`, `le`, `gt`, `ge` against a literal),
+  an `image` node and an icon vocabulary (`icon` node naming a catalogue icon), and a `plural` text node
+  that chooses among plural categories (`zero`, `one`, `two`, `few`, `many`, `other`, by
+  `Intl.PluralRules` in the request language) from a count slot. The node-kind list and the operator list
+  are open enums in the schema from the first version, so adding them is a minor change.
+- **Computed conditions belong in a derived field.** A condition over computed state ("overdue",
+  "over budget") is a derived field of the record type, computed by the kernel, and a composite tests
+  that field with `equals`; the body language never computes.
+- **Lanes are the host's.** In a `board`, the host iterates lanes and the composite is the card; a
+  composite's `each` cannot iterate lanes, so nested iteration over a grouped binding is lane-then-card
+  by construction.
+- **Blocks hold no interaction state of their own**; a pricing block's monthly/yearly toggle is a screen
+  filter (kernel state in the address) the block's `when` tests.
 
 ### Registry entries and gaps
 
-- A **renderer registry entry** is data: `{ "id", "version", "moduleHash", "capabilities": [...] }`,
-  capabilities from a closed list (`svg`, `canvas2d`, `pointer`, `keyboard`, `timers`). The table in the
-  web application holds these entries and the built module they name; a module whose hash does not
-  match its entry is not registered. So the table can later become a verified-module manifest without
-  changing its shape. There is still no run-time registration.
+- A **renderer registry entry** is data: `{ "id", "version", "moduleHash", "capabilities": [...] }`. The
+  table in the web application holds these entries and the built module they name; a module whose hash
+  does not match its entry is not registered. **`capabilities` is documentation today** (`svg`,
+  `canvas2d`, `pointer`, `keyboard`, `timers`): nothing enforces it in the browser; it becomes enforced
+  when the table becomes a verified-module manifest, and is recorded now so that the manifest needs no
+  new field. There is still no run-time registration.
 - A **catalogue gap** (`POST /api/ui/gaps`) has a status: `open` → `triaged` → `accepted` or `declined`
   → `resolved` (with `resolvedBy`: the catalogue entry id and the catalogue version that added it) or
   `duplicate` (with `duplicateOf`). When a gap is resolved, the builders of each tenant that filed it are
   told, with the placeholders that the new entry could fill.
+- A **declined** gap leaves its placeholders in the draft, where they block publication like any
+  placeholder; the builders are told and must remove each placeholder or replace it with another
+  pattern or composite before publishing.
 
 ## Structured bindings
 
@@ -522,7 +560,7 @@ A binding names what a widget shows. The kinds, each with its server contract:
 | Kind | Names | Where the work happens | Bounds and parameters |
 |---|---|---|---|
 | `section` | a section of the screen's view | the kernel's read of the query | page size at most 200; paging by cursor |
-| `grouped` | a list section and a field with a **closed** set of values (a choice, a workflow state, a bool) | the kernel reads each group as the query filtered by the group value | at most 20 groups; each lane paged by its own cursor (lane paging); a `ref` field or any open-ended field is refused (`ui.binding.open-group`), since its group set is unbounded |
+| `grouped` | a list section and a field with a **closed** set of values (a choice, a workflow state, a bool), or a **reference field whose lanes the product declares as a section of their own** | the kernel reads the lanes and each lane's cards as the viewer | at most 20 lanes per page, lanes paged when they come from a section, each lane paged by its own cursor; a reference group field without a lanes section is refused (`ui.binding.open-group`); cards whose lane the viewer may not read go to a catch-all lane "Other", whose lane label discloses nothing |
 | `series` | an aggregate of a named query, bucketed by a time field or grouped by a field | the kernel's aggregate engine, on the server; the browser receives buckets, never rows | at most 500 points per series and 8 series; time buckets in the realm's time zone with a declared bucket size (hour, day, week, month); week start from the request language |
 | `positioned` | a list section and position fields (start and end times, or x and y numbers) | the kernel reads the window the widget asks for | a window is required (time-grid: start, end, time zone, week start; plane: a bounding box); at most 2,000 records per window; beyond it the server returns the first 2,000 in the query's order and the count of records in the window (records the reader may read), and the pattern draws "showing 2,000 of N, narrow the window"; a 50,000-record section never becomes 50,000 nodes |
 | `form` | a form of the screen | the operation | |
@@ -534,6 +572,9 @@ A binding names what a widget shows. The kinds, each with its server contract:
 
 - **Plane images** are bound to a `file` field (the `media` display type) of a single section, or to a
   file of the tenant's file store named in props; never a URL.
+- **Why reference lanes come from a section**: lanes by a reference (by assignee, by project) would
+  disclose, through the lane list, records the viewer may not read (who has tasks). The lanes section is
+  read under the viewer's policies like any section, so the viewer sees exactly the lanes they may read.
 - **A chart's data table** is drawn from the same buckets as the SVG, in the same page model; the SVG is
   `aria-hidden` and the table is the accessible representation, shown on request and always present to
   assistive technology.
@@ -551,8 +592,17 @@ the same name is read again when one changes.
   postal code by country);
 - **conditional visibility**: a field may be shown only when another field of the same definition
   equals a literal or is answered; no other logic;
-- answers submitted to one operation of the product with the definition id and the answers in field
-  order; the operation validates each answer against its field record.
+- answers are **typed per input type from the first version**: each answer is a value variant of its
+  input type (`text`, `number`, `date`, `choice`, `choices`, `bool`, `email`, `file`, `reference`), never
+  a list of strings, because a string list would be the expensive one-way choice; they are submitted to
+  one operation with the definition id, and the operation validates each against its field record;
+- a **`reference` input type** takes a record of a section the definition names, chosen with the record
+  picker under the respondent's read policies;
+- **reserved as minor extensions**: `not equals` and `or` in conditional visibility, and repeating groups;
+- a definition's sections may be drawn as **wizard steps**;
+- **out of scope, stated plainly**: calculations, scoring, branching to other definitions, and any logic
+  beyond the conditions above; a full form builder of that kind would need an expression language,
+  which D-DS-7 rules out.
 
 ## Interaction
 
@@ -569,9 +619,14 @@ write is pending.
 | `select-many` | `rows.ids` to a bulk action | each selected row marked pending for the action's effect | Space, Shift+arrows, Ctrl+A on the page |
 
 Examples are part of each catalogue entry: a view result, arguments, and the projected view result,
-checked by a kernel test. **Ranks** are strings in a lexicographic rank scheme (a rank between two
-neighbours always exists without renumbering others); a product that offers `reorder` or `move` declares
-the rank field, and the gesture computes `target.rank` from the neighbours.
+checked by a kernel test. **Ranks** are strings in a fractional lexicographic scheme: a rank between two
+neighbours is computed from theirs; ties sort by rank, then by record id; when no rank of at most 32
+characters fits between two neighbours (a collision after many inserts at one place), the gesture's
+operation is preceded by a **rebalance** of that lane's page (one operation that rewrites the ranks of the
+page evenly, bounded by the page size), and the projection shows the rebalanced order. A product that
+offers `reorder` or `move` declares the rank field. A `reschedule` gesture for `time-grid` (arguments
+`row.id`, `target.start`, `target.end`; keyboard path: arrows by the grid's step, Enter to confirm) is
+reserved as a minor extension.
 
 **Inline edit inputs by field type:** `str` a text input (a textarea for `multiline`), `int` a number
 input (with the display type's scale), `bool` a switch, `time` a date or date-time input per the display
@@ -580,10 +635,11 @@ record picker, `language` a select of languages; `list`, `file` and `rich-text` 
 inline (`ui.gesture.inline-unsupported`).
 
 **Wizards.** State lives in the kernel and, when the tenant keeps drafts (D-FE-2), in the encrypted
-drafts store of the principal's partition, under the rules of D-FE-13 for typed text; it lasts until
-submission, "discard", or the idle session lifetime (D-FE-13's bound); it holds at most 64 KB per
-wizard; the address names only the wizard and the step, never typed values. A step that runs its own
-operation stores the operation's outputs, and later steps may prefill from `step.<id>.<output>`.
+drafts store of the principal's partition, under the rules of D-FE-13 for typed text; for an
+**anonymous** visitor it lives in the kernel worker's memory only and is lost on reload. It lasts until
+submission, "discard", or the idle session lifetime; it holds at most 64 KB per wizard; the address
+names only the wizard and the step. A step that runs its own operation stores its outputs, and later
+steps may prefill from `step.<id>.<output>`.
 
 **Optimistic and live state.** Optimistic state lives only in the kernel's pending writes (D-FE-5),
 drawn by the gesture's projection and marked pending until the receipt or the refusal; a refusal
@@ -650,15 +706,32 @@ widget, never a disclosure, because derived audiences only ever narrow. What mus
 refused by construction, not linted:
 
 - **`ui.audience.admin-for-members`**: an **admin** element declared, directly or through its
-  containers, for `public` or `members` (any audience whose least viewer holds only `public`). An
-  element is admin when the author marks it, or when the kernel derives it: it offers an action whose
-  operation's invokers name roles (not every signed-in person), or whose conditions test a role with
-  `has_role` or negate any expression (found by `scan`), or which changes roles, permissions, settings or
-  policies. The author cannot unmark a derived admin element. Proved: in a composition that passes this
-  check, an admin element is served only to a viewer holding a role other than `public` that a strict
-  declared audience above or on it names (`admin_needs_role`); an anonymous visitor or a plain member is
-  never served one (`admin_never_to_plain_member`); the first review's admin action is refused
-  (`admin_action_for_members_refused`).
+  containers, for `public`, for `members`, or for any audience that names the realm's **default role**
+  (`default_role`, given to every person on first sign-in, `crates/model-core/src/types.rs:3643`) or a
+  role the tenant marks as held by everyone. An element is admin when the author marks it, or when the
+  kernel derives it:
+  - it offers an action whose operation's invokers name roles (not every signed-in person);
+  - or whose conditions contain a role test (`has_role`) under a `Not`, or a role test at all (only a
+    `Not` around a role test counts as negation: `record.author != principal` in the showcase's
+    `react_to_message`, `community.jsonc:362`, is not one, and a test pins that it stays member-facing);
+  - or which changes roles, permissions, settings or policies;
+  - or **by effect**: one of its steps writes an object type whose write grants (Create, Update, Delete
+    policies and permissions) do not include the least viewer of the element's declared audience. This
+    catches access decided by data the scan cannot see (`principal in through(record, "project",
+    "owners")`), and workflow guards, which do not apply to operations (D-6547).
+  The author cannot unmark a derived admin element. A role that every current member holds without
+  being the default role is **warned** about when an admin audience names it, at definition and on each
+  role assignment that makes it so. Proved: an admin element is served only to a viewer holding a role,
+  other than `public` and the default roles, that a strict declared audience above or on it names
+  (`admin_needs_role`); an anonymous visitor or a member holding only default roles is never served one
+  (`admin_never_to_default_member`); an admin audience naming the default role is refused
+  (`admin_default_role_refused`); the first review's admin action is refused
+  (`admin_action_for_members_refused`). A Rust differential against the model's admin check is a
+  criterion of WG-5465.
+- **Group edits re-run the admin check.** Groups, the shell list and variant order are draftable and
+  need approval (see the kinds table); when a group's roles change, the kernel re-runs the admin check on
+  every screen, variant and shell entry that names the group, refuses the change if one fails, and the
+  approval shows who gains and who loses access, by role.
 - **Own scope is derived, never asserted**: a widget is own-scoped when every conditional Read grant
   that reaches its data has a condition that mentions `principal` (`scan` reports it); there is no
   `ownScope` field to set. An admin element is never own-scoped.
@@ -673,15 +746,21 @@ Every element declares an **audience**: `"public"`, `"members"`, `{ "roles": [..
 
 **Audience groups (D-DS-21, owner decision).** A group is a named set of roles defined once in the
 tenant's interface (`groups: { "staff": ["moderator", "editor"], "admins": ["tenant_admin"] }`); the
-owner role is a member of every group implicitly, so an owner sees what any group sees. The number of
-roles is unbounded. The **serving cap** applies to distinct groups: a tenant's interface may name at most
-32 groups, and one screen (with its variants and its shell entry) at most 6
-(`ui.audience.too-many-groups`). **How the cap was chosen**: the interface classes of one screen are at
-most the subsets of the groups it names, so 6 groups bound one screen to at most 2^6 = 64 classes, which
-bounds the gateway's per-screen part variants and the build work of one schema change by a fixed
-multiple of the part size; 32 tenant-wide is the number of distinct groups at which a tenant's audience
-list stays readable in the builder. Both are design choices, not measurements; WG-5465 measures the
-per-class build cost and may revise them.
+owner role is a member of every group implicitly. The number of roles is unbounded. Groups are draftable
+and need approval.
+
+**The serving cap and why (D-DS-24).** A viewer's **interface class** for a screen is formed from groups
+only: the set of the screen's **deciding groups** the viewer is in (a declared roles list counts as one unnamed
+group; a group decides when removing it would
+change some element's effective declared audience on that screen or its variants), and whether the
+viewer is a builder. Data audiences, which depend on roles of grants and invokers and are unbounded, are
+**not** part of the class: the gateway caches the class's part, and applies each viewer's data audiences
+to it when serving (a pure filter of the cached part by the viewer's roles; the result is named by its own
+content hash). So a screen has at most 2^g classes for g deciding groups, which is why the cap is per
+screen: it bounds the parts the gateway builds and caches per screen. The cap is a **tenant setting**,
+default 6, under a platform maximum that WG-5465 measures (build time and memory per class); 32 groups
+per tenant is a readability limit of the builder, stated as a choice. `ui.audience.too-many-groups` names
+the screen's deciding groups and suggests merging groups that always appear together, so it converges.
 
 | Level | Where declared | Default |
 |---|---|---|
@@ -699,7 +778,9 @@ per-class build cost and may revise them.
 viewer and its derived **data audience** does (Read grants on its object type, the public role included;
 for an action, its invokers). A container is served when something in it is served, and, if it needs
 content, when an element that counts is served in it. Derived audiences only narrow. A child may not
-declare an audience wider than its parent's (`ui.audience.wider-than-parent`).
+declare an audience wider than its parent's (`ui.audience.wider-than-parent`). **Served parts carry no
+declared audiences and no group names**: the gateway removes them, since a member need not learn that a
+group called "admins" exists or which roles it holds.
 
 **The content lint.** For each least viewer of a screen's declared audience, the kernel looks for an
 element that counts with that viewer in its content audience (unconditional grants, or grants whose
@@ -723,12 +804,12 @@ For a viewer outside an element's effective audience:
 - a screen the viewer is not served answers with the same not-found page, status and text as an address
   nothing answers;
 - a column whose field the viewer's roles can never read is not in the viewer's shape;
-- **a value withheld by a read rule** is marked so by the server: the row carries `withheld: [field
-  ids]` for the fields a read rule removed for this reader. The interpreter draws a withheld value of a
-  required field as "Restricted" and of an optional field as an absent value; it **never infers
-  withholding from absence**, so a subject's processing restriction (`subject_rights.rs::hide`, PRV-352,
-  which removes personal fields for every reader) and a field the query did not select are drawn as
-  absent values, with no mark;
+- **a value withheld by a read rule** of a **required** field is marked so by the server: the row
+  carries `withheld: [field ids]` only for required fields a read rule removed for this reader, and the
+  interpreter draws them as "Restricted". Optional fields withheld by a rule are simply absent, with no
+  marker in the reply (so neither the page nor devtools nor a scripted client learns that a rule withheld
+  them); the interpreter never infers withholding from absence, so a subject's processing restriction
+  (`subject_rights.rs::hide`, PRV-352) and a field the query did not select are drawn as absent values;
 - aggregates count only records the reader may read (D-5061);
 - an action the viewer may not invoke is absent.
 
@@ -742,53 +823,78 @@ choice of a per-record rule on a required field; the structure of a screen a vie
 ### Drafts, published, and dormant entities
 
 **Every interface element has two bodies.** Screens, composites, composite templates, presentations,
-navigation entries, forms, actions, filters and error messages each hold a **published** body and, while
-they are being changed, a **draft** body. A draft step writes draft bodies only, so no interface change
-reaches a non-builder before publication. The draft's audience is the **builders**: holders of
-`ui-build`, a capability of its own (not implied by any other) that grants reading the interface
-definitions and the schema's definitions (object types, policies, invokers) but **no data**. Overlays
-apply in preview too: a builder previewing a draft sees the effective screen (draft base plus the
-tenant's overlay), with the overlay entries the draft would orphan listed.
+navigation entries, forms, actions, filters, error messages, **groups, the shell list and variant order**
+each hold a **published** body and, while being changed, a **draft** body. A draft step writes draft
+bodies only. The draft's audience is the **builders**: holders of `ui-build`, a capability of its own,
+granting reads of interface and schema definitions (object types, policies, invokers), no reads of
+active data, and the **draft-data right** below. Overlays apply in preview.
 
-**Which kinds a draft step may create.** Every member of `TenantSchema` is named:
+**The effective schema (replacing the earlier "one gate").** The second review proposed one dormancy
+gate at every entry point; the third showed there is no one place: `schema.policies` is iterated in
+`rules.rs` (four places), `query_plan.rs`, `aggregates.rs`, `audience.rs`, `ledger_policy.rs`,
+`approvals.rs` and `lab.rs`; `holds_any` and `effective_permissions` have 47 non-test call sites; and
+`authorize_needing`, `visible_in` and `holds_any` exist more than once (in the kernel and in the
+generated model). So dormancy is a matter of **what the schema is**, not of who asks:
+
+- `TenantSchema` gains a **draft overlay** (`draft`), per product: the dormant object types (with their
+  fields and constraints), queries, views, operations, policies and workflows, and every draft body. The
+  maps every consumer reads (`objects`, `policies`, `queries`, `views`, `operations`, ...) hold the
+  **active** entities only.
+- Every evaluation for a non-builder is given the active schema, which is the schema minus its overlay:
+  no consumer, at any call site present or future, can see a dormant entity, because it is not in what
+  that consumer is given. For a builder, the gateway builds the **builder schema** (active plus overlay)
+  once per request, through one function, and passes it where the builder acts on the draft (preview,
+  invoking a dormant operation, reading dormant records).
+- **No active entity may reference a dormant one** (an object type's reference target, a policy's
+  resource, a view's query, a query's object type, an operation's types, a trigger's type or segment, an
+  interface element's view): the classifier refuses a step after which one does. Proved: everything
+  reachable by references from the schema a non-builder is given is active (`nonbuilder_reach_active`,
+  `dormant_unreachable`), the invariant is kept by accepted steps and by publishing
+  (`step_keeps_closed`, `publish_keeps_closed`), and without it a dormant entity is reachable
+  (`unclosed_reaches_dormant`).
+- A reference **from a dormant type to an active one** may not use on-delete `restrict` (refused): a
+  builder's dormant records must never make a member's delete of an active record fail on data the
+  member cannot see. `set-null` and `cascade` are allowed.
+- **No active trigger can react to a dormant type**, because a trigger names an object type that
+  exists in the schema it is defined in, triggers cannot be created in a draft step, and an active
+  trigger may not reference a dormant type (the invariant above).
+- **Quotas.** Dormant entities count against **draft quotas** (per tenant: objects, policies, queries,
+  views, operations, each a fixed fraction of the active limit, stated in `limits.rs`), not against
+  `MAX_OBJECTS`, `MAX_POLICIES`, `MAX_QUERIES` or `MAX_TRIGGERS`; publishing checks the active limits on
+  the result. An abandoned draft therefore cannot exhaust the limits members' products need.
+- **The draft-data right.** A builder may create, read, update and delete records of **dormant** types,
+  and invoke dormant operations, under the right `ui-build` carries for dormant types only (policies in
+  the overlay are evaluated as written as well, for previewing them as roles). Records of dormant types
+  are ordinary records of types active evaluations cannot name; subject-rights paths (export, erasure,
+  restriction) cover them like any record; the search index holds nothing of a type until it is active.
+- Records builders create are marked `created-in-draft`; publishing requires **keep** or **purge** per
+  dormant type, and the approval shows the counts and the activation's reach.
+
+**Which kinds a draft step may create:**
 
 | Kind | In a draft step |
 |---|---|
-| object types (new) and their fields, constraints and unique constraints | created **dormant** |
+| object types (new) and their fields, constraints and unique constraints | in the overlay (dormant) |
 | queries, views (new) | dormant |
-| tenant operations (new) | dormant, and refused unless every step writes only dormant types and none posts to the ledger or sends mail or notices |
-| policies (new) | dormant, and refused unless they grant on dormant types only |
-| interface elements of every kind | draft bodies |
-| fields, constraints or anything added to an **active** object type | refused in a draft step: needs approval |
-| changes to active operations, invokers, policies, queries, views | needs approval |
-| `role_permissions`, roles, teams, invitations | needs approval (teams and invitations are not schema changes and are never part of a product step) |
-| triggers, automations, segments | needs approval (they act on members' writes at once) |
-| workflows | dormant when on a dormant type; otherwise needs approval |
-| settings, ledger units, pools and limits | needs approval |
-| mail and notice templates, tokens | needs approval |
-| capabilities | needs approval |
+| tenant operations (new) | dormant; refused unless every step writes only dormant types and none posts to the ledger or sends mail or notices |
+| policies (new) | dormant; refused unless they grant on dormant types only |
+| workflows | dormant on a dormant type; otherwise needs approval |
+| interface elements, groups, shell list, variant order | draft bodies |
+| anything added to an active entity; changes to active operations, invokers, policies, queries, views | needs approval |
+| `role_permissions`, roles, capabilities, settings, ledger declarations, mail and notice templates, tokens, triggers, automations, segments | needs approval |
+| teams, invitations | not schema changes; never part of a product step |
 
-**The dormancy gate.** A dormant entity is reachable only by builders, and every kernel and gateway entry
-point asks one gate (`Strata.UI.Loop.gate`; `dormant_unreachable`): `authorize_needing` and `visible_in`
-(reads and record visibility), stage 1 of `decide-tenant-operation`, `holds_any` and
-`effective_permissions` (a dormant policy contributes nothing to a non-builder), the `audience.rs`
-footprint (dormant types do not enter audience classes), the operation catalogue (dormant operations are
-left out of the list and describe calls for non-builders), and the manifest. A test generated from the
-contract list calls every route as a non-builder against a tenant with one dormant entity of each kind
-and expects not-found or forbidden everywhere.
+**Publishing** is one product-level schema change, **`PublishDraft(product)`**, counted as **one** change
+against `MAX_SCHEMA_CHANGES` whatever the number of entities it activates: the kernel expands it, inside
+the same transition, by moving the product's overlay into the active maps and the product's draft bodies
+into the published ones. It is atomic because it is one schema change, one commit, all or none, as any
+schema change is; its size is bounded by the draft quotas, not by the cap, and the kernel checks the
+active limits and the whole result (closure, admin check, every screen) before the commit. A fixture
+publishes a product of 224 entities (the showcase community product's size). It is refused while any
+placeholder remains, and needs approval.
 
-**Builder writes in dormant types.** Records builders create in dormant types are marked
-`created-in-draft`; dormant operations send nothing outside (they may not post, mail or notify by the
-rule above). Activation requires an explicit choice per dormant type, **keep** or **purge** its
-draft-created records, and the approval shows the counts and the effective reach of what activates: which
-roles' policies start granting, which operations become invocable by whom.
-
-**Publishing** replaces the published bodies of a product's drafts and activates its dormant entities in
-one schema change, refused unless every draft is valid with no placeholder; it needs approval.
-
-**Abandoning.** `discard-draft` removes a product's draft bodies and dormant entities in one schema
-change; dormant types with draft-created records are listed and removed only with the owner's
-confirmation. Activated data is never rolled back by discarding. **The removal guard covers drafts.**
+**Abandoning.** `discard-draft` removes a product's overlay and draft bodies in one schema change;
+dormant types with draft-created records are listed and removed only with the owner's confirmation.
 
 ### Relation to today's auth and to policies
 
@@ -799,26 +905,23 @@ invoked.
 
 ### Serving and caching
 
-- **The interface class** of a viewer for a screen is computed by `audience.rs`'s classifier over the
-  groups and roles the screen's declarations name, the roles of grants and policies on its carried types,
-  the roles conditions test, its invokers' roles, the owner, and builder status. The membership test runs
-  before per-class work.
-- **Parts are role-only**; principal- or clock-dependent presence shows an empty state; individual
-  classes never enter the part cache.
-- **What non-builders see of change**: a class content hash instead of the schema version; schema notices
-  only when their class's manifest hash changes; draft steps notify builders only.
-- **Error messages per class**, hashed per class.
-- **A part is served only to a class whose manifest lists it.**
-- **Anonymous visitors**: parts `public, immutable`; manifest `public, max-age=0, must-revalidate` with
-  the class hash as entity tag.
-- **Everyone else**: `no-store`, kept only in the principal's partition; `copy-browser-interface` amended.
-- **Other principals.** An automation principal is refused by `/internal/ui` (it draws no interface). An
-  agent acting for a person through a delegation is served that person's class, narrowed to what its
-  delegation allows; it is a builder only when its delegation carries `ui-build`.
-- **Live changes**: a role or policy change raises the floor (D-FE-12); see "Version skew" for how the
-  page switches.
-- **Bounds**: at most 32 groups per tenant and 6 per screen (D-DS-21); the class cache is bounded by
-  entries and bytes.
+- **The interface class** (D-DS-24): the screen's deciding groups the viewer is in, and builder status.
+  The gateway builds and caches a part per class; per request it applies the viewer's data audiences to
+  the cached part (a pure filter by roles), and names the result by its content hash.
+- **Parts are role-only**; principal- or clock-dependent presence shows an empty state; per-request
+  results never enter the class cache.
+- **Served parts carry no declared audiences or group names.**
+- **What non-builders see of change**: a class content hash instead of the schema version; notices only
+  when their manifest hash changes; draft steps notify builders only.
+- **Error messages per class**, hashed per class. **A part is served only to a class whose manifest
+  lists it.**
+- **Anonymous visitors**: parts `public, immutable`; manifest revalidated with the class hash as entity
+  tag. **Everyone else**: `no-store`, kept only in the principal's partition.
+- **Other principals**: automation principals are refused by `/internal/ui`; an agent acting for a
+  person is served that person's class narrowed by its delegation, and writes only as that person, with
+  the agent recorded as actor (G-25).
+- **Bounds**: the per-screen deciding-group cap (D-DS-24), 32 groups per tenant, a class cache bounded
+  by entries and bytes.
 
 ## Role-based views
 
@@ -837,7 +940,9 @@ satisfy it; a per-record rule leaves the column, and the server marks withheld v
    when an input is not supplied by the row, when a condition reads what the viewer may not read, and
    past a per-session budget. It is advisory: the invocation decides, and a refusal at the click refreshes
    the affordance. `decide-tenant-operation` calls the same stage functions; `allowed` never comes from a
-   check the invocation does not run.
+   check the invocation does not run. `unknown` is drawn enabled for an ordinary action and **disabled**
+   for an admin action (whose audience already limits it to role holders), so an admin control is never
+   drawn as available when the platform cannot say it is.
 3. **Forms** decide on submit.
 
 **The admin panel, by construction.** An admin panel is a screen (or variant) declared for a group of
@@ -848,46 +953,43 @@ decide who the screen is for: a conditional grant, an action with role-testing c
 an author's own-scope marker (removed; own scope is derived), a filter or read rule (they only narrow).
 
 **Preview as a role.** A builder may ask for the interface **as a set of roles or groups**, or as
-anonymous. The interface (manifest, parts, which elements and variants are served) is computed for that
-set exactly. Data in a preview is intersected per row and per field with what the builder may read;
-`ui-build` grants no data reads, so a builder who may not read a section sees the section's widgets in
-their placeholder skeleton with "you may not read this data", which shows the structure the role gets
-without showing data the builder could not read. Writes are refused; replies are `no-store`.
+anonymous. The interface (manifest, parts, which variants and shells are served) is computed for that set
+exactly; the preview says which variant the set is served at each route and that later variants are not
+seen by it (a manager who is also staff never sees the staff variant at a route where the manager
+variant serves them), and that the owner, being in every group, is served the first variant. Data in a
+preview is intersected per row and per field with what the builder may read; `ui-build` grants no reads
+of active data, so a section the builder may not read is drawn as its skeleton with "you may not read
+this data". Writes are refused; replies are `no-store`.
 
 ## Tenant-arranged layouts
 
-The tenant's arrangement is an **overlay** element (`ui-layout`), one per screen (or variant) it
-changes, owned by the tenant, addressing widgets, layout containers and regions by **id**. It may
-reorder, move, hide, change props within the pattern's schema, add widgets bound to the screen's own view
-sections, forms and actions, and narrow audiences.
+The tenant's arrangement is an **overlay** element (`ui-layout`), one per screen (or variant), owned by
+the tenant, addressing widgets, layout containers and regions by **id**. It may reorder, move, hide,
+change props, add widgets bound to the screen's own sections, forms and actions, and narrow audiences.
 
 **Precedence**: the catalogue constrains everything; the product's base screen first; the overlay on top;
 the result is checked as one screen.
 
-**When the product or the catalogue changes.** Every overlay whose base changed is checked again. An
-overlay entry that fails under the new catalogue and schema (its widget id is gone, its binding stopped
-existing or changed shape, its pattern is no longer allowed where it is, its binding kind no longer
-accepted) is **orphaned**: kept as data, left out of the effective screen. The upgrade proceeds; the
-effective screen is valid under the new catalogue and schema (`orphan_valid`), orphaning removes only
-failing entries (`orphan_removes_only_failing`) and nothing from a screen that still passes
-(`orphan_keeps_valid`). The model covers dropping a widget; other overlay operations are checked by the
-kernel, not modelled.
+**When the product or the catalogue changes.** Every overlay whose base changed is checked again. Only
+**overlay entries** are orphaned: the product's own base widgets always pass, because the product's own
+check ran on them (an upgrade whose base fails is refused to its author). The model's `orphan` filters
+the effective screen, whose base widgets pass by that check, so it removes exactly the failing overlay
+entries (`orphan_valid`, `orphan_removes_only_failing`, `orphan_keeps_valid`). Other overlay operations
+than dropping are checked by the kernel, not modelled.
 
-**Orphans are reported, not silent.**
+**Orphans are reported, and never block an upgrade.**
 
-- The upgrade's result (and its dry run) lists, **per tenant**, every overlay entry it orphans; a product
-  author's dry run against a tenant shows the same list before anything is applied.
-- The tenant's owner and the overlay's author (the principal who last defined it) are notified in the
-  builder, with "drop" and "rebind" per entry.
-- An upgrade that would take a screen away from an audience in a tenant (a variant or screen that served
-  an audience no longer serves anything to it after orphaning) is **held for that tenant** as needing the
-  owner's approval, showing which audiences lose which screens; other tenants proceed.
-- A tenant may choose to drop orphans automatically; each automatic drop is recorded with the entry's
-  content and can be restored (as long as the entry would pass again, otherwise it returns as an orphan).
+- The upgrade's result and its dry run list orphans **per tenant**; a product author's dry run against a
+  tenant shows the list before anything is applied.
+- The tenant's owner and the overlay's author are notified, with "drop" and "rebind" per entry.
+- **When orphaning would take a screen away from an audience** (a screen or variant that served an
+  audience serves it nothing after orphaning), that audience is served the **product's base screen**
+  for that route (the screen without the overlay), which passed its own checks, and the owner is
+  notified. The upgrade, security fixes included, is never held for an overlay.
+- Automatic dropping, when chosen, records each dropped entry and can restore it.
 
-An owner edits overlays on the **layout editor** (builder-only), or an agent writes them; both go
-through `define-ui-element`, into the overlay's draft body, published with approval like any interface
-draft.
+An owner edits overlays on the **layout editor** (builder-only), or an agent writes them; both go into the
+overlay's draft body.
 
 ## The catalogue
 
@@ -919,55 +1021,71 @@ Each entry of the entry sections holds:
 
 ## Versioning: schemas and the rendering contract
 
-**The catalogue version** (`major.minor`) covers the schemas; `scripts/catalogue-compat.mjs` refuses a
-narrowing labelled minor, deciding structurally and approximately (any change to a pattern string, a
-numeric bound or a `oneOf` counts as narrowing unless labelled otherwise).
+**The catalogue version** covers the schemas; `scripts/catalogue-compat.mjs` refuses a narrowing labelled
+minor, deciding structurally and approximately.
 
-**The rendering contract version** covers renderer markup and the class contract, the page model,
-display-type formats and fallbacks, and token meanings, with **golden outputs** (page model and
-serialised DOM per catalogue example) under `web/test/golden/`. Whether a change is major is decided by
-the gate, not by the commit message:
+**The rendering contract version** covers markup, the class contract, the page model, display-type
+formats and fallbacks, and token meanings, with **golden outputs** (page model and serialised DOM per
+example, and the pinned screenshot of each). Whether a change is major is decided by the gate:
 
-- a golden DOM diff that adds, removes or renames a class outside the allow-list of state classes
-  (`is-pending`, `is-selected`, ...), changes element structure, or moves pixels of an existing example in
-  the pinned screenshot environment, is a **major** change of the rendering contract;
-- any other golden diff is a minor change and must be listed in its commit;
-- the **previous major's goldens are gated too**: a change may not move them, except a security fix,
-  which is applied to both majors and listed as such.
+- **one comparison**: pixels are compared **exactly** on the pinned image (same container digest, same
+  Chromium, same fonts); a golden DOM diff that adds, removes or renames a class outside the allow-list
+  of state classes, changes element structure, or an exact pixel change to an existing example, is a
+  **major** change; any other golden diff is minor and listed;
+- **tool bumps**: a stack that only bumps the pinned image, Chromium or the vendored fonts is classified
+  apart: it may change pixels, not DOM; it is checked against a **calibration set** (a fixed list of
+  examples covering every primitive) and passes when no calibration example moves more than a stated
+  bound (a share of its pixels, in the gate's configuration, which is a baseline-class file); it then
+  re-baselines in the same stack;
+- **the previous major is gated too**, DOM and pixels;
+- **security fixes**: a change that moves either major's goldens must be classified as above, except a
+  security fix recorded as a Workgraph task named in a `Security-Fix:` trailer, applied to both majors,
+  whose goldens it leaves **identical** on both (a fix that changes what is drawn is a major).
 
-**Lifecycle (D-DS-22, owner decision): warn, then migrate.** The platform supports the current and the
-previous rendering major. When a major is to leave support, the platform operator sets its end-of-support
-date. Every tenant still on it is warned in the builder, with the date and a **preview of its real
-pages under the new major**: the route `/design/preview?contract=<major>` draws the tenant's own
-published compositions (and its drafts, for builders) through the new major's renderers, with the
-tenant's data as the builder may read it, beside the current look. After the date, the tenant is moved
-automatically in one recorded change; the owner can reverse the move (back to the previous major) until
-that major leaves support in turn. A tenant may move earlier by choice. Deprecated tokens and classes are
-aliases for one major; the gate fails an alias past its major.
+**Lifecycle (D-DS-22, owner decision): warn, then migrate, reversible.**
 
-**Corpus replay.** `tests/corpus/ui/` holds the showcase's compositions, synthetic compositions, and
-adversarial ones (deepest nesting, every pattern in every region, long text, right-to-left, every state).
-**Anonymised tenant exports are not in it yet**: they need an exporter that replaces every label and
-value and keeps structure, and the owner's privacy review of that exporter, before any export enters the
-corpus. Interpreter, formatter and derivation changes are gated on the page-model diff over the corpus.
+- The platform supports the current and the previous rendering major. The operator sets a major's
+  end-of-support date and a **grace period** that follows it; during the grace period the web
+  application still ships that major's renderers, so a tenant moved off it can move back.
+- **Warnings**: every tenant still on the leaving major gets at least two warnings in the builder, at
+  separate builder sessions, each with the date and the preview; the platform records when an owner or
+  builder has opened one. An owner who has not opened any by the date is also notified by mail to every
+  owner address. Inactive owners do not stop the move.
+- **The preview** (`/design/preview?contract=<major>`) draws the tenant's real compositions through the
+  new major's renderers, using the **production renderer path** (the same modules, selected by the
+  contract version), as a member, as an anonymous visitor and as each group (the preview-as-roles of
+  "Role-based views"), with the tenant's data as the builder may read it.
+- **The move** is one recorded definition step: it re-checks every composition under the new major's
+  catalogue (orphaning and reporting overlay entries as an upgrade does), re-runs the theme step (the
+  derivation version's defaults for any tokens the new major adds, contrast checked), and records
+  the before-state; the owner can reverse it until the end of the grace period.
+- **Two majors behind** (possible only for a tenant moved back during a grace period that then ended):
+  the move goes through each major's migration in turn within the one recorded step.
+- Deprecated tokens and classes are aliases for one major.
+
+**Corpus replay.** `tests/corpus/ui/` holds the showcase's, synthetic and adversarial compositions;
+anonymised exports enter only after an exporter and the owner's privacy review.
 
 ## Version skew
 
 - The **manifest** and **every part** name the rendering contract version and catalogue major they need;
-  the **shell** names the ones it serves; a mismatch is never drawn: the page shows "This page has been
-  updated. Reload to continue" and the service worker installs the new shell.
-- **A narrower class switches at once.** When the access floor rises or a role is lost (D-FE-12), the
-  page drops every part not in the new manifest immediately and draws what it does not yet hold as
-  loading or empty; it never draws content of the wider class again.
-- **A wider or equal swap is atomic, with a deadline.** A new manifest that does not narrow the class is
-  drawn only once every part the page needs, **and the view replies whose shape fingerprints match those
-  parts**, are held; until then the page keeps drawing the previous, still-allowed content. If the swap
-  is not complete within the contact bound of docs/frontend.md, the page shows an error state with
-  "Retry", never a mix.
-- **Minimum client version, unconditionally.** The bootstrapped page (never cached) carries the minimum
-  client version; a shell below it reloads before doing anything else. Every API reply to a client below
-  it is `426` with `Strata-Reload: 1`, which every shell since the first treats as "reload" (the current
-  shell reloads on any `426`); this covers reads as well as queued writes.
+  the **shell** names the ones it serves; a mismatch is never drawn and the page shows "This page has
+  been updated. Reload to continue".
+- **On a floor notice** (a role lost, a permission or policy change, D-FE-12) the page purges at once,
+  before the new manifest arrives, every interface part it holds for the old class, and draws loading.
+  It then reads the new manifest. **Any change of roles is treated as narrowing** (a role lost and
+  another gained at once included): the page never decides "wider or narrower" itself.
+- **A swap with no floor change** (a schema notice) is atomic: a new manifest is drawn only once every
+  part the page needs and the view replies whose shape fingerprints match are held; past the contact
+  bound of docs/frontend.md the page shows an error state with "Retry", never a mix.
+- **Minimum client version.** Today nothing in `web/src` or `crates/bff` handles `426`, a
+  `Strata-Reload` header or a forced reload; status handling covers 401, 403, 404 and 409, so an old
+  shell answered `426` would show an error state, not reload. So: the handling of `426` with
+  `Strata-Reload: 1`, and a minimum version carried by the bootstrapped page, **arrive with the first
+  shell of this programme**; the server never sets a minimum above the oldest shell version known to
+  handle `426` (it records that version and refuses a higher minimum); `index.html` stays uncached
+  (`no-store`); and a recorded fixture of that first shell is tested against a minimum bump, reloading.
+  Shells older than that first one get the error state, which is stated.
 
 ## International and accessible by rule
 
@@ -1027,12 +1145,13 @@ WG-5482.
 3. **Validate**: `POST /api/products/compile` (bundle, provenance table, diagnostics); then a dry run (the
    projection, the classification, refusals mapped to pointers). A dry run's classification is shown to
    the agent and never trusted by the apply.
-4. **Lease.** The agent acquires the product's **build lease**: it returns a **fencing token** and an
-   expiry; the agent renews it while working; it lapses when not renewed, and the owner can break it. Each
-   acquisition (including taking over a lapsed or broken lease) raises the token. **Every step carries the
-   token**, and a step whose token is not the current one is refused with `product.lease-lost`
-   (`no_stale_step_after_acquire`). Held upgrades made under a lease stay held when the lease changes
-   hands; they are bound to their diff (step 6), not to the lease.
+4. **Lease.** The product's **build lease** is **tenant kernel state** (the current fencing token and its
+   expiry, stored with the tenant's schema state, so a restart does not reset the counter or reissue a
+   token). Acquiring it raises the token and sets the expiry from the clock the kernel is given; the
+   holder renews it before the expiry; the owner can break it. The check `token == current ∧ now <
+   expiry` runs **inside the transaction that applies the step**, and a step that fails it is refused
+   with `product.lease-lost` (`no_stale_step_after_acquire`, `no_step_after_expiry`). Held upgrades stay
+   held when the lease changes hands; they are bound to their diff, not to the lease.
 5. **Apply** into the draft, with the product base, the token, `"version": "next"`, the idempotency key
    (matched before any version check) and a label. The **classifier runs inside the applying
    transaction**, on the diff the transaction computes.
@@ -1088,12 +1207,21 @@ A kind not named is "needs approval". Scoping `bundle-install` to products is ne
 ### Restructures
 
 1. Add the new field or entity (dormant if on a dormant type; otherwise held).
-2. Migrate the existing data (held).
+2. Copy the data with **`CopyField`**, a typed schema change new to the kernel: `{ object, from, to,
+   convert }`, where `convert` is one of a closed list of conversions between field types (identity,
+   integer to text, text to integer when every value parses, time to date, choice renaming by a map). It
+   copies in batches of at most 10,000 records (`MAX_SCAN_RECORDS`), each batch its own schema change,
+   and **marks** each copied record with the record version it copied at, so "written since the copy" is
+   "the record's version is above its mark". The kernel's existing migration (`plan_migration`,
+   `transition.rs:1948`) moves and re-encodes fields in place and loads every record of the type; it is
+   not used for this, and the unbounded load is a separate finding for WG-5464.
 3. Rebind the draft's widgets to the new binding.
-4. **Publish with a catch-up migration in the same schema change**: the migration of step 2 is applied
-   again to every record written to the old field since step 2, so no write made between the migration
-   and publish is lost; the held projection shows the count of records not yet migrated.
-5. Remove the old field or entity (held; the guard passes because the published bodies no longer name it).
+4. **Publish with a catch-up copy in the same schema change**: `PublishDraft` re-runs `CopyField` for the
+   records whose version is above their mark; when more than 10,000 remain, publish is refused with
+   `publish.catch-up-too-large` and the agent runs more batches first. The held publish's digest covers
+   the **rule** (`object`, `from`, `to`, `convert`), never the count of records, so a changing count does
+   not make the approval fail with `product.base-moved`.
+5. Remove the old field or entity (held; the guard passes).
 
 A type change goes through the same sequence with a new field; changing a field's type in place is
 refused while any binding's fingerprint names it.
@@ -1112,7 +1240,7 @@ ordering rule is that a binding needs the data it names. Building the showcase's
 | 5 | styling | presentations: person, datetime, status, rich text | 3 | Names instead of principals, "3 hours ago", status badges |
 | 6 | binding | forms, row actions and gestures, prefill | about 8 | The post form, the react buttons on each row |
 | 7 | styling | the tenant's theme seeds | 1 (configuration) | The tenant's colours and fonts |
-| 8 | publish (needs approval) | draft bodies to published, dormant entities activated | 1 | Members see the message centre |
+| 8 | publish (needs approval) | `PublishDraft`: draft bodies to published, the overlay activated, keep-or-purge per dormant type | 1 (`PublishDraft` is counted as one change whatever it activates) | Members see the message centre |
 
 (The change counts are estimates of entity counts for this example, not measurements.)
 
@@ -1124,10 +1252,14 @@ reports the count. A first install over the cap is **staged** (D-DS-16):
 - **Versions.** Product versions get their own comparator, semantic versioning with pre-release ordering
   (`1.0.0-stage.1` < `1.0.0-stage.2` < `1.0.0`). **Platform releases keep theirs**: `release_cmp` is also
   used by `PlatformRange::admits` (`product.rs:1519-1523`) against `PLATFORM_RELEASE = "0.2-draft"`
-  (`crates/backend/src/products.rs:42`), and the showcase products declare `"min": "0.2"`; under
-  pre-release ordering `0.2-draft` would sort below `0.2` and refuse them, so the platform comparison is
-  left as it is (a fixture: the showcase products install on `0.2-draft`), and only product versions move
-  to the new comparator.
+  (`crates/backend/src/products.rs:42`), and the showcase products declare `"min": "0.2"`; so only
+  product versions move to the new comparator (a fixture: the showcase products install on
+  `0.2-draft`). Because `from_json` accepts any string as a product version today, a fixture orders every
+  version string present in the repository's products, corpus and specification examples (`1.0`, `1.0.0`,
+  `1.1.0`, ...) and checks the old and new comparators agree on every pair that has no pre-release part;
+  another checks that `from_json` accepts stage versions.
+- **Publishing a large product** is not limited by the cap: `PublishDraft` counts as one change (see
+  "Drafts, published, and dormant entities"), with a 224-entity fixture.
 - `plan_install` (pure, to be written in `strata_substrate::product`) orders the strongly connected
   components of the bundle's reference graph topologically and packs them into stages of at most 200
   changes, no stage naming an entity of a later one; a single component over 200 is refused with
@@ -1157,27 +1289,31 @@ through public routes; the corpus loader's staged install is D-DS-16 by hand.
   widths with right-to-left on desk; corpus compositions in both themes, light, both widths; generated
   stress themes on desk); the spec prints its count.
 - **Accessibility**: axe at WCAG 2.2 A and AA on every gallery and corpus page; keyboard scripts.
-- **Baselines, checked at the stack tip.** The gate compares the stack tip with the integration base, so
-  a red commit followed by a baseline-only commit, or a squash, is judged as the whole change:
-  - every baseline image that differs must be listed, by **example id**, in a `Baselines:` trailer of a
-    commit in the stack, and the listed set must **equal** the set of examples whose pixels changed (the
-    gate computes it by comparing the images), so a free-text reason cannot hide a change;
-  - the screenshot configuration (thresholds, `maxDiffPixelRatio`, masks, the pinned image digest) is a
-    **baseline-class file**: changing it counts as changing every baseline it governs;
-  - a change that moves more than 10 examples or 1% of the matrix needs a separate approval, recorded as a
-    `Baselines-Approved: <Workgraph task>` trailer naming a task the owner accepted;
-  - a Playwright or Chromium version bump is its own stack containing only the bump and the baselines it
-    moves.
+- **Baselines, checked at the stack tip, after squashing.** The gate runs on the integration tip after a
+  stack lands (Workgraph stack verification), so a squash or a red-then-baseline sequence is judged as the
+  whole change. It runs the screenshot suite twice: the **new code against the old baselines**, where
+  exactly the examples listed in the stack's `Baselines:` trailers must fail (and every other example
+  pass), and the new code against the new baselines, where every example must pass; so regenerating all
+  baselines cannot hide a change, because every example that moved must also have failed against its old
+  baseline and been listed.
+  - The screenshot configuration (thresholds, masks, the pinned image digest, the calibration bound) is
+    a baseline-class file: changing it counts as changing every baseline it governs.
+  - A change moving more than 10 examples or 1% of the matrix needs a `Baselines-Approved: <task>`
+    trailer; the gate asks Workgraph (`workgraph --json task show <task>`) that the task exists, is
+    accepted, and names this stack, and fails when Workgraph cannot be reached.
+  - A tool bump is its own stack, classified by the calibration set (see "Versioning").
 - **Contrast**: the catalogue's pairs on every preset at generation, at theme definition, and on every
   stored theme whenever a token or a pair is added.
 - **Themes over time.** A tenant theme stores its seeds, derivation version, derived set and hash. Each
   derivation version states, for every token added in a later catalogue minor, how it is derived from the
-  stored set (for example `control-border` from `border-strong`, an on-colour by the ramp search of
-  `search_finds`). Adding a token or a contrast pair runs the pair check over the stored-seed corpus and,
-  at deployment, over every stored theme; a stored theme that would fail the new pair gets the on-colour
-  derivation for it (which always passes for text-on pairs, `onColour_meets_aa`), and the owner is told;
-  the gate refuses a new non-text pair with no default that passes on the corpus. A change to the
-  derivation is a new derivation version, gated on the corpus re-derivation.
+  stored set (for example `control-border` from `border-strong`). A **contrast pair added later** is run
+  over the stored-seed corpus before it ships (the gate refuses a non-text pair with no default that
+  passes there), and over every stored theme at deployment; a stored theme that fails it is **not
+  patched**: the failure is shown to the owner as a non-blocking warning in the builder until the owner's
+  next theme step, which must pass it. A stored theme changes only by a definition step (the owner's or
+  an approved agent step), which is a new derivation version with a record of the previous derived set
+  and an undo; the stored hash is always the hash of the derived set in force, so no stored theme's hash
+  is ever silently out of date.
 - **Versioning**: `catalogue-compat.mjs` and the golden outputs in the gate, with majors decided by the
   gate.
 
@@ -1209,32 +1345,31 @@ platform admin role (WG-5474) and gap 6's reference coercion (in WG-5466).
 
 `specifications/design-system.jsonc` is an area part (`AREA_PARTS` in `scripts/split-spec.mjs`: ids that
 are `ds-` and a number, or start `d-ds-`; the behaviour-model ids `ds-save`, `ds-open` and so on are not
-in it). It holds twenty-three decisions: D-DS-1 to D-DS-6 and D-DS-20 to D-DS-22 are the owner's, decided
-2026-11-22; the others are proposals, with a source saying so. It holds seventeen requirements, DS-001 to
-DS-017, milestone 7, each stated of its Lean model and checked by the theorems that carry its `Verifies:`
+in it). It holds twenty-four decisions: D-DS-1 to D-DS-6 and D-DS-20 to D-DS-22 are the owner's, decided
+2026-11-22; the others are proposals, with a source saying so. It holds eighteen requirements, DS-001 to
+DS-018, milestone 7, each stated of its Lean model and checked by the theorems that carry its `Verifies:`
 line. Requirements checked by tests are added with those tests:
 
 | Planned requirement | Its check | Added by |
 |---|---|---|
 | Every preset theme meets AA on every catalogue pair, in both schemes | generation check with a failing fixture | WG-5458 |
-| A theme definition with a failing pair is refused; stored themes do not move on a derivation change unless labelled; a new token has a passing default | substrate tests, gate re-derivation | WG-5460 |
+| A theme definition with a failing pair is refused; a later pair a stored theme fails is reported, never patched | substrate tests | WG-5460 |
 | Every accepted catalogue example validates and every refused example is refused with its code | kernel and specc tests | WG-5459 |
 | A composite with an unnamed control, a recursive reference or over 200 expanded nodes is refused | kernel test | WG-5479 |
-| An admin element declared for members or the public is refused | kernel test | WG-5465 |
-| A non-builder reaches no dormant entity through any route | contract-enumerating gateway test | WG-5464 |
-| A member is never served a builder's draft, a draft notice, or a schema version | gateway tests | WG-5464, WG-5465 |
-| A withheld value is marked only when a read rule withheld it | backend test with a restricted subject | WG-5463 |
-| A preflight's `allowed` comes only from checks the invocation runs | kernel differential | WG-5466 |
-| Every code's `clears` clears it on its negative fixture, across entities too | specc and kernel tests | WG-5482 |
-| A golden output that changes a non-allowlisted class or moves pixels is a major | gate check | WG-5478 |
-| Baselines at the stack tip equal the listed example ids | gate check | WG-5473 |
-| The showcase installs on platform release 0.2-draft | substrate fixture | WG-5472 |
+| An admin element declared for members, the public or a default role is refused; `react_to_message` stays member-facing | kernel tests | WG-5465 |
+| No non-builder evaluation is given a dormant entity; no active entity references one; dormant references never restrict an active delete | kernel tests, contract-enumerating gateway test | WG-5464 |
+| `PublishDraft` publishes a 224-entity product as one change | kernel fixture | WG-5464 |
+| A withheld marker appears only for required fields withheld by a read rule | backend test with a restricted subject | WG-5463 |
+| The lease check runs in the applying transaction and survives a restart | backend test | WG-5471 |
+| A golden output that changes a non-allowlisted class, structure or exact pixels is a major | gate check | WG-5478 |
+| Baselines: the listed examples fail on old baselines and pass on new ones | gate check | WG-5473 |
+| The showcase installs on platform release 0.2-draft; old and new comparators agree on every installed version string without a pre-release part | substrate fixtures | WG-5472 |
 | No page of the showcase shows an epoch, a principal or a JSON object | Playwright | WG-5475 |
 
 ## What is proved
 
 `lean/Strata/UI/Composition.lean`, `Contrast.lean`, `Visibility.lean` and `Loop.lean`, imported from
-`lean/Strata.lean` and listed in `lean/Audit.lean`: 38 theorems, no `sorry`, `admit` or added axiom.
+`lean/Strata.lean` and listed in `lean/Audit.lean`: 48 theorems, no `sorry`, `admit` or added axiom.
 
 | Property | Theorem | Requirement |
 |---|---|---|
@@ -1248,29 +1383,29 @@ line. Requirements checked by tests are added with those tests:
 | A node not served leaves no trace | `hidden_leaves_no_trace`, `hidden_leaves_no_trace_in` | DS-008 |
 | Action audiences match the invoker check | `audOf_sees` | DS-009 |
 | Data audiences match grants, public included; content inside data | `dataAud_sees`, `public_grant_anon_sees`, `contentAud_sub` | DS-010 |
-| Admin elements only to holders of a strict declared role | `admin_needs_role`, `admin_never_to_plain_member` (counterexample `admin_action_for_members_refused`) | DS-011 |
+| Admin elements only to holders of a strict declared role other than public and the defaults | `admin_needs_role`, `admin_never_to_default_member` (`admin_action_for_members_refused`, `admin_default_role_refused`) | DS-011 |
 | Containers served hold elements; those needing content hold counting ones | `served_has_element`, `served_needs_content` (`empty_region_pruned`, `static_does_not_keep_region`) | DS-012 |
 | Orphaning per widget check keeps validity under a new catalogue and schema | `orphan_valid`, `orphan_removes_only_failing`, `orphan_keeps_valid` | DS-013 |
-| Shells and variants: first match in declared order | `select_sees`, `select_first` | DS-014 |
-| A taken-over lease refuses stale steps | `no_stale_step_after_acquire` | DS-015 |
+| Variants: the first that serves the viewer; shells: the first match | `selectServed_sound`, `selectServed_first`, `select_sees`, `select_first` (`variant_falls_through`) | DS-014 |
+| The lease: current token, before expiry | `no_stale_step_after_acquire`, `no_step_after_expiry` | DS-015 |
 | Approval applies exactly the held diff, or is refused | `approve_applies_held`, `approve_class_matches`, `approve_refused_when_moved` | DS-016 |
-| Dormant entities unreachable to non-builders through the gate | `dormant_unreachable` | DS-017 |
+| Nothing reachable from the non-builder schema is dormant | `nonbuilder_reach_active`, `dormant_unreachable` (`unclosed_reaches_dormant`) | DS-017 |
+| Accepted steps and publishing keep the closure invariant | `step_keeps_closed`, `publish_keeps_closed`, `publish_view` | DS-018 |
 | What the content lint establishes | `checked_screen_has_content` | supporting (a lint) |
 
 **Not proved, and what carries it.**
 
-- The code against the models: the kernel's check, the gateway's filtering, the preflight, the dormancy
-  gate at every entry point (the contract-enumerating test), the classifier: tests in WG-5464, WG-5465,
-  WG-5466, WG-5471.
-- The loop properties beyond the three guards: version assignment, idempotency before version, the
-  product base, publish as one change, the catch-up migration, keep-or-purge, staged installs; tested in
-  WG-5471 and WG-5472, not modelled.
+- The code against the models: the kernel's composition and admin checks, the gateway's filtering, the
+  preflight, the construction of the active and builder schemas, the classifier's closure check: tests
+  and differentials in WG-5464, WG-5465, WG-5466, WG-5471.
+- **The classifier runs inside the applying transaction**: not modelled; `approve_class_matches` takes
+  the classification as a hypothesis.
+- The loop beyond its guards: version assignment, idempotency before version, the product base,
+  `PublishDraft`'s expansion, `CopyField` and its marks, keep-or-purge, staged installs: tested in
+  WG-5464, WG-5471 and WG-5472.
 - Luminance and rounding; shape fingerprints; nested containers in the composition model; overlay
-  operations other than dropping; the interface class's computation; that every role-testing or negating
-  condition is detected by `scan`.
-- The derivation of admin elements is sound only as far as `scan` is complete; a missed role test makes
-  an element not admin, and then the declared audience alone decides (which is the chosen architecture:
-  an owner's declaration, not an inference, is what keeps it from members).
+  operations other than dropping; the interface class's computation; that `scan` finds every role test;
+  that the admin derivation by effect covers access decided by data.
 
 ## Follow-up work, by dependency
 
@@ -1326,6 +1461,45 @@ Each is a Workgraph task under WG-5457 with testable acceptance criteria (Workgr
 - Collaborative editing (a named gap): which shape, if any, should the platform offer?
 
 ## Answers to the reviews
+
+### Third review (four directions)
+
+**Structural change: dormancy by an effective schema.** Confirmed: `schema.policies` is iterated in
+more than ten places and `holds_any`/`effective_permissions` have 47 non-test call sites, so "one gate"
+was not one place, and `dormant_unreachable` held only because its list was routed through the gate by
+construction. Replaced by a draft overlay of the schema that no non-builder evaluation is given, with
+the closure invariant enforced by the classifier, restrict references from dormant types refused, draft
+quotas, the draft-data right, and the trigger note ("Drafts, published, and dormant entities"); the Lean
+now models the structure (`nonbuilder_reach_active`, `dormant_unreachable`, `step_keeps_closed`,
+`publish_keeps_closed`, `unclosed_reaches_dormant`; DS-017, DS-018).
+
+| # | Finding | Answer |
+|---|---|---|
+| V1 | Variant selected on audience alone (compiled) | Confirmed; fixed: the first variant that serves the viewer something (`selectServed_sound`, `selectServed_first`, `variant_falls_through`; DS-014) |
+| V2 | Groups, shells and variant order not draftable; admin check not re-run | Fixed: draftable and approval-needed; any group edit re-runs the admin check on every element naming the group, refusing a failure and showing who gains access |
+| V3 | A role everyone holds counts as strict | Confirmed (`default_role`, `types.rs:3643`); fixed: `strict` excludes `public` and default roles; admin audiences naming a default role refused (`admin_default_role_refused`); whole-tenant roles warned; `admin_never_to_default_member` (DS-011) |
+| V4 | `withheld` reveals optional withholding | Fixed: sent only for required fields |
+| V5 | The 2^6 bound contradicts the class definition | Confirmed; fixed: classes are formed from deciding groups only, data audiences applied per viewer to the cached part (D-DS-24), cap stated for that reason |
+| — | Plausible items | Adopted: admin by effect (write grants vs least viewer), only `Not` around a role test is negation with a pinned `react_to_message` test, `unknown` disabled for admin actions, nav label of the served variant, no audiences or group names in served parts, owner and manager-staff notes in preview |
+| G1 | Publish over 200 changes | Fixed: `PublishDraft(product)` counted as one change, atomic as one schema change, bounded by draft quotas, with a 224-entity fixture; the worked example says so |
+| G2 | Dormant isolation | The structural change above |
+| G3 | Lease without expiry or durable counter | Fixed: lease in tenant kernel state with expiry, checked in the applying transaction; the model has a clock (`no_step_after_expiry`; DS-015) |
+| G4 | Catch-up migration not implementable | Confirmed (`plan_migration` moves in place and loads every record; operations capped at 16 steps). Fixed: typed `CopyField` in batches of 10,000 with copy marks; publish re-runs it and refuses past 10,000 remaining; the digest covers the rule, not counts. The unbounded load in `plan_migration` is noted for WG-5464 |
+| — | Plausible items | Adopted: the classifier-in-transaction claim marked unmodelled; comparator agreement and stage-version fixtures; an agent writes only as its person |
+| R1 | 426 handling absent | Confirmed (no 426, `Strata-Reload` or reload handling in `web/src` or `crates/bff`). Fixed: arrives with the first shell of this programme; the minimum never exceeds the oldest shell that handles it; `index.html` uncached; a recorded old-shell fixture; older shells get the error state, stated |
+| R2 | Pixels-make-major collides with tool bumps | Fixed: exact comparison on the pinned image; tool-bump stacks classified by a calibration set within a stated bound; previous major's DOM and pixels gated; security fixes need a recorded task and identical goldens on both majors |
+| R3 | Reversal promise empty | Fixed: a grace period after end of support keeps the old renderer; two-behind path; orphaning and the theme step in the move; at least two warnings with an open record; mail to owners who saw none; inactive owners do not stop the move; preview as member, anonymous and each group |
+| R4 | Holds withhold security fixes | Fixed: the audience falls back to the product's base screen and the owner is notified; upgrades are never held for an overlay |
+| R5 | Patching stored themes | Fixed: a failing later pair is a non-blocking warning until the owner's next theme step; stored themes change only by a recorded definition step, a new derivation version with an undo; the hash is always of the set in force |
+| R6 | Baselines tautology | Fixed: the gate runs new code against old baselines (exactly the listed examples must fail) and against new ones (all pass); `Baselines-Approved` checked against Workgraph; the gate runs on the integration tip after landing |
+| — | Plausible items | Adopted: floor notices purge interface parts before the manifest arrives; any role change is narrowing; only overlay entries are orphaned and the model's `orphan` is stated against that; the preview uses the production renderer path |
+| L1 | Composite-typed props, handle and focus | Fixed: the list of composite-typed host props; host-injected handle as first focusable, focus model inside items |
+| L2 | Operators, plurals, derived fields, nested each | Fixed: open enums for node kinds and `when` operators reserving comparisons and `not`; a `plural` text node by `Intl.PluralRules`; computed conditions belong in derived fields; lanes are the host's, so nesting is lane-then-card |
+| L3 | Lanes by reference | Fixed: a reference group field when the product declares lanes as a section read under the viewer's policies, with a catch-all lane; the privacy reason stated |
+| L4 | Form builder | Fixed: typed answers per input type from the first version; a `reference` input; reserved `not equals`, `or`, repeating groups; sections as wizard steps; calculation and branching out of scope |
+| L5 | Group cap | Fixed: only deciding groups count; a tenant setting under a measured platform maximum; the diagnostic suggests merges |
+| L6 | Build-time items | Fixed: rank collision, rebalance and tiebreak; anonymous wizards in memory only; declined gaps' placeholders must be removed or replaced; registry `capabilities` is documentation until the verified-module manifest |
+| — | Plausible items | Adopted: image node and icon vocabulary reserved; block interaction through filter state; `select`-first notes in preview; a `reschedule` gesture reserved |
 
 ### Second review (four directions, and the owner's decisions)
 
