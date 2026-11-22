@@ -476,6 +476,173 @@ theorem stamped_at_most_once (W : IKey → Write) (ops : List Op) (hk : Keyed W 
       | _ => exact hk
     exact ih h2 _ (samo_step W s op h1 h)
 
+/-! ## The client's queue meets Q2
+
+The client keeps queued writes durably, each under a local id. A write whose input depends on an
+earlier write's result (an update of a record created offline, a reference to it) holds no key
+until that result is known; then, in one transaction, its input is rewritten with the real id and
+version and its key is drawn. A write with a key is never rewritten. Each operation is one
+IndexedDB transaction, so a crash stops the schedule between operations and changes nothing else.
+The ghost `sent` records every submission. Q2 holds of it: every submission of a key carries the
+same input (`q2_sent`). -/
+
+structure QEntry where
+  lid : Nat
+  key : Option Nat
+  input : Nat
+
+structure CQ where
+  entries : List QEntry
+  /-- Fresh keys (128 random bits in the design). -/
+  nextKey : Nat
+  nextLid : Nat
+  sent : List (Nat × Nat)
+
+inductive COp where
+  /-- Queue a write; `ready` says its input is final (it depends on no unknown result). -/
+  | enqueue (input : Nat) (ready : Bool)
+  /-- The result a write depends on is known: rewrite its input and draw its key, atomically. -/
+  | resolve (lid : Nat) (input : Nat)
+  /-- Send a write that has a key (by any tab, any number of times). -/
+  | send (lid : Nat)
+  /-- The write was answered: remove it. -/
+  | done (lid : Nat)
+
+def cstep (q : CQ) : COp → CQ
+  | .enqueue i ready =>
+    if ready then
+      { q with entries := ⟨q.nextLid, some q.nextKey, i⟩ :: q.entries, nextKey := q.nextKey + 1,
+               nextLid := q.nextLid + 1 }
+    else { q with entries := ⟨q.nextLid, none, i⟩ :: q.entries, nextLid := q.nextLid + 1 }
+  | .resolve l i =>
+    { q with entries := q.entries.map (fun e => if e.lid = l ∧ e.key = none then ⟨e.lid, some q.nextKey, i⟩ else e),
+             nextKey := q.nextKey + 1 }
+  | .send l =>
+    match q.entries.find? (fun e => e.lid == l) with
+    | some e =>
+      match e.key with
+      | some k => { q with sent := (k, e.input) :: q.sent }
+      | none => q
+    | none => q
+  | .done l => { q with entries := q.entries.filter (fun e => e.lid != l) }
+
+def crun : CQ → List COp → CQ
+  | q, [] => q
+  | q, op :: ops => crun (cstep q op) ops
+
+/-- The invariant, over the entries, the next key and the submissions. -/
+def CI (es : List QEntry) (nk : Nat) (sent : List (Nat × Nat)) : Prop :=
+  (∀ e ∈ es, ∀ k, e.key = some k → k < nk) ∧
+  (∀ p ∈ sent, p.1 < nk) ∧
+  (∀ p ∈ sent, ∀ e ∈ es, e.key = some p.1 → e.input = p.2) ∧
+  (∀ p ∈ sent, ∀ p' ∈ sent, p.1 = p'.1 → p.2 = p'.2) ∧
+  (∀ e ∈ es, ∀ e' ∈ es, ∀ k, e.key = some k → e'.key = some k → e.input = e'.input)
+
+def CInv (q : CQ) : Prop := CI q.entries q.nextKey q.sent
+
+theorem cinv_empty : CInv ⟨[], 0, 0, []⟩ := by
+  simp [CInv, CI]
+
+/-- Adding a fresh key to the entries, or an entry with no key, keeps the invariant. -/
+theorem ci_add (es : List QEntry) (nk : Nat) (sent : List (Nat × Nat)) (h : CI es nk sent)
+    (e0 : QEntry) (nk' : Nat) (hge : nk ≤ nk')
+    (h0 : ∀ k, e0.key = some k → nk ≤ k ∧ k < nk') :
+    CI (e0 :: es) nk' sent := by
+  obtain ⟨h1, h2, h3, h4, h5⟩ := h
+  refine ⟨fun e he k hk => ?_, fun p hp => by have := h2 p hp; omega, fun p hp e he hk => ?_, h4,
+    fun e he e' he' k hk hk' => ?_⟩
+  · rcases List.mem_cons.mp he with he | he
+    · subst he; exact (h0 k hk).2
+    · have := h1 e he k hk; omega
+  · rcases List.mem_cons.mp he with he | he
+    · subst he; have := (h0 _ hk).1; have := h2 p hp; omega
+    · exact h3 p hp e he hk
+  · rcases List.mem_cons.mp he with rfl | he1
+    · rcases List.mem_cons.mp he' with rfl | he2
+      · rfl
+      · have := (h0 k hk).1; have := h1 e' he2 k hk'; omega
+    · rcases List.mem_cons.mp he' with rfl | he2
+      · have := (h0 k hk').1; have := h1 e he1 k hk; omega
+      · exact h5 e he1 e' he2 k hk hk'
+
+theorem cstep_inv (q : CQ) (op : COp) (h : CInv q) : CInv (cstep q op) := by
+  unfold CInv at h ⊢
+  cases op with
+  | enqueue i ready =>
+    cases ready with
+    | true =>
+      show CI (⟨q.nextLid, some q.nextKey, i⟩ :: q.entries) (q.nextKey + 1) q.sent
+      exact ci_add _ _ _ h _ _ (by omega) (fun k hk => by simp at hk; omega)
+    | false =>
+      show CI (⟨q.nextLid, none, i⟩ :: q.entries) q.nextKey q.sent
+      exact ci_add _ _ _ h _ _ (Nat.le_refl _) (fun k hk => by simp at hk)
+  | resolve l i =>
+    show CI (q.entries.map (fun e => if e.lid = l ∧ e.key = none then (⟨e.lid, some q.nextKey, i⟩ : QEntry) else e))
+      (q.nextKey + 1) q.sent
+    obtain ⟨h1, h2, h3, h4, h5⟩ := h
+    have hmem : ∀ e ∈ q.entries.map (fun e => if e.lid = l ∧ e.key = none then (⟨e.lid, some q.nextKey, i⟩ : QEntry) else e),
+        (e.key = some q.nextKey ∧ e.input = i) ∨ (e ∈ q.entries) := by
+      intro e he
+      obtain ⟨e0, he0, rfl⟩ := List.mem_map.mp he
+      by_cases hc : e0.lid = l ∧ e0.key = none
+      · left; simp [hc]
+      · right; simp only [hc, ↓reduceIte]; exact he0
+    refine ⟨fun e he k hk => ?_, fun p hp => by have := h2 p hp; omega, fun p hp e he hk => ?_, h4,
+      fun e he e' he' k hk hk' => ?_⟩
+    · rcases hmem e he with ⟨h6, _⟩ | h7
+      · rw [h6] at hk; cases hk; omega
+      · have := h1 e h7 k hk; omega
+    · rcases hmem e he with ⟨h6, _⟩ | h7
+      · rw [h6] at hk; have h' := Option.some.inj hk; have := h2 p hp; omega
+      · exact h3 p hp e h7 hk
+    · rcases hmem e he with ⟨h6, h6'⟩ | h7 <;> rcases hmem e' he' with ⟨h8, h8'⟩ | h9
+      · rw [h6', h8']
+      · rw [h6] at hk; cases hk; have := h1 e' h9 _ hk'; omega
+      · rw [h8] at hk'; cases hk'; have := h1 e h7 _ hk; omega
+      · exact h5 e h7 e' h9 k hk hk'
+  | send l =>
+    obtain ⟨h1, h2, h3, h4, h5⟩ := h
+    simp only [cstep]
+    cases hf : q.entries.find? (fun e => e.lid == l) with
+    | none => exact ⟨h1, h2, h3, h4, h5⟩
+    | some e =>
+      have he := List.mem_of_find?_eq_some hf
+      cases hk : e.key with
+      | none => simp only [hk]; exact ⟨h1, h2, h3, h4, h5⟩
+      | some k =>
+        simp only [hk]
+        show CI q.entries q.nextKey ((k, e.input) :: q.sent)
+        refine ⟨h1, fun p hp => ?_, fun p hp e' he' hk' => ?_, fun p hp p' hp' hpp => ?_, h5⟩
+        · rcases List.mem_cons.mp hp with hp | hp
+          · subst hp; exact h1 e he k hk
+          · exact h2 p hp
+        · rcases List.mem_cons.mp hp with hp | hp
+          · subst hp; exact h5 e' he' e he k hk' hk
+          · exact h3 p hp e' he' hk'
+        · rcases List.mem_cons.mp hp with rfl | hp1
+          · rcases List.mem_cons.mp hp' with rfl | hp2
+            · rfl
+            · simp only at hpp ⊢; exact h3 p' hp2 e he (by rw [hk, hpp])
+          · rcases List.mem_cons.mp hp' with rfl | hp2
+            · simp only at hpp ⊢; exact (h3 p hp1 e he (by rw [hk, hpp])).symm
+            · exact h4 p hp1 p' hp2 hpp
+  | done l =>
+    obtain ⟨h1, h2, h3, h4, h5⟩ := h
+    show CI (q.entries.filter (fun e => e.lid != l)) q.nextKey q.sent
+    exact ⟨fun e he k hk => h1 e (List.mem_filter.mp he).1 k hk, h2,
+      fun p hp e he hk => h3 p hp e (List.mem_filter.mp he).1 hk, h4,
+      fun e he e' he' k hk hk' => h5 e (List.mem_filter.mp he).1 e' (List.mem_filter.mp he').1 k hk hk'⟩
+
+/-- **The client's scheme meets Q2**: in every schedule of queueing, resolving dependencies, sending
+    (any number of times, from any tab) and answering, with crashes between transactions, every
+    submission of one key carries the same input.
+    Verifies: FE-014 -/
+theorem q2_sent (ops : List COp) : ∀ q, CInv q → ∀ p ∈ (crun q ops).sent, ∀ p' ∈ (crun q ops).sent,
+    p.1 = p'.1 → p.2 = p'.2 := by
+  induction ops with
+  | nil => intro q h; exact h.2.2.2.1
+  | cons op ops ih => intro q h; exact ih _ (cstep_inv q op h)
+
 /-! ## What fails without each piece -/
 
 def s0 : Srv :=
