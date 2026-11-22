@@ -17,11 +17,13 @@ An answer is **current** when its stamp is the newest heard and the last contact
 ticks old; **checked** when its stamp is the newest heard but the contact is older (drawn as "last
 checked at ..." and not refetched); otherwise **stale**.
 
-Stamps are ordered only within a tenant epoch: a restore or a re-created tenant starts a new epoch,
-whose counter may start again from 1. The client keeps its known stamp, its floor and its entries
-for one epoch, and on hearing another epoch it purges them and starts again from that epoch's
-answers; it remembers the epochs it left and ignores anything still arriving from them. In the
-model the generation `g` is one order across epochs, which the client never relies on across them.
+Stamps are ordered only within a tenant epoch: a restore, a re-created tenant or a lease acquisition
+rotates the nonce and starts a new epoch, whose counter may start again from 1. With the epoch's tag
+the server sends its **ordinal**, raised at every rotation and never reset. The client keeps its known
+stamp, its floor and its entries for one epoch; it switches only to a higher ordinal (purging and
+resetting), and ignores anything of a lower ordinal. In the model the ordinal stands for the tag as
+well, and the generation `g` is one order across epochs, which the client never relies on across
+them.
 
 Proved:
 
@@ -34,9 +36,13 @@ Proved:
   last heard;
 - **nothing at rest from an older erasure epoch, read below the floor, or from another tenant
   epoch** (`rest_one_epoch`, `rest_above_floor`, `rest_same_tenant_epoch`), and hearing a newer
-  erasure epoch, floor or tenant epoch purges at once (`hear_purges`, `hear_access_purges`,
+  erasure epoch, floor or tenant epoch purges at once, while a lower tenant epoch is ignored
+  (`hear_purges`, `hear_access_purges`, `older_epoch_ignored`,
   `tenant_epoch_purges`); the floor covers a policy change for every principal at once
   (`contact_floor`);
+- **recovery across tenant epochs** (`contact_reaches_current_epoch`): whatever arrived before, any
+  answer sent in the server's current epoch brings the client to that epoch; answers out of order
+  across two rotations cannot leave it stuck (`out_of_order_epochs_recover`);
 - **a read after a confirmed commit** returns the committed value (`receipt_read`,
   `read_after_commit`);
 - **what fails without each piece**: an incomplete notice (`incomplete_notice_serves_stale`,
@@ -59,8 +65,9 @@ C4. The browser's clock does not run backwards between a request and the reads t
 C5. A view depending on several object types is governed by each type's epoch; the per-type
     instances of this model compose by conjunction (argued, not proved; a conformance case in
     WG-5435 checks the server side).
-C6. A reply that is cached or conditional (a 304) is never taken as an answer: view replies are
-    `no-store`.
+C6. A reply that did not come from the server for this request is never taken as an answer: the
+    driver issues view reads with `cache: 'no-store'`, and the server echoes a per-request nonce in
+    the answer's stamp, which the kernel checks (a replayed or cached answer fails it).
 
 No `sorry`, no added axioms. `Audit.lean` prints the axioms each theorem depends on.
 -/
@@ -128,10 +135,8 @@ structure Cache (K V : Type) where
   knownX : Nat
   floor : Nat
   contact : Nat
-  /-- The tenant epoch the known stamp, floor and entries belong to. -/
+  /-- The ordinal of the tenant epoch the known stamp, floor and entries belong to. -/
   ce : Nat
-  /-- Tenant epochs the client has left; anything still arriving from them is ignored. -/
-  retired : List Nat
   entries : K → Option (Entry V)
 
 inductive Answer (V : Type) where
@@ -152,13 +157,12 @@ def read (B now : Nat) (c : Cache K V) (k : K) : Answer V :=
       (if now ≤ c.contact + B then .current e.val else .checked e.val)
     else .stale e.val e.gen
 
-/-- Taking in a message of tenant epoch `e`: the same epoch goes on, a retired one is ignored
-    (`none`), a new one purges and resets everything, in one transaction. -/
+/-- Taking in a message of tenant epoch ordinal `e`: the same epoch goes on, a lower one is ignored
+    (`none`), a higher one purges and resets everything, in one transaction. -/
 def epochOf (c : Cache K V) (e : Nat) : Option (Cache K V) :=
   if e = c.ce then some c
-  else if e ∈ c.retired then none
-  else some { known := 0, knownX := 0, floor := 0, contact := 0, ce := e, retired := c.ce :: c.retired,
-              entries := fun _ => none }
+  else if e < c.ce then none
+  else some { known := 0, knownX := 0, floor := 0, contact := 0, ce := e, entries := fun _ => none }
 
 def hearX (c : Cache K V) (y : Nat) : Cache K V :=
   if c.knownX < y then
@@ -273,7 +277,7 @@ structure Base (s : Server K V) (c : Cache K V) : Prop where
   acc_le : s.acc ≤ s.gen
   pol_le : s.pol ≤ s.gen
   contact_le : c.contact ≤ s.now
-  ce_notin : c.ce ∉ c.retired
+  ce_le : c.ce ≤ s.ep
   entry_gen : ∀ k e, c.entries k = some e → e.gen ≤ c.known
   entry_x : ∀ k e, c.entries k = some e → e.x = c.knownX
   entry_floor : ∀ k e, c.entries k = some e → c.floor ≤ e.gen
@@ -281,7 +285,8 @@ structure Base (s : Server K V) (c : Cache K V) : Prop where
   gap_gen : ∀ g, c.known < g → g ≤ s.gen → c.contact ≤ s.gTime g
   gap_x : ∀ y, c.knownX < y → y ≤ s.x → c.contact ≤ s.xTime y
   flight : ∀ p ∈ s.inflight, p.1 ≤ s.now ∧ p.2.1 ≤ s.gen ∧ p.2.2.1 ≤ s.x ∧ p.2.2.2.1 ≤ s.fl ∧
-    (∀ g, p.2.1 < g → g ≤ s.gen → p.1 ≤ s.gTime g) ∧ (∀ y, p.2.2.1 < y → y ≤ s.x → p.1 ≤ s.xTime y)
+    (∀ g, p.2.1 < g → g ≤ s.gen → p.1 ≤ s.gTime g) ∧ (∀ y, p.2.2.1 < y → y ≤ s.x → p.1 ≤ s.xTime y) ∧
+    p.2.2.2.2 ≤ s.ep
 
 def Vals (s : Server K V) (c : Cache K V) : Prop :=
   ∀ k e, c.entries k = some e → e.val = s.view e.gen e.x k
@@ -289,16 +294,14 @@ def Vals (s : Server K V) (c : Cache K V) : Prop :=
 /-! ### Tenant epochs -/
 
 theorem epochOf_base (s : Server K V) (c : Cache K V) (e : Nat) (c' : Cache K V) (h : Base s c)
-    (he : epochOf c e = some c') : Base s c' := by
+    (hle : e ≤ s.ep) (he : epochOf c e = some c') : Base s c' := by
   unfold epochOf at he
   split at he
   · cases he; exact h
   · split at he
     · cases he
-    · rename_i hne hnr
-      cases he
-      exact ⟨Nat.zero_le _, Nat.zero_le _, Nat.zero_le _, h.acc_le, h.pol_le, Nat.zero_le _,
-        by simp only [List.mem_cons, not_or]; exact ⟨hne, hnr⟩,
+    · cases he
+      exact ⟨Nat.zero_le _, Nat.zero_le _, Nat.zero_le _, h.acc_le, h.pol_le, Nat.zero_le _, hle,
         (fun _ _ h => by cases h), (fun _ _ h => by cases h), (fun _ _ h => by cases h),
         (fun _ _ h => by cases h), (fun _ _ _ => Nat.zero_le _), (fun _ _ _ => Nat.zero_le _), h.flight⟩
 
@@ -324,11 +327,11 @@ theorem epochOf_ce (c : Cache K V) (e : Nat) (c' : Cache K V) (he : epochOf c e 
 
 theorem hearX_fields (c : Cache K V) (y : Nat) :
     (hearX c y).known = c.known ∧ (hearX c y).floor = c.floor ∧ (hearX c y).contact = c.contact ∧
-    (hearX c y).knownX = max c.knownX y ∧ (hearX c y).ce = c.ce ∧ (hearX c y).retired = c.retired := by
+    (hearX c y).knownX = max c.knownX y ∧ (hearX c y).ce = c.ce := by
   unfold hearX
   split
-  · rename_i h; exact ⟨rfl, rfl, rfl, (Nat.max_eq_right (Nat.le_of_lt h)).symm, rfl, rfl⟩
-  · rename_i h; exact ⟨rfl, rfl, rfl, (Nat.max_eq_left (Nat.le_of_not_lt h)).symm, rfl, rfl⟩
+  · rename_i h; exact ⟨rfl, rfl, rfl, (Nat.max_eq_right (Nat.le_of_lt h)).symm, rfl⟩
+  · rename_i h; exact ⟨rfl, rfl, rfl, (Nat.max_eq_left (Nat.le_of_not_lt h)).symm, rfl⟩
 
 theorem hearX_entry (c : Cache K V) (y : Nat) (hx : ∀ k e, c.entries k = some e → e.x = c.knownX)
     (k : K) (e : Entry V) (he : (hearX c y).entries k = some e) :
@@ -351,11 +354,11 @@ theorem hearX_entry (c : Cache K V) (y : Nat) (hx : ∀ k e, c.entries k = some 
 
 theorem hearAcc_fields (c : Cache K V) (a : Nat) :
     (hearAcc c a).known = c.known ∧ (hearAcc c a).knownX = c.knownX ∧ (hearAcc c a).contact = c.contact ∧
-    (hearAcc c a).floor = max c.floor a ∧ (hearAcc c a).ce = c.ce ∧ (hearAcc c a).retired = c.retired := by
+    (hearAcc c a).floor = max c.floor a ∧ (hearAcc c a).ce = c.ce := by
   unfold hearAcc
   split
-  · rename_i h; exact ⟨rfl, rfl, rfl, (Nat.max_eq_right (Nat.le_of_lt h)).symm, rfl, rfl⟩
-  · rename_i h; exact ⟨rfl, rfl, rfl, (Nat.max_eq_left (Nat.le_of_not_lt h)).symm, rfl, rfl⟩
+  · rename_i h; exact ⟨rfl, rfl, rfl, (Nat.max_eq_right (Nat.le_of_lt h)).symm, rfl⟩
+  · rename_i h; exact ⟨rfl, rfl, rfl, (Nat.max_eq_left (Nat.le_of_not_lt h)).symm, rfl⟩
 
 theorem hearAcc_entry (c : Cache K V) (a : Nat) (hf : ∀ k e, c.entries k = some e → c.floor ≤ e.gen)
     (k : K) (e : Entry V) (he : (hearAcc c a).entries k = some e) :
@@ -390,15 +393,15 @@ theorem hear_entry (s : Server K V) (c : Cache K V) (y a : Nat) (h : Base s c) (
 
 theorem hear_base (s : Server K V) (c : Cache K V) (y a : Nat) (h : Base s c) (hy : y ≤ s.x)
     (ha : a ≤ s.fl) : Base s (hearAcc (hearX c y) a) := by
-  obtain ⟨x1, x2, x3, x4, x5, x6⟩ := hearX_fields c y
-  obtain ⟨a1, a2, a3, a4, a5, a6⟩ := hearAcc_fields (hearX c y) a
+  obtain ⟨x1, x2, x3, x4, x5⟩ := hearX_fields c y
+  obtain ⟨a1, a2, a3, a4, a5⟩ := hearAcc_fields (hearX c y) a
   refine ⟨?_, ?_, ?_, h.acc_le, h.pol_le, ?_, ?_, fun k e he => ?_, fun k e he => ?_, fun k e he => ?_,
     fun k e he => ?_, fun g p q => ?_, fun y' p q => ?_, h.flight⟩
   · rw [a1, x1]; exact h.known_le
   · rw [a2, x4]; exact Nat.max_le.mpr ⟨h.knownX_le, hy⟩
   · rw [a4, x2]; exact Nat.max_le.mpr ⟨h.floor_le, ha⟩
   · rw [a3, x3]; exact h.contact_le
-  · rw [a5, x5, a6, x6]; exact h.ce_notin
+  · rw [a5, x5]; exact h.ce_le
   · rw [a1, x1]; exact h.entry_gen k e (hear_entry s c y a h k e he).1
   · rw [a2, x4]; exact (hear_entry s c y a h k e he).2.1
   · rw [a4, x2]; exact (hear_entry s c y a h k e he).2.2
@@ -414,18 +417,18 @@ theorem hear_vals (s : Server K V) (c : Cache K V) (y a : Nat) (h : Base s c) (h
 
 theorem contact_base (s : Server K V) (c : Cache K V) (t gp xp fp ep : Nat) (h : Base s c)
     (hin : (t, gp, xp, fp, ep) ∈ s.inflight) : Base s (contactIn c t gp xp fp ep) := by
-  obtain ⟨ht, hgp, hxp, hfp, hgg, hgx⟩ := h.flight _ hin
+  obtain ⟨ht, hgp, hxp, hfp, hgg, hgx, hep⟩ := h.flight _ hin
   unfold contactIn
   cases hc : epochOf c ep with
   | none => exact h
   | some c0 =>
     simp only
-    have h0 := epochOf_base s c ep c0 h hc
+    have h0 := epochOf_base s c ep c0 h hep hc
     have h1 := hear_base s c0 xp fp h0 hxp hfp
-    obtain ⟨x1, x2, x3, x4, x5, x6⟩ := hearX_fields c0 xp
-    obtain ⟨a1, a2, a3, a4, a5, a6⟩ := hearAcc_fields (hearX c0 xp) fp
+    obtain ⟨x1, x2, x3, x4, x5⟩ := hearX_fields c0 xp
+    obtain ⟨a1, a2, a3, a4, a5⟩ := hearAcc_fields (hearX c0 xp) fp
     refine ⟨Nat.max_le.mpr ⟨h1.known_le, hgp⟩, h1.knownX_le, h1.floor_le, h.acc_le, h.pol_le,
-      Nat.max_le.mpr ⟨h1.contact_le, ht⟩, h1.ce_notin,
+      Nat.max_le.mpr ⟨h1.contact_le, ht⟩, h1.ce_le,
       fun k e he => Nat.le_trans (h1.entry_gen k e he) (Nat.le_max_left _ _), h1.entry_x, h1.entry_floor,
       h1.entry_ep, fun g p q => ?_, fun y p q => ?_, h.flight⟩
     · have p' : max (hearAcc (hearX c0 xp) fp).known gp < g := p
@@ -442,24 +445,25 @@ theorem contact_base (s : Server K V) (c : Cache K V) (t gp xp fp ep : Nat) (h :
         hgx y (Nat.lt_of_le_of_lt (Nat.le_max_right _ _) p') q⟩
 
 theorem contact_vals (s : Server K V) (c : Cache K V) (t gp xp fp ep : Nat) (h : Base s c)
-    (hv : Vals s c) : Vals s (contactIn c t gp xp fp ep) := by
+    (hin : (t, gp, xp, fp, ep) ∈ s.inflight) (hv : Vals s c) : Vals s (contactIn c t gp xp fp ep) := by
   unfold contactIn
   cases hc : epochOf c ep with
   | none => exact hv
   | some c0 =>
-    exact hear_vals s c0 xp fp (epochOf_base s c ep c0 h hc) (epochOf_vals s c ep c0 hv hc)
+    exact hear_vals s c0 xp fp (epochOf_base s c ep c0 h (by
+      obtain ⟨_, _, _, _, _, _, hep⟩ := h.flight _ hin; exact hep) hc) (epochOf_vals s c ep c0 hv hc)
 
 /-! ### The put -/
 
 theorem insert_fields (c1 : Cache K V) (k : K) (v : V) (g y : Nat) :
     (insertAt c1 k v g y).known = max c1.known g ∧ (insertAt c1 k v g y).knownX = c1.knownX ∧
     (insertAt c1 k v g y).floor = c1.floor ∧ (insertAt c1 k v g y).contact = c1.contact ∧
-    (insertAt c1 k v g y).ce = c1.ce ∧ (insertAt c1 k v g y).retired = c1.retired ∧
+    (insertAt c1 k v g y).ce = c1.ce ∧
     ∀ k' e, (insertAt c1 k v g y).entries k' = some e → c1.entries k' = some e ∨ (k' = k ∧ e = ⟨v, g, y, c1.ce⟩) := by
   unfold insertAt
   cases hc : c1.entries k with
   | none =>
-    refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, fun k' e he => ?_⟩
+    refine ⟨rfl, rfl, rfl, rfl, rfl, fun k' e he => ?_⟩
     simp only [setK] at he
     by_cases hk : k' = k
     · simp only [hk, ↓reduceIte, Option.some.injEq] at he; exact Or.inr ⟨hk, he.symm⟩
@@ -467,8 +471,8 @@ theorem insert_fields (c1 : Cache K V) (k : K) (v : V) (g y : Nat) :
   | some e0 =>
     simp only
     split
-    · exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, fun k' e he => Or.inl he⟩
-    · refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, fun k' e he => ?_⟩
+    · exact ⟨rfl, rfl, rfl, rfl, rfl, fun k' e he => Or.inl he⟩
+    · refine ⟨rfl, rfl, rfl, rfl, rfl, fun k' e he => ?_⟩
       simp only [setK] at he
       by_cases hk : k' = k
       · simp only [hk, ↓reduceIte, Option.some.injEq] at he; exact Or.inr ⟨hk, he.symm⟩
@@ -482,16 +486,16 @@ theorem put_base (s : Server K V) (c : Cache K V) (k : K) (v : V) (g y er : Nat)
   · simp only [hd, ↓reduceIte]
     have hy' : c.knownX ≤ y := by omega
     have hg' : c.floor ≤ g := by omega
-    obtain ⟨x1, x2, x3, x4, x5, x6⟩ := hearX_fields c y
+    obtain ⟨x1, x2, x3, x4, x5⟩ := hearX_fields c y
     have hmx : max c.knownX y = y := Nat.max_eq_right hy'
-    obtain ⟨i1, i2, i3, i4, i5, i6, i7⟩ := insert_fields (hearX c y) k v g y
+    obtain ⟨i1, i2, i3, i4, i5, i7⟩ := insert_fields (hearX c y) k v g y
     refine ⟨?_, ?_, ?_, h.acc_le, h.pol_le, ?_, ?_, fun k' e he => ?_, fun k' e he => ?_,
       fun k' e he => ?_, fun k' e he => ?_, fun g' p q => ?_, fun y' p q => ?_, h.flight⟩
     · rw [i1, x1]; exact Nat.max_le.mpr ⟨h.known_le, hg⟩
     · rw [i2, x4, hmx]; exact hy
     · rw [i3, x2]; exact h.floor_le
     · rw [i4, x3]; exact h.contact_le
-    · rw [i5, x5, i6, x6]; exact h.ce_notin
+    · rw [i5, x5]; exact h.ce_le
     · rw [i1, x1]
       rcases i7 k' e he with he | ⟨_, rfl⟩
       · exact Nat.le_trans (h.entry_gen k' e (hearX_entry c y h.entry_x k' e he).1) (Nat.le_max_left _ _)
@@ -520,7 +524,7 @@ theorem put_vals (s : Server K V) (c : Cache K V) (k : K) (g y er : Nat) (h : Ba
   · simp only [hd, ↓reduceIte]; exact hv
   · simp only [hd, ↓reduceIte]
     intro k' e he
-    rcases (insert_fields (hearX c y) k (s.view g y k) g y).2.2.2.2.2.2 k' e he with he | ⟨hk, rfl⟩
+    rcases (insert_fields (hearX c y) k (s.view g y k) g y).2.2.2.2.2 k' e he with he | ⟨hk, rfl⟩
     · exact hv k' e (hearX_entry c y h.entry_x k' e he).1
     · subst hk; rfl
 
@@ -547,19 +551,19 @@ theorem carry_entry (es : K → Option (Entry V)) (a b : Nat) (ks : List K) (k :
       exact Or.inr ⟨hin, he.symm⟩
 
 theorem frame_base (s : Server K V) (c : Cache K V) (a b y f e : Nat) (ks : List K) (h : Base s c)
-    (hb : b ≤ s.gen) (hy : y ≤ s.x) (hf : f ≤ s.fl) : Base s (frame c a b y f e ks) := by
+    (hb : b ≤ s.gen) (hy : y ≤ s.x) (hf : f ≤ s.fl) (he : e ≤ s.ep) : Base s (frame c a b y f e ks) := by
   unfold frame
   cases hc : epochOf c e with
   | none => exact h
   | some c0 =>
     simp only
-    have h0 := epochOf_base s c e c0 h hc
+    have h0 := epochOf_base s c e c0 h he hc
     by_cases hlt : y < c0.knownX
     · simp only [hlt, ↓reduceIte]; exact h0
     · simp only [hlt, ↓reduceIte]
       have h1 := hear_base s c0 y f h0 hy hf
       refine ⟨Nat.max_le.mpr ⟨h1.known_le, hb⟩, h1.knownX_le, h1.floor_le, h.acc_le, h.pol_le,
-        h1.contact_le, h1.ce_notin, fun k e he => ?_, fun k e he => ?_, fun k e he => ?_, fun k e he => ?_,
+        h1.contact_le, h1.ce_le, fun k e he => ?_, fun k e he => ?_, fun k e he => ?_, fun k e he => ?_,
         fun g p q => h1.gap_gen g (Nat.lt_of_le_of_lt (Nat.le_max_left _ _) p) q, h1.gap_x, h.flight⟩
       · obtain ⟨e0, he0, hcase⟩ := carry_entry _ a b ks k e he
         rcases hcase with ⟨_, _, _, heq⟩ | ⟨_, heq⟩ <;> rw [heq]
@@ -579,14 +583,14 @@ theorem frame_base (s : Server K V) (c : Cache K V) (a b y f e : Nat) (ks : List
         · exact h1.entry_ep k e0 he0
 
 theorem frame_vals (s : Server K V) (c : Cache K V) (a b y f e : Nat) (ks : List K) (h : Base s c)
-    (hv : Vals s c) (hc2 : ∀ k, k ∉ ks → ∀ g, a ≤ g → g ≤ b → s.view g y k = s.view b y k) :
+    (he : e ≤ s.ep) (hv : Vals s c) (hc2 : ∀ k, k ∉ ks → ∀ g, a ≤ g → g ≤ b → s.view g y k = s.view b y k) :
     Vals s (frame c a b y f e ks) := by
   unfold frame
   cases hc : epochOf c e with
   | none => exact hv
   | some c0 =>
     simp only
-    have h0 := epochOf_base s c e c0 h hc
+    have h0 := epochOf_base s c e c0 h he hc
     have hv0 := epochOf_vals s c e c0 hv hc
     by_cases hlt : y < c0.knownX
     · simp only [hlt, ↓reduceIte]; exact hv0
@@ -608,20 +612,21 @@ theorem frame_vals (s : Server K V) (c : Cache K V) (a b y f e : Nat) (ks : List
 theorem step_base (s : Server K V) (c : Cache K V) (op : Op K V) (h : Base s c) :
     Base (step (s, c) op).1 (step (s, c) op).2 := by
   have commitB : ∀ (f : K → V) (a p e : Nat), s.acc ≤ a → s.pol ≤ p → a ≤ s.gen + 1 → p ≤ s.gen + 1 →
-      Base { s.commit f with acc := a, pol := p, ep := e } c := by
-    intro f a p e ha1 hp1 ha2 hp2
+      s.ep ≤ e → Base { s.commit f with acc := a, pol := p, ep := e } c := by
+    intro f a p e ha1 hp1 ha2 hp2 he
     obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14⟩ := h
     have hfl : s.fl ≤ max a p := by
       simp only [Server.fl]; exact Nat.max_le.mpr ⟨Nat.le_trans ha1 (Nat.le_max_left _ _),
         Nat.le_trans hp1 (Nat.le_max_right _ _)⟩
-    refine ⟨by simp only [Server.commit]; omega, h2, Nat.le_trans h3 hfl, ha2, hp2, h6, h7, h8, h9, h10,
-      h11, fun g p' q => ?_, h13, fun pr hp => ?_⟩
+    refine ⟨by simp only [Server.commit]; omega, h2, Nat.le_trans h3 hfl, ha2, hp2, h6, Nat.le_trans h7 he,
+      h8, h9, h10, h11, fun g p' q => ?_, h13, fun pr hp => ?_⟩
     · simp only [Server.commit] at q ⊢
       by_cases hg : g = s.gen + 1
       · simp only [hg, ↓reduceIte]; exact h6
       · simp only [hg, ↓reduceIte]; exact h12 g p' (by omega)
-    · obtain ⟨b1, b2, b3, b4, b5, b6⟩ := h14 pr hp
-      refine ⟨b1, by simp only [Server.commit]; omega, b3, Nat.le_trans b4 hfl, fun g p' q => ?_, b6⟩
+    · obtain ⟨b1, b2, b3, b4, b5, b6, b7⟩ := h14 pr hp
+      refine ⟨b1, by simp only [Server.commit]; omega, b3, Nat.le_trans b4 hfl, fun g p' q => ?_, b6,
+        Nat.le_trans b7 he⟩
       simp only [Server.commit] at q ⊢
       by_cases hg : g = s.gen + 1
       · simp only [hg, ↓reduceIte]; exact b1
@@ -629,10 +634,10 @@ theorem step_base (s : Server K V) (c : Cache K V) (op : Op K V) (h : Base s c) 
   have hacc := h.acc_le
   have hpol := h.pol_le
   cases op with
-  | commit f => exact commitB f s.acc s.pol s.ep (Nat.le_refl _) (Nat.le_refl _) (by omega) (by omega)
-  | revoke f => exact commitB f (s.gen + 1) s.pol s.ep (by omega) (Nat.le_refl _) (Nat.le_refl _) (by omega)
-  | policy f => exact commitB f s.acc (s.gen + 1) s.ep (Nat.le_refl _) (by omega) (by omega) (Nat.le_refl _)
-  | recreate f => exact commitB f s.acc s.pol (s.ep + 1) (Nat.le_refl _) (Nat.le_refl _) (by omega) (by omega)
+  | commit f => exact commitB f s.acc s.pol s.ep (Nat.le_refl _) (Nat.le_refl _) (by omega) (by omega) (Nat.le_refl _)
+  | revoke f => exact commitB f (s.gen + 1) s.pol s.ep (by omega) (Nat.le_refl _) (Nat.le_refl _) (by omega) (Nat.le_refl _)
+  | policy f => exact commitB f s.acc (s.gen + 1) s.ep (Nat.le_refl _) (by omega) (by omega) (Nat.le_refl _) (Nat.le_refl _)
+  | recreate f => exact commitB f s.acc s.pol (s.ep + 1) (Nat.le_refl _) (Nat.le_refl _) (by omega) (by omega) (by omega)
   | destroy er =>
     obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14⟩ := h
     refine ⟨h1, by simp only [step, Server.destroy]; omega, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12,
@@ -641,8 +646,8 @@ theorem step_base (s : Server K V) (c : Cache K V) (op : Op K V) (h : Base s c) 
       by_cases hy : y = s.x + 1
       · simp only [hy, ↓reduceIte]; exact h6
       · simp only [hy, ↓reduceIte]; exact h13 y p (by omega)
-    · obtain ⟨b1, b2, b3, b4, b5, b6⟩ := h14 pr hp
-      refine ⟨b1, b2, by simp only [step, Server.destroy]; omega, b4, b5, fun y p q => ?_⟩
+    · obtain ⟨b1, b2, b3, b4, b5, b6, b7⟩ := h14 pr hp
+      refine ⟨b1, b2, by simp only [step, Server.destroy]; omega, b4, b5, fun y p q => ?_, b7⟩
       simp only [step, Server.destroy] at q ⊢
       by_cases hy : y = s.x + 1
       · simp only [hy, ↓reduceIte]; exact b1
@@ -650,8 +655,8 @@ theorem step_base (s : Server K V) (c : Cache K V) (op : Op K V) (h : Base s c) 
   | tick =>
     obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14⟩ := h
     exact ⟨h1, h2, h3, h4, h5, by simp only [step]; omega, h7, h8, h9, h10, h11, h12, h13, fun pr hp => by
-      obtain ⟨b1, b2, b3, b4, b5, b6⟩ := h14 pr hp
-      exact ⟨by simp only [step]; omega, b2, b3, b4, b5, b6⟩⟩
+      obtain ⟨b1, b2, b3, b4, b5, b6, b7⟩ := h14 pr hp
+      exact ⟨by simp only [step]; omega, b2, b3, b4, b5, b6, b7⟩⟩
   | answer t =>
     simp only [step]
     by_cases ht : t ≤ s.now
@@ -661,7 +666,7 @@ theorem step_base (s : Server K V) (c : Cache K V) (op : Op K V) (h : Base s c) 
       rcases List.mem_cons.mp hp with hp | hp
       · subst hp
         exact ⟨ht, Nat.le_refl _, Nat.le_refl _, Nat.le_refl _, fun g a b => by simp only at a b; omega,
-          fun y a b => by simp only at a b; omega⟩
+          fun y a b => by simp only at a b; omega, Nat.le_refl _⟩
       · exact h14 pr hp
     · simp only [ht, ↓reduceIte]; exact ⟨h.1, h.2, h.3, h.4, h.5, h.6, h.7, h.8, h.9, h.10, h.11, h.12, h.13, h.14⟩
   | pong t gp xp fp ep =>
@@ -673,14 +678,14 @@ theorem step_base (s : Server K V) (c : Cache K V) (op : Op K V) (h : Base s c) 
     simp only [step]
     by_cases hv : (t, gs, xs, fs, es) ∈ s.inflight ∧ g ≤ gs ∧ y ≤ xs
     · simp only [hv, and_self, ↓reduceIte]
-      obtain ⟨_, hgs, hxs, _, _, _⟩ := h.flight _ hv.1
+      obtain ⟨_, hgs, hxs, _, _, _, _⟩ := h.flight _ hv.1
       exact put_base s _ k _ g y er (Nat.le_trans hv.2.1 hgs) (Nat.le_trans hv.2.2 hxs)
         (contact_base s c t gs xs fs es h hv.1)
     · simp only [hv, ↓reduceIte]; exact h
   | frame a b y f e ks =>
     simp only [step]
     by_cases hv : a ≤ b ∧ b ≤ s.gen ∧ y ≤ s.x ∧ f ≤ s.fl ∧ e ≤ s.ep
-    · simp only [hv, and_self, ↓reduceIte]; exact frame_base s c a b y f e ks h hv.2.1 hv.2.2.1 hv.2.2.2.1
+    · simp only [hv, and_self, ↓reduceIte]; exact frame_base s c a b y f e ks h hv.2.1 hv.2.2.1 hv.2.2.2.1 hv.2.2.2.2
     · simp only [hv, ↓reduceIte]; exact h
   | lose => exact h
 
@@ -712,18 +717,18 @@ theorem step_vals (s : Server K V) (c : Cache K V) (op : Op K V) (h : Base s c)
   | pong t gp xp fp ep =>
     simp only [step]
     by_cases hin : (t, gp, xp, fp, ep) ∈ s.inflight
-    · simp only [hin, ↓reduceIte]; exact contact_vals s c t gp xp fp ep h hv
+    · simp only [hin, ↓reduceIte]; exact contact_vals s c t gp xp fp ep h hin hv
     · simp only [hin, ↓reduceIte]; exact hv
   | reply k g y er t gs xs fs es =>
     simp only [step]
     by_cases hr : (t, gs, xs, fs, es) ∈ s.inflight ∧ g ≤ gs ∧ y ≤ xs
     · simp only [hr, and_self, ↓reduceIte]
-      exact put_vals s _ k g y er (contact_base s c t gs xs fs es h hr.1) (contact_vals s c t gs xs fs es h hv)
+      exact put_vals s _ k g y er (contact_base s c t gs xs fs es h hr.1) (contact_vals s c t gs xs fs es h hr.1 hv)
     · simp only [hr, ↓reduceIte]; exact hv
   | frame a b y f e ks =>
     simp only [step]
     by_cases hr : a ≤ b ∧ b ≤ s.gen ∧ y ≤ s.x ∧ f ≤ s.fl ∧ e ≤ s.ep
-    · simp only [hr, and_self, ↓reduceIte]; exact frame_vals s c a b y f e ks h hv hc
+    · simp only [hr, and_self, ↓reduceIte]; exact frame_vals s c a b y f e ks h hr.2.2.2.2 hv hc
     · simp only [hr, ↓reduceIte]; exact hv
   | lose => exact hv
 
@@ -863,26 +868,59 @@ theorem contact_floor (s : Server K V) (c : Cache K V) (t : Nat) (hce : c.ce = s
   exact ⟨Nat.le_trans (Nat.le_max_right s.acc s.pol) (Nat.le_max_right _ _),
          Nat.le_trans (Nat.le_max_left s.acc s.pol) (Nat.le_max_right _ _)⟩
 
-/-- **Hearing another tenant epoch purges and resets together**: nothing is left at rest, and the
+/-- **Hearing a higher tenant epoch purges and resets together**: nothing is left at rest, and the
     known stamp, erasure epoch and floor start again from that epoch.
     Verifies: FE-018 -/
-theorem tenant_epoch_purges (c c' : Cache K V) (e : Nat) (hne : e ≠ c.ce) (he : epochOf c e = some c') :
-    (∀ k, c'.entries k = none) ∧ c'.known = 0 ∧ c'.knownX = 0 ∧ c'.floor = 0 ∧ c'.ce = e ∧
-      c.ce ∈ c'.retired := by
+theorem tenant_epoch_purges (c c' : Cache K V) (e : Nat) (hgt : c.ce < e) (he : epochOf c e = some c') :
+    (∀ k, c'.entries k = none) ∧ c'.known = 0 ∧ c'.knownX = 0 ∧ c'.floor = 0 ∧ c'.ce = e := by
   unfold epochOf at he
-  simp only [hne, ↓reduceIte] at he
-  split at he
-  · cases he
-  · cases he; exact ⟨fun _ => rfl, rfl, rfl, rfl, rfl, List.mem_cons_self ..⟩
+  have hne : e ≠ c.ce := by omega
+  have hnlt : ¬ e < c.ce := by omega
+  simp only [hne, hnlt, ↓reduceIte, Option.some.injEq] at he
+  subst he
+  exact ⟨fun _ => rfl, rfl, rfl, rfl, rfl⟩
 
-/-- **A message from a tenant epoch the client left changes nothing.**
+/-- **A message of a lower tenant epoch ordinal changes nothing.**
     Verifies: FE-018 -/
-theorem retired_epoch_ignored (c : Cache K V) (h : c.ce ∉ c.retired) (e : Nat) (hr : e ∈ c.retired)
+theorem older_epoch_ignored (c : Cache K V) (e : Nat) (hlt : e < c.ce)
     (a b y f : Nat) (ks : List K) (t gp xp : Nat) :
     frame c a b y f e ks = c ∧ contactIn c t gp xp f e = c := by
-  have hne : e ≠ c.ce := fun he => h (he ▸ hr)
-  have hn : epochOf c e = none := by simp [epochOf, hne, hr]
+  have hne : e ≠ c.ce := by omega
+  have hn : epochOf c e = none := by simp [epochOf, hne, hlt]
   exact ⟨by simp [frame, hn], by simp [contactIn, hn]⟩
+
+/-- **Recovery across tenant epochs**: whatever arrived before, an answer sent in the server's
+    current epoch brings the client to that epoch.
+    Verifies: FE-018 -/
+theorem contact_reaches_current_epoch (s : Server K V) (c : Cache K V) (h : Base s c)
+    (t gp xp fp : Nat) : (contactIn c t gp xp fp s.ep).ce = s.ep := by
+  unfold contactIn
+  have hle := h.ce_le
+  cases hc : epochOf c s.ep with
+  | none =>
+    unfold epochOf at hc
+    by_cases heq : s.ep = c.ce
+    · simp [heq] at hc
+    · have : ¬ s.ep < c.ce := by omega
+      simp [heq, this] at hc
+  | some c0 =>
+    simp only
+    have := epochOf_ce c s.ep c0 hc
+    show (hearAcc (hearX c0 xp) fp).ce = s.ep
+    rw [(hearAcc_fields _ fp).2.2.2.2, (hearX_fields c0 xp).2.2.2.2, this]
+
+/-- The review's schedule: the tenant rotates twice (ordinals 0, 1, 2); the client hears an answer of
+    epoch 2, then a late answer of epoch 1, then another answer of epoch 2 with a reply, and ends in
+    epoch 2 with the reply current. -/
+def cx0 : Cache Nat Nat :=
+  { known := 0, knownX := 0, floor := 0, contact := 0, ce := 0, entries := fun _ => none }
+
+theorem out_of_order_epochs_recover :
+    let c1 := contactIn cx0 5 10 0 0 2
+    let c2 := contactIn c1 6 3 0 0 1
+    let c3 := put (contactIn c2 7 11 0 0 2) 0 9 11 0 2
+    c2.ce = 2 ∧ c3.ce = 2 ∧ read 1 7 c3 0 = .current 9 := by
+  decide
 
 set_option linter.unusedSimpArgs false in
 /-- **A reply read and sent at the server's current stamp is read back as current**: the reply is
@@ -902,8 +940,8 @@ theorem receipt_read (B : Nat) (s : Server K V) (c : Cache K V) (k : K) (h : Bas
       { hearAcc (hearX c s.x) s.fl with known := max (hearAcc (hearX c s.x) s.fl).known s.gen,
                                         contact := max (hearAcc (hearX c s.x) s.fl).contact t } := by
     simp only [contactIn, he]
-  obtain ⟨x1, x2, x3, x4, x5, x6⟩ := hearX_fields c s.x
-  obtain ⟨a1, a2, a3, a4, a5, a6⟩ := hearAcc_fields (hearX c s.x) s.fl
+  obtain ⟨x1, x2, x3, x4, x5⟩ := hearX_fields c s.x
+  obtain ⟨a1, a2, a3, a4, a5⟩ := hearAcc_fields (hearX c s.x) s.fl
   have hm : max c.known s.gen = s.gen := Nat.max_eq_right h.known_le
   have hmx : max c.knownX s.x = s.x := Nat.max_eq_right h.knownX_le
   have hfl : max c.floor s.fl = s.fl := Nat.max_eq_right h.floor_le
@@ -961,7 +999,7 @@ def cxServer : Server Nat Nat :=
     gTime := fun _ => 0, xTime := fun _ => 0, now := 0, inflight := [] }
 
 def cxCache : Cache Nat Nat :=
-  { known := 0, knownX := 0, floor := 0, contact := 0, ce := 0, retired := [],
+  { known := 0, knownX := 0, floor := 0, contact := 0, ce := 0,
     entries := fun _ => some ⟨5, 0, 0, 0⟩ }
 
 /-- **Without C2, a stale value stays current.** -/
@@ -1011,7 +1049,7 @@ theorem floored_put_drops : (put (hearAcc cxCache 1) 0 5 0 0 0).entries 0 = none
 
 /-- A client that had reached floor 5000 in one tenant epoch. -/
 def cxOld : Cache Nat Nat :=
-  { known := 5000, knownX := 0, floor := 5000, contact := 0, ce := 0, retired := [], entries := fun _ => none }
+  { known := 5000, knownX := 0, floor := 5000, contact := 0, ce := 0, entries := fun _ => none }
 
 /-- **Comparing a re-created tenant with the old one's numbers drops everything**: its counter
     starts again, so a reply at generation 1 is below the old floor. -/
