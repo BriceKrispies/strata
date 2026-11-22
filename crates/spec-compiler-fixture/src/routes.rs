@@ -357,8 +357,9 @@ async fn authorize_access<H: AuthHoles>(
             _ => None,
         };
         if access.scheme == Scheme::Delegation
-            && holding
-                .as_ref().is_none_or(|holding| holding.acting_for.is_none())
+            && !holding
+                .as_ref()
+                .is_some_and(|holding| holding.acting_for.is_some())
         {
             return Err(refuse(
                 FailureCode::Forbidden,
