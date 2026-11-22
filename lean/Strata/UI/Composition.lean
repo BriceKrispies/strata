@@ -1,48 +1,69 @@
 /-
-Compositions and wireframe fidelity (docs/design-system.md, "Screens as compositions" and
-"Wireframes").
+Compositions and wireframe fidelity (docs/design-system.md, "Screens as compositions",
+"Wireframes and fidelity" and "Tenant-arranged layouts").
 
-A screen is a template and a list of widgets. A widget is a pattern of the catalogue placed in a
-region of the template, with a binding to the data it shows (a section of a view, a form, an action)
-or none: a widget with no binding is a wireframe placeholder, drawn from the sample shape it
-declares. The catalogue says which patterns a template allows in each region, and which patterns
-need data.
+A screen (a published body, a draft body, or a product screen as a tenant overlay leaves it) is a
+template and a list of widgets. A widget has an id, unique in its screen, by which an overlay
+addresses it; a pattern of the catalogue; the region it is placed in; and a binding:
 
-- **Valid**: every widget is allowed where it is placed, and every binding it has names something
-  the tenant schema defines. A placeholder is valid; that is what lets a wireframe exist before the
-  data model does.
-- **Full fidelity**: every widget whose pattern needs data has a binding.
+- `placeholder`: a wireframe placeholder, drawn from its sample shape, naming nothing;
+- `static`: a pattern that shows no data (a block of prose, a list of links);
+- `bound b`: bound to `b`. What `b` is is abstract here. In the implementation a binding names a
+  section of the screen's view, a form, an action or a platform source *together with the shape
+  fingerprint* of what it names (for a section: its object type and the type of every field the
+  widget reads). So a field whose type changes, or a section whose shape changes, is a binding that
+  stops existing and a new one that starts: the theorems below cover shape changes because the
+  fingerprint is part of `b`.
+
+The catalogue says which patterns a template allows in each region, which patterns are static, and
+which bindings a pattern accepts (the binding's kind against the pattern's `binds`, and the field
+names its props read against the shape).
+
+- **Valid**: ids are distinct; every widget is allowed where it is; a static pattern is `static`; a
+  data pattern is a placeholder or bound to a binding the pattern accepts and the schema defines.
+- **Publishable**: valid with no placeholder at all, whatever the pattern.
 
 Proved:
 
-- the check the kernel runs is exactly validity (`check_iff`), so a composition that passes it names
-  only bindings the schema defines (`checked_bindings_resolve`);
-- a valid composition at full fidelity has every data widget bound to something that exists
-  (`full_valid_bound`);
-- binding a placeholder to something that exists keeps the composition valid (`bindAt_valid`) and
-  leaves one placeholder fewer (`bindAt_unbound`);
-- refinement one widget at a time is valid at every step and ends at full fidelity
-  (`refine_valid`, `refine_full`);
-- the incremental rule: a schema change that removes nothing an unchanged screen names, applied with
-  every changed screen checked against the new schema, leaves every screen valid
-  (`incremental_valid`); without the removal guard it fails (`unguarded_removal_breaks`).
+- the kernel's check is exactly validity (`check_iff`); a checked composition names only bindings
+  the schema defines and its patterns accept (`checked_bindings_resolve`);
+- a publishable composition has every data widget bound to something that exists and is accepted
+  (`publishable_bound`), and no placeholder (`publishable_no_placeholder`);
+- binding a placeholder keeps validity and leaves one placeholder fewer (`bindAt_valid`,
+  `bindAt_placeholders`); refinement one widget at a time is valid at every step and ends
+  publishable (`refine_valid`, `refine_publishable`);
+- the incremental rule, with the schema *and the catalogue* changing: unchanged screens stay valid
+  when the change removes no binding they name and narrows no catalogue entry they use, and changed
+  screens are checked against the new schema and catalogue (`incremental_valid`); without the
+  removal guard a valid screen breaks (`unguarded_removal_breaks`);
+- orphaning instead of refusing: removing from a screen exactly the widgets whose binding stopped
+  existing leaves a valid screen with distinct ids (`orphan_valid`), and removes nothing else
+  (`orphan_removes_only_dangling`).
 
-The model abstracts what a binding is (a type `B`) and what the schema defines (`has : B → Bool`).
-No `sorry`, no added axioms.
+Not modelled: the content of props beyond what `accepts` decides, overlay operations other than
+dropping a widget, and the screens' visibility (Visibility.lean). No `sorry`, no added axioms.
 -/
 
 namespace Strata.UI.Composition
 
-/-- A widget: a pattern placed in a region, bound or a placeholder. -/
+/-- A widget's binding. -/
+inductive Bind (B : Type) where
+  | placeholder
+  | static
+  | bound (b : B)
+
+/-- A widget: its id, its pattern, its region, its binding. -/
 structure Widget (P R B : Type) where
+  id : Nat
   pattern : P
   region : R
-  bind : Option B
+  bind : Bind B
 
 /-- What the catalogue says about templates and patterns. -/
-structure Catalogue (T P R : Type) where
+structure Catalogue (T P R B : Type) where
   allowed : T → R → P → Bool
-  needsData : P → Bool
+  isStatic : P → Bool
+  accepts : P → B → Bool
 
 /-- A screen: its template and its widgets. -/
 structure Screen (T P R B : Type) where
@@ -51,206 +72,330 @@ structure Screen (T P R B : Type) where
 
 variable {T P R B : Type}
 
-/-- One widget is allowed where it is, and its binding, if any, exists. -/
-def WidgetOk (cat : Catalogue T P R) (has : B → Bool) (t : T) (w : Widget P R B) : Prop :=
-  cat.allowed t w.region w.pattern = true ∧ ∀ b, w.bind = some b → has b = true
+/-- The binding of one widget is right for its pattern and exists. -/
+def bindOk (cat : Catalogue T P R B) (has : B → Bool) (p : P) : Bind B → Bool
+  | .placeholder => !cat.isStatic p
+  | .static => cat.isStatic p
+  | .bound b => !cat.isStatic p && cat.accepts p b && has b
 
-/-- A screen is valid when every widget is. -/
-def Valid (cat : Catalogue T P R) (has : B → Bool) (s : Screen T P R B) : Prop :=
-  ∀ w ∈ s.widgets, WidgetOk cat has s.template w
+/-- One widget is allowed where it is, and its binding is right. -/
+def widgetCheck (cat : Catalogue T P R B) (has : B → Bool) (t : T) (w : Widget P R B) : Bool :=
+  cat.allowed t w.region w.pattern && bindOk cat has w.pattern w.bind
 
-/-- The kernel's check of one widget. -/
-def widgetCheck (cat : Catalogue T P R) (has : B → Bool) (t : T) (w : Widget P R B) : Bool :=
-  cat.allowed t w.region w.pattern && (match w.bind with | none => true | some b => has b)
+/-- A screen is valid: distinct ids, and every widget passes. -/
+def Valid (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B) : Prop :=
+  (s.widgets.map (·.id)).Nodup ∧ ∀ w ∈ s.widgets, widgetCheck cat has s.template w = true
 
 /-- The kernel's check of a screen. -/
-def check (cat : Catalogue T P R) (has : B → Bool) (s : Screen T P R B) : Bool :=
-  s.widgets.all (widgetCheck cat has s.template)
+def check (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B) : Bool :=
+  decide ((s.widgets.map (·.id)).Nodup) && s.widgets.all (widgetCheck cat has s.template)
 
-theorem widgetCheck_iff (cat : Catalogue T P R) (has : B → Bool) (t : T) (w : Widget P R B) :
-    widgetCheck cat has t w = true ↔ WidgetOk cat has t w := by
-  unfold widgetCheck WidgetOk
-  cases hb : w.bind with
-  | none => simp
-  | some b => simp
+theorem bound_ok {cat : Catalogue T P R B} {has : B → Bool} {t : T} {w : Widget P R B} {b : B}
+    (h : widgetCheck cat has t w = true) (hb : w.bind = .bound b) :
+    cat.allowed t w.region w.pattern = true ∧ cat.isStatic w.pattern = false ∧
+      cat.accepts w.pattern b = true ∧ has b = true := by
+  unfold widgetCheck bindOk at h
+  rw [hb] at h
+  simp only [Bool.and_eq_true, Bool.not_eq_true'] at h
+  exact ⟨h.1, h.2.1.1, h.2.1.2, h.2.2⟩
+
+theorem ok_of_bound {cat : Catalogue T P R B} {has : B → Bool} {t : T} {w : Widget P R B} {b : B}
+    (hb : w.bind = .bound b) (ha : cat.allowed t w.region w.pattern = true)
+    (hs : cat.isStatic w.pattern = false) (hc : cat.accepts w.pattern b = true)
+    (hh : has b = true) : widgetCheck cat has t w = true := by
+  unfold widgetCheck bindOk
+  rw [hb]
+  simp [ha, hs, hc, hh]
+
+theorem placeholder_ok {cat : Catalogue T P R B} {has : B → Bool} {t : T} {w : Widget P R B}
+    (h : widgetCheck cat has t w = true) (hb : w.bind = .placeholder) :
+    cat.allowed t w.region w.pattern = true ∧ cat.isStatic w.pattern = false := by
+  unfold widgetCheck bindOk at h
+  rw [hb] at h
+  simp only [Bool.and_eq_true, Bool.not_eq_true'] at h
+  exact h
+
+/-- A widget that passes under one catalogue and schema passes under another that agrees on it. -/
+theorem wc_transfer {cat cat' : Catalogue T P R B} {has has' : B → Bool} {t : T} {w : Widget P R B}
+    (ok : widgetCheck cat has t w = true)
+    (ha : cat'.allowed t w.region w.pattern = cat.allowed t w.region w.pattern)
+    (hs : cat'.isStatic w.pattern = cat.isStatic w.pattern)
+    (hb : ∀ b, w.bind = .bound b → cat'.accepts w.pattern b = cat.accepts w.pattern b ∧ has' b = true) :
+    widgetCheck cat' has' t w = true := by
+  cases h : w.bind with
+  | placeholder =>
+    have := placeholder_ok ok h
+    unfold widgetCheck bindOk; rw [h, ha, hs]; simp [this.1, this.2]
+  | static =>
+    unfold widgetCheck bindOk at ok ⊢; rw [h] at ok ⊢; rw [ha, hs]; exact ok
+  | bound b =>
+    obtain ⟨h1, h2, h3, h4⟩ := bound_ok ok h
+    obtain ⟨hacc, hhas⟩ := hb b h
+    exact ok_of_bound h (ha.trans h1) (hs.trans h2) (hacc.trans h3) hhas
 
 /-- Verifies: DS-001 -/
-theorem check_iff (cat : Catalogue T P R) (has : B → Bool) (s : Screen T P R B) :
+theorem check_iff (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B) :
     check cat has s = true ↔ Valid cat has s := by
   unfold check Valid
-  simp only [List.all_eq_true]
-  exact ⟨fun h w hw => (widgetCheck_iff cat has _ w).1 (h w hw),
-         fun h w hw => (widgetCheck_iff cat has _ w).2 (h w hw)⟩
+  simp [List.all_eq_true]
 
-/-- A composition that passes the check names only bindings the schema defines.
+/-- A composition that passes the check names only bindings the schema defines and its patterns
+    accept.
     Verifies: DS-001 -/
-theorem checked_bindings_resolve (cat : Catalogue T P R) (has : B → Bool) (s : Screen T P R B)
-    (h : check cat has s = true) : ∀ w ∈ s.widgets, ∀ b, w.bind = some b → has b = true :=
-  fun w hw => ((check_iff cat has s).1 h w hw).2
+theorem checked_bindings_resolve (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B)
+    (h : check cat has s = true) :
+    ∀ w ∈ s.widgets, ∀ b, w.bind = .bound b → has b = true ∧ cat.accepts w.pattern b = true := by
+  intro w hw b hb
+  have := bound_ok (((check_iff cat has s).1 h).2 w hw) hb
+  exact ⟨this.2.2.2, this.2.2.1⟩
 
-/-- Full fidelity: every widget whose pattern needs data is bound. -/
-def Full (cat : Catalogue T P R) (s : Screen T P R B) : Prop :=
-  ∀ w ∈ s.widgets, cat.needsData w.pattern = true → w.bind.isSome = true
+/-- Whether a binding is a placeholder. -/
+def Bind.isPlaceholder : Bind B → Bool
+  | .placeholder => true
+  | _ => false
+
+/-- Publishable: valid, with no placeholder at all. -/
+def Publishable (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B) : Prop :=
+  Valid cat has s ∧ ∀ w ∈ s.widgets, w.bind.isPlaceholder = false
 
 /-- Verifies: DS-002 -/
-theorem full_valid_bound (cat : Catalogue T P R) (has : B → Bool) (s : Screen T P R B)
-    (hv : Valid cat has s) (hf : Full cat s) :
-    ∀ w ∈ s.widgets, cat.needsData w.pattern = true → ∃ b, w.bind = some b ∧ has b = true := by
-  intro w hw hn
-  have hs := hf w hw hn
+theorem publishable_no_placeholder (cat : Catalogue T P R B) (has : B → Bool)
+    (s : Screen T P R B) (h : Publishable cat has s) : ∀ w ∈ s.widgets, w.bind ≠ .placeholder := by
+  intro w hw he
+  have := h.2 w hw
+  rw [he] at this
+  cases this
+
+/-- Verifies: DS-002 -/
+theorem publishable_bound (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B)
+    (h : Publishable cat has s) :
+    ∀ w ∈ s.widgets, cat.isStatic w.pattern = false →
+      ∃ b, w.bind = .bound b ∧ has b = true ∧ cat.accepts w.pattern b = true := by
+  intro w hw hs
+  have hc := h.1.2 w hw
+  have hp := h.2 w hw
   cases hb : w.bind with
-  | none => rw [hb] at hs; cases hs
-  | some b => exact ⟨b, rfl, (hv w hw).2 b hb⟩
+  | placeholder => rw [hb] at hp; cases hp
+  | static =>
+    unfold widgetCheck bindOk at hc; rw [hb] at hc
+    simp [hs] at hc
+  | bound b =>
+    have := bound_ok hc hb
+    exact ⟨b, rfl, this.2.2.2, this.2.2.1⟩
 
-/-- Bind the `i`-th widget of a list to `b`. -/
-def setBind (b : B) : Nat → List (Widget P R B) → List (Widget P R B)
-  | _, [] => []
-  | 0, w :: ws => { w with bind := some b } :: ws
-  | i + 1, w :: ws => w :: setBind b i ws
+/-- Bind the widget with id `i` to `b`, when it is a placeholder. -/
+def bindWidget (i : Nat) (b : B) (w : Widget P R B) : Widget P R B :=
+  if w.id = i ∧ w.bind.isPlaceholder = true then { w with bind := .bound b } else w
 
-/-- Bind the `i`-th widget of a screen to `b`. -/
-def bindAt (b : B) (i : Nat) (s : Screen T P R B) : Screen T P R B :=
-  { s with widgets := setBind b i s.widgets }
+/-- Bind the placeholder with id `i` of a screen to `b`. -/
+def bindAt (i : Nat) (b : B) (s : Screen T P R B) : Screen T P R B :=
+  { s with widgets := s.widgets.map (bindWidget i b) }
 
-theorem mem_setBind (b : B) : ∀ (i : Nat) (ws : List (Widget P R B)) (w : Widget P R B),
-    w ∈ setBind b i ws → w ∈ ws ∨ ∃ v ∈ ws, w = { v with bind := some b }
-  | _, [], _, h => by simp [setBind] at h
-  | 0, v :: vs, w, h => by
-    simp only [setBind, List.mem_cons] at h
-    rcases h with h | h
-    · exact Or.inr ⟨v, by simp, h⟩
-    · exact Or.inl (by simp [h])
-  | i + 1, v :: vs, w, h => by
-    simp only [setBind, List.mem_cons] at h
-    rcases h with h | h
-    · exact Or.inl (by simp [h])
-    · rcases mem_setBind b i vs w h with h' | ⟨u, hu, rfl⟩
-      · exact Or.inl (by simp [h'])
-      · exact Or.inr ⟨u, by simp [hu], rfl⟩
+theorem bindWidget_id (i : Nat) (b : B) (w : Widget P R B) : (bindWidget i b w).id = w.id := by
+  unfold bindWidget; split <;> rfl
 
-/-- Binding a placeholder to something the schema defines keeps the composition valid.
+/-- Binding a placeholder to a binding its pattern accepts and the schema defines keeps validity.
     Verifies: DS-003 -/
-theorem bindAt_valid (cat : Catalogue T P R) (has : B → Bool) (s : Screen T P R B) (b : B)
-    (i : Nat) (hv : Valid cat has s) (hb : has b = true) : Valid cat has (bindAt b i s) := by
-  intro w hw
-  rcases mem_setBind b i s.widgets w hw with h | ⟨v, hv', rfl⟩
-  · exact hv w h
-  · refine ⟨(hv v hv').1, ?_⟩
-    intro c hc
-    simp at hc
-    exact hc ▸ hb
+theorem bindAt_valid (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B) (i : Nat)
+    (b : B) (hv : Valid cat has s)
+    (hb : ∀ w ∈ s.widgets, w.id = i → cat.accepts w.pattern b = true ∧ has b = true) :
+    Valid cat has (bindAt i b s) := by
+  refine ⟨?_, ?_⟩
+  · have : (s.widgets.map (bindWidget i b)).map (·.id) = s.widgets.map (·.id) := by
+      simp [List.map_map, Function.comp_def, bindWidget_id]
+    simpa [bindAt, this] using hv.1
+  · intro w hw
+    simp only [bindAt, List.mem_map] at hw
+    obtain ⟨v, hv', rfl⟩ := hw
+    have ok := hv.2 v hv'
+    unfold bindWidget
+    split
+    · rename_i hc
+      have hph := hc.2
+      cases hvb : v.bind with
+      | placeholder =>
+        have ok' := placeholder_ok ok hvb
+        obtain ⟨ha, hn⟩ := hb v hv' hc.1
+        exact ok_of_bound (w := { v with bind := .bound b }) rfl ok'.1 ok'.2 ha hn
+      | static => rw [hvb] at hph; cases hph
+      | bound c => rw [hvb] at hph; cases hph
+    · exact ok
 
-/-- The placeholders that still need data. -/
-def unbound (cat : Catalogue T P R) (ws : List (Widget P R B)) : Nat :=
-  (ws.filter (fun w => cat.needsData w.pattern && w.bind.isNone)).length
+/-- The placeholders of a list of widgets. -/
+def placeholders (ws : List (Widget P R B)) : Nat := (ws.filter (·.bind.isPlaceholder)).length
 
-/-- Binding a placeholder that needs data leaves one fewer.
+/-- Binding the placeholder with id `i`, when ids are distinct, leaves one placeholder fewer.
     Verifies: DS-003 -/
-theorem bindAt_unbound (cat : Catalogue T P R) (b : B) :
-    ∀ (i : Nat) (ws : List (Widget P R B)) (w : Widget P R B), ws[i]? = some w →
-      cat.needsData w.pattern = true → w.bind = none →
-      unbound cat (setBind b i ws) + 1 = unbound cat ws
-  | _, [], _, h, _, _ => by simp at h
-  | 0, v :: vs, w, h, hn, hb => by
-    simp at h
-    subst h
-    simp [unbound, setBind, List.filter, hn, hb]
-  | i + 1, v :: vs, w, h, hn, hb => by
-    simp at h
-    have ih := bindAt_unbound cat b i vs w (by simpa using h) hn hb
-    unfold unbound at ih ⊢
-    simp only [setBind, List.filter]
-    split <;> simp_all
+theorem bindAt_placeholders (i : Nat) (b : B) :
+    ∀ (ws : List (Widget P R B)), (ws.map (·.id)).Nodup →
+      (∃ w ∈ ws, w.id = i ∧ w.bind.isPlaceholder = true) →
+      placeholders (ws.map (bindWidget i b)) + 1 = placeholders ws
+  | [], _, ⟨w, hw, _⟩ => by simp at hw
+  | v :: vs, hnd, hex => by
+    simp only [List.map_cons, List.nodup_cons, List.mem_map, not_exists, not_and] at hnd
+    obtain ⟨hnot, hnd'⟩ := hnd
+    by_cases hvi : v.id = i
+    · have hvp : v.bind.isPlaceholder = true := by
+        obtain ⟨w, hw, hi, hp⟩ := hex
+        rcases List.mem_cons.1 hw with rfl | hw'
+        · exact hp
+        · exact absurd (hi.trans hvi.symm) (hnot w hw')
+      have hrest : vs.map (bindWidget i b) = vs := by
+        have h' : ∀ x ∈ vs, bindWidget i b x = id x := by
+          intro x hx
+          have : x.id ≠ i := fun h => hnot x hx (h.trans hvi.symm)
+          simp [bindWidget, this]
+        exact (List.map_congr_left h').trans (List.map_id vs)
+      have hv : bindWidget i b v = { v with bind := .bound b } := by
+        simp [bindWidget, hvi, hvp]
+      unfold placeholders
+      simp only [List.map_cons, hv, hrest, List.filter_cons]
+      rw [if_pos hvp]
+      simp [Bind.isPlaceholder]
+    · have hex' : ∃ w ∈ vs, w.id = i ∧ w.bind.isPlaceholder = true := by
+        obtain ⟨w, hw, hi, hp⟩ := hex
+        rcases List.mem_cons.1 hw with rfl | hw'
+        · exact absurd hi hvi
+        · exact ⟨w, hw', hi, hp⟩
+      have ih := bindAt_placeholders i b vs hnd' hex'
+      have hv : bindWidget i b v = v := by simp [bindWidget, hvi]
+      unfold placeholders at ih ⊢
+      simp only [List.map_cons, hv, List.filter_cons]
+      split <;> simp_all
 
-/-- Refinement one widget at a time: the first `k` widgets resolved, the rest as they were. -/
+/-- Refinement of the first `k` widgets: each placeholder resolved, the rest as they were. -/
 def refine (resolve : Widget P R B → Option B) (k : Nat) (ws : List (Widget P R B)) :
     List (Widget P R B) :=
   (ws.take k).map (fun w => match w.bind, resolve w with
-    | none, some b => { w with bind := some b }
+    | .placeholder, some b => { w with bind := .bound b }
     | _, _ => w) ++ ws.drop k
 
-/-- Every step of refinement is valid, when what each placeholder is bound to exists.
+theorem refine_ids (resolve : Widget P R B → Option B) (k : Nat) (ws : List (Widget P R B)) :
+    (refine resolve k ws).map (·.id) = ws.map (·.id) := by
+  unfold refine
+  rw [List.map_append, List.map_map]
+  conv => rhs; rw [← List.take_append_drop k ws, List.map_append]
+  congr 1
+  apply List.map_congr_left
+  intro w _
+  simp only [Function.comp_apply]
+  split <;> rfl
+
+/-- Every step of refinement is valid, when each resolution is accepted and exists.
     Verifies: DS-003 -/
-theorem refine_valid (cat : Catalogue T P R) (has : B → Bool) (s : Screen T P R B)
+theorem refine_valid (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B)
     (resolve : Widget P R B → Option B) (hv : Valid cat has s)
-    (hr : ∀ w ∈ s.widgets, ∀ b, resolve w = some b → has b = true) (k : Nat) :
-    Valid cat has { s with widgets := refine resolve k s.widgets } := by
+    (hr : ∀ w ∈ s.widgets, ∀ b, resolve w = some b → cat.accepts w.pattern b = true ∧ has b = true)
+    (k : Nat) : Valid cat has { s with widgets := refine resolve k s.widgets } := by
+  refine ⟨by simpa [refine_ids] using hv.1, ?_⟩
   intro w hw
   simp only [refine, List.mem_append, List.mem_map] at hw
   rcases hw with ⟨v, hv', rfl⟩ | hw
   · have hvs : v ∈ s.widgets := List.mem_of_mem_take hv'
-    have ok := hv v hvs
-    cases hb : v.bind with
-    | none =>
-      cases hres : resolve v with
-      | none => simp only [hb, hres]; exact ok
-      | some c =>
-        simp only [hb, hres]
-        refine ⟨ok.1, ?_⟩
-        intro d hd
-        simp at hd
-        exact hd ▸ hr v hvs c hres
-    | some c => simp only [hb]; exact ok
-  · exact hv w (List.mem_of_mem_drop hw)
+    have ok := hv.2 v hvs
+    split
+    · rename_i b hvb hres
+      have ok' := placeholder_ok ok hvb
+      obtain ⟨ha, hn⟩ := hr v hvs b hres
+      exact ok_of_bound (w := { v with bind := .bound b }) rfl ok'.1 ok'.2 ha hn
+    · exact ok
+  · exact hv.2 w (List.mem_of_mem_drop hw)
 
-/-- Refinement of every widget ends at full fidelity, when every placeholder that needs data is
-    resolved.
+/-- Refinement of every widget ends publishable, when every placeholder is resolved.
     Verifies: DS-003 -/
-theorem refine_full (cat : Catalogue T P R) (s : Screen T P R B)
-    (resolve : Widget P R B → Option B)
-    (hr : ∀ w ∈ s.widgets, cat.needsData w.pattern = true → w.bind = none →
-      (resolve w).isSome = true) :
-    Full cat { s with widgets := refine resolve s.widgets.length s.widgets } := by
-  intro w hw hn
+theorem refine_publishable (cat : Catalogue T P R B) (has : B → Bool) (s : Screen T P R B)
+    (resolve : Widget P R B → Option B) (hv : Valid cat has s)
+    (hr : ∀ w ∈ s.widgets, ∀ b, resolve w = some b → cat.accepts w.pattern b = true ∧ has b = true)
+    (hall : ∀ w ∈ s.widgets, w.bind.isPlaceholder = true → (resolve w).isSome = true) :
+    Publishable cat has { s with widgets := refine resolve s.widgets.length s.widgets } := by
+  refine ⟨refine_valid cat has s resolve hv hr _, ?_⟩
+  intro w hw
   simp only [refine, List.take_length, List.drop_length, List.append_nil, List.mem_map] at hw
-  rcases hw with ⟨v, hv, rfl⟩
-  cases hb : v.bind with
-  | none =>
-    have hs := hr v hv
+  obtain ⟨v, hv', rfl⟩ := hw
+  cases hvb : v.bind with
+  | placeholder =>
+    have hs := hall v hv' (by simp [hvb, Bind.isPlaceholder])
     cases hres : resolve v with
-    | none =>
-      simp only [hb, hres] at hn ⊢
-      have := hs hn hb
-      rw [hres] at this
-      cases this
-    | some c => simp [hb, hres]
-  | some c => simp [hb]
+    | none => rw [hres] at hs; cases hs
+    | some b => simp [hvb, hres, Bind.isPlaceholder]
+  | static => simp [hvb, Bind.isPlaceholder]
+  | bound c => simp [hvb, Bind.isPlaceholder]
 
 /-- A screen names `b` when one of its widgets is bound to it. -/
-def Names (s : Screen T P R B) (b : B) : Prop := ∃ w ∈ s.widgets, w.bind = some b
+def Names (s : Screen T P R B) (b : B) : Prop := ∃ w ∈ s.widgets, w.bind = .bound b
 
-/-- The incremental rule: unchanged screens stay valid when the change removes nothing they name,
-    and changed screens are checked against the new schema.
+/-- The incremental rule, with the schema and the catalogue changing.
     Verifies: DS-004 -/
-theorem incremental_valid (cat : Catalogue T P R) (has has' : B → Bool)
+theorem incremental_valid (cat cat' : Catalogue T P R B) (has has' : B → Bool)
     (unchanged changed : List (Screen T P R B))
     (hu : ∀ s ∈ unchanged, Valid cat has s)
     (hkeep : ∀ b, has b = true → has' b = false → ∀ s ∈ unchanged, ¬ Names s b)
-    (hc : ∀ s ∈ changed, check cat has' s = true) :
-    ∀ s ∈ unchanged ++ changed, Valid cat has' s := by
+    (hcat : ∀ s ∈ unchanged, ∀ w ∈ s.widgets,
+      cat'.allowed s.template w.region w.pattern = cat.allowed s.template w.region w.pattern ∧
+      cat'.isStatic w.pattern = cat.isStatic w.pattern ∧
+      ∀ b, w.bind = .bound b → cat'.accepts w.pattern b = cat.accepts w.pattern b)
+    (hc : ∀ s ∈ changed, check cat' has' s = true) :
+    ∀ s ∈ unchanged ++ changed, Valid cat' has' s := by
   intro s hs
   rcases List.mem_append.1 hs with hs | hs
-  · intro w hw
-    refine ⟨(hu s hs w hw).1, ?_⟩
+  · refine ⟨(hu s hs).1, ?_⟩
+    intro w hw
+    have ok := (hu s hs).2 w hw
+    obtain ⟨ha, hst, hacc⟩ := hcat s hs w hw
+    refine wc_transfer ok ha hst ?_
     intro b hb
-    have hold := (hu s hs w hw).2 b hb
+    refine ⟨hacc b hb, ?_⟩
+    have hold := (bound_ok ok hb).2.2.2
     cases h' : has' b with
     | true => rfl
     | false => exact absurd ⟨w, hw, hb⟩ (hkeep b hold h' s hs)
-  · exact (check_iff cat has' s).1 (hc s hs)
+  · exact (check_iff cat' has' s).1 (hc s hs)
 
 /-- Without the removal guard, a valid screen stops being valid. -/
 theorem unguarded_removal_breaks :
-    ∃ (cat : Catalogue Unit Unit Unit) (has has' : Unit → Bool) (s : Screen Unit Unit Unit Unit),
+    ∃ (cat : Catalogue Unit Unit Unit Unit) (has has' : Unit → Bool) (s : Screen Unit Unit Unit Unit),
       Valid cat has s ∧ ¬ Valid cat has' s := by
-  refine ⟨⟨fun _ _ _ => true, fun _ => true⟩, fun _ => true, fun _ => false,
-    ⟨(), [⟨(), (), some ()⟩]⟩, ?_, ?_⟩
-  · intro w hw
-    simp at hw
-    subst hw
-    exact ⟨rfl, fun _ _ => rfl⟩
+  refine ⟨⟨fun _ _ _ => true, fun _ => false, fun _ _ => true⟩, fun _ => true, fun _ => false,
+    ⟨(), [⟨0, (), (), .bound ()⟩]⟩, ?_, ?_⟩
+  · exact ⟨by simp, by simp [widgetCheck, bindOk]⟩
   · intro h
-    have := (h ⟨(), (), some ()⟩ (by simp)).2 () rfl
-    cases this
+    have := h.2 ⟨0, (), (), .bound ()⟩ (by simp)
+    simp [widgetCheck, bindOk] at this
+
+/-- Whether a widget's binding still exists. -/
+def live (has : B → Bool) (w : Widget P R B) : Bool :=
+  match w.bind with
+  | .bound b => has b
+  | _ => true
+
+/-- Orphan the widgets whose binding stopped existing. -/
+def orphan (has : B → Bool) (s : Screen T P R B) : Screen T P R B :=
+  { s with widgets := s.widgets.filter (live has) }
+
+/-- Orphaning keeps a screen valid under the new schema.
+    Verifies: DS-004 -/
+theorem orphan_valid (cat : Catalogue T P R B) (has has' : B → Bool) (s : Screen T P R B)
+    (hv : Valid cat has s) : Valid cat has' (orphan has' s) := by
+  refine ⟨?_, ?_⟩
+  · exact List.Nodup.sublist (List.Sublist.map _ List.filter_sublist) hv.1
+  · intro w hw
+    simp only [orphan, List.mem_filter] at hw
+    obtain ⟨hw, hl⟩ := hw
+    have ok := hv.2 w hw
+    refine wc_transfer ok rfl rfl ?_
+    intro b hb
+    exact ⟨rfl, by simpa [live, hb] using hl⟩
+
+/-- Orphaning removes only widgets whose binding stopped existing.
+    Verifies: DS-004 -/
+theorem orphan_removes_only_dangling (has : B → Bool) (s : Screen T P R B) (w : Widget P R B)
+    (hw : w ∈ s.widgets) (hgone : w ∉ (orphan has s).widgets) :
+    ∃ b, w.bind = .bound b ∧ has b = false := by
+  simp only [orphan, List.mem_filter, not_and] at hgone
+  have hl := hgone hw
+  cases hb : w.bind with
+  | placeholder => simp [live, hb] at hl
+  | static => simp [live, hb] at hl
+  | bound b => exact ⟨b, rfl, by simpa [live, hb] using hl⟩
 
 end Strata.UI.Composition
