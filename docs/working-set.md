@@ -697,7 +697,7 @@ Still open, each with the task that carries it:
 - **W4's realisation in Rust.** The model assumes every change raises the generation; that the
   Rust nonce and counter deliver it is held by the exhaustive differential conformance case of
   WG-5389. A file replaced under an open handle is outside the guarantee; the restore runbook that
-  closes handles first is WG-5404. `w4_violation_breaks_checked_read` shows what fails without it.
+  closes handles first is in WG-5401. `w4_violation_breaks_checked_read` shows what fails without it.
 - **Accounted bytes against resident memory.** The budget theorems are about accounted bytes; the
   gap (in-flight snapshots, policy structures, the adapter's memory) is measured and calibrated in
   WG-5394.
