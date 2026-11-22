@@ -237,3 +237,6 @@ import Strata
 #print axioms Strata.UI.Loop.approve_applies_held
 #print axioms Strata.UI.Loop.approve_class_matches
 #print axioms Strata.UI.Loop.approve_refused_when_moved
+#print axioms Strata.UI.Visibility.narrow_class_eq_render
+#print axioms Strata.UI.Visibility.renderClass_shared
+#print axioms Strata.UI.Visibility.signed_in_decides

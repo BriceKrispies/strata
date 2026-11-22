@@ -39,6 +39,10 @@ Proved:
   earlier variant's audience who may read none of its content falls through (`variant_falls_through`);
 - actions follow the kernel's invoker check (`audOf_sees`); data audiences follow grants, the public
   role included (`dataAud_sees`, `public_grant_anon_sees`); content inside data (`contentAud_sub`);
+- **the class part and its narrowing** (`narrow_class_eq_render`, `renderClass_shared`): the gateway's
+  class part, built from declared audiences alone and narrowed per request by the viewer's data
+  audiences, is exactly what rendering for that viewer gives, and two viewers who agree on every declared
+  audience share the class part; signed-in status is one of the things that decide (`signed_in_decides`);
 - the **content lint** (`checked_screen_has_content`) holds for what it reasons on; it is a lint that
   warns, not the guarantee that keeps admin screens from members (that is the admin check).
 
@@ -770,5 +774,122 @@ theorem static_does_not_keep_region :
       [.elem 3 .signedIn .anyone .anyone false false,
        .elem 4 (.roles [7]) .anyone .anyone true false]) = none := by
   simp [render, renderAll, sees, rolesOf, pub, boxOut, countedAll, counted, Viewer.signedIn]
+
+/-! ### The class part and its per-request narrowing
+
+The gateway builds one part per interface class from the declared audiences alone, keeping every data
+audience in it and pruning nothing; per request it narrows that part by the viewer's data audiences and
+prunes. These theorems say the narrowed class part is exactly what the viewer is served, and that two
+viewers who agree on every declared audience of a composition share its class part. -/
+
+/-- A class part: declared audiences applied, data audiences kept, nothing pruned. -/
+inductive ClassOut where
+  | box (label : Nat) (needs : Bool) (kids : List ClassOut)
+  | elem (label : Nat) (data : Aud) (counts admin : Bool)
+
+mutual
+  /-- The class part of a node: what the declared audiences let through. -/
+  def renderClass (v : Viewer) : Node → Option ClassOut
+    | .box l a n ks => if sees v a then some (.box l n (renderClassAll v ks)) else none
+    | .elem l a d _ c adm => if sees v a then some (.elem l d c adm) else none
+  /-- The class parts of a list of nodes. -/
+  def renderClassAll (v : Viewer) : List Node → List ClassOut
+    | [] => []
+    | n :: ns =>
+      match renderClass v n with
+      | some o => o :: renderClassAll v ns
+      | none => renderClassAll v ns
+end
+
+mutual
+  /-- Narrowing a class part by the viewer's data audiences, pruning as `render` does. -/
+  def narrow (v : Viewer) : ClassOut → Option Out
+    | .box l n ks => boxOut l n (narrowAll v ks)
+    | .elem l d c adm => if sees v d then some (.elem l c adm) else none
+  /-- Narrowing a list of class parts. -/
+  def narrowAll (v : Viewer) : List ClassOut → List Out
+    | [] => []
+    | o :: os =>
+      match narrow v o with
+      | some x => x :: narrowAll v os
+      | none => narrowAll v os
+end
+
+mutual
+  /-- Narrowing the class part is exactly what the viewer is served.
+      Verifies: DS-019 -/
+  theorem narrow_class_eq_render (v : Viewer) : ∀ n : Node,
+      (renderClass v n).bind (narrow v) = render v n
+    | .box l a nd ks => by
+      by_cases ha : sees v a = true
+      · simp only [renderClass, render, ha, if_true, Option.bind_some, narrow]
+        rw [narrowAll_class_eq_renderAll v ks]
+      · simp only [renderClass, render]
+        rw [if_neg ha, if_neg ha]
+        rfl
+    | .elem l a d c cnt adm => by
+      by_cases ha : sees v a = true
+      · simp only [renderClass, render, ha, if_true, Option.bind_some, narrow, Bool.true_and]
+      · simp only [renderClass, render]
+        rw [if_neg ha]
+        have : (sees v a && sees v d) = false := by simp [Bool.not_eq_true] at ha; simp [ha]
+        rw [this]
+        rfl
+  theorem narrowAll_class_eq_renderAll (v : Viewer) : ∀ ns : List Node,
+      narrowAll v (renderClassAll v ns) = renderAll v ns
+    | [] => by simp [renderClassAll, narrowAll, renderAll]
+    | n :: ns => by
+      have ih := narrowAll_class_eq_renderAll v ns
+      have hn := narrow_class_eq_render v n
+      cases hc : renderClass v n with
+      | none =>
+        rw [hc] at hn
+        simp only [Option.bind_none] at hn
+        simp only [renderClassAll, hc, renderAll, ← hn, ih]
+      | some o =>
+        rw [hc] at hn
+        simp only [Option.bind_some] at hn
+        simp only [renderClassAll, hc, narrowAll, renderAll, ← hn]
+        cases narrow v o <;> simp [ih]
+end
+
+mutual
+  /-- Every declared audience of a node. -/
+  def declared : Node → List Aud
+    | .box _ a _ ks => a :: declaredAll ks
+    | .elem _ a _ _ _ _ => [a]
+  /-- Every declared audience of a list of nodes. -/
+  def declaredAll : List Node → List Aud
+    | [] => []
+    | n :: ns => declared n ++ declaredAll ns
+end
+
+mutual
+  /-- Two viewers who agree on every declared audience of a node get the same class part: the class
+      key need hold no more than what decides those audiences (deciding groups, signed-in status).
+      Verifies: DS-020 -/
+  theorem renderClass_shared (v w : Viewer) : ∀ n : Node,
+      (∀ a ∈ declared n, sees v a = sees w a) → renderClass v n = renderClass w n
+    | .box l a nd ks, h => by
+      have ha : sees v a = sees w a := h a (by simp [declared])
+      have hk : ∀ b ∈ declaredAll ks, sees v b = sees w b :=
+        fun b hb => h b (by simp [declared, hb])
+      simp only [renderClass, ha, renderClassAll_shared v w ks hk]
+    | .elem l a d c cnt adm, h => by
+      have ha : sees v a = sees w a := h a (by simp [declared])
+      simp only [renderClass, ha]
+  theorem renderClassAll_shared (v w : Viewer) : ∀ ns : List Node,
+      (∀ a ∈ declaredAll ns, sees v a = sees w a) → renderClassAll v ns = renderClassAll w ns
+    | [], _ => rfl
+    | n :: ns, h => by
+      have hn := renderClass_shared v w n (fun a ha => h a (by simp [declaredAll, ha]))
+      have hs := renderClassAll_shared v w ns (fun a ha => h a (by simp [declaredAll, ha]))
+      simp only [renderClassAll, hn, hs]
+end
+
+/-- Signed-in status decides a declared audience: an anonymous visitor and a member holding no group
+    can differ on `signedIn`, so the class key must hold it. -/
+theorem signed_in_decides : sees .anon .signedIn ≠ sees (.member []) .signedIn := by
+  simp [sees, Viewer.signedIn]
 
 end Strata.UI.Visibility
