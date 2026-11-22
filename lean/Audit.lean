@@ -230,7 +230,9 @@ import Strata
 #print axioms Strata.UI.Visibility.renderClass_shared
 #print axioms Strata.UI.Visibility.signed_in_decides
 #print axioms Strata.UI.Loop.draft_steps_frame
-#print axioms Strata.UI.Loop.checked_lookup_unreadable
+#print axioms Strata.UI.Loop.snapshot_readable
+#print axioms Strata.UI.Loop.snapshot_ignores_unreadable
+#print axioms Strata.UI.Loop.preview_depends_on_readable_only
 #print axioms Strata.UI.Loop.preview_reads_within_viewer
 #print axioms Strata.UI.Loop.followed_within_viewer
 #print axioms Strata.UI.Loop.no_stale_draft_write
@@ -238,3 +240,6 @@ import Strata
 #print axioms Strata.UI.Loop.approve_applies_held
 #print axioms Strata.UI.Loop.approve_class_matches
 #print axioms Strata.UI.Loop.approve_refused_when_moved
+#print axioms Strata.UI.Loop.approve_refused_on_hash_mismatch
+#print axioms Strata.UI.Loop.staged_invisible_until_last
+#print axioms Strata.UI.Visibility.selectNarrowed_eq_selectServed

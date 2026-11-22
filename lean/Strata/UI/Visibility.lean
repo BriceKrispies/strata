@@ -892,4 +892,23 @@ end
 theorem signed_in_decides : sees .anon .signedIn ≠ sees (.member []) .signedIn := by
   simp [sees, Viewer.signedIn]
 
+/-- Screen variants selected on the narrowed class parts: the first variant whose audience holds the
+    viewer and whose narrowed class part serves them something. -/
+def selectNarrowed (v : Viewer) : List (Aud × Node) → Option Out
+  | [] => none
+  | (a, n) :: rest =>
+    match (if sees v a then (renderClass v n).bind (narrow v) else none) with
+    | some o => some o
+    | none => selectNarrowed v rest
+
+/-- Selecting variants on the narrowed class parts is the same as selecting them on what the viewer
+    is served, so the gateway can select from its cached class parts.
+    Verifies: DS-014 -/
+theorem selectNarrowed_eq_selectServed (v : Viewer) :
+    ∀ vs : List (Aud × Node), selectNarrowed v vs = selectServed v vs
+  | [] => rfl
+  | (a, n) :: rest => by
+    simp only [selectNarrowed, selectServed, served, narrow_class_eq_render,
+      selectNarrowed_eq_selectServed v rest]
+
 end Strata.UI.Visibility
