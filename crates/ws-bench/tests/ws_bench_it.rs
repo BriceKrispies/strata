@@ -182,7 +182,7 @@ fn tiny(faults: &str) -> Scenario {
         "mix": [
             {{ "op": "get", "object": "note", "weight": 10, "actor": "editor" }},
             {{ "op": "by-field", "object": "note", "weight": 3, "actor": "editor" }},
-            {{ "op": "page", "object": "note", "weight": 2, "page_size": 10 }},
+            {{ "op": "page", "object": "note", "weight": 2, "page-size": 10 }},
             {{ "op": "scan", "object": "person", "weight": 1 }},
             {{ "op": "header", "weight": 2 }},
             {{ "op": "update", "object": "note", "weight": 2, "actor": "editor", "contended": true }},

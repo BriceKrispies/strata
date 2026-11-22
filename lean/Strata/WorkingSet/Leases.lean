@@ -59,7 +59,7 @@ inductive LOp where
   | revoke
   | write (p : ProcId) (g : Nat) (t : Option Tenant)
   | raw (t : Option Tenant)
-  | admit (p : ProcId) (k : Key)
+  | admitEntry (p : ProcId) (k : Key)
   | read (p : ProcId) (k : Key)
 
 def LOp.fenced : LOp → Bool
@@ -123,7 +123,7 @@ def stepL (s : LState) : LOp → LState × LOut
       else (s, .refused)
     | none => (s, .refused)
   | .raw t => ({ s with world := upd s.world s.x t, gen := s.gen + 1 }, .done)
-  | .admit p k =>
+  | .admitEntry p k =>
     (setP s p { s.procs p with cache := ⟨k, s.gen, fetch s.world k⟩ :: kept s p, known := s.gen },
       .done)
   | .read p k =>
@@ -410,7 +410,7 @@ theorem stepL_inv (s : LState) (op : LOp) (hf : op.fenced = true) (hinv : LInv m
       · exact ⟨hs, hd, ht, hb, hv⟩
     · exact ⟨hs, hd, ht, hb, hv⟩
   | raw t => simp [LOp.fenced] at hf
-  | admit p k =>
+  | admitEntry p k =>
     simp only [stepL]
     refine ⟨?_, hd, ?_, ?_, ?_⟩
     · intro q e1 he1

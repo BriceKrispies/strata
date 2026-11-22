@@ -248,7 +248,13 @@ fn the_lean_sources_contain_no_placeholder_proofs() {
             .map(|line| line.split("--").next().unwrap_or(""))
             .collect::<Vec<_>>()
             .join("\n");
-        for forbidden in ["sorry", "admit", "axiom ", "native_decide", "unsafe "] {
+        // Whole words only: `admit_keeps_pinned` or `admitEntry` is a name, not the tactic.
+        let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '\'' || c == '.';
+        let words: Vec<&str> = code.split(|c: char| !ident(c)).collect();
+        for forbidden in ["sorry", "admit", "native_decide"] {
+            assert!(!words.contains(&forbidden), "{file} contains `{forbidden}`");
+        }
+        for forbidden in ["axiom ", "unsafe "] {
             assert!(!code.contains(forbidden), "{file} contains `{forbidden}`");
         }
     }

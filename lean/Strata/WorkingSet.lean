@@ -754,7 +754,7 @@ def room (st : σ) (c : Cache) (k : Key) (n : Nat) : List Entry :=
 
 /-- Admit a value read from the store at generation `stamp`. Pinned keys skip the admission test
     and may displace every unpinned entry; if the entry does not fit, nothing changes. -/
-def admit (st : σ) (c : Cache) (k : Key) (stamp : Nat) (v : Payload) : Cache :=
+def admitEntry (st : σ) (c : Cache) (k : Key) (stamp : Nat) (v : Payload) : Cache :=
   if !c.pins.contains k && !pol.admits st c.entries k (size k v) then c
   else if bytes size (room pol size st c k (size k v)) + size k v ≤ c.budget then
     { c with entries := ⟨k, stamp, v⟩ :: room pol size st c k (size k v) }
@@ -873,7 +873,7 @@ def readWS (sys : Sys σ) (k : Key) : Sys σ × Outcome :=
   | some e => ({ sys with pst := pol.touch sys.pst k true }, .value e.val)
   | none =>
     ({ sync sys k.tenant with
-        cache := admit pol size sys.pst (sync sys k.tenant).cache k (sys.store.gen k.tenant)
+        cache := admitEntry pol size sys.pst (sync sys k.tenant).cache k (sys.store.gen k.tenant)
           (fetch sys.store.world k),
         pst := pol.touch sys.pst k false },
       .value (fetch sys.store.world k))
@@ -922,7 +922,7 @@ def decideReqWS (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) : Sys 
     tenant are confirmed at the receipt's generation, a pinned header the delta changed comes back. -/
 def acceptCache (sys : Sys σ) (p : Pending) : Cache :=
   if sys.cache.pins.contains (.header p.ctx.tenant) && inv p.delta (.header p.ctx.tenant) then
-    admit pol size sys.pst
+    admitEntry pol size sys.pst
       { sys.cache with
         entries := carry inv p.ctx.tenant p.delta (sys.store.gen p.ctx.tenant) sys.cache.entries }
       (.header p.ctx.tenant) (sys.store.gen p.ctx.tenant + 1)
@@ -975,7 +975,7 @@ def stepWS (sys : Sys σ) : Op → Sys σ × Outcome
   | .checkedRead k => readWS pol size (sync sys k.tenant) k
   | .pin k =>
     ({ sys with
-        cache := admit pol size sys.pst { sys.cache with pins := k :: sys.cache.pins } k
+        cache := admitEntry pol size sys.pst { sys.cache with pins := k :: sys.cache.pins } k
           (sys.store.gen k.tenant) (fetch sys.store.world k) },
       .done)
   | .unpin k => ({ sys with cache := { sys.cache with pins := sys.cache.pins.filter (· != k) } }, .done)
@@ -1112,9 +1112,9 @@ theorem room_sub (st : σ) (c : Cache) (k : Key) (n : Nat) :
   · exact base_sub pol size _ _ _ _ e he
 
 theorem admit_sub (st : σ) (c : Cache) (k : Key) (stamp : Nat) (v : Payload) :
-    ∀ e ∈ (admit pol size st c k stamp v).entries, e ∈ c.entries ∨ e = ⟨k, stamp, v⟩ := by
+    ∀ e ∈ (admitEntry pol size st c k stamp v).entries, e ∈ c.entries ∨ e = ⟨k, stamp, v⟩ := by
   intro e he
-  unfold admit at he
+  unfold admitEntry at he
   split at he
   · exact Or.inl he
   · split at he
@@ -1124,14 +1124,14 @@ theorem admit_sub (st : σ) (c : Cache) (k : Key) (stamp : Nat) (v : Payload) :
     · exact Or.inl he
 
 theorem admit_pins (st : σ) (c : Cache) (k : Key) (stamp : Nat) (v : Payload) :
-    (admit pol size st c k stamp v).pins = c.pins := by
-  unfold admit; split
+    (admitEntry pol size st c k stamp v).pins = c.pins := by
+  unfold admitEntry; split
   · rfl
   · split <;> rfl
 
 theorem admit_within (st : σ) (c : Cache) (k : Key) (stamp : Nat) (v : Payload)
-    (hw : Within size c) : Within size (admit pol size st c k stamp v) := by
-  unfold admit
+    (hw : Within size c) : Within size (admitEntry pol size st c k stamp v) := by
+  unfold admitEntry
   split
   · exact hw
   · split
@@ -1235,7 +1235,7 @@ theorem refresh_safe (sys : Sys σ) (x y : TenantId)
 
 theorem admit_sound (st : σ) (c : Cache) (s : Store) (k : Key) (stamp : Nat) (v : Payload)
     (hst : stamp = s.gen k.tenant) (hv : v = fetch s.world k) (hs : Sound c.entries s) :
-    Sound (admit pol size st c k stamp v).entries s := by
+    Sound (admitEntry pol size st c k stamp v).entries s := by
   intro e he
   rcases admit_sub pol size st c k _ _ e he with h | h
   · exact hs e h
@@ -1243,7 +1243,7 @@ theorem admit_sound (st : σ) (c : Cache) (s : Store) (k : Key) (stamp : Nat) (v
 
 theorem admit_safe (st : σ) (c : Cache) (known : TenantId → Nat) (s : Store) (k : Key)
     (stamp : Nat) (y : TenantId) (hs : SafeAt c.entries known s y) :
-    SafeAt (admit pol size st c k stamp (fetch s.world k)).entries known s y := by
+    SafeAt (admitEntry pol size st c k stamp (fetch s.world k)).entries known s y := by
   intro e he hy hst
   rcases admit_sub pol size st c k _ _ e he with h | h
   · exact hs e h hy hst
@@ -1406,7 +1406,7 @@ theorem readWS_pins (sys : Sys σ) (k : Key) :
     (readWS pol size sys k).1.cache.pins = sys.cache.pins := by
   unfold readWS; split
   · rfl
-  · show (admit pol size _ _ _ _ _).pins = _
+  · show (admitEntry pol size _ _ _ _ _).pins = _
     rw [admit_pins]; exact sync_pins sys k.tenant
 
 theorem readWS_within (sys : Sys σ) (k : Key) (hw : Within size sys.cache) :
@@ -2597,9 +2597,9 @@ def Resident (c : Cache) (k : Key) : Prop := ∃ e ∈ c.entries, e.key = k
     included: a replacement keeps it resident). -/
 theorem admit_keeps_pinned (st : σ) (c : Cache) (k : Key) (stamp : Nat) (v : Payload) (k' : Key)
     (hp : c.pins.contains k' = true) (hr : Resident c k') :
-    Resident (admit pol size st c k stamp v) k' := by
+    Resident (admitEntry pol size st c k stamp v) k' := by
   obtain ⟨e, he, hk⟩ := hr
-  unfold admit
+  unfold admitEntry
   split
   · exact ⟨e, he, hk⟩
   · split
@@ -2659,9 +2659,9 @@ theorem pin_resident (st : σ) (c : Cache) (k : Key) (stamp : Nat) (v : Payload)
     (hk : c.pins.contains k = true)
     (hfit : bytes size ((c.entries.filter (fun e => c.pins.contains e.key)).filter
       (fun e => e.key != k)) + size k v ≤ c.budget) :
-    ⟨k, stamp, v⟩ ∈ (admit pol size st c k stamp v).entries := by
+    ⟨k, stamp, v⟩ ∈ (admitEntry pol size st c k stamp v).entries := by
   have hk' : k ∈ c.pins := by simpa using hk
-  unfold admit
+  unfold admitEntry
   rw [ite_eq_right (by simp [hk'])]
   have hpin : (base pol size st c k (size k v)).filter (fun e => c.pins.contains e.key)
       = (c.entries.filter (fun e => c.pins.contains e.key)).filter (fun e => e.key != k) := by
@@ -2856,7 +2856,7 @@ def SealedStore.write (s : SealedStore) (k : Key) (v : SealedVal) : SealedStore 
 def destroyKey (s : SealedStore) (n : Nat) : SealedStore := { s with keys := destroy s.keys n }
 
 inductive SOp where
-  | admit (k : Key)
+  | admitEntry (k : Key)
   | write (k : Key) (v : SealedVal)
   | destroy (n : Nat)
   | read (k : Key)
@@ -2868,7 +2868,7 @@ def sHit {α : Type} (c : List (Key × Nat × α)) (g : Nat) (k : Key) : Option 
 /-- Below sealing: entries are sealed values; a read opens with the keys live at the read. -/
 def runBelow : List (Key × Nat × SealedVal) → SealedStore → List SOp → List Payload
   | _, _, [] => []
-  | c, s, .admit k :: ops => runBelow ((k, s.gen, s.vals k) :: c) s ops
+  | c, s, .admitEntry k :: ops => runBelow ((k, s.gen, s.vals k) :: c) s ops
   | c, s, .write k v :: ops => runBelow c (s.write k v) ops
   | c, s, .destroy n :: ops => runBelow c (destroyKey s n) ops
   | c, s, .read k :: ops => openWith s.keys ((sHit c s.gen k).getD (s.vals k)) :: runBelow c s ops
@@ -2876,7 +2876,7 @@ def runBelow : List (Key × Nat × SealedVal) → SealedStore → List SOp → L
 /-- Above sealing: entries are values opened at admission. -/
 def runAbove : List (Key × Nat × Payload) → SealedStore → List SOp → List Payload
   | _, _, [] => []
-  | c, s, .admit k :: ops => runAbove ((k, s.gen, openWith s.keys (s.vals k)) :: c) s ops
+  | c, s, .admitEntry k :: ops => runAbove ((k, s.gen, openWith s.keys (s.vals k)) :: c) s ops
   | c, s, .write k v :: ops => runAbove c (s.write k v) ops
   | c, s, .destroy n :: ops => runAbove c (destroyKey s n) ops
   | c, s, .read k :: ops => (sHit c s.gen k).getD (openWith s.keys (s.vals k)) :: runAbove c s ops
@@ -2884,7 +2884,7 @@ def runAbove : List (Key × Nat × Payload) → SealedStore → List SOp → Lis
 /-- What each read should return: the stored value opened with the keys live now. -/
 def runTruth : SealedStore → List SOp → List Payload
   | _, [] => []
-  | s, .admit _ :: ops => runTruth s ops
+  | s, .admitEntry _ :: ops => runTruth s ops
   | s, .write k v :: ops => runTruth (s.write k v) ops
   | s, .destroy n :: ops => runTruth (destroyKey s n) ops
   | s, .read k :: ops => openWith s.keys (s.vals k) :: runTruth s ops
@@ -2916,7 +2916,7 @@ theorem below_sealing_erasure_safe (ops : List SOp) :
   | cons op ops ih =>
     intro c s hc
     cases op with
-    | admit k =>
+    | admitEntry k =>
       apply ih
       intro e he
       rcases List.mem_cons.mp he with h | h
@@ -2946,8 +2946,8 @@ theorem below_sealing_erasure_safe (ops : List SOp) :
     the store now gives the erased marker. -/
 theorem above_sealing_serves_erased (s : SealedStore) (k : Key)
     (hlive : s.keys (s.vals k).key = true) (hplain : (s.vals k).plain ≠ .record none) :
-    runAbove [] s [.admit k, .destroy (s.vals k).key, .read k] ≠
-      runTruth s [.admit k, .destroy (s.vals k).key, .read k] := by
+    runAbove [] s [.admitEntry k, .destroy (s.vals k).key, .read k] ≠
+      runTruth s [.admitEntry k, .destroy (s.vals k).key, .read k] := by
   simp [runAbove, runTruth, openWith, destroyKey, destroy, sHit, hlive, hplain]
 
 end Strata.WorkingSet

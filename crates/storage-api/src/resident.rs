@@ -648,9 +648,10 @@ impl ResidentStore {
             // An entry is not at the generation this load found: serve none of them. Drop them
             // and read the whole request again, which is one snapshot by itself.
             self.drop_records(held);
-            Self::bump(&self.record_misses, hits.len() as u64);
             Self::bump(&self.rereads, 1);
-            hits.clear();
+            // The reread reads every record of the request, the former hits included: they are
+            // misses now, and are admitted again at the new generation below.
+            probes.extend(hits.drain(..).map(|(key, _, _)| key));
             answered = match run(wanted) {
                 Ok(answered) => answered,
                 Err(error) => {
