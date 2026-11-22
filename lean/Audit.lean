@@ -130,6 +130,12 @@ import Strata
 #print axioms Strata.Client.Cache.read_stale_older
 #print axioms Strata.Client.Cache.rest_one_epoch
 #print axioms Strata.Client.Cache.rest_above_floor
+#print axioms Strata.Client.Cache.rest_same_tenant_epoch
+#print axioms Strata.Client.Cache.contact_floor
+#print axioms Strata.Client.Cache.tenant_epoch_purges
+#print axioms Strata.Client.Cache.retired_epoch_ignored
+#print axioms Strata.Client.Cache.restarted_counter_dropped_without_reset
+#print axioms Strata.Client.Cache.reset_accepts
 #print axioms Strata.Client.Cache.hear_purges
 #print axioms Strata.Client.Cache.hear_access_purges
 #print axioms Strata.Client.Cache.receipt_read
