@@ -4597,7 +4597,7 @@ impl<'a> Plan<'a> {
                         })
                         .map(|(_, s)| s.clone())
                         .unwrap_or_default();
-                    let ex = self.expect(quote! { second }, &[text.clone()], &token);
+                    let ex = self.expect(quote! { second }, std::slice::from_ref(&text), &token);
                     let text = self.shape(&text);
                     quote! {
                         if first == #text {
@@ -4802,9 +4802,9 @@ impl<'a> Plan<'a> {
             _ if o.op.result.as_deref().and_then(operand_ref).is_some() => {
                 let n = o.op.result.as_deref().and_then(operand_ref).unwrap_or(1);
                 let mut l = Vec::new();
-                for k in 0..o.exprs.len() {
+                for (k, operand) in operands.iter().enumerate().take(o.exprs.len()) {
                     l.push(format!("const s{k} = check({}, env);", e(k)));
-                    l.extend(self.expect_js(&format!("s{k}"), &operands[k], &token, false));
+                    l.extend(self.expect_js(&format!("s{k}"), operand, &token, false));
                 }
                 l.push(format!("return s{};", n - 1));
                 l
@@ -4813,10 +4813,10 @@ impl<'a> Plan<'a> {
             // checked arithmetic, ms_between, the durations, concat and text.
             _ => {
                 let mut l = Vec::new();
-                for k in 0..o.exprs.len() {
+                for (k, operand) in operands.iter().enumerate().take(o.exprs.len()) {
                     l.extend(self.expect_js(
                         &format!("check({}, env)", e(k)),
-                        &operands[k],
+                        operand,
                         &token,
                         true,
                     ));

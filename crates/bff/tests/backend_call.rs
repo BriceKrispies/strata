@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicI64;
-use strata_bff::routes::Visit;
 use strata_bff::{token, Bff, Config};
 use strata_kernel::TenantId;
 
@@ -56,15 +55,4 @@ fn the_published_origin_of_a_site_does_not_depend_on_the_order_of_the_list() {
         strata_bff::routes::primary_origin(&bff, &site).as_deref(),
         Some("http://127.0.0.1:4100")
     );
-}
-
-fn visit(session: Option<&str>) -> Visit {
-    Visit {
-        site: TenantId::new("fieldnotes").unwrap(),
-        token: session.map(str::to_string),
-        correlation: "c-visit-7".into(),
-        source: None,
-        origin: None,
-        idempotency_key: None,
-    }
 }

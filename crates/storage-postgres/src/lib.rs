@@ -4384,7 +4384,7 @@ impl Store for PostgresStore {
                 };
                 put_job(t, &next)?;
                 write_automation(t, tenant, writes, now)?;
-                Ok(Reported::Recorded(next))
+                Ok(Reported::Recorded(Box::new(next)))
             })?
             .unwrap_or_else(|| Reported::Refused(format!("no tenant {tenant}"))))
     }

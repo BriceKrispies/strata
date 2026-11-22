@@ -20,84 +20,8 @@
 use std::collections::BTreeMap;
 
 use serde_json::{json, Map, Value};
-use strata_spec_compiler::language::Operator;
-use strata_spec_compiler::layer_expr::{self, ProductContext, Scope, EXPR_TYPE};
+use strata_spec_compiler::layer_expr::{self, ProductContext, EXPR_TYPE};
 use strata_spec_compiler_language_fixture::rule_language as lang;
-
-/// The context probes are checked in: no object type, the role `member`.
-fn bare_context() -> ProductContext {
-    let ids: BTreeMap<String, String> = [("member".to_string(), "roles".to_string())].into();
-    ProductContext::of(&ids, &Map::new())
-}
-
-/// An expression of each shape the language names.
-fn sample(shape: &str) -> &'static str {
-    match shape {
-        "bool" => "true",
-        "int" => "1",
-        "str" => "'a'",
-        "time" => "time(1)",
-        "ref" => "ref(1)",
-        "list" => "[1]",
-        "any" => "null",
-        other => panic!(
-            "the language names a shape {other}, which this test has no sample expression of: add one"
-        ),
-    }
-}
-
-/// How many expression operands the probe of an operator has: a n-ary junction is probed with two.
-fn arity(op: &Operator, form: &str) -> usize {
-    match form {
-        "infix" | "keyword-infix" => 2,
-        "prefix-word" => 1,
-        _ => op.operands.len(),
-    }
-}
-
-/// The shapes operand `at` accepts; a n-ary operator declares one list for all its operands.
-fn accepted(op: &Operator, at: usize) -> &[String] {
-    let last = op
-        .operands
-        .len()
-        .checked_sub(1)
-        .unwrap_or_else(|| panic!("operator {} declares no operand", op.name));
-    &op.operands[at.min(last)]
-}
-
-/// The text of a probe of `op`, and the text the printer is expected to give back for it. `replaced`
-/// puts a sample of another shape at one operand.
-fn probe(op: &Operator, replaced: Option<(usize, &str)>) -> (String, String) {
-    let form = op.form.as_deref().unwrap();
-    let token = op
-        .token
-        .as_deref()
-        .unwrap_or_else(|| panic!("operator {} has the form {form} and no token", op.name));
-    let args: Vec<&str> = (0..arity(op, form))
-        .map(|i| match replaced {
-            Some((at, shape)) if at == i => sample(shape),
-            _ => sample(&accepted(op, i)[0]),
-        })
-        .collect();
-    match form {
-        "infix" | "keyword-infix" => (
-            format!("{} {token} {}", args[0], args[1]),
-            format!("({} {token} {})", args[0], args[1]),
-        ),
-        "prefix-word" => (
-            format!("{token} {}", args[0]),
-            format!("{token}({})", args[0]),
-        ),
-        _ => {
-            let text = format!("{token}({})", args.join(", "));
-            (text.clone(), text)
-        }
-    }
-}
-
-fn check(text: &str) -> Result<String, (&'static str, String)> {
-    layer_expr::shape_name(text, &Scope::default(), &bare_context())
-}
 
 // ---------------------------------------------------------------------------------------------
 // The corpus: the generated parser and checker against layer_expr.rs

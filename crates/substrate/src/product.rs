@@ -1624,7 +1624,7 @@ pub enum Planned {
     Unchanged {
         schema_version: u64,
     },
-    Change(ProductChange),
+    Change(Box<ProductChange>),
 }
 
 /// What a product change did.
@@ -1749,7 +1749,7 @@ pub fn plan_install(
             record.to_kernel().map_err(BundleError::invalid_bundle)?,
         ));
     }
-    Ok(Planned::Change(ProductChange {
+    Ok(Planned::Change(Box::new(ProductChange {
         step: format!(
             "install {}",
             bundle.product.as_deref().unwrap_or(&bundle.name)
@@ -1768,7 +1768,7 @@ pub fn plan_install(
             remove: Vec::new(),
         },
         record,
-    }))
+    })))
 }
 
 /// The order a removal takes entities in: what refers to others first (triggers name automations,
@@ -2020,7 +2020,7 @@ pub fn plan_upgrade(
             record.to_kernel().map_err(BundleError::invalid_bundle)?,
         ));
     }
-    Ok(Planned::Change(ProductChange {
+    Ok(Planned::Change(Box::new(ProductChange {
         step: format!("upgrade {product}"),
         version: bundle.version.clone(),
         changes,
@@ -2036,7 +2036,7 @@ pub fn plan_upgrade(
             remove: dropped_segments,
         },
         record,
-    }))
+    })))
 }
 
 /// Plans the removal of an installed product: exactly the entities its record owns are removed,
@@ -2073,7 +2073,7 @@ pub fn plan_remove(
             .map(|e| SegmentKey(e.id.clone()))
             .collect(),
     };
-    Ok(Planned::Change(ProductChange {
+    Ok(Planned::Change(Box::new(ProductChange {
         step: format!("remove {product}"),
         version: installed.version.clone(),
         changes,
@@ -2082,7 +2082,7 @@ pub fn plan_remove(
         removed,
         segments,
         record: None,
-    }))
+    })))
 }
 
 impl ProductChange {
@@ -2107,7 +2107,7 @@ pub fn run_planned<E>(
         Planned::Unchanged { schema_version } => {
             return Ok(ProductInstall::Unchanged { schema_version })
         }
-        Planned::Change(change) => change,
+        Planned::Change(change) => *change,
     };
     let schema_version = if change.changes.is_empty() {
         target.schema.version.0

@@ -331,17 +331,6 @@ fn put(store: &dyn Store, tenant: &str, items: Vec<Arc<Record>>) {
     }
 }
 
-fn delete(store: &dyn Store, tenant: &str, ids: impl IntoIterator<Item = u64>) {
-    let ops = ids
-        .into_iter()
-        .map(|id| DeltaOp::DeleteRecord {
-            object: object("item"),
-            id: RecordId(id),
-        })
-        .collect();
-    commit_ops(store, tenant, ops);
-}
-
 struct Lcg(u64);
 
 impl Lcg {
@@ -406,18 +395,6 @@ fn random_item(rng: &mut Lcg, id: u64) -> Arc<Record> {
 
 /// The teams of the random items; an even one is open.
 const TEAMS: u64 = 5;
-
-fn team(id: u64) -> Arc<Record> {
-    Arc::new(Record {
-        id: RecordId(id),
-        object: object("team"),
-        version: 1,
-        created_by: None,
-        created_at: Timestamp(1),
-        updated_at: Timestamp(1),
-        fields: BTreeMap::from([(field("open"), Value::Bool(id % 2 == 0))]),
-    })
-}
 
 fn named(
     name: &str,
@@ -572,7 +549,9 @@ fn every_store_answers_an_index_page_alike() {
         .map(|r| r.id.0)
         .collect();
         for (name, store) in &made {
-            let loaded = store.load(&tenant_id("alpha"), &[need.clone()]).unwrap();
+            let loaded = store
+                .load(&tenant_id("alpha"), std::slice::from_ref(&need))
+                .unwrap();
             let ids: BTreeSet<u64> = loaded
                 .tenant
                 .unwrap()

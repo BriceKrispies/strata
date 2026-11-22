@@ -1,6 +1,8 @@
 //! The slow tests of strata-spec-compiler, gathered into one test binary: each module below is one of
 //! the package's test files, unchanged.
 
+mod support;
+
 #[path = "bundle.rs"]
 mod bundle;
 

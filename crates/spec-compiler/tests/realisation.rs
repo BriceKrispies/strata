@@ -59,24 +59,6 @@ fn behavior<'a>(spec: &'a mut Value, id: &str) -> &'a mut Value {
         .unwrap()
 }
 
-fn contract<'a>(spec: &'a mut Value, id: &str) -> &'a mut Value {
-    spec["contracts"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|c| c["id"] == id)
-        .unwrap()
-}
-
-fn component<'a>(spec: &'a mut Value, id: &str) -> &'a mut Value {
-    spec["components"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|c| c["id"] == id)
-        .unwrap()
-}
-
 #[test]
 fn a_declared_target_machine_leaves_the_shipped_module_and_enters_the_feature() {
     let mut spec = fixture("machines");

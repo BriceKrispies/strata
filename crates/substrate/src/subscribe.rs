@@ -91,7 +91,7 @@ pub trait SelectorExt {
     /// A selector from the members of a subscription request, or the reason it is refused: a name
     /// that is not valid, a kind the kernel does not emit, a segment id that is not one, or a
     /// member that names nothing.
-    fn new(
+    fn from_request(
         objects: Option<Vec<String>>,
         kinds: Option<Vec<String>>,
         segments: Option<Vec<String>>,
@@ -122,7 +122,7 @@ impl SelectorExt for Selector {
         }
     }
 
-    fn new(
+    fn from_request(
         objects: Option<Vec<String>>,
         kinds: Option<Vec<String>>,
         segments: Option<Vec<String>>,
@@ -728,10 +728,10 @@ mod tests {
     fn a_request_is_refused_for_what_nothing_emits_and_for_names_that_are_not_valid() {
         let names = |list: &[&str]| Some(list.iter().map(|n| n.to_string()).collect::<Vec<_>>());
         assert_eq!(
-            Selector::new(None, None, None, None, None),
+            Selector::from_request(None, None, None, None, None),
             Ok(Selector::all())
         );
-        let accepted = Selector::new(
+        let accepted = Selector::from_request(
             names(&["note"]),
             names(&["record-updated"]),
             None,
@@ -746,7 +746,7 @@ mod tests {
         );
         assert_eq!(accepted.transitions, Some(vec!["publish".to_string()]));
 
-        let segments = Selector::new(
+        let segments = Selector::from_request(
             None,
             None,
             names(&["0b1a6a7e-0000-4000-8000-000000000001"]),
@@ -755,27 +755,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(segments.segments.map(|set| set.len()), Some(1));
-        assert!(Selector::new(None, None, names(&["not-a-uuid"]), None, None).is_err());
-        let units = Selector::new(None, None, None, names(&["eur"]), None).unwrap();
+        assert!(Selector::from_request(None, None, names(&["not-a-uuid"]), None, None).is_err());
+        let units = Selector::from_request(None, None, None, names(&["eur"]), None).unwrap();
         assert_eq!(units.units, Some(vec![LedgerUnit::new("eur").unwrap()]));
-        assert!(Selector::new(None, None, None, names(&["Not A Unit"]), None).is_err());
+        assert!(Selector::from_request(None, None, None, names(&["Not A Unit"]), None).is_err());
         // Naming nothing is still naming the member: it would match nothing, so it is refused.
-        assert!(Selector::new(None, None, Some(vec![]), None, None).is_err());
-        assert!(Selector::new(None, None, None, Some(vec![]), None)
+        assert!(Selector::from_request(None, None, Some(vec![]), None, None).is_err());
+        assert!(Selector::from_request(None, None, None, Some(vec![]), None)
             .unwrap_err()
             .contains("names no unit"));
-        let unknown = Selector::new(None, names(&["record-create"]), None, None, None);
+        let unknown = Selector::from_request(None, names(&["record-create"]), None, None, None);
         assert!(unknown.unwrap_err().contains("not emitted"));
         // A tenant-declared kind is refused for its own reason: the kernel emits none.
-        let declared = Selector::new(None, names(&["app.survey-closed"]), None, None, None);
+        let declared =
+            Selector::from_request(None, names(&["app.survey-closed"]), None, None, None);
         assert!(declared
             .unwrap_err()
             .contains("no declare-event-kind or emit-event"));
-        assert!(Selector::new(None, names(&["Not A Kind"]), None, None, None).is_err());
+        assert!(Selector::from_request(None, names(&["Not A Kind"]), None, None, None).is_err());
         // Every kind the kernel emits is accepted, the ledger's among them.
-        assert!(Selector::new(None, names(&["ledger-entry-posted"]), None, None, None).is_ok());
-        assert!(Selector::new(None, None, None, None, names(&[""])).is_err());
-        assert!(Selector::new(names(&["Not An Object"]), None, None, None, None).is_err());
+        assert!(
+            Selector::from_request(None, names(&["ledger-entry-posted"]), None, None, None).is_ok()
+        );
+        assert!(Selector::from_request(None, None, None, None, names(&[""])).is_err());
+        assert!(Selector::from_request(names(&["Not An Object"]), None, None, None, None).is_err());
     }
 
     /// Verifies: SCH-1576
@@ -875,7 +878,7 @@ mod tests {
         );
         assert_eq!(told(&Principal::Anonymous, &all), None);
         let units = |names: &[&str]| {
-            Selector::new(
+            Selector::from_request(
                 None,
                 None,
                 None,
@@ -950,7 +953,8 @@ mod tests {
             coverage: strata_kernel::Coverage::Complete,
         };
         let (segment, logged) = segment_and_entry("alpha:m1");
-        let names = |list: Vec<String>| Selector::new(None, None, Some(list), None, None).unwrap();
+        let names =
+            |list: Vec<String>| Selector::from_request(None, None, Some(list), None, None).unwrap();
         let selector = names(vec![segment.id.to_string()]);
         let hears = |who: &Principal, selector: &Selector, logged: &SegmentEvent| {
             segment_notice(&state, who, selector, &segment, 7, logged)
@@ -977,7 +981,7 @@ mod tests {
         other[8] = 0x80;
         let elsewhere = names(vec![seg::segment_id_of(other).to_string()]);
         assert_eq!(hears(&user("alpha:owner"), &elsewhere, &logged), None);
-        let with_kinds = Selector::new(
+        let with_kinds = Selector::from_request(
             None,
             Some(vec!["record-updated".to_string()]),
             Some(vec![segment.id.to_string()]),
@@ -987,7 +991,7 @@ mod tests {
         .unwrap();
         assert_eq!(hears(&user("alpha:owner"), &with_kinds, &logged), None);
         // The selector names the object type of the people it wants to hear of.
-        let people = Selector::new(
+        let people = Selector::from_request(
             Some(vec!["person".to_string()]),
             None,
             Some(vec![segment.id.to_string()]),
@@ -1011,7 +1015,8 @@ mod tests {
         let (_, events) = published_then_withdrawn();
         let (segment, _) = segment_and_entry("alpha:m1");
         let selector =
-            Selector::new(None, None, Some(vec![segment.id.to_string()]), None, None).unwrap();
+            Selector::from_request(None, None, Some(vec![segment.id.to_string()]), None, None)
+                .unwrap();
         assert!(events.iter().all(|event| !selector.admits(event)));
         assert!(events.iter().all(|event| Selector::all().admits(event)));
     }

@@ -9,7 +9,6 @@ mod system;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use strata_kernel::ext::*;
 use strata_kernel::TenantId;
 use strata_machine_store::StorageApiMachineStore;
 use strata_runtime::SystemClock;

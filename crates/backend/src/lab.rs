@@ -324,6 +324,7 @@ impl Lab {
             .unwrap_or(0)
     }
 
+    #[cfg(test)]
     fn insert(&self, id: &str, run: Run) {
         let _ = self.insert_within(id, run, usize::MAX);
     }

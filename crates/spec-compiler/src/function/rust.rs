@@ -2227,7 +2227,6 @@ impl<'a> Gen<'a> {
             "keys" | "values" => {
                 let (it, of) = self.iter_source(&Expr {
                     kind: Kind::Op(op.clone()),
-                    pos: 0,
                     ty: Some(eff.clone()),
                 })?;
                 let t = &it.t;

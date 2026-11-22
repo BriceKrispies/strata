@@ -573,7 +573,6 @@ pub fn lint_started(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn finding(rule: &'static str, entity: &str) -> Finding {
         Finding {

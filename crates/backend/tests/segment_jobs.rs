@@ -730,7 +730,7 @@ fn a_subscription_hears_the_entry_of_a_person_whose_record_the_subscriber_may_re
     let need = segment_flow::subject_need(segment, &logged.event.person);
     let state = fx.app.store.load(&fx.tenant(), &[need]).unwrap();
     let selector =
-        Selector::new(None, None, Some(vec![gold_id().to_string()]), None, None).unwrap();
+        Selector::from_request(None, None, Some(vec![gold_id().to_string()]), None, None).unwrap();
     let hears = |who: &str, selector: &Selector| {
         let principal = Principal::User(principal_id(&fx.person(who)));
         segment_notice(&state, &principal, selector, segment, position, &logged)

@@ -16,7 +16,7 @@
 //!
 //! The runs need `node` (see `support`).
 
-mod support;
+use crate::support;
 
 use std::fs;
 use std::path::PathBuf;

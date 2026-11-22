@@ -13,7 +13,7 @@
 //! Fails when Exegra or `node` is missing (see `support`); skipped, with a loud banner, only when
 //! `SPECC_SKIP_EXEGRA_TESTS=1` says so.
 
-mod support;
+use crate::support;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;

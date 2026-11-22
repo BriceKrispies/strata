@@ -15,7 +15,6 @@
 //! The text is turned into ordinary kernel `SchemaChange` values against the current schema.
 //! It is a convenience for people; the kernel only ever sees the changes.
 
-use strata_kernel::ext::*;
 use strata_kernel::{
     ConstraintDef, ConstraintId, FieldDef, FieldId, FieldType, ObjectTypeId, SchemaChange,
     TenantSchema,
