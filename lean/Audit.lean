@@ -243,3 +243,5 @@ import Strata
 #print axioms Strata.UI.Loop.approve_refused_on_hash_mismatch
 #print axioms Strata.UI.Loop.staged_invisible_until_last
 #print axioms Strata.UI.Visibility.selectNarrowed_eq_selectServed
+#print axioms Strata.UI.Loop.hidden_reference_not_followed
+#print axioms Strata.UI.Loop.early_change_to_reachable_visible

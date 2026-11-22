@@ -12,8 +12,9 @@ state; the tenant's state changes only when the owner runs the upgrade of an app
 - **The preview is built from a viewer-scoped snapshot** (`snapshot_readable`,
   `snapshot_ignores_unreadable`, `preview_depends_on_readable_only`): only records the viewer may read
   under the live schema's policies, each redacted by the field read rules. Draft filters, draft policy
-  conditions and conversions run on the snapshot alone, so values the viewer may not read cannot change
-  any preview, however often it is repeated. Draft policies only narrow (`preview_reads_within_viewer`),
+  conditions and conversions run on the snapshot alone, so values the viewer may not read, hidden
+  reference fields included (`hidden_reference_not_followed`), cannot change any preview, however often
+  it is repeated. Draft policies only narrow (`preview_reads_within_viewer`),
   and references are followed in the snapshot, over chains of any length (`followed_within_viewer`).
 - **No stale draft write** (`no_stale_draft_write`, `revisions_increase`).
 - **The approved revision** (`approve_applies_held`, `approve_class_matches`,
@@ -22,10 +23,11 @@ state; the tenant's state changes only when the owner runs the upgrade of an app
   an unchanged diff. The model has one live state: that the kernel commits against the schema version
   the plan used (`expected_version`) is not modelled, nor is the classification's computation (a
   hypothesis of `approve_class_matches`).
-- **Staged upgrades** (`staged_invisible_until_last`): members are served nothing new until the last
-  stage, which holds every grant and interface element. By construction of the model; the real guarantee
-  is the planner's test that no earlier stage holds a policy, permission, invoker set or interface
-  element (WG-5472).
+- **Staged upgrades** (`staged_invisible_until_last`, `early_change_to_reachable_visible`): what members
+  are served depends only on the entities their grants, invokers and interface reach; an early stage may
+  change only entities outside that set, so no early stage changes what they are served, and an early
+  change to a reachable entity would. That the planner keeps every grant, invoker set, interface element
+  and change to a live entity in the last stage is held by its test (WG-5472).
 
 No `sorry`, no added axioms.
 -/
@@ -64,15 +66,21 @@ theorem draft_steps_frame {T D V : Type} (serve : T → V) :
     simp only [draftRun]
     exact ⟨h1.trans h, by rw [h1.trans h]⟩
 
-/-- A live record: its id, the ids it references, and its fields (field id, value). -/
+/-- A live record: its id and its fields (field id, value). References are field values: a field
+    the schema declares a reference holds the id of the record it names. -/
 structure Rec where
   id : Nat
-  refs : List Nat
   fields : List (Nat × Nat)
 
-/-- What a viewer may read of a record: the field read rules trim the fields. -/
+/-- What a viewer may read of a record: the field read rules trim the fields, reference fields
+    included. -/
 def redact (readField : Nat → Nat → Bool) (r : Rec) : Rec :=
   { r with fields := r.fields.filter (fun p => readField r.id p.1) }
+
+/-- The references of a record: the values of its reference fields (`isRef`), read from whatever
+    fields it still has, so a redacted record shows only references the viewer may read. -/
+def refsOf (isRef : Nat → Bool) (r : Rec) : List Nat :=
+  (r.fields.filter (fun p => isRef p.1)).map (·.2)
 
 /-- The viewer-scoped snapshot the preview is built from: the records the viewer may read, live
     schema policies deciding, each redacted by the field read rules. Draft filters, draft policy
@@ -94,9 +102,9 @@ theorem snapshot_readable (canRead : Nat → Bool) (readField : Nat → Nat → 
   simp only [redact, List.mem_filter] at hp
   exact hp
 
-/-- Two live records that agree on everything the viewer may read. -/
+/-- Two live records that agree on everything the viewer may read, references included. -/
 def Agree (readField : Nat → Nat → Bool) (r s : Rec) : Prop :=
-  r.id = s.id ∧ r.refs = s.refs ∧
+  r.id = s.id ∧
     r.fields.filter (fun p => readField r.id p.1) = s.fields.filter (fun p => readField s.id p.1)
 
 /-- Two stores that agree, record by record, on everything the viewer may read. -/
@@ -114,27 +122,28 @@ theorem snapshot_cons (canRead : Nat → Bool) (readField : Nat → Nat → Bool
   · simp [List.filter_cons, h]
   · simp [List.filter_cons, h]
 
-/-- Values the viewer may not read do not change the snapshot, so no draft filter, policy condition
-    or conversion can depend on them, however often a builder previews: no field value leaks.
+/-- Values the viewer may not read, hidden reference fields included, do not change the snapshot, so no
+    draft filter, policy condition or conversion can depend on them, however often a builder
+    previews.
     Verifies: DS-018 -/
 theorem snapshot_ignores_unreadable (canRead : Nat → Bool) (readField : Nat → Nat → Bool) :
     ∀ (s1 s2 : List Rec), AgreeAll readField s1 s2 →
       snapshot canRead readField s1 = snapshot canRead readField s2
   | [], [], _ => rfl
-  | r :: rs, s :: ss, ⟨⟨hid, href, hf⟩, hrest⟩ => by
+  | r :: rs, s :: ss, ⟨⟨hid, hf⟩, hrest⟩ => by
     have ih := snapshot_ignores_unreadable canRead readField rs ss hrest
     have hred : redact readField r = redact readField s := by
       cases r; cases s
       simp only [redact] at hf ⊢
-      simp only at hid href
-      subst hid; subst href
+      simp only at hid
+      subst hid
       rw [hf]
     rw [snapshot_cons, snapshot_cons, hid, hred, ih]
   | [], _ :: _, h => absurd h (by simp [AgreeAll])
   | _ :: _, [], h => absurd h (by simp [AgreeAll])
 
-/-- A preview computation: any function of the snapshot, for any draft policy, filter or conversion.
-    Previews over stores that agree on what the viewer may read are equal. -/
+/-- A preview computation: any function of the snapshot. Previews over stores that agree on what the
+    viewer may read are equal. -/
 theorem preview_depends_on_readable_only {α : Type} (canRead : Nat → Bool) (readField : Nat → Nat → Bool)
     (f : List Rec → α) (s1 s2 : List Rec) (h : AgreeAll readField s1 s2) :
     f (snapshot canRead readField s1) = f (snapshot canRead readField s2) := by
@@ -151,21 +160,29 @@ def lookupIn (snap : List Rec) (id : Nat) : Option Rec := snap.find? (fun r => r
 theorem lookupIn_mem (snap : List Rec) (id : Nat) (r : Rec) (h : lookupIn snap id = some r) :
     r ∈ snap := List.mem_of_find?_eq_some h
 
-/-- The records reached by following references `k` hops from some rows. -/
-def hops (snap : List Rec) : Nat → List Rec → List Rec
+/-- The records reached by following references `k` hops from some rows, through the references the
+    redacted records still show. -/
+def hops (isRef : Nat → Bool) (snap : List Rec) : Nat → List Rec → List Rec
   | 0, rows => rows
-  | k + 1, rows => (hops snap k rows).flatMap (fun r => r.refs.filterMap (lookupIn snap))
+  | k + 1, rows => (hops isRef snap k rows).flatMap (fun r => (refsOf isRef r).filterMap (lookupIn snap))
 
 /-- Every record reached by any chain of references from snapshot rows is in the snapshot, so it is
     readable and redacted (`snapshot_readable`).
     Verifies: DS-018 -/
-theorem followed_within_viewer (snap : List Rec) (rows : List Rec) (hrows : ∀ r ∈ rows, r ∈ snap) :
-    ∀ (k : Nat) (x : Rec), x ∈ hops snap k rows → x ∈ snap
+theorem followed_within_viewer (isRef : Nat → Bool) (snap : List Rec) (rows : List Rec)
+    (hrows : ∀ r ∈ rows, r ∈ snap) : ∀ (k : Nat) (x : Rec), x ∈ hops isRef snap k rows → x ∈ snap
   | 0, x, h => hrows x h
   | k + 1, x, h => by
     simp only [hops, List.mem_flatMap, List.mem_filterMap] at h
     obtain ⟨_, _, id, _, hx⟩ := h
     exact lookupIn_mem snap id x hx
+
+/-- A reference field the viewer may not read is not followed: a redacted record shows no reference
+    through a field its read rule hides. -/
+theorem hidden_reference_not_followed (readField : Nat → Nat → Bool) (r : Rec)
+    (f v : Nat) (hf : readField r.id f = false) :
+    (f, v) ∉ (redact readField r).fields := by
+  simp [redact, hf]
 
 
 /-- A draft in the store: its revision and the revisions at which writes were applied, newest first. -/
@@ -274,21 +291,54 @@ theorem approve_refused_on_hash_mismatch {S R H Bd D C : Type} [DecidableEq H] [
   rw [hb]
   simp [hne]
 
-/-- A staged upgrade: earlier stages change only what members cannot reach (new entities with no
-    grants, no invokers and no interface); the last stage carries every policy, permission, invoker
-    set and interface element. -/
-structure Staged (Dt I : Type) where
-  data : Dt
-  iface : I
+/-- A staged upgrade. The tenant's entities are a map from ids; what members can reach is decided by
+    the reachable set, which grants, invokers and interface elements determine, and they come only in
+    the last stage. An earlier stage may change only entities outside the reachable set (entities it
+    creates, which nothing grants yet). -/
+structure Staged (E : Type) where
+  ents : Nat → Option E
+  reach : Nat → Bool
 
-/-- Applying earlier stages, each acting on the unreachable part only. -/
-def applyEarly {Dt I : Type} (s : Staged Dt I) (stages : List (Dt → Dt)) : Staged Dt I :=
-  { s with data := stages.foldl (fun d f => f d) s.data }
+/-- An early stage: it changes entities only where nothing is reachable. -/
+def EarlyOk {E : Type} (s : Staged E) (f : (Nat → Option E) → (Nat → Option E)) : Prop :=
+  ∀ ents i, s.reach i = true → f ents i = ents i
 
-/-- Members are served a function of what they can reach (the interface, grants and invokers), so
-    nothing new is served to them until the last stage commits, whichever earlier stages have run.
+/-- Applying early stages in turn. -/
+def applyEarly {E : Type} (s : Staged E) : List ((Nat → Option E) → (Nat → Option E)) → Staged E
+  | [] => s
+  | f :: fs => applyEarly { s with ents := f s.ents } fs
+
+theorem applyEarly_reach {E : Type} : ∀ (s : Staged E) fs, (applyEarly s fs).reach = s.reach
+  | s, [] => rfl
+  | s, f :: fs => by simp only [applyEarly]; exact applyEarly_reach _ fs
+
+theorem applyEarly_agree {E : Type} : ∀ (s : Staged E) (fs : List ((Nat → Option E) → (Nat → Option E))),
+    (∀ f ∈ fs, EarlyOk s f) → ∀ i, s.reach i = true → (applyEarly s fs).ents i = s.ents i
+  | s, [], _, i, _ => rfl
+  | s, f :: fs, h, i, hi => by
+    simp only [applyEarly]
+    have hf := h f (by simp) s.ents i hi
+    have hrest : ∀ g ∈ fs, EarlyOk { s with ents := f s.ents } g := by
+      intro g hg ents j hj
+      exact h g (by simp [hg]) ents j hj
+    rw [applyEarly_agree { s with ents := f s.ents } fs hrest i hi]
+    exact hf
+
+/-- Members are served a function of the reachable entities only (their grants decide what they read
+    and invoke, the interface what they see). So no early stage changes what they are served.
     Verifies: DS-021 -/
-theorem staged_invisible_until_last {Dt I V : Type} (serve : I → V) (s : Staged Dt I)
-    (stages : List (Dt → Dt)) : serve (applyEarly s stages).iface = serve s.iface := rfl
+theorem staged_invisible_until_last {E V : Type} (serve : (Nat → Bool) → (Nat → Option E) → V)
+    (hserve : ∀ r e1 e2, (∀ i, r i = true → e1 i = e2 i) → serve r e1 = serve r e2)
+    (s : Staged E) (fs : List ((Nat → Option E) → (Nat → Option E))) (hfs : ∀ f ∈ fs, EarlyOk s f) :
+    serve (applyEarly s fs).reach (applyEarly s fs).ents = serve s.reach s.ents := by
+  rw [applyEarly_reach]
+  exact hserve s.reach _ _ (fun i hi => applyEarly_agree s fs hfs i hi)
+
+/-- Without the rule, an early stage that changes a reachable entity changes what members are served. -/
+theorem early_change_to_reachable_visible :
+    ∃ (s : Staged Nat) (f : (Nat → Option Nat) → (Nat → Option Nat)),
+      s.reach 0 = true ∧ (applyEarly s [f]).ents 0 ≠ s.ents 0 := by
+  refine ⟨⟨fun _ => some 1, fun i => i == 0⟩, fun e i => if i = 0 then some 2 else e i, rfl, ?_⟩
+  simp [applyEarly]
 
 end Strata.UI.Loop

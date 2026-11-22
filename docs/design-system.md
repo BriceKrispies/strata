@@ -633,13 +633,19 @@ the same name is read again when one changes.
   `answer_choice`, `answer_choices`), plus **one reference answer type per object type** the product
   declares its forms may reference (`answer_ref_<object>`), and **one file answer type** whose per-question
   media types and size limits (from the field record, under the platform's cap) are checked by the
-  `write-answers` step. **Per-question privacy**: each answer type has a **personal** variant (a personal
-  declaration whose subject is the respondent) and a **restricted** variant (a read rule naming the form's
-  reviewer group), and the field record's privacy setting chooses which one the answer is written to. A
-  new platform operation step, `write-answers`, creates the answer records of one submission in the
-  operation's transaction, after validation against each field record (WG-5480). **Waiting for WG-5494**:
-  decimal numbers, money, civil dates and durations; until then `answer_number` is an integer with the
-  field record's scale and `answer_date` a time. Never a list of strings;
+  `write-answers` step. **Per-question privacy** uses two independent flags of the question, so each answer
+  type exists in **four variants**: plain; **personal** (a personal declaration whose subject is the
+  respondent, kind `free-text`, with the product's declared answer **retention**, since retention is per
+  object type, `ObjectTypeDef.retention`, `types.rs:4943-4945`, and a personal declaration has one kind per
+  field, `PersonalDeclaration`, `types.rs:10181-10188`); **restricted** (a read rule `has_role(<product>__form_reviewer)`, a fixed
+  reviewer role per product, because a read rule names a literal role, `Expr::HasRole`, `types.rs:4849`, and
+  cannot name an interface group); and personal-and-restricted. The tenant gives the reviewer role to whom it
+  chooses. A **reference answer** type's reference uses on-delete **set-null**, so erasing or deleting a
+  referenced record (a person, say) leaves the answer without the reference rather than blocking the
+  erasure. A new platform operation step, `write-answers`, creates the answer records of one submission in
+  the operation's transaction, after validation against each field record (WG-5480). **Waiting for
+  WG-5494**: decimal numbers, money, civil dates and durations; until then `answer_number` is an integer
+  with the field record's scale and `answer_date` a time. Never a list of strings;
 - a **`reference` input type** takes a record of a section the definition names, chosen with the record
   picker under the respondent's read policies;
 - **reserved as minor extensions**: `not equals` and `or` in conditional visibility, and repeating groups;
@@ -885,10 +891,11 @@ navigation, forms, actions, filters, error messages); the tenant's own interface
 shell list) has an **interface draft** of its own, held the same way.
 
 - **Keys.** Drafts live in a per-tenant **draft store outside the tenant's state**, keyed by
-  `(product, draftId)` with the **base version** the draft was started from. One draft per product is the
-  default and the convention; a second draft is possible, but merging drafts is out of scope: publishing a
-  draft whose base is not the installed version is refused with `draft.base-stale`, naming the entities
-  both changed.
+  `(product, draftId)` with the **base version** the draft was started from; the tenant's interface draft
+  is keyed the same way (`(interface, draftId)`, its base being the interface's last published revision), so
+  draft sets and publishing treat both alike. One draft per product is the default and the convention; a
+  second draft is possible, but merging drafts is out of scope: publishing a draft whose base is not the
+  installed version is refused with `draft.base-stale`, naming the entities both changed.
 - **Writes.** A write names the revision it was prepared against and applies only at the current one
   (`no_stale_draft_write`, `revisions_increase`), and records its **actor** (the person, and the agent
   acting for them). One agent works on a draft at a time **by convention**, with the advisory lease as the
@@ -942,11 +949,19 @@ fields):
 
 **Publishing.**
 
-- **Submit** snapshots the revision **immutably**, with a **content hash** over its source and bundle, and
-  records its diff and classification.
-- **Approval** shows, first, the **effective-permission delta**: for each role, what it newly reads,
-  invokes or sees, computed with `effective_permissions` on the planned schema against the live one. A delta
-  that opens anything to the public or to every member needs the owner's explicit confirmation of that line.
+- **Submit** appends an **immutable** snapshot of the revision to the draft store (snapshots are
+  append-only; nothing rewrites or deletes one before its draft is deleted), with a **content hash** over
+  its source and bundle, and records its diff and classification. Publishing **recomputes** the hash from the
+  stored source and bundle rather than trusting a stored value.
+- **Approval** shows, first, the **permission delta**, computed by a kernel function over **two schemas**
+  (live and planned), not by `effective_permissions`, which reads only role permissions (`rules.rs:187-192`
+  through `grants_of`, `schema.rs:170-178`). The function covers, per role (and for the public and for every
+  signed-in person): role permissions; **policies**, including any-object policies and conditional ones
+  (`rules.rs:452-470`), each conditional line marked conditional with its condition; **operation invokers**,
+  including `signed-in: true` (`types.rs:10756-10762`); **field read rules**; and **interface audiences**.
+  Each source has a negative fixture (a widening to the public by a policy alone; an operation opened to
+  every signed-in person; a field read rule loosened; an audience widened). A line that opens anything to
+  the public or to every member needs the owner's explicit confirmation.
 - **The owner publishes** with step-up (`products.rs:316-334`) through a contract that takes the **revision
   id and hash** and reads the snapshot from the draft store; the bundle no longer comes in the request body
   (`bundle_of`, `products.rs:89-95`). A hash mismatch is refused (`approve_refused_on_hash_mismatch`). The
@@ -958,13 +973,15 @@ fields):
   refuses with `product.base-moved`.
 - **Large upgrades are staged** (see "The 200-change cap").
 
-**Draft sets.** A change that spans products (a product that names another's entities once WG-5493 allows
-it) or a product and the tenant's interface (a new product and the audience group of its soft launch) is a
-**draft set**: drafts of several products and the interface draft, previewed as one projection, approved
-once (one permission delta), and applied in dependency order, the interface draft last, each product
-upgrade staged within the cap. If applying stops before the last stage of the last member, nothing new is
-reachable by members (see staging); the owner resumes, or rolls back by removal upgrades of what was
-created, in reverse order.
+**Draft sets.** A change that spans products (once WG-5493 allows cross-product references, WG-5516) or a
+product and the tenant's interface (a new product and the audience group of its soft launch) is a **draft
+set**: a **named, stored** set of drafts, **hashed over its members' snapshot hashes**, previewed as one
+projection and approved once; publishing binds to the **set hash**. It is applied in dependency order:
+**groups and the shell list** (from the interface draft) **first**, then the product drafts (each staged
+within the cap), then **overlays** last. An audience that names a group neither the set nor the tenant
+defines is refused with `ui.audience.unknown-group`, naming the group and the element. If applying stops,
+what was created and not yet granted is unreachable; the owner resumes, or rolls back by removal upgrades in
+reverse order.
 
 **Real data for new types: soft launch.** The owner publishes the new type, as a draft set with its
 narrow audience group, with policies that grant only staff; uses it; and widens it with an ordinary upgrade
@@ -1099,9 +1116,9 @@ Overlay operations other than dropping are checked by the kernel, not modelled.
   for that route (the screen without the overlay), which passed its own checks, and the owner is
   notified. The upgrade, security fixes included, is never held for an overlay.
 - Automatic dropping, when chosen, records each dropped entry and can restore it.
-- **Overlay rebind before contract.** When a restructure renames or retypes a field, the expand and rebind
-  upgrades offer the owner an **overlay rebind** step for each overlay entry that names the old field
-  (rebinding it to the new one, owner-approved), so the contract upgrade orphans only entries the owner
+- **Overlay rebind before contract.** When a restructure renames or retypes a field, the rebind upgrade
+  (after the migration is complete) offers the owner an **overlay rebind** step for each overlay entry that
+  names the old field, applied with the base rebind, so the contract upgrade orphans only entries the owner
   chose not to rebind. Orphaning, never refusal, is the rule for overlays.
 
 An owner edits overlays on the **layout editor** (builder-only), or an agent writes them. Overlays, groups
@@ -1190,12 +1207,15 @@ example, and the pinned screenshot of each). Whether a change is major is decide
   the before-state; the owner can reverse it until the end of the grace period.
 - **Reversal semantics: restore the recorded before-state, not a backward migration.** The move does not
   rewrite compositions; it sets the major, records which entries it orphaned, and records the theme's
-  previous derived set. Reversing sets the grace major again, restores the orphaned entries, and restores
-  the previous derived set; installed products' base screens are **re-checked under the grace major**,
-  orphaning and reporting what fails (a product upgraded since the move may use an entry the grace major
-  lacks). Overlay and theme edits made since the move are kept where they pass under the grace major;
-  overlay entries that fail are orphaned and reported, and a theme edit that fails the grace major's pairs
-  is reported and left for the owner's next theme step.
+  previous derived set. Reversing sets the grace major again and restores the orphaned entries;
+  installed products' base screens are **re-checked under the grace major**, orphaning and reporting what
+  fails. **Theme edits made since the move win**: tokens the owner changed after the move keep their new
+  values, and only tokens untouched since return to the previous derived set (the result is contrast-checked;
+  a failing pair is reported for the next theme step). Overlay edits made since the move are kept where they
+  pass under the grace major and orphaned and reported otherwise.
+- **What a migration between majors transforms**, given compositions are never rewritten: the tenant's
+  rendering-major setting, the theme's derived set (by the new major's derivation defaults), and the record
+  of orphaned entries. A two-behind chain applies those transforms major by major.
 - **Two majors behind** (possible only for a tenant moved back during a grace period that then ended):
   the move goes through each major's migration in turn within the one recorded step; the chain is at
   most two migrations long, since no tenant can be on a major older than the grace major, and a major
@@ -1220,9 +1240,11 @@ anonymised exports enter only after an exporter and the owner's privacy review.
   "Reload" activates it (skip-waiting, then reload) when no drain is in progress, and otherwise waits for
   the drain to finish. Until then the screen shows its older stored part if it has one, or "This page needs
   an update" in place of the screen.
-- **After a rollback** (a shell older than parts already stored): online, stored parts above the shell's
-  minor are purged and fetched again for the shell's minor; offline, the older stored part of the screen is
-  drawn if there is one, and the screen is unavailable offline otherwise.
+- **After a rollback** (a shell older than parts already stored): online, only the stored parts the server
+  **no longer lists** for the viewer's class are purged; an older stored part of a screen is kept and drawn
+  until a drawable replacement (at the shell's minor) is held; each part is purged at most once per
+  manifest, so there is no purge loop. Offline, the older stored part is drawn if there is one, and the
+  screen is unavailable offline otherwise.
 - **On a floor notice** (a role lost, a permission or policy change, D-FE-12) the page purges at once,
   before the new manifest arrives, every interface part it holds for the old class, and draws loading. Any
   change of roles is treated as narrowing.
@@ -1352,13 +1374,19 @@ A rename or a type change is **expand, migrate, rebind, contract**, each an ordi
    new one, using a conversion from an **open, platform-released vocabulary** (first: identity, integer to
    text, text to integer, time to date, choice renaming), in batches of `erasure::BATCH` records, durable and
    resumable after a crash, with an owner-visible status. Values that do not convert are reported with a
-   `clears` that is an approved data-fix step. From expand to contract, the product's operations write
-   **both** fields (or have been moved to the new one), so the job's final pass converges to zero records
-   left rather than chasing new writes. A second upgrade touching the same type while its job runs is
-   refused with `migration.in-progress` (or queued when the owner chooses).
+   `clears` that is an approved data-fix step. The **expand** upgrade carries, atomically, the changes that
+   make the product's own operations write **both** fields. Dual-writing alone cannot make the final pass
+   converge, because generic record intents, other products, automations, imports and `write-answers` can
+   still write the old field; so at **rebind** the old field is **frozen**: the kernel refuses any write to
+   it (`field.frozen`), and the job's final pass then runs to zero records left. While the job runs, an
+   upgrade that **alters the migrating fields** is refused with `migration.in-progress` (or queued when the
+   owner chooses); changes to read rules, policies and invokers of the type, security fixes among them, go
+   through.
 3. **Rebind**: a draft rebinds the screens to the new field, gated on the job's **migration-complete**
-   report; the tenant's overlays that name the old field get an owner-approved **overlay rebind** step
-   (offered entry by entry), so contract orphans nothing the owner did not choose to drop.
+   report, and freezes the old field. The owner-approved **overlay rebind** steps for overlay entries that
+   name the old field are offered **only after migration-complete** (never while the new field is still
+   empty), and are applied in the same upgrade as the base rebind, so contract orphans nothing the owner did
+   not choose to drop.
 4. **Contract**: a later upgrade removes the old field and may tighten the new one to required; the
    removal guard passes because no published screen names the old field.
 
@@ -1394,25 +1422,59 @@ product upgrade as one change; that is **reversed**. A product change is submitt
 all its changes (`ProductChange::intent`, `crates/substrate/src/product.rs:1957-1990`), counted at
 `transition.rs:2154`; its assessment clones the schema and rebuilds the dependency graph for each adaptable
 change (`transition.rs:2086-2104`) and `owner_of` scans owned lists (`kernel/src/products.rs:71-76`), so
-with entity limits as the only bound one single-writer commit could do quadratic work. The cap keeps each
-commit bounded.
+with entity limits as the only bound one single-writer commit could do quadratic work.
 
 **Large upgrades stage automatically.** When an approved revision's plan exceeds the cap, the planner
-splits it into **dependency-ordered stages**, each within the cap, and the upgrade runs as a **resumable
-staged job** (progress in the job's state); the revision is approved **once**:
+splits it into dependency-ordered stages, each within the cap, applied as a **resumable staged job**. The
+rule that makes staging invisible is about **reachability**: an early stage may change only entities that
+members and API callers cannot reach, and only **created** entities can be unreachable.
 
-- every **policy, role permission, invoker set, trigger, automation and interface element** goes into the
-  **last stage**; object types, fields, queries and views come first, and operations are created in an
-  earlier stage with **no invokers** and get theirs in the last;
-- so entities created by earlier stages are **unreachable** to members and API callers (no grant, no
-  invoker, no screen) until the last stage commits (`staged_invisible_until_last`, by construction of the
-  model; the planner's test that no earlier stage holds a grant or interface element is the guarantee,
-  WG-5472); a new optional field on a live type is empty until a migration fills it;
-- removals (the contract step) are in the last stage too;
-- if the last stage alone exceeds the cap, the plan is refused with `upgrade.final-stage-too-large`,
-  naming its counts, and the product must be split across releases;
-- stage records are internal; the product's visible history shows the version;
-- a fixture at the product entity limits checks the staging.
+**What an early stage may hold:**
+
+- new object types, their fields and constraints, **unless an any-object policy** (a policy whose resource
+  is every object type, `rules.rs:229, 456, 520`, `audience.rs:145`) would reach them, in which case the new
+  type goes in the last stage (or, if that overflows it, staging is refused with
+  `upgrade.final-stage-too-large`);
+- new queries and views (nothing serves them until a screen does);
+- new workflows on new types, new mail and notice templates nothing yet uses;
+- new **operations whose only invoker is a reserved role**: the kernel refuses an operation that names no
+  invoker (`definitions.rs:857-858`, "names no invoker"; OPR-1549), so the planner defines a reserved,
+  permissionless role (`<product>__staging`, holding no permission, assignable to nobody) in the first stage,
+  names it as the early operations' only invoker, replaces their invokers in the last stage, and removes the
+  reserved role after the last stage commits;
+- interface elements whose declared audience names only a group that no role yet fills (allowed when
+  needed to fit the last stage; not needed for the showcase, below).
+
+**What only the last stage may hold:** every policy and role permission; every real invoker set; every
+interface element members could reach; triggers, automations and segments (they act on members' writes);
+settings, ledger declarations and capabilities; unique constraints on existing types; every removal; and
+**every change to an existing live entity** (a view's or query's filter, a constraint, a read rule, a field
+retype, an existing operation's steps, a workflow). If the last stage alone exceeds the cap, the plan is
+refused with `upgrade.final-stage-too-large`, naming its counts, and the product must be split across
+releases. A planner test checks, over generated bundles, that no early stage changes the observable
+behaviour of an existing live entity or holds a grant or a member-reachable interface element; the model
+says why that suffices (`staged_invisible_until_last`: members are served a function of what they reach,
+and an early stage changes nothing reachable; `early_change_to_reachable_visible` is the counterexample).
+
+**Does the showcase stage?** The showcase community product (measured from `community.jsonc`: 8 object
+types with 64 fields and constraints, 5 roles, 19 policies, 2 workflows, 14 operations, 17 queries, 10 views,
+11 triggers, 11 automations, 5 segments, 10 screens, 13 forms, 20 live bindings, 3 error messages, 5 ledger
+declarations, 1 setting, 2 notice templates) puts into its last stage the 19 policies, the role permissions,
+the 14 invoker replacements, 11 triggers, 11 automations, 5 segments, the 46 interface elements, the ledger
+declarations and the setting: about 120 changes by this count, within the cap, so it stages without the
+early-interface allowance.
+
+**Authority and state while staging:**
+
+- each stage commits under the approving owner's **recorded approval**, which is valid for a bounded number
+  of stages and a bounded period the tenant configures; a stopped job is resumed by the owner (or by another
+  owner of the tenant, with step-up), never by an agent;
+- each stage **re-checks** that the remaining plan still matches the approved diff and refuses on a mismatch
+  (`product.base-moved`); each stage re-plans once on a `SchemaConflict` like a single commit;
+- while staging, the product's installed-product record carries an internal **stage marker** (the target
+  version and the stage reached), and every other upgrade, removal or draft set touching the product is
+  refused with `upgrade.in-progress`;
+- the visible history shows the version only; a fixture at the product entity limits checks the staging.
 
 - **Versions.** Product versions get their own comparator, semantic versioning with pre-release ordering;
   platform releases keep `release_cmp` (a fixture: the showcase products install on `0.2-draft`; another:
@@ -1602,7 +1664,8 @@ line. Requirements checked by tests are added with those tests:
 | An admin element declared for members, the public or a default role is refused; `react_to_message` stays member-facing | kernel tests | WG-5465 |
 | Draft writes change no tenant state; a stale draft write is refused | backend tests (the tenant's schema version unchanged across draft writes) | WG-5464 |
 | A preview is built from a viewer-scoped redacted snapshot; a widening draft policy shows no extra row | backend tests | WG-5464, WG-5470 |
-| A staged upgrade at the product entity limits commits in stages and members see nothing new before the last | substrate fixture | WG-5472 |
+| A staged upgrade at the product entity limits commits in stages and members see nothing new before the last; an early operation's only invoker is the reserved staging role | substrate fixtures | WG-5472 |
+| The permission delta reports each source (role permissions, policies, invokers, read rules, audiences) | kernel fixtures, one per source | WG-5471 |
 | Publishing takes the revision id and hash, refuses a mismatch, and re-plans once on a race | backend tests | WG-5471 |
 | A withheld marker appears only for required fields withheld by a read rule | backend test with a restricted subject | WG-5463 |
 | The owner's upgrade always passes the planned-against schema version and refuses a moved base | backend test | WG-5471 |
@@ -1614,7 +1677,7 @@ line. Requirements checked by tests are added with those tests:
 ## What is proved
 
 `lean/Strata/UI/Composition.lean`, `Contrast.lean`, `Visibility.lean` and `Loop.lean`, imported from
-`lean/Strata.lean` and listed in `lean/Audit.lean`: 54 theorems, no `sorry`, `admit` or added axiom.
+`lean/Strata.lean` and listed in `lean/Audit.lean`: 56 theorems, no `sorry`, `admit` or added axiom.
 
 | Property | Theorem | Requirement |
 |---|---|---|
@@ -1635,8 +1698,8 @@ line. Requirements checked by tests are added with those tests:
 | A draft write applies only at the current revision; revisions increase | `no_stale_draft_write`, `revisions_increase` | DS-015 |
 | The owner's upgrade applies exactly the approved diff of the snapshot with the approved hash, or is refused | `approve_applies_held`, `approve_class_matches`, `approve_refused_when_moved`, `approve_refused_on_hash_mismatch` | DS-016 |
 | Draft writes and discards leave the tenant's state and every served view unchanged | `draft_steps_frame` | DS-017 |
-| Preview computations see only readable records and fields, over any chain of references | `snapshot_readable`, `snapshot_ignores_unreadable`, `preview_reads_within_viewer`, `followed_within_viewer` (`preview_depends_on_readable_only`) | DS-018 |
-| Members see nothing new before the last stage of a staged upgrade | `staged_invisible_until_last` (by construction; the planner test is the guarantee) | DS-021 |
+| Preview computations see only readable records and fields, references being redacted fields, over any chain of references | `snapshot_readable`, `snapshot_ignores_unreadable`, `preview_reads_within_viewer`, `followed_within_viewer` (`preview_depends_on_readable_only`, `hidden_reference_not_followed`) | DS-018 |
+| A stage changing only unreachable entities leaves members' view unchanged; changing a reachable one does not | `staged_invisible_until_last` (`early_change_to_reachable_visible`) | DS-021 |
 | Narrowing the class part equals rendering for the viewer | `narrow_class_eq_render` | DS-019 |
 | Viewers agreeing on declared audiences share the class part; signed-in status decides | `renderClass_shared` (`signed_in_decides`) | DS-020 |
 | What the content lint establishes | `checked_screen_has_content` | supporting (a lint) |
@@ -1646,10 +1709,12 @@ line. Requirements checked by tests are added with those tests:
 - The code against the models: the kernel's composition and admin checks, the gateway's filtering, the
   preflight, the draft store's compare-and-swap, the preview's read-checked lookup and narrowing-only
   draft policies: tests and differentials in WG-5464, WG-5465, WG-5466, WG-5470, WG-5471.
-- **By construction, not proved of the code**: `draft_steps_frame` and `staged_invisible_until_last` hold
-  because the model's draft and early-stage events touch nothing members see; the guarantees are the
-  implementation tests (tenant state byte-identical across draft writes, WG-5464; no grant or interface
-  element in an early stage, WG-5472).
+- **By construction, not proved of the code**: `draft_steps_frame` holds because the model's draft
+  events touch only the draft store; the guarantee is the implementation test that the tenant's state is
+  byte-identical across draft writes (WG-5464). `staged_invisible_until_last` is proved from a
+  reachability hypothesis (members are served a function of what they reach) and the rule that early stages
+  change nothing reachable; that the kernel's reads and the gateway's serving depend only on reachable
+  entities, and that the planner obeys the rule, are tested (WG-5472).
 - **One live state**: the approval theorems assume one live state; that the kernel commits against the
   schema version the plan used (`expected_version`), and the one re-plan on a race, are not modelled
   (WG-5471). The classification's computation is a hypothesis of `approve_class_matches`.
@@ -1722,6 +1787,28 @@ Each is a Workgraph task under WG-5457 with testable acceptance criteria (Workgr
   content at rest for photos and large uploads (see "Reserved entries")?
 
 ## Answers to the reviews
+
+### Sixth review
+
+Each claim was re-checked against the code; all hold. One line number in the findings did not match:
+`PersonalDeclaration` is at `types.rs:10181-10188`, not 10100-10122; the finding itself holds.
+
+| # | Finding | Answer |
+|---|---|---|
+| B1 | Early operations with no invokers are refused | Confirmed (`definitions.rs:857-858`, OPR-1549). Fixed: a reserved, permissionless staging role nobody holds is the early operations' only invoker, replaced in the last stage and removed after |
+| — | Staging is invisible only for created entities | Fixed: every change to an existing live entity, every grant, member-reachable interface element, trigger, automation, segment, setting, ledger declaration, capability, unique constraint on an existing type and removal is in the last stage; new types reached by an any-object policy go last too; the model now has reachability (`staged_invisible_until_last` from a reachability hypothesis, `early_change_to_reachable_visible`) and the planner test is named as the guarantee |
+| — | Showcase composition | Checked from `community.jsonc`: the last stage is about 120 changes by count, within the cap; early interface elements behind unfilled groups are allowed when needed and not needed here |
+| B3 | Stage authority and state | Fixed: the approving owner's recorded approval, bounded in stages and period; owner-only resume with step-up; the approved diff re-checked per stage; one re-plan per stage on a race; an internal stage marker on the installed-product record; `upgrade.in-progress` refuses other changes to the product |
+| PD | The permission delta used `effective_permissions` | Confirmed (`rules.rs:187-192` reads role permissions only). Fixed: a kernel function over two schemas covering role permissions, policies (any-object and conditional, marked), invokers including signed-in, field read rules and audiences, with a negative fixture per source |
+| M | Dual-write cannot converge | Fixed: expand carries the dual-write operation changes atomically; at rebind the old field is frozen by the kernel (`field.frozen`) and the final pass runs to zero |
+| M | Overlay rebind offered while the field is empty | Fixed: offered only after migration-complete, applied with the base rebind |
+| M | `migration.in-progress` blocks security fixes | Fixed: it refuses only changes altering the migrating fields; read rules, policies and invokers go through |
+| DS | Draft-set order and identity | Fixed: groups and the shell list first, products, overlays last; `ui.audience.unknown-group`; named, stored sets hashed over member snapshot hashes, publishing bound to the set hash; the interface draft keyed by draft id like product drafts |
+| — | Snapshot integrity | Fixed: snapshots append-only; publishing recomputes the content hash from the stored source and bundle |
+| A | Answer privacy, retention, references | Fixed: a fixed reviewer role per product (a read rule names a literal role); personal and restricted as independent flags, four variants; retention per personal variant from the product's declared answer retention; reference answers set-null on delete |
+| R | Rollback refetch | Fixed: purge only parts the server no longer lists; keep older parts until a replacement is held; at most one purge per part per manifest |
+| R | Reversal theme conflict | Fixed: edits since the move win; only untouched tokens return; a migration between majors transforms only the major setting, the theme's derived set and the orphan record, since compositions are never rewritten |
+| L | Hidden reference counterexample | Confirmed (references separate from redacted fields). Fixed: references are fields, read from the redacted record; `snapshot_ignores_unreadable` and `followed_within_viewer` re-proved; `hidden_reference_not_followed` |
 
 ### Fifth review (option D holds)
 
