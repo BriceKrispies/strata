@@ -6,6 +6,9 @@
 //   node scripts/split-spec.mjs --spec <file>       split another file (its parts go beside it)
 //   node scripts/split-spec.mjs --check <monolith>  confirm the parts on disk reassemble to the
 //                                                   monolithic file, section by section
+//   node scripts/split-spec.mjs --verify            exit 1, writing nothing, when an item is not in the
+//                                                   part the split places it in (an area item edited
+//                                                   into a consumer part by Exegra's apply, say)
 //
 // The input may be a monolithic spec.jsonc or a manifest: a manifest is resolved first, so the script
 // can be run again on its own output (the files come out identical) and again on a monolithic file
@@ -144,7 +147,7 @@ export function openingComments(text) {
 }
 
 /** Splits the file at `specPath` in place. @returns {{written: string[]}} */
-export function splitFile(specPath) {
+export function splitFile(specPath, { dryRun = false } = {}) {
   const path = resolve(specPath);
   const own = readFileSync(path, 'utf8');
   const { text } = readSpec(path);
@@ -154,9 +157,10 @@ export function splitFile(specPath) {
   const put = (file, content) => {
     const prior = existsSync(file) ? readFileSync(file, 'utf8') : null;
     if (prior === content) return;
+    written.push(file);
+    if (dryRun) return;
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, content);
-    written.push(file);
   };
   for (const [name, content] of parts) put(join(dir, name), content);
   put(path, manifest);
@@ -205,6 +209,12 @@ function main(argv) {
     for (const p of problems) console.log(`FAIL  ${p}`);
     console.log(problems.length ? `split-spec: ${problems.length} difference(s)` : 'split-spec: the parts reassemble to the monolithic file');
     return problems.length ? 1 : 0;
+  }
+  if (argv.includes('--verify')) {
+    const { written } = splitFile(spec, { dryRun: true });
+    for (const file of written) console.log(`FAIL  ${file} is not where the split places it; run node scripts/split-spec.mjs`);
+    console.log(written.length ? `split-spec: ${written.length} file(s) would change` : 'split-spec: every item is in its part');
+    return written.length ? 1 : 0;
   }
   const { written } = splitFile(spec);
   console.log(written.length ? `split-spec: wrote ${written.join(', ')}` : 'split-spec: nothing to change');
