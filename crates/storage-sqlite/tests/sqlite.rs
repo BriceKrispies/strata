@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
-use strata_storage_api::{execute, idempotency_scope, Account, SessionRecord, Store};
+use strata_storage_api::{conformance, execute, idempotency_scope, Account, SessionRecord, Store};
 use strata_storage_sqlite::{default_tenants_dir, tenant_migration_steps, SqliteStore};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);

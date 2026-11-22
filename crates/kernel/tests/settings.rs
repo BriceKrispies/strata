@@ -1046,10 +1046,6 @@ fn grant(role_name: &str, capability: &str) -> SchemaChange {
     }
 }
 
-fn held(world: &World, who: &str) -> BTreeSet<String> {
-    rules::held_capabilities(tenant(world), &user(&format!("alpha:{who}")))
-}
-
 // Verifies: SET-2300
 #[test]
 fn a_role_of_a_product_is_refused_a_capability_of_another_product() {

@@ -24,8 +24,8 @@ use serde_json::Value as Json;
 use strata_kernel::expr as kexpr;
 use strata_kernel::ext::*;
 use strata_kernel::{
-    FieldDef, FieldId, FieldType, ObjectTypeDef, ObjectTypeId, OnDelete, Principal, PrincipalId,
-    Record as KRecord, RecordId, RoleId, Timestamp, Value as KValue,
+    FieldId, ObjectTypeId, Principal, PrincipalId, Record as KRecord, RecordId, RoleId, Timestamp,
+    Value as KValue,
 };
 use strata_spec_compiler::output;
 use strata_spec_compiler_language_fixture::rule_language as lang;
@@ -76,36 +76,16 @@ fn language_golden_output_matches_its_fixture_crate() {
 // The publication template's expressions
 // ---------------------------------------------------------------------------------------------
 
-/// One expression of the template with its definition site.
-struct Site {
-    source: String,
-    object: String,
-    params: Vec<String>,
-}
-
 fn template() -> Json {
     let path = manifest_dir().join("../../tenants/_templates/publication.json");
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
 
-fn strings(v: &Json) -> Vec<String> {
-    v.as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Json::as_str)
-        .map(str::to_string)
-        .collect()
-}
-
-fn template_expressions(t: &Json) -> Vec<Site> {
+fn template_expressions(t: &Json) -> Vec<String> {
     let mut out = Vec::new();
-    let mut push = |source: Option<&str>, object: &str, params: Vec<String>| {
+    let mut push = |source: Option<&str>| {
         if let Some(source) = source {
-            out.push(Site {
-                source: source.to_string(),
-                object: object.to_string(),
-                params,
-            });
+            out.push(source.to_string());
         }
     };
     let list = |v: &Json, k: &str| -> Vec<Json> {
@@ -115,38 +95,28 @@ fn template_expressions(t: &Json) -> Vec<Site> {
             .unwrap_or_default()
     };
     for o in list(t, "objects") {
-        let id = o["id"].as_str().unwrap();
         for f in list(&o, "fields") {
-            push(f.get("default").and_then(Json::as_str), id, Vec::new());
+            push(f.get("default").and_then(Json::as_str));
         }
         for c in list(&o, "constraints") {
-            push(c.get("check").and_then(Json::as_str), id, Vec::new());
+            push(c.get("check").and_then(Json::as_str));
         }
     }
     for w in list(t, "workflows") {
-        let object = w["object"].as_str().unwrap();
         for tr in list(&w, "transitions") {
-            push(tr.get("guard").and_then(Json::as_str), object, Vec::new());
+            push(tr.get("guard").and_then(Json::as_str));
             if let Some(set) = tr.get("set").and_then(Json::as_object) {
                 for value in set.values() {
-                    push(value.as_str(), object, Vec::new());
+                    push(value.as_str());
                 }
             }
         }
     }
     for p in list(t, "policies") {
-        push(
-            p.get("when").and_then(Json::as_str),
-            p["on"].as_str().unwrap(),
-            Vec::new(),
-        );
+        push(p.get("when").and_then(Json::as_str));
     }
     for q in list(t, "queries") {
-        push(
-            q.get("where").and_then(Json::as_str),
-            q["object"].as_str().unwrap(),
-            strings(&q["params"]),
-        );
+        push(q.get("where").and_then(Json::as_str));
     }
     out
 }
@@ -367,7 +337,6 @@ fn evaluation_agrees_with_the_kernel() {
     ];
     let sources: Vec<String> = template_expressions(&template())
         .into_iter()
-        .map(|s| s.source)
         .chain(MORE.iter().map(|s| s.to_string()))
         .collect();
     let mut failures = Vec::new();
@@ -418,140 +387,6 @@ fn evaluation_agrees_with_the_kernel() {
     }
     assert!(compared > 100);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-// ---------------------------------------------------------------------------------------------
-// The static check against the kernel
-// ---------------------------------------------------------------------------------------------
-
-/// The template's object types as kernel definitions.
-fn objects(t: &Json) -> BTreeMap<ObjectTypeId, ObjectTypeDef> {
-    let mut out = BTreeMap::new();
-    for o in t["objects"].as_array().unwrap() {
-        let id = ObjectTypeId::new(o["id"].as_str().unwrap()).unwrap();
-        let mut fields = BTreeMap::new();
-        for f in o["fields"].as_array().unwrap() {
-            let ty_text = f["type"].as_str().unwrap();
-            let ty = |t: &str| match t {
-                "string" => FieldType::Str,
-                "int" => FieldType::Int,
-                "bool" => FieldType::Bool,
-                "timestamp" => FieldType::Time,
-                other => match other.strip_prefix("ref:") {
-                    Some(target) => FieldType::Ref {
-                        target: ObjectTypeId::new(target).unwrap(),
-                        on_delete: OnDelete::Restrict,
-                    },
-                    None => panic!("a template field type {other}"),
-                },
-            };
-            let ty = match ty_text.strip_prefix("list:") {
-                Some(inner) => FieldType::List(Box::new(ty(inner))),
-                None => ty(ty_text),
-            };
-            let fid = field(f["id"].as_str().unwrap());
-            fields.insert(
-                fid.clone(),
-                FieldDef {
-                    id: fid,
-                    label: String::new(),
-                    ty,
-                    required: false,
-                    unique: false,
-                    default: None,
-                    read: None,
-                    personal: None,
-                },
-            );
-        }
-        out.insert(
-            id.clone(),
-            ObjectTypeDef {
-                id,
-                label: String::new(),
-                fields,
-                constraints: BTreeMap::new(),
-                retention: None,
-                publication: None,
-                language_field: None,
-                translation_group: None,
-                unique: None,
-                searchable: None,
-            },
-        );
-    }
-    out
-}
-
-fn shape_of(ty: &FieldType) -> lang::Shape {
-    match ty {
-        FieldType::Str => lang::Shape::Str,
-        FieldType::Int => lang::Shape::Int,
-        FieldType::Bool => lang::Shape::Bool,
-        FieldType::Time => lang::Shape::Time,
-        FieldType::Ref { .. } => lang::Shape::Ref,
-        FieldType::File { .. } | FieldType::Language => lang::Shape::Str,
-        FieldType::List(_) => lang::Shape::List,
-    }
-}
-
-/// The generated check's definition site over the kernel's definitions.
-struct Definitions<'a> {
-    object: &'a ObjectTypeDef,
-    objects: &'a BTreeMap<ObjectTypeId, ObjectTypeDef>,
-    params: &'a BTreeSet<String>,
-    roles: &'a BTreeSet<RoleId>,
-}
-
-impl Definitions<'_> {
-    fn def(&self, field: &str) -> Result<&FieldDef, String> {
-        let id = FieldId::new(field).map_err(|e| e.to_string())?;
-        self.object
-            .fields
-            .get(&id)
-            .ok_or_else(|| format!("unknown field {field}"))
-    }
-}
-
-impl lang::TypeEnv for Definitions<'_> {
-    fn field_shape(&self, through: Option<&str>, name: &str) -> Result<lang::Shape, String> {
-        let fields = match through {
-            None => &self.object.fields,
-            Some(reference) => {
-                let Some((object, _, false)) = self.def(reference)?.ty.ref_target() else {
-                    return Err(format!("{reference} is not a single reference"));
-                };
-                &self
-                    .objects
-                    .get(object)
-                    .ok_or_else(|| format!("unknown object type {object}"))?
-                    .fields
-            }
-        };
-        let id = FieldId::new(name).map_err(|e| e.to_string())?;
-        fields
-            .get(&id)
-            .map(|def| shape_of(&def.ty))
-            .ok_or_else(|| format!("unknown field {name}"))
-    }
-
-    fn follow(&self, field: &str) -> Result<(), String> {
-        let Some((object, _, false)) = self.def(field)?.ty.ref_target() else {
-            return Err(format!("{field} is not a single reference"));
-        };
-        self.objects
-            .get(object)
-            .map(|_| ())
-            .ok_or_else(|| format!("unknown object type {object}"))
-    }
-
-    fn has_param(&self, name: &str) -> bool {
-        self.params.contains(name)
-    }
-
-    fn has_role(&self, role: &str) -> bool {
-        RoleId::new(role).is_ok_and(|r| self.roles.contains(&r))
-    }
 }
 
 fn to_generated(v: &KValue) -> Value {

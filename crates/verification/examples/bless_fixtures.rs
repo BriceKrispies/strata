@@ -22,11 +22,7 @@ fn main() {
     let fixtures = lean_dir.join("fixtures");
     let current = std::fs::read_to_string(fixtures.join("scenarios.txt"))
         .unwrap_or_default()
-        .replace(
-            "
-", "
-",
-        );
+        .replace("\r\n", "\n");
     let text = format!(
         "{}{}",
         scenarios(FIXTURE_SEED, FIXTURE_COUNT),

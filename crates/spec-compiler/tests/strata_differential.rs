@@ -37,7 +37,7 @@
 //! `SPECC_SKIP_EXEGRA_TESTS=1` or `SPECC_SKIP_NODE_TESTS=1` says so. `STRATA_DIFFERENTIAL_JOBS`
 //! sets how many Exegra traces run at once (default 2).
 
-mod support;
+use crate::support;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Write};

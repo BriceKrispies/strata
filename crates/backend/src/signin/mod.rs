@@ -66,7 +66,7 @@ pub trait SignInMethod: Send + Sync {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum SignInOutcome {
-    Session(LoginReply),
+    Session(Box<LoginReply>),
     /// `{ "second_factor": { "challenge", "methods", "enrol", "expires_in" } }`.
     Pending(Json),
 }
@@ -291,7 +291,8 @@ pub fn sign_in(
     if let Some(waiting) = second::stage(app, caller, name, method.factors(), &account)? {
         return Ok(SignInOutcome::Pending(waiting));
     }
-    auth::start_session(app, caller, &tenant, account, name).map(SignInOutcome::Session)
+    auth::start_session(app, caller, &tenant, account, name)
+        .map(|reply| SignInOutcome::Session(Box::new(reply)))
 }
 
 #[cfg(test)]

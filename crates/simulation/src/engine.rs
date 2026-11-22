@@ -133,7 +133,7 @@ pub enum Outcome {
         delta_hash: String,
         events: Vec<EventSummary>,
         effects: Vec<Effect>,
-        output: Output,
+        output: Box<Output>,
         checks_passed: usize,
         /// Checks that failed without stopping the transition (grandfathered records).
         warnings: Vec<Check>,
@@ -352,7 +352,7 @@ pub fn run_with(
                         delta_hash: canon::hash_of(&transition.delta),
                         events: transition.events.iter().map(summarise).collect(),
                         effects: transition.effects.clone(),
-                        output: transition.output.clone(),
+                        output: Box::new(transition.output.clone()),
                         checks_passed: transition.evidence.iter().filter(|c| c.passed).count(),
                         warnings: transition
                             .evidence

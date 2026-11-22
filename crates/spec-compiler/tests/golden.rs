@@ -251,13 +251,6 @@ fn file_text(files: &[GeneratedFile], path: &str) -> String {
         .clone()
 }
 
-fn specc(args: &[&str]) -> std::process::Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_specc"))
-        .args(args)
-        .output()
-        .unwrap()
-}
-
 const DERIVED_SPEC: &str = "crates/spec-compiler/tests/fixtures/derived/spec.jsonc";
 const DERIVED_CRATE: &str = "strata-spec-compiler-derived-fixture";
 

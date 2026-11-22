@@ -8,15 +8,6 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 use strata_runtime::server::{serve_with, ServeLimits};
 
-fn limits(header: u64, request: u64, connections: usize) -> ServeLimits {
-    ServeLimits {
-        header_read_timeout: Duration::from_secs(header),
-        request_timeout: Duration::from_secs(request),
-        max_connections: connections,
-        ..ServeLimits::default()
-    }
-}
-
 /// Send `request` and read the whole reply (the request asks for the connection to close).
 fn exchange(addr: SocketAddr, request: &str, patience: Duration) -> std::io::Result<String> {
     let mut stream = TcpStream::connect(addr)?;

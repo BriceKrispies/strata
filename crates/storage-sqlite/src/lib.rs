@@ -5029,7 +5029,7 @@ impl Store for SqliteStore {
                 };
                 put_job(tx, &next)?;
                 write_automation(tx, tenant, writes, now)?;
-                Ok(Reported::Recorded(next))
+                Ok(Reported::Recorded(Box::new(next)))
             })?
             .unwrap_or_else(|| Reported::Refused(format!("no tenant {tenant}"))))
     }

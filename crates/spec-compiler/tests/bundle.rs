@@ -12,11 +12,10 @@
 //!   (`layer.header-invalid`), and the layer checks are refused first.
 //! - The `specc bundle` command writes the file, and writes nothing for a product it refuses.
 
-mod support;
+use crate::support;
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 
 use serde_json::{json, Map, Value};
 use strata_spec_compiler::layers::{self, ProductFile};
@@ -317,14 +316,6 @@ fn two_entities_that_would_share_an_id_are_refused() {
 }
 
 // ---- the command ------------------------------------------------------------------------------
-
-fn specc(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_specc"))
-        .args(args)
-        .current_dir(root())
-        .output()
-        .expect("specc runs")
-}
 
 // Verifies: AGG-001
 // Verifies: AGG-041

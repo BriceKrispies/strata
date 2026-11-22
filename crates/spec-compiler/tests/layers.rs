@@ -17,7 +17,7 @@
 //!
 //! The Exegra checks need the Exegra CLI (see `support`).
 
-mod support;
+use crate::support;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -418,22 +418,6 @@ fn an_event_kind_without_the_app_prefix_is_refused() {
 }
 
 // ---- generated files ----------------------------------------------------------------------
-
-/// Runs specc from the repository root and fails with its output unless it succeeds.
-fn specc(args: &[&str]) {
-    let output = Command::new(env!("CARGO_BIN_EXE_specc"))
-        .args(args)
-        .current_dir(root())
-        .output()
-        .expect("specc runs");
-    assert!(
-        output.status.success(),
-        "specc {} failed:\n{}{}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
 
 // ---- Exegra -------------------------------------------------------------------------------
 

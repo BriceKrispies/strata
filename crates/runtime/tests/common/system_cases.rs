@@ -1,10 +1,6 @@
-//! The system host on a store: one queue for two hand-written machines, delivered in
-//! `(due, seq)` order at each entry's own time, an ignored event writing nothing, and a step that
-//! fails in one receiver committing nothing in any.
-//!
-//! The counter counts `bump`s of its key and tells the watcher of the same key 10 ms later
-//! (`bumped`, a delayed emit); the watcher counts what it hears and settles 5 ms after (a timer).
-//! `both` reaches the watcher, which counts it, and the counter, which refuses it.
+//! The system host on a store: one queue for hand-written machines, a singleton made once by two
+//! systems over one store, a message that always fails dead-lettered after the cap, and dead
+//! letters purged past retention.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -12,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use strata_runtime::{
     Delivery, DispatchError, Dispatcher, Envelope, Isolation, Machine, MachineStore, Member,
-    NoTelemetry, Outcome, PurgeReport, RecordError, Retention, RetryPolicy, Router, Routing,
-    StepError, System, Telemetry, TestClock, Time,
+    Outcome, PurgeReport, RecordError, Retention, RetryPolicy, Router, Routing, StepError, System,
+    TestClock, Time,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,19 +36,6 @@ enum Out {
     Bumped { key: String },
     #[serde(rename = "pinged")]
     Pinged {},
-}
-
-/// The longest key a record may have: the machines' stand-in for a generated record constraint.
-const MAX_KEY: usize = 8;
-
-/// The counter's `instances.max`.
-const MAX_COUNTERS: u64 = 3;
-
-fn validate(record: &Rec) -> Result<(), String> {
-    if record.key.chars().count() > MAX_KEY {
-        return Err(format!("key is longer than {MAX_KEY} characters"));
-    }
-    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,135 +73,10 @@ fn to_rec(key: &str, phase: &Phase, vars: &Vars) -> Rec {
     }
 }
 
-struct Counter;
-
-impl Machine for Counter {
-    const NAME: &'static str = "counter";
-    const RECORD: &'static str = "counters";
-    const ISOLATION: Isolation = Isolation::Serializable;
-    const CREATES: bool = true;
-    const MAX_INSTANCES: Option<u64> = Some(MAX_COUNTERS);
-    type State = Phase;
-    type Vars = Vars;
-    type Event = In;
-    type Emitted = Out;
-    type Key = String;
-    type Record = Rec;
-
-    fn initial(_: &String) -> (Phase, Vars) {
-        (Phase::Open, Vars { n: 0, at: 0 })
-    }
-    fn from_record(r: &Rec) -> Result<(Phase, Vars), RecordError> {
-        from_rec(r)
-    }
-    fn to_record(k: &String, s: &Phase, v: &Vars, _: Option<&Rec>) -> Result<Rec, RecordError> {
-        Ok(to_rec(k, s, v))
-    }
-    fn is_elapsed(e: &In) -> bool {
-        matches!(e, In::Settled {})
-    }
-    fn validate_record(r: &Rec) -> Result<(), String> {
-        validate(r)
-    }
-    fn step(s: &Phase, v: &Vars, e: &In, now: Time) -> Result<Outcome<Counter>, StepError> {
-        match e {
-            In::Ping { .. } => Ok(Outcome::to(*s, v.clone()).emit_after(
-                "pager",
-                Delivery::AtMostOnce,
-                Out::Pinged {},
-                Duration::from_millis(10),
-            )),
-            In::Bump { key } => Ok(Outcome::to(
-                *s,
-                Vars {
-                    n: v.n + 1,
-                    at: now.0,
-                },
-            )
-            .emit_after(
-                "outside",
-                Delivery::AtLeastOnce,
-                Out::Bumped { key: key.clone() },
-                Duration::from_millis(10),
-            )),
-            In::Both { .. } => Err(StepError::Rejected("the counter refuses both".into())),
-            _ => Ok(Outcome::ignore(*s, v.clone())),
-        }
-    }
-}
-
-struct Watcher;
-
-impl Machine for Watcher {
-    const NAME: &'static str = "watcher";
-    const RECORD: &'static str = "watchers";
-    const ISOLATION: Isolation = Isolation::Serializable;
-    const CREATES: bool = true;
-    type State = Phase;
-    type Vars = Vars;
-    type Event = In;
-    type Emitted = Out;
-    type Key = String;
-    type Record = Rec;
-
-    fn initial(_: &String) -> (Phase, Vars) {
-        (Phase::Open, Vars { n: 0, at: 0 })
-    }
-    fn from_record(r: &Rec) -> Result<(Phase, Vars), RecordError> {
-        from_rec(r)
-    }
-    fn to_record(k: &String, s: &Phase, v: &Vars, _: Option<&Rec>) -> Result<Rec, RecordError> {
-        Ok(to_rec(k, s, v))
-    }
-    fn is_elapsed(e: &In) -> bool {
-        matches!(e, In::Settled {})
-    }
-    fn validate_record(r: &Rec) -> Result<(), String> {
-        validate(r)
-    }
-    fn step(s: &Phase, v: &Vars, e: &In, now: Time) -> Result<Outcome<Watcher>, StepError> {
-        match (s, e) {
-            (Phase::Open, In::Bumped { .. } | In::Both { .. }) => Ok(Outcome::to(
-                Phase::Open,
-                Vars {
-                    n: v.n + 1,
-                    at: now.0,
-                },
-            )
-            .set_timer("settle", Duration::from_millis(5), In::Settled {})),
-            (Phase::Open, In::Settled {}) => {
-                Ok(Outcome::to(Phase::Settled, Vars { n: v.n, at: now.0 }))
-            }
-            _ => Ok(Outcome::ignore(*s, v.clone())),
-        }
-    }
-}
-
-const ROUTES: strata_runtime::RouteTable = &[
-    ("bump", &[Routing::by_key("counter", "key")]),
-    ("noise", &[Routing::every("counter")]),
-    (
-        "both",
-        &[
-            Routing::by_key("watcher", "key"),
-            Routing::by_key("counter", "key"),
-        ],
-    ),
-    ("bumped", &[Routing::by_key("watcher", "key")]),
-    ("ping", &[Routing::by_key("counter", "key")]),
-];
-
 /// The receivers outside the machines: remembers who was dispatched to.
 #[derive(Default)]
 struct Outside {
     receivers: Mutex<Vec<String>>,
-}
-
-impl Outside {
-    fn reached(&self, receiver: &str) -> usize {
-        let seen = self.receivers.lock().unwrap();
-        seen.iter().filter(|r| *r == receiver).count()
-    }
 }
 
 impl Dispatcher<Value> for Outside {
@@ -227,30 +85,6 @@ impl Dispatcher<Value> for Outside {
         seen.push(envelope.receiver.as_str().to_string());
         Ok(())
     }
-}
-
-fn system_on<S: MachineStore>(
-    store: Arc<S>,
-    clock: &TestClock,
-    outside: &Arc<Outside>,
-    telemetry: Arc<dyn Telemetry>,
-) -> System<S, Outside> {
-    let router = Router::new(
-        vec![Member::of::<Counter>(), Member::of::<Watcher>()],
-        ROUTES,
-    );
-    System::new(store, router, outside.clone(), Arc::new(clock.clone()))
-        .unwrap()
-        .with_telemetry(telemetry)
-}
-
-fn system<S: MachineStore>(store: Arc<S>, clock: &TestClock) -> System<S, Outside> {
-    system_on(
-        store,
-        clock,
-        &Arc::new(Outside::default()),
-        Arc::new(NoTelemetry),
-    )
 }
 
 fn key(k: &str) -> String {

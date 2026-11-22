@@ -191,7 +191,12 @@ function workspacePackages() {
   const manifest = readFileSync(resolve(root, 'Cargo.toml'), 'utf8');
   const members = [...(manifest.match(/^members\s*=\s*\[([^\]]*)\]/m)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1]);
   // crates/model/<area> are the crates by area of the generated model (WG-5371).
-  const isGenerated = (dir) => dir === 'crates/model' || dir === 'crates/model-core' || dir.startsWith('crates/model/');
+  // A crate whose src/lib.rs carries the @generated header is specc output too (the fixture crates).
+  const hasGeneratedHeader = (dir) => {
+    const lib = resolve(root, dir, 'src/lib.rs');
+    return existsSync(lib) && readFileSync(lib, 'utf8').split(/\r?\n/, 3).some((line) => line.includes('@generated'));
+  };
+  const isGenerated = (dir) => dir === 'crates/model' || dir === 'crates/model-core' || dir.startsWith('crates/model/') || hasGeneratedHeader(dir);
   const all = [];
   const handWritten = [];
   for (const dir of members) {

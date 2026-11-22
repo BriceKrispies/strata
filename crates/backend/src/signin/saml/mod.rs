@@ -388,7 +388,8 @@ impl SignInMethod for SamlMethod {
             let identity = identify(app, caller)?;
             if identity
                 .session
-                .as_ref().is_none_or(|session| session.principal != *principal)
+                .as_ref()
+                .is_none_or(|session| session.principal != *principal)
             {
                 return refuse(caller, &provider.id, "link_session");
             }
