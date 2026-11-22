@@ -65,7 +65,7 @@
       "tier": "full",
       "seconds": null,
       "unmeasured": true,
-      "reason": "corpus: Compiles the 14 enterprise product files with specc, installs them into one tenant, and populates the small scale four times on the memory store and once on SQLite, to check that a fixed seed gives a byte-identical tenant hash; not yet measured"
+      "reason": "corpus: Compiles the 14 enterprise product files with specc, installs them into one tenant, and populates the small scale three times (twice on the memory store, once on SQLite, plus another seed) to check that a fixed seed gives a byte-identical tenant hash on both stores, and only plans the large scale; not yet measured"
     },
     {
       "package": "strata-kernel",
@@ -110,7 +110,7 @@
       "tier": "full",
       "seconds": 8.37,
       "unmeasured": true,
-      "reason": "simulation: Determinism and minimisation over the Fieldnotes bundle; scoped runs include it when the simulation crate or a tenant bundle changed"
+      "reason": "simulation: Determinism and minimisation over the Fieldnotes bundle, and the shell path with each fault of the failure modes, which share one fault-free baseline run; scoped runs include it when the simulation crate or a tenant bundle changed"
     },
     {
       "package": "strata-spec-compiler",
@@ -125,7 +125,7 @@
       "tier": "full",
       "seconds": 1051.92,
       "unmeasured": true,
-      "reason": "bundle: Not yet measured: loads the platform specification and runs specc; full tier until it is measured; conformance: Loads the platform specification and formats its whole generated conformance suite with rustfmt; not yet measured; golden: Regenerates three fixture crates and compares them byte for byte; scoped runs include it when the specc crate changed; layers: Validates the whole specification with Exegra once per product file and runs specc over the whole specification twice per generated tree; strata_differential: Steps every generated machine, Rust and JavaScript, through every scenario trace from Exegra",
+      "reason": "bundle: Not yet measured: loads the platform specification and runs specc; full tier until it is measured; conformance: Loads the platform specification and formats its whole generated conformance suite with rustfmt; not yet measured; golden: Regenerates three fixture crates and compares them byte for byte; scoped runs include it when the specc crate changed; layers: Validates the whole specification with Exegra three times (the platform alone, the accepted products together, two refused products) and runs specc over the whole specification twice per generated tree; strata_differential: Steps every generated machine, Rust and JavaScript, through every scenario trace from Exegra",
       "slow": true
     },
     {

@@ -523,19 +523,42 @@ fn info_of(spec: &Value, b: &Value) -> Info {
     }
 }
 
+/// The specification as it is read, parsed and loaded (with the ids of its client machines), once
+/// for every test in this binary: reading the 5.6 MB text and loading it is most of what the
+/// registry test costs, and the comparison test needs the same.
+struct Loaded {
+    json: Value,
+    typed: Spec,
+    client: BTreeSet<String>,
+}
+
+fn loaded(root: &Path) -> &'static Loaded {
+    static LOADED: std::sync::OnceLock<Loaded> = std::sync::OnceLock::new();
+    LOADED.get_or_init(|| {
+        let path = "specifications/spec.jsonc";
+        let text = strata_spec_parts::read_spec_text(&root.join(path)).unwrap();
+        let json = jsonc::parse(&text).unwrap();
+        let (typed, client) = load::load_with_client_machines(path, &text).unwrap_or_else(|d| {
+            panic!(
+                "the specification was refused:
+{}",
+                d.iter().map(ToString::to_string).collect::<Vec<_>>().join(
+                    "
+"
+                )
+            )
+        });
+        Loaded {
+            json,
+            typed,
+            client: client.iter().map(|b| b.id.to_string()).collect(),
+        }
+    })
+}
+
 fn read_specification(root: &Path) -> Specification {
-    let path = "specifications/spec.jsonc";
-    let text = strata_spec_parts::read_spec_text(&root.join(path)).unwrap();
-    let json = jsonc::parse(&text).unwrap();
-    let typed = load::load(path, &text).unwrap_or_else(|d| {
-        panic!(
-            "the specification was refused:\n{}",
-            d.iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    });
+    let Loaded { json, typed, .. } = loaded(root);
+    let (json, typed) = (json.clone(), typed.clone());
     let cases = wire::type_cases(&typed);
     let implementation: Vec<&Value> = items(&json, "behaviors")
         .iter()
@@ -1292,29 +1315,21 @@ fn the_generated_machines_step_as_exegra_runs_the_specification() {
 #[test]
 fn every_server_implementation_machine_is_in_the_registry() {
     let root = clean(&support::repo_root());
-    let path = "specifications/spec.jsonc";
-    let text = strata_spec_parts::read_spec_text(&root.join(path)).unwrap();
-    let json = jsonc::parse(&text).unwrap();
-    let (typed, client) = load::load_with_client_machines(path, &text).unwrap_or_else(|d| {
-        panic!(
-            "the specification was refused:\n{}",
-            d.iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    });
-    let client: BTreeSet<&str> = client.iter().map(|b| b.id.as_str()).collect();
+    let Loaded {
+        json,
+        typed,
+        client,
+    } = loaded(&root);
     let memory: BTreeSet<&str> = typed
         .memory_machines
         .iter()
         .map(|b| b.id.as_str())
         .collect();
-    let expected: BTreeSet<String> = items(&json, "behaviors")
+    let expected: BTreeSet<String> = items(json, "behaviors")
         .iter()
         .filter(|b| b["level"] == json!("implementation"))
         .map(|b| b["id"].as_str().unwrap().to_string())
-        .filter(|id| !client.contains(id.as_str()) && !memory.contains(id.as_str()))
+        .filter(|id| !client.contains(id) && !memory.contains(id.as_str()))
         .collect();
     assert!(
         !expected.is_empty(),

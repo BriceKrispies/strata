@@ -489,7 +489,7 @@ fn platform_validation(cli: &Path) -> &'static Value {
 }
 
 /// Exegra accepts the fixture product and the complete products beside the platform, and reports
-/// the platform semantic hash unchanged with each set.
+/// the platform semantic hash unchanged with them.
 #[test]
 fn exegra_accepts_the_products_and_reports_the_platform_hash_unchanged() {
     let Some(cli) = support::exegra_cli("the layered validation") else {
@@ -498,46 +498,32 @@ fn exegra_accepts_the_products_and_reports_the_platform_hash_unchanged() {
     let alone = platform_validation(&cli);
     assert!(alone["semanticHash"].is_string(), "{alone}");
 
-    let specs = exegra_specs("exegra-accepted", &["badges.jsonc"]);
+    // The fixture product and the two complete products in one project: each lives in its own
+    // namespace, and one validation analyses the whole platform once instead of once per set.
+    let specs = exegra_specs(
+        "exegra-accepted",
+        &["badges.jsonc", "ledger-trigger.jsonc", "promotions.jsonc"],
+    );
     let layered = exegra_validate(&cli, &specs, "layered");
     assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
     assert_eq!(layered["result"]["errors"], Value::from(0), "{layered}");
     assert_eq!(
         layered["semanticHash"], alone["semanticHash"],
-        "adding a product changed the platform semantic hash, which the generated headers carry"
+        "adding products changed the platform semantic hash, which the generated headers carry"
     );
-    assert_eq!(
-        layered["result"]["products"][0]["product"],
-        Value::from("badges")
-    );
-
-    let specs = exegra_specs(
-        "exegra-complete",
-        &["ledger-trigger.jsonc", "promotions.jsonc"],
-    );
-    let layered = exegra_validate(&cli, &specs, "layered");
-    assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
-    assert_eq!(layered["result"]["errors"], Value::from(0), "{layered}");
-    assert_eq!(layered["semanticHash"], alone["semanticHash"]);
     let products: Vec<&str> = layered["result"]["products"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|p| p["product"].as_str())
         .collect();
-    assert_eq!(products, vec!["ledger-trigger", "promotions"]);
+    assert_eq!(products, vec!["badges", "ledger-trigger", "promotions"]);
 }
 
-/// Exegra refuses a few of the refused products with the same rule as specc: one from each kind of
-/// layering rule (an import, an expression, the header, a record rule). Every Exegra validation
-/// analyses the whole platform, so the parity of every fixture is checked in Exegra's own tests
-/// (WG-5350), not here.
-const EXEGRA_SAMPLE: [&str; 4] = [
-    "import-missing",
-    "expression-type",
-    "header-missing",
-    "retention-missing",
-];
+/// Exegra refuses two of the refused products with the same rule as specc: one expression rule
+/// and one record rule. Every Exegra validation analyses the whole platform, so the parity of every
+/// fixture is checked in Exegra's own tests (WG-5350), not here.
+const EXEGRA_SAMPLE: [&str; 2] = ["expression-type", "retention-missing"];
 
 #[test]
 fn exegra_refuses_each_refused_product_with_the_same_rule() {
