@@ -5,7 +5,7 @@ primitives, the patterns and how products extend them, the app shell and templat
 that turns data into interface, interaction, wireframes, who sees what (public and private, role by
 role), the layouts a tenant arranges, how all of it is versioned, and the loop in which an agent
 builds a tenant's screens while the tenant watches. This is a design. Its requirements are in
-`specifications/design-system.jsonc` (DS-001 to DS-021, D-DS-1 to D-DS-29), the properties that can
+`specifications/design-system.jsonc` (DS-001 to DS-021, D-DS-1 to D-DS-30), the properties that can
 be stated precisely are proved in Lean (`lean/Strata/UI/`), and the work is listed at the end in
 dependency order, each item a Workgraph task under WG-5457. It was revised after three adversarial
 review rounds; the answers are in the last section, and everything above it is the current design.
@@ -958,9 +958,14 @@ fields):
   through `grants_of`, `schema.rs:170-178`). The function covers, per role (and for the public and for every
   signed-in person): role permissions; **policies**, including any-object policies and conditional ones
   (`rules.rs:452-470`), each conditional line marked conditional with its condition; **operation invokers**,
-  including `signed-in: true` (`types.rs:10756-10762`); **field read rules**; and **interface audiences**.
-  Each source has a negative fixture (a widening to the public by a policy alone; an operation opened to
-  every signed-in person; a field read rule loosened; an audience widened). A line that opens anything to
+  including `signed-in: true` (`types.rs:10756-10762`); **operation conditions** (the stage-4 gate,
+  `operations.rs:15-16` and `:291`: a role test removed or any condition loosened); the **object types an
+  operation's steps write** (steps run under the definer's powers, so a step newly writing a type widens what
+  the invokers can change); **workflow transition guards** (`transition.rs:900-905`); **field read rules**;
+  and **interface audiences**. It also lists operations that **become or stop being derived admin**. Each
+  source has a negative fixture (a widening to the public by a policy alone; an operation opened to every
+  signed-in person; a condition's role test removed; a step newly writing another type; a transition guard
+  loosened; a field read rule loosened; an audience widened). A line that opens anything to
   the public or to every member needs the owner's explicit confirmation.
 - **The owner publishes** with step-up (`products.rs:316-334`) through a contract that takes the **revision
   id and hash** and reads the snapshot from the draft store; the bundle no longer comes in the request body
@@ -1117,9 +1122,9 @@ Overlay operations other than dropping are checked by the kernel, not modelled.
   notified. The upgrade, security fixes included, is never held for an overlay.
 - Automatic dropping, when chosen, records each dropped entry and can restore it.
 - **Overlay rebind before contract.** When a restructure renames or retypes a field, the rebind upgrade
-  (after the migration is complete) offers the owner an **overlay rebind** step for each overlay entry that
-  names the old field, applied with the base rebind, so the contract upgrade orphans only entries the owner
-  chose not to rebind. Orphaning, never refusal, is the rule for overlays.
+  (the freeze, last pass and rebind commit) offers the owner an **overlay rebind** step for each overlay
+  entry that names the old field, applied in that commit, so the contract upgrade orphans only entries the
+  owner chose not to rebind. Orphaning, never refusal, is the rule for overlays.
 
 An owner edits overlays on the **layout editor** (builder-only), or an agent writes them. Overlays, groups
 and the shell list belong to the tenant, not to a product, so they are drafted in the tenant's own
@@ -1363,38 +1368,68 @@ No delegation carries `bundle-install`. An agent writes only as the person it ac
 
 ### Restructures
 
-A rename or a type change is **expand, migrate, rebind, contract**, each an ordinary approved upgrade:
+A rename or a type change is a sequence of ordinary approved upgrades with explicit phases.
 
-1. **Expand**: the new field is added **optional**. Adding a required field to a type with records is
-   refused today (`ExistingData::Reject`, `product.rs:2090-2096`), and the expand step must not depend on
-   that changing. The new field's read rule and personal declaration must be the **same as or stricter
-   than** the source field's (refused otherwise), so a migration never copies a value to where more people
-   can read it.
-2. **Migrate**: the upgrade declares a **migration job** (WG-5514): copy or convert the source field into the
-   new one, using a conversion from an **open, platform-released vocabulary** (first: identity, integer to
-   text, text to integer, time to date, choice renaming), in batches of `erasure::BATCH` records, durable and
-   resumable after a crash, with an owner-visible status. Values that do not convert are reported with a
-   `clears` that is an approved data-fix step. The **expand** upgrade carries, atomically, the changes that
-   make the product's own operations write **both** fields. Dual-writing alone cannot make the final pass
-   converge, because generic record intents, other products, automations, imports and `write-answers` can
-   still write the old field; so at **rebind** the old field is **frozen**: the kernel refuses any write to
-   it (`field.frozen`), and the job's final pass then runs to zero records left. While the job runs, an
-   upgrade that **alters the migrating fields** is refused with `migration.in-progress` (or queued when the
-   owner chooses); changes to read rules, policies and invokers of the type, security fixes among them, go
-   through.
-3. **Rebind**: a draft rebinds the screens to the new field, gated on the job's **migration-complete**
-   report, and freezes the old field. The owner-approved **overlay rebind** steps for overlay entries that
-   name the old field are offered **only after migration-complete** (never while the new field is still
-   empty), and are applied in the same upgrade as the base rebind, so contract orphans nothing the owner did
-   not choose to drop.
-4. **Contract**: a later upgrade removes the old field and may tighten the new one to required; the
-   removal guard passes because no published screen names the old field.
+1. **Expand.** The new field is added **optional** (adding a required field to a type with records is
+   refused, `ExistingData::Reject`, `product.rs:2090-2096`). Its read rule and personal declaration must be
+   the same as or stricter than the source field's (refused otherwise). The same upgrade carries,
+   atomically, the changes that make the product's own operations **write both fields**, and declares the
+   **migration job** (WG-5514).
+2. **Bulk copy.** The job copies or converts the old field into the new one in batches of `erasure::BATCH`
+   records, with a conversion from an **open, platform-released vocabulary** (first: identity, integer to
+   text, text to integer, time to date, choice renaming); it is durable and resumable after a crash, has an
+   owner-visible status, marks each copied record with the record version it copied at (in the job's state,
+   not the record), and reports values that do not convert with a `clears` that is an approved data-fix
+   step. It then repeats **catch-up passes** over records whose version is above their mark. Screens still
+   read the old field throughout, and the product's own writers keep both fields equal; only writers outside
+   the product (generic record intents, other products, automations, imports, `write-answers`) can make the
+   fields differ, and the catch-up passes copy what they changed.
+3. **Freeze, last pass and rebind in one commit** (the chosen design). One owner-approved upgrade, the
+   **rebind** upgrade, does three things in **one commit**: it **freezes** the old field, runs the **last
+   pass** (copying every record whose version is above its mark), and **rebinds** the screens to the new
+   field, with the owner-approved **overlay rebind** steps applied in the same commit. It is accepted only
+   when the job reports **at most one batch** (`erasure::BATCH` records) left, so the commit stays bounded;
+   otherwise it is refused with `migration.not-ready` and the count, and the catch-up passes go on.
+   *Why this and not a separate freeze step*: with a separate freeze first, every record written between
+   the freeze and the rebind would show its pre-freeze value on the still-bound screens (writes would go to
+   the new field only), a window of stale reads members could see; doing all three in one commit leaves no
+   such window. *Fallback*: if writers outside the product keep the count above one batch (the job reports
+   `migration.not-ready` repeatedly), the owner may choose the separate sequence (freeze as its own
+   approved step, then the last pass, then the rebind), accepting the stated stale-read window.
+4. **Contract.** A later upgrade removes the old field and may tighten the new one to required; the removal
+   guard passes because no published screen names the old field.
+
+**What the freeze means.** After the rebind commit the old field is **frozen**: a write that **changes its
+value** is refused with `field.frozen`, whoever the writer (a record intent, another product's operation,
+an automation, an import, `write-answers`); a write that carries the old value unchanged passes, so an update
+of other fields of the record still works. The freeze is enforced where record changes are validated (the
+path shared by direct record intents and operation steps). **Subject erasure** (`erasure.rs`, which writes
+the erased form with `DeltaOp::PutRecord` in its own transition) and **retention** (`retention.rs`, its own
+transition) do not go through that validation, so they keep erasing and expiring the old field; a
+**restriction** is a read-time mask (`subject_rights.rs` `hide`), not a write. Each of these is a test in
+WG-5514.
+
+**While the job runs**, an upgrade that alters the migrating fields is refused with `migration.in-progress`
+(or queued, at the owner's choice); changes to read rules, policies and invokers of the type, security fixes
+among them, go through.
+
+**Undo across a restructure.**
+
+- **Before the rebind commit**, undo is the ordinary rule: publish an earlier source as a new version; the
+  old field is still the bound and written one, and the job is cancelled.
+- **After the rebind commit and before contract**, undoing the rebind needs a **reverse migration**: the
+  undo upgrade declares a job copying new to old with the **inverse conversion**, and its own rebind commit
+  lifts the freeze on the old field, freezes the new one, runs the last pass and binds the screens back,
+  by the same rule (at most one batch left). An undo whose conversion has no inverse in the vocabulary
+  (text to integer has one only for values that parse; a choice renaming has one; time to date does not)
+  is refused with `migration.not-invertible`, naming the conversion.
+- **After contract**, the old field is gone; going back is a new restructure.
 
 **The migration event.** Job writes emit an event of kind `migration`. Per consumer: **triggers and
-automations** do not match it (the one exclusion); **segments** re-evaluate the changed records;
-**notices and stamps** go out as for any write (browsers refresh); the **search index** updates the
-changed fields; **aggregate copies** are invalidated by the type's change counter; **erasure** and
-subject rights see the new field like any other. Each is a criterion of WG-5514 with its own test.
+automations** do not match it (the one exclusion); **segments** re-evaluate the changed records; **notices
+and stamps** go out as for any write; the **search index** updates the changed fields; **aggregate copies**
+are invalidated by the type's change counter; **erasure** and subject rights see the new field like any
+other. Each is a test in WG-5514.
 
 A type change of a field in place is refused while any binding's fingerprint names it.
 
@@ -1471,9 +1506,23 @@ early-interface allowance.
   owner of the tenant, with step-up), never by an agent;
 - each stage **re-checks** that the remaining plan still matches the approved diff and refuses on a mismatch
   (`product.base-moved`); each stage re-plans once on a `SchemaConflict` like a single commit;
-- while staging, the product's installed-product record carries an internal **stage marker** (the target
-  version and the stage reached), and every other upgrade, removal or draft set touching the product is
-  refused with `upgrade.in-progress`;
+- **the ownership record across stages**: `foreign_change` refuses a change to a product's entities that
+  does not carry the product's record at a version other than the installed one, and a record that repeats
+  the installed version (`kernel/src/products.rs:338-347`, INT-1582). So each stage records the product at
+  its own **internal pre-release version** (`<target>-stage.<n>`), ordered by the product-version comparator
+  (WG-5472) between the installed version and the target, and extends the record's `owns` with every entity
+  it creates; the last stage records the target version. The kernel rule is unchanged and INT-1582 holds as
+  written; the stage version is the stage marker. The reserved staging role is listed among the product's
+  owned entities, and `assign-role` refuses any role named `<product>__staging`. A kernel test runs a
+  three-stage upgrade through `foreign_change`;
+- every other upgrade, removal or draft set touching the product is refused with `upgrade.in-progress`,
+  **except the owner's abandon**: an owner-only action with step-up, exempt from `upgrade.in-progress`,
+  that removes everything the stages created (unreachable by construction, so no member data depends on
+  it), the staging role included, and restores the record at the version installed before the job;
+- **security fixes are never locked out**: the owner may pre-authorise, per tenant, "abandon then apply"
+  for upgrades tagged security, so a security upgrade arriving while a job is stopped abandons it and
+  applies; and a stopped job whose approval period has passed is **abandoned automatically** by the platform,
+  recorded and notified, so the product never waits on an owner action;
 - the visible history shows the version only; a fixture at the product entity limits checks the staging.
 
 - **Versions.** Product versions get their own comparator, semantic versioning with pre-release ordering;
@@ -1650,7 +1699,7 @@ platform admin role (WG-5474) and gap 6's reference coercion (in WG-5466).
 
 `specifications/design-system.jsonc` is an area part (`AREA_PARTS` in `scripts/split-spec.mjs`: ids that
 are `ds-` and a number, or start `d-ds-`; the behaviour-model ids `ds-save`, `ds-open` and so on are not
-in it). It holds twenty-nine decisions: D-DS-1 to D-DS-6 and D-DS-20 to D-DS-22 are the owner's, decided
+in it). It holds thirty decisions: D-DS-1 to D-DS-6 and D-DS-20 to D-DS-22 are the owner's, decided
 2026-11-22; the others are proposals, with a source saying so. It holds twenty-one requirements, DS-001 to
 DS-021, milestone 7, each stated of its Lean model and checked by the theorems that carry its `Verifies:`
 line. Requirements checked by tests are added with those tests:
@@ -1665,7 +1714,9 @@ line. Requirements checked by tests are added with those tests:
 | Draft writes change no tenant state; a stale draft write is refused | backend tests (the tenant's schema version unchanged across draft writes) | WG-5464 |
 | A preview is built from a viewer-scoped redacted snapshot; a widening draft policy shows no extra row | backend tests | WG-5464, WG-5470 |
 | A staged upgrade at the product entity limits commits in stages and members see nothing new before the last; an early operation's only invoker is the reserved staging role | substrate fixtures | WG-5472 |
-| The permission delta reports each source (role permissions, policies, invokers, read rules, audiences) | kernel fixtures, one per source | WG-5471 |
+| The permission delta reports each source (role permissions, policies, invokers, operation conditions, written types, transition guards, read rules, audiences) and derived-admin changes | kernel fixtures, one per source | WG-5471 |
+| The rebind commit freezes, runs the last pass and rebinds only with at most one batch left; `field.frozen` refuses only a change of value and spares erasure and retention | kernel tests | WG-5514 |
+| A three-stage upgrade passes `foreign_change` with per-stage pre-release versions; abandon removes what stages created | kernel tests | WG-5472 |
 | Publishing takes the revision id and hash, refuses a mismatch, and re-plans once on a race | backend tests | WG-5471 |
 | A withheld marker appears only for required fields withheld by a read rule | backend test with a restricted subject | WG-5463 |
 | The owner's upgrade always passes the planned-against schema version and refuses a moved base | backend test | WG-5471 |
@@ -1787,6 +1838,18 @@ Each is a Workgraph task under WG-5457 with testable acceptance criteria (Workgr
   content at rest for photos and large uploads (see "Reserved entries")?
 
 ## Answers to the reviews
+
+### Seventh review
+
+Each claim was re-checked against the code; all hold.
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | Freeze and rebind form a circle | Confirmed. Fixed with explicit phases: expand (optional field, dual-writing operations, the job), bulk copy with catch-up passes, then **one commit** that freezes the old field, runs the last pass and rebinds (overlay rebind included), accepted only with at most one batch left (`migration.not-ready` otherwise), then contract. Chosen over a separate freeze step because that would leave a window of stale reads on still-bound screens; the separate sequence is the stated fallback when outside writers keep the count above a batch. `field.frozen` refuses a change of value only; erasure (`erasure.rs`, `DeltaOp::PutRecord` in its own transition) and retention write outside record-change validation and are unaffected; restriction is a read mask (D-DS-30) |
+| 2 | Undo after rebind | Fixed: before the rebind commit undo is ordinary; after it, undo declares a reverse migration with the inverse conversion and its own rebind commit lifts the freeze; refused with `migration.not-invertible` when the conversion has no inverse; after contract, going back is a new restructure |
+| 3 | A stopped staged job locks the product | Fixed: an owner-only abandon with step-up, exempt from `upgrade.in-progress`, removes what the stages created and the staging role; security upgrades can be pre-authorised to abandon and apply; a stopped job past its approval period is abandoned automatically |
+| 4 | Ownership record across stages | Confirmed (`foreign_change`, `kernel/src/products.rs:338-347`, INT-1582). Fixed without changing the rule: each stage records the product at its own internal pre-release version, ordered by the WG-5472 comparator, extending `owns`; the staging role is owned and `assign-role` refuses it; a three-stage kernel test |
+| 5 | Delta sources | Fixed: operation conditions (`operations.rs:15-16`, `:291`), the object types operation steps write, workflow transition guards (`transition.rs:900-905`), and derived-admin changes, each with a negative fixture |
 
 ### Sixth review
 
