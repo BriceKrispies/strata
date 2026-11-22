@@ -1,6 +1,6 @@
 //! The enterprise corpus on real stores: it installs into one tenant, the tenant's schema holds
-//! every entity the 14 products own, and a fixed seed gives a byte-identical populated tenant.
-//! Specc compiles the 14 product files once per binary; the population runs at the small scale.
+//! every entity the 14 products own, and a fixed seed gives a byte-identical populated tenant. Specc compiles the 14 product files once
+//! per binary; the population runs at the small scale, and the large scale is only planned.
 
 use std::sync::OnceLock;
 use strata_corpus::{
@@ -50,30 +50,28 @@ fn the_loaded_tenant_holds_every_entity_of_the_14_products() {
 }
 
 #[test]
-fn a_fixed_seed_gives_a_byte_identical_populated_tenant() {
-    let first = built(&MemoryStore::new(), 7);
-    let second = built(&MemoryStore::new(), 7);
-    assert_eq!(first.hash, second.hash, "the same seed, the same tenant");
+fn a_fixed_seed_gives_a_byte_identical_tenant_on_both_stores_and_another_seed_another_tenant() {
+    // Two independent populations of one seed on two different stores agree, which shows both
+    // that the seed fixes the tenant and that the stores hold the same one.
+    let memory = built(&MemoryStore::new(), 7);
+    let sqlite =
+        SqliteStore::open_in_memory(Timestamp(1_767_225_600_000)).unwrap_or_else(|e| panic!("{e}"));
+    let on_sqlite = built(&sqlite, 7);
     assert_eq!(
-        first.catalogue.to_json(),
-        second.catalogue.to_json(),
+        memory.hash, on_sqlite.hash,
+        "the same seed, the same tenant"
+    );
+    assert_eq!(
+        memory.catalogue.to_json(),
+        on_sqlite.catalogue.to_json(),
         "the same seed, the same catalogue"
     );
     let other = built(&MemoryStore::new(), 8);
-    assert_ne!(first.hash, other.hash, "another seed, another tenant");
+    assert_ne!(memory.hash, other.hash, "another seed, another tenant");
 }
 
 #[test]
-fn memory_and_sqlite_hold_the_same_tenant() {
-    let memory = built(&MemoryStore::new(), 3);
-    let sqlite =
-        SqliteStore::open_in_memory(Timestamp(1_767_225_600_000)).unwrap_or_else(|e| panic!("{e}"));
-    let on_sqlite = built(&sqlite, 3);
-    assert_eq!(memory.hash, on_sqlite.hash);
-}
-
-#[test]
-fn every_object_type_has_records_and_the_large_scale_has_over_100000() {
+fn every_object_type_has_planned_records_and_the_large_scale_plans_over_100000() {
     let store = MemoryStore::new();
     let loaded =
         load_corpus(&store, &LoadOptions::default(), products()).unwrap_or_else(|e| panic!("{e}"));
