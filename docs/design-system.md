@@ -1429,8 +1429,25 @@ A rename or a type change is a sequence of ordinary approved upgrades with expli
        and lists every predicate that names the old field.
 
      After the freeze these readers would read a field no longer written, and the contract upgrade would be
-     refused while they name it. The rebind commit's diff rewrites each to the new field (segments through
-     their own definition path), or the planner refuses with `migration.dependents-remain`, naming them;
+     refused while they name it. The rebind commit's diff rewrites each to the new field, or the planner
+     refuses with `migration.dependents-remain`, naming them. **Segment predicates are rewritten before the
+     rebind commit**, because segments are defined through the segment store outside the schema change
+     (`product_segments.rs` `take` and `define_all`; WG-5166 is open), not inside the `ChangeSchema`: once the
+     job has a complete report, the platform rewrites each segment predicate that names the old field to name
+     the new one. Membership stays consistent, because the new field is complete up to the report and the
+     product's writers keep both fields equal until the commit; a crash between the segment rewrite and the
+     commit leaves segments on the new field, which is harmless for the same reason. The planner's
+     `migration.dependents-remain` also refuses the rebind commit while a segment rewrite has not finished.
+     A fixture kills the process between the segment rewrite and the commit and checks that membership stays
+     consistent, so that `SegmentEntered` and `SegmentExited` triggers act on correct membership.
+
+     The two new dependent kinds change **impact analysis for every schema change**, not only restructures:
+     `assess_changes` (`transition.rs:2086-2104`) classifies a change by the dependents the graph reports
+     (D-8210: dependencies are computed from definitions at the level of a field), so a field change that an
+     operation's conditions or steps, or a template's value nodes, read becomes adaptable or breaking where it
+     was not before; `rewrite_schema` (`crates/kernel/src/rewrite.rs:407`) must rewrite those kinds when a field
+     is renamed or moved; and MIG-592 (the breaking-change requirement of "Change classes, pins and
+     projections") is amended to name operations and templates among the dependents (WG-5514);
    - the writer and dependent changes are in the commit's diff, so they appear in the **permission delta**
      and the **classification**;
    - **freezes** the old field;
@@ -1779,7 +1796,8 @@ line. Requirements checked by tests are added with those tests:
 | A preview is built from a viewer-scoped redacted snapshot; a widening draft policy shows no extra row | backend tests | WG-5464, WG-5470 |
 | A staged upgrade at the product entity limits commits in stages and members see nothing new before the last; an early operation's only invoker is the reserved staging role | substrate fixtures | WG-5472 |
 | The permission delta reports each source (role permissions, policies, invokers, operation conditions, written types, transition guards, read rules, audiences) and derived-admin changes | kernel fixtures, one per source | WG-5471 |
-| The rebind commit requires a complete report (refused with the bulk copy incomplete, or with an unconverted record), changes the product's writers and every other dependent of the old field (refused while one remains), relaxes and freezes the old field, runs the last pass from the record events after the report (a record written after it is still copied, or the commit is refused) and rebinds; `field.frozen` refuses only a change of value and spares erasure and retention | kernel tests; fixtures renaming a required field through every phase with a live writer, a rename where a policy condition and a query filter name the old field; one each where an operation condition, a segment predicate and a template name it; a rebind commit over the cap refused with `migration.rebind-too-large` | WG-5514 |
+| The rebind commit requires a complete report (refused with the bulk copy incomplete, or with an unconverted record), changes the product's writers and every other dependent of the old field (refused while one remains), relaxes and freezes the old field, runs the last pass from the record events after the report (a record written after it is still copied, or the commit is refused) and rebinds; `field.frozen` refuses only a change of value and spares erasure and retention | kernel tests; fixtures renaming a required field through every phase with a live writer, a rename where a policy condition and a query filter name the old field; one each where an operation condition, a segment predicate and a template name it; a process killed between the segment rewrite and the rebind commit with membership staying consistent; a rebind commit over the cap refused with `migration.rebind-too-large` | WG-5514 |
+| Impact analysis and `rewrite_schema` cover the `Operation` and `Template` dependent kinds for every schema change; MIG-592 amended | kernel tests | WG-5514 |
 | A draft set narrowing a group and adding an element naming it, stopped between steps, serves the element to no viewer outside the final audience | negative fixture | WG-5471 |
 | A group deletion or rename applies after the product stages that stop naming it; a mixed group change splits into a narrowing part first and a widening part last | tests | WG-5471 |
 | Expand raises the old field to the new field's protection; subject erasure after rebind removes both copies; a reverse migration of a personal field is legal and of a less protected destination refused | kernel tests | WG-5514 |
@@ -1905,6 +1923,13 @@ Each is a Workgraph task under WG-5457 with testable acceptance criteria (Workgr
   content at rest for photos and large uploads (see "Reserved entries")?
 
 ## Answers to the reviews
+
+### Final review fix
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | Segment predicates are rewritten outside the rebind commit | Confirmed (segments are defined through the segment store, `product_segments.rs` `take` and `define_all`; WG-5166 open). Fixed: segment predicates are rewritten to the new field after the complete report and before the rebind commit; membership stays consistent because the new field is complete to the report and the product's writers keep both fields equal; a crash between the two leaves segments on the new field, harmless; `migration.dependents-remain` refuses while a segment rewrite is unfinished; a fixture kills the process between them |
+| 2 | The new dependent kinds affect every schema change | Stated: `Operation` and `Template` change `assess_changes`' impact analysis (D-8210) for every schema change and need `rewrite_schema` support; MIG-592 ("A breaking schema change SHALL be refused naming each affected dependent, unless that dependent is pinned to a projection") is amended to name them; in WG-5514 |
 
 ### Tenth review
 
