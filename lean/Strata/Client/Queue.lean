@@ -33,6 +33,17 @@ What fails without each piece:
   (`restore_without_epoch_applies_twice`); with the epoch it applies once
   (`restore_with_epoch_applies_once`).
 
+The client's queue (`cstep`) and the lookup fence (`fstep`) are models of their own:
+
+- `q2_sent` holds because no operation of the client model edits a write that has a key; what the
+  model adds is that resolving a dependency and the person's edits, computed outside a transaction
+  and committed by compare-and-swap, respect that under concurrency. The write-ahead record of the
+  first sending and the lookup path are not in it;
+- the queue model's `firstSent` is a server ghost; that the client's write-ahead record equals it,
+  up to the margin of Q4, is argued, not proved;
+- `fence_holds`: a key fenced by a lookup never commits, so a create resent under a new key after a
+  "not found" applies once (`fenced_lookup_applies_once`, `unfenced_lookup_applies_twice`).
+
 Assumptions, all of them:
 
 Q1. Within one tenant epoch, every change to a record gives it a version never used before in that
@@ -490,6 +501,8 @@ structure QEntry where
   lid : Nat
   key : Option Nat
   input : Nat
+  /-- Raised by every change, for the compare-and-swap of a change computed outside a transaction. -/
+  ver : Nat
 
 structure CQ where
   entries : List QEntry
@@ -501,8 +514,12 @@ structure CQ where
 inductive COp where
   /-- Queue a write; `ready` says its input is final (it depends on no unknown result). -/
   | enqueue (input : Nat) (ready : Bool)
-  /-- The result a write depends on is known: rewrite its input and draw its key, atomically. -/
-  | resolve (lid : Nat) (input : Nat)
+  /-- The result a write depends on is known. The new input is computed (and encrypted) outside a
+      transaction; one short transaction then checks the entry is still at version `ver` with no
+      key, rewrites the input and draws the key (compare-and-swap). -/
+  | resolve (lid : Nat) (ver : Nat) (input : Nat)
+  /-- The person decides a keyless write again (another tab may do it concurrently). -/
+  | edit (lid : Nat) (input : Nat)
   /-- Send a write that has a key (by any tab, any number of times). -/
   | send (lid : Nat)
   /-- The write was answered: remove it. -/
@@ -511,12 +528,16 @@ inductive COp where
 def cstep (q : CQ) : COp → CQ
   | .enqueue i ready =>
     if ready then
-      { q with entries := ⟨q.nextLid, some q.nextKey, i⟩ :: q.entries, nextKey := q.nextKey + 1,
+      { q with entries := ⟨q.nextLid, some q.nextKey, i, 0⟩ :: q.entries, nextKey := q.nextKey + 1,
                nextLid := q.nextLid + 1 }
-    else { q with entries := ⟨q.nextLid, none, i⟩ :: q.entries, nextLid := q.nextLid + 1 }
-  | .resolve l i =>
-    { q with entries := q.entries.map (fun e => if e.lid = l ∧ e.key = none then ⟨e.lid, some q.nextKey, i⟩ else e),
+    else { q with entries := ⟨q.nextLid, none, i, 0⟩ :: q.entries, nextLid := q.nextLid + 1 }
+  | .resolve l v i =>
+    { q with entries := q.entries.map (fun e =>
+               if e.lid = l ∧ e.key = none ∧ e.ver = v then ⟨e.lid, some q.nextKey, i, e.ver + 1⟩ else e),
              nextKey := q.nextKey + 1 }
+  | .edit l i =>
+    { q with entries := q.entries.map (fun e =>
+               if e.lid = l ∧ e.key = none then ⟨e.lid, none, i, e.ver + 1⟩ else e) }
   | .send l =>
     match q.entries.find? (fun e => e.lid == l) with
     | some e =>
@@ -571,20 +592,21 @@ theorem cstep_inv (q : CQ) (op : COp) (h : CInv q) : CInv (cstep q op) := by
   | enqueue i ready =>
     cases ready with
     | true =>
-      show CI (⟨q.nextLid, some q.nextKey, i⟩ :: q.entries) (q.nextKey + 1) q.sent
+      show CI (⟨q.nextLid, some q.nextKey, i, 0⟩ :: q.entries) (q.nextKey + 1) q.sent
       exact ci_add _ _ _ h _ _ (by omega) (fun k hk => by simp at hk; omega)
     | false =>
-      show CI (⟨q.nextLid, none, i⟩ :: q.entries) q.nextKey q.sent
+      show CI (⟨q.nextLid, none, i, 0⟩ :: q.entries) q.nextKey q.sent
       exact ci_add _ _ _ h _ _ (Nat.le_refl _) (fun k hk => by simp at hk)
-  | resolve l i =>
-    show CI (q.entries.map (fun e => if e.lid = l ∧ e.key = none then (⟨e.lid, some q.nextKey, i⟩ : QEntry) else e))
-      (q.nextKey + 1) q.sent
+  | resolve l v i =>
+    show CI (q.entries.map (fun e => if e.lid = l ∧ e.key = none ∧ e.ver = v then
+        (⟨e.lid, some q.nextKey, i, e.ver + 1⟩ : QEntry) else e)) (q.nextKey + 1) q.sent
     obtain ⟨h1, h2, h3, h4, h5⟩ := h
-    have hmem : ∀ e ∈ q.entries.map (fun e => if e.lid = l ∧ e.key = none then (⟨e.lid, some q.nextKey, i⟩ : QEntry) else e),
+    have hmem : ∀ e ∈ q.entries.map (fun e => if e.lid = l ∧ e.key = none ∧ e.ver = v then
+        (⟨e.lid, some q.nextKey, i, e.ver + 1⟩ : QEntry) else e),
         (e.key = some q.nextKey ∧ e.input = i) ∨ (e ∈ q.entries) := by
       intro e he
       obtain ⟨e0, he0, rfl⟩ := List.mem_map.mp he
-      by_cases hc : e0.lid = l ∧ e0.key = none
+      by_cases hc : e0.lid = l ∧ e0.key = none ∧ e0.ver = v
       · left; simp [hc]
       · right; simp only [hc, ↓reduceIte]; exact he0
     refine ⟨fun e he k hk => ?_, fun p hp => by have := h2 p hp; omega, fun p hp e he hk => ?_, h4,
@@ -600,6 +622,29 @@ theorem cstep_inv (q : CQ) (op : COp) (h : CInv q) : CInv (cstep q op) := by
       · rw [h6] at hk; cases hk; have := h1 e' h9 _ hk'; omega
       · rw [h8] at hk'; cases hk'; have := h1 e h7 _ hk; omega
       · exact h5 e h7 e' h9 k hk hk'
+  | edit l i =>
+    show CI (q.entries.map (fun e => if e.lid = l ∧ e.key = none then
+        (⟨e.lid, none, i, e.ver + 1⟩ : QEntry) else e)) q.nextKey q.sent
+    obtain ⟨h1, h2, h3, h4, h5⟩ := h
+    have hmem : ∀ e ∈ q.entries.map (fun e => if e.lid = l ∧ e.key = none then
+        (⟨e.lid, none, i, e.ver + 1⟩ : QEntry) else e), e.key = none ∨ e ∈ q.entries := by
+      intro e he
+      obtain ⟨e0, he0, rfl⟩ := List.mem_map.mp he
+      by_cases hc : e0.lid = l ∧ e0.key = none
+      · left; simp [hc]
+      · right; simp only [hc, ↓reduceIte]; exact he0
+    refine ⟨fun e he k hk => ?_, h2, fun p hp e he hk => ?_, h4, fun e he e' he' k hk hk' => ?_⟩
+    · rcases hmem e he with h6 | h7
+      · rw [h6] at hk; cases hk
+      · exact h1 e h7 k hk
+    · rcases hmem e he with h6 | h7
+      · rw [h6] at hk; cases hk
+      · exact h3 p hp e h7 hk
+    · rcases hmem e he with h6 | h7
+      · rw [h6] at hk; cases hk
+      · rcases hmem e' he' with h8 | h9
+        · rw [h8] at hk'; cases hk'
+        · exact h5 e h7 e' h9 k hk hk'
   | send l =>
     obtain ⟨h1, h2, h3, h4, h5⟩ := h
     simp only [cstep]
@@ -642,6 +687,86 @@ theorem q2_sent (ops : List COp) : ∀ q, CInv q → ∀ p ∈ (crun q ops).sent
   induction ops with
   | nil => intro q h; exact h.2.2.2.1
   | cons op ops ih => intro q h; exact ih _ (cstep_inv q op h)
+
+/-! ## The lookup fence
+
+When the outcome of a create is unknown, the client asks the server for the recorded outcome of its
+key. A "not found" answer does not stop the original request, still in flight, from committing
+later. So the lookup **fences** the key: when the key is not committed, the server records a
+tombstone for it, and a later submission of that key is refused. The client then resends the
+create under a new key. A separate model, joined to the queue model by the design: the server
+keeps a tombstone at least as long as the request deadline. -/
+
+structure FSrv where
+  seen : Nat → Bool
+  tomb : Nat → Bool
+  applied : List Nat
+
+inductive FOp where
+  /-- A submission of key `k` (the original in flight, or any resend). -/
+  | submit (k : Nat)
+  /-- The client asks for the outcome of `k`; when it is not committed, the key is fenced. -/
+  | lookup (k : Nat)
+  | other
+
+def fstep (s : FSrv) : FOp → FSrv
+  | .submit k => if s.seen k || s.tomb k then s
+                 else { s with seen := setR s.seen k true, applied := k :: s.applied }
+  | .lookup k => if s.seen k then s else { s with tomb := setR s.tomb k true }
+  | .other => s
+
+def frun : FSrv → List FOp → FSrv
+  | s, [] => s
+  | s, op :: ops => frun (fstep s op) ops
+
+/-- **A fenced key never commits**: after a lookup that found a key not committed, no submission of
+    that key, however late it arrives, is applied.
+    Verifies: FE-016 -/
+theorem fence_holds (k : Nat) (ops : List FOp) :
+    ∀ s : FSrv, s.tomb k = true → s.seen k = false →
+      (frun s ops).applied.count k = s.applied.count k ∧ (frun s ops).seen k = false := by
+  induction ops with
+  | nil => intro s _ hs; exact ⟨rfl, hs⟩
+  | cons op ops ih =>
+    intro s ht hs
+    have step_ok : (fstep s op).tomb k = true ∧ (fstep s op).seen k = false ∧
+        (fstep s op).applied.count k = s.applied.count k := by
+      cases op with
+      | submit k' =>
+        simp only [fstep]
+        by_cases hk : s.seen k' || s.tomb k'
+        · simp only [hk, ↓reduceIte]; exact ⟨ht, hs, by first | rfl | trivial⟩
+        · simp only [hk, Bool.false_eq_true, ↓reduceIte]
+          have hne : k' ≠ k := by
+            intro he; subst he; simp [ht] at hk
+          refine ⟨ht, by simp [setR, Ne.symm hne, hs], ?_⟩
+          exact count_cons_ne k k' s.applied (Ne.symm hne)
+      | lookup k' =>
+        simp only [fstep]
+        by_cases hk : s.seen k'
+        · simp only [hk, ↓reduceIte]; exact ⟨ht, hs, by first | rfl | trivial⟩
+        · simp only [hk, Bool.false_eq_true, ↓reduceIte]
+          refine ⟨?_, hs, by first | rfl | trivial⟩
+          simp only [setR]; split <;> simp_all
+      | other => exact ⟨ht, hs, by first | rfl | trivial⟩
+    obtain ⟨h1, h2, h3⟩ := step_ok
+    obtain ⟨r1, r2⟩ := ih _ h1 h2
+    exact ⟨r1.trans h3, r2⟩
+
+/-- Without the fence, the original request arriving after a "not found" lookup and a resend under a
+    new key applies the create twice (once under each key). -/
+def f0 : FSrv := { seen := fun _ => false, tomb := fun _ => false, applied := [] }
+
+/-- A lookup that only reads, recording nothing. -/
+def lookupNoFence (s : FSrv) (_k : Nat) : FSrv := s
+
+theorem unfenced_lookup_applies_twice :
+    (frun (lookupNoFence f0 7) [.submit 8, .submit 7]).applied.length = 2 := by
+  decide
+
+theorem fenced_lookup_applies_once :
+    (frun f0 [.lookup 7, .submit 8, .submit 7]).applied.length = 1 := by
+  decide
 
 /-! ## What fails without each piece -/
 

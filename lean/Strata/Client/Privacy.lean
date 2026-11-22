@@ -32,9 +32,16 @@ Proved:
   `expire_then_same_principal_unlocks`);
 - **revocation reaches the device at its next reload** (`revoke_device_erases`, `revoke_all_erases`),
   unless the person kept an offline key, which survives a reload (`offline_key_survives_reload`);
-- **rotation loses nothing and retires the old key** (`rot_no_loss`, `rot_finish_retires`), in the
-  order: new share durable, writers switch, re-encrypt one ciphertext at a time, delete the old
-  share only when none is left under it; deleting early loses data (`rot_early_delete_loses`).
+- **rotation loses no record and no update** (`rot_no_loss`, `rot_no_lost_update`,
+  `rot_finish_retires`): every change is computed outside a transaction and verified in one short
+  transaction, an append or rewrite against the partition's current key id and a re-encryption
+  against the version it read; without the key-id check a stale tab's append outlives the old key
+  (`rot_stale_append_breaks`), and without the compare-and-swap a re-encryption loses an update
+  (`rot_blind_write_loses_update`).
+
+`fetchById` always presents the secret of the partition the session holds: it shows that knowing a
+device id gives nothing without that device's secret, and says nothing about an attacker who holds
+some other device's secret.
 
 Assumptions, all of them:
 
@@ -948,105 +955,298 @@ theorem offline_key_survives_reload {α : Type} (s : St α) (p : PrincipalId) (k
 
 /-! ## Rotation
 
-A partition's ciphertexts are under the old share's key or the new one's. The order: the new share
-is made durable (`begin`); writers switch to the new key (`switch`, under the leader lock and told
-to the other tabs); ciphertexts are re-encrypted one at a time (`reenc`), each in its own
-transaction; the old share is deleted only when no ciphertext is left under it (`finish`). A crash
-can stop the schedule anywhere, and another tab can append at any point. `ok` says a ciphertext's
-key is still held. -/
+A partition's records are encrypted under the old share's key or the new one's. WebCrypto work
+cannot run inside an IndexedDB transaction (the transaction commits when it goes idle), so every
+change is computed outside a transaction and then **verified and written in one short
+transaction**: an append or rewrite names the key id it encrypted under and is refused unless that
+is the partition's current key id; a re-encryption names the version of the record it read and is
+refused unless the record is still at that version (compare-and-swap). The order: the new share is
+made durable (`begin`); the current key id switches to the new key (`switch`); each old record is
+read (`rread`, outside a transaction) and written back under the new key (`rwrite`, the
+compare-and-swap); the old share is deleted only when the current key is new and no record is left
+under the old one (`finish`). A crash can stop the schedule anywhere, other tabs append and rewrite
+at any time, and a tab may still hold the old key id when it writes. -/
+
+structure RRec where
+  newKey : Bool
+  val : Nat
+  ver : Nat
+  deriving DecidableEq
 
 structure Rot where
-  /-- Each ciphertext: `true` under the new key. -/
-  disk : List Bool
+  recs : List RRec
   oldShare : Bool
   newShare : Bool
-  writeNew : Bool
+  /-- The partition's current key id: `true` once writers must use the new key. -/
+  cur : Bool
+  /-- Reads the rotating tab made outside a transaction: slot, value, version. -/
+  reads : List (Nat × Nat × Nat)
 
 inductive ROp where
   | begin
   | switch
-  /-- Another tab appends under the key writers use. -/
-  | append
-  /-- Re-encrypt the ciphertext at position `i` under the new key. -/
-  | reenc (i : Nat)
+  /-- Another tab appends a value it encrypted under key id `kw`. -/
+  | append (kw : Bool) (v : Nat)
+  /-- Another tab rewrites slot `i` with a value it encrypted under key id `kw`. -/
+  | write (i : Nat) (kw : Bool) (v : Nat)
+  /-- The rotating tab reads slot `i`, outside a transaction. -/
+  | rread (i : Nat)
+  /-- The rotating tab writes back its `j`-th read under the new key, if the record is unchanged. -/
+  | rwrite (j : Nat)
   | finish
 
 def rstep (r : Rot) : ROp → Rot
   | .begin => { r with newShare := true }
-  | .switch => if r.newShare then { r with writeNew := true } else r
-  | .append => { r with disk := r.writeNew :: r.disk }
-  | .reenc i => if r.newShare then { r with disk := r.disk.set i true } else r
-  | .finish => if r.writeNew && r.disk.all id then { r with oldShare := false } else r
+  | .switch => if r.newShare then { r with cur := true } else r
+  | .append kw v => if kw = r.cur then { r with recs := r.recs ++ [⟨kw, v, 0⟩] } else r
+  | .write i kw v =>
+    match r.recs[i]? with
+    | some old => if kw = r.cur then { r with recs := r.recs.set i ⟨kw, v, old.ver + 1⟩ } else r
+    | none => r
+  | .rread i =>
+    match r.recs[i]? with
+    | some old => { r with reads := r.reads ++ [(i, old.val, old.ver)] }
+    | none => r
+  | .rwrite j =>
+    match r.reads[j]? with
+    | some (i, v, ver) =>
+      match r.recs[i]? with
+      | some old => if r.newShare ∧ old.ver = ver then { r with recs := r.recs.set i ⟨true, v, ver + 1⟩ } else r
+      | none => r
+    | none => r
+  | .finish => if r.cur && r.recs.all (fun x => x.newKey) then { r with oldShare := false } else r
 
 def rrun : Rot → List ROp → Rot
   | r, [] => r
   | r, op :: ops => rrun (rstep r op) ops
 
-/-- Every ciphertext's key is held, and writers use a held key. -/
+/-- Every record's key is held, and the current key is held. -/
 def ROk (r : Rot) : Prop :=
-  (∀ b ∈ r.disk, (b = true → r.newShare = true) ∧ (b = false → r.oldShare = true)) ∧
-  (r.writeNew = true → r.newShare = true) ∧ (r.writeNew = false → r.oldShare = true)
+  (∀ x ∈ r.recs, (x.newKey = true → r.newShare = true) ∧ (x.newKey = false → r.oldShare = true)) ∧
+  (r.cur = true → r.newShare = true) ∧ (r.cur = false → r.oldShare = true)
+
+/-- A read made outside a transaction names a slot that exists, and still describes its record
+    whenever the record is at the version read. -/
+def ReadOk (r : Rot) : Prop :=
+  ∀ p ∈ r.reads, p.1 < r.recs.length ∧
+    ∀ x, r.recs[p.1]? = some x → p.2.2 ≤ x.ver ∧ (x.ver = p.2.2 → x.val = p.2.1)
 
 theorem rstep_ok (r : Rot) (op : ROp) (h : ROk r) : ROk (rstep r op) := by
   obtain ⟨hd, hw1, hw2⟩ := h
+  have keyOk : ∀ kw, kw = r.cur → (kw = true → r.newShare = true) ∧ (kw = false → r.oldShare = true) :=
+    fun kw hk => by subst hk; exact ⟨hw1, hw2⟩
   cases op with
-  | begin =>
-    exact ⟨fun b hb => ⟨fun _ => rfl, (hd b hb).2⟩, fun _ => rfl, hw2⟩
+  | begin => exact ⟨fun x hx => ⟨fun _ => rfl, (hd x hx).2⟩, fun _ => rfl, hw2⟩
   | switch =>
     simp only [rstep]
     split
     · rename_i hn; exact ⟨hd, fun _ => hn, fun h => by cases h⟩
     · exact ⟨hd, hw1, hw2⟩
-  | append =>
-    refine ⟨fun b hb => ?_, hw1, hw2⟩
-    rcases List.mem_cons.mp hb with hb | hb
-    · subst hb; exact ⟨hw1, hw2⟩
-    · exact hd b hb
-  | reenc i =>
+  | append kw v =>
     simp only [rstep]
     split
-    · rename_i hn
-      refine ⟨fun b hb => ?_, hw1, hw2⟩
-      rcases List.mem_or_eq_of_mem_set hb with hb | hb
-      · exact hd b hb
-      · subst hb; exact ⟨fun _ => hn, fun h => by cases h⟩
+    · rename_i hk
+      refine ⟨fun x hx => ?_, hw1, hw2⟩
+      rcases List.mem_append.mp hx with hx | hx
+      · exact hd x hx
+      · simp at hx; subst hx; exact keyOk kw hk
+    · exact ⟨hd, hw1, hw2⟩
+  | write i kw v =>
+    simp only [rstep]
+    split
+    · split
+      · rename_i hk
+        refine ⟨fun x hx => ?_, hw1, hw2⟩
+        rcases List.mem_or_eq_of_mem_set hx with hx | hx
+        · exact hd x hx
+        · subst hx; exact keyOk kw hk
+      · exact ⟨hd, hw1, hw2⟩
+    · exact ⟨hd, hw1, hw2⟩
+  | rread i =>
+    simp only [rstep]
+    split
+    · exact ⟨hd, hw1, hw2⟩
+    · exact ⟨hd, hw1, hw2⟩
+  | rwrite j =>
+    simp only [rstep]
+    split
+    · split
+      · split
+        · rename_i hc
+          refine ⟨fun x hx => ?_, hw1, hw2⟩
+          rcases List.mem_or_eq_of_mem_set hx with hx | hx
+          · exact hd x hx
+          · subst hx; exact ⟨fun _ => hc.1, fun h => by cases h⟩
+        · exact ⟨hd, hw1, hw2⟩
+      · exact ⟨hd, hw1, hw2⟩
     · exact ⟨hd, hw1, hw2⟩
   | finish =>
     simp only [rstep]
     split
     · rename_i hc
       simp only [Bool.and_eq_true] at hc
-      obtain ⟨hwn, hall⟩ := hc
-      refine ⟨fun b hb => ⟨(hd b hb).1, fun hf => ?_⟩, hw1, fun hw => ?_⟩
-      · have := List.all_eq_true.mp hall b hb; subst hf; cases this
-      · rw [hwn] at hw; cases hw
+      obtain ⟨hcur, hall⟩ := hc
+      refine ⟨fun x hx => ⟨(hd x hx).1, fun hf => ?_⟩, hw1, fun hc' => ?_⟩
+      · have := List.all_eq_true.mp hall x hx; rw [hf] at this; cases this
+      · rw [hcur] at hc'; cases hc'
     · exact ⟨hd, hw1, hw2⟩
 
-/-- **Rotation loses nothing**: at every point of every schedule (a crash stops it anywhere, and
-    other tabs append at any time), every ciphertext's key is still held.
+theorem get_lt {α : Type} (l : List α) (i : Nat) (a : α) (h : l[i]? = some a) : i < l.length :=
+  (List.getElem?_eq_some_iff.mp h).1
+
+theorem get_mem {α : Type} (l : List α) (i : Nat) (a : α) (h : l[i]? = some a) : a ∈ l := by
+  obtain ⟨hi, he⟩ := List.getElem?_eq_some_iff.mp h
+  rw [← he]; exact List.getElem_mem hi
+
+theorem set_get (l : List RRec) (i j : Nat) (a x : RRec) (h : (l.set i a)[j]? = some x) :
+    (i = j ∧ x = a) ∨ (i ≠ j ∧ l[j]? = some x) := by
+  rw [List.getElem?_set] at h
+  by_cases hij : i = j
+  · subst hij
+    left
+    simp only [↓reduceIte] at h
+    split at h
+    · simp at h; exact ⟨rfl, h.symm⟩
+    · simp at h
+  · right
+    simp only [hij, ↓reduceIte] at h
+    exact ⟨hij, h⟩
+
+/-- Rewriting slot `i` with a higher version keeps every read valid. -/
+theorem reads_set (r : Rot) (h : ReadOk r) (i : Nat) (old a : RRec) (hold : r.recs[i]? = some old)
+    (hv : old.ver < a.ver) : ReadOk { r with recs := r.recs.set i a } := by
+  intro p hp
+  obtain ⟨hlt, hx⟩ := h p hp
+  refine ⟨by simp only [List.length_set]; exact hlt, fun x hgx => ?_⟩
+  rcases set_get r.recs i p.1 a x hgx with ⟨hij, rfl⟩ | ⟨_, hx'⟩
+  · subst hij
+    have := (hx old hold).1
+    exact ⟨by omega, fun h' => by omega⟩
+  · exact hx x hx'
+
+theorem rstep_reads (r : Rot) (op : ROp) (h : ReadOk r) : ReadOk (rstep r op) := by
+  cases op with
+  | begin => exact h
+  | switch => simp only [rstep]; split <;> exact h
+  | append kw v =>
+    simp only [rstep]
+    split
+    · intro p hp
+      obtain ⟨hlt, hx⟩ := h p hp
+      refine ⟨by simp only [List.length_append]; omega, fun x hgx => ?_⟩
+      rw [List.getElem?_append_left hlt] at hgx
+      exact hx x hgx
+    · exact h
+  | write i kw v =>
+    simp only [rstep]
+    split
+    · rename_i old hold
+      split
+      · exact reads_set r h i old _ hold (by simp only; omega)
+      · exact h
+    · exact h
+  | rread i =>
+    simp only [rstep]
+    split
+    · rename_i old hold
+      intro p hp
+      rcases List.mem_append.mp hp with hp | hp
+      · exact h p hp
+      · simp at hp
+        subst hp
+        refine ⟨get_lt r.recs i old hold, fun x hgx => ?_⟩
+        rw [hold] at hgx; cases hgx
+        exact ⟨Nat.le_refl _, fun _ => rfl⟩
+    · exact h
+  | rwrite j =>
+    simp only [rstep]
+    split
+    · split
+      · rename_i old hold
+        split
+        · rename_i hc
+          exact reads_set r h _ old _ hold (by simp only; omega)
+        · exact h
+      · exact h
+    · exact h
+  | finish => simp only [rstep]; split <;> exact h
+
+/-- **Rotation loses no record**: at every point of every schedule (a crash stops it anywhere,
+    other tabs append and rewrite under whatever key id they hold), every record's key is held.
     Verifies: FE-013 -/
 theorem rot_no_loss (ops : List ROp) : ∀ r, ROk r → ROk (rrun r ops) := by
   induction ops with
   | nil => intro r h; exact h
   | cons op ops ih => intro r h; exact ih _ (rstep_ok r op h)
 
-/-- **Finishing retires the old key**: once `finish` takes effect, no ciphertext is under the old
-    key and the old share is deleted.
+theorem rot_reads (ops : List ROp) : ∀ r, ReadOk r → ReadOk (rrun r ops) := by
+  induction ops with
+  | nil => intro r h; exact h
+  | cons op ops ih => intro r h; exact ih _ (rstep_reads r op h)
+
+/-- **A re-encryption never loses an update**: writing back a read changes no record's value,
+    whatever other tabs wrote since the read.
     Verifies: FE-013 -/
-theorem rot_finish_retires (r : Rot) (hw : r.writeNew = true) (hall : r.disk.all id = true) :
-    (rstep r .finish).oldShare = false ∧ ∀ b ∈ (rstep r .finish).disk, b = true := by
-  simp only [rstep, hw, hall, Bool.and_self, ↓reduceIte]
-  refine ⟨trivial, fun b hb => ?_⟩
-  have := List.all_eq_true.mp hall b hb
+theorem rot_no_lost_update (r : Rot) (h : ReadOk r) (j i : Nat) (x : RRec)
+    (hx : (rstep r (.rwrite j)).recs[i]? = some x) : ∃ y, r.recs[i]? = some y ∧ x.val = y.val := by
+  simp only [rstep] at hx
+  split at hx
+  · rename_i i0 v ver hread
+    split at hx
+    · rename_i old hold
+      split at hx
+      · rename_i hc
+        rcases set_get r.recs i0 i _ x hx with ⟨hij, rfl⟩ | ⟨_, hx'⟩
+        · subst hij
+          have hmem := get_mem r.reads j _ hread
+          have := ((h _ hmem).2 old hold).2 hc.2
+          exact ⟨old, hold, this.symm⟩
+        · exact ⟨x, hx', rfl⟩
+      · exact ⟨x, hx, rfl⟩
+    · exact ⟨x, hx, rfl⟩
+  · exact ⟨x, hx, rfl⟩
+
+/-- **Finishing retires the old key**: once `finish` takes effect, the current key is new, no record
+    is under the old key, and the old share is deleted.
+    Verifies: FE-013 -/
+theorem rot_finish_retires (r : Rot) (hc : r.cur = true) (hall : r.recs.all (fun x => x.newKey) = true) :
+    (rstep r .finish).oldShare = false ∧ ∀ x ∈ (rstep r .finish).recs, x.newKey = true := by
+  simp only [rstep, hc, hall, Bool.and_self, ↓reduceIte]
+  refine ⟨trivial, fun x hx => ?_⟩
+  have := List.all_eq_true.mp hall x hx
   simpa using this
 
-/-- Deleting the old share before re-encrypting loses a ciphertext. -/
-def rotEarly (r : Rot) : Rot := { r with oldShare := false }
+/-- **Without the key-id check, a stale tab breaks rotation**: after `begin`, `switch` and `finish`,
+    a tab that still holds the old key id appends, and its record's key is gone. -/
+def rotStaleAppend (r : Rot) (v : Nat) : Rot := { r with recs := r.recs ++ [⟨false, v, 0⟩] }
 
-theorem rot_early_delete_loses :
-    ¬ ROk (rotEarly { disk := [false], oldShare := true, newShare := true, writeNew := true }) := by
+def rot0 : Rot := { recs := [], oldShare := true, newShare := false, cur := false, reads := [] }
+
+theorem rot_stale_append_breaks :
+    ¬ ROk (rotStaleAppend (rrun rot0 [.begin, .switch, .finish]) 7) := by
   intro h
-  have := (h.1 false (by simp [rotEarly])).2 rfl
-  simp [rotEarly] at this
+  have := (h.1 ⟨false, 7, 0⟩ (by simp [rotStaleAppend, rrun, rstep, rot0])).2 rfl
+  simp [rrun, rstep, rot0, rotStaleAppend] at this
+
+/-- With the check, the same stale append is refused. -/
+theorem rot_stale_append_refused :
+    (rstep (rrun rot0 [.begin, .switch, .finish]) (.append false 7)).recs = [] := by
+  decide
+
+/-- **Without compare-and-swap, a re-encryption loses an update**: the rotating tab reads 1, another
+    tab rewrites it to 2 under the new key, and the blind write-back restores 1. -/
+def rwriteBlind (r : Rot) (i v ver : Nat) : Rot := { r with recs := r.recs.set i ⟨true, v, ver + 1⟩ }
+
+def rot1 : Rot := { recs := [⟨false, 1, 0⟩], oldShare := true, newShare := false, cur := false, reads := [] }
+
+theorem rot_blind_write_loses_update :
+    (rwriteBlind (rrun rot1 [.begin, .switch, .rread 0, .write 0 true 2]) 0 1 0).recs[0]?.map (·.val) = some 1 ∧
+    (rrun rot1 [.begin, .switch, .rread 0, .write 0 true 2]).recs[0]?.map (·.val) = some 2 := by
+  decide
+
+/-- With compare-and-swap the write-back is refused and the update stays. -/
+theorem rot_cas_keeps_update :
+    (rrun rot1 [.begin, .switch, .rread 0, .write 0 true 2, .rwrite 0]).recs[0]?.map (·.val) = some 2 := by
+  decide
 
 end Strata.Client.Privacy
