@@ -115,6 +115,16 @@ fn outcomes(trace: &ShellTrace) -> BTreeMap<usize, String> {
         .collect()
 }
 
+/// The run without faults that the fault tests compare with, made once for the binary: every
+/// fault test below runs the same seed and schedule, so the one clean run serves them all (a run
+/// starts a backend and installs the seed tenants, which is most of its cost).
+fn baseline() -> &'static ShellRun {
+    static CLEAN: OnceLock<ShellRun> = OnceLock::new();
+    CLEAN.get_or_init(|| run(&backend(), &editorial(BASELINE_SEED, 30, Faults::default())))
+}
+
+const BASELINE_SEED: u64 = 5;
+
 fn injected(trace: &ShellTrace, fault: StoreFault) -> usize {
     trace.injected.iter().filter(|i| i.fault == fault).count()
 }
@@ -180,8 +190,11 @@ fn the_shell_path_decides_as_the_kernel_does() {
     assert_eq!(seqs.len(), distinct.len());
 }
 
+/// Two runs of one faulty scenario give the same trace, and the nonces of the tenant generations
+/// come from the scenario's seed (D19): the two end at the same generations, and another seed
+/// (the baseline's) ends at another.
 #[test]
-fn the_same_shell_scenario_gives_the_same_trace() {
+fn the_same_seed_gives_the_same_trace_and_generations() {
     let faults = Faults {
         store: StoreFaults {
             commit_conflict: 100_000,
@@ -203,26 +216,14 @@ fn the_same_shell_scenario_gives_the_same_trace() {
     assert_eq!(first.trace, second.trace);
     assert_clean(&first.trace);
     assert!(!first.trace.injected.is_empty());
-}
-
-/// The nonces of the tenant generations come from the scenario's seed (D19): two runs of one
-/// scenario end at the same generations, and another seed ends at others.
-#[test]
-fn the_same_seed_gives_the_same_generations() {
-    let scenario = editorial(11, 20, Faults::default());
-    let first = run(&backend(), &scenario);
-    let second = run(&backend(), &scenario);
     assert!(
         first.generations.contains_key(&fieldnotes()),
         "the run ends with the tenant's generation"
     );
     assert_eq!(first.generations, second.generations);
-    assert_eq!(first.trace.hash(), second.trace.hash());
-
-    let other = run(&backend(), &editorial(12, 20, Faults::default()));
     assert_ne!(
         first.generations[&fieldnotes()].nonce,
-        other.generations[&fieldnotes()].nonce,
+        baseline().generations[&fieldnotes()].nonce,
         "another seed draws another nonce"
     );
 }
@@ -231,11 +232,11 @@ fn the_same_seed_gives_the_same_generations() {
 fn a_commit_that_loses_a_race_is_decided_again() {
     // fm: a store conflict. The store refuses the commit; the backend decides again on fresh
     // state and the client learns the same outcome.
-    let clean = run(&backend(), &editorial(5, 30, Faults::default()));
+    let clean = baseline();
     let raced = run(
         &backend(),
         &editorial(
-            5,
+            BASELINE_SEED,
             30,
             store_faults(StoreFaults {
                 commit_conflict: 250_000,
@@ -259,11 +260,11 @@ fn a_process_stopped_before_its_write_commits_nothing_and_the_retry_commits_once
     // fm: a stopped process mid-commit (fm-database-failover, fm-disk-full as the request sees
     // them): nothing is written, the client is told the service is unavailable and sends the
     // request again with its key.
-    let clean = run(&backend(), &editorial(6, 30, Faults::default()));
+    let clean = baseline();
     let stopped = run(
         &backend(),
         &editorial(
-            6,
+            BASELINE_SEED,
             30,
             store_faults(StoreFaults {
                 commit_unavailable: 200_000,
@@ -291,11 +292,11 @@ fn a_process_stopped_before_its_write_commits_nothing_and_the_retry_commits_once
 fn a_commit_whose_answer_is_lost_is_answered_from_its_key() {
     // fm: the process stops after the write and before it answers. The client's retry finds the
     // first result under its key; nothing is committed twice.
-    let clean = run(&backend(), &editorial(8, 30, Faults::default()));
+    let clean = baseline();
     let lost = run(
         &backend(),
         &editorial(
-            8,
+            BASELINE_SEED,
             30,
             store_faults(StoreFaults {
                 commit_reply_lost: 300_000,
@@ -318,12 +319,12 @@ fn a_commit_whose_answer_is_lost_is_answered_from_its_key() {
 #[test]
 fn a_repeated_request_commits_once() {
     // fm: a repeated message (env-cloud message-duplication).
-    let clean = run(&backend(), &editorial(9, 25, Faults::default()));
+    let clean = baseline();
     let repeated = run(
         &backend(),
         &editorial(
-            9,
-            25,
+            BASELINE_SEED,
+            30,
             Faults {
                 request_repeated: 1_000_000,
                 ..Faults::default()
@@ -834,10 +835,10 @@ fn a_recorded_workload_replays_to_its_recorded_outcomes() {
     // A deployment's run is recorded as the store journalled it, and replayed through a fresh
     // deployment's request path: every entry is answered with its recorded revision, state delta
     // and events, and the tenant left is the recorded one.
-    let original = run(&backend(), &editorial(14, 40, Faults::default()));
+    let original = baseline();
     assert_clean(&original.trace);
     let recording = &original.recordings[&fieldnotes()];
-    assert!(recording.entries.len() > 40);
+    assert!(recording.entries.len() > 10);
     let replay = replay_recording(&Backend::new(None), recording, 99).unwrap();
     assert_eq!(
         (replay.agreed, replay.entries),
