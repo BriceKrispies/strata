@@ -59,7 +59,7 @@ export function createWorkerPolicy(factory, origin, dev) {
  * @returns {any}
  */
 export function workerScriptUrl(value) {
-  const dev = /** @type {any} */ (import.meta).env?.DEV === true;
+  const dev = import.meta.env?.DEV === true;
   const factory = /** @type {any} */ (globalThis).trustedTypes;
   if (!factory) {
     const accepted = acceptWorkerUrl(value, globalThis.location.origin, dev);
