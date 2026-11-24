@@ -81,7 +81,8 @@ pub fn final_stage_too_large(counts: &StageCounts) -> String {
 /// then run as it is. The change must carry the record of the target version (an upgrade does).
 pub fn plan_stages(
     change: &ProductChange,
-    installed: &InstalledRecord,
+    product: &str,
+    installed: Option<&InstalledRecord>,
     schema: &TenantSchema,
 ) -> Result<Option<StagePlan>, BundleError> {
     let cap = strata_kernel::limits::MAX_SCHEMA_CHANGES;
@@ -100,7 +101,6 @@ pub fn plan_stages(
         return Ok(None);
     }
 
-    let product = installed.product.as_str();
     let staging = staging_role(product);
     let created: BTreeSet<(String, String)> = change
         .created
@@ -221,7 +221,9 @@ pub fn plan_stages(
         groups.last_mut().expect("a group").push(candidate);
     }
 
-    let mut owned: BTreeSet<OwnedEntity> = installed.owns.iter().cloned().collect();
+    let mut owned: BTreeSet<OwnedEntity> = installed
+        .map(|record| record.owns.iter().cloned().collect())
+        .unwrap_or_default();
     let mut stages = Vec::new();
     for (n, group) in groups.iter().enumerate() {
         let number = n + 1;
@@ -247,7 +249,7 @@ pub fn plan_stages(
             }
         }
         let record = InstalledRecord {
-            product: installed.product.clone(),
+            product: product.to_string(),
             version: version.clone(),
             platform: target.platform.clone(),
             owns: owned.iter().cloned().collect(),

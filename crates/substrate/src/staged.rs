@@ -11,8 +11,11 @@
 //!
 //! Implements: D-DS-16, WG-5472.
 
-use crate::product::{BundleError, BundleErrorKind, InstalledRecord, OwnedEntity};
-use crate::stages::{staging_role, Stage, StagePlan};
+use crate::product::{
+    run_planned, BundleError, BundleErrorKind, InstalledRecord, OwnedEntity, Planned,
+    ProductInstall, ProductInstallError, ProductTarget,
+};
+use crate::stages::{plan_stages, staging_role, Stage, StagePlan};
 use strata_kernel::*;
 
 /// The approval an owner records for a staged job: who approved it, for how many stages and until
@@ -52,8 +55,9 @@ pub enum JobState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StagedJob {
     pub product: String,
-    /// The record installed before the job: abandon restores it.
-    pub installed: InstalledRecord,
+    /// The record installed before the job, or none for a first install: abandon restores it, or
+    /// removes the product when there was none.
+    pub installed: Option<InstalledRecord>,
     /// The approved plan. Its last stage records the target version.
     pub plan: StagePlan,
     /// Whether the upgrade is tagged security (pre-authorised abandon applies to it).
@@ -122,13 +126,14 @@ pub struct Notice {
 
 /// Starts a job for an approved plan. The plan's stages are the approved diff.
 pub fn start(
+    product: &str,
     plan: StagePlan,
-    installed: InstalledRecord,
+    installed: Option<InstalledRecord>,
     approval: Approval,
     security: bool,
 ) -> StagedJob {
     StagedJob {
-        product: installed.product.clone(),
+        product: product.to_string(),
         installed,
         plan,
         security,
@@ -324,7 +329,11 @@ pub fn abandon_plan(
 
     // Every commit keeps the record owning what is still there: the installed entities, the
     // created ones, and the staging role, less what the commits so far have removed.
-    let mut owned: Vec<OwnedEntity> = job.installed.owns.clone();
+    let mut owned: Vec<OwnedEntity> = job
+        .installed
+        .as_ref()
+        .map(|record| record.owns.clone())
+        .unwrap_or_default();
     owned.extend(created.iter().cloned());
     if staging_defined {
         owned.push(OwnedEntity {
@@ -341,7 +350,7 @@ pub fn abandon_plan(
         let record = InstalledRecord {
             product: job.product.clone(),
             version: format!("{target}-abandon.{}", index + 1),
-            platform: job.installed.platform.clone(),
+            platform: job.installed.as_ref().and_then(|r| r.platform.clone()),
             owns: owned.clone(),
             schema_version: None,
         };
@@ -352,11 +361,19 @@ pub fn abandon_plan(
         commits.push(changes);
     }
     // The last commit restores the record installed before the job.
-    let restored = job.installed.to_kernel().map_err(StagedError::Refused)?;
+    let restored = match &job.installed {
+        Some(record) => {
+            SchemaChange::RecordProduct(record.to_kernel().map_err(StagedError::Refused)?)
+        }
+        None => SchemaChange::RemoveProduct(
+            ProductId::new(job.product.clone())
+                .map_err(|e| StagedError::Refused(format!("the product id: {e:?}")))?,
+        ),
+    };
     // Nothing committed means nothing is written: the record is already the installed one.
     if let Some(last) = commits.last_mut() {
         last.pop();
-        last.push(SchemaChange::RecordProduct(restored));
+        last.push(restored);
     }
     Ok(commits)
 }
@@ -396,6 +413,128 @@ fn removal_rank(kind: &str) -> u8 {
         "mail-template" | "notice-template" => 4,
         "object" => 5,
         _ => 6,
+    }
+}
+
+/// How long an approval of a staged job stands when the caller gives no period (7 days).
+pub const DEFAULT_APPROVAL_PERIOD_MS: i64 = 7 * 86_400_000;
+
+/// Runs a planned product change the way the platform installs and upgrades a product. A change
+/// that fits one commit runs as [`run_planned`] runs it. A change over the cap is planned in stages
+/// ([`plan_stages`]) and run as a staged job whose approval covers all of its stages, under the
+/// target's principal. The stages commit one after another through `execute`; nothing else commits
+/// between them on this path, so the approved plan is the plan the commits make. The backend's job
+/// runner, which shares the tenant with others, re-plans before each stage instead.
+pub fn run_planned_staged<E: std::fmt::Display>(
+    planned: Planned,
+    target: &ProductTarget<'_>,
+    execute: &mut dyn FnMut(Context, Intent) -> Result<Output, E>,
+) -> Result<ProductInstall, ProductInstallError<E>> {
+    let change = match &planned {
+        Planned::Change(change) => change.as_ref().clone(),
+        Planned::Unchanged { .. } => return run_planned(planned, target, execute),
+    };
+    let Some(record) = change.record.clone() else {
+        return run_planned(planned, target, execute);
+    };
+    let product = record.product.clone();
+    let installed = target
+        .installed
+        .filter(|held| held.product == product)
+        .cloned()
+        .or_else(|| InstalledRecord::of(target.schema, &product));
+    let plan = match plan_stages(&change, &product, installed.as_ref(), target.schema) {
+        Ok(None) => return run_planned(planned, target, execute),
+        Ok(Some(plan)) => plan,
+        Err(error) => return Err(ProductInstallError::Refused(error)),
+    };
+    let approved = plan.clone();
+    let owner = match &target.principal {
+        Principal::User(id) => id.0.clone(),
+        other => format!("{other:?}"),
+    };
+    let mut job = start(
+        &product,
+        plan,
+        installed,
+        Approval {
+            owner,
+            stages_allowed: approved.stages.len(),
+            valid_until: target.now.saturating_add(DEFAULT_APPROVAL_PERIOD_MS),
+        },
+        false,
+    );
+    let first = approved.stages.first().map(|s| s.version.clone());
+    let mut failure: Option<E> = None;
+    let mut schema_version: Option<u64> = None;
+    let result = run(
+        &mut job,
+        target.now,
+        &mut |_| Ok(Some(approved.clone())),
+        &mut |stage| {
+            let ctx = Context {
+                tenant: target.tenant.clone(),
+                principal: target.principal.clone(),
+                session: None,
+                now: Timestamp(target.now),
+                correlation: format!("{}:{}", change.step, stage.version),
+                verified_address: None,
+                idempotency_key: target.idempotency_key.clone(),
+                language: None,
+                hop: None,
+            };
+            let expected = if first.as_deref() == Some(stage.version.as_str()) {
+                target.expected_version
+            } else {
+                None
+            };
+            let intent = Intent::ChangeSchema {
+                changes: stage.changes.clone(),
+                expected_version: expected,
+                existing: ExistingData::Reject,
+            };
+            match execute(ctx, intent) {
+                Ok(Output::Schema { version }) => {
+                    schema_version = Some(version.0);
+                    Ok(())
+                }
+                Ok(other) => Err(StepFailure::Refused(format!(
+                    "{}: the executor returned {other:?}, not a schema version",
+                    stage.version
+                ))),
+                Err(error) => {
+                    let message = error.to_string();
+                    failure = Some(error);
+                    Err(StepFailure::Refused(message))
+                }
+            }
+        },
+    );
+    match result {
+        Ok(()) if matches!(job.state, JobState::Done) => Ok(ProductInstall::Applied {
+            schema_version: schema_version.unwrap_or(target.schema.version.0),
+            record: change.record.clone(),
+        }),
+        Ok(()) => Err(ProductInstallError::Refused(BundleError {
+            kind: BundleErrorKind::InvalidBundle,
+            message: format!("the staged upgrade of {product} stopped before its last stage"),
+        })),
+        Err(StagedError::Refused(message)) => match failure {
+            Some(error) => Err(ProductInstallError::Step {
+                step: change.step.clone(),
+                error,
+            }),
+            None => Err(ProductInstallError::Refused(BundleError {
+                kind: BundleErrorKind::InvalidBundle,
+                message,
+            })),
+        },
+        Err(other) => Err(ProductInstallError::Refused(
+            other.bundle_error().unwrap_or(BundleError {
+                kind: BundleErrorKind::InvalidBundle,
+                message: format!("{other:?}"),
+            }),
+        )),
     }
 }
 

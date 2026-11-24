@@ -7,9 +7,8 @@
 use serde_json::{json, Value as Json};
 use strata_kernel::*;
 use strata_substrate::bundle::{
-    install_into, install_product, plan_upgrade, Bundle, BundleError, BundleErrorKind,
-    InstalledRecord, Planned, ProductBundle, ProductInstall, ProductInstallError, ProductTarget,
-    product_version_cmp,
+    install_into, install_product, plan_upgrade, product_version_cmp, Bundle, BundleError,
+    BundleErrorKind, InstalledRecord, Planned, ProductBundle, ProductInstall, ProductTarget,
 };
 use strata_substrate::stages::{plan_stages, staging_role, StagePlan};
 
@@ -84,11 +83,7 @@ fn install(world: &mut World, doc: &Json) -> InstalledRecord {
 }
 
 /// Plans the upgrade of the installed `record` to `doc`, against the tenant of `world`.
-fn plan(
-    world: &World,
-    doc: &Json,
-    record: &InstalledRecord,
-) -> Result<Planned, BundleError> {
+fn plan(world: &World, doc: &Json, record: &InstalledRecord) -> Result<Planned, BundleError> {
     let bundle = read(doc);
     let tenant = tenant();
     let schema = world.tenants[&tenant].schema.clone();
@@ -300,9 +295,18 @@ fn record_of(change: &SchemaChange) -> Option<&InstalledProduct> {
 }
 
 /// Plans `doc` as an upgrade of `record`, over the cap, and returns the plan.
-fn staged(world: &World, doc: &Json, record: &InstalledRecord) -> Result<Option<StagePlan>, BundleError> {
+fn staged(
+    world: &World,
+    doc: &Json,
+    record: &InstalledRecord,
+) -> Result<Option<StagePlan>, BundleError> {
     let change = change_of(plan(world, doc, record));
-    plan_stages(&change, record, &world.tenants[&tenant()].schema)
+    plan_stages(
+        &change,
+        "bulk",
+        Some(record),
+        &world.tenants[&tenant()].schema,
+    )
 }
 
 #[test]
@@ -312,9 +316,18 @@ fn a_small_upgrade_is_one_commit_and_is_not_staged() {
     s.objects = 2;
     s.queries = 3;
     let change = change_of(plan(&world, &product_doc(&s), &record));
-    assert!(change.changes.len() + 1 <= CAP);
-    let planned = plan_stages(&change, &record, &world.tenants[&tenant()].schema);
-    assert_eq!(planned.unwrap(), None, "an upgrade under the cap is not staged");
+    assert!(change.changes.len() < CAP);
+    let planned = plan_stages(
+        &change,
+        "bulk",
+        Some(&record),
+        &world.tenants[&tenant()].schema,
+    );
+    assert_eq!(
+        planned.unwrap(),
+        None,
+        "an upgrade under the cap is not staged"
+    );
 }
 
 #[test]
@@ -330,21 +343,35 @@ fn a_product_at_the_entity_limits_installs_in_stages() {
         .unwrap_or_else(|e| panic!("{e}"))
         .expect("the upgrade is over the cap");
 
-    assert!(plan.stages.len() >= 3, "three or more stages, got {}", plan.stages.len());
+    assert!(
+        plan.stages.len() >= 3,
+        "three or more stages, got {}",
+        plan.stages.len()
+    );
     for stage in &plan.stages {
-        assert!(stage.changes.len() <= CAP, "{} holds {}", stage.version, stage.changes.len());
+        assert!(
+            stage.changes.len() <= CAP,
+            "{} holds {}",
+            stage.version,
+            stage.changes.len()
+        );
     }
     let last = plan.stages.last().unwrap();
     assert_eq!(last.version, "2.0.0", "the last stage records the target");
     assert!(
-        last.changes.iter().any(|c| matches!(c, SchemaChange::RemoveRole(r) if r.0 == staging_role("bulk"))),
+        last.changes
+            .iter()
+            .any(|c| matches!(c, SchemaChange::RemoveRole(r) if r.0 == staging_role("bulk"))),
         "the last stage removes the staging role"
     );
 
     // The versions of the stages rise from the installed version to the target.
     let mut previous = record.version.clone();
     for stage in &plan.stages {
-        assert_eq!(product_version_cmp(&previous, &stage.version), std::cmp::Ordering::Less);
+        assert_eq!(
+            product_version_cmp(&previous, &stage.version),
+            std::cmp::Ordering::Less
+        );
         previous = stage.version.clone();
     }
     assert_eq!(plan.stages[0].version, "2.0.0-stage.1");
@@ -352,16 +379,14 @@ fn a_product_at_the_entity_limits_installs_in_stages() {
     // Each stage records its own version and owns what it has created so far; the staging role is
     // owned by the early stages and not by the target.
     let early = &plan.stages[0];
-    let record_of_early = record_of(early.changes.last().unwrap()).expect("a record ends the stage");
+    let record_of_early =
+        record_of(early.changes.last().unwrap()).expect("a record ends the stage");
     assert_eq!(record_of_early.version, "2.0.0-stage.1");
-    assert!(owned_kernel(record_of_early)
-        .contains(&("role".to_string(), staging_role("bulk"))));
+    assert!(owned_kernel(record_of_early).contains(&("role".to_string(), staging_role("bulk"))));
     let target_record = record_of(last.changes.last().unwrap()).expect("a record ends the stage");
     assert_eq!(target_record.version, "2.0.0");
-    assert!(!owned_kernel(target_record)
-        .contains(&("role".to_string(), staging_role("bulk"))));
-    assert!(owned_kernel(target_record)
-        .contains(&("object".to_string(), "bulk__o149".to_string())));
+    assert!(!owned_kernel(target_record).contains(&("role".to_string(), staging_role("bulk"))));
+    assert!(owned_kernel(target_record).contains(&("object".to_string(), "bulk__o149".to_string())));
 }
 
 /// The entities a record the kernel holds says the product owns.
@@ -395,11 +420,10 @@ fn a_three_stage_upgrade_passes_the_kernel_one_stage_at_a_time() {
         .expect("the product is installed");
     assert_eq!(installed.version, "2.0.0");
     assert!(!owned_ids(&installed).contains(&("role".to_string(), staging_role("bulk"))));
-    assert!(world.tenants[&tenant()]
+    assert!(!world.tenants[&tenant()]
         .schema
         .roles
-        .get(&RoleId(staging_role("bulk")))
-        .is_none());
+        .contains_key(&RoleId(staging_role("bulk"))));
 }
 
 #[test]
@@ -417,15 +441,25 @@ fn an_early_operation_is_refused_by_the_kernel_without_the_staging_role() {
         conditions: vec![],
         steps: vec![],
     };
-    let without_role = commit(world.clone(), &[SchemaChange::DefineOperation(op.clone())], "early");
-    assert!(without_role.is_err(), "an operation whose only invoker is an undefined role is refused");
+    let without_role = commit(
+        world.clone(),
+        &[SchemaChange::DefineOperation(op.clone())],
+        "early",
+    );
+    assert!(
+        without_role.is_err(),
+        "an operation whose only invoker is an undefined role is refused"
+    );
 
     let role = SchemaChange::DefineRole(RoleDef {
         id: RoleId(staging_role("bulk")),
         label: "Staging".into(),
     });
     let with_role = commit(world, &[role, SchemaChange::DefineOperation(op)], "early");
-    assert!(with_role.is_ok(), "the operation is accepted once the staging role is defined");
+    assert!(
+        with_role.is_ok(),
+        "the operation is accepted once the staging role is defined"
+    );
 }
 
 #[test]
@@ -446,7 +480,9 @@ fn assign_role_refuses_the_staging_role_of_a_product() {
         .err()
         .expect("the staging role is not assigned");
     assert!(
-        refused.message.contains("reserved for a product's staged upgrade"),
+        refused
+            .message
+            .contains("reserved for a product's staged upgrade"),
         "{}",
         refused.message
     );
@@ -457,10 +493,15 @@ fn a_last_stage_over_the_cap_is_refused_with_its_counts() {
     let (world, record) = first_version();
     let mut s = shape("2.0.0");
     s.policies = 1 + CAP; // every policy is a last-stage change
-    let err = staged(&world, &product_doc(&s), &record).expect_err("the last stage is over the cap");
+    let err =
+        staged(&world, &product_doc(&s), &record).expect_err("the last stage is over the cap");
     assert_eq!(err.kind, BundleErrorKind::FinalStageTooLarge);
     assert!(err.message.contains("upgrade.final-stage-too-large"));
-    assert!(err.message.contains(&format!("DefinePolicy {}", 1 + CAP)), "{}", err.message);
+    assert!(
+        err.message.contains(&format!("DefinePolicy {}", 1 + CAP)),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -488,7 +529,10 @@ fn an_any_object_policy_keeps_queries_on_an_existing_type_early() {
     for stage in &plan.stages[..plan.stages.len() - 1] {
         for change in &stage.changes {
             assert!(
-                !matches!(change, SchemaChange::DefineObject { .. } | SchemaChange::DefinePolicy(_)),
+                !matches!(
+                    change,
+                    SchemaChange::DefineObject { .. } | SchemaChange::DefinePolicy(_)
+                ),
                 "an early stage holds {change:?}"
             );
         }
@@ -523,7 +567,12 @@ fn no_early_stage_changes_what_a_member_can_see_over_generated_products() {
         let created = created_objects_of(&doc, &installed_objects);
         match staged(&world, &doc, &record) {
             Ok(None) => {}
-            Err(err) => assert_eq!(err.kind, BundleErrorKind::FinalStageTooLarge, "{}", err.message),
+            Err(err) => assert_eq!(
+                err.kind,
+                BundleErrorKind::FinalStageTooLarge,
+                "{}",
+                err.message
+            ),
             Ok(Some(plan)) => {
                 staged_cases += 1;
                 for stage in &plan.stages[..plan.stages.len() - 1] {
@@ -579,10 +628,16 @@ fn approved_plan(world: &World, record: &InstalledRecord) -> StagePlan {
         .expect("the upgrade is over the cap")
 }
 
-fn job_of(plan: StagePlan, record: &InstalledRecord, stages_allowed: usize, valid_until: i64) -> StagedJob {
+fn job_of(
+    plan: StagePlan,
+    record: &InstalledRecord,
+    stages_allowed: usize,
+    valid_until: i64,
+) -> StagedJob {
     staged::start(
+        "bulk",
         plan,
-        record.clone(),
+        Some(record.clone()),
         Approval {
             owner: "user:admin".to_string(),
             stages_allowed,
@@ -657,11 +712,18 @@ fn a_job_commits_under_its_approval_and_resumes_only_for_an_owner_with_step_up()
         Err(StagedError::NotAllowed(_))
     ));
     staged::resume(&mut job, &owner(true), renewal(), START).unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(job.approval.owner, "user:admin", "the resumed approval is the owner's");
+    assert_eq!(
+        job.approval.owner, "user:admin",
+        "the resumed approval is the owner's"
+    );
 
     drive(&mut job, &mut world, START).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(job.state, JobState::Done);
-    assert_eq!(installed_version(&world), "2.0.0", "the last stage records the target");
+    assert_eq!(
+        installed_version(&world),
+        "2.0.0",
+        "the last stage records the target"
+    );
 }
 
 #[test]
@@ -679,12 +741,17 @@ fn a_stage_whose_remaining_plan_moved_is_refused_as_base_moved() {
     );
     match result {
         Err(error @ StagedError::BaseMoved(_)) => {
-            let bundle = error.bundle_error().expect("product.base-moved is a bundle error");
+            let bundle = error
+                .bundle_error()
+                .expect("product.base-moved is a bundle error");
             assert!(bundle.message.starts_with("product.base-moved"));
         }
         other => panic!("the moved plan is not refused: {other:?}"),
     }
-    assert_eq!(job.committed, 0, "nothing commits against a plan that moved");
+    assert_eq!(
+        job.committed, 0,
+        "nothing commits against a plan that moved"
+    );
     assert_eq!(installed_version(&world), "1.0.0");
 }
 
@@ -714,11 +781,14 @@ fn a_schema_conflict_is_planned_again_once_and_a_second_one_is_base_moved() {
         },
     )
     .unwrap_or_else(|e| panic!("{e:?}"));
-    assert!(plans_made >= 2, "the stage was planned again after the conflict");
+    assert!(
+        plans_made >= 2,
+        "the stage was planned again after the conflict"
+    );
     assert_eq!(job.committed, job.plan.stages.len());
 
     // Two conflicts in a row: the upgrade is planned again and found moved.
-    let (mut world, record) = first_version();
+    let (world, record) = first_version();
     let plan = approved_plan(&world, &record);
     let mut job = job_of(plan.clone(), &record, 10, START + PERIOD);
     let approved = plan.clone();
@@ -728,7 +798,10 @@ fn a_schema_conflict_is_planned_again_once_and_a_second_one_is_base_moved() {
         &mut |_| Ok(Some(approved.clone())),
         &mut |_| Err(StepFailure::SchemaConflict),
     );
-    assert!(matches!(result, Err(StagedError::BaseMoved(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(StagedError::BaseMoved(_))),
+        "{result:?}"
+    );
     assert_eq!(installed_version(&world), "1.0.0");
 }
 
@@ -737,8 +810,11 @@ fn an_open_job_refuses_other_changes_to_its_product() {
     let (world, record) = first_version();
     let plan = approved_plan(&world, &record);
     let job = job_of(plan, &record, 1, START + PERIOD);
-    let refused = staged::refuse_while_staging(Some(&job)).expect_err("a running job blocks others");
-    let bundle = refused.bundle_error().expect("upgrade.in-progress is a bundle error");
+    let refused =
+        staged::refuse_while_staging(Some(&job)).expect_err("a running job blocks others");
+    let bundle = refused
+        .bundle_error()
+        .expect("upgrade.in-progress is a bundle error");
     assert!(bundle.message.starts_with("upgrade.in-progress"));
     assert!(staged::refuse_while_staging(None).is_ok());
     let mut done = job.clone();
@@ -762,7 +838,9 @@ fn an_owner_abandon_removes_what_the_stages_created_and_restores_the_record() {
         .collect();
     assert!(!created.is_empty(), "the first stage creates object types");
     let schema = world.tenants[&tenant()].schema.clone();
-    assert!(schema.objects.contains_key(&ObjectTypeId::new(created[0].clone()).unwrap()));
+    assert!(schema
+        .objects
+        .contains_key(&ObjectTypeId::new(created[0].clone()).unwrap()));
 
     assert!(matches!(
         staged::abandon_plan(&job, &AbandonBy::Owner(owner(false))),
@@ -776,10 +854,23 @@ fn an_owner_abandon_removes_what_the_stages_created_and_restores_the_record() {
     assert!(matches!(job.state, JobState::Abandoned { .. }));
 
     let schema = world.tenants[&tenant()].schema.clone();
-    assert_eq!(installed_version(&world), "1.0.0", "the record is back at the installed version");
-    assert_eq!(owned_kernel_of(&world), before, "the record owns what it owned before the job");
-    assert!(!schema.objects.contains_key(&ObjectTypeId::new(created[0].clone()).unwrap()));
-    assert!(schema.roles.get(&RoleId(staging_role("bulk"))).is_none(), "the staging role is gone");
+    assert_eq!(
+        installed_version(&world),
+        "1.0.0",
+        "the record is back at the installed version"
+    );
+    assert_eq!(
+        owned_kernel_of(&world),
+        before,
+        "the record owns what it owned before the job"
+    );
+    assert!(!schema
+        .objects
+        .contains_key(&ObjectTypeId::new(created[0].clone()).unwrap()));
+    assert!(
+        !schema.roles.contains_key(&RoleId(staging_role("bulk"))),
+        "the staging role is gone"
+    );
 }
 
 #[test]
@@ -799,11 +890,17 @@ fn a_security_upgrade_arriving_while_a_job_is_stopped_abandons_it_under_a_pre_au
         ..allowing
     };
     assert!(staged::pre_authorised_abandon(&job, &allowing, true));
-    assert!(!staged::pre_authorised_abandon(&job, &allowing, false), "only a security upgrade");
-    assert!(!staged::pre_authorised_abandon(&job, &refusing, true), "only when pre-authorised");
+    assert!(
+        !staged::pre_authorised_abandon(&job, &allowing, false),
+        "only a security upgrade"
+    );
+    assert!(
+        !staged::pre_authorised_abandon(&job, &refusing, true),
+        "only when pre-authorised"
+    );
 
-    let commits = staged::abandon_plan(&job, &AbandonBy::PreAuthorised)
-        .unwrap_or_else(|e| panic!("{e:?}"));
+    let commits =
+        staged::abandon_plan(&job, &AbandonBy::PreAuthorised).unwrap_or_else(|e| panic!("{e:?}"));
     apply_all(&mut world, &commits);
     let notice = staged::mark_abandoned(&mut job, &AbandonBy::PreAuthorised);
     assert!(notice.detail.contains("pre-authorisation"));
@@ -817,13 +914,21 @@ fn a_stopped_job_past_its_approval_period_is_abandoned_automatically() {
     let mut job = job_of(plan, &record, 1, START + 1_000);
     drive(&mut job, &mut world, START).unwrap_or_else(|e| panic!("{e:?}"));
     assert!(matches!(job.state, JobState::Stopped { .. }));
-    assert!(!staged::expire(&job, START + 999), "the period has not passed");
+    assert!(
+        !staged::expire(&job, START + 999),
+        "the period has not passed"
+    );
     assert!(staged::expire(&job, START + 2_000), "the period has passed");
 
-    let commits = staged::abandon_plan(&job, &AbandonBy::Expired).unwrap_or_else(|e| panic!("{e:?}"));
+    let commits =
+        staged::abandon_plan(&job, &AbandonBy::Expired).unwrap_or_else(|e| panic!("{e:?}"));
     apply_all(&mut world, &commits);
     let notice = staged::mark_abandoned(&mut job, &AbandonBy::Expired);
-    assert!(notice.detail.contains("approval period"), "recorded and notified: {}", notice.detail);
+    assert!(
+        notice.detail.contains("approval period"),
+        "recorded and notified: {}",
+        notice.detail
+    );
     assert_eq!(installed_version(&world), "1.0.0");
 }
 

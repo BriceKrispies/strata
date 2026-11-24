@@ -4,6 +4,9 @@
 #[path = "product_bundle.rs"]
 mod product_bundle;
 
+#[path = "staged_upgrade.rs"]
+mod staged_upgrade;
+
 #[path = "publication_template.rs"]
 mod publication_template;
 
