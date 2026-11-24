@@ -310,10 +310,11 @@ test('no text of a page model is an epoch, a principal or JSON, in any state', (
 
 test('a part without section shapes is drawn from its rows', () => {
   const bare = { screen: { kind: 'list' }, forms: {} };
-  const page = compose(bare, { data: { open: [{ id: 3, fields: { title: 'Leak', status: 'open', opened_at: EPOCH } }] } }, ctx);
+  const page = compose(bare, { data: { open: [{ id: 3, fields: { title: 'Leak', status: 'open', opened_at: EPOCH } }, { id: 4, fields: { title: 'Drip', status: 'draft', opened_at: EPOCH } }] } }, ctx);
   const open = byId(page, 'section:open');
   assert.equal(open.pattern, 'record-list');
   assert.equal(open.items[0].title, 'Leak');
-  assert.equal(open.items[0].status.text, 'Open');
+  assert.equal(open.items[0].state ?? null, null, 'a normal state (open) is not drawn');
+  assert.equal(open.items[1].state?.label, 'Draft', 'a state that departs from normal is said in words');
   assert.equal(open.items[0].time.text, '3 hours ago', 'a number in a field named *_at is a time');
 });
