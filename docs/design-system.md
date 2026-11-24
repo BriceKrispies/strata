@@ -5,7 +5,7 @@ primitives, the patterns and how products extend them, the app shell and templat
 that turns data into interface, interaction, wireframes, who sees what (public and private, role by
 role), the layouts a tenant arranges, how all of it is versioned, and the loop in which an agent
 builds a tenant's screens while the tenant watches. This is a design. Its requirements are in
-`specifications/design-system.jsonc` (DS-001 to DS-021, D-DS-1 to D-DS-30), the properties that can
+`specifications/design-system.jsonc` (DS-001 to DS-023, D-DS-1 to D-DS-31), the properties that can
 be stated precisely are proved in Lean (`lean/Strata/UI/`), and the work is listed at the end in
 dependency order, each item a Workgraph task under WG-5457. It was revised after three adversarial
 review rounds; the answers are in the last section, and everything above it is the current design.
@@ -23,8 +23,9 @@ theming through tokens, Fieldnotes becoming one theme (D-DS-1); layouts the tena
 (D-DS-2); agentic first (D-DS-3); wireframing as a first-class concept (D-DS-4); public and private
 for every element, with the rule that the interface never discloses what the data layer would refuse
 (D-DS-5); role-based views (D-DS-6); per-role shells and screen variants, first match wins (D-DS-20);
-audience groups (D-DS-21); and the rendering-major lifecycle, warn then migrate (D-DS-22). Every other
-D-DS-* is a proposal of this design.
+audience groups (D-DS-21); and the rendering-major lifecycle, warn then migrate (D-DS-22). A tenth,
+of 2026-11-24, is that the design system has no pills: a state is said in words where it departs from
+normal (D-DS-31, see "Layer 2: primitives"). Every other D-DS-* is a proposal of this design.
 
 - **Who a screen is for is declared, never inferred** (D-DS-23, the architecture decision of the second
   review). Audiences are written in roles or audience groups by the owner or the agent; what the
@@ -145,7 +146,7 @@ section lists each with its type:
 | Tones | `tone-{neutral,info,success,warning,danger}-{fg,bg}` | colour |
 | Type | `font-display`, `font-text`, `font-ui`, `font-code`; `text-xs` to `text-3xl`; `leading-tight`, `leading-text`; `tracking-display` | family (closed list), length, number |
 | Space | `space-1` to `space-9`; `density` (`compact` 0.75, `regular` 1, `comfortable` 1.25) | length, enumeration |
-| Shape | `radius-1` to `radius-3`, `radius-pill`; `border-hair`, `border-rule` | length |
+| Shape | `radius-1` to `radius-3` (there is no pill radius, D-DS-31); `border-hair`, `border-rule` | length |
 | Elevation | `shadow-1` to `shadow-3` | shadow (from a scale) |
 | Motion | `ease`, `dur-quick`, `dur-settle` (zero under reduced motion) | easing, duration |
 | Size | `size-control`, `width-page`, `width-measure`, `width-form` | length |
@@ -221,7 +222,7 @@ document, and at 400% zoom.
 | toast | `<ds-toast-region>`: a `status` live region, `alert` for errors | errors do not dismiss themselves; others pause on hover and focus |
 | gesture hosts | `<ds-sortable>`, `<ds-lanes>`, `<ds-selection>`: the interaction gestures (see "Interaction") | every pointer gesture has a keyboard path and a single-pointer, non-drag path |
 | avatar | `<img alt>` or initials; decorative (`alt=""`) beside a visible name | none |
-| badge, chip | `<span class="ds-badge">`; a removable chip is a button | native |
+| state line | `<p class="ds-state ds-state--{note,attention,danger}">` under a record's title: a bold lead word ("Draft.") and the sentence the presentation declares; the record carries `data-edge`, a 3px rule on its leading edge | native text; nothing is said by colour alone |
 | progress | native `<progress>` or `<meter>` | native |
 | skeleton | `<div class="ds-skeleton" aria-hidden="true">` inside a container with `aria-busy="true"` | none |
 | layout classes | `ds-stack`, `ds-cluster`, `ds-grid`, `ds-sidebar`, `ds-switcher`, `ds-center`, `ds-split`: classes with custom-property parameters, intrinsic and container-query based, logical properties only | none |
@@ -241,14 +242,46 @@ document, and at 400% zoom.
 - **Properties, not markup.** Elements take properties through `dom.js`'s property channel and build
   their children with DOM APIs; charts are SVG built with `createElementNS`. Nothing is parsed (D18).
 - **Forced colours.** Under `forced-colors: active` primitives use system colours, keep every
-  boundary as a border (never a background alone), and never carry state by colour alone (a status
-  badge has its label; a selected row has a mark).
+  boundary as a border (never a background alone), and never carry state by colour alone (a state
+  line says its state in words; a selected row has a mark).
 - **Target size.** Every target is at least 24 by 24 CSS pixels at every density, compact included
   (WCAG 2.5.8); in a touch shell (bottom-tab, below) at least 44 by 44. The density token scales
   padding, never below the floor.
 - **Reflow.** Every primitive and pattern reflows at 320 CSS pixels wide (400% zoom of a 1280 window)
   with no scrolling in two directions, except inside a data table, which stacks its rows as cards
   below its `stackBelow` width.
+
+**No pills (D-DS-31, owner decision of 2026-11-24).** There is no badge, chip, pill or count bubble: no
+rounded or tinted capsule label anywhere. What a capsule used to show is shown by what it means:
+
+- **State is said in words, only where it departs from normal.** A status value has a mark the
+  product declares (`normal`, `note`, `attention`, `danger`) and may have a sentence about its
+  consequence for the reader. A normal value draws nothing: a published message in a list of
+  published messages carries no label. Any other value draws a state line directly under the record's
+  title, a bold lead word and its sentence ("**Draft.** Only administrators can see this until it is
+  published."), in the colour of its mark with no fill, and the record gets a 3px rule on its leading
+  edge, so exceptions are found by scanning. Undeclared values take their mark from a word list
+  (published, active, open, done, sent, read, approved are normal; draft, pending, scheduled, queued
+  are notes; hidden, rejected, failed, overdue, left, archived, removed, suspended need attention; any
+  other word is a note) and have the lead word only.
+- **Unread** is bold text and the same rule; the section heading says the count in words, muted
+  ("Notifications 8 unread").
+- **Counts** beside a section title are muted tabular figures in the heading ("Announcements 5",
+  "Reactions received 122 in all").
+- **Short value lists** (tags, languages, lists of references) are a sentence by `Intl.ListFormat` in
+  the request language ("English and Tamil").
+- **Record numbers and kinds** are plain muted words in the meta line ("No. 329", "Badge").
+- **Circles** are kept for what is round: avatars and dots. Bars keep square or `radius-1` ends.
+
+**What holds it.** The catalogue has no pill radius token, and `scripts/ui-tokens.mjs` refuses a token
+whose id names a pill and a primitive named badge, pill, chip or tag-capsule. `npm run check:styles`
+(`scripts/check-style-literals.mjs`) refuses, in every stylesheet outside the generated ones, a radius
+of `9999px`, `999px` or `100vmax`, `50%` on anything whose class does not name an avatar or a dot,
+and the class names `ds-badge`, `ds-chip` and `ds-pill`; in the design system's own stylesheet it
+accepts only the radius tokens. A committed failing fixture (`scripts/fixtures/style-literals/pills.css`)
+and its tests keep the check honest (DS-022, DS-023). Fieldnotes' publication chrome keeps the rounded
+ends it was drawn with (the masthead search, the desk's status label, the theme swatches), written as
+radii of at least half their height: it is not a design-system primitive, and it is held pixel-identical.
 
 ## Layer 3: patterns
 
@@ -385,12 +418,12 @@ the field types it applies to, its props, and what the server must provide.
 | `money` | int of minor units with a currency (and, when WG-5494 adds it, a money type) | `Intl.NumberFormat` currency style, fed an exact decimal string; currency, scale and rounding mode come from the field's type when it has them, otherwise from props (`currency` as a literal or a sibling field, `scale`, `rounding`, default half-even) | |
 | `percent` | int | with a declared scale | |
 | `boolean` | bool | "Yes"/"No", a check mark with text, or a switch's state | |
-| `status` | str (workflow state or choice) | a badge; each value has a label and a tone (`neutral`, `info`, `success`, `warning`, `danger`) | |
+| `status` | str (workflow state or choice) | a state (D-DS-31): each value has a label, a mark (`normal`, `note`, `attention`, `danger`) and optionally a sentence, declared as the props `state.<value>`, `means.<value>` and `label.<value>`; a normal value is not drawn, any other is a state line and a leading-edge rule | |
 | `choice` | str with options | the option's label | |
 | `person` | str holding a principal; `created_by` | a person chip: avatar or initials and the display name, linked to the person's profile screen when one is declared | the `people` table of the reply |
 | `reference` | ref | a link to the screen that shows the target's detail, its text the target's title field | `refs` (exists, with `include`) and the target's presentation |
-| `references` | list of ref | chips of references | as `reference` |
-| `tags` | list of str | chips | |
+| `references` | list of ref | a prose list of references ("Design and Engineering", `Intl.ListFormat`), each a link | as `reference` |
+| `tags` | list of str | a prose list ("English and Tamil", `Intl.ListFormat` in the request language) | |
 | `language` | language | the language's name (`Intl.DisplayNames`) | |
 | `media` | file | an image rendition with alt text from a declared field, or a file link with size and type | the rendition address (D-6589) |
 | `url`, `email` | str | a link; external links get `rel="noopener noreferrer"` | |
@@ -398,7 +431,7 @@ the field types it applies to, its props, and what the server must provide.
 
 **Fallbacks.** A field with no declared display type is drawn by its type: `time` as `datetime`
 relative, `ref` as `reference` (or, when no title is available, the target object's label as the
-link text, never the id), `bool` as `boolean`, `list` as chips, `file` as `media`, `int` as `number`,
+link text, never the id), `bool` as `boolean`, `list` as a prose list, `file` as `media`, `int` as `number`,
 `str` as `text`, `language` as `language`. `created_by` is always `person`. No fallback draws a
 record id, an epoch number or a JSON object. An aggregate is drawn by the pattern bound to it
 (`stat-tile`, `aggregate-bars`, `reaction-bar`), never as JSON.
@@ -1535,7 +1568,7 @@ rule is that a binding needs the data it names, in the draft.
 | 2 | data | object types message, comment, reaction; policies; queries and views | the bound widgets can now be bound |
 | 3 | data | operations post, comment, react, hide; their invokers | nothing on screen |
 | 4 | binding | the table bound to `messages`, the card to `message`, the thread to `comments` | sample messages in the table |
-| 5 | styling | presentations: person, datetime, status, rich text | names, "3 hours ago", status badges on the samples |
+| 5 | styling | presentations: person, datetime, status, rich text | names, "3 hours ago", state lines on the samples |
 | 6 | binding | forms, row actions, gestures, prefill | the post form and the react buttons, working against the ephemeral sample state |
 | 7 | styling | the tenant's theme seeds (tenant configuration, not part of the draft) | the tenant's colours and fonts |
 | 8 | publish | the owner publishes the approved revision by id and hash (staged automatically if over the cap) | members see the message centre when the last stage commits |
@@ -1790,10 +1823,11 @@ platform admin role (WG-5474) and gap 6's reference coercion (in WG-5466).
 
 `specifications/design-system.jsonc` is an area part (`AREA_PARTS` in `scripts/split-spec.mjs`: ids that
 are `ds-` and a number, or start `d-ds-`; the behaviour-model ids `ds-save`, `ds-open` and so on are not
-in it). It holds thirty decisions: D-DS-1 to D-DS-6 and D-DS-20 to D-DS-22 are the owner's, decided
-2026-11-22; the others are proposals, with a source saying so. It holds twenty-one requirements, DS-001 to
-DS-021, milestone 7, each stated of its Lean model and checked by the theorems that carry its `Verifies:`
-line. Requirements checked by tests are added with those tests:
+in it). It holds thirty-one decisions: D-DS-1 to D-DS-6 and D-DS-20 to D-DS-22 are the owner's, decided
+2026-11-22, and D-DS-31 (no pills) is the owner's, decided 2026-11-24; the others are proposals, with a
+source saying so. It holds twenty-three requirements, milestone 7: DS-001 to DS-021, each stated of its
+Lean model and checked by the theorems that carry its `Verifies:` line, and DS-022 and DS-023, held by
+the stylesheet check of D-DS-31 (`npm run check:styles`) and its failing fixture. Requirements checked by tests are added with those tests:
 
 | Planned requirement | Its check | Added by |
 |---|---|---|
