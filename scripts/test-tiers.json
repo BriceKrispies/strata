@@ -61,6 +61,13 @@
     },
     {
       "package": "strata-corpus",
+      "target": "staged_install",
+      "tier": "routine",
+      "seconds": 0.1,
+      "unmeasured": false
+    },
+    {
+      "package": "strata-corpus",
       "target": "corpus_slow",
       "tier": "full",
       "seconds": null,
