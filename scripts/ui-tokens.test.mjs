@@ -1,13 +1,15 @@
-// Tests for scripts/ui-tokens.mjs and scripts/check-style-literals.mjs.
+// Tests for scripts/ui-tokens.mjs and scripts/check-style-literals.mjs, with the No-pills check of
+// D-DS-31 (DS-022, DS-023) and its failing fixture in scripts/fixtures/style-literals.
 // Run with: node --test scripts/ui-tokens.test.mjs
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
-import { checkStyles, findLiterals } from './check-style-literals.mjs';
+import { checkStyles, findLiterals, findPills } from './check-style-literals.mjs';
 import { parseJsonc } from './jsonc.mjs';
-import { filesFor, loadCatalogue, outDir, ratio, parseHex, refusals, renderTheme, expandPresets, writeTokens } from './ui-tokens.mjs';
+import { filesFor, loadCatalogue, outDir, pillRefusals, ratio, parseHex, refusals, renderTheme, expandPresets, writeTokens } from './ui-tokens.mjs';
 
 const fixtureFile = new URL('./fixtures/ui-tokens/low-contrast.jsonc', import.meta.url);
 const made = [];
@@ -116,6 +118,51 @@ test('the style literal check finds colours and font families and passes tokens'
   assert.deepEqual(found.map((f) => [f.line, f.kind]), [[1, 'colour'], [2, 'colour'], [3, 'colour'], [4, 'font family']]);
 });
 
-test('no stylesheet in web/src/styles names a literal colour or font outside the generated tokens', () => {
+test('no stylesheet in web/src/styles names a literal colour or font outside the generated tokens, or draws a pill', () => {
   assert.deepEqual(checkStyles(), []);
+});
+
+/// The failing fixture of the No-pills check (D-DS-31): every refused rule is found, no allowed one.
+test('the no-pills check refuses pill radii and capsule class names, and passes avatars, dots and tokens', () => {
+  const dir = fileURLToPath(new URL('./fixtures/style-literals/', import.meta.url));
+  const problems = checkStyles(dir);
+  const found = (file, line) => problems.some((p) => p.includes(`fixtures/style-literals/${file}:${line}:`));
+  for (const line of [8, 13, 18, 23, 27, 28, 32, 40]) assert.ok(found('pills.css', line), `pills.css:${line} refused\n${problems.join('\n')}`);
+  assert.ok(found('ds-fixture.css', 7), `a non-token radius in a design-system stylesheet is refused\n${problems.join('\n')}`);
+  assert.equal(problems.length, 9, problems.join('\n'));
+  assert.ok(problems.every((p) => p.endsWith('the design system has no pills (D-DS-31)')));
+});
+
+test('findPills reads each declaration with the selector of its block', () => {
+  const css = [
+    '@layer components {',
+    '  .ds-avatar { border-radius: 50%; }',
+    '  .swatch__dot { border-radius: 50%; }',
+    '  .ring { border-radius: 50%; }',
+    '  @media (min-width: 1px) { .x { border-end-end-radius: 999px; } }',
+    '  .ds-chips { color: inherit; }',
+    '  .ds-pill--new { color: inherit; }',
+    '}',
+  ].join('\n');
+  assert.deepEqual(findPills(css).map((f) => [f.line, f.selector, f.kind]), [
+    [4, '.ring', 'pill radius (50% on something that is not an avatar or a dot)'],
+    [5, '.x', 'pill radius'],
+    [7, '.ds-pill--new', 'capsule class'],
+  ]);
+  assert.deepEqual(findPills('.a { border-radius: 2rem; }'), [], 'outside the design system a fixed radius is not refused');
+  assert.equal(findPills('.a { border-radius: 2rem; }', { designSystem: true }).length, 1);
+  assert.deepEqual(findPills('.a { border-radius: var(--radius-1) 0; }', { designSystem: true }), []);
+});
+
+test('the catalogue has no pill token, and a pill token or a capsule primitive is refused', () => {
+  const catalogue = loadCatalogue();
+  assert.ok(!catalogue.tokens.some((t) => /pill/.test(t.id)), 'radius-pill is gone');
+  assert.deepEqual(pillRefusals(catalogue), []);
+  catalogue.tokens.push({ id: 'radius-pill', group: 'Shape', type: 'length' });
+  catalogue.primitives = [{ id: 'badge' }, { id: 'button' }, 'chip', { id: 'tag-capsule' }];
+  const lines = pillRefusals(catalogue);
+  assert.equal(lines.length, 4, lines.join('\n'));
+  assert.ok(lines.some((l) => /token radius-pill makes a pill/.test(l)));
+  for (const id of ['badge', 'chip', 'tag-capsule']) assert.ok(lines.some((l) => l.includes(`primitive ${id} is a capsule label`)), id);
+  assert.ok(refusals(catalogue).some((l) => /radius-pill/.test(l)), 'the generator refuses it');
 });

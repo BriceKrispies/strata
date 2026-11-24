@@ -270,14 +270,14 @@
     background: var(--surface-raised);
   }
 
-  .strip__mark {
+  .strip__dot {
     inline-size: 0.6rem;
     block-size: 0.6rem;
     border: 1.5px solid var(--text);
     border-radius: 50%;
   }
 
-  .strip__mark--yes {
+  .strip__dot--yes {
     background: var(--text);
   }
 

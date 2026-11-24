@@ -175,8 +175,8 @@ function timeline(result) {
       return h(
         'li',
         { key: s.step, class: s.diverged ? 'strip__item strip__item--diverged' : 'strip__item', title: text },
-        h('span', { class: a ? 'strip__mark strip__mark--yes' : 'strip__mark strip__mark--no', 'aria-hidden': 'true' }),
-        h('span', { class: b ? 'strip__mark strip__mark--yes' : 'strip__mark strip__mark--no', 'aria-hidden': 'true' }),
+        h('span', { class: a ? 'strip__dot strip__dot--yes' : 'strip__dot strip__dot--no', 'aria-hidden': 'true' }),
+        h('span', { class: b ? 'strip__dot strip__dot--yes' : 'strip__dot strip__dot--no', 'aria-hidden': 'true' }),
         h('span', { class: 'visually-hidden' }, text),
       );
     }),

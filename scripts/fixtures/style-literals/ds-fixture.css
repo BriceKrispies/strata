@@ -1,0 +1,26 @@
+/* A failing fixture for the No-pills check in a design-system stylesheet (its name starts with ds):
+   there, a radius is a radius token, 0, inherit, or 50% on an avatar or a dot (D-DS-31). */
+
+@layer components {
+  /* refused: a radius derived from the height is a pill by another name */
+  .ds-tag {
+    border-radius: 1.5em;
+  }
+
+  /* allowed */
+  .ds-card {
+    border-radius: var(--radius-3);
+  }
+
+  .ds-row {
+    border-radius: 0;
+  }
+
+  .ds-fill {
+    border-radius: inherit;
+  }
+
+  .ds-avatar {
+    border-radius: 50%;
+  }
+}

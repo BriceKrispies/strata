@@ -399,7 +399,7 @@ function swatches(name, legend, field, options) {
           'label',
           { key: option, class: 'swatch' },
           h('input', { type: 'radio', name, value: option, checked: field.value === option }),
-          h('span', { class: `swatch__chip swatch__chip--${option}`, 'aria-hidden': 'true' }),
+          h('span', { class: `swatch__dot swatch__dot--${option}`, 'aria-hidden': 'true' }),
           h('span', null, SWATCH_NAMES[option] ?? option),
         ),
       ),

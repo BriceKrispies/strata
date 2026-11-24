@@ -215,9 +215,28 @@ export function formatFailure(theme, f) {
   return `ui-tokens: preset ${theme.id}: ${f.pair} (${f.scheme} scheme, ${f.variant})${r}${f.note ? ` [${f.note}]` : ''}`;
 }
 
+// No pills (D-DS-31): a state is said in words where it departs from normal, never by a capsule.
+// The catalogue may not name a token that makes a pill, or a primitive that is one.
+const PILL_TOKEN = /pill|capsule/i;
+const PILL_PRIMITIVES = new Set(['badge', 'pill', 'chip', 'tag-capsule']);
+
+/** The refusals of D-DS-31 in a catalogue: pill tokens and capsule primitives, as lines. */
+export function pillRefusals(catalogue) {
+  const lines = [];
+  for (const token of catalogue.tokens ?? []) {
+    if (PILL_TOKEN.test(String(token.id))) lines.push(`ui-tokens: token ${token.id} makes a pill; the design system has none (D-DS-31)`);
+  }
+  const primitives = Array.isArray(catalogue.primitives) ? catalogue.primitives : Object.keys(catalogue.primitives ?? {}).map((id) => ({ id }));
+  for (const primitive of primitives) {
+    const id = String(typeof primitive === 'string' ? primitive : primitive?.id ?? primitive?.name ?? '').toLowerCase();
+    if (PILL_PRIMITIVES.has(id)) lines.push(`ui-tokens: primitive ${id} is a capsule label; say a state in words where it departs from normal (D-DS-31)`);
+  }
+  return lines;
+}
+
 /** Every refusal for the catalogue's presets, as lines. Empty when all presets are sound. */
 export function refusals(catalogue) {
-  const lines = [];
+  const lines = [...pillRefusals(catalogue)];
   for (const theme of expandPresets(catalogue)) {
     const problems = structure(catalogue, theme);
     if (problems.length) {

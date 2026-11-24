@@ -1,0 +1,66 @@
+/* A failing fixture for the No-pills check (D-DS-31, scripts/check-style-literals.mjs). Every rule
+   marked "refused" must be found; every rule marked "allowed" must not. Not part of the web
+   application: it is never imported. */
+
+@layer components {
+  /* refused: a pill radius in pixels */
+  .tag {
+    border-radius: 9999px;
+  }
+
+  /* refused: the shorter pill radius */
+  .label {
+    border-start-start-radius: 999px;
+  }
+
+  /* refused: a pill radius by viewport units */
+  .count {
+    border-radius: 100vmax;
+  }
+
+  /* refused: the removed token */
+  .status {
+    border-radius: var(--radius-pill);
+  }
+
+  /* refused: a capsule class name, and a circle on something that is not an avatar or a dot */
+  .ds-badge--success {
+    border-radius: 50%;
+  }
+
+  /* refused: capsule class names */
+  .ds-chip,
+  .ds-pill {
+    color: inherit;
+  }
+
+  @media (min-width: 40rem) {
+    /* refused: inside a nested block too */
+    .bubble {
+      border-radius: 4px 999px;
+    }
+  }
+
+  /* allowed: an avatar and a dot are round */
+  .ds-avatar {
+    border-radius: 50%;
+  }
+
+  .colophon__live-dot::before {
+    border-radius: 50%;
+  }
+
+  /* allowed: a radius token, and a radius of a fixed size outside the design system's stylesheet */
+  .card {
+    border-radius: var(--radius-2);
+  }
+
+  .masthead__search input {
+    border-radius: 1.5rem;
+  }
+
+  /* allowed: 50% that is not a radius */
+  .hidden {
+    clip-path: inset(50%);
+  }
+}

@@ -66,7 +66,8 @@
     padding: var(--space-1) var(--space-3);
     background: transparent;
     border: var(--border-hair) solid var(--control-border);
-    border-radius: 999px;
+    /* Fieldnotes masthead, held pixel-identical: at least half its height. */
+    border-radius: 1.5rem;
     transition: inline-size var(--dur-quick) var(--ease);
   }
 
@@ -106,7 +107,7 @@
     font-variation-settings: 'SOFT' 100, 'WONK' 1;
   }
 
-  .colophon__live[data-connection='open']::before {
+  .colophon__live-dot[data-connection='open']::before {
     content: '';
     display: inline-block;
     inline-size: 0.5em;
