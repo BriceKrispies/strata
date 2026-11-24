@@ -1513,6 +1513,67 @@ fn release_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     std::cmp::Ordering::Equal
 }
 
+/// Orders two versions of a product by semantic versioning (semver.org, section 11): the numeric
+/// core `MAJOR.MINOR.PATCH` first (a missing part counting as zero, as `release_cmp` does), then a
+/// version with a pre-release part before the same core without one, then the pre-release
+/// identifiers. Build metadata after `+` does not order. Platform releases keep `release_cmp`
+/// (`PlatformRange::admits`); this orders products only (D-DS-16, WG-5472).
+pub fn product_version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let (core_a, pre_a) = split_product_version(a);
+    let (core_b, pre_b) = split_product_version(b);
+    match release_cmp(core_a, core_b) {
+        std::cmp::Ordering::Equal => {}
+        other => return other,
+    }
+    match (pre_a, pre_b) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (Some(x), Some(y)) => cmp_pre_release(x, y),
+    }
+}
+
+/// The numeric core and the pre-release part (without the leading `-`) of a product version;
+/// build metadata is dropped.
+fn split_product_version(version: &str) -> (&str, Option<&str>) {
+    let version = version.split('+').next().unwrap_or(version);
+    match version.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (version, None),
+    }
+}
+
+/// Compares two pre-release parts identifier by identifier (semver section 11.4): numeric
+/// identifiers by value, alphanumeric ones in ASCII order, a numeric one before an alphanumeric
+/// one, and a shorter list before a longer one that it prefixes.
+fn cmp_pre_release(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut left = a.split('.');
+    let mut right = b.split('.');
+    loop {
+        match (left.next(), right.next()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(x), Some(y)) => match cmp_pre_identifier(x, y) {
+                std::cmp::Ordering::Equal => {}
+                other => return other,
+            },
+        }
+    }
+}
+
+fn cmp_pre_identifier(x: &str, y: &str) -> std::cmp::Ordering {
+    let numeric = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    match (numeric(x), numeric(y)) {
+        // Numeric identifiers have no leading zeros in a valid version, so length then text is
+        // the numeric order without overflow.
+        (true, true) => x.len().cmp(&y.len()).then_with(|| x.cmp(y)),
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => x.cmp(y),
+    }
+}
+
 impl PlatformRange {
     /// Whether `release` is from `min` up to, and excluding, `below`.
     pub fn admits(&self, release: &str) -> bool {
@@ -1927,7 +1988,7 @@ pub fn plan_upgrade(
             "the product \"{product}\" is not installed; install-bundle installs it"
         )));
     };
-    if release_cmp(&bundle.version, &installed.version) != std::cmp::Ordering::Greater {
+    if product_version_cmp(&bundle.version, &installed.version) != std::cmp::Ordering::Greater {
         return Err(BundleError::invalid(format!(
             "version {} is not greater than version {} of the product \"{product}\", which is installed (INT-1583)",
             bundle.version, installed.version
@@ -2179,4 +2240,99 @@ pub fn remove_product<E>(
 ) -> Result<ProductInstall, ProductInstallError<E>> {
     let planned = plan_remove(product, delete_records, target)?;
     run_planned(planned, target, execute)
+}
+
+#[cfg(test)]
+mod version_order_tests {
+    use super::{product_version_cmp, release_cmp, PlatformRange};
+    use std::cmp::Ordering::{Equal, Greater, Less};
+
+    fn ascending(versions: &[&str]) {
+        for pair in versions.windows(2) {
+            assert_eq!(
+                product_version_cmp(pair[0], pair[1]),
+                Less,
+                "{} should sort before {}",
+                pair[0],
+                pair[1]
+            );
+            assert_eq!(product_version_cmp(pair[1], pair[0]), Greater);
+        }
+    }
+
+    #[test]
+    fn pre_releases_sort_before_their_release_by_semver_rules() {
+        // The example order of semver.org section 11.
+        ascending(&[
+            "2.0.0-alpha",
+            "2.0.0-alpha.1",
+            "2.0.0-alpha.beta",
+            "2.0.0-beta",
+            "2.0.0-beta.2",
+            "2.0.0-beta.11",
+            "2.0.0-rc.1",
+            "2.0.0",
+        ]);
+    }
+
+    #[test]
+    fn stage_markers_sort_between_the_installed_version_and_the_target() {
+        // The internal pre-release versions of a staged upgrade (D-DS-16): numeric stage numbers
+        // compare by value, so stage 10 follows stage 2.
+        ascending(&[
+            "1.0.0",
+            "1.1.0-stage.1",
+            "1.1.0-stage.2",
+            "1.1.0-stage.10",
+            "1.1.0",
+            "1.1.1",
+        ]);
+    }
+
+    #[test]
+    fn a_missing_core_part_counts_as_zero_and_build_metadata_does_not_order() {
+        assert_eq!(product_version_cmp("1.0", "1.0.0"), Equal);
+        assert_eq!(product_version_cmp("1.0.0+build.7", "1.0.0+build.9"), Equal);
+        assert_eq!(
+            product_version_cmp("1.0.0-rc.1+build.7", "1.0.0-rc.1"),
+            Equal
+        );
+        assert_eq!(product_version_cmp("1.0.10", "1.0.9"), Greater);
+    }
+
+    #[test]
+    fn new_and_old_comparators_agree_on_every_repository_version_without_a_pre_release() {
+        // Every purely numeric version string the repository uses (bundles, manifests, lock
+        // files and platform constants), so the product comparator changes no order that
+        // existed before.
+        let versions = [
+            "0.1.0", "0.1.17", "0.1.3", "0.12", "0.2", "0.2.17", "0.2.46", "0.28.2", "0.3",
+            "0.32.1", "0.4", "0.5.3", "0.6.8", "0.7.9", "1.0", "1.0.0", "1.0.10", "1.0.228",
+            "1.1.0", "1.1.1", "1.2.2", "1.24.0", "1.3.0", "1.52", "1.65.1", "1.8.0", "1.85",
+            "2.0.0", "2.0.119", "2.3.3", "3.0.0", "3.3.20", "4.0.0", "4.0.7", "4.14.0", "4.14.1",
+            "4.68.6", "5.0.0", "5.3.0", "5.9.3", "6.0.0", "6.5.0", "7.3.8", "8.5.33",
+        ];
+        for a in versions {
+            for b in versions {
+                assert_eq!(
+                    product_version_cmp(a, b),
+                    release_cmp(a, b),
+                    "{a} against {b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn showcase_products_install_on_the_draft_platform_release() {
+        // The showcase products declare `platform.min` 0.2 (admin, community, identity, pages).
+        // The platform check keeps `release_cmp`, so a platform release is admitted as before.
+        let range = PlatformRange {
+            min: "0.2".to_string(),
+            below: None,
+        };
+        assert!(range.admits("0.2-draft"));
+        assert!(range.admits("0.2"));
+        assert!(!range.admits("0.1.17"));
+    }
 }
