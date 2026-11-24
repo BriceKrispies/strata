@@ -131,3 +131,69 @@ fn an_upgrade_changes_the_parts_it_changes_and_a_removal_takes_the_interface_out
     );
     assert!(definition(&schema).manifest.parts.is_empty());
 }
+
+/// A screen part carries the shape of what it binds, with a fingerprint: the object a section
+/// reads with each field's type and requirement, and the operation of a form or action with its
+/// inputs. A change to a field's type changes the shape, its fingerprint and the part's hash.
+#[test]
+fn a_field_type_change_moves_the_section_fingerprint() {
+    let mut world = world();
+    installed(&mut world, &ticket_desk());
+    let mut schema = schema_of(&world);
+    let before = definition(&schema);
+    let part = |definition: &strata_substrate::ui::Definition| -> Json {
+        let entry = &definition.manifest.parts[0];
+        assert_eq!(entry.id, SCREEN);
+        definition.part(&entry.hash).unwrap().clone()
+    };
+    let first = part(&before);
+    let section = &first["sections"]["open"];
+    assert_eq!(section["single"], false);
+    assert_eq!(section["shape"]["object"], "ticket_desk__ticket");
+    let title = section["shape"]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["id"] == "title")
+        .expect("the title field is in the shape");
+    assert_eq!(title["type"], "str");
+    assert_eq!(title["required"], true);
+    assert!(title.get("displayType").is_none(), "none is declared");
+    assert_eq!(
+        section["shape"]["fingerprint"].as_str().unwrap().len(),
+        64,
+        "a SHA-256 in hex"
+    );
+    assert!(
+        first["forms"]["ticket_desk__open_form"]["shape"]["operation"].is_string(),
+        "a form carries the shape of its operation"
+    );
+
+    let object = ObjectTypeId::new("ticket_desk__ticket").unwrap();
+    let field = FieldId::new("title").unwrap();
+    schema
+        .objects
+        .get_mut(&object)
+        .unwrap()
+        .fields
+        .get_mut(&field)
+        .unwrap()
+        .ty = FieldType::Int;
+    let after = definition(&schema);
+    let second = part(&after);
+    assert_eq!(
+        second["sections"]["open"]["shape"]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == "title")
+            .unwrap()["type"],
+        "int"
+    );
+    assert_ne!(
+        second["sections"]["open"]["shape"]["fingerprint"],
+        section["shape"]["fingerprint"]
+    );
+    assert_ne!(after.manifest.parts[0].hash, before.manifest.parts[0].hash);
+    assert_ne!(after.manifest.hash, before.manifest.hash);
+}

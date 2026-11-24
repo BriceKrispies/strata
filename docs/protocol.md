@@ -107,3 +107,87 @@ processes through their environment), `x-strata-site` (the tenant the BFF resolv
 refuses anything without the service token, including requests from a browser that finds the
 port. It derives tenant and principal from the session it holds; a session that belongs to
 another tenant than the site is treated as no session.
+
+## View replies: people, references and section shapes
+
+`GET /api/view` answers a model whose `data` holds each section of the view: a list section is an
+array of rows, a single section one row or null. Three things in it name people or records of other
+types, and none of them is a bare identifier.
+
+### The people table
+
+A reply carries `people` beside `data`:
+
+```json
+{
+  "data": { "posts": [ { "id": 7, "created_by": { "person": "p1" }, "fields": { "title": "..." } } ] },
+  "people": { "p1": { "name": "Ada Okafor", "avatar": null, "self": true } }
+}
+```
+
+- A person value (today the author of a record, `created_by`) is `{"person": "<handle>"}`, or null
+  when the reader may not know the author. The handle is opaque and belongs to this reply: `p1`,
+  `p2`, ... in order of first appearance. The principal string is not sent anywhere in the reply.
+- `people[handle]` is `{"name": string | null, "avatar": string | null}`. `name: null` means the
+  client draws "A member". `avatar` is a file address, or null (no avatar is stored yet).
+- `self: true` is added to the entry of the reader's own handle, so a page can tell "this is mine"
+  without a principal to compare. Other entries carry no `self`.
+- A name is resolved only for a principal the reader was already given as an author, and only as far
+  as the tenant's `member_names` setting allows: `members` (the default: a signed-in reader sees
+  display names), `everyone` (anonymous readers too) or `nobody`. A reader always sees their own
+  name. The display name is the one the account holds (the `display_name` of the session reply).
+
+### Reference fields
+
+A value of a reference field (and each item of a list of references) is
+
+```json
+{ "ref": { "object": "author", "id": 3, "title": "Mirela Ashby" } }
+```
+
+when the reader may read the target, with `title` null when the object type has no title field
+and the target has no text for it, and
+
+```json
+{ "ref": null }
+```
+
+when the target is not readable: no id and no target are sent. The title is the text of the target
+object type's title field: a required string field named `title` or `name`, else the first required
+string field (the specification declares no title field yet; one declared later is used first). A
+null reference stays null. Targets are read under the reader's policies, as the view's `include`
+reads them, and `refs` (the included records) is unchanged. The reference fields of records inside
+`refs` are not resolved and keep their bare ids.
+
+### Section shapes in a screen part
+
+A screen part (`GET /api/ui/parts/<hash>`) carries, beside `screen`, `forms`, `actions` and `live`:
+
+```json
+{
+  "sections": {
+    "posts": {
+      "single": false,
+      "shape": {
+        "object": "post",
+        "fields": [
+          { "id": "author", "type": "ref<author>", "required": true },
+          { "id": "title", "type": "str", "required": true }
+        ],
+        "fingerprint": "<64 hex digits>"
+      }
+    }
+  }
+}
+```
+
+- One entry for each section of the screen's view. `shape.object` is the object type the section's
+  query reads; `fields` lists every field of it by id with its `type` (`str`, `int`, `bool`, `time`,
+  `file`, `language`, `ref<object>`, `list<type>`) and `required`, and a `displayType` when one is
+  declared (none is yet, so it is left out). An aggregate section has `aggregate` (its id) in place
+  of `fields`.
+- Each form and action in the part gains `shape`: `{"operation": id, "inputs": [{"name", "type",
+  "required"}], "fingerprint"}`.
+- `fingerprint` is the SHA-256, in lower-case hex, of the canonical JSON of the shape without it. A
+  change to a field's type, or to what an operation takes, changes the shape, the fingerprint and
+  the part's hash.

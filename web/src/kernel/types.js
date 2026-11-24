@@ -29,7 +29,7 @@
  * @property {number} version
  * @property {number} created_at
  * @property {number} updated_at
- * @property {string | null} created_by
+ * @property {{ person: string } | null} created_by  The author, as a handle into the reply's `people`.
  * @property {Record<string, any>} fields
  * @property {Record<string, any>} refs
  * @property {Record<string, any[]>} [blocks]
@@ -41,6 +41,7 @@
  * @property {string} path
  * @property {Record<string, string>} params
  * @property {Record<string, any>} data
+ * @property {Record<string, { name: string | null, avatar: string | null, self?: boolean }>} [people]  What the reader may know of each person the reply names, by handle.
  * @property {Record<string, string>} [next]  For each list section with more rows, the cursor of its next page.
  * @property {string[]} depends_on
  * @property {number} revision

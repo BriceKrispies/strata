@@ -496,7 +496,7 @@ pub const TYPES: &[TypeDecl] = &[
             },
             Field {
                 wire: "created_by",
-                ty: Ty::Named("principal-id"),
+                ty: Ty::Named("person-ref"),
                 optional: true,
             },
             Field {
@@ -536,7 +536,7 @@ pub const TYPES: &[TypeDecl] = &[
             },
             Field {
                 wire: "created_by",
-                ty: Ty::Named("principal-id"),
+                ty: Ty::Named("person-ref"),
                 optional: true,
             },
             Field {
@@ -1054,7 +1054,7 @@ pub const TYPES: &[TypeDecl] = &[
             },
             Field {
                 wire: "created_by",
-                ty: Ty::Named("principal-id"),
+                ty: Ty::Named("person-ref"),
                 optional: true,
             },
             Field {
@@ -1094,7 +1094,7 @@ pub const TYPES: &[TypeDecl] = &[
             },
             Field {
                 wire: "created_by",
-                ty: Ty::Named("principal-id"),
+                ty: Ty::Named("person-ref"),
                 optional: true,
             },
             Field {
@@ -2094,6 +2094,14 @@ pub const TYPES: &[TypeDecl] = &[
         ]),
     },
     TypeDecl {
+        id: "person-ref",
+        decl: Decl::Struct(&[Field {
+            wire: "person",
+            ty: Ty::Text,
+            optional: false,
+        }]),
+    },
+    TypeDecl {
         id: "platform-compat",
         decl: Decl::Struct(&[
             Field {
@@ -2137,12 +2145,12 @@ pub const TYPES: &[TypeDecl] = &[
             },
             Field {
                 wire: "author",
-                ty: Ty::Named("record-id"),
+                ty: Ty::Named("record-ref"),
                 optional: false,
             },
             Field {
                 wire: "category",
-                ty: Ty::Named("record-id"),
+                ty: Ty::Named("record-ref"),
                 optional: true,
             },
             Field {
@@ -2222,7 +2230,7 @@ pub const TYPES: &[TypeDecl] = &[
             },
             Field {
                 wire: "created_by",
-                ty: Ty::Named("principal-id"),
+                ty: Ty::Named("person-ref"),
                 optional: true,
             },
             Field {
@@ -2385,7 +2393,7 @@ pub const TYPES: &[TypeDecl] = &[
             },
             Field {
                 wire: "created_by",
-                ty: Ty::Named("principal-id"),
+                ty: Ty::Named("person-ref"),
                 optional: true,
             },
             Field {
@@ -2419,8 +2427,36 @@ pub const TYPES: &[TypeDecl] = &[
         decl: Decl::Alias(Ty::Int(0, 18446744073709551615)),
     },
     TypeDecl {
+        id: "record-ref",
+        decl: Decl::Struct(&[Field {
+            wire: "ref",
+            ty: Ty::Named("ref-target"),
+            optional: true,
+        }]),
+    },
+    TypeDecl {
         id: "recurrence",
         decl: Decl::Alias(Ty::Text),
+    },
+    TypeDecl {
+        id: "ref-target",
+        decl: Decl::Struct(&[
+            Field {
+                wire: "object",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "id",
+                ty: Ty::Named("record-id"),
+                optional: false,
+            },
+            Field {
+                wire: "title",
+                ty: Ty::Text,
+                optional: true,
+            },
+        ]),
     },
     TypeDecl {
         id: "role-id",

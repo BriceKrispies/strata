@@ -460,6 +460,22 @@ function editorSubmission(editor, status) {
 }
 
 /**
+ * A record's fields with each reference as the id the kernel's rules read: the reply sends a
+ * reference as `{ ref: { id, title } }`, or `{ ref: null }` when the target is not readable.
+ * @param {Record<string, any> | null} fields
+ */
+function plainFields(fields) {
+  if (!fields) return null;
+  /** @param {any} value @returns {any} */
+  const plain = (value) => {
+    if (Array.isArray(value)) return value.map(plain);
+    if (value && typeof value === 'object' && 'ref' in value) return value.ref?.id ?? null;
+    return value;
+  };
+  return Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, plain(value)]));
+}
+
+/**
  * What the page can tell of the article it is about to send, from what the server said the kernel
  * will check (the view's `record_rules`): the kernel's failed checks, and the ones it left to the
  * server. Null when the view carried nothing, which leaves everything to the server.
@@ -469,7 +485,7 @@ function localVerdict(state, editor, contract, inputs, now) {
   const rules = state.view.model?.record_rules?.[EDITOR_OBJECT];
   if (!rules) return null;
   const body = contracts.request(contract, inputs, state.route.path).body;
-  const stored = editor.id == null ? null : (state.view.model.data.post?.fields ?? null);
+  const stored = editor.id == null ? null : plainFields(state.view.model.data.post?.fields ?? null);
   const session = state.session;
   return checkRecord(rules, draftOf(body, stored), {
     old: stored,

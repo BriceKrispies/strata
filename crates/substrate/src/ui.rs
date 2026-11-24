@@ -13,10 +13,17 @@
 //! router and a page frame need before they fetch the part: its route, its view, its title, its
 //! layout, who may open it and its query parameters. The manifest is named by the hash of that
 //! list, so a change to one screen changes one part and the manifest, and a change elsewhere in
-//! the schema (a record type, a policy) changes neither: a client compares one hash to know whether
+//! the schema that no screen reads (a policy, a record type no section or form reads) changes
+//! neither: a client compares one hash to know whether
 //! what it holds is current (WG-5332), and a part it holds stays valid for as long as its hash is
 //! listed (WG-5307). The schema version the manifest was computed at is carried beside the hash,
 //! not inside it.
+//!
+//! A screen part also carries the shape of what it binds: for each section of its view, the object
+//! type and, for each field, its id, type and whether it is required (and its display type, when
+//! one is declared); for each form and action, the operation and its inputs. Each shape has a
+//! fingerprint, the SHA-256 of its canonical JSON, so a change to a field's type changes the
+//! shape, the fingerprint and the part's hash, and a client that formats values by type redraws.
 //!
 //! Pure: the same schema gives the same definition, byte for byte.
 
@@ -24,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as Json};
 use std::collections::BTreeMap;
 use strata_kernel::canon::hash_of;
-use strata_kernel::{TenantSchema, UiElement};
+use strata_kernel::{FieldType, TenantSchema, UiElement, ViewId};
 
 /// The kind of a part that holds one screen.
 pub const SCREEN_PART: &str = "screen";
@@ -105,33 +112,144 @@ fn text_of<T: Serialize>(value: &T) -> Option<String> {
 fn on_screen(
     schema: &TenantSchema,
     screen: &str,
-    pick: fn(&UiElement) -> Option<(&str, Json)>,
+    pick: fn(&TenantSchema, &UiElement) -> Option<(String, Json)>,
 ) -> Map<String, Json> {
     strata_kernel::ui::elements(schema)
         .filter_map(|(id, element)| {
-            let (on, value) = pick(element)?;
+            let (on, value) = pick(schema, element)?;
             (on == screen).then(|| (id.clone(), value))
         })
         .collect()
 }
 
-fn form_of(element: &UiElement) -> Option<(&str, Json)> {
+/// A field type as a shape writes it: `str`, `int`, `bool`, `time`, `file`, `language`,
+/// `ref<object>` and `list<type>`.
+fn type_name(ty: &FieldType) -> String {
+    match ty {
+        FieldType::Str => "str".into(),
+        FieldType::Int => "int".into(),
+        FieldType::Bool => "bool".into(),
+        FieldType::Time => "time".into(),
+        FieldType::Ref { target, .. } => format!("ref<{target}>"),
+        FieldType::List(inner) => format!("list<{}>", type_name(inner)),
+        FieldType::File { .. } => "file".into(),
+        FieldType::Language => "language".into(),
+    }
+}
+
+/// A shape with its fingerprint: the SHA-256 of the canonical JSON of the shape without it.
+fn fingerprinted(mut shape: Map<String, Json>) -> Json {
+    let fingerprint = hash_of(&Json::Object(shape.clone()));
+    shape.insert("fingerprint".into(), json!(fingerprint));
+    Json::Object(shape)
+}
+
+/// The shape of what a section reads: its object type and each of its fields by id (type,
+/// whether required). No field declares a display type yet, so none is written.
+fn object_shape(schema: &TenantSchema, object: &strata_kernel::ObjectTypeId) -> Map<String, Json> {
+    let fields: Vec<Json> = schema
+        .objects
+        .get(object)
+        .into_iter()
+        .flat_map(|def| def.fields.values())
+        .map(|field| {
+            json!({
+                "id": field.id.as_str(),
+                "type": type_name(&field.ty),
+                "required": field.required,
+            })
+        })
+        .collect();
+    let mut shape = Map::new();
+    shape.insert("object".into(), json!(object.as_str()));
+    shape.insert("fields".into(), Json::Array(fields));
+    shape
+}
+
+/// The shapes of the sections of a view, by section name.
+fn section_shapes(schema: &TenantSchema, view: &ViewId) -> Map<String, Json> {
+    let Some(def) = schema.views.get(view) else {
+        return Map::new();
+    };
+    def.sections
+        .iter()
+        .filter_map(|(name, section)| {
+            let query = schema.queries.get(&section.query)?;
+            let mut shape = object_shape(schema, &query.object);
+            if let Some(aggregate) = &section.aggregate {
+                shape.insert("aggregate".into(), json!(aggregate.as_str()));
+                shape.remove("fields");
+            }
+            Some((
+                name.clone(),
+                json!({ "single": section.single, "shape": fingerprinted(shape) }),
+            ))
+        })
+        .collect()
+}
+
+/// The shape of an operation a form or action invokes: its id and each input's name, type and
+/// whether it is required.
+fn operation_shape(schema: &TenantSchema, operation: &str) -> Json {
+    let mut shape = Map::new();
+    shape.insert("operation".into(), json!(operation));
+    let def = schema
+        .operations
+        .iter()
+        .flatten()
+        .find(|(id, _)| id.0 == operation)
+        .map(|(_, def)| def);
+    if let Some(def) = def {
+        let inputs: Vec<Json> = def
+            .inputs
+            .iter()
+            .map(|input| {
+                json!({
+                    "name": input.name,
+                    "type": type_name(&input.ty),
+                    "required": input.required,
+                })
+            })
+            .collect();
+        shape.insert("inputs".into(), Json::Array(inputs));
+    }
+    fingerprinted(shape)
+}
+
+/// The element's JSON with its shape added.
+fn with_shape(element: Json, shape: Json) -> Json {
     match element {
-        UiElement::Form(form) => Some((form.screen.as_str(), json!(form))),
+        Json::Object(mut map) => {
+            map.insert("shape".into(), shape);
+            Json::Object(map)
+        }
+        other => other,
+    }
+}
+
+fn form_of(schema: &TenantSchema, element: &UiElement) -> Option<(String, Json)> {
+    match element {
+        UiElement::Form(form) => Some((
+            form.screen.clone(),
+            with_shape(json!(form), operation_shape(schema, &form.operation.0)),
+        )),
         _ => None,
     }
 }
 
-fn action_of(element: &UiElement) -> Option<(&str, Json)> {
+fn action_of(schema: &TenantSchema, element: &UiElement) -> Option<(String, Json)> {
     match element {
-        UiElement::Action(action) => Some((action.screen.as_str(), json!(action))),
+        UiElement::Action(action) => Some((
+            action.screen.clone(),
+            with_shape(json!(action), operation_shape(schema, &action.operation.0)),
+        )),
         _ => None,
     }
 }
 
-fn live_of(element: &UiElement) -> Option<(&str, Json)> {
+fn live_of(_: &TenantSchema, element: &UiElement) -> Option<(String, Json)> {
     match element {
-        UiElement::LiveBinding(live) => Some((live.screen.as_str(), json!(live))),
+        UiElement::LiveBinding(live) => Some((live.screen.clone(), json!(live))),
         _ => None,
     }
 }
@@ -148,6 +266,7 @@ pub fn definition(schema: &TenantSchema) -> Definition {
             "kind": SCREEN_PART,
             "id": id,
             "screen": screen,
+            "sections": section_shapes(schema, &screen.view),
             "forms": on_screen(schema, id, form_of),
             "actions": on_screen(schema, id, action_of),
             "live": on_screen(schema, id, live_of),

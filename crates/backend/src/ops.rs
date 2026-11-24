@@ -9,12 +9,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use strata_kernel::editor_rules::record_rules as editor_record_rules;
 use strata_kernel::ext::*;
+use strata_kernel::refs_in;
 use strata_kernel::rules::Lookup;
 use strata_kernel::{
     read, read_needs, visible, Check, Context, DomainError, ErrorKind, FieldId, Intent,
     InvitationId, Need, ObjectTypeId, Output, PageCursor, Principal, PrincipalId, ReadRequest,
-    ReadResult, Record, RecordId, RoleId, State, StateRevision, TeamId, TenantId, TenantState,
-    ViewSection,
+    ReadResult, Record, RecordId, RoleId, SettingId, State, StateRevision, TeamId, TenantId,
+    TenantState, Value, ViewSection,
 };
 use strata_protocol::api::{
     ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest, MAX_VIEW_LIMIT,
@@ -23,8 +24,8 @@ use strata_storage_api::{execute_admitting, execute_at, ExecuteError, Executed, 
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
     aggregate_request_with, decode_cursor, encode_cursor, included_refs, match_route,
-    resolved_settings, section_order, section_request_with, select_fields, with_page, SectionData,
-    ViewData,
+    name_for_reader, resolved_settings, section_order, section_request_with, select_fields,
+    title_of, with_page, PersonInfo, RefTargets, SectionData, ViewData, MEMBER_NAMES_SETTING,
 };
 
 /// The tenant's schema, members and counters, without records.
@@ -693,6 +694,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                     rows: Vec::new(),
                     included: BTreeMap::new(),
                     markdown: Vec::new(),
+                    ref_targets: BTreeMap::new(),
                     next: None,
                     aggregate: Some(result),
                 },
@@ -712,7 +714,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         )?;
         revision = result.revision;
         let object = &schema.queries[&section.query].object;
-        let mut included = BTreeMap::new();
+        let mut included: BTreeMap<FieldId, BTreeMap<RecordId, Arc<Record>>> = BTreeMap::new();
         for (field, (target, ids)) in included_refs(schema, object, section, &result.rows) {
             let found = read_loaded(
                 app,
@@ -741,11 +743,64 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         if section.single {
             done.insert(name.clone(), result.rows.first().cloned());
         }
+        let rows: Vec<Arc<Record>> = result.rows.iter().map(&shown).collect();
+        // Every reference field the rows send: where it points and the title of each target the
+        // reader may read. A target the kernel does not hand this reader is not in the table.
+        let mut ref_targets = BTreeMap::new();
+        for (field, def) in schema
+            .objects
+            .get(object)
+            .into_iter()
+            .flat_map(|o| &o.fields)
+        {
+            let Some((target, _, _)) = def.ty.ref_target() else {
+                continue;
+            };
+            let ids: BTreeSet<RecordId> = rows
+                .iter()
+                .flat_map(|row| refs_in(row.get(field)))
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            let readable: Vec<Arc<Record>> = match included.get(field) {
+                Some(held) => held.values().cloned().collect(),
+                None => read_loaded(
+                    app,
+                    &identity.tenant,
+                    schema,
+                    &mut state,
+                    &mut needs,
+                    &ReadRequest::Records {
+                        object: target.clone(),
+                        ids: ids.iter().copied().collect(),
+                    },
+                    &ctx,
+                    anonymous,
+                )?
+                .rows
+                .iter()
+                .map(&shown)
+                .collect(),
+            };
+            let target_def = schema.objects.get(target);
+            ref_targets.insert(
+                field.clone(),
+                RefTargets {
+                    object: target.clone(),
+                    titles: readable
+                        .iter()
+                        .filter(|record| ids.contains(&record.id))
+                        .map(|record| (record.id, target_def.and_then(|def| title_of(def, record))))
+                        .collect(),
+                },
+            );
+        }
         sections.insert(
             name.clone(),
             SectionData {
                 single: section.single,
-                rows: result.rows.iter().map(&shown).collect(),
+                rows,
                 included,
                 markdown: section
                     .markdown
@@ -757,6 +812,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                     })
                     .cloned()
                     .collect(),
+                ref_targets,
                 next: result
                     .next
                     .as_ref()
@@ -798,6 +854,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             }
         }
     }
+    let people = people_of(app, identity, &tenant, &sections);
     Ok(ViewData {
         view: def.id.clone(),
         title: def.title.clone(),
@@ -807,7 +864,58 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         revision,
         schema_version: schema.version,
         record_rules,
+        people,
     })
+}
+
+/// What the reader may know of each principal the sections of a view name (as the author of a
+/// row or of an included record): a display name from the principal's account, only as far as the
+/// tenant's member-name setting allows, and no avatar yet. The principals are those of records the
+/// reader was already given (a record's authorship is withheld from other readers before this),
+/// so nothing is named that the reader could not already read.
+fn people_of(
+    app: &App,
+    identity: &Identity,
+    tenant: &TenantState,
+    sections: &BTreeMap<String, SectionData>,
+) -> BTreeMap<String, PersonInfo> {
+    let named: BTreeSet<&PrincipalId> = sections
+        .values()
+        .flat_map(|section| {
+            let included = section.included.values().flat_map(|held| held.values());
+            section.rows.iter().chain(included)
+        })
+        .filter_map(|record| record.created_by.as_ref())
+        .collect();
+    let mode = SettingId::new(MEMBER_NAMES_SETTING)
+        .ok()
+        .and_then(|id| strata_kernel::settings::resolve(tenant, &identity.principal, &id).ok())
+        .and_then(|found| match found.value {
+            Value::Str(mode) => Some(mode),
+            _ => None,
+        })
+        .unwrap_or_else(|| "members".to_string());
+    let signed_in = !identity.anonymous();
+    named
+        .into_iter()
+        .map(|principal| {
+            let reader = matches!(&identity.principal, Principal::User(me) if me == principal);
+            let account = app
+                .store
+                .account_of(&identity.tenant, principal)
+                .ok()
+                .flatten()
+                .map(|account| account.display_name);
+            (
+                principal.as_str().to_string(),
+                PersonInfo {
+                    name: name_for_reader(&mode, signed_in, reader, account),
+                    avatar: None,
+                    reader,
+                },
+            )
+        })
+        .collect()
 }
 
 fn session_line(s: &strata_storage_api::SessionRecord) -> Json {

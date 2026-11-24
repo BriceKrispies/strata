@@ -37,6 +37,15 @@ function firstParagraph(blocks) {
   return `${cut.slice(0, cut.lastIndexOf(' '))}…`;
 }
 
+/**
+ * Whether a person value (`{ person: handle }`) is the signed-in reader: the reply's `people` table
+ * marks the reader's own handle, as the reply carries no principal to compare.
+ * @param {any} model @param {any} created
+ */
+function isReader(model, created) {
+  return created?.person != null && model.people?.[created.person]?.self === true;
+}
+
 function person(row) {
   return row ? { name: row.fields.name, href: hrefFor('screen-author', { slug: row.fields.slug }), role: row.fields.title ?? '' } : null;
 }
@@ -107,7 +116,7 @@ registerPageBuilder('home', (state, { d }) => ({
   topics: d.categories.map(topic),
 }));
 
-registerPageBuilder('post', (state, { d, session, canWrite }) => {
+registerPageBuilder('post', (state, { model, d, session, canWrite }) => {
   if (!d.post) return { kind: 'missing', path: state.route.path };
   const f = d.post.fields;
   return {
@@ -117,14 +126,14 @@ registerPageBuilder('post', (state, { d, session, canWrite }) => {
     blocks: d.post.blocks?.body ?? [],
     tags: f.tags ?? [],
     authorBio: d.post.refs?.author?.fields.bio ?? '',
-    canEdit: canWrite && (session.principal === d.post.created_by || session.roles.includes('editor') || session.roles.includes('owner')),
+    canEdit: canWrite && (isReader(model, d.post.created_by) || session.roles.includes('editor') || session.roles.includes('owner')),
     more: d.recent.filter((r) => r.id !== d.post.id).slice(0, 3).map((r) => entry(r)),
   };
 });
 
 registerPageBuilder('topics', (_state, { d }) => ({
   kind: 'topics',
-  topics: d.categories.map((c) => ({ ...topic(c), count: d.recent.filter((p) => p.fields.category === c.id).length })),
+  topics: d.categories.map((c) => ({ ...topic(c), count: d.recent.filter((p) => p.fields.category?.ref?.id === c.id).length })),
 }));
 
 registerPageBuilder('topic', (state, { d }) => {

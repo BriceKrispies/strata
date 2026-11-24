@@ -226,17 +226,28 @@ export function tenantTitle(template, model) {
   return (template ?? '').replace(/\$\{([^}]*)\}/g, (_, path) => valueAt(model, path));
 }
 
-/** The value of a field as a page shows it. @param {any} value */
-function shown(value) {
+/**
+ * The value of a field as a page shows it. A person is the name the reply's `people` table holds
+ * for the handle ("A member" when it holds none); a reference is its target's title ("Not
+ * available" when the target is unreadable or has no title); neither is drawn as its id.
+ * @param {any} value @param {Record<string, any>} [people]
+ * @returns {string}
+ */
+function shown(value, people = {}) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  if (typeof value === 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return value.map((item) => shown(item, people)).join(', ');
+  if (typeof value === 'object') {
+    if ('person' in value) return people[value.person]?.name ?? 'A member';
+    if ('ref' in value) return value.ref?.title ?? 'Not available';
+    return JSON.stringify(value);
+  }
   return String(value);
 }
 
-/** A projected record as the interpreter draws it: each field by name, in name order. @param {any} row */
-function recordOf(row) {
-  const fields = Object.keys(row?.fields ?? {}).sort().map((name) => ({ name, value: shown(row.fields[name]) }));
+/** A projected record as the interpreter draws it: each field by name, in name order. @param {any} row @param {Record<string, any>} people */
+function recordOf(row, people) {
+  const fields = Object.keys(row?.fields ?? {}).sort().map((name) => ({ name, value: shown(row.fields[name], people) }));
   return { id: row?.id ?? null, fields };
 }
 
@@ -247,11 +258,12 @@ function recordOf(row) {
  */
 function sectionsOf(model) {
   const data = model?.data ?? {};
+  const people = model?.people ?? {};
   return Object.keys(data).sort().map((name) => {
     const value = data[name];
-    if (Array.isArray(value)) return { name, single: false, rows: value.map(recordOf), more: typeof model.next?.[name] === 'string' };
-    if (value && typeof value === 'object' && 'fields' in value) return { name, single: true, record: recordOf(value) };
-    return { name, single: true, record: { id: null, fields: [{ name, value: shown(value) }] } };
+    if (Array.isArray(value)) return { name, single: false, rows: value.map((row) => recordOf(row, people)), more: typeof model.next?.[name] === 'string' };
+    if (value && typeof value === 'object' && 'fields' in value) return { name, single: true, record: recordOf(value, people) };
+    return { name, single: true, record: { id: null, fields: [{ name, value: shown(value, people) }] } };
   });
 }
 
