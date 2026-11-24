@@ -60,6 +60,7 @@ function draw(model, applied) {
   const root = document.documentElement;
   root.dataset.accent = model.theme.accent;
   root.dataset.paper = model.theme.paper;
+  root.dataset.theme = model.theme.theme;
   root.dataset.scheme = model.theme.scheme;
   if (model.title) document.title = model.title;
   holdValues(applied < inputsSent);

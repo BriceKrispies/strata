@@ -44,7 +44,7 @@
  * @property {Record<string, string>} [next]  For each list section with more rows, the cursor of its next page.
  * @property {string[]} depends_on
  * @property {number} revision
- * @property {{ accent: string, paper: string }} theme
+ * @property {{ accent: string, paper: string, theme?: string }} theme
  *
  * @typedef {{ check: string, detail: string }} FailedCheck
  * @typedef {{ code: string, message: string, kind?: string, failed?: { rule: string, detail: string }[], correlation?: string }} ApiError

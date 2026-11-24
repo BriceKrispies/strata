@@ -2952,6 +2952,11 @@ pub const TYPES: &[TypeDecl] = &[
                 ty: Ty::Text,
                 optional: false,
             },
+            Field {
+                wire: "theme",
+                ty: Ty::Text,
+                optional: true,
+            },
         ]),
     },
     TypeDecl {

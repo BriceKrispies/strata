@@ -707,7 +707,7 @@ id: limit per window, on exceed
 - value-map: scalar string
 - view-data: {view:view-id, title:string, params:map\<string, string\>, sections:map\<string, section-data\>, depends-on:set\<object-type-id\>, revision:state-revision, schema-version:schema-version}
 - view-id: id string
-- view-theme: {accent:string, paper:string}
+- view-theme: {accent:string, paper:string, theme?:string}
 - visitor-id: id uuid
 - webhook-delivery: {id:string, endpoint:string, subscription:string, status:u16, attempts:u32, at:timestamp, state:string, outcome?:string}
 - workflow-id: id string

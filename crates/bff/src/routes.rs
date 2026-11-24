@@ -2368,9 +2368,10 @@ async fn page(State(bff): State<Shared>, headers: HeaderMap, request: Request) -
         .replace(
             "<html lang=\"en\">",
             &format!(
-                "<html lang=\"en\" data-accent=\"{}\" data-paper=\"{}\">",
+                "<html lang=\"en\" data-accent=\"{}\" data-paper=\"{}\" data-theme=\"{}\">",
                 theme["accent"].as_str().unwrap_or("moss"),
-                theme["paper"].as_str().unwrap_or("linen")
+                theme["paper"].as_str().unwrap_or("linen"),
+                theme["theme"].as_str().unwrap_or("fieldnotes")
             ),
         )
         .replace(
