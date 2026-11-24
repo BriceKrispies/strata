@@ -12,6 +12,7 @@
 @import './base.css';
 @import './layout.css';
 @import './components.css';
+@import './ds.css';
 @import './lab.css';
 
 .qr { display: block; margin-block: 0.75rem; background: var(--qr-ground); padding: 0; max-width: 100%; height: auto; }

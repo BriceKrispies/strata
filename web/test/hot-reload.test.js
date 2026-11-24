@@ -86,7 +86,7 @@ const fires = (invariant, tab) => (error) => {
 test('two tabs on a tenant screen both show a title-only upgrade, fetching only the screen part again', () => {
   const { sim, gateway, tabs } = desk('a', 'b');
   for (const tab of tabs) {
-    assert.match(pageText(tab), /# Open tickets\n## open\n- 1 status=open title=Leak\nform ticket_desk__open_form\n {2}Title: \n {2}\[Open the ticket\]/);
+    assert.match(pageText(tab), /# Open tickets\n## Open\n- Leak \[Open\]\nform ticket_desk__open_form\n {2}Title: \n {2}\[Open the ticket\]/);
     assert.deepEqual(tab.partFetches().map((r) => r.hash).sort(), [h('a'), ERRORS].sort());
   }
   gateway.upgrade('v2');
@@ -119,7 +119,7 @@ test('a ticket created in one tab appears in the other through the notice', () =
   a.submit(FORM);
   sim.quiesce();
   assert.match(pageText(a), /toast\(ok\): Ticket opened\./);
-  for (const tab of [a, b]) assert.match(pageText(tab), /- 2 status= title=Broken door|title=Broken door/);
+  for (const tab of [a, b]) assert.match(pageText(tab), /\n- Broken door\n/);
 });
 
 test('a refusal is shown inline in the tenant\'s words', () => {

@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { initialState, update } from '../../src/kernel/update.js';
 import { view } from '../../src/kernel/view.js';
 import { matchTenantRoute, tenantScreenOfView } from '../../src/kernel/tenant-ui.js';
+import { nodeText } from '../../src/kernel/compose.js';
 
 /** @typedef {{ hash: string, schema_version: number, parts: any[] }} Manifest */
 /** @typedef {{ manifest: Manifest, parts: Record<string, any> }} Version */
@@ -836,18 +837,40 @@ export function pageText(tab) {
     out.push(`[${page.kind}]${page.message ? ` ${page.message}` : ''}`);
   } else {
     out.push(`# ${page.heading}`);
-    for (const section of page.sections) {
-      out.push(`## ${section.name}`);
-      const records = section.single ? [section.record] : section.rows;
-      for (const r of records) out.push(`- ${r.id ?? ''} ${r.fields.map((/** @type {any} */ f) => `${f.name}=${f.value}`).join(' ')}`.replace(/ +$/, ''));
-    }
-    for (const form of page.forms) {
-      out.push(`form ${form.id}${form.busy ? ' (sending)' : ''}`);
-      for (const f of form.fields) out.push(`  ${f.label}: ${f.value}${f.error ? ` !${f.error}` : ''}`);
-      out.push(`  [${form.submitLabel}]${form.error ? ` !${form.error}` : ''}`);
+    for (const node of [...(page.main ?? []), ...(page.aside ?? [])]) {
+      if (node.pattern === 'form') {
+        out.push(`form ${node.form}${node.busy ? ' (sending)' : ''}`);
+        for (const f of node.fields) out.push(`  ${f.label}: ${f.value}${f.error ? ` !${f.error}` : ''}`);
+        out.push(`  [${node.submitLabel}]${node.error ? ` !${node.error}` : ''}`);
+        continue;
+      }
+      out.push(`## ${node.label}${node.state === 'ready' ? '' : ` (${node.state})`}`);
+      for (const line of nodeLines(node)) out.push(`- ${line}`.replace(/ +$/, ''));
     }
     for (const a of page.actions) out.push(`[${a.label}]${a.armed ? ' (confirm)' : ''}`);
   }
   for (const t of drawn.toasts) out.push(`toast(${t.kind}): ${t.text}`);
   return out.join('\n');
+}
+
+/** The lines a pattern node draws, as text: one per record, notice or group. @param {any} node @returns {string[]} */
+function nodeLines(node) {
+  if (node.state !== 'ready') return [];
+  const facts = (/** @type {any[]} */ meta) => meta.map((m) => ` ${m.label}=${nodeText(m.value)}`).join('');
+  switch (node.pattern) {
+    case 'record-list':
+      return node.items.map((/** @type {any} */ r) => `${r.title ?? ''}${r.status ? ` [${nodeText(r.status)}]` : ''}${facts(r.meta)}`);
+    case 'data-table':
+      return node.rows.map((/** @type {any} */ r) => r.cells.map((/** @type {any} */ c) => nodeText(c.value)).join(' | '));
+    case 'record-detail':
+      return [`${node.record.title ?? ''}${node.record.status ? ` [${nodeText(node.record.status)}]` : ''}${facts(node.facts)}`];
+    case 'notification-list':
+      return node.items.map((/** @type {any} */ i) => `${i.unread ? '* ' : ''}${i.text}`);
+    case 'aggregate-bars':
+      return node.bars.map((/** @type {any} */ b) => `${b.label}: ${b.text}`);
+    case 'stat-tile':
+      return [node.value];
+    default:
+      return [];
+  }
 }

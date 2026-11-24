@@ -420,13 +420,14 @@ function decodeView(state, body) {
   return contracts.decode(entry.viewModel, body);
 }
 
-/** Take a view model in: page data, site chrome, theme, and the forms that edit it. */
-function acceptView(state, model, cursors = {}) {
+/** Take a view model in: page data, site chrome, theme, and the forms that edit it. @param {any} state @param {any} model @param {any} [cursors] @param {number} [at] */
+function acceptView(state, model, cursors = {}, at = undefined) {
   const site = model.data.site?.fields;
   let next = {
     ...state,
     ready: true,
-    view: { status: 'ready', model, error: null, request: 0, next: cursors ?? {}, more: 0 },
+    // `at` is when the model arrived: the time relative times on the page are told against.
+    view: { status: 'ready', model, error: null, request: 0, next: cursors ?? {}, more: 0, at },
     // A confirmation belongs to the view it was asked on; a view that replaces it disarms it.
     confirmDelete: null,
     site: site ? { name: site.name ?? '', tagline: site.tagline ?? '' } : state.site,
@@ -810,7 +811,7 @@ function onHttp(state, msg) {
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
       if (msg.ok) {
-        const accepted = acceptView(state, decodeView(state, msg.body), msg.body?.next);
+        const accepted = acceptView(state, decodeView(state, msg.body), msg.body?.next, msg.at);
         return enterScreen(accepted, msg, msg.body.view);
       }
       const status = msg.status === 404 ? 'missing' : 'error';
@@ -1267,7 +1268,7 @@ function step(state, msg) {
         effects.push(effect);
       }
       if (boot?.view && boot.path === route.path) {
-        next = acceptView(next, decodeView(next, boot.view), boot.view.next);
+        next = acceptView(next, decodeView(next, boot.view), boot.view.next, msg.at);
         const entered = enterScreen(next, msg, boot.view.view);
         next = entered.state;
         effects.push(...entered.effects);

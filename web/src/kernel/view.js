@@ -5,15 +5,35 @@
 import { hrefFor } from '../generated/routes.js';
 import { SIGN_IN_PATH, SIGN_IN_SCREEN, guardedView, navigation, pageTitle as statedTitle, screenOfView } from '../generated/screens.js';
 import { pageBuilderOf } from './page-builders.js';
-import { partOf, tenantPage, tenantScreenOfView } from './tenant-ui.js';
+import { matchTenantRoute, partOf, tenantPage, tenantScreenOfView, tenantScreens } from './tenant-ui.js';
 import { hrefOf } from './update.js';
 // The publication's page builders register themselves; a product's are registered the same way
 // (`registerPageBuilder`), by a module the entry point imports, without editing this file.
 import './publication-pages.js';
 
+/** What the interpreter of tenant screens is told besides the part and the model. */
+function tenantContext(state, signedIn) {
+  const moreRequest = state.view.more ? state.pending?.[state.view.more] : null;
+  return {
+    forms: state.tenant.forms,
+    confirm: state.tenant.confirm,
+    signedIn,
+    now: typeof state.view.at === 'number' ? state.view.at : undefined,
+    screens: tenantScreens(state.ui),
+    moreLoading: typeof moreRequest?.section === 'string' ? moreRequest.section : null,
+  };
+}
+
 function page(state) {
   const { view, session } = state;
-  if (view.status === 'loading' && !view.model) return { kind: 'loading' };
+  if (view.status === 'loading' && !view.model) {
+    // A tenant screen whose part the page holds is drawn at once, each section as its skeleton.
+    const signedIn = session?.authenticated === true;
+    const match = matchTenantRoute(state.ui, state.route.path, state.route.query);
+    const part = match ? partOf(state.ui, match.entry) : null;
+    if (match && part && (match.entry.auth !== 'session' || signedIn)) return tenantPage(match.entry, part, null, tenantContext(state, signedIn));
+    return { kind: 'loading' };
+  }
   if (view.status === 'missing') return { kind: 'missing', path: state.route.path };
   if (view.status === 'error') return { kind: 'error', message: view.error?.message ?? 'The page could not be loaded.' };
   const model = view.model;
@@ -27,7 +47,7 @@ function page(state) {
     if (tenant.auth === 'session' && !signedIn) return view.status === 'loading' ? { kind: 'loading' } : { kind: 'signin_required', next: hrefOf(state.route) };
     const part = partOf(state.ui, tenant);
     if (!part) return { kind: 'loading' };
-    return tenantPage(tenant, part, model, { forms: state.tenant.forms, confirm: state.tenant.confirm, signedIn });
+    return tenantPage(tenant, part, model, tenantContext(state, signedIn));
   }
   const guarded = guardedView(model.view);
   // While the next page is on its way, a guarded page the visitor just left is not shown again.

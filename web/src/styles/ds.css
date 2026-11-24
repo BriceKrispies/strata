@@ -1,0 +1,1229 @@
+/* The design system's primitives and patterns (docs/design-system.md, "Layer 2: primitives",
+   "Layer 3: patterns", "Layer 4"). Class contracts on native elements, in the light DOM. They read
+   semantic tokens only, use logical properties only, show a visible focus ring, keep every target at
+   least 24 by 24 CSS pixels, and reflow at 320 CSS pixels wide. Only tenant screens use them; the
+   publication's own pages keep their classes in components.css. */
+
+@layer components {
+  /* ---- Layout primitives ------------------------------------------------------------------- */
+
+  .ds-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ds-gap, var(--space-4));
+  }
+
+  .ds-stack--tight {
+    --ds-gap: var(--space-2);
+  }
+
+  .ds-cluster {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ds-gap, var(--space-2));
+  }
+
+  .ds-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--ds-min, 16rem)), 1fr));
+    gap: var(--ds-gap, var(--space-4));
+  }
+
+  /* ---- Page template: header, main column, side column ----------------------------------- */
+
+  .ds-page {
+    display: grid;
+    gap: var(--space-6);
+    font-family: var(--font-ui);
+    color: var(--text);
+  }
+
+  .ds-page__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-3) var(--space-5);
+    padding-block-end: var(--space-5);
+    border-block-end: var(--border-hair) solid var(--border);
+  }
+
+  .ds-page__title {
+    font-family: var(--font-display);
+    font-size: var(--text-3xl);
+    font-weight: 700;
+    line-height: var(--leading-tight);
+    letter-spacing: var(--tracking-display);
+    font-variation-settings: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .ds-page__body,
+  .ds-page__main,
+  .ds-page__aside {
+    display: grid;
+    gap: var(--space-6);
+    align-content: start;
+    min-inline-size: 0;
+  }
+
+  .ds-page__aside {
+    gap: var(--space-5);
+  }
+
+  @container main (min-width: 56rem) {
+    .ds-page__body--split {
+      grid-template-columns: minmax(0, 1fr) minmax(17rem, 21rem);
+      gap: var(--space-6);
+    }
+  }
+
+  /* ---- Sections and panels --------------------------------------------------------------- */
+
+  .ds-section {
+    display: grid;
+    gap: var(--space-3);
+    min-inline-size: 0;
+  }
+
+  .ds-section__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .ds-section__title {
+    font-family: var(--font-ui);
+    font-size: var(--text-lg);
+    font-weight: 650;
+    line-height: var(--leading-snug);
+    letter-spacing: 0;
+    font-variation-settings: normal;
+  }
+
+  .ds-section__title:focus {
+    outline: none;
+  }
+
+  .ds-section__count {
+    display: inline-flex;
+    align-items: center;
+    min-block-size: 1.5rem;
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-pill);
+    background: var(--tone-neutral-bg);
+    color: var(--tone-neutral-fg);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ds-section--panel {
+    padding: var(--space-4) var(--space-5) var(--space-5);
+    background: var(--surface-raised);
+    border: var(--border-hair) solid var(--border);
+    border-radius: var(--radius-3);
+    box-shadow: var(--shadow-1);
+  }
+
+  .ds-section--panel .ds-section__title {
+    font-size: var(--text-md);
+  }
+
+  /* ---- Card ------------------------------------------------------------------------------ */
+
+  .ds-card,
+  .ds-record,
+  .ds-detail,
+  .ds-form-card,
+  .ds-stat {
+    background: var(--surface-raised);
+    border: var(--border-hair) solid var(--border);
+    border-radius: var(--radius-3);
+    box-shadow: var(--shadow-1);
+    min-inline-size: 0;
+  }
+
+  .ds-card {
+    padding: var(--space-4) var(--space-5);
+  }
+
+  /* ---- Button ---------------------------------------------------------------------------- */
+
+  .ds-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-block-size: var(--size-control);
+    min-inline-size: var(--size-control);
+    padding-inline: var(--space-4);
+    border: var(--border-hair) solid transparent;
+    border-radius: var(--radius-2);
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    line-height: 1.2;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color var(--dur-quick) var(--ease), border-color var(--dur-quick) var(--ease), box-shadow var(--dur-quick) var(--ease);
+  }
+
+  .ds-button:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .ds-button--primary {
+    background: var(--accent);
+    color: var(--text-on-accent);
+    box-shadow: var(--shadow-1);
+  }
+
+  .ds-button--primary:hover {
+    background: var(--accent-strong);
+    color: var(--text-on-accent);
+  }
+
+  .ds-button--secondary {
+    background: var(--surface-raised);
+    color: var(--text);
+    border-color: var(--control-border);
+  }
+
+  .ds-button--secondary:hover {
+    background: var(--surface-sunk);
+  }
+
+  .ds-button--quiet {
+    background: transparent;
+    color: var(--link);
+  }
+
+  .ds-button--quiet:hover {
+    background: var(--accent-wash);
+  }
+
+  .ds-button--danger {
+    background: var(--tone-danger-fg);
+    color: var(--text-on-danger);
+  }
+
+  .ds-button--small {
+    min-block-size: 2rem;
+    min-inline-size: 2rem;
+    padding-inline: var(--space-3);
+    font-size: var(--text-xs);
+  }
+
+  .ds-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  /* ---- Badge, status pill, chip, number ---------------------------------------------------- */
+
+  .ds-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    min-block-size: 1.5rem;
+    padding-inline: var(--space-2);
+    border: var(--border-hair) solid transparent;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    background: var(--tone-neutral-bg);
+    color: var(--tone-neutral-fg);
+  }
+
+  .ds-badge--status::before {
+    content: '';
+    inline-size: 0.5em;
+    block-size: 0.5em;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .ds-badge--info { background: var(--tone-info-bg); color: var(--tone-info-fg); }
+  .ds-badge--success { background: var(--tone-success-bg); color: var(--tone-success-fg); }
+  .ds-badge--warning { background: var(--tone-warning-bg); color: var(--tone-warning-fg); }
+  .ds-badge--danger { background: var(--tone-danger-bg); color: var(--tone-danger-fg); }
+
+  .ds-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .ds-chip {
+    display: inline-flex;
+    align-items: center;
+    min-block-size: 1.5rem;
+    padding-inline: var(--space-2);
+    border: var(--border-hair) solid var(--border);
+    border-radius: var(--radius-pill);
+    background: var(--surface-sunk);
+    font-size: var(--text-xs);
+  }
+
+  .ds-number {
+    display: inline-flex;
+    align-items: center;
+    padding-inline: var(--space-1);
+    border-radius: var(--radius-1);
+    background: var(--surface-sunk);
+    color: var(--text-muted);
+    font-family: var(--font-code);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+
+  /* ---- Avatar and person chip -------------------------------------------------------------- */
+
+  .ds-avatar {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    inline-size: 2.25rem;
+    block-size: 2.25rem;
+    overflow: hidden;
+    border-radius: 50%;
+    background: var(--accent-wash);
+    color: var(--accent-strong);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1;
+  }
+
+  .ds-avatar img {
+    inline-size: 100%;
+    block-size: 100%;
+    object-fit: cover;
+  }
+
+  .ds-avatar--sm {
+    inline-size: 1.5rem;
+    block-size: 1.5rem;
+    font-size: 0.625rem;
+  }
+
+  .ds-avatar--lg {
+    inline-size: 4rem;
+    block-size: 4rem;
+    font-size: var(--text-lg);
+  }
+
+  .ds-person {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    font-weight: 550;
+    color: var(--text);
+  }
+
+  /* ---- Values ------------------------------------------------------------------------------ */
+
+  .ds-muted,
+  .ds-nil {
+    color: var(--text-muted);
+  }
+
+  .ds-pre {
+    white-space: pre-line;
+  }
+
+  .ds-num {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ds-time {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .ds-code {
+    font-family: var(--font-code);
+    font-size: 0.9em;
+  }
+
+  .ds-link {
+    color: var(--link);
+    text-decoration-color: currentColor;
+  }
+
+  .ds-link:hover {
+    color: var(--accent-strong);
+  }
+
+  .ds-link--strong {
+    font-weight: 600;
+    color: var(--text);
+    text-decoration-line: none;
+  }
+
+  .ds-link--strong:hover {
+    text-decoration-line: underline;
+  }
+
+  .ds-ref {
+    font-weight: 550;
+  }
+
+  .ds-media {
+    max-inline-size: 100%;
+    border-radius: var(--radius-2);
+  }
+
+  .ds-cell-title {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  /* ---- Fields --------------------------------------------------------------------------------- */
+
+  .ds-field {
+    display: grid;
+    gap: var(--space-1);
+    min-inline-size: 0;
+  }
+
+  .ds-field__label {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .ds-field__optional {
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+
+  .ds-field__help {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+
+  .ds-field__error {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--tone-danger-fg);
+  }
+
+  .ds-input,
+  .ds-select,
+  .ds-textarea {
+    inline-size: 100%;
+    min-block-size: var(--size-control);
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface-raised);
+    color: var(--text);
+    border: var(--border-hair) solid var(--control-border);
+    border-radius: var(--radius-2);
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    transition: border-color var(--dur-quick) var(--ease), box-shadow var(--dur-quick) var(--ease);
+  }
+
+  .ds-textarea {
+    min-block-size: 6rem;
+    resize: vertical;
+    line-height: var(--leading-text);
+  }
+
+  .ds-input:focus-visible,
+  .ds-select:focus-visible,
+  .ds-textarea:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 1px;
+    border-color: var(--accent);
+  }
+
+  .ds-field--error .ds-input,
+  .ds-field--error .ds-select,
+  .ds-field--error .ds-textarea {
+    border-color: var(--tone-danger-fg);
+    border-inline-start-width: 4px;
+  }
+
+  .ds-fieldset {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    min-inline-size: 0;
+  }
+
+  .ds-fieldset legend {
+    padding: 0;
+    margin-block-end: var(--space-1);
+  }
+
+  .ds-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-4);
+  }
+
+  /* A check or radio with its words: the whole label is the target, at least 24 pixels tall. */
+  .ds-check {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-block-size: 1.5rem;
+    padding-block: var(--space-1);
+    font-size: var(--text-sm);
+    cursor: pointer;
+  }
+
+  .ds-check input {
+    flex: none;
+    inline-size: 1.125rem;
+    block-size: 1.125rem;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  /* ---- Forms ---------------------------------------------------------------------------------- */
+
+  .ds-form-card {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-5) var(--space-5);
+  }
+
+  .ds-form-card--disclosure {
+    padding: 0;
+  }
+
+  .ds-form__title {
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    font-weight: 650;
+    line-height: var(--leading-snug);
+    letter-spacing: 0;
+    font-variation-settings: normal;
+  }
+
+  .ds-form {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .ds-form__fields {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .ds-form__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-block-start: var(--space-1);
+  }
+
+  .ds-disclosure__summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    min-block-size: var(--size-control);
+    padding: var(--space-3) var(--space-5);
+    border-radius: var(--radius-3);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .ds-disclosure__summary::-webkit-details-marker {
+    display: none;
+  }
+
+  /* A plus that becomes a minus: the same in either writing direction. */
+  .ds-disclosure__summary::after {
+    content: '+';
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    inline-size: 1.5rem;
+    block-size: 1.5rem;
+    border-radius: 50%;
+    background: var(--surface-sunk);
+    color: var(--text-muted);
+    font-size: var(--text-md);
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  .ds-disclosure[open] > .ds-disclosure__summary::after {
+    content: '\2212';
+  }
+
+  .ds-disclosure__summary:hover {
+    background: var(--surface-sunk);
+  }
+
+  .ds-disclosure__summary:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .ds-disclosure > .ds-form {
+    padding: var(--space-1) var(--space-5) var(--space-5);
+  }
+
+  /* ---- Notice and empty state ----------------------------------------------------------------- */
+
+  .ds-notice {
+    padding: var(--space-3) var(--space-4);
+    border: var(--border-hair) solid transparent;
+    border-inline-start-width: 4px;
+    border-radius: var(--radius-2);
+    font-size: var(--text-sm);
+    font-weight: 550;
+    background: var(--tone-info-bg);
+    color: var(--tone-info-fg);
+    border-color: var(--tone-info-fg);
+  }
+
+  .ds-notice--success { background: var(--tone-success-bg); color: var(--tone-success-fg); border-color: var(--tone-success-fg); }
+  .ds-notice--warning { background: var(--tone-warning-bg); color: var(--tone-warning-fg); border-color: var(--tone-warning-fg); }
+  .ds-notice--danger { background: var(--tone-danger-bg); color: var(--tone-danger-fg); border-color: var(--tone-danger-fg); }
+
+  .ds-empty {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-1);
+    padding: var(--space-6) var(--space-4);
+    border: var(--border-hair) dashed var(--border-strong);
+    border-radius: var(--radius-3);
+    background: var(--surface-sunk);
+    color: var(--text-muted);
+    text-align: center;
+  }
+
+  .ds-section--panel .ds-empty {
+    padding-block: var(--space-5);
+  }
+
+  .ds-empty__icon {
+    margin-block-end: var(--space-1);
+    color: var(--text-muted);
+  }
+
+  .ds-empty__title {
+    font-size: var(--text-sm);
+    font-weight: 650;
+    color: var(--text);
+  }
+
+  .ds-empty__text {
+    font-size: var(--text-xs);
+    max-inline-size: 32ch;
+  }
+
+  /* ---- Skeleton -------------------------------------------------------------------------------- */
+
+  .ds-skeleton {
+    block-size: 0.75rem;
+    inline-size: 100%;
+    border-radius: var(--radius-1);
+    background: var(--surface-sunk);
+  }
+
+  .ds-skeleton--title {
+    block-size: 1.125rem;
+    inline-size: 60%;
+  }
+
+  .ds-skeleton--short {
+    inline-size: 40%;
+  }
+
+  .ds-skeleton--block {
+    block-size: 4rem;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .ds-skeleton {
+      animation: ds-pulse 1.4s var(--ease) infinite;
+    }
+  }
+
+  @keyframes ds-pulse {
+    50% {
+      opacity: 0.45;
+    }
+  }
+
+  /* ---- Description list -------------------------------------------------------------------- */
+
+  .ds-dl {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 10rem), 1fr));
+    gap: var(--space-3) var(--space-5);
+    margin: 0;
+  }
+
+  .ds-dl__item {
+    display: grid;
+    gap: 0.125rem;
+    align-content: start;
+    min-inline-size: 0;
+  }
+
+  .ds-dl dt {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .ds-dl dd {
+    margin: 0;
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .ds-dl--compact {
+    gap: var(--space-2) var(--space-4);
+    padding-block-start: var(--space-3);
+    border-block-start: var(--border-hair) solid var(--border);
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 8rem), 1fr));
+  }
+
+  /* ---- Record list and card --------------------------------------------------------------------- */
+
+  .ds-list {
+    display: grid;
+    gap: var(--space-3);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .ds-list--grid {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 15.5rem), 1fr));
+  }
+
+  .ds-record {
+    display: grid;
+  }
+
+  .ds-record__inner,
+  .ds-record--skeleton {
+    display: grid;
+    gap: var(--space-2);
+    align-content: start;
+    padding: var(--space-4);
+  }
+
+  .ds-record--compact .ds-record__inner {
+    padding: var(--space-3);
+  }
+
+  /* In a panel the records are rows of the panel, not cards inside a card. */
+  .ds-section--panel .ds-list {
+    gap: 0;
+  }
+
+  .ds-section--panel .ds-record {
+    background: transparent;
+    border: 0;
+    border-block-end: var(--border-hair) solid var(--border);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .ds-section--panel .ds-record:last-child {
+    border-block-end: 0;
+  }
+
+  .ds-section--panel .ds-record__inner {
+    padding-inline: 0;
+  }
+
+  .ds-record__head {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+  }
+
+  .ds-record__heading {
+    display: grid;
+    gap: 0.125rem;
+    flex: 1;
+    min-inline-size: 0;
+  }
+
+  .ds-record__title {
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    font-weight: 650;
+    line-height: var(--leading-snug);
+    letter-spacing: 0;
+    font-variation-settings: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .ds-record--compact .ds-record__title {
+    font-size: var(--text-sm);
+  }
+
+  .ds-record__title a {
+    color: inherit;
+    text-decoration-line: none;
+  }
+
+  .ds-record__title a:hover {
+    color: var(--link);
+    text-decoration-line: underline;
+  }
+
+  .ds-record__subtitle {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+
+  .ds-record__marks {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: var(--space-1);
+    flex: none;
+  }
+
+  .ds-record__byline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-3);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+
+  .ds-record__body {
+    font-size: var(--text-sm);
+    line-height: var(--leading-text);
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  .ds-record__body--clamp {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+    overflow: hidden;
+  }
+
+  .ds-record--compact .ds-record__body--clamp {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+
+  .ds-record__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-4);
+    margin: 0;
+    font-size: var(--text-xs);
+  }
+
+  .ds-meta {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .ds-meta__label {
+    color: var(--text-muted);
+  }
+
+  .ds-meta__label::after {
+    content: ':';
+  }
+
+  .ds-meta__value {
+    margin: 0;
+    font-weight: 550;
+  }
+
+  .ds-prose {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .ds-prose :where(h2, h3, h4) {
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    font-weight: 650;
+    font-variation-settings: normal;
+  }
+
+  .ds-prose :where(ul, ol) {
+    padding-inline-start: var(--space-5);
+  }
+
+  .ds-more {
+    display: flex;
+    justify-content: center;
+  }
+
+  /* ---- Record detail ------------------------------------------------------------------------- */
+
+  .ds-detail {
+    display: grid;
+    gap: var(--space-5);
+    padding: var(--space-5) var(--space-6);
+  }
+
+  .ds-detail__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .ds-detail__heading {
+    display: grid;
+    gap: var(--space-2);
+    min-inline-size: 0;
+    flex: 1;
+  }
+
+  .ds-detail__title {
+    font-family: var(--font-display);
+    font-size: var(--text-2xl);
+    font-weight: 700;
+    line-height: var(--leading-tight);
+    letter-spacing: var(--tracking-display);
+    font-variation-settings: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .ds-detail__subtitle {
+    font-size: var(--text-md);
+    color: var(--text-muted);
+  }
+
+  .ds-detail__body {
+    max-inline-size: var(--width-measure);
+    font-size: var(--text-md);
+    line-height: var(--leading-text);
+  }
+
+  .ds-detail__facts {
+    padding-block-start: var(--space-4);
+    border-block-start: var(--border-hair) solid var(--border);
+  }
+
+  .ds-detail--skeleton {
+    gap: var(--space-3);
+  }
+
+  /* ---- Data table -------------------------------------------------------------------------- */
+
+  .ds-table-wrap {
+    container-type: inline-size;
+    overflow-x: auto;
+    background: var(--surface-raised);
+    border: var(--border-hair) solid var(--border);
+    border-radius: var(--radius-3);
+    box-shadow: var(--shadow-1);
+  }
+
+  .ds-table-wrap--skeleton {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-4);
+  }
+
+  .ds-table-skeleton__row {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: var(--space-4);
+  }
+
+  .ds-table {
+    inline-size: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+  }
+
+  .ds-table th,
+  .ds-table td {
+    padding: var(--space-3) var(--space-4);
+    text-align: start;
+    vertical-align: middle;
+    border-block-end: var(--border-hair) solid var(--border);
+  }
+
+  .ds-table thead th {
+    padding-block: var(--space-2);
+    background: var(--surface-sunk);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .ds-table tbody th {
+    font-weight: 600;
+  }
+
+  .ds-table tbody tr:last-child > * {
+    border-block-end: 0;
+  }
+
+  .ds-table tbody tr:hover > * {
+    background: var(--surface-sunk);
+  }
+
+  .ds-table .ds-table__num {
+    text-align: end;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Narrow: each row is a card, each cell labelled by its column. */
+  @container (max-width: 34rem) {
+    .ds-table thead {
+      position: absolute;
+      inline-size: 1px;
+      block-size: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .ds-table,
+    .ds-table tbody,
+    .ds-table tr,
+    .ds-table th,
+    .ds-table td {
+      display: block;
+    }
+
+    .ds-table tr {
+      padding-block: var(--space-2);
+      border-block-end: var(--border-hair) solid var(--border);
+    }
+
+    .ds-table tbody tr:last-child {
+      border-block-end: 0;
+    }
+
+    .ds-table th,
+    .ds-table td,
+    .ds-table tbody tr:last-child > * {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: var(--space-2);
+      padding-block: var(--space-1);
+      border-block-end: 0;
+    }
+
+    .ds-table td::before {
+      content: attr(data-label);
+      color: var(--text-muted);
+      font-size: var(--text-xs);
+      font-weight: 600;
+    }
+
+    .ds-table .ds-table__num {
+      text-align: start;
+    }
+  }
+
+  /* ---- Notification list ------------------------------------------------------------------- */
+
+  .ds-notices {
+    display: grid;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .ds-notification {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--space-3);
+    padding-block: var(--space-3);
+    border-block-end: var(--border-hair) solid var(--border);
+  }
+
+  .ds-notification:last-child {
+    border-block-end: 0;
+    padding-block-end: 0;
+  }
+
+  .ds-notification:first-child {
+    padding-block-start: 0;
+  }
+
+  .ds-notification__dot {
+    inline-size: 0.5rem;
+    block-size: 0.5rem;
+    margin-block-start: 0.4rem;
+    border-radius: 50%;
+    border: var(--border-hair) solid var(--border-strong);
+  }
+
+  .ds-notification--unread .ds-notification__dot {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .ds-notification__main {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .ds-notification__text {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+
+  .ds-notification--unread .ds-notification__text {
+    color: var(--text);
+    font-weight: 550;
+  }
+
+  .ds-notification__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+
+  /* ---- Aggregate bars and stat tile ----------------------------------------------------------- */
+
+  .ds-bars {
+    display: grid;
+    gap: var(--space-3);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .ds-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-3);
+    font-size: var(--text-sm);
+  }
+
+  .ds-bar__label {
+    overflow-wrap: anywhere;
+  }
+
+  .ds-bar__value {
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ds-bar__track {
+    grid-column: 1 / -1;
+    display: block;
+    block-size: 0.5rem;
+    overflow: hidden;
+    border-radius: var(--radius-pill);
+    background: var(--surface-sunk);
+  }
+
+  .ds-bar__fill {
+    display: block;
+    block-size: 100%;
+    inline-size: 0;
+    border-radius: inherit;
+    background: var(--accent);
+  }
+
+  .ds-bar__fill[data-fill='1'] { inline-size: 5%; }
+  .ds-bar__fill[data-fill='2'] { inline-size: 10%; }
+  .ds-bar__fill[data-fill='3'] { inline-size: 15%; }
+  .ds-bar__fill[data-fill='4'] { inline-size: 20%; }
+  .ds-bar__fill[data-fill='5'] { inline-size: 25%; }
+  .ds-bar__fill[data-fill='6'] { inline-size: 30%; }
+  .ds-bar__fill[data-fill='7'] { inline-size: 35%; }
+  .ds-bar__fill[data-fill='8'] { inline-size: 40%; }
+  .ds-bar__fill[data-fill='9'] { inline-size: 45%; }
+  .ds-bar__fill[data-fill='10'] { inline-size: 50%; }
+  .ds-bar__fill[data-fill='11'] { inline-size: 55%; }
+  .ds-bar__fill[data-fill='12'] { inline-size: 60%; }
+  .ds-bar__fill[data-fill='13'] { inline-size: 65%; }
+  .ds-bar__fill[data-fill='14'] { inline-size: 70%; }
+  .ds-bar__fill[data-fill='15'] { inline-size: 75%; }
+  .ds-bar__fill[data-fill='16'] { inline-size: 80%; }
+  .ds-bar__fill[data-fill='17'] { inline-size: 85%; }
+  .ds-bar__fill[data-fill='18'] { inline-size: 90%; }
+  .ds-bar__fill[data-fill='19'] { inline-size: 95%; }
+  .ds-bar__fill[data-fill='20'] { inline-size: 100%; }
+
+  .ds-bars__rest {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+
+  .ds-stat {
+    display: grid;
+    gap: var(--space-1);
+    padding: var(--space-4) var(--space-5);
+  }
+
+  .ds-stat__label {
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0;
+    color: var(--text-muted);
+    font-variation-settings: normal;
+  }
+
+  .ds-stat__value {
+    font-size: var(--text-2xl);
+    font-weight: 700;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- Forced colours: every boundary a border, state never by colour alone ---------------- */
+
+  @media (forced-colors: active) {
+    .ds-badge,
+    .ds-chip,
+    .ds-section__count,
+    .ds-avatar,
+    .ds-notice {
+      border: var(--border-hair) solid CanvasText;
+    }
+
+    .ds-bar__track {
+      border: var(--border-hair) solid CanvasText;
+    }
+
+    .ds-bar__fill,
+    .ds-notification--unread .ds-notification__dot {
+      background: Highlight;
+      forced-color-adjust: none;
+    }
+
+    .ds-skeleton {
+      border: var(--border-hair) solid GrayText;
+    }
+  }
+}
