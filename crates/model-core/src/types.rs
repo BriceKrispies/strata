@@ -2655,13 +2655,13 @@ pub struct PersonRef {
     pub person: String,
 }
 
-/// Ref Target
+/// Record Ref Target
 ///
 /// The target of a reference the reader may read: its object type, its id and its title (the title field of the object type), absent when the target has none.
 ///
-/// Specification type `ref-target`: a struct.
+/// Specification type `record-ref-target`: a struct.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub struct RefTarget {
+pub struct RecordRefTarget {
     /// Field `object`.
     pub object: String,
     /// Field `id`.
@@ -2680,7 +2680,7 @@ pub struct RefTarget {
 pub struct RecordRef {
     /// Field `ref`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub r#ref: Option<RefTarget>,
+    pub r#ref: Option<RecordRefTarget>,
 }
 
 /// Author Record

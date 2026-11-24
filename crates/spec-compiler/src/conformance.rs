@@ -2038,7 +2038,8 @@ mod tests {
     { "id": "view-data", "kind": "struct", "fields": [{ "name": "title", "type": "string" }] },
     { "id": "state-revision", "kind": "id", "repr": "u64" },
     { "id": "schema-version", "kind": "id", "repr": "u32" },
-    { "id": "view-theme", "kind": "struct", "fields": [{ "name": "accent", "type": "string" }] },"#,
+    { "id": "view-theme", "kind": "struct", "fields": [{ "name": "accent", "type": "string" }] },
+    { "id": "person-entry", "kind": "struct", "fields": [{ "name": "name", "type": "string", "optional": true }] },"#,
         );
         let text = generate("fixture.jsonc", &spec, &Options::default())
             .unwrap()

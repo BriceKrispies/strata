@@ -2450,16 +2450,12 @@ pub const TYPES: &[TypeDecl] = &[
         id: "record-ref",
         decl: Decl::Struct(&[Field {
             wire: "ref",
-            ty: Ty::Named("ref-target"),
+            ty: Ty::Named("record-ref-target"),
             optional: true,
         }]),
     },
     TypeDecl {
-        id: "recurrence",
-        decl: Decl::Alias(Ty::Text),
-    },
-    TypeDecl {
-        id: "ref-target",
+        id: "record-ref-target",
         decl: Decl::Struct(&[
             Field {
                 wire: "object",
@@ -2477,6 +2473,10 @@ pub const TYPES: &[TypeDecl] = &[
                 optional: true,
             },
         ]),
+    },
+    TypeDecl {
+        id: "recurrence",
+        decl: Decl::Alias(Ty::Text),
     },
     TypeDecl {
         id: "role-id",
