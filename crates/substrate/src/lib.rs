@@ -21,6 +21,7 @@ pub mod plain;
 pub mod product;
 pub mod project;
 pub mod proposal;
+pub mod stages;
 pub mod subscribe;
 pub mod theme;
 pub mod ui;

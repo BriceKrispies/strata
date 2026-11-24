@@ -62,6 +62,9 @@ fn bundle_error(error: BundleError) -> ApiError {
         BundleErrorKind::Invalid => (ErrorCode::Invalid, "invalid"),
         BundleErrorKind::Conflict => (ErrorCode::Conflict, "conflict"),
         BundleErrorKind::NotFound => (ErrorCode::NotFound, "not-found"),
+        BundleErrorKind::FinalStageTooLarge => {
+            (ErrorCode::Invalid, "upgrade.final-stage-too-large")
+        }
     };
     let mut reply = ApiError::new(code, error.message);
     reply.0.kind = Some(kind.to_string());

@@ -94,6 +94,9 @@ pub enum BundleErrorKind {
     Conflict,
     /// `not-found`: the product is not installed.
     NotFound,
+    /// `upgrade.final-stage-too-large`: the last stage of a staged upgrade alone is over the cap,
+    /// so the product must be split across releases (D-DS-16, KRN-1283).
+    FinalStageTooLarge,
 }
 
 /// A bundle that cannot be read or installed, and why.
