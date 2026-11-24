@@ -46,6 +46,7 @@
     "nonGoals": "intent.jsonc",
     "openQuestions": "intent.jsonc",
     "plans": "boundary.jsonc",
+    "presentations": "boundary.jsonc",
     "quotas": "boundary.jsonc",
     "records": "boundary.jsonc",
     "relationships": "boundary.jsonc",

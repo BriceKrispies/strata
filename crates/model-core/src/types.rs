@@ -9487,7 +9487,7 @@ pub struct InstalledProduct {
 
 /// UI Element
 ///
-/// One element of the interface definition of a tenant (D-8250): a screen, a form, an action, a live binding or an error message, held in tenant-schema.ui by its id, which is in the namespace of the product that installs it. Every reference between elements and to the schema is checked when the schema that holds it is checked (strata_kernel::ui).
+/// One element of the interface definition of a tenant (D-8250): a screen, a form, an action, a live binding, an error message or a presentation, held in tenant-schema.ui by its id, which is in the namespace of the product that installs it. Every reference between elements and to the schema is checked when the schema that holds it is checked (strata_kernel::ui).
 ///
 /// Specification type `ui-element`: a union, externally tagged.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -9502,6 +9502,8 @@ pub enum UiElement {
     LiveBinding(UiLiveBinding),
     /// The variant `error-message`.
     ErrorMessage(UiErrorMessage),
+    /// The variant `presentation`.
+    Presentation(UiPresentation),
 }
 
 /// UI Screen
@@ -9801,6 +9803,138 @@ impl UiLiveEvent {
             Self::SessionEnded => "session-ended",
         }
     }
+}
+
+/// UI Display Type
+///
+/// The display types of the design system (docs/design-system.md, Display types): how the interpreter draws the value of a field. Each applies to certain field types, which the kernel checks when a presentation is defined.
+///
+/// Specification type `ui-display-type`: an enumeration, serialised as the specification's values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+pub enum UiDisplayType {
+    /// The value `text`.
+    #[serde(rename = "text")]
+    Text,
+    /// The value `rich-text`.
+    #[serde(rename = "rich-text")]
+    RichText,
+    /// The value `datetime`.
+    #[serde(rename = "datetime")]
+    Datetime,
+    /// The value `date`.
+    #[serde(rename = "date")]
+    Date,
+    /// The value `duration`.
+    #[serde(rename = "duration")]
+    Duration,
+    /// The value `count`.
+    #[serde(rename = "count")]
+    Count,
+    /// The value `number`.
+    #[serde(rename = "number")]
+    Number,
+    /// The value `money`.
+    #[serde(rename = "money")]
+    Money,
+    /// The value `percent`.
+    #[serde(rename = "percent")]
+    Percent,
+    /// The value `boolean`.
+    #[serde(rename = "boolean")]
+    Boolean,
+    /// The value `status`.
+    #[serde(rename = "status")]
+    Status,
+    /// The value `choice`.
+    #[serde(rename = "choice")]
+    Choice,
+    /// The value `person`.
+    #[serde(rename = "person")]
+    Person,
+    /// The value `reference`.
+    #[serde(rename = "reference")]
+    Reference,
+    /// The value `references`.
+    #[serde(rename = "references")]
+    References,
+    /// The value `tags`.
+    #[serde(rename = "tags")]
+    Tags,
+    /// The value `language`.
+    #[serde(rename = "language")]
+    Language,
+    /// The value `media`.
+    #[serde(rename = "media")]
+    Media,
+    /// The value `url`.
+    #[serde(rename = "url")]
+    Url,
+    /// The value `email`.
+    #[serde(rename = "email")]
+    Email,
+    /// The value `code`.
+    #[serde(rename = "code")]
+    Code,
+}
+
+impl UiDisplayType {
+    /// The value as the specification writes it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::RichText => "rich-text",
+            Self::Datetime => "datetime",
+            Self::Date => "date",
+            Self::Duration => "duration",
+            Self::Count => "count",
+            Self::Number => "number",
+            Self::Money => "money",
+            Self::Percent => "percent",
+            Self::Boolean => "boolean",
+            Self::Status => "status",
+            Self::Choice => "choice",
+            Self::Person => "person",
+            Self::Reference => "reference",
+            Self::References => "references",
+            Self::Tags => "tags",
+            Self::Language => "language",
+            Self::Media => "media",
+            Self::Url => "url",
+            Self::Email => "email",
+            Self::Code => "code",
+        }
+    }
+}
+
+/// UI Field Display
+///
+/// How one field of an object type is drawn: its display type and the props that display type takes (for example style=relative for a datetime), each a string.
+///
+/// Specification type `ui-field-display`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct UiFieldDisplay {
+    /// Field `display`.
+    pub display: UiDisplayType,
+    /// Field `props`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub props: Option<std::collections::BTreeMap<String, String>>,
+}
+
+/// UI Presentation
+///
+/// The presentation of one object type (D-8250): the field whose text titles a record, and the display type of each field it declares. A field that names none is drawn by its type. The kernel checks that the object type and every named field exist and that each display type applies to the field type (ui.binding.unknown-object, ui.binding.unknown-field, ui.binding.display-type, ui.binding.title).
+///
+/// Specification type `ui-presentation`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct UiPresentation {
+    /// Field `object`.
+    pub object: ObjectTypeId,
+    /// Field `title`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<FieldId>,
+    /// Field `fields`.
+    pub fields: std::collections::BTreeMap<FieldId, UiFieldDisplay>,
 }
 
 /// UI Error Message

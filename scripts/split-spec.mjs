@@ -51,7 +51,7 @@ export const SECTION_PART = {
   quotas: boundary, retentions: boundary, plans: boundary, grants: boundary, delegations: boundary,
   tokenScopes: boundary, featureFlags: boundary, validations: boundary, languages: boundary, components: boundary,
   relationships: boundary, screens: boundary, forms: boundary, actions: boundary, liveBindings: boundary,
-  errorMessages: boundary,
+  errorMessages: boundary, presentations: boundary,
 
   events: behaviour, behaviors: behaviour, faults: behaviour, scenarios: behaviour, uiScenarios: behaviour,
   failureModes: behaviour, faultModels: behaviour,

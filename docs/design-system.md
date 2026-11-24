@@ -423,15 +423,25 @@ product's `presentations` section and owned by the product:
 
 ```jsonc
 { "id": "showcase_community__message_presentation", "object": "showcase_community__message",
-  "title": "title", "subtitle": "channel", "media": null,
+  "title": "title",
   "fields": {
     "author":     { "display": "person" },
-    "created_at": { "display": "datetime", "style": "relative" },
+    "created_at": { "display": "datetime", "props": { "style": "relative" } },
     "channel":    { "display": "choice" },
-    "status":     { "display": "status", "tones": { "published": "success", "hidden": "neutral" } },
+    "status":     { "display": "status", "props": { "tone.published": "success", "tone.hidden": "neutral" } },
     "body":       { "display": "rich-text" }
   } }
 ```
+
+`props` is an object of strings (a nested prop is a dotted key); `title` is the field that titles a
+record, and a field the presentation does not name is drawn by its type. As built (WG-5462): the
+element is `ui-presentation` in the specification, specc writes a product's `presentations` section
+into the bundle's `ui`, and the kernel refuses a presentation whose object type or field does not
+exist (`ui.binding.unknown-object`, `ui.binding.unknown-field`), whose display type does not apply
+to the field's type (`ui.binding.display-type`), whose title is not a string field
+(`ui.binding.title`) or that repeats an object type (`ui.binding.duplicate`). `created_by` takes
+`person`, and `created_at` and `updated_at` take `datetime` or `date`. A field declared `person`
+holds a principal, and a view reply sends it as `{"person": handle}` like `created_by`.
 
 The kernel checks that the object type and every field exist and that each display type applies to
 the field's type. A widget's props may override a field's display for that widget. A presentation

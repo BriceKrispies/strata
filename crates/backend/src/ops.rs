@@ -784,6 +784,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                 .collect(),
             };
             let target_def = schema.objects.get(target);
+            let target_presentation = strata_kernel::ui::presentation_of(schema, target);
             ref_targets.insert(
                 field.clone(),
                 RefTargets {
@@ -791,7 +792,13 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                     titles: readable
                         .iter()
                         .filter(|record| ids.contains(&record.id))
-                        .map(|record| (record.id, target_def.and_then(|def| title_of(def, record))))
+                        .map(|record| {
+                            (
+                                record.id,
+                                target_def
+                                    .and_then(|def| title_of(def, target_presentation, record)),
+                            )
+                        })
                         .collect(),
                 },
             );
@@ -854,7 +861,8 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             }
         }
     }
-    let people = people_of(app, identity, &tenant, &sections);
+    let person_fields = strata_kernel::ui::person_fields(schema);
+    let people = people_of(app, identity, &tenant, &sections, &person_fields);
     Ok(ViewData {
         view: def.id.clone(),
         title: def.title.clone(),
@@ -865,6 +873,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         schema_version: schema.version,
         record_rules,
         people,
+        person_fields,
     })
 }
 
@@ -878,15 +887,20 @@ fn people_of(
     identity: &Identity,
     tenant: &TenantState,
     sections: &BTreeMap<String, SectionData>,
+    person_fields: &BTreeMap<ObjectTypeId, BTreeSet<FieldId>>,
 ) -> BTreeMap<String, PersonInfo> {
-    let named: BTreeSet<&PrincipalId> = sections
-        .values()
-        .flat_map(|section| {
-            let included = section.included.values().flat_map(|held| held.values());
-            section.rows.iter().chain(included)
-        })
-        .filter_map(|record| record.created_by.as_ref())
-        .collect();
+    let mut named: BTreeSet<PrincipalId> = BTreeSet::new();
+    for section in sections.values() {
+        let included = section.included.values().flat_map(|held| held.values());
+        for record in section.rows.iter().chain(included) {
+            named.extend(record.created_by.clone());
+            for field in person_fields.get(&record.object).into_iter().flatten() {
+                if let Value::Str(principal) = record.get(field) {
+                    named.extend(PrincipalId::new(principal.as_str()).ok());
+                }
+            }
+        }
+    }
     let mode = SettingId::new(MEMBER_NAMES_SETTING)
         .ok()
         .and_then(|id| strata_kernel::settings::resolve(tenant, &identity.principal, &id).ok())
@@ -899,6 +913,7 @@ fn people_of(
     named
         .into_iter()
         .map(|principal| {
+            let principal = &principal;
             let reader = matches!(&identity.principal, Principal::User(me) if me == principal);
             let account = app
                 .store

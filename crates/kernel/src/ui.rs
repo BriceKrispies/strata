@@ -23,15 +23,20 @@
 //!   `route.<param>` of its screen; a navigation after success names a screen;
 //! - a live binding is on a screen, and listens to notice kinds the protocol has (`upsert`,
 //!   `remove`, `schema`, `membership`); one on the end of a session names none;
-//! - an error message has text, and the forms and actions it applies to exist.
+//! - an error message has text, and the forms and actions it applies to exist;
+//! - a presentation describes an object type of the tenant (`ui.binding.unknown-object`), names
+//!   only fields it has (`ui.binding.unknown-field`; `created_by`, `created_at` and `updated_at`
+//!   are the system attributes a presentation may also name), draws each with a display type that
+//!   applies to the field's type (`ui.binding.display-type`), and takes its title from a string
+//!   field (`ui.binding.title`); one object type has one presentation (`ui.binding.duplicate`).
 //!
 //! How the definition is served (in parts, each named by its hash) is the substrate's
 //! (`strata_substrate::ui`); this module only holds the elements.
 
 use crate::schema::TenantSchema;
 use crate::types::{
-    SchemaChange, UiAction, UiControl, UiElement, UiErrorMessage, UiForm, UiLiveBinding,
-    UiLiveEvent, UiOutcome, UiScreen,
+    FieldType, SchemaChange, UiAction, UiControl, UiDisplayType, UiElement, UiErrorMessage, UiForm,
+    UiLiveBinding, UiLiveEvent, UiOutcome, UiPresentation, UiScreen,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -399,6 +404,119 @@ fn live_problems(
     }
 }
 
+/// Whether a display type applies to a field of this type (docs/design-system.md, Display types).
+pub fn display_applies(display: UiDisplayType, ty: &FieldType) -> bool {
+    use UiDisplayType as D;
+    let is_ref = |ty: &FieldType| matches!(ty, FieldType::Ref { .. });
+    match display {
+        D::Text | D::RichText | D::Status | D::Choice | D::Person | D::Url | D::Email => {
+            matches!(ty, FieldType::Str)
+        }
+        D::Datetime | D::Date => matches!(ty, FieldType::Time),
+        D::Duration | D::Count | D::Number | D::Money | D::Percent => matches!(ty, FieldType::Int),
+        D::Boolean => matches!(ty, FieldType::Bool),
+        D::Reference => is_ref(ty),
+        D::References => matches!(ty, FieldType::List(inner) if is_ref(inner)),
+        D::Tags => matches!(ty, FieldType::List(inner) if matches!(**inner, FieldType::Str)),
+        D::Language => matches!(ty, FieldType::Language),
+        D::Media => matches!(ty, FieldType::File { .. }),
+        D::Code => matches!(ty, FieldType::Str | FieldType::Int),
+    }
+}
+
+/// The presentations of the schema by the object type they describe, and for each the fields that
+/// are drawn as a person. Read by the view path to decide which values are principals.
+pub fn person_fields(
+    schema: &TenantSchema,
+) -> BTreeMap<crate::types::ObjectTypeId, BTreeSet<crate::types::FieldId>> {
+    let mut out: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+    for (_, element) in elements(schema) {
+        if let UiElement::Presentation(presentation) = element {
+            for (field, shown) in &presentation.fields {
+                if shown.display == UiDisplayType::Person {
+                    out.entry(presentation.object.clone())
+                        .or_default()
+                        .insert(field.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The presentation of an object type, when the tenant has one.
+pub fn presentation_of<'a>(
+    schema: &'a TenantSchema,
+    object: &crate::types::ObjectTypeId,
+) -> Option<&'a UiPresentation> {
+    elements(schema).find_map(|(_, element)| match element {
+        UiElement::Presentation(p) if p.object == *object => Some(p),
+        _ => None,
+    })
+}
+
+fn presentation_problems(
+    schema: &TenantSchema,
+    id: &str,
+    presentation: &UiPresentation,
+    seen: &mut BTreeSet<String>,
+    problems: &mut Vec<String>,
+) {
+    use UiDisplayType as D;
+    let at = format!("presentation {id}");
+    let Some(object) = schema.objects.get(&presentation.object) else {
+        problems.push(format!(
+            "ui.binding.unknown-object: {at}: describes {}, which is not an object type of the tenant",
+            presentation.object
+        ));
+        return;
+    };
+    if !seen.insert(presentation.object.as_str().to_string()) {
+        problems.push(format!(
+            "ui.binding.duplicate: {at}: {} already has a presentation; an object type has one",
+            presentation.object
+        ));
+    }
+    if let Some(title) = &presentation.title {
+        match object.fields.get(title) {
+            None => problems.push(format!(
+                "ui.binding.unknown-field: {at}: takes its title from {title}, which is not a field of {}",
+                presentation.object
+            )),
+            Some(field) if !matches!(field.ty, FieldType::Str) => problems.push(format!(
+                "ui.binding.title: {at}: takes its title from {title}, which is not a string field"
+            )),
+            Some(_) => {}
+        }
+    }
+    for (name, shown) in &presentation.fields {
+        let display = shown.display;
+        let applies = match object.fields.get(name) {
+            Some(field) => display_applies(display, &field.ty),
+            None => match name.as_str() {
+                "created_by" => display == D::Person,
+                "created_at" | "updated_at" => matches!(display, D::Datetime | D::Date),
+                _ => {
+                    problems.push(format!(
+                        "ui.binding.unknown-field: {at}: declares {name}, which {} does not have",
+                        presentation.object
+                    ));
+                    continue;
+                }
+            },
+        };
+        if !applies {
+            let ty = object.fields.get(name).map_or_else(
+                || "a system attribute".to_string(),
+                |f| format!("{:?}", f.ty),
+            );
+            problems.push(format!(
+                "ui.binding.display-type: {at}: {name} is {ty}, to which the display type {display:?} does not apply"
+            ));
+        }
+    }
+}
+
 fn message_problems(
     schema: &TenantSchema,
     id: &str,
@@ -427,6 +545,7 @@ pub fn problems(schema: &TenantSchema, problems: &mut Vec<String>) {
     let screens = screens(schema);
     let forms = forms(schema);
     let mut routes = BTreeMap::new();
+    let mut presented = BTreeSet::new();
     for (id, element) in elements(schema) {
         if !is_name(id) {
             problems.push(format!(
@@ -441,6 +560,9 @@ pub fn problems(schema: &TenantSchema, problems: &mut Vec<String>) {
             }
             UiElement::LiveBinding(live) => live_problems(id, live, &screens, problems),
             UiElement::ErrorMessage(message) => message_problems(schema, id, message, problems),
+            UiElement::Presentation(presentation) => {
+                presentation_problems(schema, id, presentation, &mut presented, problems)
+            }
         }
     }
 }
