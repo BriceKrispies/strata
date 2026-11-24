@@ -9,7 +9,10 @@
 //
 // The rules this module keeps by construction:
 // - nothing is drawn as text that is an epoch number, a record id, a principal string or a JSON
-//   object; an unknown object or array draws as an empty node or as chips of its string members;
+//   object; an unknown object or array draws as an empty node or as a prose list of its string
+//   members ("English and Tamil", by Intl.ListFormat in the request language);
+// - no value is a capsule (D-DS-31): a status is a state, said in words, with a mark that says
+//   whether it departs from normal; a list is a sentence, not chips;
 // - numbers and money are formatted from exact decimal strings with BigInt, so values beyond 2^53
 //   and fractional minor units stay exact; Intl supplies only the separators and the currency
 //   pattern, and the digits are ours;
@@ -17,7 +20,7 @@
 // @ts-check
 
 /**
- * @typedef {'neutral' | 'info' | 'success' | 'warning' | 'danger'} Tone
+ * @typedef {'normal' | 'note' | 'attention' | 'danger'} Mark
  * @typedef {{ kind: string, [key: string]: any }} DisplayNode
  * @typedef {{ lang?: string, timeZone?: string, now?: number, people?: Record<string, { name: string | null, avatar?: string | null }> }} DisplayContext
  * @typedef {{ neg: boolean, digits: bigint, scale: number }} Decimal
@@ -37,26 +40,31 @@ const IDENTIFIER = /^\d{9,}$/;
 const DECIMAL = /^([+-]?)(\d+)(?:\.(\d+))?$/;
 const CIVIL_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const ROUNDING = ['half-even', 'half-up', 'half-down', 'down', 'up', 'floor', 'ceil'];
-const TONES = ['neutral', 'info', 'success', 'warning', 'danger'];
+const MARKS = ['normal', 'note', 'attention', 'danger'];
 const KNOWN = new Set([
   'text', 'rich-text', 'datetime', 'date', 'duration', 'count', 'number', 'money', 'percent', 'boolean',
   'status', 'choice', 'person', 'reference', 'references', 'tags', 'language', 'media', 'url', 'email', 'code',
 ]);
 
-/** The tone of a status word when the presentation names none. @type {Record<string, Tone>} */
-const DEFAULT_TONES = {
-  published: 'success', active: 'success', approved: 'success', accepted: 'success', done: 'success',
-  complete: 'success', completed: 'success', enabled: 'success', live: 'success',
-  review: 'info', in_review: 'info', in_progress: 'info', scheduled: 'info', sent: 'info',
-  pending: 'warning', waiting: 'warning', overdue: 'warning',
-  draft: 'neutral', archived: 'neutral', closed: 'neutral', inactive: 'neutral', new: 'neutral',
-  hidden: 'danger', removed: 'danger', rejected: 'danger', deleted: 'danger', failed: 'danger',
-  expired: 'danger', suspended: 'danger',
+/**
+ * What a status value means for the reader when the presentation declares nothing (D-DS-31): a
+ * normal value is not drawn at all; a note or an attention value is said in words. A value not
+ * listed is a note, so a state nobody declared is never hidden.
+ * @type {Record<string, Mark>}
+ */
+const DEFAULT_MARKS = {
+  published: 'normal', active: 'normal', open: 'normal', done: 'normal', sent: 'normal', read: 'normal',
+  approved: 'normal', accepted: 'normal', complete: 'normal', completed: 'normal', enabled: 'normal', live: 'normal',
+  draft: 'note', pending: 'note', scheduled: 'note', queued: 'note', review: 'note', in_review: 'note',
+  in_progress: 'note', waiting: 'note', new: 'note', unread: 'note', on_leave: 'note',
+  hidden: 'attention', rejected: 'attention', failed: 'attention', overdue: 'attention', left: 'attention',
+  archived: 'attention', removed: 'attention', suspended: 'attention', expired: 'attention', deleted: 'attention',
+  retired: 'attention', inactive: 'attention', closed: 'attention',
 };
 
 /**
  * The display type a field with no declared display type is drawn by (the Fallbacks paragraph).
- * `list` draws as `tags`, the display type whose rendering is chips.
+ * `list` draws as `tags`, the display type whose rendering is a prose list.
  * @param {string | undefined} fieldType
  * @returns {string}
  */
@@ -368,8 +376,8 @@ function draw(type, value, props, c) {
     case 'choice': return choiceNode(value, props);
     case 'person': return personNode(value, c);
     case 'reference': return refNode(value, props);
-    case 'references': return Array.isArray(value) && value.length > 0 ? chips(value.map((v) => refNode(v, props))) : null;
-    case 'tags': return tagsNode(value);
+    case 'references': return Array.isArray(value) && value.length > 0 ? proseList(value.map((v) => refNode(v, props)), c.lang) : null;
+    case 'tags': return tagsNode(value, c.lang);
     case 'language': return languageNode(value, c.lang);
     case 'media': return mediaNode(value);
     case 'url': return urlNode(value);
@@ -384,9 +392,24 @@ function textOf(text) {
   return text === null ? null : { kind: 'text', text };
 }
 
-/** @param {DisplayNode[]} items */
-function chips(items) {
-  return { kind: 'chips', items };
+/**
+ * A short list of values as words: "English and Tamil", "A, B and C", joined by Intl.ListFormat in
+ * the request language. `text` is the sentence; `parts` say which piece is which item (a link
+ * stays a link) and which is a separator the language puts between them.
+ * @param {DisplayNode[]} items @param {string} lang @returns {DisplayNode}
+ */
+function proseList(items, lang) {
+  const texts = items.map((item) => (typeof item.text === 'string' ? item.text : ''));
+  /** @type {any[]} */
+  let pieces;
+  try {
+    pieces = make(Intl.ListFormat, lang, { type: 'conjunction', style: 'long' }).formatToParts(texts);
+  } catch {
+    pieces = texts.flatMap((t, i) => (i === 0 ? [{ type: 'element', value: t }] : [{ type: 'literal', value: ', ' }, { type: 'element', value: t }]));
+  }
+  let next = 0;
+  const parts = pieces.map((piece) => (piece.type === 'element' ? { item: items[next++] } : { literal: String(piece.value) }));
+  return { kind: 'list', text: pieces.map((piece) => String(piece.value)).join(''), parts };
 }
 
 /**
@@ -496,16 +519,36 @@ function boolNode(value, props) {
   return { kind: 'boolean', value, text: value ? yes : no };
 }
 
-/** @param {any} value @param {Record<string, any>} props */
+/**
+ * A prop given per value, flat (`state.hidden`, as a presentation's string map holds it) or nested
+ * (`state: { hidden }`).
+ * @param {Record<string, any>} props @param {string} name @param {string} value @returns {unknown}
+ */
+function perValue(props, name, value) {
+  const flat = own(props, `${name}.${value}`);
+  if (flat !== undefined) return flat;
+  return own(props[name], value);
+}
+
+/**
+ * A status is a state (D-DS-31): its label, its mark (normal, note, attention or danger) and, when
+ * the presentation declares one, what it means for the reader. The presentation's props are
+ * `state.<value>` (the mark), `means.<value>` (one sentence) and `label.<value>` (or `labels`).
+ * An undeclared value takes its mark from a word list and has no sentence. A normal value is not
+ * drawn by the patterns at all.
+ * @param {any} value @param {Record<string, any>} props
+ */
 function statusNode(value, props) {
   if (!isWord(value)) return null;
-  const label = own(props.labels, value);
-  const explicit = own(props.tones, value);
-  /** @type {Tone} */
-  const tone = typeof explicit === 'string' && TONES.includes(explicit)
-    ? /** @type {Tone} */ (explicit)
-    : own(DEFAULT_TONES, value.toLowerCase().replace(/[\s-]+/g, '_')) ?? 'neutral';
-  return { kind: 'status', text: typeof label === 'string' ? label : wordOf(value), tone };
+  const label = perValue(props, 'label', value) ?? own(props.labels, value);
+  const declared = perValue(props, 'state', value);
+  const said = perValue(props, 'means', value);
+  /** @type {Mark} */
+  const mark = typeof declared === 'string' && MARKS.includes(declared)
+    ? /** @type {Mark} */ (declared)
+    : own(DEFAULT_MARKS, value.toLowerCase().replace(/[\s-]+/g, '_')) ?? 'note';
+  const means = typeof said === 'string' && said.trim() !== '' && !PRINCIPAL.test(said) ? said.trim() : null;
+  return { kind: 'state', value, label: typeof label === 'string' && label !== '' ? label : wordOf(value), mark, means };
 }
 
 /** @param {any} value @param {Record<string, any>} props */
@@ -553,13 +596,13 @@ function refNode(value, props) {
   return { kind: 'link', text: title ?? label, ref: { object: ref.object, id: ref.id } };
 }
 
-/** Tags: the string members of a list as chips; anything else is left out. @param {any} value */
-function tagsNode(value) {
+/** Tags: the string members of a list as a prose list; anything else is left out. @param {any} value @param {string} lang */
+function tagsNode(value, lang) {
   if (!Array.isArray(value)) return null;
   const items = value
     .filter((v) => isWord(v) && v !== '')
     .map((v) => ({ kind: 'text', text: v }));
-  return items.length > 0 ? chips(items) : null;
+  return items.length > 0 ? proseList(items, lang) : null;
 }
 
 /** @param {any} value @param {string} lang */

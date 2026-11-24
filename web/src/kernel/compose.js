@@ -17,6 +17,11 @@
 // Every data pattern has the states `loading` (a skeleton with a fixed number of rows, which says
 // nothing about how many records there are), `empty`, `error` and `ready`.
 //
+// A state is said in words, only where it departs from normal (D-DS-31, no pills): a status whose
+// mark is normal is not on the page at all; any other becomes the record's `state` (a lead word and,
+// when the presentation declares one, a sentence) and its `edge`, the mark the renderer draws as a
+// rule on the record's leading edge. An unread notice has the edge `unread`.
+//
 // The rules this module keeps by construction: no text of the page model is a record id drawn as
 // a number, an epoch, a principal or JSON. Values go through display.js, which draws none of
 // those; labels are humanised identifiers; the one place a record's number is shown is the
@@ -52,10 +57,10 @@ const CHOICE_WORD = /^[a-z][a-z0-9]*(?:[ _-][a-z0-9]+){0,3}$/;
 /**
  * @typedef {import('./display.js').DisplayNode} DisplayNode
  * @typedef {{ lang?: string, timeZone?: string, now?: number, people?: Record<string, any>, screens?: { id: string, route?: string }[], route?: string, forms?: Record<string, any>, moreLoading?: string | null }} ComposeContext
- * @typedef {{ id: string, type: string, target: string | null, displayType: string | null, required: boolean, label: string }} Field
+ * @typedef {{ id: string, type: string, target: string | null, displayType: string | null, props: Record<string, any> | null, required: boolean, label: string }} Field
  * @typedef {{ name: string, label: string, single: boolean, aggregate: boolean, object: string | null, title: string | null, fields: Field[] }} Section
  * @typedef {{ id: string, label: string, value: DisplayNode }} Fact
- * @typedef {{ key: string, title: string | null, href: string | null, subtitle: string | null, avatar: { initials: string, src: string | null } | null, status: DisplayNode | null, person: DisplayNode | null, time: DisplayNode | null, timeLabel: string, body: { text?: string, blocks?: any[] } | null, meta: Fact[], number: string | null }} RecordModel
+ * @typedef {{ key: string, title: string | null, href: string | null, subtitle: string | null, avatar: { initials: string, src: string | null } | null, state: DisplayNode | null, edge: string | null, person: DisplayNode | null, time: DisplayNode | null, timeLabel: string, body: { text?: string, blocks?: any[] } | null, meta: Fact[], number: string | null }} RecordModel
  */
 
 // ---- words --------------------------------------------------------------------------------
@@ -102,7 +107,7 @@ export function nodeText(node) {
   if (!node) return '';
   if (node.kind === 'empty') return '';
   if (node.kind === 'person') return String(node.name ?? '');
-  if (node.kind === 'chips') return (node.items ?? []).map((/** @type {any} */ item) => nodeText(item)).filter(Boolean).join(', ');
+  if (node.kind === 'state') return String(node.label ?? '');
   if (node.kind === 'rich') return String(node.markdown ?? '');
   return typeof node.text === 'string' ? node.text : '';
 }
@@ -125,6 +130,7 @@ function fieldOf(f) {
     type,
     target,
     displayType: typeof f?.displayType === 'string' ? f.displayType : null,
+    props: isRecord(f?.props) ? f.props : null,
     required: f?.required === true,
     label: typeof f?.label === 'string' && f.label !== '' ? f.label : fieldLabel(id),
   };
@@ -152,7 +158,7 @@ function inferFields(value) {
     else if (Array.isArray(v)) type = 'list';
     else if (isRecord(v) && 'ref' in v) type = 'ref';
     else if (isRecord(v) && 'person' in v) displayType = 'person';
-    return { id, type, target: null, displayType, required: false, label: fieldLabel(id) };
+    return { id, type, target: null, displayType, props: null, required: false, label: fieldLabel(id) };
   });
 }
 
@@ -240,7 +246,15 @@ function displayOf(field, value) {
 
 /** @param {Field} field @param {any} value @param {ComposeContext} ctx @returns {DisplayNode} */
 function format(field, value, ctx) {
-  return formatValue({ value, fieldType: field.type, displayType: displayOf(field, value), props: null, ctx: displayCtx(ctx) });
+  return formatValue({ value, fieldType: field.type, displayType: displayOf(field, value), props: field.props, ctx: displayCtx(ctx) });
+}
+
+/**
+ * The state a status node says, or null when there is nothing to say: a normal value is not drawn.
+ * @param {DisplayNode | null} node @returns {DisplayNode | null}
+ */
+function departure(node) {
+  return node && node.kind === 'state' && node.mark !== 'normal' ? node : null;
 }
 
 /** @param {ComposeContext} ctx */
@@ -326,7 +340,12 @@ function recordOf(section, roles, row, ctx) {
   const numberId = isRecord(numberValue) && isRecord(numberValue.ref) ? numberValue.ref.id : null;
   const avatar = roles.avatar && title ? { initials: initialsOf(title), src: null } : null;
   /** @type {Fact[]} */
-  const meta = roles.shown.map((f) => ({ id: f.id, label: f.label, value: format(f, values[f.id], ctx) }));
+  const meta = roles.shown.map((f) => {
+    const value = format(f, values[f.id], ctx);
+    // A state that is normal is said nowhere, in the facts either.
+    return { id: f.id, label: f.label, value: value.kind === 'state' && value.mark === 'normal' ? { kind: 'empty', text: '—' } : value };
+  });
+  const state = departure(nodeOf(roles.status));
   const timeField = roles.time ? byId.get(roles.time) : null;
   return {
     key: String(row?.id ?? title ?? ''),
@@ -334,7 +353,8 @@ function recordOf(section, roles, row, ctx) {
     href: recordHref(section, row, ctx),
     subtitle: textOf(roles.subtitle),
     avatar,
-    status: nodeOf(roles.status),
+    state,
+    edge: state ? state.mark : null,
     person,
     time: nodeOf(roles.time),
     timeLabel: timeField ? timeField.label : '',
@@ -414,7 +434,7 @@ function aggregateNode(section, value, ctx) {
   return {
     ...base(section, 'ready', 'aggregate-bars'),
     bars: shown.map(({ value: _v, ...bar }) => bar),
-    total: nodeText(formatValue({ value: total, displayType: 'count', fieldType: 'int', ctx: displayCtx(ctx) })),
+    total: `${nodeText(formatValue({ value: total, displayType: 'count', fieldType: 'int', ctx: displayCtx(ctx) }))} in all`,
     rest: rest > 0 ? `and ${rest} more` : null,
   };
 }
@@ -452,9 +472,11 @@ function noticeNode(section, rows, ctx) {
     const kind = kindField ? nodeText(format(/** @type {Field} */ (byId.get(kindField)), values[kindField], ctx)) : '';
     const link = typeof values.link === 'string' && /^\/(?!\/)\S*$/.test(values.link) ? values.link : null;
     const record = recordOf(section, roles, row, ctx);
-    return { key: String(row?.id ?? text), text: text || 'Notification', kind: kind || null, unread, time: record.time, href: link, number: record.number };
+    return { key: String(row?.id ?? text), text: text || 'Notification', kind: kind || null, unread, edge: unread ? 'unread' : null, time: record.time, href: link, number: record.number };
   });
-  return { ...base(section, 'ready', 'notification-list'), unread: items.filter((i) => i.unread).length, items };
+  const unread = items.filter((i) => i.unread).length;
+  // The count is said in the heading line, in words: "8 unread".
+  return { ...base(section, 'ready', 'notification-list'), unread, count: unread > 0 ? `${unread} unread` : null, items };
 }
 
 /** @param {Section} section @param {any[]} rows @param {ComposeContext} ctx @param {'main' | 'aside'} region @param {string | null} more */
@@ -473,7 +495,8 @@ function listNode(section, rows, ctx, region, more) {
     if (roles.number) columns.push({ id: '_number', label: 'No.', numeric: false });
     if (roles.title) columns.push({ id: '_title', label: fieldLabel(roles.title === 'display_name' ? 'name' : roles.title), numeric: false });
     if (roles.subtitle) columns.push({ id: '_subtitle', label: fieldLabel(roles.subtitle), numeric: false });
-    if (roles.status) columns.push({ id: '_status', label: fieldLabel(roles.status), numeric: false });
+    // A state column only when some row departs from normal; a normal row says nothing in it.
+    if (roles.status && records.some((r) => r.state)) columns.push({ id: '_status', label: fieldLabel(roles.status), numeric: false });
     if (roles.persons.length) columns.push({ id: '_person', label: fieldLabel(roles.persons[0]), numeric: false });
     for (const f of roles.shown) columns.push({ id: f.id, label: f.label, numeric: f.type === 'int' });
     if (roles.time) columns.push({ id: '_time', label: fieldLabel(roles.time), numeric: false });
@@ -484,11 +507,11 @@ function listNode(section, rows, ctx, region, more) {
       cells._number = text(r.number);
       cells._title = r.title ? { kind: 'title', text: r.title, href: r.href, avatar: r.avatar } : { kind: 'empty', text: '—' };
       cells._subtitle = text(r.subtitle);
-      cells._status = r.status ?? { kind: 'empty', text: '—' };
+      cells._status = r.state ?? { kind: 'text', text: '' };
       cells._person = r.person ?? { kind: 'empty', text: '—' };
       cells._time = r.time ?? { kind: 'empty', text: '—' };
       for (const m of r.meta) cells[m.id] = m.value;
-      return { key: r.key, cells: columns.map((c) => ({ column: c.id, label: c.label, numeric: c.numeric, value: cells[c.id] ?? { kind: 'empty', text: '—' } })) };
+      return { key: r.key, edge: r.edge, cells: columns.map((c) => ({ column: c.id, label: c.label, numeric: c.numeric, value: cells[c.id] ?? { kind: 'empty', text: '—' } })) };
     });
     return { ...base(section, 'ready', 'data-table'), count, columns, rows: rowsOut, more: moreNode };
   }

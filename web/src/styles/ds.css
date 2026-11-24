@@ -1,7 +1,9 @@
 /* The design system's primitives and patterns (docs/design-system.md, "Layer 2: primitives",
    "Layer 3: patterns", "Layer 4"). Class contracts on native elements, in the light DOM. They read
    semantic tokens only, use logical properties only, show a visible focus ring, keep every target at
-   least 24 by 24 CSS pixels, and reflow at 320 CSS pixels wide. Only tenant screens use them; the
+   least 24 by 24 CSS pixels, and reflow at 320 CSS pixels wide. There are no pills (D-DS-31): a
+   state is said in words where it departs from normal, with a rule on the record's leading edge;
+   counts, numbers and kinds are plain text; npm run check:styles refuses a pill radius here. Only tenant screens use them; the
    publication's own pages keep their classes in components.css. */
 
 @layer components {
@@ -107,16 +109,11 @@
     outline: none;
   }
 
+  /* A count in the heading line: muted figures or words, part of the heading text, no container. */
   .ds-section__count {
-    display: inline-flex;
-    align-items: center;
-    min-block-size: 1.5rem;
-    padding-inline: var(--space-2);
-    border-radius: var(--radius-pill);
-    background: var(--tone-neutral-bg);
-    color: var(--tone-neutral-fg);
-    font-size: var(--text-xs);
-    font-weight: 600;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    font-weight: 400;
     font-variant-numeric: tabular-nums;
   }
 
@@ -223,66 +220,32 @@
     cursor: not-allowed;
   }
 
-  /* ---- Badge, status pill, chip, number ---------------------------------------------------- */
+  /* ---- State, prose list, record number ------------------------------------------------------ */
 
-  .ds-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4em;
-    min-block-size: 1.5rem;
-    padding-inline: var(--space-2);
-    border: var(--border-hair) solid transparent;
-    border-radius: var(--radius-pill);
-    font-size: var(--text-xs);
-    font-weight: 600;
-    line-height: 1;
-    white-space: nowrap;
-    background: var(--tone-neutral-bg);
-    color: var(--tone-neutral-fg);
+  /* A state line: a bold lead word and, when the presentation says one, what it means for the
+     reader, in the colour of its mark with no fill. A normal state is never drawn. */
+  .ds-state {
+    font-size: var(--text-sm);
+    line-height: var(--leading-snug);
+    color: var(--tone-info-fg);
   }
 
-  .ds-badge--status::before {
-    content: '';
-    inline-size: 0.5em;
-    block-size: 0.5em;
-    border-radius: 50%;
-    background: currentColor;
+  .ds-state__lead {
+    font-weight: 700;
   }
 
-  .ds-badge--info { background: var(--tone-info-bg); color: var(--tone-info-fg); }
-  .ds-badge--success { background: var(--tone-success-bg); color: var(--tone-success-fg); }
-  .ds-badge--warning { background: var(--tone-warning-bg); color: var(--tone-warning-fg); }
-  .ds-badge--danger { background: var(--tone-danger-bg); color: var(--tone-danger-fg); }
-
-  .ds-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-1);
-    list-style: none;
-    margin: 0;
-    padding: 0;
+  .ds-state--attention {
+    color: var(--tone-warning-fg);
   }
 
-  .ds-chip {
-    display: inline-flex;
-    align-items: center;
-    min-block-size: 1.5rem;
-    padding-inline: var(--space-2);
-    border: var(--border-hair) solid var(--border);
-    border-radius: var(--radius-pill);
-    background: var(--surface-sunk);
-    font-size: var(--text-xs);
+  .ds-state--danger {
+    color: var(--tone-danger-fg);
   }
 
+  /* A record's own number, for the forms that ask for it: plain muted text in the meta line. */
   .ds-number {
-    display: inline-flex;
-    align-items: center;
-    padding-inline: var(--space-1);
-    border-radius: var(--radius-1);
-    background: var(--surface-sunk);
     color: var(--text-muted);
-    font-family: var(--font-code);
-    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 
@@ -556,7 +519,7 @@
     place-items: center;
     inline-size: 1.5rem;
     block-size: 1.5rem;
-    border-radius: 50%;
+    border-radius: var(--radius-1);
     background: var(--surface-sunk);
     color: var(--text-muted);
     font-size: var(--text-md);
@@ -791,15 +754,6 @@
   .ds-record__subtitle {
     font-size: var(--text-sm);
     color: var(--text-muted);
-  }
-
-  .ds-record__marks {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    align-items: center;
-    gap: var(--space-1);
-    flex: none;
   }
 
   .ds-record__byline {
@@ -1055,12 +1009,13 @@
     padding: 0;
   }
 
+  /* Every notice leaves room for the leading-edge rule; an unread one has it, and a bold text. */
   .ds-notification {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: var(--space-3);
     padding-block: var(--space-3);
+    padding-inline-start: var(--space-3);
     border-block-end: var(--border-hair) solid var(--border);
+    border-inline-start: 3px solid transparent;
   }
 
   .ds-notification:last-child {
@@ -1070,19 +1025,6 @@
 
   .ds-notification:first-child {
     padding-block-start: 0;
-  }
-
-  .ds-notification__dot {
-    inline-size: 0.5rem;
-    block-size: 0.5rem;
-    margin-block-start: 0.4rem;
-    border-radius: 50%;
-    border: var(--border-hair) solid var(--border-strong);
-  }
-
-  .ds-notification--unread .ds-notification__dot {
-    background: var(--accent);
-    border-color: var(--accent);
   }
 
   .ds-notification__main {
@@ -1097,7 +1039,7 @@
 
   .ds-notification--unread .ds-notification__text {
     color: var(--text);
-    font-weight: 550;
+    font-weight: 700;
   }
 
   .ds-notification__meta {
@@ -1141,7 +1083,7 @@
     display: block;
     block-size: 0.5rem;
     overflow: hidden;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-1);
     background: var(--surface-sunk);
   }
 
@@ -1201,12 +1143,31 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* The rule on a record's leading edge: exceptions can be found by scanning down the page.
+     Last in the layer, so it holds on a card, a panel row, a table row and a notice alike. */
+  .ds-page [data-edge] {
+    border-inline-start: 3px solid var(--tone-info-fg);
+  }
+
+  .ds-page [data-edge='attention'] {
+    border-inline-start-color: var(--tone-warning-fg);
+  }
+
+  .ds-page [data-edge='danger'] {
+    border-inline-start-color: var(--tone-danger-fg);
+  }
+
+  .ds-section--panel .ds-record[data-edge] .ds-record__inner {
+    padding-inline-start: var(--space-3);
+  }
+
+  .ds-page [data-edge='unread'] {
+    border-inline-start-color: var(--accent);
+  }
+
   /* ---- Forced colours: every boundary a border, state never by colour alone ---------------- */
 
   @media (forced-colors: active) {
-    .ds-badge,
-    .ds-chip,
-    .ds-section__count,
     .ds-avatar,
     .ds-notice {
       border: var(--border-hair) solid CanvasText;
@@ -1216,8 +1177,7 @@
       border: var(--border-hair) solid CanvasText;
     }
 
-    .ds-bar__fill,
-    .ds-notification--unread .ds-notification__dot {
+    .ds-bar__fill {
       background: Highlight;
       forced-color-adjust: none;
     }

@@ -2,6 +2,9 @@
 // class contracts (`ds-*`, web/src/styles/ds.css) on native elements, in the light DOM. None of
 // them knows anything about Strata data; the pattern renderers (views/patterns) compose them, and a
 // display node from the kernel (kernel/display.js) is drawn by `displayValue`.
+//
+// There is no badge, chip or pill primitive (D-DS-31): a state is said in words by `stateLine`,
+// only where it departs from normal; a short list is a sentence; counts and numbers are plain text.
 // @ts-check
 
 import { h } from './dom.js';
@@ -19,18 +22,26 @@ export function button({ variant = 'secondary', small = false, ...attrs }, ...ch
   return h('button', { type: 'button', ...attrs, class: cls }, ...children);
 }
 
-/**
- * A badge, or a status pill when it has a tone and `status` (a dot before the label, so the state
- * is never carried by colour alone: the label says it).
- * @param {string} text @param {{ tone?: string, status?: boolean, key?: string }} [options]
- */
-export function badge(text, { tone = 'neutral', status = false, key } = {}) {
-  return h('span', { class: `ds-badge ds-badge--${tone}${status ? ' ds-badge--status' : ''}`, key }, text);
+/** The lead word of a state, ending as a sentence does. @param {string} label */
+function leadWord(label) {
+  return /[.!?]$/.test(label) ? label : `${label}.`;
 }
 
-/** A chip: a short label in a pill. @param {any} content @param {string} [key] */
-export function chip(content, key) {
-  return h('li', { class: 'ds-chip', key }, content);
+/**
+ * A state line, under a record's title: the state's label as a bold lead word and, when the
+ * presentation says one, what it means for the reader ("Draft. Only administrators can see this
+ * until it is published."), in the colour of its mark with no fill. A normal state never reaches
+ * here: the kernel drops it.
+ * @param {any} state
+ */
+export function stateLine(state) {
+  if (!state) return null;
+  return h(
+    'p',
+    { class: `ds-state ds-state--${state.mark}` },
+    h('strong', { class: 'ds-state__lead' }, leadWord(state.label)),
+    state.means ? ` ${state.means}` : null,
+  );
 }
 
 /**
@@ -76,14 +87,15 @@ export function displayValue(node) {
       return h('span', { class: 'ds-num' }, node.text);
     case 'boolean':
       return h('span', { class: node.value ? 'ds-bool ds-bool--yes' : 'ds-bool ds-bool--no' }, node.text);
-    case 'status':
-      return badge(node.text, { tone: node.tone, status: true });
+    case 'state':
+      return h('span', { class: `ds-state ds-state--${node.mark}` }, h('strong', { class: 'ds-state__lead' }, node.label), node.means ? ` ${node.means}` : null);
     case 'person':
       return personChip(node);
     case 'link':
       return node.href ? h('a', { class: 'ds-link', href: node.href }, node.text) : h('span', { class: 'ds-ref' }, node.text);
-    case 'chips':
-      return h('ul', { class: 'ds-chips' }, (node.items ?? []).map((/** @type {any} */ item, /** @type {number} */ i) => chip(displayValue(item), String(i))));
+    case 'list':
+      // A prose list: each item drawn as itself (a link stays a link), the language's separators between.
+      return h('span', { class: 'ds-list-prose' }, (node.parts ?? []).map((/** @type {any} */ part) => (part.item ? displayValue(part.item) : part.literal)));
     case 'language':
       return h('span', { lang: node.tag }, node.text);
     case 'media':
@@ -130,8 +142,13 @@ export function sectionFrame({ id, label, state, count = null, panel = false, ex
     h(
       'header',
       { class: hideLabel ? 'ds-section__head visually-hidden' : 'ds-section__head' },
-      h('h2', { class: 'ds-section__title', id: headingId, tabindex: '-1' }, label),
-      count ? h('span', { class: 'ds-section__count' }, h('span', { class: 'visually-hidden' }, 'Count: '), count) : null,
+      // A count is heading text, muted, with no container: "31", "8 unread", "122 in all".
+      h(
+        'h2',
+        { class: 'ds-section__title', id: headingId, tabindex: '-1' },
+        label,
+        count ? h('span', { class: 'ds-section__count' }, ' ', /^\d[\d,.]*\+?$/.test(count) ? h('span', { class: 'visually-hidden' }, 'count ') : null, count) : null,
+      ),
       extra,
     ),
     ...content,

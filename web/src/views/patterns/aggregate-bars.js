@@ -37,6 +37,6 @@ export function aggregateBars(node, { panel }) {
         node.rest ? h('p', { class: 'ds-bars__rest' }, node.rest) : null,
       ];
   }
-  const count = node.state === 'ready' && node.total ? `${node.total} in all` : null;
+  const count = node.state === 'ready' && node.total ? node.total : null;
   return sectionFrame({ id: node.id, label: node.label, state: node.state, count, panel }, content);
 }

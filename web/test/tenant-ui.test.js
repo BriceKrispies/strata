@@ -138,7 +138,7 @@ test('a tenant screen is drawn by the interpreter from its part and the view mod
   assert.equal(open.label, 'Open');
   assert.equal(open.state, 'ready');
   assert.equal(open.items[0].title, 'Leak');
-  assert.deepEqual(open.items[0].status, { kind: 'status', text: 'Open', tone: 'neutral' });
+  assert.equal(open.items[0].state, null, 'an open ticket in a list of open tickets says nothing of its state');
   assert.deepEqual(page.aside, [
     {
       pattern: 'form', id: 'form:ticket_desk__open_form', form: 'ticket_desk__open_form', title: 'Open ticket', submitLabel: 'Open the ticket',

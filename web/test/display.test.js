@@ -96,14 +96,22 @@ test('display type: money is exact, rounds half-even by default, and takes curre
 test('display types: boolean, status, choice', () => {
   assert.deepEqual(fmt({ value: true, fieldType: 'bool', displayType: 'boolean' }), { kind: 'boolean', value: true, text: 'Yes' });
   assert.deepEqual(fmt({ value: false, fieldType: 'bool', displayType: 'boolean', props: { no: 'Nope' } }), { kind: 'boolean', value: false, text: 'Nope' });
-  assert.deepEqual(fmt({ value: 'published', fieldType: 'str', displayType: 'status' }), { kind: 'status', text: 'Published', tone: 'success' });
-  assert.deepEqual(fmt({ value: 'hidden', fieldType: 'str', displayType: 'status' }), { kind: 'status', text: 'Hidden', tone: 'danger' });
-  assert.equal(fmt({ value: 'hidden', fieldType: 'str', displayType: 'status', props: { tones: { hidden: 'neutral' } } }).tone, 'neutral');
-  assert.equal(fmt({ value: 'draft', fieldType: 'str', displayType: 'status' }).tone, 'neutral');
-  assert.equal(fmt({ value: 'pending', fieldType: 'str', displayType: 'status' }).tone, 'warning');
-  assert.equal(fmt({ value: 'zzz', fieldType: 'str', displayType: 'status' }).tone, 'neutral');
-  assert.equal(fmt({ value: 'in_review', fieldType: 'str', displayType: 'status' }).text, 'In review');
-  assert.equal(fmt({ value: 'published', fieldType: 'str', displayType: 'status', props: { labels: { published: 'Live' } } }).text, 'Live');
+  // A status is a state said in words (D-DS-31): a label, a mark and, when declared, what it means.
+  assert.deepEqual(fmt({ value: 'published', fieldType: 'str', displayType: 'status' }), { kind: 'state', value: 'published', label: 'Published', mark: 'normal', means: null });
+  assert.deepEqual(fmt({ value: 'hidden', fieldType: 'str', displayType: 'status' }), { kind: 'state', value: 'hidden', label: 'Hidden', mark: 'attention', means: null });
+  for (const value of ['published', 'active', 'open', 'done', 'sent', 'read', 'approved']) assert.equal(fmt({ value, fieldType: 'str', displayType: 'status' }).mark, 'normal', value);
+  for (const value of ['draft', 'pending', 'scheduled', 'queued']) assert.equal(fmt({ value, fieldType: 'str', displayType: 'status' }).mark, 'note', value);
+  for (const value of ['hidden', 'rejected', 'failed', 'overdue', 'left', 'archived', 'removed', 'suspended']) assert.equal(fmt({ value, fieldType: 'str', displayType: 'status' }).mark, 'attention', value);
+  assert.equal(fmt({ value: 'zzz', fieldType: 'str', displayType: 'status' }).mark, 'note', 'an undeclared value is never hidden');
+  assert.equal(fmt({ value: 'in_review', fieldType: 'str', displayType: 'status' }).label, 'In review');
+  // The presentation's props, flat as a string map holds them, or nested.
+  const declared = { 'state.hidden': 'danger', 'means.hidden': 'Members cannot see this message.', 'label.hidden': 'Hidden by a moderator', 'state.published': 'normal' };
+  assert.deepEqual(fmt({ value: 'hidden', fieldType: 'str', displayType: 'status', props: declared }), {
+    kind: 'state', value: 'hidden', label: 'Hidden by a moderator', mark: 'danger', means: 'Members cannot see this message.',
+  });
+  assert.equal(fmt({ value: 'draft', fieldType: 'str', displayType: 'status', props: { state: { draft: 'normal' } } }).mark, 'normal');
+  assert.equal(fmt({ value: 'draft', fieldType: 'str', displayType: 'status', props: { 'state.draft': 'loud' } }).mark, 'note', 'a mark outside the list is ignored');
+  assert.equal(fmt({ value: 'published', fieldType: 'str', displayType: 'status', props: { labels: { published: 'Live' } } }).label, 'Live');
   const options = [{ value: 'general', label: 'General' }];
   assert.deepEqual(fmt({ value: 'general', fieldType: 'str', displayType: 'choice', props: { options } }), { kind: 'text', text: 'General' });
 });
@@ -131,16 +139,18 @@ test('display types: reference, references', () => {
   assert.deepEqual(fmt({ value: { ref: null }, fieldType: 'ref', displayType: 'reference' }), unreadable);
   assert.deepEqual(fmt({ value: 'm1', fieldType: 'ref', displayType: 'reference' }), unreadable);
   assert.deepEqual(fmt({ value: 42, fieldType: 'ref', displayType: 'reference' }), unreadable);
+  const link = { kind: 'link', text: 'Hello there', ref: { object: MESSAGE, id: 'm1' } };
   assert.deepEqual(fmt({ value: [target, { ref: null }], fieldType: 'list', displayType: 'references' }), {
-    kind: 'chips',
-    items: [{ kind: 'link', text: 'Hello there', ref: { object: MESSAGE, id: 'm1' } }, unreadable],
+    kind: 'list', text: 'Hello there and Not available', parts: [{ item: link }, { literal: ' and ' }, { item: unreadable }],
   });
 });
 
-test('display types: tags keep only the string members', () => {
+test('display types: tags keep only the string members, as a prose list', () => {
   assert.deepEqual(fmt({ value: ['ada', 'user:ada', { x: 1 }, 'grace'], fieldType: 'list', displayType: 'tags' }), {
-    kind: 'chips', items: [{ kind: 'text', text: 'ada' }, { kind: 'text', text: 'grace' }],
+    kind: 'list', text: 'ada and grace', parts: [{ item: { kind: 'text', text: 'ada' } }, { literal: ' and ' }, { item: { kind: 'text', text: 'grace' } }],
   });
+  assert.equal(fmt({ value: ['English', 'Tamil', 'Hindi'], fieldType: 'list' }).text, 'English, Tamil, and Hindi');
+  assert.equal(fmt({ value: ['English', 'Tamil'], fieldType: 'list', ctx: { ...ctx, lang: 'fr' } }).text, 'English et Tamil');
   assert.deepEqual(fmt({ value: ['user:ada'], fieldType: 'list', displayType: 'tags' }), EMPTY);
 });
 
@@ -170,7 +180,7 @@ test('fallbacks draw each field type by its own rule', () => {
   assert.equal(fmt({ value: NOW - 5 * 60_000, fieldType: 'time' }).text, '5 minutes ago');
   assert.equal(fmt({ value: { ref: { object: MESSAGE, id: 'm1', title: null } }, fieldType: 'ref' }).text, 'Message');
   assert.equal(fmt({ value: true, fieldType: 'bool' }).text, 'Yes');
-  assert.equal(fmt({ value: ['a'], fieldType: 'list' }).kind, 'chips');
+  assert.equal(fmt({ value: ['a'], fieldType: 'list' }).kind, 'list');
   assert.equal(fmt({ value: { name: 'a.png', type: 'image/png', url: '/a.png' }, fieldType: 'file' }).kind, 'media');
   assert.equal(fmt({ value: '12345678901234', fieldType: 'int' }).text, '12,345,678,901,234');
   assert.equal(fmt({ value: 'hello', fieldType: 'str' }).text, 'hello');
@@ -271,12 +281,13 @@ function valueOf(fieldType, r) {
   }
 }
 
-const KINDS = new Set(['text', 'rich', 'time', 'person', 'link', 'status', 'chips', 'boolean', 'number', 'money', 'code', 'url', 'email', 'media', 'empty', 'language']);
+const KINDS = new Set(['text', 'rich', 'time', 'person', 'link', 'state', 'list', 'boolean', 'number', 'money', 'code', 'url', 'email', 'media', 'empty', 'language']);
 
 /** Every string a node draws. @param {any} node @param {string[]} out @returns {string[]} */
 function drawnText(node, out = []) {
-  for (const key of ['text', 'name', 'alt']) if (typeof node[key] === 'string') out.push(node[key]);
+  for (const key of ['text', 'name', 'alt', 'label', 'means']) if (typeof node[key] === 'string') out.push(node[key]);
   if (Array.isArray(node.items)) for (const item of node.items) drawnText(item, out);
+  if (Array.isArray(node.parts)) for (const part of node.parts) if (part.item) drawnText(part.item, out); else out.push(part.literal);
   return out;
 }
 

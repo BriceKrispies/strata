@@ -48,7 +48,7 @@ export function dataTable(node, { panel }) {
               node.rows.map((/** @type {any} */ row) =>
                 h(
                   'tr',
-                  { key: row.key },
+                  { key: row.key, 'data-edge': row.edge ?? null },
                   row.cells.map((/** @type {any} */ cell, /** @type {number} */ i) =>
                     h(
                       i === 0 ? 'th' : 'td',

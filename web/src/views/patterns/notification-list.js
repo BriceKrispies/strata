@@ -1,9 +1,10 @@
-// The `notification-list` pattern: notices with their read state. Unread is said in words ("New")
-// as well as by the dot, so the state is never carried by colour alone.
+// The `notification-list` pattern: notices with their read state. An unread notice has a bold text
+// and the rule on its leading edge, and says "Unread" to assistive technology; the heading says how
+// many in words ("8 unread"). No pill, no dot (D-DS-31).
 // @ts-check
 
 import { h } from '../../components/dom.js';
-import { badge, displayValue, emptyState, loadingWords, notice, sectionFrame, skeletonLine } from '../../components/ds.js';
+import { displayValue, emptyState, loadingWords, notice, sectionFrame, skeletonLine } from '../../components/ds.js';
 
 /** @param {any} node @param {{ panel: boolean }} options */
 export function notificationList(node, { panel }) {
@@ -28,8 +29,7 @@ export function notificationList(node, { panel }) {
         node.items.map((/** @type {any} */ item) =>
           h(
             'li',
-            { class: item.unread ? 'ds-notification ds-notification--unread' : 'ds-notification', key: item.key },
-            h('span', { class: 'ds-notification__dot', 'aria-hidden': 'true' }),
+            { class: item.unread ? 'ds-notification ds-notification--unread' : 'ds-notification', 'data-edge': item.edge ?? null, key: item.key },
             h(
               'div',
               { class: 'ds-notification__main' },
@@ -37,7 +37,7 @@ export function notificationList(node, { panel }) {
               h(
                 'p',
                 { class: 'ds-notification__meta' },
-                item.unread ? badge('New', { tone: 'info' }) : h('span', { class: 'visually-hidden' }, 'Read'),
+                h('span', { class: 'visually-hidden' }, item.unread ? 'Unread' : 'Read'),
                 item.kind ? h('span', null, item.kind) : null,
                 item.time ? displayValue(item.time) : null,
                 item.number ? h('span', { class: 'ds-number' }, item.number) : null,
@@ -47,6 +47,6 @@ export function notificationList(node, { panel }) {
         ),
       );
   }
-  const count = node.state === 'ready' && node.unread > 0 ? `${node.unread} new` : null;
+  const count = node.state === 'ready' ? node.count ?? null : null;
   return sectionFrame({ id: node.id, label: node.label, state: node.state, count, panel }, content);
 }

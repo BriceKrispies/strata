@@ -130,7 +130,8 @@ test('a list with a title and a body is a list of cards, every value formatted b
   const card = messages.items[0];
   assert.equal(card.title, 'Offsite notes');
   assert.equal(card.href, '/messages/12', 'a route named after the object type opens the record');
-  assert.deepEqual(card.status, { kind: 'status', text: 'Published', tone: 'success' });
+  assert.equal(card.state, null, 'a published message says nothing of its state (D-DS-31)');
+  assert.equal(card.edge, null);
   assert.equal(card.person.kind, 'person');
   assert.equal(card.person.name, 'Ada Okafor', 'the author comes from the people table');
   assert.equal(card.time.kind, 'time');
@@ -138,6 +139,29 @@ test('a list with a title and a body is a list of cards, every value formatted b
   assert.equal(card.body.text.startsWith('Thanks to everyone'), true);
   assert.equal(card.number, 'No. 12', 'the self-reference the forms ask for');
   assert.deepEqual(card.meta.map((m) => [m.label, nodeText(m.value)]), [['Channel', 'General']], 'the principal in author is not drawn');
+});
+
+test('a state that departs from normal is a state line with its meaning and an edge; a normal one is nothing', () => {
+  const declared = {
+    ...part,
+    sections: {
+      messages: {
+        single: false,
+        shape: shape('showcase_community__message', [
+          f('status', 'str', true, { displayType: 'status', props: { 'state.published': 'normal', 'state.hidden': 'attention', 'means.hidden': 'Members cannot see this message.' } }),
+          f('title', 'str'),
+        ]),
+      },
+    },
+  };
+  const data = { messages: [row(1, { status: 'published', title: 'Seen' }), row(2, { status: 'hidden', title: 'Unseen' }), row(3, { status: 'draft', title: 'Undeclared' })] };
+  const [first, second, third] = byId(compose(declared, { data }, ctx), 'section:messages').items;
+  assert.equal(first.state, null);
+  assert.equal(first.edge, null);
+  assert.deepEqual(second.state, { kind: 'state', value: 'hidden', label: 'Hidden', mark: 'attention', means: 'Members cannot see this message.' });
+  assert.equal(second.edge, 'attention');
+  assert.deepEqual(third.state, { kind: 'state', value: 'draft', label: 'Draft', mark: 'note', means: null }, 'a fallback exception has the lead word only');
+  assert.equal(third.edge, 'note');
 });
 
 test('a list of many short fields and no body is a data table; identifiers are not columns', () => {
@@ -155,6 +179,8 @@ test('a list of many short fields and no body is a data table; identifiers are n
   const second = Object.fromEntries(people.rows[1].cells.map((c) => [c.label, nodeText(c.value)]));
   assert.equal(second.Department, 'Not available', 'an unreadable reference is not a link and not an id');
   assert.equal(second.Status, 'On leave');
+  assert.equal(first.find((c) => c.label === 'Status').value.text, '', 'a normal state says nothing in its column');
+  assert.deepEqual(people.rows.map((r) => r.edge), [null, 'note'], 'the row that departs from normal has the edge rule');
   assert.equal(second.Office, '');
 });
 
@@ -168,7 +194,8 @@ test('a single section is a record detail with its title, avatar and facts', () 
   assert.deepEqual(profile.record.avatar, { initials: 'AO', src: null });
   assert.equal(profile.record.body.text, 'I look after the platform team and our tools.');
   const facts = Object.fromEntries(profile.facts.map((x) => [x.label, x.value]));
-  assert.equal(facts.Languages.kind, 'chips');
+  assert.equal(facts.Languages.kind, 'list');
+  assert.equal(nodeText(facts.Languages), 'English and Portuguese', 'a short list is a sentence, not chips');
   assert.equal(nodeText(facts['Open to mentoring']), 'Yes');
   assert.equal(facts.Joined.kind, 'time');
   assert.ok(!('Principal' in facts) && !('Handle' in facts));
@@ -186,7 +213,7 @@ test('an aggregate grouped by a field is bars, one with a single value a stat ti
   const bars = byId(page, 'section:reactions_received');
   assert.equal(bars.pattern, 'aggregate-bars');
   assert.deepEqual(bars.bars.map((b) => [b.label, b.text, b.fill]), [['A member', '14', 20], ['A member', '7', 10], ['Not set', '1', 1]]);
-  assert.equal(bars.total, '22');
+  assert.equal(bars.total, '22 in all');
   assert.ok(page.aside.includes(bars), 'an aggregate sits in the side column');
   const tile = byId(page, 'section:total');
   assert.equal(tile.pattern, 'stat-tile');
@@ -199,6 +226,8 @@ test('a list with an unread and read state is a notification list with its unrea
   const notices = byId(page, 'section:notifications');
   assert.equal(notices.pattern, 'notification-list');
   assert.equal(notices.unread, 1);
+  assert.equal(notices.count, '1 unread', 'the heading says the count in words');
+  assert.deepEqual(notices.items.map((i) => i.edge), ['unread', null]);
   assert.deepEqual(notices.items.map((i) => [i.text, i.unread, i.kind, i.href]), [
     ['Priya celebrated your message.', true, 'Reaction', '/messages/12'],
     ['You earned Polyglot.', false, 'Badge', null],

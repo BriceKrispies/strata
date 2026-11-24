@@ -3,11 +3,12 @@
 // @ts-check
 
 import { h } from '../../components/dom.js';
-import { avatar, bodyText, displayValue, emptyState, loadingWords, moreButton, notice, personChip, sectionFrame, skeletonLine } from '../../components/ds.js';
+import { avatar, bodyText, stateLine, displayValue, emptyState, loadingWords, moreButton, notice, personChip, sectionFrame, skeletonLine } from '../../components/ds.js';
 
 /**
- * One record as a card: title (a link to its screen when it has one), status, person, time, body
- * and its other facts. Heading level 3 under the section's heading.
+ * One record as a card: title (a link to its screen when it has one), the state line when its state
+ * departs from normal (with the rule on its leading edge), person, time, number, body and its other
+ * facts. Heading level 3 under the section's heading. Nothing on it is a pill (D-DS-31).
  * @param {any} record @param {{ compact: boolean, clamp: boolean }} options
  */
 export function recordCard(record, { compact, clamp }) {
@@ -17,7 +18,7 @@ export function recordCard(record, { compact, clamp }) {
   const titleText = record.title ?? '';
   return h(
     'li',
-    { class: `ds-record${compact ? ' ds-record--compact' : ''}`, key: record.key },
+    { class: `ds-record${compact ? ' ds-record--compact' : ''}`, 'data-edge': record.edge ?? null, key: record.key },
     h(
       'article',
       { class: 'ds-record__inner' },
@@ -31,18 +32,17 @@ export function recordCard(record, { compact, clamp }) {
           titleText
             ? h('h3', { class: 'ds-record__title' }, record.href ? h('a', { href: record.href }, titleText) : titleText)
             : null,
+          stateLine(record.state),
           record.subtitle ? h('p', { class: 'ds-record__subtitle' }, record.subtitle) : null,
         ),
-        record.status || record.number
-          ? h('div', { class: 'ds-record__marks' }, record.status ? displayValue(record.status) : null, record.number ? h('span', { class: 'ds-number' }, record.number) : null)
-          : null,
       ),
-      record.person || record.time
+      record.person || record.time || record.number
         ? h(
             'p',
             { class: 'ds-record__byline' },
             record.person ? personChip(record.person) : null,
             record.time ? h('span', { class: 'ds-record__time' }, record.timeLabel ? h('span', { class: 'visually-hidden' }, `${record.timeLabel}: `) : null, displayValue(record.time)) : null,
+            record.number ? h('span', { class: 'ds-number' }, record.number) : null,
           )
         : null,
       bodyText(record.body, clamp ? 'ds-record__body ds-record__body--clamp' : 'ds-record__body'),

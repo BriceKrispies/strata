@@ -859,11 +859,11 @@ function nodeLines(node) {
   const facts = (/** @type {any[]} */ meta) => meta.map((m) => ` ${m.label}=${nodeText(m.value)}`).join('');
   switch (node.pattern) {
     case 'record-list':
-      return node.items.map((/** @type {any} */ r) => `${r.title ?? ''}${r.status ? ` [${nodeText(r.status)}]` : ''}${facts(r.meta)}`);
+      return node.items.map((/** @type {any} */ r) => `${r.title ?? ''}${r.state ? ` [${nodeText(r.state)}]` : ''}${facts(r.meta)}`);
     case 'data-table':
       return node.rows.map((/** @type {any} */ r) => r.cells.map((/** @type {any} */ c) => nodeText(c.value)).join(' | '));
     case 'record-detail':
-      return [`${node.record.title ?? ''}${node.record.status ? ` [${nodeText(node.record.status)}]` : ''}${facts(node.facts)}`];
+      return [`${node.record.title ?? ''}${node.record.state ? ` [${nodeText(node.record.state)}]` : ''}${facts(node.facts)}`];
     case 'notification-list':
       return node.items.map((/** @type {any} */ i) => `${i.unread ? '* ' : ''}${i.text}`);
     case 'aggregate-bars':

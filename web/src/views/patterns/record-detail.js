@@ -3,7 +3,7 @@
 // @ts-check
 
 import { h } from '../../components/dom.js';
-import { avatar, bodyText, descriptionList, displayValue, emptyState, loadingWords, notice, personChip, sectionFrame, skeletonLine } from '../../components/ds.js';
+import { avatar, bodyText, stateLine, descriptionList, displayValue, emptyState, loadingWords, notice, personChip, sectionFrame, skeletonLine } from '../../components/ds.js';
 
 /** @param {any} node */
 export function recordDetail(node) {
@@ -25,7 +25,7 @@ export function recordDetail(node) {
       const r = node.record;
       content = h(
         'article',
-        { class: 'ds-detail' },
+        { class: 'ds-detail', 'data-edge': r.edge ?? null },
         h(
           'div',
           { class: 'ds-detail__head' },
@@ -34,12 +34,12 @@ export function recordDetail(node) {
             'div',
             { class: 'ds-detail__heading' },
             r.title ? h('h3', { class: 'ds-detail__title' }, r.title) : null,
+            stateLine(r.state),
             r.subtitle ? h('p', { class: 'ds-detail__subtitle' }, r.subtitle) : null,
-            r.person || r.status || r.number
+            r.person || r.number
               ? h(
                   'div',
                   { class: 'ds-cluster' },
-                  r.status ? displayValue(r.status) : null,
                   r.person ? personChip(r.person) : null,
                   r.number ? h('span', { class: 'ds-number' }, r.number) : null,
                 )
