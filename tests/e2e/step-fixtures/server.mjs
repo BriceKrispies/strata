@@ -84,7 +84,7 @@ const confirmButton = document.getElementById('confirm');
 document.getElementById('delete').onclick = () => { confirmButton.hidden = false; };
 confirmButton.onclick = () => { msg.textContent = 'Deleted.'; };
 document.getElementById('out').onclick = () => { msg.textContent = 'Signed out.'; };`),
-  fragment: page('fragment', 'Fragment', '<h1>Fragment</h1><p id="h"></p>', `document.getElementById('h').textContent = 'Fragment ' + location.hash;`),
+  fragment: page('fragment', 'Fragment', '<h1>Fragment</h1><p id="h"></p>', `const show = () => { document.getElementById('h').textContent = 'Fragment ' + location.hash; }; show(); addEventListener('hashchange', show);`),
   cleaned: page('cleaned', 'Cleaned', '<h1>Cleaned</h1><p id="h"></p>', `const held = location.hash.slice(1);
 history.replaceState(null, '', location.pathname);
 document.getElementById('h').textContent = 'Cleaned ' + held;`),
