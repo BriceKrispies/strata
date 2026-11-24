@@ -476,3 +476,48 @@ fn an_author_cannot_touch_another_authors_post() {
     assert!(world.step(&edit, &ctx(user("ann"))).is_ok());
     assert!(world.step(&edit, &ctx(user("ed"))).is_ok());
 }
+
+#[test]
+fn a_tenant_document_theme_is_a_tenant_setting_and_a_name_outside_the_presets_is_refused() {
+    let with = |theme: Option<&str>| {
+        let mut doc = json!({
+            "id": "plain", "name": "Plain", "owner": "user:admin", "created_at": "2026-01-01T00:00:00Z"
+        });
+        if let Some(theme) = theme {
+            doc["theme"] = json!(theme);
+        }
+        Bundle::from_json(&doc.to_string()).unwrap()
+    };
+    let installed = |bundle: &Bundle| install_into(&World::default(), bundle);
+    let tenant_of = |world: &World| {
+        world
+            .tenants
+            .get(&TenantId::new("plain").unwrap())
+            .expect("the tenant")
+            .clone()
+    };
+    assert_eq!(
+        theme::tenant_theme(&tenant_of(&installed(&with(Some("neutral"))).unwrap())),
+        Some("neutral")
+    );
+    assert_eq!(
+        theme::tenant_theme(&tenant_of(&installed(&with(Some("fieldnotes"))).unwrap())),
+        Some("fieldnotes")
+    );
+    assert_eq!(
+        theme::tenant_theme(&tenant_of(&installed(&with(None)).unwrap())),
+        None
+    );
+    for bad in ["Neutral", "red; background: url(//evil)", ""] {
+        assert!(installed(&with(Some(bad))).is_err(), "{bad:?} was accepted");
+    }
+}
+
+#[test]
+fn a_settings_record_names_its_own_preset_and_anything_else_names_none() {
+    let fields =
+        |theme: &str| BTreeMap::from([(FieldId::new("theme").unwrap(), Value::Str(theme.into()))]);
+    assert_eq!(theme::record_theme(&fields("neutral")), Some("neutral"));
+    assert_eq!(theme::record_theme(&fields("evil\"><script>")), None);
+    assert_eq!(theme::record_theme(&BTreeMap::new()), None);
+}

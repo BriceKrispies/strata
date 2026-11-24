@@ -1513,6 +1513,12 @@ async fn view_model(
             json!({ "settings": rejected }),
         );
     }
+    // The settings record's preset first, then the tenant's own configuration, then the default.
+    let mut resolved = resolved;
+    resolved.theme = settings
+        .and_then(|record| theme::record_theme(&record.fields))
+        .or_else(|| data.tenant_theme.as_deref().and_then(theme::known_theme))
+        .unwrap_or(resolved.theme);
     model["theme"] = json!(resolved);
     model["path"] = json!(path);
     echo_request(&mut model, data.view.as_str(), &asked);
@@ -2353,10 +2359,21 @@ async fn page(State(bff): State<Shared>, headers: HeaderMap, request: Request) -
         .and_then(|v| v["data"]["site"]["fields"]["tagline"].as_str())
         .unwrap_or("")
         .to_string();
+    // A page with no view (a missing page) is still drawn in the tenant's own preset.
+    let tenant_preset = session
+        .as_ref()
+        .ok()
+        .and_then(|reply| reply.session.theme.as_deref())
+        .and_then(theme::known_theme);
     let theme = view
         .as_ref()
         .map(|v| v["theme"].clone())
-        .unwrap_or_else(|| json!(theme::Theme::default()));
+        .unwrap_or_else(|| {
+            json!(theme::Theme {
+                theme: tenant_preset.unwrap_or(theme::THEMES[0]),
+                ..theme::Theme::default()
+            })
+        });
     let bootstrap = json!({
         "path": path,
         "session": session.ok().map(|reply| json!({ "session": with_request_token(&bff, &visit, reply.session), "state": reply.state })),

@@ -676,7 +676,7 @@ id: limit per window, on exceed
 - session-state: anonymous|active|expired|revoked
 - session-summary: {id:session-id, created-at:timestamp, last-seen-at:timestamp, expires-at:timestamp, current:bool}
 - session-token: scalar string
-- session-view: {authenticated:bool, tenant:tenant-id, tenant-name:string, session-id?:session-id, principal?:principal-id, display-name?:display-name, roles:list\<string\>, csrf-token?:secret, expires-at?:timestamp, may:map\<string, list\<string\>\>, may-manage-schema:bool}
+- session-view: {authenticated:bool, tenant:tenant-id, tenant-name:string, theme?:string, session-id?:session-id, principal?:principal-id, display-name?:display-name, roles:list\<string\>, csrf-token?:secret, expires-at?:timestamp, may:map\<string, list\<string\>\>, may-manage-schema:bool}
 - setting-def: {id:setting-id, label:string, type:setting-type, default:value, levels:set\<setting-level\>, locked-by?:setting-level}
 - setting-id: id string
 - setting-level: platform|tenant|team|person

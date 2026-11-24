@@ -3915,6 +3915,9 @@ pub struct SessionView {
     pub tenant: TenantId,
     /// Field `tenant-name`.
     pub tenant_name: String,
+    /// Field `theme`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
     /// Field `session-id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,

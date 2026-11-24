@@ -865,6 +865,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         schema_version: schema.version,
         record_rules,
         people,
+        tenant_theme: strata_substrate::theme::tenant_theme(&tenant).map(str::to_string),
     })
 }
 
