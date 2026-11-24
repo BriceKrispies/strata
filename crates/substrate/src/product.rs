@@ -97,6 +97,12 @@ pub enum BundleErrorKind {
     /// `upgrade.final-stage-too-large`: the last stage of a staged upgrade alone is over the cap,
     /// so the product must be split across releases (D-DS-16, KRN-1283).
     FinalStageTooLarge,
+    /// `upgrade.in-progress`: a staged upgrade of the product is open, and only its owner may
+    /// abandon it (D-DS-16).
+    InProgress,
+    /// `product.base-moved`: the remaining stages of a staged upgrade no longer match the approved
+    /// diff, or a stage conflicted twice (D-DS-16).
+    BaseMoved,
 }
 
 /// A bundle that cannot be read or installed, and why.

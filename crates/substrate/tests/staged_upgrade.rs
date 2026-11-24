@@ -547,3 +547,306 @@ fn no_early_stage_changes_what_a_member_can_see_over_generated_products() {
     }
     assert!(staged_cases > 0, "the generator reaches the staged path");
 }
+
+// ---- the staged job: approval, resume, re-check, re-plan, abandon (WG-5472) -------------------------
+
+use strata_substrate::staged::{
+    self, AbandonBy, Approval, Authority, JobState, StagedError, StagedJob, StagingPolicy,
+    StepFailure,
+};
+use strata_substrate::stages::Stage;
+
+const START: i64 = 1_800_000_000_000;
+const PERIOD: i64 = 7 * 86_400_000;
+
+fn owner(stepped_up: bool) -> Authority {
+    Authority {
+        principal: "user:admin".to_string(),
+        is_owner: true,
+        stepped_up,
+    }
+}
+
+/// The approved plan of the three-stage upgrade of `bulk` to 2.0.0, from the installed `record`.
+fn approved_plan(world: &World, record: &InstalledRecord) -> StagePlan {
+    let mut s = shape("2.0.0");
+    s.objects = 150;
+    s.fields = 4;
+    s.queries = 150;
+    s.ops = 150;
+    staged(world, &product_doc(&s), record)
+        .unwrap_or_else(|e| panic!("{e}"))
+        .expect("the upgrade is over the cap")
+}
+
+fn job_of(plan: StagePlan, record: &InstalledRecord, stages_allowed: usize, valid_until: i64) -> StagedJob {
+    staged::start(
+        plan,
+        record.clone(),
+        Approval {
+            owner: "user:admin".to_string(),
+            stages_allowed,
+            valid_until,
+        },
+        false,
+    )
+}
+
+/// Commits one stage of a job into the tenant of `world`.
+fn commit_stage(world: &mut World, stage: &Stage) -> Result<(), StepFailure> {
+    let next = commit(world.clone(), &stage.changes, &stage.version)
+        .map_err(|e| StepFailure::Refused(e.message))?;
+    *world = next;
+    Ok(())
+}
+
+/// Runs a job as the backend does, where nothing has moved since the approval.
+fn drive(job: &mut StagedJob, world: &mut World, now: i64) -> Result<(), StagedError> {
+    let approved = job.plan.clone();
+    staged::run(
+        job,
+        now,
+        &mut |_| Ok(Some(approved.clone())),
+        &mut |stage| commit_stage(world, stage),
+    )
+}
+
+/// Applies a list of commits in order, as an abandon does.
+fn apply_all(world: &mut World, commits: &[Vec<SchemaChange>]) {
+    for (n, changes) in commits.iter().enumerate() {
+        *world = commit(world.clone(), changes, &format!("abandon:{n}"))
+            .unwrap_or_else(|e| panic!("abandon commit {n} was refused: {e:?}"));
+    }
+}
+
+fn installed_version(world: &World) -> String {
+    InstalledRecord::of(&world.tenants[&tenant()].schema, "bulk")
+        .expect("the product is installed")
+        .version
+}
+
+#[test]
+fn a_job_commits_under_its_approval_and_resumes_only_for_an_owner_with_step_up() {
+    let (mut world, record) = first_version();
+    let plan = approved_plan(&world, &record);
+    let total = plan.stages.len();
+    assert!(total >= 3);
+    let mut job = job_of(plan, &record, 2, START + PERIOD);
+
+    drive(&mut job, &mut world, START).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(job.committed, 2, "the approval covers two stages");
+    assert_eq!(job.state, JobState::Stopped { since: START });
+    assert_eq!(installed_version(&world), "2.0.0-stage.2");
+
+    let not_owner = Authority {
+        principal: "user:someone".to_string(),
+        is_owner: false,
+        stepped_up: true,
+    };
+    let renewal = || Approval {
+        owner: String::new(),
+        stages_allowed: total,
+        valid_until: START + 2 * PERIOD,
+    };
+    assert!(matches!(
+        staged::resume(&mut job, &not_owner, renewal(), START),
+        Err(StagedError::NotAllowed(_))
+    ));
+    assert!(matches!(
+        staged::resume(&mut job, &owner(false), renewal(), START),
+        Err(StagedError::NotAllowed(_))
+    ));
+    staged::resume(&mut job, &owner(true), renewal(), START).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(job.approval.owner, "user:admin", "the resumed approval is the owner's");
+
+    drive(&mut job, &mut world, START).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(job.state, JobState::Done);
+    assert_eq!(installed_version(&world), "2.0.0", "the last stage records the target");
+}
+
+#[test]
+fn a_stage_whose_remaining_plan_moved_is_refused_as_base_moved() {
+    let (mut world, record) = first_version();
+    let plan = approved_plan(&world, &record);
+    let mut job = job_of(plan.clone(), &record, 10, START + PERIOD);
+    let mut moved = plan.clone();
+    moved.stages[0].changes.pop();
+    let result = staged::run(
+        &mut job,
+        START,
+        &mut |_| Ok(Some(moved.clone())),
+        &mut |stage| commit_stage(&mut world, stage),
+    );
+    match result {
+        Err(error @ StagedError::BaseMoved(_)) => {
+            let bundle = error.bundle_error().expect("product.base-moved is a bundle error");
+            assert!(bundle.message.starts_with("product.base-moved"));
+        }
+        other => panic!("the moved plan is not refused: {other:?}"),
+    }
+    assert_eq!(job.committed, 0, "nothing commits against a plan that moved");
+    assert_eq!(installed_version(&world), "1.0.0");
+}
+
+#[test]
+fn a_schema_conflict_is_planned_again_once_and_a_second_one_is_base_moved() {
+    let (mut world, record) = first_version();
+    let plan = approved_plan(&world, &record);
+
+    // One conflict, then the stage commits.
+    let mut job = job_of(plan.clone(), &record, 10, START + PERIOD);
+    let mut conflicts = 1;
+    let mut plans_made = 0;
+    let approved = plan.clone();
+    staged::run(
+        &mut job,
+        START,
+        &mut |_| {
+            plans_made += 1;
+            Ok(Some(approved.clone()))
+        },
+        &mut |stage| {
+            if conflicts > 0 {
+                conflicts -= 1;
+                return Err(StepFailure::SchemaConflict);
+            }
+            commit_stage(&mut world, stage)
+        },
+    )
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(plans_made >= 2, "the stage was planned again after the conflict");
+    assert_eq!(job.committed, job.plan.stages.len());
+
+    // Two conflicts in a row: the upgrade is planned again and found moved.
+    let (mut world, record) = first_version();
+    let plan = approved_plan(&world, &record);
+    let mut job = job_of(plan.clone(), &record, 10, START + PERIOD);
+    let approved = plan.clone();
+    let result = staged::run(
+        &mut job,
+        START,
+        &mut |_| Ok(Some(approved.clone())),
+        &mut |_| Err(StepFailure::SchemaConflict),
+    );
+    assert!(matches!(result, Err(StagedError::BaseMoved(_))), "{result:?}");
+    assert_eq!(installed_version(&world), "1.0.0");
+}
+
+#[test]
+fn an_open_job_refuses_other_changes_to_its_product() {
+    let (world, record) = first_version();
+    let plan = approved_plan(&world, &record);
+    let job = job_of(plan, &record, 1, START + PERIOD);
+    let refused = staged::refuse_while_staging(Some(&job)).expect_err("a running job blocks others");
+    let bundle = refused.bundle_error().expect("upgrade.in-progress is a bundle error");
+    assert!(bundle.message.starts_with("upgrade.in-progress"));
+    assert!(staged::refuse_while_staging(None).is_ok());
+    let mut done = job.clone();
+    done.state = JobState::Done;
+    assert!(staged::refuse_while_staging(Some(&done)).is_ok());
+}
+
+#[test]
+fn an_owner_abandon_removes_what_the_stages_created_and_restores_the_record() {
+    let (mut world, record) = first_version();
+    let before = owned_kernel_of(&world);
+    let plan = approved_plan(&world, &record);
+    let mut job = job_of(plan, &record, 1, START + PERIOD);
+    drive(&mut job, &mut world, START).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(job.committed, 1);
+    let created: Vec<String> = job.plan.stages[0]
+        .created
+        .iter()
+        .filter(|e| e.kind == "object")
+        .map(|e| e.id.clone())
+        .collect();
+    assert!(!created.is_empty(), "the first stage creates object types");
+    let schema = world.tenants[&tenant()].schema.clone();
+    assert!(schema.objects.contains_key(&ObjectTypeId::new(created[0].clone()).unwrap()));
+
+    assert!(matches!(
+        staged::abandon_plan(&job, &AbandonBy::Owner(owner(false))),
+        Err(StagedError::NotAllowed(_))
+    ));
+    let commits = staged::abandon_plan(&job, &AbandonBy::Owner(owner(true)))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    apply_all(&mut world, &commits);
+    let notice = staged::mark_abandoned(&mut job, &AbandonBy::Owner(owner(true)));
+    assert_eq!(notice.product, "bulk");
+    assert!(matches!(job.state, JobState::Abandoned { .. }));
+
+    let schema = world.tenants[&tenant()].schema.clone();
+    assert_eq!(installed_version(&world), "1.0.0", "the record is back at the installed version");
+    assert_eq!(owned_kernel_of(&world), before, "the record owns what it owned before the job");
+    assert!(!schema.objects.contains_key(&ObjectTypeId::new(created[0].clone()).unwrap()));
+    assert!(schema.roles.get(&RoleId(staging_role("bulk"))).is_none(), "the staging role is gone");
+}
+
+#[test]
+fn a_security_upgrade_arriving_while_a_job_is_stopped_abandons_it_under_a_pre_authorisation() {
+    let (mut world, record) = first_version();
+    let plan = approved_plan(&world, &record);
+    let mut job = job_of(plan, &record, 1, START + PERIOD);
+    drive(&mut job, &mut world, START).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(matches!(job.state, JobState::Stopped { .. }));
+    let allowing = StagingPolicy {
+        max_stages: 10,
+        approval_period_ms: PERIOD,
+        abandon_security_upgrades: true,
+    };
+    let refusing = StagingPolicy {
+        abandon_security_upgrades: false,
+        ..allowing
+    };
+    assert!(staged::pre_authorised_abandon(&job, &allowing, true));
+    assert!(!staged::pre_authorised_abandon(&job, &allowing, false), "only a security upgrade");
+    assert!(!staged::pre_authorised_abandon(&job, &refusing, true), "only when pre-authorised");
+
+    let commits = staged::abandon_plan(&job, &AbandonBy::PreAuthorised)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    apply_all(&mut world, &commits);
+    let notice = staged::mark_abandoned(&mut job, &AbandonBy::PreAuthorised);
+    assert!(notice.detail.contains("pre-authorisation"));
+    assert_eq!(installed_version(&world), "1.0.0");
+}
+
+#[test]
+fn a_stopped_job_past_its_approval_period_is_abandoned_automatically() {
+    let (mut world, record) = first_version();
+    let plan = approved_plan(&world, &record);
+    let mut job = job_of(plan, &record, 1, START + 1_000);
+    drive(&mut job, &mut world, START).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(matches!(job.state, JobState::Stopped { .. }));
+    assert!(!staged::expire(&job, START + 999), "the period has not passed");
+    assert!(staged::expire(&job, START + 2_000), "the period has passed");
+
+    let commits = staged::abandon_plan(&job, &AbandonBy::Expired).unwrap_or_else(|e| panic!("{e:?}"));
+    apply_all(&mut world, &commits);
+    let notice = staged::mark_abandoned(&mut job, &AbandonBy::Expired);
+    assert!(notice.detail.contains("approval period"), "recorded and notified: {}", notice.detail);
+    assert_eq!(installed_version(&world), "1.0.0");
+}
+
+#[test]
+fn a_job_past_its_approval_does_not_commit_another_stage() {
+    let (mut world, record) = first_version();
+    let plan = approved_plan(&world, &record);
+    let mut job = job_of(plan, &record, 10, START + 1_000);
+    drive(&mut job, &mut world, START + 5_000).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(job.committed, 0, "an expired approval commits nothing");
+    assert!(matches!(job.state, JobState::Stopped { .. }));
+    assert_eq!(installed_version(&world), "1.0.0");
+}
+
+/// The entities the record of the installed product owns, read from the kernel.
+fn owned_kernel_of(world: &World) -> Vec<(String, String)> {
+    let record = InstalledRecord::of(&world.tenants[&tenant()].schema, "bulk")
+        .expect("the product is installed");
+    let mut owned: Vec<(String, String)> = record
+        .owns
+        .iter()
+        .map(|e| (e.kind.clone(), e.id.clone()))
+        .collect();
+    owned.sort();
+    owned
+}

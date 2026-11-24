@@ -1119,7 +1119,9 @@ fn change_member(
     if grant && crate::products::is_staging_role(&role.0) {
         return Err(draft.reject(
             ErrorKind::InvalidIntent,
-            format!("the role {role} is reserved for a product's staged upgrade and is not assigned"),
+            format!(
+                "the role {role} is reserved for a product's staged upgrade and is not assigned"
+            ),
         ));
     }
     // ADM-152, ADM-1080: taking a role away asks as much of the actor as handing it out.
