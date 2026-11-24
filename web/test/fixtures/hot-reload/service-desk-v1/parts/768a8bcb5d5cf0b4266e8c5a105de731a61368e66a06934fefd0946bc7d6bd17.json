@@ -1,0 +1,116 @@
+{
+  "actions": {
+    "service_desk__open_again": {
+      "arguments": {
+        "title": "form.title"
+      },
+      "form": "service_desk__open_form",
+      "label": "Open it again",
+      "on_error": "toast",
+      "on_success": {
+        "toast": "Opened again."
+      },
+      "operation": "service_desk__open_ticket",
+      "screen": "service_desk__board_screen",
+      "shape": {
+        "fingerprint": "e7e0183577885da3b50d93b062e88b4aee85b4928ab96b2dca25bca1d9eadf71",
+        "inputs": [
+          {
+            "name": "title",
+            "required": true,
+            "type": "str"
+          }
+        ],
+        "operation": "service_desk__open_ticket"
+      }
+    }
+  },
+  "forms": {
+    "service_desk__open_form": {
+      "fields": [
+        {
+          "control": "text",
+          "input": "title",
+          "label": "Title",
+          "name": "title",
+          "trim": true
+        }
+      ],
+      "on_error": "inline",
+      "on_success": {
+        "toast": "Ticket opened."
+      },
+      "operation": "service_desk__open_ticket",
+      "screen": "service_desk__board_screen",
+      "shape": {
+        "fingerprint": "e7e0183577885da3b50d93b062e88b4aee85b4928ab96b2dca25bca1d9eadf71",
+        "inputs": [
+          {
+            "name": "title",
+            "required": true,
+            "type": "str"
+          }
+        ],
+        "operation": "service_desk__open_ticket"
+      },
+      "submit_label": "Open the ticket"
+    }
+  },
+  "id": "service_desk__board_screen",
+  "kind": "screen",
+  "live": {
+    "service_desk__board_live": {
+      "event": "notice",
+      "kinds": [
+        "upsert"
+      ],
+      "objects": true,
+      "screen": "service_desk__board_screen"
+    }
+  },
+  "screen": {
+    "auth": "session",
+    "kind": "list",
+    "query": [],
+    "route": "/desk",
+    "title": "Tickets",
+    "view": "service_desk__board"
+  },
+  "sections": {
+    "open": {
+      "shape": {
+        "fields": [
+          {
+            "id": "asset",
+            "required": false,
+            "type": "ref<service_desk__asset>"
+          },
+          {
+            "id": "customer",
+            "required": false,
+            "type": "ref<service_desk__customer>"
+          },
+          {
+            "id": "sla_due",
+            "required": false,
+            "type": "time"
+          },
+          {
+            "id": "status",
+            "required": true,
+            "type": "str"
+          },
+          {
+            "id": "title",
+            "required": true,
+            "type": "str"
+          }
+        ],
+        "fingerprint": "619003bdeec6f1cf90c3385b17565969688642e219b5169288f51c971bc57416",
+        "object": "service_desk__ticket",
+        "title": "title"
+      },
+      "single": false
+    }
+  }
+}

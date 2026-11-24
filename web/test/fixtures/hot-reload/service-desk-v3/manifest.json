@@ -1,9 +1,9 @@
 {
-  "hash": "afcea2ba190cc733a5308fe87e0b3b86a9f99b3a702014e88c66815ecb473e90",
+  "hash": "5bc93cfe908dac5672d14129b15b94b2786c9e17cd8213e1bc7ccbf5b6ced037",
   "parts": [
     {
       "auth": "anyone",
-      "hash": "bb754f726dfe613046a1555caa4631302cd1341287c79e3366419a63553dd804",
+      "hash": "dc8ebdc26cc344d4e0c5e9e4400a5de473fe9307476c1fe2508c2b4c8fbc9045",
       "id": "knowledge_base__articles_screen",
       "kind": "screen",
       "layout": "list",
@@ -14,7 +14,7 @@
     },
     {
       "auth": "session",
-      "hash": "ebe41aacf52a6709ea75cc23844fb7031e284bfedade9bf9a830dcbe3c365b0e",
+      "hash": "9840331873730c42b113f721768625487c94026b6a33a712e2a0511dc73c272d",
       "id": "service_desk__asset_screen",
       "kind": "screen",
       "layout": "detail",
@@ -25,7 +25,7 @@
     },
     {
       "auth": "session",
-      "hash": "af30f1b18412f3c9485d707cb9c898302819b17a80b41be129758815fb51a7db",
+      "hash": "98d8e84242b0a021ca476f4285005f4fab5a63eec61345bbd756f7fa9e91a9d3",
       "id": "service_desk__board_screen",
       "kind": "screen",
       "layout": "list",
@@ -36,7 +36,7 @@
     },
     {
       "auth": "anyone",
-      "hash": "de8f295eb08ff3325c65b525658344af76bf56e256448c6b8e4ccdf8d74a2077",
+      "hash": "f783f3b14a5a62864bcb3868425064c0c83a231c0ea7f5a4a9fb5eb52bb23494",
       "id": "service_desk__customers_screen",
       "kind": "screen",
       "layout": "list",

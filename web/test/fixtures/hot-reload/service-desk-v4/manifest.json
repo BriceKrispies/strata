@@ -1,9 +1,9 @@
 {
-  "hash": "721f5770683c3f416844ecaf0e371386dbd876d2b60aec6ab01490969df9c819",
+  "hash": "f82330a072f2993d0b177d9c3121484872ccb21a0c8af37384b4ecaf2daeb8f6",
   "parts": [
     {
       "auth": "anyone",
-      "hash": "bb754f726dfe613046a1555caa4631302cd1341287c79e3366419a63553dd804",
+      "hash": "dc8ebdc26cc344d4e0c5e9e4400a5de473fe9307476c1fe2508c2b4c8fbc9045",
       "id": "knowledge_base__articles_screen",
       "kind": "screen",
       "layout": "list",
@@ -14,7 +14,7 @@
     },
     {
       "auth": "session",
-      "hash": "ebe41aacf52a6709ea75cc23844fb7031e284bfedade9bf9a830dcbe3c365b0e",
+      "hash": "9840331873730c42b113f721768625487c94026b6a33a712e2a0511dc73c272d",
       "id": "service_desk__asset_screen",
       "kind": "screen",
       "layout": "detail",
@@ -25,7 +25,7 @@
     },
     {
       "auth": "session",
-      "hash": "2f2a7cf4e19f56c9fe1e92ce4f01440c5b7d96dd485c88c892d00f690a563339",
+      "hash": "6e7be4bef1617e77d0921bc48643407dcc355f225020ed43b5afae7c201f87ae",
       "id": "service_desk__board_screen",
       "kind": "screen",
       "layout": "list",
@@ -36,7 +36,7 @@
     },
     {
       "auth": "session",
-      "hash": "2802485853daabc5f280dc399c3ad10fe1a7559f89c323418ebd8a41b625ac2a",
+      "hash": "31cffa1de5bd8dc64bfdc51a6a4923d73318db2eb43f84b1ac9ce7954096b93f",
       "id": "service_desk__customer_screen",
       "kind": "screen",
       "layout": "detail",
@@ -47,7 +47,7 @@
     },
     {
       "auth": "anyone",
-      "hash": "de8f295eb08ff3325c65b525658344af76bf56e256448c6b8e4ccdf8d74a2077",
+      "hash": "f783f3b14a5a62864bcb3868425064c0c83a231c0ea7f5a4a9fb5eb52bb23494",
       "id": "service_desk__customers_screen",
       "kind": "screen",
       "layout": "list",

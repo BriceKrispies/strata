@@ -23,5 +23,27 @@
     "route": "/assets",
     "title": "Assets",
     "view": "service_desk__asset_detail"
+  },
+  "sections": {
+    "all": {
+      "shape": {
+        "fields": [
+          {
+            "id": "model",
+            "required": true,
+            "type": "str"
+          },
+          {
+            "id": "tag",
+            "required": true,
+            "type": "str"
+          }
+        ],
+        "fingerprint": "05e02cddf3559be33a66fa067b019df3d866a1df1df3279560088629c413c86a",
+        "object": "service_desk__asset",
+        "title": "model"
+      },
+      "single": false
+    }
   }
 }

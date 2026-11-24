@@ -1,0 +1,42 @@
+{
+  "actions": {},
+  "forms": {},
+  "id": "knowledge_base__articles_screen",
+  "kind": "screen",
+  "live": {},
+  "screen": {
+    "auth": "anyone",
+    "kind": "list",
+    "query": [],
+    "route": "/kb",
+    "title": "Articles",
+    "view": "knowledge_base__articles"
+  },
+  "sections": {
+    "published": {
+      "shape": {
+        "fields": [
+          {
+            "id": "body",
+            "required": true,
+            "type": "str"
+          },
+          {
+            "id": "status",
+            "required": true,
+            "type": "str"
+          },
+          {
+            "id": "title",
+            "required": true,
+            "type": "str"
+          }
+        ],
+        "fingerprint": "12ed609476dee9318e7f255db02d4731918a0ccdfdc0b44a542291c992900dbf",
+        "object": "knowledge_base__article",
+        "title": "title"
+      },
+      "single": false
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "actions": {},
+  "forms": {},
+  "id": "service_desk__customer_screen",
+  "kind": "screen",
+  "live": {
+    "service_desk__customer_live": {
+      "event": "notice",
+      "kinds": [
+        "membership",
+        "remove",
+        "schema",
+        "upsert"
+      ],
+      "objects": true,
+      "screen": "service_desk__customer_screen"
+    }
+  },
+  "screen": {
+    "auth": "session",
+    "kind": "detail",
+    "query": [],
+    "route": "/customers/detail",
+    "title": "Customer",
+    "view": "service_desk__customer_detail"
+  },
+  "sections": {
+    "one": {
+      "shape": {
+        "fields": [
+          {
+            "id": "display_name",
+            "required": true,
+            "type": "str"
+          },
+          {
+            "id": "email",
+            "required": true,
+            "type": "str"
+          },
+          {
+            "id": "phone",
+            "required": false,
+            "type": "str"
+          }
+        ],
+        "fingerprint": "1b13a031a6a73a02dae1d6a046ed3e04248faaa784787b259bdb9627c75cabaf",
+        "object": "service_desk__customer",
+        "title": "display_name"
+      },
+      "single": true
+    }
+  }
+}

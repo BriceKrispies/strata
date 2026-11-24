@@ -1,0 +1,140 @@
+{
+  "actions": {
+    "service_desk__open_again": {
+      "arguments": {
+        "priority": "form.priority",
+        "subject": "form.subject"
+      },
+      "form": "service_desk__open_form",
+      "label": "Open it again",
+      "on_error": "toast",
+      "on_success": {
+        "toast": "Opened again."
+      },
+      "operation": "service_desk__open_ticket",
+      "screen": "service_desk__board_screen",
+      "shape": {
+        "fingerprint": "8a0ec0840e8b32de7a66101d2e081e81b297cc0bf2cfce74f3e3693b01279748",
+        "inputs": [
+          {
+            "name": "subject",
+            "required": true,
+            "type": "str"
+          },
+          {
+            "name": "priority",
+            "required": false,
+            "type": "str"
+          }
+        ],
+        "operation": "service_desk__open_ticket"
+      }
+    }
+  },
+  "forms": {
+    "service_desk__open_form": {
+      "fields": [
+        {
+          "control": "text",
+          "input": "subject",
+          "label": "Subject",
+          "name": "subject",
+          "trim": true
+        },
+        {
+          "control": "text",
+          "input": "priority",
+          "label": "Priority",
+          "name": "priority",
+          "trim": true
+        }
+      ],
+      "on_error": "inline",
+      "on_success": {
+        "toast": "Ticket opened."
+      },
+      "operation": "service_desk__open_ticket",
+      "screen": "service_desk__board_screen",
+      "shape": {
+        "fingerprint": "8a0ec0840e8b32de7a66101d2e081e81b297cc0bf2cfce74f3e3693b01279748",
+        "inputs": [
+          {
+            "name": "subject",
+            "required": true,
+            "type": "str"
+          },
+          {
+            "name": "priority",
+            "required": false,
+            "type": "str"
+          }
+        ],
+        "operation": "service_desk__open_ticket"
+      },
+      "submit_label": "Open the ticket"
+    }
+  },
+  "id": "service_desk__board_screen",
+  "kind": "screen",
+  "live": {
+    "service_desk__board_live": {
+      "event": "notice",
+      "kinds": [
+        "remove",
+        "upsert"
+      ],
+      "objects": true,
+      "screen": "service_desk__board_screen"
+    }
+  },
+  "screen": {
+    "auth": "session",
+    "kind": "list",
+    "query": [],
+    "route": "/desk/tickets",
+    "title": "Tickets",
+    "view": "service_desk__board"
+  },
+  "sections": {
+    "open": {
+      "shape": {
+        "fields": [
+          {
+            "id": "asset",
+            "required": false,
+            "type": "ref<service_desk__asset>"
+          },
+          {
+            "id": "customer",
+            "required": false,
+            "type": "ref<service_desk__customer>"
+          },
+          {
+            "id": "priority",
+            "required": false,
+            "type": "str"
+          },
+          {
+            "id": "sla_due",
+            "required": false,
+            "type": "time"
+          },
+          {
+            "id": "status",
+            "required": true,
+            "type": "str"
+          },
+          {
+            "id": "subject",
+            "required": true,
+            "type": "str"
+          }
+        ],
+        "fingerprint": "5fd0d6451d1b3ce15c69f54d04c486d011c9a1d18c7f7f6c0ea8cb32e68cb3ae",
+        "object": "service_desk__ticket",
+        "title": "status"
+      },
+      "single": false
+    }
+  }
+}

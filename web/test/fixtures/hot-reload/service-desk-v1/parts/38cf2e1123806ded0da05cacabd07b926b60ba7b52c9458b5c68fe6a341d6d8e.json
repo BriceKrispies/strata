@@ -23,5 +23,27 @@
     "route": "/customers",
     "title": "Customers",
     "view": "service_desk__customer_list"
+  },
+  "sections": {
+    "all": {
+      "shape": {
+        "fields": [
+          {
+            "id": "email",
+            "required": true,
+            "type": "str"
+          },
+          {
+            "id": "name",
+            "required": true,
+            "type": "str"
+          }
+        ],
+        "fingerprint": "e5a5a8fce17b2cdf8af60bd5a780920c0bf32b04a1a310c6ff9517dbe726b2d4",
+        "object": "service_desk__customer",
+        "title": "name"
+      },
+      "single": false
+    }
   }
 }
