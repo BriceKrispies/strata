@@ -29,7 +29,9 @@ const DAY = 86_400_000;
 const MAX_INSTANT = 8.64e15;
 const ANON = 'A member';
 const NOT_AVAILABLE = 'Not available';
-const PRINCIPAL = /^(user|org|svc|service|role|group):\S+$/;
+// A principal is its scheme prefix and whatever follows it, spaces included. The prefixes are the ones
+// the backend forms (user:, team:, sealed:, automation:), plus the ones the design doc names.
+const PRINCIPAL = /^(user|team|sealed|automation|service|agent|system|org|svc|role|group):/;
 // A string of nine or more digits is an identifier or an epoch in digits, never prose: it is not drawn as text.
 const IDENTIFIER = /^\d{9,}$/;
 const DECIMAL = /^([+-]?)(\d+)(?:\.(\d+))?$/;
@@ -387,9 +389,18 @@ function chips(items) {
   return { kind: 'chips', items };
 }
 
-/** Text is drawn only when it is a string and not a principal. @param {any} value @param {Record<string, any>} props */
+/**
+ * A string that may be drawn as words: not a principal, not an identifier in digits. Every string
+ * path (text, status, choice, tags) goes through this one check.
+ * @param {any} value @returns {value is string}
+ */
+function isWord(value) {
+  return typeof value === 'string' && !PRINCIPAL.test(value) && !IDENTIFIER.test(value);
+}
+
+/** Text is drawn only when it is a word. @param {any} value @param {Record<string, any>} props */
 function textNode(value, props) {
-  if (typeof value !== 'string' || PRINCIPAL.test(value) || IDENTIFIER.test(value)) return null;
+  if (!isWord(value)) return null;
   return props.multiline === true ? { kind: 'text', text: value, multiline: true } : { kind: 'text', text: value };
 }
 
@@ -487,7 +498,7 @@ function boolNode(value, props) {
 
 /** @param {any} value @param {Record<string, any>} props */
 function statusNode(value, props) {
-  if (typeof value !== 'string' || PRINCIPAL.test(value)) return null;
+  if (!isWord(value)) return null;
   const label = own(props.labels, value);
   const explicit = own(props.tones, value);
   /** @type {Tone} */
@@ -499,7 +510,7 @@ function statusNode(value, props) {
 
 /** @param {any} value @param {Record<string, any>} props */
 function choiceNode(value, props) {
-  if (typeof value !== 'string' || PRINCIPAL.test(value)) return null;
+  if (!isWord(value)) return null;
   /** @type {unknown} */
   let label;
   if (Array.isArray(props.options)) {
@@ -546,7 +557,7 @@ function refNode(value, props) {
 function tagsNode(value) {
   if (!Array.isArray(value)) return null;
   const items = value
-    .filter((v) => typeof v === 'string' && v !== '' && !PRINCIPAL.test(v) && !IDENTIFIER.test(v))
+    .filter((v) => isWord(v) && v !== '')
     .map((v) => ({ kind: 'text', text: v }));
   return items.length > 0 ? chips(items) : null;
 }
@@ -576,7 +587,7 @@ function mediaNode(value) {
 
 /** @param {any} value */
 function urlNode(value) {
-  if (typeof value !== 'string' || value === '' || PRINCIPAL.test(value)) return null;
+  if (!isWord(value) || value === '') return null;
   const href = safeHref(value);
   return href !== null ? { kind: 'url', text: value, href } : { kind: 'text', text: value };
 }
