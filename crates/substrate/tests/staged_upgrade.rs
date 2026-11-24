@@ -170,7 +170,7 @@ fn product_doc(s: &Shape) -> Json {
     for p in 0..s.policies {
         let id = format!("bulk__p{p}");
         let resource = if p == 0 && s.any_object {
-            json!("*")
+            json!("AnyObject")
         } else {
             json!({ "Object": "bulk__o0" })
         };
@@ -492,13 +492,16 @@ fn assign_role_refuses_the_staging_role_of_a_product() {
 fn a_last_stage_over_the_cap_is_refused_with_its_counts() {
     let (world, record) = first_version();
     let mut s = shape("2.0.0");
-    s.policies = 1 + CAP; // every policy is a last-stage change
+    // 1 + CAP policies in the shape. bulk__p0 is installed already and identical in 2.0.0, so the
+    // upgrade does not change it: the plan holds CAP policy changes, which alone with the role
+    // removal and the record is over the cap.
+    s.policies = 1 + CAP;
     let err =
         staged(&world, &product_doc(&s), &record).expect_err("the last stage is over the cap");
     assert_eq!(err.kind, BundleErrorKind::FinalStageTooLarge);
     assert!(err.message.contains("upgrade.final-stage-too-large"));
     assert!(
-        err.message.contains(&format!("DefinePolicy {}", 1 + CAP)),
+        err.message.contains(&format!("DefinePolicy {CAP}")),
         "{}",
         err.message
     );
