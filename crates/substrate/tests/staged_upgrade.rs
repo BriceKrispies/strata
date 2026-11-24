@@ -429,6 +429,30 @@ fn an_early_operation_is_refused_by_the_kernel_without_the_staging_role() {
 }
 
 #[test]
+fn assign_role_refuses_the_staging_role_of_a_product() {
+    let (world, _) = first_version();
+    let staging = RoleId(staging_role("bulk"));
+    let role = SchemaChange::DefineRole(RoleDef {
+        id: staging.clone(),
+        label: "Staging".into(),
+    });
+    let world = commit(world, &[role], "staging").unwrap_or_else(|e| panic!("{e:?}"));
+    let intent = Intent::AssignRole {
+        principal: PrincipalId::new("user:admin").unwrap(),
+        role: staging,
+    };
+    let refused = world
+        .step(&intent, &context_at(1_800_000_000_000, "assign"))
+        .err()
+        .expect("the staging role is not assigned");
+    assert!(
+        refused.message.contains("reserved for a product's staged upgrade"),
+        "{}",
+        refused.message
+    );
+}
+
+#[test]
 fn a_last_stage_over_the_cap_is_refused_with_its_counts() {
     let (world, record) = first_version();
     let mut s = shape("2.0.0");

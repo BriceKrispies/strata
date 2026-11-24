@@ -27,17 +27,12 @@ use crate::product::{BundleError, InstalledRecord, OwnedEntity, ProductChange, S
 use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::*;
 
-/// The suffix of the reserved role a product's staged upgrade defines: `<product>__staging`.
-pub const STAGING_ROLE_SUFFIX: &str = "__staging";
+pub use strata_kernel::products::{is_staging_role, STAGING_ROLE_SUFFIX};
 
-/// The reserved staging role of a product. It holds no permission and nobody holds it.
+/// The reserved staging role of a product. It holds no permission and nobody holds it, and
+/// `assign-role` refuses it.
 pub fn staging_role(product: &str) -> String {
     format!("{product}{STAGING_ROLE_SUFFIX}")
-}
-
-/// Whether a role name is reserved for a product's staged upgrade, which `assign-role` refuses.
-pub fn is_staging_role(name: &str) -> bool {
-    name.ends_with(STAGING_ROLE_SUFFIX)
 }
 
 /// One stage of a staged upgrade: the schema changes of one `ChangeSchema` intent, which end with

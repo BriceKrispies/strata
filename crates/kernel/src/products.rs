@@ -328,6 +328,15 @@ pub fn touched(change: &SchemaChange) -> Vec<EntityRef> {
     }
 }
 
+/// The suffix of the reserved role a product's staged upgrade defines, `<product>__staging`
+/// (D-DS-16, WG-5472). It holds no permission and nobody holds it; `assign-role` refuses it.
+pub const STAGING_ROLE_SUFFIX: &str = "__staging";
+
+/// Whether a role name is the reserved staging role of some product.
+pub fn is_staging_role(role: &str) -> bool {
+    role.ends_with(STAGING_ROLE_SUFFIX)
+}
+
 /// The first reason `changes` alter an entity of an installed product from outside it, or `None`
 /// (D-6582, INT-1582). A change comes through a product when it carries, in the same change, the
 /// record of that product at a version other than the installed one (the recorded upgrade path:

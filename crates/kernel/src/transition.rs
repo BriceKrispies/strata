@@ -1116,6 +1116,12 @@ fn change_member(
     if *role == public_role() {
         return Err(draft.reject(ErrorKind::InvalidIntent, "everyone already holds public"));
     }
+    if grant && crate::products::is_staging_role(&role.0) {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            format!("the role {role} is reserved for a product's staged upgrade and is not assigned"),
+        ));
+    }
     // ADM-152, ADM-1080: taking a role away asks as much of the actor as handing it out.
     require_conferrable(draft, [role])?;
     let mut roles = draft
