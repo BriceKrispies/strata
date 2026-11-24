@@ -81,6 +81,7 @@ export function view(state) {
     theme: {
       accent: state.theme.accent,
       paper: state.theme.paper,
+      theme: state.theme.preset,
       scheme: state.theme.mode === 'auto' ? (state.theme.systemDark ? 'dark' : 'light') : state.theme.mode,
       mode: state.theme.mode,
     },

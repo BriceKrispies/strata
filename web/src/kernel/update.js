@@ -90,7 +90,7 @@ export function initialState() {
     session: null,
     sessionFlow: sessionInit(),
     site: { name: '', tagline: '' },
-    theme: { mode: 'auto', systemDark: false, accent: 'moss', paper: 'linen' },
+    theme: { mode: 'auto', systemDark: false, accent: 'moss', paper: 'linen', preset: 'fieldnotes' },
     // `next` holds, for each list section with more rows, the cursor of its next page; `more` is the
     // id of the request that loads one (0 when none is).
     view: { status: 'loading', model: null, error: null, request: 0, next: {}, more: 0 },
@@ -431,7 +431,7 @@ function acceptView(state, model, cursors = {}) {
     confirmDelete: null,
     site: site ? { name: site.name ?? '', tagline: site.tagline ?? '' } : state.site,
     tenant: model.view === state.view.model?.view ? state.tenant : { forms: {}, confirm: null },
-    theme: { ...state.theme, accent: model.theme?.accent ?? 'moss', paper: model.theme?.paper ?? 'linen' },
+    theme: { ...state.theme, accent: model.theme?.accent ?? 'moss', paper: model.theme?.paper ?? 'linen', preset: model.theme?.theme ?? 'fieldnotes' },
     optimistic: {},
   };
   const formsState = { ...next.forms };

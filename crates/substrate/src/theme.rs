@@ -11,12 +11,22 @@ use strata_kernel::{FieldId, Value};
 
 pub const ACCENTS: [&str; 5] = ["moss", "clay", "ink", "ochre", "plum"];
 pub const PAPERS: [&str; 3] = ["linen", "stone", "chalk"];
+/// The design-system presets of specifications/ui-catalogue.jsonc. The first is the default.
+pub const THEMES: [&str; 2] = ["fieldnotes", "neutral"];
 
 /// A resolved theme: every member is one of the names above.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Theme {
     pub accent: &'static str,
     pub paper: &'static str,
+    /// The preset (`data-theme`). Left out of the view while it is the default, so a tenant that
+    /// chooses nothing is served what it always was.
+    #[serde(skip_serializing_if = "is_default_theme")]
+    pub theme: &'static str,
+}
+
+fn is_default_theme(theme: &&str) -> bool {
+    *theme == THEMES[0]
 }
 
 impl Default for Theme {
@@ -24,6 +34,7 @@ impl Default for Theme {
         Theme {
             accent: ACCENTS[0],
             paper: PAPERS[0],
+            theme: THEMES[0],
         }
     }
 }
@@ -33,7 +44,7 @@ fn pick(allowed: &[&'static str], value: Option<&Value>) -> Option<&'static str>
     allowed.iter().copied().find(|name| *name == wanted)
 }
 
-/// Resolve a theme from a settings record's fields (`accent`, `paper`). Returns the theme and
+/// Resolve a theme from a settings record's fields (`accent`, `paper`, `theme`). Returns the theme and
 /// the names of any settings that were present but not in the schema.
 pub fn resolve(fields: &BTreeMap<FieldId, Value>) -> (Theme, Vec<&'static str>) {
     let mut rejected = Vec::new();
@@ -51,6 +62,7 @@ pub fn resolve(fields: &BTreeMap<FieldId, Value>) -> (Theme, Vec<&'static str>) 
     let theme = Theme {
         accent: choose("accent", &ACCENTS, ACCENTS[0]),
         paper: choose("paper", &PAPERS, PAPERS[0]),
+        theme: choose("theme", &THEMES, THEMES[0]),
     };
     (theme, rejected)
 }
@@ -72,9 +84,14 @@ mod tests {
             resolve(&fields(&[("accent", "clay"), ("paper", "stone")])).0,
             Theme {
                 accent: "clay",
-                paper: "stone"
+                paper: "stone",
+                theme: "fieldnotes"
             }
         );
+        assert_eq!(resolve(&fields(&[("theme", "neutral")])).0.theme, "neutral");
+        let (theme, rejected) = resolve(&fields(&[("theme", "evil\"><script>")]));
+        assert_eq!(theme, Theme::default());
+        assert_eq!(rejected, vec!["theme"]);
         let (theme, rejected) = resolve(&fields(&[("accent", "red; background: url(//evil)")]));
         assert_eq!(theme, Theme::default());
         assert_eq!(rejected, vec!["accent"]);

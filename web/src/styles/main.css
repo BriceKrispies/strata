@@ -7,12 +7,13 @@
 @import '@fontsource-variable/newsreader/opsz-italic.css';
 @import '@fontsource-variable/instrument-sans/index.css';
 
-@import './tokens.css';
+@import './generated/tokens-fieldnotes.css';
+@import './generated/tokens-neutral.css';
 @import './base.css';
 @import './layout.css';
 @import './components.css';
 @import './lab.css';
 
-.qr { display: block; margin-block: 0.75rem; background: #fff; padding: 0; max-width: 100%; height: auto; }
+.qr { display: block; margin-block: 0.75rem; background: var(--qr-ground); padding: 0; max-width: 100%; height: auto; }
 .codes { list-style: none; padding: 0; columns: 2; column-gap: 2rem; font-variant-numeric: tabular-nums; }
 .codes li { margin-block: 0.25rem; }

@@ -2819,7 +2819,7 @@ pub struct PostRow {
 
 /// View Theme
 ///
-/// The resolved theme of a view: the accent and paper names the publication settings give, or the defaults when a setting is not one of the theme tokens.
+/// The resolved theme of a view: the accent and paper names the publication settings give, and the design-system preset (theme, left out while it is the default fieldnotes), or the defaults when a setting is not one of the theme tokens.
 ///
 /// Specification type `view-theme`: a struct.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -2828,6 +2828,9 @@ pub struct ViewTheme {
     pub accent: String,
     /// Field `paper`.
     pub paper: String,
+    /// Field `theme`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 /// Option Choice
