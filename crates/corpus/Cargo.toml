@@ -31,5 +31,9 @@ serde_json.workspace = true
 name = "corpus_slow"
 path = "tests/corpus_slow.rs"
 
+[[test]]
+name = "staged_install"
+path = "tests/staged_install.rs"
+
 [lints]
 workspace = true

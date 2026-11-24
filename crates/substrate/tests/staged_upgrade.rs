@@ -955,3 +955,17 @@ fn owned_kernel_of(world: &World) -> Vec<(String, String)> {
     owned.sort();
     owned
 }
+
+#[test]
+fn a_product_requiring_platform_0_2_installs_on_the_draft_platform_release() {
+    // The showcase products declare platform.min 0.2; the release they install on is 0.2-draft.
+    // The install is applied, the record keeps the declared range, and the version is the bundle's.
+    let (world, record) = first_version();
+    assert_eq!(record.version, "1.0.0");
+    assert_eq!(
+        record.platform.as_ref().map(|p| p.min.as_str()),
+        Some("0.2"),
+        "the declared platform range is recorded"
+    );
+    assert!(!world.tenants[&tenant()].schema.objects.is_empty());
+}

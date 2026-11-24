@@ -4,7 +4,7 @@
 //! code behind `specc bundle`: the layer checks first, then the bundle rules, then the check of
 //! the finished bundle against `tenant-bundle`). The tenant is created by the whole-tenant install
 //! (`strata_substrate::bundle::install`, which the backend's seed runs), and each product is
-//! planned and installed by `plan_install` and `run_planned`, which the backend's install-bundle
+//! planned and installed by `plan_install` and `run_planned_staged`, which the backend's install-bundle
 //! route runs: one `change-schema` intent per product, committed through `execute` with the
 //! ownership record of the product in the same commit. The segments of a product go in through
 //! the segment store after its schema change, as the route does.
@@ -22,9 +22,10 @@ use strata_spec_compiler::layers::{prepare_platform, ProductFile};
 use strata_storage_api::segments as kept;
 use strata_storage_api::{execute, Store};
 use strata_substrate::bundle::{
-    install, plan_install, plan_upgrade, run_planned, Bundle, InstalledRecord, Planned,
-    ProductBundle, ProductInstall, ProductTarget,
+    install, plan_install, plan_upgrade, Bundle, InstalledRecord, Planned, ProductBundle,
+    ProductInstall, ProductTarget,
 };
+use strata_substrate::staged::run_planned_staged;
 
 /// The platform release this loader installs against, which a bundle's platform range is checked
 /// against. It is the value of `strata_backend::products::PLATFORM_RELEASE` (the specification
@@ -387,7 +388,7 @@ pub fn upgrade_product_with_field(
         .insert(field.id.clone(), field);
     let planned = plan_upgrade(&parsed, &target).map_err(|e| one(e.to_string()))?;
     let mut refused: Vec<String> = Vec::new();
-    let applied = run_planned(planned, &target, &mut |ctx, intent| match execute(
+    let applied = run_planned_staged(planned, &target, &mut |ctx, intent| match execute(
         store, &intent, &ctx,
     ) {
         Ok(done) => Ok(done.transition.output),
@@ -441,7 +442,7 @@ pub fn install_product_into(
     };
     let mut commits = 0u64;
     let mut refused: Vec<String> = Vec::new();
-    let applied = run_planned(planned, &target, &mut |ctx, intent| {
+    let applied = run_planned_staged(planned, &target, &mut |ctx, intent| {
         commits += 1;
         match execute(store, &intent, &ctx) {
             Ok(done) => Ok(done.transition.output),

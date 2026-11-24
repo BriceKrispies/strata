@@ -1,0 +1,2555 @@
+{
+  "name": "Club",
+  "version": "1.0.0",
+  "product": "club",
+  "platform": {
+    "min": "0.2"
+  },
+  "content": {
+    "objects": {
+      "club__o1": {
+        "id": "club__o1",
+        "label": "Object 1",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o2": {
+        "id": "club__o2",
+        "label": "Object 2",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o3": {
+        "id": "club__o3",
+        "label": "Object 3",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o4": {
+        "id": "club__o4",
+        "label": "Object 4",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o5": {
+        "id": "club__o5",
+        "label": "Object 5",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o6": {
+        "id": "club__o6",
+        "label": "Object 6",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o7": {
+        "id": "club__o7",
+        "label": "Object 7",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o8": {
+        "id": "club__o8",
+        "label": "Object 8",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o9": {
+        "id": "club__o9",
+        "label": "Object 9",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o10": {
+        "id": "club__o10",
+        "label": "Object 10",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o11": {
+        "id": "club__o11",
+        "label": "Object 11",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o12": {
+        "id": "club__o12",
+        "label": "Object 12",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o13": {
+        "id": "club__o13",
+        "label": "Object 13",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o14": {
+        "id": "club__o14",
+        "label": "Object 14",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o15": {
+        "id": "club__o15",
+        "label": "Object 15",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o16": {
+        "id": "club__o16",
+        "label": "Object 16",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o17": {
+        "id": "club__o17",
+        "label": "Object 17",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o18": {
+        "id": "club__o18",
+        "label": "Object 18",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o19": {
+        "id": "club__o19",
+        "label": "Object 19",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o20": {
+        "id": "club__o20",
+        "label": "Object 20",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o21": {
+        "id": "club__o21",
+        "label": "Object 21",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o22": {
+        "id": "club__o22",
+        "label": "Object 22",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o23": {
+        "id": "club__o23",
+        "label": "Object 23",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      },
+      "club__o24": {
+        "id": "club__o24",
+        "label": "Object 24",
+        "fields": {
+          "f0": {
+            "id": "f0",
+            "label": "Points",
+            "ty": "Int",
+            "required": true,
+            "unique": false,
+            "default": "0"
+          },
+          "f1": {
+            "id": "f1",
+            "label": "Status",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f2": {
+            "id": "f2",
+            "label": "Field 2",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f3": {
+            "id": "f3",
+            "label": "Field 3",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f4": {
+            "id": "f4",
+            "label": "Field 4",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f5": {
+            "id": "f5",
+            "label": "Field 5",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f6": {
+            "id": "f6",
+            "label": "Field 6",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          },
+          "f7": {
+            "id": "f7",
+            "label": "Field 7",
+            "ty": "Str",
+            "required": false,
+            "unique": false
+          }
+        },
+        "constraints": {
+          "c0": {
+            "id": "c0",
+            "expr": "record.f0 >= 0",
+            "message": "Points are not negative."
+          }
+        }
+      }
+    },
+    "roles": {
+      "club__r1": {
+        "id": "club__r1",
+        "label": "Role 1"
+      },
+      "club__r2": {
+        "id": "club__r2",
+        "label": "Role 2"
+      },
+      "club__r3": {
+        "id": "club__r3",
+        "label": "Role 3"
+      },
+      "club__r4": {
+        "id": "club__r4",
+        "label": "Role 4"
+      },
+      "club__r5": {
+        "id": "club__r5",
+        "label": "Role 5"
+      }
+    },
+    "role-permissions": {
+      "club__r1": [
+        "content-read",
+        {
+          "object": "club__o1",
+          "actions": [
+            "read"
+          ]
+        }
+      ],
+      "club__r2": [
+        "content-read",
+        {
+          "object": "club__o1",
+          "actions": [
+            "read"
+          ]
+        }
+      ],
+      "club__r3": [
+        "content-read",
+        {
+          "object": "club__o1",
+          "actions": [
+            "read"
+          ]
+        }
+      ],
+      "club__r4": [
+        "content-read",
+        {
+          "object": "club__o1",
+          "actions": [
+            "read"
+          ]
+        }
+      ],
+      "club__r5": [
+        "content-read",
+        {
+          "object": "club__o1",
+          "actions": [
+            "read"
+          ]
+        }
+      ]
+    },
+    "policies": {
+      "club__p1": {
+        "id": "club__p1",
+        "role": "club__r1",
+        "resource": {
+          "Object": "club__o1"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p2": {
+        "id": "club__p2",
+        "role": "club__r2",
+        "resource": {
+          "Object": "club__o2"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p3": {
+        "id": "club__p3",
+        "role": "club__r3",
+        "resource": {
+          "Object": "club__o3"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p4": {
+        "id": "club__p4",
+        "role": "club__r4",
+        "resource": {
+          "Object": "club__o4"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p5": {
+        "id": "club__p5",
+        "role": "club__r5",
+        "resource": {
+          "Object": "club__o5"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p6": {
+        "id": "club__p6",
+        "role": "club__r1",
+        "resource": {
+          "Object": "club__o6"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p7": {
+        "id": "club__p7",
+        "role": "club__r2",
+        "resource": {
+          "Object": "club__o7"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p8": {
+        "id": "club__p8",
+        "role": "club__r3",
+        "resource": {
+          "Object": "club__o8"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p9": {
+        "id": "club__p9",
+        "role": "club__r4",
+        "resource": {
+          "Object": "club__o9"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p10": {
+        "id": "club__p10",
+        "role": "club__r5",
+        "resource": {
+          "Object": "club__o10"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p11": {
+        "id": "club__p11",
+        "role": "club__r1",
+        "resource": {
+          "Object": "club__o11"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p12": {
+        "id": "club__p12",
+        "role": "club__r2",
+        "resource": {
+          "Object": "club__o12"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p13": {
+        "id": "club__p13",
+        "role": "club__r3",
+        "resource": {
+          "Object": "club__o13"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p14": {
+        "id": "club__p14",
+        "role": "club__r4",
+        "resource": {
+          "Object": "club__o14"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p15": {
+        "id": "club__p15",
+        "role": "club__r5",
+        "resource": {
+          "Object": "club__o15"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p16": {
+        "id": "club__p16",
+        "role": "club__r1",
+        "resource": {
+          "Object": "club__o16"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p17": {
+        "id": "club__p17",
+        "role": "club__r2",
+        "resource": {
+          "Object": "club__o17"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p18": {
+        "id": "club__p18",
+        "role": "club__r3",
+        "resource": {
+          "Object": "club__o18"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      },
+      "club__p19": {
+        "id": "club__p19",
+        "role": "club__r4",
+        "resource": {
+          "Object": "club__o19"
+        },
+        "actions": [
+          "Read"
+        ],
+        "condition": "record.f0 >= 0"
+      }
+    },
+    "queries": {
+      "club__q1": {
+        "id": "club__q1",
+        "object": "club__o1",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q2": {
+        "id": "club__q2",
+        "object": "club__o2",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q3": {
+        "id": "club__q3",
+        "object": "club__o3",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q4": {
+        "id": "club__q4",
+        "object": "club__o4",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q5": {
+        "id": "club__q5",
+        "object": "club__o5",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q6": {
+        "id": "club__q6",
+        "object": "club__o6",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q7": {
+        "id": "club__q7",
+        "object": "club__o7",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q8": {
+        "id": "club__q8",
+        "object": "club__o8",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q9": {
+        "id": "club__q9",
+        "object": "club__o9",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q10": {
+        "id": "club__q10",
+        "object": "club__o10",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q11": {
+        "id": "club__q11",
+        "object": "club__o11",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q12": {
+        "id": "club__q12",
+        "object": "club__o12",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q13": {
+        "id": "club__q13",
+        "object": "club__o13",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q14": {
+        "id": "club__q14",
+        "object": "club__o14",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q15": {
+        "id": "club__q15",
+        "object": "club__o15",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q16": {
+        "id": "club__q16",
+        "object": "club__o16",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      },
+      "club__q17": {
+        "id": "club__q17",
+        "object": "club__o17",
+        "filter": "record.f0 >= 0",
+        "params": [],
+        "order": [
+          {
+            "field": "f0",
+            "descending": true
+          }
+        ],
+        "limit": 10
+      }
+    },
+    "workflows": {
+      "club__w1": {
+        "id": "club__w1",
+        "object": "club__o1",
+        "field": "f1",
+        "initial": [
+          "new"
+        ],
+        "transitions": [
+          {
+            "name": "promote",
+            "from": "new",
+            "to": "gold",
+            "guard": "record.f0 >= 100",
+            "set": {}
+          }
+        ]
+      },
+      "club__w2": {
+        "id": "club__w2",
+        "object": "club__o1",
+        "field": "f1",
+        "initial": [
+          "new"
+        ],
+        "transitions": [
+          {
+            "name": "promote",
+            "from": "new",
+            "to": "gold",
+            "guard": "record.f0 >= 100",
+            "set": {}
+          }
+        ]
+      }
+    },
+    "operations": [
+      {
+        "id": "club__op1",
+        "label": "Operation 1",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o1",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op2",
+        "label": "Operation 2",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o2",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op3",
+        "label": "Operation 3",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o3",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op4",
+        "label": "Operation 4",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o4",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op5",
+        "label": "Operation 5",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o5",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op6",
+        "label": "Operation 6",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o6",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op7",
+        "label": "Operation 7",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o7",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op8",
+        "label": "Operation 8",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o8",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op9",
+        "label": "Operation 9",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o9",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op10",
+        "label": "Operation 10",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o10",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op11",
+        "label": "Operation 11",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o11",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op12",
+        "label": "Operation 12",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o12",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op13",
+        "label": "Operation 13",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o13",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "club__op14",
+        "label": "Operation 14",
+        "inputs": [],
+        "invokers": {
+          "signed-in": false,
+          "roles": [
+            "club__r1"
+          ]
+        },
+        "conditions": [],
+        "steps": [
+          {
+            "CreateRecord": {
+              "id": "rec",
+              "object": "club__o14",
+              "fields": {
+                "f0": "0"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

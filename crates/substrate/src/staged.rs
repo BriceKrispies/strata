@@ -477,9 +477,15 @@ pub fn run_planned_staged<E: std::fmt::Display>(
                 principal: target.principal.clone(),
                 session: None,
                 now: Timestamp(target.now),
-                correlation: format!("{}:{}", change.step, stage.version),
+                // The history shows the version the product reaches, not its internal stages.
+                correlation: format!("{}:{}", change.step, change.version),
                 verified_address: None,
-                idempotency_key: target.idempotency_key.clone(),
+                // A repeat of the key answers the first stage, so only the first stage carries it.
+                idempotency_key: if first.as_deref() == Some(stage.version.as_str()) {
+                    target.idempotency_key.clone()
+                } else {
+                    None
+                },
                 language: None,
                 hop: None,
             };
