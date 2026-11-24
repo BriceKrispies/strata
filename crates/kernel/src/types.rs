@@ -71,9 +71,9 @@ pub use strata_model_core::types::{
 /// The interface elements of [`crate::ui`]: the screens, forms, actions, live bindings and error
 /// messages a tenant's products installed, held in the schema (D-8250).
 pub use strata_model_core::types::{
-    UiAction, UiAuth, UiControl, UiElement, UiErrorDisplay, UiErrorField, UiErrorMessage,
-    UiErrorOn, UiField, UiForm, UiLiveBinding, UiLiveEvent, UiOption, UiOutcome, UiScreen,
-    UiScreenKind,
+    UiAction, UiAuth, UiControl, UiDisplayType, UiElement, UiErrorDisplay, UiErrorField,
+    UiErrorMessage, UiErrorOn, UiField, UiFieldDisplay, UiForm, UiLiveBinding, UiLiveEvent,
+    UiOption, UiOutcome, UiPresentation, UiScreen, UiScreenKind,
 };
 
 /// The text types of a template and of a token (`structured-blocks`, `expression`).

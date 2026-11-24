@@ -43,6 +43,14 @@ use crate::diagnostic::Diagnostic;
 pub const UI_UNRESOLVED: &str = "bundle.ui-unresolved";
 /// A feature of an interface entity that the interpreter of the web application does not draw.
 pub const UI_UNSUPPORTED: &str = "bundle.ui-unsupported";
+/// A presentation of an object type the product does not declare.
+pub const BINDING_UNKNOWN_OBJECT: &str = "ui.binding.unknown-object";
+/// A presentation that names a field its object type does not have.
+pub const BINDING_UNKNOWN_FIELD: &str = "ui.binding.unknown-field";
+/// A presentation that names a display type the design system does not have.
+pub const BINDING_UNKNOWN_DISPLAY: &str = "ui.binding.unknown-display";
+/// A presentation whose shape is not the one of the format.
+pub const BINDING_SHAPE: &str = "ui.binding.shape";
 
 /// The sections of a product file that hold interface entities, in the order they are read.
 pub const UI_SECTIONS: &[&str] = &[
@@ -51,6 +59,32 @@ pub const UI_SECTIONS: &[&str] = &[
     "actions",
     "liveBindings",
     "errorMessages",
+    "presentations",
+];
+
+/// The display types of the design system (`ui-display-type`).
+const DISPLAY_TYPES: &[&str] = &[
+    "text",
+    "rich-text",
+    "datetime",
+    "date",
+    "duration",
+    "count",
+    "number",
+    "money",
+    "percent",
+    "boolean",
+    "status",
+    "choice",
+    "person",
+    "reference",
+    "references",
+    "tags",
+    "language",
+    "media",
+    "url",
+    "email",
+    "code",
 ];
 
 /// The layouts the interpreter draws (`ui-screen-kind`).
@@ -86,6 +120,8 @@ struct Product<'a> {
     /// The screen of each form, by id.
     forms: BTreeMap<&'a str, &'a str>,
     actions: BTreeSet<&'a str>,
+    /// The field names of each object type of the product, by id.
+    objects: BTreeMap<&'a str, BTreeSet<&'a str>>,
 }
 
 impl<'a> Product<'a> {
@@ -121,6 +157,19 @@ impl<'a> Product<'a> {
             actions: items(top, "actions")
                 .into_iter()
                 .map(|(id, _)| id)
+                .collect(),
+            objects: items(top, "objects")
+                .into_iter()
+                .map(|(id, object)| {
+                    let fields = object
+                        .get("fields")
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flatten()
+                        .map(|(name, _)| name.as_str())
+                        .collect();
+                    (id, fields)
+                })
                 .collect(),
         }
     }
@@ -505,6 +554,97 @@ impl Check<'_> {
         } })
     }
 
+    fn binding(&mut self, code: &str, entity: &str, message: String) {
+        self.out.push(Diagnostic::new(
+            code,
+            entity,
+            format!(
+                "\"{entity}\" of the product \"{}\": {message}",
+                self.product
+            ),
+        ));
+    }
+
+    /// A presentation: the object type it describes, its title field and the display type (with
+    /// props) of each field it declares. That the display type applies to the field's type is
+    /// checked by the kernel when the element is defined (`ui.binding.display-type`).
+    fn presentation(&mut self, id: &str, map: &Map<String, Value>, product: &Product<'_>) -> Value {
+        let object = text(map, "object").unwrap_or("");
+        let known = product.objects.get(object);
+        if known.is_none() {
+            self.binding(
+                BINDING_UNKNOWN_OBJECT,
+                id,
+                format!("describes \"{object}\", which is not an object type of the product; name one of its objects."),
+            );
+        }
+        let has_field = |field: &str| known.is_none_or(|fields| fields.contains(field));
+        let mut out = Map::new();
+        out.insert("object".to_string(), json!(object));
+        if let Some(title) = text(map, "title") {
+            if !has_field(title) {
+                self.binding(
+                    BINDING_UNKNOWN_FIELD,
+                    id,
+                    format!(
+                        "takes its title from \"{title}\", which is not a field of \"{object}\"."
+                    ),
+                );
+            }
+            out.insert("title".to_string(), json!(title));
+        }
+        let mut fields = Map::new();
+        for (name, declared) in map
+            .get("fields")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if !has_field(name)
+                && !matches!(name.as_str(), "created_by" | "created_at" | "updated_at")
+            {
+                self.binding(
+                    BINDING_UNKNOWN_FIELD,
+                    id,
+                    format!("declares the field \"{name}\", which \"{object}\" does not have."),
+                );
+            }
+            let Some(declared) = declared.as_object() else {
+                self.binding(
+                    BINDING_SHAPE,
+                    id,
+                    format!("the field \"{name}\" is not an object with a \"display\"."),
+                );
+                continue;
+            };
+            let display = text(declared, "display").unwrap_or("");
+            if !DISPLAY_TYPES.contains(&display) {
+                self.binding(
+                    BINDING_UNKNOWN_DISPLAY,
+                    id,
+                    format!("draws \"{name}\" as \"{display}\", which is not a display type of the design system."),
+                );
+            }
+            let mut field = Map::new();
+            field.insert("display".to_string(), json!(display));
+            if let Some(props) = declared.get("props") {
+                match props.as_object() {
+                    Some(props) if props.values().all(Value::is_string) => {
+                        field.insert("props".to_string(), Value::Object(props.clone()));
+                    }
+                    _ => self.binding(
+                        BINDING_SHAPE,
+                        id,
+                        format!("the props of \"{name}\" are not an object of strings."),
+                    ),
+                }
+            }
+            fields.insert(name.clone(), Value::Object(field));
+        }
+        out.insert("fields".to_string(), Value::Object(fields));
+        json!({ "Presentation": out })
+    }
+
     fn message(&mut self, id: &str, map: &Map<String, Value>, product: &Product<'_>) -> Value {
         let mut message = Map::new();
         message.insert("on".to_string(), json!(text(map, "on").unwrap_or("check")));
@@ -558,6 +698,7 @@ pub fn ui_section(
                 "forms" => check.form(id, map, &declared),
                 "actions" => check.action(id, map, &declared),
                 "liveBindings" => check.live(id, map, &declared),
+                "presentations" => check.presentation(id, map, &declared),
                 _ => check.message(id, map, &declared),
             };
             elements.push((id.to_string(), element));

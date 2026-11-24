@@ -7840,6 +7840,7 @@ pub fn assemble_view(
         title: found.view.title.clone(),
         params: found.params.clone(),
         sections: progress.sections.clone(),
+        people: None,
         depends_on: depends.clone(),
         revision: progress.revision.clone(),
         schema_version: site.schema.version.clone(),

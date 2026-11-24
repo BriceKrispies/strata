@@ -2094,6 +2094,26 @@ pub const TYPES: &[TypeDecl] = &[
         ]),
     },
     TypeDecl {
+        id: "person-entry",
+        decl: Decl::Struct(&[
+            Field {
+                wire: "name",
+                ty: Ty::Text,
+                optional: true,
+            },
+            Field {
+                wire: "avatar",
+                ty: Ty::Text,
+                optional: true,
+            },
+            Field {
+                wire: "self",
+                ty: Ty::Bool,
+                optional: true,
+            },
+        ]),
+    },
+    TypeDecl {
         id: "person-ref",
         decl: Decl::Struct(&[Field {
             wire: "person",
@@ -4065,6 +4085,11 @@ pub const DELIVER_VIEW: Contract = Contract {
             optional: false,
         },
         Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
+        },
+        Field {
             wire: "revision",
             ty: Ty::Named("state-revision"),
             optional: false,
@@ -4837,6 +4862,11 @@ pub const READ_FRONT_PAGE: Contract = Contract {
             optional: false,
         },
         Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
+        },
+        Field {
             wire: "revision",
             ty: Ty::Named("state-revision"),
             optional: false,
@@ -4916,6 +4946,11 @@ pub const READ_ARTICLE_PAGE: Contract = Contract {
             wire: "depends_on",
             ty: Ty::List(&Ty::Text),
             optional: false,
+        },
+        Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
         },
         Field {
             wire: "revision",
@@ -4999,6 +5034,11 @@ pub const READ_TOPICS_PAGE: Contract = Contract {
             optional: false,
         },
         Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
+        },
+        Field {
             wire: "revision",
             ty: Ty::Named("state-revision"),
             optional: false,
@@ -5078,6 +5118,11 @@ pub const READ_TOPIC_PAGE: Contract = Contract {
             wire: "depends_on",
             ty: Ty::List(&Ty::Text),
             optional: false,
+        },
+        Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
         },
         Field {
             wire: "revision",
@@ -5161,6 +5206,11 @@ pub const READ_AUTHORS_PAGE: Contract = Contract {
             optional: false,
         },
         Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
+        },
+        Field {
             wire: "revision",
             ty: Ty::Named("state-revision"),
             optional: false,
@@ -5242,6 +5292,11 @@ pub const READ_AUTHOR_PAGE: Contract = Contract {
             optional: false,
         },
         Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
+        },
+        Field {
             wire: "revision",
             ty: Ty::Named("state-revision"),
             optional: false,
@@ -5321,6 +5376,11 @@ pub const READ_SEARCH_PAGE: Contract = Contract {
             wire: "depends_on",
             ty: Ty::List(&Ty::Text),
             optional: false,
+        },
+        Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
         },
         Field {
             wire: "revision",
@@ -5407,6 +5467,11 @@ pub const READ_ABOUT_PAGE: Contract = Contract {
             wire: "depends_on",
             ty: Ty::List(&Ty::Text),
             optional: false,
+        },
+        Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
         },
         Field {
             wire: "revision",
@@ -5525,6 +5590,11 @@ pub const READ_SIGN_IN_VIEW: Contract = Contract {
             optional: false,
         },
         Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
+        },
+        Field {
             wire: "revision",
             ty: Ty::Named("state-revision"),
             optional: false,
@@ -5604,6 +5674,11 @@ pub const READ_DESK_VIEW: Contract = Contract {
             wire: "depends_on",
             ty: Ty::List(&Ty::Text),
             optional: false,
+        },
+        Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
         },
         Field {
             wire: "revision",
@@ -5690,6 +5765,11 @@ pub const READ_NEW_ARTICLE_VIEW: Contract = Contract {
             wire: "depends_on",
             ty: Ty::List(&Ty::Text),
             optional: false,
+        },
+        Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
         },
         Field {
             wire: "revision",
@@ -5786,6 +5866,11 @@ pub const READ_EDIT_ARTICLE_VIEW: Contract = Contract {
             wire: "depends_on",
             ty: Ty::List(&Ty::Text),
             optional: false,
+        },
+        Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
         },
         Field {
             wire: "revision",
@@ -5894,6 +5979,11 @@ pub const READ_SETTINGS_VIEW: Contract = Contract {
             optional: false,
         },
         Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
+        },
+        Field {
             wire: "revision",
             ty: Ty::Named("state-revision"),
             optional: false,
@@ -5993,6 +6083,11 @@ pub const READ_LAB_VIEW: Contract = Contract {
             wire: "depends_on",
             ty: Ty::List(&Ty::Text),
             optional: false,
+        },
+        Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
         },
         Field {
             wire: "revision",
@@ -6452,6 +6547,11 @@ pub const READ_VIEW: Contract = Contract {
             wire: "theme",
             ty: Ty::Named("view-theme"),
             optional: false,
+        },
+        Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
         },
         Field {
             wire: "next",

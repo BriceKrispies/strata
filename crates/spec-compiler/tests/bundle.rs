@@ -336,3 +336,39 @@ fn a_query_with_aggregates_and_a_section_that_names_one_reach_the_bundle() {
         "leaders"
     );
 }
+
+/// A presentation of a product file is an interface element of the section `ui` of its bundle,
+/// with the display type and props of each field it declares.
+#[test]
+fn a_presentation_is_an_interface_element_of_the_bundle() {
+    let output = bundle_of(&product("bundle/presentation.jsonc"));
+    let bundle = the_bundle(&output);
+    let presentation = &bundle["content"]["ui"]["ticket_desk__ticket_presentation"]["Presentation"];
+    assert_eq!(presentation["object"], "ticket_desk__ticket");
+    assert_eq!(presentation["title"], "title");
+    assert_eq!(
+        presentation["fields"]["assignee"],
+        json!({ "display": "person" })
+    );
+    assert_eq!(
+        presentation["fields"]["created_at"],
+        json!({ "display": "datetime", "props": { "style": "relative" } })
+    );
+    assert!(bundle["content"].get("presentations").is_none());
+}
+
+/// A presentation that names an object type, a field or a display type that does not exist is
+/// refused, each with its ui.binding code.
+#[test]
+fn a_presentation_that_names_what_does_not_exist_is_refused() {
+    let diagnostics = refused("bundle-refused/ui-binding.jsonc");
+    assert_eq!(
+        codes(&diagnostics),
+        [
+            bundle_ui::BINDING_UNKNOWN_OBJECT,
+            bundle_ui::BINDING_UNKNOWN_FIELD,
+            bundle_ui::BINDING_UNKNOWN_DISPLAY
+        ],
+        "{diagnostics:?}"
+    );
+}

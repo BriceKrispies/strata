@@ -197,3 +197,44 @@ fn a_field_type_change_moves_the_section_fingerprint() {
     assert_ne!(after.manifest.parts[0].hash, before.manifest.parts[0].hash);
     assert_ne!(after.manifest.hash, before.manifest.hash);
 }
+
+/// The shape of a section carries the display type its object type's presentation declares for
+/// each field, and the title field the presentation names.
+#[test]
+fn a_section_shape_carries_the_declared_display_types_and_title() {
+    let mut world = world();
+    installed(&mut world, &ticket_desk());
+    let mut schema = schema_of(&world);
+    let plain = definition(&schema);
+    let before = plain.part(&plain.manifest.parts[0].hash).unwrap().clone();
+    let fields = [(
+        FieldId::new("status").unwrap(),
+        UiFieldDisplay {
+            display: UiDisplayType::Status,
+            props: None,
+        },
+    )];
+    schema.ui.get_or_insert_with(Default::default).insert(
+        "ticket_desk__ticket_presentation".to_string(),
+        UiElement::Presentation(UiPresentation {
+            object: ObjectTypeId::new("ticket_desk__ticket").unwrap(),
+            title: Some(FieldId::new("status").unwrap()),
+            fields: fields.into_iter().collect(),
+        }),
+    );
+    let shown = definition(&schema);
+    let part = shown.part(&shown.manifest.parts[0].hash).unwrap();
+    let shape = &part["sections"]["open"]["shape"];
+    assert_eq!(shape["title"], "status");
+    let status = shape["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "status")
+        .unwrap();
+    assert_eq!(status["displayType"], "status");
+    assert_ne!(
+        shape["fingerprint"], before["sections"]["open"]["shape"]["fingerprint"],
+        "a declared display type changes the fingerprint"
+    );
+}

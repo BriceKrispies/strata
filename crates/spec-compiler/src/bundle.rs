@@ -125,7 +125,9 @@ fn place(section: &str) -> Option<Place> {
         "operations" => ("operations", "operation"),
         "eventKinds" => ("event-kinds", "event-kind"),
         // The interface entities are one kind of tenant entity, the interface element (D-8250).
-        "screens" | "forms" | "actions" | "liveBindings" | "errorMessages" => ("ui", "ui-element"),
+        "screens" | "forms" | "actions" | "liveBindings" | "errorMessages" | "presentations" => {
+            ("ui", "ui-element")
+        }
         _ => return None,
     };
     Some(Place {

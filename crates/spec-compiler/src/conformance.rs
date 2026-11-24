@@ -124,6 +124,7 @@ pub const VIEW_PROJECTION: &[(&str, &str, bool)] = &[
     ("revision", "state-revision", false),
     ("schema_version", "schema-version", false),
     ("theme", "view-theme", false),
+    ("people", "map<string, person-entry>", true),
     ("next", "json", true),
     ("record_rules", "json", true),
 ];

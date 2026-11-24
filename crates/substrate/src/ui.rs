@@ -144,24 +144,39 @@ fn fingerprinted(mut shape: Map<String, Json>) -> Json {
     Json::Object(shape)
 }
 
-/// The shape of what a section reads: its object type and each of its fields by id (type,
-/// whether required). No field declares a display type yet, so none is written.
+/// The shape of what a section reads: its object type, its title field and each of its fields by
+/// id (type, whether required, and the display type the object type's presentation declares for
+/// it, with its props).
 fn object_shape(schema: &TenantSchema, object: &strata_kernel::ObjectTypeId) -> Map<String, Json> {
+    let presentation = strata_kernel::ui::presentation_of(schema, object);
     let fields: Vec<Json> = schema
         .objects
         .get(object)
         .into_iter()
         .flat_map(|def| def.fields.values())
         .map(|field| {
-            json!({
-                "id": field.id.as_str(),
-                "type": type_name(&field.ty),
-                "required": field.required,
-            })
+            let mut entry = Map::new();
+            entry.insert("id".into(), json!(field.id.as_str()));
+            entry.insert("type".into(), json!(type_name(&field.ty)));
+            entry.insert("required".into(), json!(field.required));
+            if let Some(shown) = presentation.and_then(|p| p.fields.get(&field.id)) {
+                entry.insert("displayType".into(), json!(shown.display));
+                if let Some(props) = shown.props.as_ref().filter(|props| !props.is_empty()) {
+                    entry.insert("props".into(), json!(props));
+                }
+            }
+            Json::Object(entry)
         })
         .collect();
     let mut shape = Map::new();
     shape.insert("object".into(), json!(object.as_str()));
+    let title = schema
+        .objects
+        .get(object)
+        .and_then(|def| crate::project::title_field(def, presentation));
+    if let Some(title) = title {
+        shape.insert("title".into(), json!(title.as_str()));
+    }
     shape.insert("fields".into(), Json::Array(fields));
     shape
 }

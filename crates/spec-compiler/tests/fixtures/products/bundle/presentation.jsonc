@@ -1,0 +1,33 @@
+{
+  // A product that declares how the fields of its record type are drawn (WG-5462, D-8250): a
+  // presentation. specc writes it as an interface element of the section "ui" of the bundle, the
+  // object type and every field checked against the product's own object.
+  "product": {
+    "id": "ticket-desk",
+    "name": "Ticket desk",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] }
+  },
+  "objects": [
+    {
+      "id": "ticket_desk__ticket",
+      "label": "Ticket",
+      "fields": {
+        "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": false },
+        "assignee": { "id": "assignee", "label": "Assignee", "ty": "Str", "required": false, "unique": false }
+      },
+      "constraints": {}
+    }
+  ],
+  "presentations": [
+    {
+      "id": "ticket_desk__ticket_presentation", "object": "ticket_desk__ticket", "title": "title",
+      "fields": {
+        "title": { "display": "text" },
+        "assignee": { "display": "person" },
+        "created_at": { "display": "datetime", "props": { "style": "relative" } }
+      }
+    }
+  ]
+}

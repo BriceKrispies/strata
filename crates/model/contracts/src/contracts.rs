@@ -3974,6 +3974,9 @@ pub struct DeliverViewResponse {
     pub data: serde_json::Value,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -10900,6 +10903,9 @@ pub struct ReadFrontPageResponse {
     pub data: types::FrontPageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -10948,6 +10954,9 @@ pub struct ReadArticlePageResponse {
     pub data: types::ArticlePageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -10997,6 +11006,9 @@ pub struct ReadTopicsPageResponse {
     pub data: types::TopicsPageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -11045,6 +11057,9 @@ pub struct ReadTopicPageResponse {
     pub data: types::TopicPageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -11094,6 +11109,9 @@ pub struct ReadAuthorsPageResponse {
     pub data: types::AuthorsPageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -11142,6 +11160,9 @@ pub struct ReadAuthorPageResponse {
     pub data: types::AuthorPageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -11195,6 +11216,9 @@ pub struct ReadSearchPageResponse {
     pub data: types::SearchPageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -11243,6 +11267,9 @@ pub struct ReadAboutPageResponse {
     pub data: types::AboutPageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -11324,6 +11351,9 @@ pub struct ReadSignInViewResponse {
     pub data: types::SitePageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -11369,6 +11399,9 @@ pub struct ReadDeskViewResponse {
     pub data: types::DeskPageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -11428,6 +11461,9 @@ pub struct ReadNewArticleViewResponse {
     pub data: types::NewArticlePageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -11494,6 +11530,9 @@ pub struct ReadEditArticleViewResponse {
     pub data: types::EditArticlePageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -11562,6 +11601,9 @@ pub struct ReadSettingsViewResponse {
     pub data: types::SitePageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.
@@ -11623,6 +11665,9 @@ pub struct ReadLabViewResponse {
     pub data: types::SitePageData,
     /// Field `depends-on`.
     pub depends_on: Vec<String>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, types::PersonEntry>>,
     /// Field `revision`.
     pub revision: types::StateRevision,
     /// Field `schema-version`.

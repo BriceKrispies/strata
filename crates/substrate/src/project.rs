@@ -14,7 +14,7 @@ use strata_kernel::types::{AggregateId, AggregateRequest, AggregateResult};
 use strata_kernel::{
     ArgSource, FieldDef, FieldId, FieldType, ObjectTypeDef, ObjectTypeId, PageCursor, Principal,
     ReadRequest, Record, RecordId, SchemaVersion, SettingId, StateRevision, TenantSchema,
-    TenantState, Value, ViewDef, ViewId, ViewSection,
+    TenantState, UiPresentation, Value, ViewDef, ViewId, ViewSection,
 };
 
 /// Find the view whose route pattern matches a path, with the values of its `:name` segments.
@@ -94,9 +94,17 @@ pub fn name_for_reader(
 
 /// The field whose text titles a record of an object type: a field named `title` or `name` when
 /// it is a required string, else the first required string field; none when there is no such
-/// field. The specification declares no title field yet; when it does, it comes first here.
-pub fn title_field(def: &ObjectTypeDef) -> Option<&FieldId> {
+/// field. The title the object type's presentation declares comes first, when it is a field.
+pub fn title_field<'a>(
+    def: &'a ObjectTypeDef,
+    presentation: Option<&UiPresentation>,
+) -> Option<&'a FieldId> {
     let required_str = |field: &&FieldDef| field.required && matches!(field.ty, FieldType::Str);
+    if let Some(declared) = presentation.and_then(|p| p.title.as_ref()) {
+        if let Some(field) = def.fields.get(declared) {
+            return Some(&field.id);
+        }
+    }
     ["title", "name"]
         .iter()
         .find_map(|wanted| {
@@ -110,8 +118,12 @@ pub fn title_field(def: &ObjectTypeDef) -> Option<&FieldId> {
 }
 
 /// The title of a record: the text of its [`title_field`], when it holds some.
-pub fn title_of(def: &ObjectTypeDef, record: &Record) -> Option<String> {
-    match record.get(title_field(def)?) {
+pub fn title_of(
+    def: &ObjectTypeDef,
+    presentation: Option<&UiPresentation>,
+    record: &Record,
+) -> Option<String> {
+    match record.get(title_field(def, presentation)?) {
         Value::Str(text) if !text.trim().is_empty() => Some(text.clone()),
         _ => None,
     }
@@ -162,6 +174,10 @@ pub struct ViewData {
     /// settings record, when it has one that says, comes first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tenant_theme: Option<String>,
+    /// The fields drawn as a person, by object type (from the tenant's presentations): their
+    /// string values are principals, which [`project`] sends as handles into `people`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub person_fields: BTreeMap<ObjectTypeId, BTreeSet<FieldId>>,
 }
 
 /// Section names in evaluation order: sections that feed others come first.
@@ -437,14 +453,16 @@ pub fn included_refs(
 /// first appearance, and the principal string goes no further.
 struct People<'a> {
     known: &'a BTreeMap<String, PersonInfo>,
+    person_fields: &'a BTreeMap<ObjectTypeId, BTreeSet<FieldId>>,
     handles: BTreeMap<String, String>,
     table: Map<String, Json>,
 }
 
 impl<'a> People<'a> {
-    fn new(known: &'a BTreeMap<String, PersonInfo>) -> Self {
+    fn new(data: &'a ViewData) -> Self {
         Self {
-            known,
+            known: &data.people,
+            person_fields: &data.person_fields,
             handles: BTreeMap::new(),
             table: Map::new(),
         }
@@ -486,6 +504,8 @@ fn project_record(
     people: &mut People<'_>,
     targets: Option<&BTreeMap<FieldId, RefTargets>>,
 ) -> Map<String, Json> {
+    let declared = people.person_fields;
+    let persons = declared.get(&record.object);
     let mut out = Map::new();
     out.insert("id".into(), json!(record.id.0));
     out.insert("object".into(), json!(record.object.as_str()));
@@ -504,6 +524,11 @@ fn project_record(
         .iter()
         .map(|(field, value)| {
             let plain = match (targets.and_then(|all| all.get(field)), value) {
+                (_, Value::Str(principal))
+                    if !principal.is_empty() && persons.is_some_and(|f| f.contains(field)) =>
+                {
+                    json!({ "person": people.handle(principal) })
+                }
                 (Some(target), Value::Ref(id)) => ref_value(target, *id),
                 (Some(target), Value::List(items)) => Json::Array(
                     items
@@ -579,7 +604,7 @@ fn project_row(record: &Record, section: &SectionData, people: &mut People<'_>) 
 /// `{"ref": {"object", "id", "title"}}`, or `{"ref": null}` when the reader may not read the
 /// target.
 pub fn project(data: &ViewData) -> Json {
-    let mut people = People::new(&data.people);
+    let mut people = People::new(data);
     let mut sections = Map::new();
     for (name, section) in &data.sections {
         let value = if let Some(aggregate) = &section.aggregate {
@@ -666,6 +691,7 @@ mod people_and_refs {
             schema_version: SchemaVersion(1),
             record_rules: BTreeMap::new(),
             tenant_theme: None,
+            person_fields: BTreeMap::from([(object("post"), BTreeSet::from([field("editor")]))]),
             people: BTreeMap::from([
                 (
                     "user:ada".to_string(),
@@ -684,7 +710,11 @@ mod people_and_refs {
     #[test]
     fn a_reply_carries_handles_and_no_principal_string() {
         let rows = vec![
-            record(1, "user:ada", vec![]),
+            record(
+                1,
+                "user:ada",
+                vec![("editor", Value::Str("user:bob".into()))],
+            ),
             record(2, "user:bob", vec![]),
             record(3, "user:ada", vec![]),
         ];
@@ -693,6 +723,11 @@ mod people_and_refs {
         assert!(!text.contains("user:"), "{text}");
         let posts = &model["data"]["posts"];
         assert_eq!(posts[0]["created_by"], json!({ "person": "p1" }));
+        assert_eq!(
+            posts[0]["fields"]["editor"],
+            json!({ "person": "p2" }),
+            "a field the presentation draws as a person is a handle too"
+        );
         assert_eq!(posts[1]["created_by"], json!({ "person": "p2" }));
         assert_eq!(posts[2]["created_by"], json!({ "person": "p1" }));
         assert_eq!(
@@ -764,14 +799,24 @@ mod people_and_refs {
             field_def("slug", FieldType::Str, true),
             field_def("title", FieldType::Str, true),
         ]);
-        assert_eq!(title_field(&slug_and_title), Some(&field("title")));
+        assert_eq!(title_field(&slug_and_title, None), Some(&field("title")));
         let only_slug = def(vec![
             field_def("slug", FieldType::Str, true),
             field_def("note", FieldType::Str, false),
         ]);
-        assert_eq!(title_field(&only_slug), Some(&field("slug")));
+        assert_eq!(title_field(&only_slug, None), Some(&field("slug")));
+        let declared = UiPresentation {
+            object: object("thing"),
+            title: Some(field("note")),
+            fields: BTreeMap::new(),
+        };
+        assert_eq!(
+            title_field(&only_slug, Some(&declared)),
+            Some(&field("note")),
+            "a declared title wins"
+        );
         let none = def(vec![field_def("rank", FieldType::Int, true)]);
-        assert_eq!(title_field(&none), None);
+        assert_eq!(title_field(&none, None), None);
     }
 
     /// A name follows the member-name setting: signed-in members by default, everyone or nobody

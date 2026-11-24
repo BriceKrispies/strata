@@ -191,3 +191,21 @@ A screen part (`GET /api/ui/parts/<hash>`) carries, beside `screen`, `forms`, `a
 - `fingerprint` is the SHA-256, in lower-case hex, of the canonical JSON of the shape without it. A
   change to a field's type, or to what an operation takes, changes the shape, the fingerprint and
   the part's hash.
+
+### Presentations: person fields and display types
+
+A tenant's presentation of an object type (a `presentations` section of a product, `ui-presentation`
+in the specification) declares the display type of its fields. Two things reach the reply:
+
+- A field declared `"display": "person"` holds a principal in a string field. Its value in a row
+  (and in an included record) is sent as `{"person": "<handle>"}`, with an entry in `people`, under
+  the same rules as `created_by`: the value is one the reader's read of the record already gave
+  them, the name follows the `member_names` setting, and the principal string is not sent. An empty
+  value stays an empty string.
+- A section's `shape` in the screen part gains, for each field a presentation declares,
+  `"displayType"` (the display type, e.g. `"rich-text"`) and `"props"` (an object of strings, when
+  the declaration has any), and the shape gains `"title"`: the presentation's title field, else the
+  field the reply's reference titles use. A declared display type changes the shape's fingerprint.
+
+The title of a reference (`{"ref": {"title"}}`) is the target object type's presentation `title`
+when it declares one, else the choice described under "Reference fields".

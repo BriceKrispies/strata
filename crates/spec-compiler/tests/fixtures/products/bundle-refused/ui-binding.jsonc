@@ -1,0 +1,26 @@
+{
+  // Refused by specc bundle (WG-5462, D-8250): a presentation of an object type the product does
+  // not declare (ui.binding.unknown-object), one that names a field its object does not have
+  // (ui.binding.unknown-field), and one that draws a field as a display type the design system does
+  // not have (ui.binding.unknown-display).
+  "product": {
+    "id": "ticket-desk",
+    "name": "Ticket desk",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] }
+  },
+  "objects": [
+    {
+      "id": "ticket_desk__ticket",
+      "label": "Ticket",
+      "fields": { "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {}
+    }
+  ],
+  "presentations": [
+    { "id": "ticket_desk__a", "object": "ticket_desk__nothing", "fields": {} },
+    { "id": "ticket_desk__b", "object": "ticket_desk__ticket", "fields": { "nope": { "display": "text" } } },
+    { "id": "ticket_desk__c", "object": "ticket_desk__ticket", "fields": { "title": { "display": "sparkle" } } }
+  ]
+}
