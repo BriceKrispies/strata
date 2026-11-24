@@ -12,9 +12,9 @@ use strata_kernel::ext::*;
 use strata_kernel::refs_in;
 use strata_kernel::types::{AggregateId, AggregateRequest, AggregateResult};
 use strata_kernel::{
-    ArgSource, FieldId, ObjectTypeId, PageCursor, Principal, ReadRequest, Record, RecordId,
-    SchemaVersion, SettingId, StateRevision, TenantSchema, TenantState, Value, ViewDef, ViewId,
-    ViewSection,
+    ArgSource, FieldDef, FieldId, FieldType, ObjectTypeDef, ObjectTypeId, PageCursor, Principal,
+    ReadRequest, Record, RecordId, SchemaVersion, SettingId, StateRevision, TenantSchema,
+    TenantState, Value, ViewDef, ViewId, ViewSection,
 };
 
 /// Find the view whose route pattern matches a path, with the values of its `:name` segments.
@@ -52,6 +52,71 @@ pub fn match_route<'a>(
     best.map(|(_, view, params)| (view, params))
 }
 
+/// The reference fields of a section's object, as the reader may follow them: the target object
+/// type, and the title of each target record the reader may read. A target that is not here is not
+/// readable, and the reply says so without its id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefTargets {
+    pub object: ObjectTypeId,
+    pub titles: BTreeMap<RecordId, Option<String>>,
+}
+
+/// What a reply may say of one principal: a display name and an avatar (a file address), each
+/// `None` when the reader may not know it, and whether the principal is the reader.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonInfo {
+    pub name: Option<String>,
+    pub avatar: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reader: bool,
+}
+
+/// The setting that says who may see the display names of the members a view names: `members`
+/// (the default: signed-in readers), `everyone` (anonymous readers too) or `nobody`.
+pub const MEMBER_NAMES_SETTING: &str = "member_names";
+
+/// The display name a reader may be given for a member, as the member-name setting allows. A
+/// reader is always given their own name; any other value of the setting reads as `members`.
+pub fn name_for_reader(
+    mode: &str,
+    signed_in: bool,
+    is_reader: bool,
+    name: Option<String>,
+) -> Option<String> {
+    let allowed = is_reader
+        || match mode {
+            "everyone" => true,
+            "nobody" => false,
+            _ => signed_in,
+        };
+    name.filter(|name| allowed && !name.trim().is_empty())
+}
+
+/// The field whose text titles a record of an object type: a field named `title` or `name` when
+/// it is a required string, else the first required string field; none when there is no such
+/// field. The specification declares no title field yet; when it does, it comes first here.
+pub fn title_field(def: &ObjectTypeDef) -> Option<&FieldId> {
+    let required_str = |field: &&FieldDef| field.required && matches!(field.ty, FieldType::Str);
+    ["title", "name"]
+        .iter()
+        .find_map(|wanted| {
+            def.fields
+                .values()
+                .filter(required_str)
+                .find(|field| field.id.as_str() == *wanted)
+        })
+        .or_else(|| def.fields.values().find(required_str))
+        .map(|field| &field.id)
+}
+
+/// The title of a record: the text of its [`title_field`], when it holds some.
+pub fn title_of(def: &ObjectTypeDef, record: &Record) -> Option<String> {
+    match record.get(title_field(def)?) {
+        Value::Str(text) if !text.trim().is_empty() => Some(text.clone()),
+        _ => None,
+    }
+}
+
 /// The raw result of one view section, before projection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SectionData {
@@ -60,6 +125,10 @@ pub struct SectionData {
     /// Referenced records the principal may read, by referencing field.
     pub included: BTreeMap<FieldId, BTreeMap<RecordId, Arc<Record>>>,
     pub markdown: Vec<FieldId>,
+    /// Each reference field of the section's object: where it points and the titles of the
+    /// targets the reader may read (included or not).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ref_targets: BTreeMap<FieldId, RefTargets>,
     /// The cursor that fetches the next page of this section, as [`encode_cursor`] writes it;
     /// `None` at the end of the list and for a single-row section (CMS-164).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,6 +154,10 @@ pub struct ViewData {
     /// in the model as `record_rules`; left out while nothing was asked.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub record_rules: BTreeMap<String, Json>,
+    /// What the reader may know of each principal the rows name, by principal. [`project`] sends
+    /// handles in their place.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub people: BTreeMap<String, PersonInfo>,
 }
 
 /// Section names in evaluation order: sections that feed others come first.
@@ -356,7 +429,59 @@ pub fn included_refs(
     out
 }
 
-fn project_record(record: &Record) -> Map<String, Json> {
+/// The people a reply names: each principal gets an opaque handle (`p1`, `p2`, ...) in order of
+/// first appearance, and the principal string goes no further.
+struct People<'a> {
+    known: &'a BTreeMap<String, PersonInfo>,
+    handles: BTreeMap<String, String>,
+    table: Map<String, Json>,
+}
+
+impl<'a> People<'a> {
+    fn new(known: &'a BTreeMap<String, PersonInfo>) -> Self {
+        Self {
+            known,
+            handles: BTreeMap::new(),
+            table: Map::new(),
+        }
+    }
+
+    fn handle(&mut self, principal: &str) -> String {
+        if let Some(handle) = self.handles.get(principal) {
+            return handle.clone();
+        }
+        let handle = format!("p{}", self.handles.len() + 1);
+        let info = self.known.get(principal).cloned().unwrap_or_default();
+        let mut entry = Map::new();
+        entry.insert("name".into(), json!(info.name));
+        entry.insert("avatar".into(), json!(info.avatar));
+        if info.reader {
+            entry.insert("self".into(), json!(true));
+        }
+        self.table.insert(handle.clone(), Json::Object(entry));
+        self.handles.insert(principal.to_string(), handle.clone());
+        handle
+    }
+}
+
+/// A reference as the reply sends it: the target's object, id and title when the reader may read
+/// it, else `{"ref": null}`, with no id.
+fn ref_value(targets: &RefTargets, id: RecordId) -> Json {
+    match targets.titles.get(&id) {
+        Some(title) => json!({ "ref": {
+            "object": targets.object.as_str(),
+            "id": id.0,
+            "title": title,
+        } }),
+        None => json!({ "ref": null }),
+    }
+}
+
+fn project_record(
+    record: &Record,
+    people: &mut People<'_>,
+    targets: Option<&BTreeMap<FieldId, RefTargets>>,
+) -> Map<String, Json> {
     let mut out = Map::new();
     out.insert("id".into(), json!(record.id.0));
     out.insert("object".into(), json!(record.object.as_str()));
@@ -365,22 +490,44 @@ fn project_record(record: &Record) -> Map<String, Json> {
     out.insert("updated_at".into(), json!(record.updated_at.0));
     out.insert(
         "created_by".into(),
-        json!(record.created_by.as_ref().map(|p| p.as_str())),
+        match &record.created_by {
+            Some(principal) => json!({ "person": people.handle(principal.as_str()) }),
+            None => Json::Null,
+        },
     );
     let fields: Map<String, Json> = record
         .fields
         .iter()
-        .map(|(field, value)| (field.as_str().to_string(), to_plain(value)))
+        .map(|(field, value)| {
+            let plain = match (targets.and_then(|all| all.get(field)), value) {
+                (Some(target), Value::Ref(id)) => ref_value(target, *id),
+                (Some(target), Value::List(items)) => Json::Array(
+                    items
+                        .iter()
+                        .map(|item| match item {
+                            Value::Ref(id) => ref_value(target, *id),
+                            other => to_plain(other),
+                        })
+                        .collect(),
+                ),
+                _ => to_plain(value),
+            };
+            (field.as_str().to_string(), plain)
+        })
         .collect();
     out.insert("fields".into(), Json::Object(fields));
     out
 }
 
-fn project_row(record: &Record, section: &SectionData) -> Json {
-    let mut out = project_record(record);
+fn project_row(record: &Record, section: &SectionData, people: &mut People<'_>) -> Json {
+    let mut out = project_record(record, people, Some(&section.ref_targets));
     let mut refs = Map::new();
     for (field, included) in &section.included {
-        let resolve = |id: &RecordId| included.get(id).map(|r| Json::Object(project_record(r)));
+        let mut resolve = |id: &RecordId| {
+            included
+                .get(id)
+                .map(|r| Json::Object(project_record(r, people, None)))
+        };
         let projected = match record.get(field) {
             Value::Ref(id) => resolve(id).unwrap_or(Json::Null),
             Value::List(items) => Json::Array(
@@ -422,30 +569,33 @@ fn project_row(record: &Record, section: &SectionData) -> Json {
 
 /// Project raw view data into the plain view model the browser renders. A single section
 /// becomes one object or `null`; any other section becomes an array.
+///
+/// A principal is never sent: a record's author is `{"person": "<handle>"}`, and the reply's
+/// `people` table says what the reader may know of each handle. A reference field is
+/// `{"ref": {"object", "id", "title"}}`, or `{"ref": null}` when the reader may not read the
+/// target.
 pub fn project(data: &ViewData) -> Json {
-    let sections: Map<String, Json> = data
-        .sections
-        .iter()
-        .map(|(name, section)| {
-            let value = if let Some(aggregate) = &section.aggregate {
-                project_aggregate(aggregate)
-            } else if section.single {
+    let mut people = People::new(&data.people);
+    let mut sections = Map::new();
+    for (name, section) in &data.sections {
+        let value = if let Some(aggregate) = &section.aggregate {
+            project_aggregate(aggregate)
+        } else if section.single {
+            section
+                .rows
+                .first()
+                .map_or(Json::Null, |row| project_row(row, section, &mut people))
+        } else {
+            Json::Array(
                 section
                     .rows
-                    .first()
-                    .map_or(Json::Null, |row| project_row(row, section))
-            } else {
-                Json::Array(
-                    section
-                        .rows
-                        .iter()
-                        .map(|row| project_row(row, section))
-                        .collect(),
-                )
-            };
-            (name.clone(), value)
-        })
-        .collect();
+                    .iter()
+                    .map(|row| project_row(row, section, &mut people))
+                    .collect(),
+            )
+        };
+        sections.insert(name.clone(), value);
+    }
     let next: Map<String, Json> = data
         .sections
         .iter()
@@ -456,6 +606,7 @@ pub fn project(data: &ViewData) -> Json {
         "title": data.title,
         "params": data.params,
         "data": sections,
+        "people": people.table,
         "depends_on": data.depends_on.iter().map(|o| o.as_str()).collect::<Vec<_>>(),
         "revision": data.revision.0,
         "schema_version": data.schema_version.0,
@@ -471,4 +622,172 @@ pub fn project(data: &ViewData) -> Json {
         model["record_rules"] = json!(data.record_rules);
     }
     model
+}
+
+#[cfg(test)]
+mod people_and_refs {
+    use super::*;
+    use strata_kernel::testkit::{field, field_def, object, principal_id};
+    use strata_kernel::Timestamp;
+
+    fn record(id: u64, author: &str, fields: Vec<(&str, Value)>) -> Arc<Record> {
+        Arc::new(Record {
+            id: RecordId(id),
+            object: object("post"),
+            version: 1,
+            created_by: Some(principal_id(author)),
+            created_at: Timestamp(0),
+            updated_at: Timestamp(0),
+            fields: fields.into_iter().map(|(f, v)| (field(f), v)).collect(),
+        })
+    }
+
+    fn data(rows: Vec<Arc<Record>>, ref_targets: BTreeMap<FieldId, RefTargets>) -> ViewData {
+        let section = SectionData {
+            single: false,
+            rows,
+            included: BTreeMap::new(),
+            markdown: Vec::new(),
+            ref_targets,
+            next: None,
+            aggregate: None,
+        };
+        ViewData {
+            view: ViewId::new("home").unwrap(),
+            title: "Home".into(),
+            params: BTreeMap::new(),
+            sections: BTreeMap::from([("posts".to_string(), section)]),
+            depends_on: BTreeSet::new(),
+            revision: StateRevision(1),
+            schema_version: SchemaVersion(1),
+            record_rules: BTreeMap::new(),
+            people: BTreeMap::from([
+                (
+                    "user:ada".to_string(),
+                    PersonInfo {
+                        name: Some("Ada Okafor".into()),
+                        avatar: None,
+                        reader: true,
+                    },
+                ),
+                ("user:bob".to_string(), PersonInfo::default()),
+            ]),
+        }
+    }
+
+    /// The reply carries no principal string; authors are handles into `people`.
+    #[test]
+    fn a_reply_carries_handles_and_no_principal_string() {
+        let rows = vec![
+            record(1, "user:ada", vec![]),
+            record(2, "user:bob", vec![]),
+            record(3, "user:ada", vec![]),
+        ];
+        let model = project(&data(rows, BTreeMap::new()));
+        let text = model.to_string();
+        assert!(!text.contains("user:"), "{text}");
+        let posts = &model["data"]["posts"];
+        assert_eq!(posts[0]["created_by"], json!({ "person": "p1" }));
+        assert_eq!(posts[1]["created_by"], json!({ "person": "p2" }));
+        assert_eq!(posts[2]["created_by"], json!({ "person": "p1" }));
+        assert_eq!(
+            model["people"],
+            json!({
+                "p1": { "name": "Ada Okafor", "avatar": null, "self": true },
+                "p2": { "name": null, "avatar": null },
+            })
+        );
+    }
+
+    /// A readable target is `{"ref": {object, id, title}}`; an unreadable one is
+    /// `{"ref": null}` with no id.
+    #[test]
+    fn an_unreadable_reference_target_is_ref_null() {
+        let targets = BTreeMap::from([(
+            field("author"),
+            RefTargets {
+                object: object("author"),
+                titles: BTreeMap::from([(RecordId(7), Some("Ines Vale".to_string()))]),
+            },
+        )]);
+        let rows = vec![
+            record(1, "user:ada", vec![("author", Value::Ref(RecordId(7)))]),
+            record(2, "user:ada", vec![("author", Value::Ref(RecordId(9)))]),
+            record(
+                3,
+                "user:ada",
+                vec![(
+                    "author",
+                    Value::List(vec![Value::Ref(RecordId(7)), Value::Ref(RecordId(9))]),
+                )],
+            ),
+        ];
+        let model = project(&data(rows, targets));
+        let posts = &model["data"]["posts"];
+        assert_eq!(
+            posts[0]["fields"]["author"],
+            json!({ "ref": { "object": "author", "id": 7, "title": "Ines Vale" } })
+        );
+        assert_eq!(posts[1]["fields"]["author"], json!({ "ref": null }));
+        assert_eq!(
+            posts[2]["fields"]["author"],
+            json!([
+                { "ref": { "object": "author", "id": 7, "title": "Ines Vale" } },
+                { "ref": null }
+            ])
+        );
+        assert!(!posts[1].to_string().contains('9'));
+    }
+
+    /// The title of a target is its `title` or `name` field, else its first required
+    /// string field.
+    #[test]
+    fn a_title_field_is_chosen_by_name_then_by_requirement() {
+        let def = |fields: Vec<FieldDef>| ObjectTypeDef {
+            id: object("thing"),
+            label: "Thing".into(),
+            fields: fields.into_iter().map(|f| (f.id.clone(), f)).collect(),
+            constraints: BTreeMap::new(),
+            retention: None,
+            publication: None,
+            language_field: None,
+            translation_group: None,
+            unique: None,
+            searchable: None,
+        };
+        let slug_and_title = def(vec![
+            field_def("slug", FieldType::Str, true),
+            field_def("title", FieldType::Str, true),
+        ]);
+        assert_eq!(title_field(&slug_and_title), Some(&field("title")));
+        let only_slug = def(vec![
+            field_def("slug", FieldType::Str, true),
+            field_def("note", FieldType::Str, false),
+        ]);
+        assert_eq!(title_field(&only_slug), Some(&field("slug")));
+        let none = def(vec![field_def("rank", FieldType::Int, true)]);
+        assert_eq!(title_field(&none), None);
+    }
+
+    /// A name follows the member-name setting: signed-in members by default, everyone or nobody
+    /// when the tenant says so, and a reader always has their own.
+    #[test]
+    fn names_follow_the_member_name_setting() {
+        let ada = || Some("Ada Okafor".to_string());
+        // The default: signed-in readers see names, anonymous readers do not.
+        assert_eq!(name_for_reader("members", true, false, ada()), ada());
+        assert_eq!(name_for_reader("members", false, false, ada()), None);
+        assert_eq!(name_for_reader("unheard-of", false, false, ada()), None);
+        // Everyone: an anonymous reader sees names too.
+        assert_eq!(name_for_reader("everyone", false, false, ada()), ada());
+        // Nobody: no one sees another member's name, a reader still sees their own.
+        assert_eq!(name_for_reader("nobody", true, false, ada()), None);
+        assert_eq!(name_for_reader("nobody", true, true, ada()), ada());
+        // A member with no name, or an empty one, is "A member" to the client.
+        assert_eq!(name_for_reader("everyone", true, false, None), None);
+        assert_eq!(
+            name_for_reader("everyone", true, false, Some(" ".into())),
+            None
+        );
+    }
 }

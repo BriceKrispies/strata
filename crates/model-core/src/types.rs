@@ -2603,10 +2603,10 @@ pub struct PostFields {
     /// Field `body`.
     pub body: String,
     /// Field `author`.
-    pub author: RecordId,
+    pub author: RecordRef,
     /// Field `category`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub category: Option<RecordId>,
+    pub category: Option<RecordRef>,
     /// Field `tags`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
@@ -2624,6 +2624,45 @@ pub struct PostFields {
     /// Field `cover-alt`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover_alt: Option<String>,
+}
+
+/// Person Ref
+///
+/// A person value of a view reply (the author of a record): an opaque handle, per reply, into the reply's people table. The principal itself is never sent (WG-5463).
+///
+/// Specification type `person-ref`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct PersonRef {
+    /// Field `person`.
+    pub person: String,
+}
+
+/// Ref Target
+///
+/// The target of a reference the reader may read: its object type, its id and its title (the title field of the object type), absent when the target has none.
+///
+/// Specification type `ref-target`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct RefTarget {
+    /// Field `object`.
+    pub object: String,
+    /// Field `id`.
+    pub id: RecordId,
+    /// Field `title`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// Record Ref
+///
+/// A reference field of a view reply: its target, or no target when the reader may not read it (the reply sends no id then).
+///
+/// Specification type `record-ref`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct RecordRef {
+    /// Field `ref`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#ref: Option<RefTarget>,
 }
 
 /// Author Record
@@ -2645,7 +2684,7 @@ pub struct AuthorRecord {
     pub updated_at: prelude::Timestamp,
     /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_by: Option<PrincipalId>,
+    pub created_by: Option<PersonRef>,
     /// Field `fields`.
     pub fields: AuthorFields,
 }
@@ -2669,7 +2708,7 @@ pub struct CategoryRecord {
     pub updated_at: prelude::Timestamp,
     /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_by: Option<PrincipalId>,
+    pub created_by: Option<PersonRef>,
     /// Field `fields`.
     pub fields: CategoryFields,
 }
@@ -2708,7 +2747,7 @@ pub struct PublicationRow {
     pub updated_at: prelude::Timestamp,
     /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_by: Option<PrincipalId>,
+    pub created_by: Option<PersonRef>,
     /// Field `fields`.
     pub fields: PublicationFields,
     /// Field `refs`.
@@ -2740,7 +2779,7 @@ pub struct AuthorRow {
     pub updated_at: prelude::Timestamp,
     /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_by: Option<PrincipalId>,
+    pub created_by: Option<PersonRef>,
     /// Field `fields`.
     pub fields: AuthorFields,
     /// Field `refs`.
@@ -2772,7 +2811,7 @@ pub struct CategoryRow {
     pub updated_at: prelude::Timestamp,
     /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_by: Option<PrincipalId>,
+    pub created_by: Option<PersonRef>,
     /// Field `fields`.
     pub fields: CategoryFields,
     /// Field `refs`.
@@ -2804,7 +2843,7 @@ pub struct PostRow {
     pub updated_at: prelude::Timestamp,
     /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_by: Option<PrincipalId>,
+    pub created_by: Option<PersonRef>,
     /// Field `fields`.
     pub fields: PostFields,
     /// Field `refs`.

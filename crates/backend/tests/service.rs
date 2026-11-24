@@ -2026,3 +2026,49 @@ async fn a_view_with_a_field_selection_holds_no_unselected_and_no_redacted_field
         );
     }
 }
+
+/// A view names the people behind its rows by handle: the reply to a signed-in author carries
+/// their own display name, marked as theirs, and no principal string anywhere; the rows of other
+/// authors name nobody, and a reference field carries its target's title.
+#[tokio::test]
+async fn a_view_reply_names_people_by_handle_and_titles_its_references() {
+    let backend = start().await;
+    let token = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+    let draft = json!({
+        "op": "create",
+        "object": "post",
+        "fields": { "title": "People test", "slug": "people-test", "body": "Text.", "author": 3 },
+    });
+    let (status, body) = backend
+        .call("fieldnotes", Some(&token), "/internal/mutate", draft)
+        .await;
+    assert_eq!(status, 200, "{body}");
+
+    let desk = backend.view("fieldnotes", Some(&token), "/desk").await;
+    let people = desk["people"].as_object().expect("a people table");
+    let me: Vec<_> = people.iter().filter(|(_, p)| p["reader"] == true).collect();
+    assert_eq!(me.len(), 1, "the reader is one of the people: {people:?}");
+    assert_eq!(me[0].0, "user:tomasz");
+    assert_eq!(me[0].1["name"], "Tomasz Wren");
+    assert!(
+        people.len() == 1,
+        "other authors' rows name nobody: {people:?}"
+    );
+
+    // A reference field of a row has its target's title when the reader may read the target.
+    let targets = &desk["sections"]["posts"]["ref_targets"];
+    let author = &targets["author"];
+    assert_eq!(author["object"], "author");
+    assert!(
+        author["titles"]
+            .as_object()
+            .is_some_and(|titles| !titles.is_empty() && titles.values().all(|t| t.is_string())),
+        "titles of readable authors: {author}"
+    );
+
+    // An anonymous reader is given no people.
+    let home = backend.view("fieldnotes", None, "/").await;
+    assert!(home.get("people").is_none(), "{home}");
+}

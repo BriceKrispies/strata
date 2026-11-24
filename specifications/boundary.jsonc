@@ -1442,7 +1442,7 @@
             "label": "label"
           },
           "initial": {
-            "path": "data.post.fields.category"
+            "path": "data.post.fields.category.ref.id"
           }
         },
         {
@@ -1456,7 +1456,7 @@
             "label": "label"
           },
           "initial": {
-            "path": "data.post.fields.author"
+            "path": "data.post.fields.author.ref.id"
           }
         },
         {
@@ -1590,7 +1590,7 @@
             "label": "label"
           },
           "initial": {
-            "path": "data.post.fields.category"
+            "path": "data.post.fields.category.ref.id"
           }
         },
         {
@@ -1604,7 +1604,7 @@
             "label": "label"
           },
           "initial": {
-            "path": "data.post.fields.author"
+            "path": "data.post.fields.author.ref.id"
           }
         },
         {
@@ -1738,7 +1738,7 @@
             "label": "label"
           },
           "initial": {
-            "path": "data.post.fields.category"
+            "path": "data.post.fields.category.ref.id"
           }
         },
         {
@@ -1752,7 +1752,7 @@
             "label": "label"
           },
           "initial": {
-            "path": "data.post.fields.author"
+            "path": "data.post.fields.author.ref.id"
           }
         },
         {
@@ -1886,7 +1886,7 @@
             "label": "label"
           },
           "initial": {
-            "path": "data.post.fields.category"
+            "path": "data.post.fields.category.ref.id"
           }
         },
         {
@@ -1900,7 +1900,7 @@
             "label": "label"
           },
           "initial": {
-            "path": "data.post.fields.author"
+            "path": "data.post.fields.author.ref.id"
           }
         },
         {
@@ -2545,14 +2545,17 @@
     {"id":"publication-fields","name":"Publication Fields","kind":"struct","fields":[{"name":"key","type":"string"},{"name":"name","type":"string"},{"name":"tagline","type":"string","optional":true},{"name":"about","type":"string","optional":true},{"name":"colophon","type":"string","optional":true},{"name":"accent","type":"string"},{"name":"paper","type":"string"}],"description":"The fields of the publication record as the BFF projects them (object publication of the tenant template), under the names the JSON uses."},
     {"id":"author-fields","name":"Author Fields","kind":"struct","fields":[{"name":"name","type":"string"},{"name":"slug","type":"string"},{"name":"title","type":"string","optional":true},{"name":"bio","type":"string","optional":true},{"name":"principal","type":"string","optional":true}],"description":"The fields of an author record as the BFF projects them (object author)."},
     {"id":"category-fields","name":"Category Fields","kind":"struct","fields":[{"name":"name","type":"string"},{"name":"slug","type":"string"},{"name":"description","type":"string","optional":true}],"description":"The fields of a topic record as the BFF projects them (object category)."},
-    {"id":"post-fields","name":"Post Fields","kind":"struct","fields":[{"name":"title","type":"string"},{"name":"slug","type":"string"},{"name":"excerpt","type":"string","optional":true},{"name":"body","type":"string"},{"name":"author","type":"record-id"},{"name":"category","type":"record-id","optional":true},{"name":"tags","type":"list<string>","optional":true},{"name":"status","type":"string"},{"name":"featured","type":"bool","optional":true},{"name":"published-at","type":"timestamp","optional":true},{"name":"cover","type":"string","optional":true},{"name":"cover-alt","type":"string","optional":true}],"description":"The fields of an article record as the BFF projects them (object post). The specification names them in kebab-case like every other field; on the wire they are snake_case (published_at, cover_alt), as system.generation.wireCase says."},
-    {"id":"author-record","name":"Author Record","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"principal-id","optional":true},{"name":"fields","type":"author-fields"}],"description":"An author record included in an article row (refs.author): the projection of a record without refs or blocks of its own (substrate project_record)."},
-    {"id":"category-record","name":"Category Record","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"principal-id","optional":true},{"name":"fields","type":"category-fields"}],"description":"A topic record included in an article row (refs.category)."},
+    {"id":"post-fields","name":"Post Fields","kind":"struct","fields":[{"name":"title","type":"string"},{"name":"slug","type":"string"},{"name":"excerpt","type":"string","optional":true},{"name":"body","type":"string"},{"name":"author","type":"record-ref"},{"name":"category","type":"record-ref","optional":true},{"name":"tags","type":"list<string>","optional":true},{"name":"status","type":"string"},{"name":"featured","type":"bool","optional":true},{"name":"published-at","type":"timestamp","optional":true},{"name":"cover","type":"string","optional":true},{"name":"cover-alt","type":"string","optional":true}],"description":"The fields of an article record as the BFF projects them (object post). The specification names them in kebab-case like every other field; on the wire they are snake_case (published_at, cover_alt), as system.generation.wireCase says."},
+    {"id":"person-ref","name":"Person Ref","kind":"struct","fields":[{"name":"person","type":"string"}],"description":"A person value of a view reply (the author of a record): an opaque handle, per reply, into the reply's people table. The principal itself is never sent (WG-5463)."},
+    {"id":"ref-target","name":"Ref Target","kind":"struct","fields":[{"name":"object","type":"string"},{"name":"id","type":"record-id"},{"name":"title","type":"string","optional":true}],"description":"The target of a reference the reader may read: its object type, its id and its title (the title field of the object type), absent when the target has none."},
+    {"id":"record-ref","name":"Record Ref","kind":"struct","fields":[{"name":"ref","type":"ref-target","optional":true}],"description":"A reference field of a view reply: its target, or no target when the reader may not read it (the reply sends no id then)."},
+    {"id":"author-record","name":"Author Record","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"person-ref","optional":true},{"name":"fields","type":"author-fields"}],"description":"An author record included in an article row (refs.author): the projection of a record without refs or blocks of its own (substrate project_record)."},
+    {"id":"category-record","name":"Category Record","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"person-ref","optional":true},{"name":"fields","type":"category-fields"}],"description":"A topic record included in an article row (refs.category)."},
     {"id":"post-refs","name":"Post Refs","kind":"struct","fields":[{"name":"author","type":"author-record","optional":true},{"name":"category","type":"category-record","optional":true}],"description":"The records an article row includes through its reference fields (the view definition includes author and category); each is absent when the reference is empty."},
-    {"id":"publication-row","name":"Publication Row","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"principal-id","optional":true},{"name":"fields","type":"publication-fields"},{"name":"refs","type":"json"},{"name":"blocks","type":"json","optional":true},{"name":"reading-minutes","type":"u32","optional":true}],"description":"One publication record as a view section holds it (substrate project_row): the record members, refs (an empty object here), blocks of its markdown fields and reading_minutes when it has any."},
-    {"id":"author-row","name":"Author Row","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"principal-id","optional":true},{"name":"fields","type":"author-fields"},{"name":"refs","type":"json"},{"name":"blocks","type":"json","optional":true},{"name":"reading-minutes","type":"u32","optional":true}],"description":"One author record as a view section holds it; the markdown field bio is in blocks."},
-    {"id":"category-row","name":"Category Row","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"principal-id","optional":true},{"name":"fields","type":"category-fields"},{"name":"refs","type":"json"},{"name":"blocks","type":"json","optional":true},{"name":"reading-minutes","type":"u32","optional":true}],"description":"One topic record as a view section holds it."},
-    {"id":"post-row","name":"Post Row","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"principal-id","optional":true},{"name":"fields","type":"post-fields"},{"name":"refs","type":"post-refs"},{"name":"blocks","type":"json","optional":true},{"name":"reading-minutes","type":"u32","optional":true}],"description":"One article record as a view section holds it: its fields, the author and the topic it refers to (refs), and the blocks of its body with the reading time."},
+    {"id":"publication-row","name":"Publication Row","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"person-ref","optional":true},{"name":"fields","type":"publication-fields"},{"name":"refs","type":"json"},{"name":"blocks","type":"json","optional":true},{"name":"reading-minutes","type":"u32","optional":true}],"description":"One publication record as a view section holds it (substrate project_row): the record members, refs (an empty object here), blocks of its markdown fields and reading_minutes when it has any."},
+    {"id":"author-row","name":"Author Row","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"person-ref","optional":true},{"name":"fields","type":"author-fields"},{"name":"refs","type":"json"},{"name":"blocks","type":"json","optional":true},{"name":"reading-minutes","type":"u32","optional":true}],"description":"One author record as a view section holds it; the markdown field bio is in blocks."},
+    {"id":"category-row","name":"Category Row","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"person-ref","optional":true},{"name":"fields","type":"category-fields"},{"name":"refs","type":"json"},{"name":"blocks","type":"json","optional":true},{"name":"reading-minutes","type":"u32","optional":true}],"description":"One topic record as a view section holds it."},
+    {"id":"post-row","name":"Post Row","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"string"},{"name":"version","type":"u64"},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"created-by","type":"person-ref","optional":true},{"name":"fields","type":"post-fields"},{"name":"refs","type":"post-refs"},{"name":"blocks","type":"json","optional":true},{"name":"reading-minutes","type":"u32","optional":true}],"description":"One article record as a view section holds it: its fields, the author and the topic it refers to (refs), and the blocks of its body with the reading time."},
     {"id":"view-theme","name":"View Theme","kind":"struct","fields":[{"name":"accent","type":"string"},{"name":"paper","type":"string"},{"name":"theme","type":"string","optional":true}],"description":"The resolved theme of a view: the accent and paper names the publication settings give, and the design-system preset (theme, left out while it is the default fieldnotes), or the defaults when a setting is not one of the theme tokens."},
     {"id":"option-choice","name":"Option Choice","kind":"struct","fields":[{"name":"value","type":"string"},{"name":"label","type":"string"}],"description":"One entry of a choice control: the value the form submits and the label it shows."},
     {"id":"front-page-data","name":"Front Page Data","kind":"struct","fields":[{"name":"site","type":"publication-row","optional":true},{"name":"featured","type":"post-row","optional":true},{"name":"recent","type":"list<post-row>"},{"name":"categories","type":"list<category-row>"}],"description":"The sections of the front page view: the publication, the featured article, the recent articles and the topics."},
