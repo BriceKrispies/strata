@@ -3,6 +3,7 @@
 // with the fixed interpreter. Plain functions, no browser and no worker.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { nodesOf } from '../src/kernel/compose.js';
 import { explainRefusal, matchTenantRoute, tenantTitle } from '../src/kernel/tenant-ui.js';
 import { initialState, update } from '../src/kernel/update.js';
 import { view } from '../src/kernel/view.js';
@@ -80,6 +81,9 @@ function run(state, messages) {
   return { state, effects };
 }
 
+/** The form nodes of a page model. */
+const formsOf = (page) => nodesOf(page).filter((n) => n.pattern === 'form');
+
 const http = (effects) => effects.filter((e) => e.type === 'http');
 const answer = (effect, body, ok = true, status = 200) => ({ type: 'http_result', id: effect.id, ok, status, body });
 
@@ -127,11 +131,20 @@ test('a tenant screen is drawn by the interpreter from its part and the view mod
   assert.equal(page.layout, 'list');
   assert.equal(page.heading, 'Open tickets');
   assert.equal(view(loaded()).pageTitle, 'Open tickets', 'the title the screen states, not the view\'s');
-  assert.deepEqual(page.sections, [
-    { name: 'open', single: false, more: false, rows: [{ id: 3, fields: [{ name: 'status', value: 'open' }, { name: 'title', value: 'Leak' }] }] },
-  ]);
-  assert.deepEqual(page.forms, [
-    { id: 'ticket_desk__open_form', submitLabel: 'Open the ticket', busy: false, error: '', notice: '', fields: [{ name: 'title', label: 'Title', control: 'text', options: [], value: '', error: '' }] },
+  // The list of tickets in the main column, as cards; the form beside it.
+  assert.equal(page.template, 'split');
+  const [open] = page.main;
+  assert.equal(open.pattern, 'record-list');
+  assert.equal(open.label, 'Open');
+  assert.equal(open.state, 'ready');
+  assert.equal(open.items[0].title, 'Leak');
+  assert.deepEqual(open.items[0].status, { kind: 'status', text: 'Open', tone: 'neutral' });
+  assert.deepEqual(page.aside, [
+    {
+      pattern: 'form', id: 'form:ticket_desk__open_form', form: 'ticket_desk__open_form', title: 'Open ticket', submitLabel: 'Open the ticket',
+      busy: false, error: '', notice: '', collapsible: false, open: true,
+      fields: [{ name: 'title', label: 'Title', control: 'text', options: [], value: '', error: '', required: null }],
+    },
   ]);
   assert.deepEqual(page.actions, [{ id: 'ticket_desk__open_again', label: 'Open it again', confirm: null, armed: false }]);
 });
@@ -151,11 +164,11 @@ test('a tenant form invokes its operation with its fields as inputs, and a refus
   assert.deepEqual(invoked.body, { operation: 'ticket_desk__open_ticket', inputs: { title: '' } }, 'the field is trimmed');
   assert.ok(invoked.idempotencyKey, 'an invocation carries a key');
   assert.equal(invoked.csrf, 'tok');
-  assert.equal(view(typed.state).page.forms[0].busy, true);
+  assert.equal(formsOf(view(typed.state).page)[0].busy, true);
 
   const refusal = { code: 'invalid', message: 'The ticket was refused.', failed: [{ rule: 'required:ticket_desk__ticket.title', detail: 'title is required', passed: false }] };
   const refused = update(typed.state, { ...stamp, ...answer(invoked, refusal, false, 422) });
-  const form = view(refused.state).page.forms[0];
+  const form = formsOf(view(refused.state).page)[0];
   assert.equal(form.busy, false);
   assert.equal(form.fields[0].error, 'A ticket needs a title.');
   assert.equal(form.error, 'The ticket was refused.');

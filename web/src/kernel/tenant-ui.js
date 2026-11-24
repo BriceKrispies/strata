@@ -19,6 +19,8 @@
 // element's type in the specification together.
 // @ts-check
 
+import { compose } from './compose.js';
+
 /**
  * @typedef {{ kind: string, id: string, hash: string, route?: string, view?: string, title?: string, layout?: string, auth?: string, query?: string[] }} ManifestEntry
  * @typedef {{ hash: string, schema_version: number, parts: ManifestEntry[] }} Manifest
@@ -227,47 +229,6 @@ export function tenantTitle(template, model) {
 }
 
 /**
- * The value of a field as a page shows it. A person is the name the reply's `people` table holds
- * for the handle ("A member" when it holds none); a reference is its target's title ("Not
- * available" when the target is unreadable or has no title); neither is drawn as its id.
- * @param {any} value @param {Record<string, any>} [people]
- * @returns {string}
- */
-function shown(value, people = {}) {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  if (Array.isArray(value)) return value.map((item) => shown(item, people)).join(', ');
-  if (typeof value === 'object') {
-    if ('person' in value) return people[value.person]?.name ?? 'A member';
-    if ('ref' in value) return value.ref?.title ?? 'Not available';
-    return JSON.stringify(value);
-  }
-  return String(value);
-}
-
-/** A projected record as the interpreter draws it: each field by name, in name order. @param {any} row @param {Record<string, any>} people */
-function recordOf(row, people) {
-  const fields = Object.keys(row?.fields ?? {}).sort().map((name) => ({ name, value: shown(row.fields[name], people) }));
-  return { id: row?.id ?? null, fields };
-}
-
-/**
- * The sections of a view model, as the interpreter draws them: a list section as its rows, a
- * single section as one record. The aggregate of a section is drawn as its value.
- * @param {any} model
- */
-function sectionsOf(model) {
-  const data = model?.data ?? {};
-  const people = model?.people ?? {};
-  return Object.keys(data).sort().map((name) => {
-    const value = data[name];
-    if (Array.isArray(value)) return { name, single: false, rows: value.map((row) => recordOf(row, people)), more: typeof model.next?.[name] === 'string' };
-    if (value && typeof value === 'object' && 'fields' in value) return { name, single: true, record: recordOf(value, people) };
-    return { name, single: true, record: { id: null, fields: [{ name, value: shown(value, people) }] } };
-  });
-}
-
-/**
  * The state of a form of a tenant screen the page keeps: its values, whether it is waiting for a
  * reply, and the refusal it shows.
  * @typedef {{ values: Record<string, string | boolean>, busy: boolean, error: string, notice?: string, errors: Record<string, string> }} TenantForm
@@ -379,29 +340,13 @@ export function explainRefusal(errors, owner, form, error) {
 
 /**
  * The page model of a tenant screen: what `views/tenant.js` draws. Built from the screen's part and
- * the view model alone (INT-3257).
+ * the view model alone (INT-3257) by the interpreter (`compose.js`): a page header with the
+ * screen's title and actions, and pattern nodes in a main and a side column. A null model draws
+ * the screen's sections in their loading state.
  * @param {ManifestEntry} entry @param {any} part @param {any} model
- * @param {{ forms: Record<string, TenantForm>, confirm: string | null, signedIn: boolean }} context
+ * @param {{ forms: Record<string, TenantForm>, confirm: string | null, signedIn: boolean, now?: number, lang?: string, timeZone?: string, screens?: ManifestEntry[], moreLoading?: string | null }} context
  */
 export function tenantPage(entry, part, model, context) {
-  const forms = Object.entries(part?.forms ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, form]) => {
-    const held = context.forms[id] ?? formInit(form);
-    return {
-      id,
-      submitLabel: form.submit_label,
-      busy: held.busy,
-      error: held.error,
-      notice: held.notice ?? '',
-      fields: (form.fields ?? []).map((/** @type {any} */ field) => ({
-        name: field.name,
-        label: field.label,
-        control: field.control,
-        options: field.options ?? [],
-        value: held.values[field.name] ?? (field.control === 'checkbox' ? false : ''),
-        error: held.errors[field.name] ?? '',
-      })),
-    };
-  });
   const actions = Object.entries(part?.actions ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, action]) => ({
     id,
     label: action.label,
@@ -409,16 +354,24 @@ export function tenantPage(entry, part, model, context) {
     armed: context.confirm === id,
   }));
   const layout = entry.layout ?? part?.screen?.kind ?? 'list';
-  const title = tenantTitle(entry.title, model) || model?.title || '';
+  const title = (model ? tenantTitle(entry.title, model) : '') || model?.title || entry.title?.replace(/\$\{[^}]*\}/g, '').trim() || '';
+  const page = compose(part, model, {
+    layout,
+    forms: context.forms,
+    now: context.now,
+    lang: context.lang,
+    timeZone: context.timeZone,
+    screens: (context.screens ?? []).map((e) => ({ id: e.id, route: e.route })),
+    route: entry.route ?? '',
+    moreLoading: context.moreLoading ?? null,
+  });
   return {
     kind: 'tenant',
     screen: entry.id,
     layout,
     pageTitle: title,
     heading: title,
-    formsFirst: layout === 'editor' || layout === 'settings',
-    sections: sectionsOf(model),
-    forms,
     actions,
+    ...page,
   };
 }
