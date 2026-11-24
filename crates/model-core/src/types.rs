@@ -2626,6 +2626,24 @@ pub struct PostFields {
     pub cover_alt: Option<String>,
 }
 
+/// Person Entry
+///
+/// What a view reply says of one person it names, under the person's handle in the reply's people table: the display name and avatar the reader may know (null when not), and self on the reader's own entry (WG-5463).
+///
+/// Specification type `person-entry`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PersonEntry {
+    /// Field `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Field `avatar`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    /// Field `self`.
+    #[serde(rename = "self", default, skip_serializing_if = "Option::is_none")]
+    pub self_: Option<bool>,
+}
+
 /// Person Ref
 ///
 /// A person value of a view reply (the author of a record): an opaque handle, per reply, into the reply's people table. The principal itself is never sent (WG-5463).
@@ -4261,6 +4279,9 @@ pub struct ViewData {
     pub params: std::collections::BTreeMap<String, String>,
     /// Field `sections`.
     pub sections: std::collections::BTreeMap<String, SectionData>,
+    /// Field `people`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<std::collections::BTreeMap<String, PersonEntry>>,
     /// Field `depends-on`.
     #[serde(deserialize_with = "decode_set_object_type_id")]
     pub depends_on: std::collections::BTreeSet<ObjectTypeId>,
