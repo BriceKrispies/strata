@@ -10,7 +10,7 @@
 
   .masthead {
     padding-block: var(--space-5) var(--space-4);
-    border-block-end: var(--border-hair) solid var(--rule);
+    border-block-end: var(--border-hair) solid var(--border);
     font-family: var(--font-ui);
     font-size: var(--text-sm);
   }
@@ -65,7 +65,7 @@
     min-block-size: 2.25rem;
     padding: var(--space-1) var(--space-3);
     background: transparent;
-    border: var(--border-hair) solid var(--rule-strong);
+    border: var(--border-hair) solid var(--control-border);
     border-radius: 999px;
     transition: inline-size var(--dur-quick) var(--ease);
   }
@@ -79,7 +79,7 @@
     min-block-size: var(--size-control);
     padding-inline: var(--space-4);
     background: transparent;
-    border: var(--border-hair) solid var(--rule-strong);
+    border: var(--border-hair) solid var(--control-border);
     border-radius: var(--radius-2);
     cursor: pointer;
   }
@@ -91,8 +91,8 @@
 
   .colophon {
     padding-block: var(--space-6) var(--space-7);
-    border-block-start: var(--border-hair) solid var(--rule);
-    color: var(--ink-quiet);
+    border-block-start: var(--border-hair) solid var(--border);
+    color: var(--text-muted);
     font-family: var(--font-ui);
     font-size: var(--text-xs);
     display: grid;
@@ -102,7 +102,7 @@
   .colophon__name {
     font-family: var(--font-display);
     font-size: var(--text-lg);
-    color: var(--ink);
+    color: var(--text);
     font-variation-settings: 'SOFT' 100, 'WONK' 1;
   }
 
@@ -129,7 +129,7 @@
       align-items: stretch;
       gap: var(--space-4);
       padding-block: var(--space-4) var(--space-2);
-      border-block-start: var(--border-hair) solid var(--rule);
+      border-block-start: var(--border-hair) solid var(--border);
     }
 
     .masthead__menu--open {

@@ -65,8 +65,8 @@
 
 @layer base {
   html {
-    background: var(--paper);
-    color: var(--ink);
+    background: var(--surface);
+    color: var(--text);
     font-family: var(--font-text);
     font-size: 100%;
     font-optical-sizing: auto;
@@ -106,7 +106,7 @@
   a {
     color: inherit;
     text-decoration-line: underline;
-    text-decoration-color: var(--rule-strong);
+    text-decoration-color: var(--border-strong);
     text-decoration-thickness: 1px;
     text-underline-offset: 0.18em;
     /* Colour is inherited and deliberately not transitioned: transitions on inherited colour
@@ -133,7 +133,7 @@
 
   ::selection {
     background: var(--accent-wash);
-    color: var(--ink);
+    color: var(--text);
   }
 
   code,
@@ -144,7 +144,7 @@
 
   hr {
     border: 0;
-    border-block-start: var(--border-hair) solid var(--rule);
+    border-block-start: var(--border-hair) solid var(--border);
     margin-block: var(--space-6);
   }
 
@@ -172,8 +172,8 @@
     inset-inline-start: var(--space-2);
     z-index: 10;
     padding: var(--space-2) var(--space-4);
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--text);
+    color: var(--surface);
     font-family: var(--font-ui);
     font-size: var(--text-sm);
     border-radius: var(--radius-2);
@@ -182,7 +182,7 @@
 
   .skip:focus {
     transform: none;
-    color: var(--paper);
+    color: var(--surface);
   }
 
   .noscript {

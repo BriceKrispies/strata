@@ -22,6 +22,8 @@
 //      crates/bff/tests/conformance/fixtures/spec.jsonc.
 //   9. The deployment files: deploy/compose.yaml, deploy/kubernetes, deploy/monitoring, from the
 //      specification and specifications/deploy.jsonc.
+//  10. The design tokens: one stylesheet per preset of specifications/ui-catalogue.jsonc in
+//      web/src/styles/generated (scripts/ui-tokens.mjs). A preset below its contrast minimum is refused.
 //
 // The headers of crates/model, crates/model-core, web/src/generated and specifications/catalogue.md carry
 // the specification's semantic hash, which Exegra reports (see spec-hash.mjs). The journeys, step
@@ -37,6 +39,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { productArgs, semanticHashDetail } from './spec-hash.mjs';
+import { writeTokens } from './ui-tokens.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const libs = [join(root, 'crates', 'model', 'src', 'lib.rs'), join(root, 'crates', 'model-core', 'src', 'lib.rs')];
@@ -123,5 +126,13 @@ specc('generate the conformance fixtures (crates/bff/tests/conformance/fixtures/
 specc('generate the deployment files (deploy)', [
   'deploy', '--spec', 'specifications/spec.jsonc', '--out', 'deploy',
 ]);
+console.log('\n== generate the design tokens (web/src/styles/generated)');
+try {
+  const written = writeTokens();
+  console.log(written.length ? `wrote ${written.length} stylesheet(s)` : 'unchanged');
+} catch (error) {
+  console.error(`\nregenerate: the design tokens were refused:\n${error.message}`);
+  process.exit(1);
+}
 
 console.log('\nregenerate: done');

@@ -1,0 +1,13 @@
+// A preset the generator must refuse: neutral with a faint strong border and a faint control edge in the light scheme (about 1.4 to 1 on the surfaces, where 3 to 1 is the minimum), and muted text too pale to read in the dark scheme.
+// scripts/ui-tokens.test.mjs lays it over the catalogue's presets.
+{
+  "themes": [
+    {
+      "id": "low-contrast",
+      "from": "neutral",
+      "summary": "Fixture: contrast below the minimum.",
+      "light": { "border-strong": "#d5d9e0", "control-border": "#d5d9e0" },
+      "dark": { "text-muted": "#2a3140" }
+    }
+  ]
+}
