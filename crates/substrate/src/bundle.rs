@@ -26,6 +26,10 @@ pub struct Bundle {
     pub owner: PrincipalId,
     /// When the tenant is created. Later steps follow one millisecond apart.
     pub created_at: String,
+    /// The design-system preset of the tenant (`fieldnotes` or `neutral`), for pages no settings
+    /// record of the tenant says otherwise for. Left out, the tenant has none of its own.
+    #[serde(default)]
+    pub theme: Option<String>,
     #[serde(default)]
     pub roles: Vec<RoleSpec>,
     #[serde(default)]
@@ -630,6 +634,11 @@ impl Bundle {
         );
         changes.extend(triggers.into_values().map(SchemaChange::DefineTrigger));
         changes.extend(operations.into_values().map(SchemaChange::DefineOperation));
+        if let Some(theme) = &self.theme {
+            changes.push(SchemaChange::DefineSetting(crate::theme::setting_def(
+                theme,
+            )?));
+        }
         Ok(changes)
     }
 }

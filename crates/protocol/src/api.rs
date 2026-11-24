@@ -108,6 +108,9 @@ pub struct SessionView {
     pub authenticated: bool,
     pub tenant: String,
     pub tenant_name: String,
+    /// The design-system preset the tenant's own configuration names, when it names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

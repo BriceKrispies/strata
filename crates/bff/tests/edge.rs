@@ -1530,3 +1530,44 @@ async fn a_request_token_survives_a_restart_and_is_good_at_a_second_instance() {
         "another secret does not"
     );
 }
+
+/// A tenant whose document names a design-system preset and has no settings record is drawn in
+/// it on every page, including a page with nothing to show; one that names none is drawn in
+/// the default preset.
+#[tokio::test]
+async fn a_tenant_document_chooses_the_preset_of_every_page_of_the_tenant() {
+    let dir =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("tenants-{}", std::process::id()));
+    for (id, theme) in [("plain", Some("neutral")), ("bare", None)] {
+        let mut doc = json!({
+            "id": id,
+            "name": id,
+            "owner": "user:admin",
+            "created_at": "2026-08-31T09:00:00Z"
+        });
+        if let Some(theme) = theme {
+            doc["theme"] = json!(theme);
+        }
+        std::fs::create_dir_all(dir.join(id)).unwrap();
+        std::fs::write(dir.join(id).join("tenant.json"), doc.to_string()).unwrap();
+    }
+    let edge = start_with(
+        |cfg| cfg.sites = Config::parse_sites("127.0.0.1=plain,localhost=bare").unwrap(),
+        |cfg| cfg.tenants_dir = dir.clone(),
+    )
+    .await;
+    for path in ["/", "/nothing-here", "/sign-in"] {
+        let (_, _, plain) = edge.get("127.0.0.1", path, None).await;
+        assert!(
+            plain.text.contains("data-theme=\"neutral\""),
+            "{path}: {}",
+            plain.text
+        );
+        let (_, _, bare) = edge.get("localhost", path, None).await;
+        assert!(
+            bare.text.contains("data-theme=\"fieldnotes\""),
+            "{path}: {}",
+            bare.text
+        );
+    }
+}

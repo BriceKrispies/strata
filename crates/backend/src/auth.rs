@@ -293,6 +293,7 @@ pub fn session_view(tenant: &TenantState, identity: &Identity) -> SessionView {
         authenticated: session.is_some(),
         tenant: tenant.id.as_str().to_string(),
         tenant_name: tenant.name.clone(),
+        theme: strata_substrate::theme::tenant_theme(tenant).map(str::to_string),
         session_id: session.map(|s| s.id.as_str().to_string()),
         principal: session.map(|s| s.principal.as_str().to_string()),
         display_name: session.map(|s| s.display_name.clone()),

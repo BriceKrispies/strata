@@ -5,14 +5,56 @@
 //! stylesheet or a style attribute.
 
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::ext::*;
-use strata_kernel::{FieldId, Value};
+use strata_kernel::{
+    FieldId, Principal, SettingDef, SettingId, SettingLevel, SettingType, TenantState, Value,
+};
 
 pub const ACCENTS: [&str; 5] = ["moss", "clay", "ink", "ochre", "plum"];
 pub const PAPERS: [&str; 3] = ["linen", "stone", "chalk"];
 /// The design-system presets of specifications/ui-catalogue.jsonc. The first is the default.
 pub const THEMES: [&str; 2] = ["fieldnotes", "neutral"];
+
+/// The tenant setting that holds the design-system preset of a tenant that has no settings record
+/// of its own to say (D-DS-15). The tenant document's `theme` defines it, with the preset as its
+/// default, and the owner may change it at the tenant level.
+pub const THEME_SETTING: &str = "ui_theme";
+
+/// The definition of [`THEME_SETTING`] with `theme` as its value, or why the name is not a preset.
+pub fn setting_def(theme: &str) -> Result<SettingDef, String> {
+    let theme = THEMES
+        .iter()
+        .find(|name| **name == theme)
+        .ok_or_else(|| format!("theme must be one of {THEMES:?}, got {theme:?}"))?;
+    Ok(SettingDef {
+        id: SettingId::new(THEME_SETTING).map_err(|e| e.to_string())?,
+        label: "Design-system preset".to_string(),
+        r#type: SettingType::new("string").map_err(|e| e.to_string())?,
+        default: Value::Str((*theme).to_string()),
+        levels: BTreeSet::from([SettingLevel::Tenant]),
+        locked_by: None,
+    })
+}
+
+/// The preset the tenant's own configuration names, or `None` when it names none or a name
+/// outside [`THEMES`].
+pub fn tenant_theme(tenant: &TenantState) -> Option<&'static str> {
+    let id = SettingId::new(THEME_SETTING).ok()?;
+    let found = strata_kernel::settings::resolve(tenant, &Principal::System, &id).ok()?;
+    pick(&THEMES, Some(&found.value))
+}
+
+/// The preset a settings record names in its `theme` field, when it names one of [`THEMES`].
+pub fn record_theme(fields: &BTreeMap<FieldId, Value>) -> Option<&'static str> {
+    let id = FieldId::new("theme").ok()?;
+    pick(&THEMES, fields.get(&id))
+}
+
+/// The preset of that name, when there is one.
+pub fn known_theme(name: &str) -> Option<&'static str> {
+    THEMES.iter().copied().find(|theme| *theme == name)
+}
 
 /// A resolved theme: every member is one of the names above.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

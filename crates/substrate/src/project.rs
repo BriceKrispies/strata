@@ -158,6 +158,10 @@ pub struct ViewData {
     /// handles in their place.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub people: BTreeMap<String, PersonInfo>,
+    /// The preset the tenant's own configuration names (see `theme::tenant_theme`); the page's
+    /// settings record, when it has one that says, comes first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_theme: Option<String>,
 }
 
 /// Section names in evaluation order: sections that feed others come first.
@@ -661,6 +665,7 @@ mod people_and_refs {
             revision: StateRevision(1),
             schema_version: SchemaVersion(1),
             record_rules: BTreeMap::new(),
+            tenant_theme: None,
             people: BTreeMap::from([
                 (
                     "user:ada".to_string(),

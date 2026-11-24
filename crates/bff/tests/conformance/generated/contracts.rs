@@ -2714,6 +2714,11 @@ pub const TYPES: &[TypeDecl] = &[
                 optional: false,
             },
             Field {
+                wire: "theme",
+                ty: Ty::Text,
+                optional: true,
+            },
+            Field {
                 wire: "session_id",
                 ty: Ty::Named("session-id"),
                 optional: true,

@@ -404,7 +404,7 @@ export function signInAtSite(inputs) {
  * The outputs of `sign-in-at-site` from its reply.
  * @param {any} body
  * @param {any} [_inputs]
- * @returns {{ session: { authenticated: boolean, tenant: string, tenant_name: string, session_id?: string, principal?: string, display_name?: string, roles: string[], csrf_token?: Uint8Array, expires_at?: number, may: Record<string, string[]>, may_manage_schema: boolean }, state: 'anonymous' | 'active' | 'expired' | 'revoked' }}
+ * @returns {{ session: { authenticated: boolean, tenant: string, tenant_name: string, theme?: string, session_id?: string, principal?: string, display_name?: string, roles: string[], csrf_token?: Uint8Array, expires_at?: number, may: Record<string, string[]>, may_manage_schema: boolean }, state: 'anonymous' | 'active' | 'expired' | 'revoked' }}
  */
 export function decodeSignInAtSite(body, _inputs) {
   return /** @type {any} */ (pick(body, ['session', 'state']));
@@ -423,7 +423,7 @@ export function signOutOfSite(inputs) {
  * The outputs of `sign-out-of-site` from its reply.
  * @param {any} body
  * @param {any} [_inputs]
- * @returns {{ session: { authenticated: boolean, tenant: string, tenant_name: string, session_id?: string, principal?: string, display_name?: string, roles: string[], csrf_token?: Uint8Array, expires_at?: number, may: Record<string, string[]>, may_manage_schema: boolean }, state: 'anonymous' | 'active' | 'expired' | 'revoked' }}
+ * @returns {{ session: { authenticated: boolean, tenant: string, tenant_name: string, theme?: string, session_id?: string, principal?: string, display_name?: string, roles: string[], csrf_token?: Uint8Array, expires_at?: number, may: Record<string, string[]>, may_manage_schema: boolean }, state: 'anonymous' | 'active' | 'expired' | 'revoked' }}
  */
 export function decodeSignOutOfSite(body, _inputs) {
   return /** @type {any} */ (pick(body, ['session', 'state']));
@@ -442,7 +442,7 @@ export function readSessionView(inputs) {
  * The outputs of `read-session-view` from its reply.
  * @param {any} body
  * @param {any} [_inputs]
- * @returns {{ session: { authenticated: boolean, tenant: string, tenant_name: string, session_id?: string, principal?: string, display_name?: string, roles: string[], csrf_token?: Uint8Array, expires_at?: number, may: Record<string, string[]>, may_manage_schema: boolean }, state: 'anonymous' | 'active' | 'expired' | 'revoked' }}
+ * @returns {{ session: { authenticated: boolean, tenant: string, tenant_name: string, theme?: string, session_id?: string, principal?: string, display_name?: string, roles: string[], csrf_token?: Uint8Array, expires_at?: number, may: Record<string, string[]>, may_manage_schema: boolean }, state: 'anonymous' | 'active' | 'expired' | 'revoked' }}
  */
 export function decodeReadSessionView(body, _inputs) {
   return /** @type {any} */ (pick(body, ['session', 'state']));
