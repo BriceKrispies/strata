@@ -654,6 +654,8 @@ fn reads_now(expr: &Expr) -> bool {
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => reads_now(a),
         Expr::And(items) | Expr::Or(items) => items.iter().any(reads_now),
@@ -702,6 +704,8 @@ pub fn indexable(expr: &Expr) -> bool {
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => indexable(a),
         Expr::And(items) | Expr::Or(items) => items.iter().all(indexable),
@@ -756,6 +760,8 @@ fn walk(expr: &Expr, raw: &mut Raw, problems: &mut Vec<String>) {
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => walk(a, raw, problems),
         Expr::And(items) | Expr::Or(items) => {
@@ -1430,6 +1436,8 @@ fn thresholds(expr: &Expr, env: &Env<'_>, at_zero: &Env<'_>, out: &mut Vec<i64>)
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => thresholds(a, env, at_zero, out),
         Expr::And(items) | Expr::Or(items) => {

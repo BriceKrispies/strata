@@ -590,6 +590,7 @@ impl Run<'_> {
             values.insert(field, value);
         }
         let id = RecordId(self.work.next_record);
+        crate::normalise::normalise_fields(def, &mut values);
         let candidate = Record {
             id,
             object: object.clone(),
@@ -734,6 +735,7 @@ impl Run<'_> {
             ));
         }
 
+        crate::normalise::normalise_fields(def, &mut candidate.fields);
         let validation = validate_record(
             self.lookup(),
             &schema,

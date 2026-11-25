@@ -310,6 +310,8 @@ fn reads<'e>(expr: &'e Expr, out: &mut Vec<Reads<'e>>) {
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => reads(a, out),
         Expr::And(items) | Expr::Or(items) => {

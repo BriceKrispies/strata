@@ -48,6 +48,7 @@ fn personal(id: &str) -> FieldDef {
             subject: DataSubject::Creator,
             searchable: false,
         }),
+        normalise: None,
         ..field_def(id, FieldType::Str, false)
     }
 }

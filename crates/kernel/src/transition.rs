@@ -742,6 +742,7 @@ fn create_record(
         }
     }
 
+    crate::normalise::normalise_fields(def, &mut values);
     let candidate = Record {
         id: RecordId(draft.next_record),
         object: object.clone(),
@@ -965,6 +966,7 @@ fn update_record(
         )?;
     }
 
+    crate::normalise::normalise_fields(def, &mut candidate.fields);
     validate_record(
         lookup,
         &draft.tenant.schema,
@@ -1656,6 +1658,7 @@ pub(crate) fn apply_change(
                 default: None,
                 read: None,
                 personal: None,
+                normalise: None,
             };
             object(schema, id)?.fields.insert(field.clone(), def);
             format!("define relationship {id}.{field} -> {target}")
@@ -2041,10 +2044,11 @@ pub fn plan_migration(
             if let Some(arrived) = moved.get(&(object.clone(), record.id)) {
                 carried.extend(arrived.clone());
             }
-            let stripped: BTreeMap<FieldId, Value> = carried
+            let mut stripped: BTreeMap<FieldId, Value> = carried
                 .into_iter()
                 .filter(|(field, _)| def.fields.contains_key(field))
                 .collect();
+            crate::normalise::normalise_fields(def, &mut stripped);
             let candidate = if stripped == record.fields {
                 record.clone()
             } else {

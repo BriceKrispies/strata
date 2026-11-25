@@ -78,6 +78,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json"] }
 argon2 = "0.5.3"
 getrandom = "0.2.16"
 unicode-normalization = "0.1.25"
+unicode-properties = { version = "0.1.5", default-features = false, features = ["emoji"] }
 tower-http = { version = "0.6.8", features = ["fs"] }
 hyper = { version = "1.8.0", features = ["http1", "server"] }
 hyper-util = { version = "0.1.17", features = ["tokio", "server", "service", "http1"] }

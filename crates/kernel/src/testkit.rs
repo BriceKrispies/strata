@@ -65,6 +65,7 @@ pub fn field_def(id: &str, ty: FieldType, required: bool) -> FieldDef {
         default: None,
         read: None,
         personal: None,
+        normalise: None,
     }
 }
 

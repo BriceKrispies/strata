@@ -91,6 +91,7 @@ fn doc_schema(searchable: &[&str]) -> Vec<SchemaChange> {
                 subject: DataSubject::Creator,
                 searchable: false,
             }),
+            normalise: None,
             ..field_def("email", FieldType::Str, false)
         }),
         SchemaChange::SetRetention {

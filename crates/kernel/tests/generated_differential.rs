@@ -1317,6 +1317,8 @@ fn mentions_through(expr: &Expr) -> bool {
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => mentions_through(a),
         Expr::And(items) | Expr::Or(items) => items.iter().any(mentions_through),
@@ -1346,6 +1348,8 @@ fn reads_a_field(expr: &Expr, named: &dyn Fn(&str) -> bool) -> bool {
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => reads_a_field(a, named),
         Expr::And(items) | Expr::Or(items) => items.iter().any(|item| reads_a_field(item, named)),

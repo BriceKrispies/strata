@@ -79,6 +79,7 @@ fn require_excerpt(existing: ExistingData, before_step: usize) -> Proposal {
                 default: None,
                 read: None,
                 personal: None,
+                normalise: None,
             },
         }],
         existing,

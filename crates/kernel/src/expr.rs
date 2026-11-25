@@ -82,6 +82,8 @@ fn first_missing(expr: &Expr, env: &Env<'_>, lookup: Lookup<'_>) -> Option<Need>
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => first_missing(a, env, lookup),
         Expr::And(items) | Expr::Or(items) => items

@@ -52,5 +52,8 @@ mod segments;
 #[path = "settings.rs"]
 mod settings;
 
+#[path = "text_rules.rs"]
+mod text_rules;
+
 #[path = "triggers.rs"]
 mod triggers;

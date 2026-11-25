@@ -209,6 +209,8 @@ pub(crate) fn walk(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => walk(a, visit),
         Expr::And(items) | Expr::Or(items) => items.iter().for_each(|e| walk(e, visit)),

@@ -98,6 +98,7 @@ fn declared(
                 subject,
                 searchable: true,
             }),
+            normalise: None,
         },
     )
 }

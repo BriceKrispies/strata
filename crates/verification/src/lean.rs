@@ -202,6 +202,7 @@ fn field_def(n: u64, required: bool) -> FieldDef {
         default: (n == 6).then_some(Expr::Lit(Value::Int(7))),
         read: None,
         personal: None,
+        normalise: None,
     }
 }
 
