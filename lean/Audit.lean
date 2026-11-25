@@ -79,6 +79,8 @@ import Strata
 #print axioms Strata.set_unique_refused_over_duplicates
 #print axioms Strata.lax_unique_change_can_break_wf
 #print axioms Strata.strict_schema_change_conforms
+#print axioms Strata.schemaViolated_false
+#print axioms Strata.setRequired_spec
 #print axioms Strata.defineUnique_spec
 #print axioms Strata.lookup_map_ty
 #print axioms Strata.lookup_makeUnique_ty

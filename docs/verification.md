@@ -57,7 +57,7 @@ builds their module, without reading the statements (`specifications/README.md`)
 | | `create_duplicate_refused`, `update_duplicate_refused` | A write that is otherwise valid and duplicates another record's unique value, or agrees with another record on a composite constraint, is refused with `uniqueViolated`, and no state follows |
 | | `define_unique_refused_over_duplicates`, `set_unique_refused_over_duplicates` | A composite constraint that existing records already violate is refused with `uniqueViolated`; a strict unique field over records that agree on it is refused with `migrationRejected`; no state follows |
 | | `lax_unique_change_can_break_wf` | The exclusion of the non-strict unique change is necessary: a lax `setUnique` over two records that agree leaves a tenant that is not well formed |
-| | `strict_schema_change_conforms` | An accepted strict schema change (`setRequired`, `setUnique`, `defineUnique`) leaves every record conforming to the resulting schema, including records a lax change left non-conforming |
+| | `strict_schema_change_conforms`, `schemaViolated_false` | An accepted strict schema change (`setRequired`, `setUnique`, `defineUnique`, and any strict change refused by the same check) leaves the whole tenant conforming: every record conforms to the resulting schema, and `UniqueRecords` holds for it, including records and unique values a lax change left behind |
 | | `setUnique_records`, `defineUnique_records`, `stepTenant_conform_ids` | A schema change leaves the records as they are, and every accepted step keeps them conforming and their ids below the counter |
 
 `lake build` checks them. `lake env lean Audit.lean` prints the axioms each depends on: only
@@ -569,14 +569,16 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
   clash is checked after the type, as in `validate_record`. `valueProblem` and `problem` take a flag
   `uniq` that switches the unique checks on, so the theorems can say what the refusal is when the
   write passes everything else (`problem_uniq_dichotomy`, `problem_uniq_refusal`).
-- **Existing records are checked by the same rule.** A strict schema change is refused with
-  `migrationRejected` when any stored record would not conform to the resulting schema, including
-  a record an earlier lax change left non-conforming. This is the kernel's `Reject`, which validates
-  every existing record against the new schema. Within that, a strict `setUnique` is also refused
-  when two records agree on the field or hold a value over the unique bound. A lax change keeps
-  the records and does not count them. A composite definition (`defineUnique`, always strict here)
-  is refused with `uniqueViolated` when two records agree on every field, and that check runs
-  before the conformance check, as in the kernel's `plan_migration`. The rule itself is
+- **Existing records are checked by one rule for every strict schema change.** The kernel's
+  `Reject` validates every existing record against the resulting schema, and every unique
+  constraint with it. The model has one shared refusal, `schemaChangeRefused`, that `setRequired`,
+  `setUnique` and `defineUnique` all use: refused with `migrationRejected` when `schemaViolated`
+  holds, which is when some record does not conform (a required field missing, a value of the wrong
+  type, a reference to nothing), a unique field is held by two records or holds a value over the
+  unique bound, or a composite constraint is held by two records. A violation a lax change left
+  behind therefore refuses a later strict change whatever the change is about. A lax change never
+  refuses. `defineUnique` checks its own new composite first, as the kernel's `plan_migration` does
+  (`uniqueViolated`), and the shared check after it (`migrationRejected`). The rule that results is
   `strict_schema_change_conforms`.
 - **Names stay distinct, and `normalise` keeps the last value.** The kernel's records are maps, so
   a name occurs once in a record and once in the schema. The model needed that as the invariant

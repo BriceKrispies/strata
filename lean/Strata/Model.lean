@@ -457,13 +457,23 @@ def makeRequired (schema : Schema) (f : FieldId) : Schema :=
 def makeUnique (schema : Schema) (f : FieldId) : Schema :=
   schema.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with unique := true }) else fd)
 
-/-- The strict refusal of making field `f` unique. A strict schema change is refused when any
-    stored record would not conform to the resulting schema, as the kernel's `Reject` does (it
-    validates every existing record against the new schema), and when the stored records already
-    agree on the field or hold a value over the unique bound. -/
-def uniqueClash (L : Limits) (schema : Schema) (rs : Records) (f : FieldId) (strict : Bool) : Bool :=
-  strict && (!(rs.all (fun q => conforms (makeUnique schema f) q.2)) || dupFields rs [f] ||
-    rs.any (fun q => decide (L.maxUnique < (q.2.fields.get f).size)))
+/-- What a strict schema change over the stored records would violate, under the schema it leaves:
+    some record does not conform (a required field missing, a value of the wrong type, a reference
+    to nothing); a unique field is held by two records, or holds a value over the unique bound;
+    a composite constraint is held by two records. This is the kernel's `Reject` check: it
+    validates every existing record against the resulting schema, and every unique constraint with
+    it, so a violation a lax change left behind refuses a later strict change. -/
+def schemaViolated (L : Limits) (schema : Schema) (us : List (List FieldId)) (rs : Records) : Bool :=
+  !(rs.all (fun q => conforms schema q.2)) ||
+    schema.any (fun fd => fd.2.unique &&
+      (dupFields rs [fd.1] || rs.any (fun q => decide (L.maxUnique < (q.2.fields.get fd.1).size)))) ||
+    us.any (fun u => dupFields rs u)
+
+/-- The one refusal every strict schema change makes: `Reject` refuses the change when the records
+    would violate the resulting schema (`schemaViolated`). A lax change never refuses. -/
+def schemaChangeRefused (L : Limits) (schema : Schema) (us : List (List FieldId)) (rs : Records)
+    (strict : Bool) : Bool :=
+  strict && schemaViolated L schema us rs
 
 /-- A composite definition the schema can hold: two to four fields, none repeated, each one of the
     schema and not a list (the kernel's `unique_problems`). -/
@@ -508,7 +518,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
     if p != t.owner then .error .unauthorized
     else
       let schema' := makeRequired t.schema f
-      if strict && !(t.records.all (fun q => conforms schema' q.2)) then .error .migrationRejected
+      if schemaChangeRefused t.limits schema' t.uniques t.records strict then .error .migrationRejected
       else .ok { t with schema := schema' }
   | .setUnique f strict =>
     if p != t.owner then .error .unauthorized
@@ -517,14 +527,15 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
       | none => .error .invalidSchema
       | some d =>
         if d.ty.isList then .error .invalidSchema
-        else if uniqueClash t.limits t.schema t.records f strict then
+        else if schemaChangeRefused t.limits (makeUnique t.schema f) t.uniques t.records strict then
           .error .migrationRejected
         else .ok { t with schema := makeUnique t.schema f }
   | .defineUnique fs =>
     if p != t.owner then .error .unauthorized
     else if !uniqueFieldsOk t.schema fs then .error .invalidSchema
     else if dupFields t.records fs then .error .uniqueViolated
-    else if !(t.records.all (fun q => conforms t.schema q.2)) then .error .migrationRejected
+    else if schemaChangeRefused t.limits t.schema (t.uniques ++ [fs]) t.records true then
+      .error .migrationRejected
     else .ok { t with uniques := t.uniques ++ [fs] }
 
 /-- The transition function of the model: one intent, in one context, against the world. -/

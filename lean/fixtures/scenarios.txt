@@ -1517,3 +1517,9 @@ op 1 100 create 1=s:yew
 op 1 100 require 4 lax
 op 1 100 composite 3 10 4 6
 end
+scenario h-strict-change-refuses-a-grandfathered-duplicate
+op 1 100 create 1=s:oak
+op 1 101 create 1=s:fir 3=b:0
+op 1 100 unique 6 lax
+op 1 100 require 1 strict
+end

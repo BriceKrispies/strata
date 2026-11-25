@@ -230,20 +230,11 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : PrincipalId) (i : Intent)
             obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
             exact hids q₀ (List.mem_filter.mp hq₀).1
   | setRequired f strict =>
-    simp only [Intent.strict] at hstrict
-    subst hstrict
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · rename_i hall
-        cases h
-        refine ⟨?_, hids⟩
-        intro q hq
-        have hall' : (t.records.all fun q => conforms (makeRequired t.schema f) q.2) = true := by
-          simpa using hall
-        exact List.all_eq_true.mp hall' q hq
+    obtain ⟨hc, -⟩ := strict_schema_change_conforms t t' p (.setRequired f strict) rfl hstrict h
+    obtain ⟨hn, hr⟩ := setRequired_spec t t' p f strict h
+    refine ⟨hc, fun q hq => ?_⟩
+    rw [hn]
+    exact hids q (by rw [hr] at hq; exact hq)
   | setUnique f s =>
     obtain ⟨hn, hr, hs, -⟩ := setUnique_spec t t' p f s h
     rw [hn, hr, hs]
@@ -323,7 +314,7 @@ theorem lax_change_can_break_wf :
       decide
     · unfold Tenant.UniqueRecords
       decide
-  · simp [stepTenant, makeRequired]
+  · simp [stepTenant, makeRequired, schemaChangeRefused]
   · intro hwf
     have := hwf.1 (0, { owner := 0, version := 1, fields := [] }) (by simp)
     revert this
