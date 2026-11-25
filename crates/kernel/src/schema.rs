@@ -164,6 +164,7 @@ impl TenantSchemaExt for TenantSchema {
             tokens: None,
             products: None,
             ui: None,
+            scoped_roles: None,
         }
     }
 
@@ -433,6 +434,8 @@ impl TenantSchemaExt for TenantSchema {
                 }
             }
         }
+
+        crate::scoped::problems(self, &mut problems);
 
         for policy in self.policies.values() {
             let at = format!("policy {}", policy.id);

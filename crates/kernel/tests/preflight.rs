@@ -67,6 +67,7 @@ fn discard_with(
         subject: Some(TenantOperationSubject {
             object: object("note"),
             input: "note".into(),
+            self_action: None,
         }),
         conditions,
         steps: vec![TenantOperationStep::DeleteRecord {

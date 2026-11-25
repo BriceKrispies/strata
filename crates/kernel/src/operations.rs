@@ -556,6 +556,27 @@ fn stage_subject(
         rule,
         format!("{} {id} is readable by the invoker", def.object),
     ));
+    // D-8405, ADM-1613: an operation that declares a self-action refusal is refused to a person
+    // on a record that names that same person, whatever roles the invoker holds.
+    if let (Some(field), Principal::User(actor), Some(record)) =
+        (&def.self_action, &ctx.principal, found)
+    {
+        if record.get(field).as_str() == Some(actor.as_str()) {
+            return Err(refusal(
+                evidence,
+                ErrorKind::SelfAction,
+                format!("{at}:self_action"),
+                format!(
+                    "{} {id} names the invoker in {field}; a person does not act on their own record",
+                    def.object
+                ),
+            ));
+        }
+        evidence.push(Check::pass(
+            format!("{at}:self_action"),
+            format!("{} {id} names another person in {field}", def.object),
+        ));
+    }
     Ok(found.cloned())
 }
 

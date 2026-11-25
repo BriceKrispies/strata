@@ -55,9 +55,10 @@ pub struct Prior {
 /// The name of the event an intent's entry has, when the intent changes configuration or roles.
 fn event_of(intent: &Intent) -> Option<&'static str> {
     match intent {
-        Intent::AssignRole { .. } | Intent::RevokeRole { .. } | Intent::RedeemInvitation { .. } => {
-            Some("member.roles_changed")
-        }
+        Intent::AssignRole { .. }
+        | Intent::AssignScopedRole { .. }
+        | Intent::RevokeRole { .. }
+        | Intent::RedeemInvitation { .. } => Some("member.roles_changed"),
         Intent::AddTeamMember { .. } | Intent::RemoveTeamMember { .. } => {
             Some("team.membership_changed")
         }
@@ -84,6 +85,7 @@ fn user_of(ctx: &Context) -> Option<PrincipalId> {
 fn person_of(intent: &Intent, ctx: &Context) -> Option<PrincipalId> {
     match intent {
         Intent::AssignRole { principal, .. }
+        | Intent::AssignScopedRole { principal, .. }
         | Intent::RevokeRole { principal, .. }
         | Intent::AddTeamMember { principal, .. }
         | Intent::RemoveTeamMember { principal, .. } => Some(principal.clone()),
@@ -109,6 +111,13 @@ fn value_in(intent: &Intent, ctx: &Context, state: &TenantState) -> Json {
     match intent {
         Intent::AssignRole { principal, .. } | Intent::RevokeRole { principal, .. } => {
             json!(state.members.get(principal).map(names))
+        }
+        // A scoped assignment adds nothing to the roles of a person (D-8403): what the entry
+        // records is their scoped roles, each with the object type it is narrowed to.
+        Intent::AssignScopedRole { principal, .. } => {
+            json!(strata_kernel::scoped::of(&state.schema, principal)
+                .map(|held| json!({ "role": held.role.as_str(), "object": held.object.as_str() }))
+                .collect::<Vec<_>>())
         }
         Intent::RedeemInvitation { .. } => {
             json!(user_of(ctx).and_then(|person| state.members.get(&person).map(names)))
