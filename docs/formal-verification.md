@@ -480,7 +480,7 @@ what the B2 implementation will be proved against.
 | Message | What update does | Status | Slice |
 |---|---|---|---|
 | `action passkeys.sign_in`; `http_result` passkeys.challenge, passkeys.sign_in; `passkey_result` (sign-in) | passkey sign-in: challenge, browser prompt, answer; signs in as a login does | not covered | 6 |
-| `action passkeys.add`, `passkeys.remove`; `http_result` passkeys.list, passkeys.register_start, passkeys.register_finish, passkeys.remove; `passkey_result` (registration) | the person's passkeys | not covered | 8 |
+| `action passkeys.add`, `passkeys.remove`; `http_result` passkeys.list, passkeys.register_start, passkeys.register_finish, passkeys.remove; `passkey_result` (registration) | the person's passkeys | partly | 8 (`passkeyAddAsk`, `personalCeremony`, `passkeyCompleted`, `passkeyDeclined`, `deskAsk` for the removal, the answers `personalAnswerReload` and `personalAnswerQuiet`; the list reply and the support check are not yet) |
 | `action factors.enrol_start`, `factors.enrol_cancel`, `factors.remove_totp`, `factors.new_codes`, `factors.dismiss_codes`, `factors.use`, `factors.use_passkey`, `factors.stepup_cancel` | the authenticator, recovery codes, the factor choice, the step-up prompt | partly | 7 (`factorsAsk`, `factorsAnswer` for enrol_start, remove_totp and new_codes; the other factor actions and the stepup cancel are not yet, except `factors.stepup_cancel` which is covered by `stepUpCancel`) |
 | `submit` second, totpconfirm, stepup; `input` second, totpconfirm, stepup | the second-factor code, the enrolment confirmation, the re-authentication | partly | 7 (`secondSubmit`, `stepUpSubmit`; the totpconfirm form and the typed values are not yet) |
 | `http_result` factors.summary (entered with the desk), enrol_start, enrol_finish, remove_totp, new_codes | the factors section's state | partly | 7 (`factorsAnswer` for enrol_start, remove_totp and new_codes; the summary and enrol_finish are not yet) |
@@ -492,7 +492,7 @@ what the B2 implementation will be proved against.
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `action sessions.revoke`, `sessions.revoke_others`; `http_result` sessions.list (entered with the desk), sessions.revoke, sessions.revoke_others | the person's own sessions: list, end one, end the others | not covered | 8 |
+| `action sessions.revoke`, `sessions.revoke_others`; `http_result` sessions.list (entered with the desk), sessions.revoke, sessions.revoke_others | the person's own sessions: list, end one, end the others | partly | 8 (`deskAsk` for both revocations and `personalAnswerReload`/`personalAnswerQuiet` for their answers; the list reply, `sessions.list`, is not yet) |
 
 #### Sign-in methods: links, invitations, identity providers
 
@@ -561,7 +561,7 @@ what the B2 implementation will be proved against.
 | `ws_send` | subscribe, ack, ping, and the Lab's cancel | partly | 5 (subscribe, ack and ping: covered; cancel: 12) |
 | `ws_close` | closing the socket, after a gap in the notices | covered | 5 (`eventGap`) |
 | `store` | the theme choice in storage | covered | 4 (`themeCycle` stores the mode's key) |
-| `passkey` (`create`, `get`) | the browser's passkey prompt | not covered | 6 (sign-in), 7 (second factor), 8 (registration) |
+| `passkey` (`create`, `get`) | the browser's passkey prompt | partly | 8 (`create` for the registration is covered by `personalCeremony`); 6 (sign-in, `get`), 7 (second factor, `get`) |
 | `log` | the record-rule disagreement, and the worker's diagnostics | not covered | 9 |
 | `navigate_away` | the redirect to an identity provider; emitted by `oidc.js` but absent from the `Effect` type in `types.js` (F5) | covered | 6 (`oidcRedirect`; `types.js` still needs the declaration, F5) |
 
@@ -693,7 +693,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 | 5 (partly done) | Live connection, read from `client-live-flow-impl.js` (`welcomeFirst`, `welcomeResume`, `eventRefresh`, `eventQuiet`, `eventGap`, `resyncRefresh`, `pongBehind`, `pongCurrent`, `wsClosedLater`, `wsRefusedKeep`, `wsRefusedStop`, `reconnectFires`, `heartbeatDue`, `socketOpened`). Still open: the session frame when active, the request token on connect, the session read on a membership notice, the resync and reset outside the open state, and the schema notice's manifest (11) | 1, 2 |
 | 6 (partly done) | Sign-in methods: emailed links (request and answer), invitations (request and acceptance), the identity provider's start and redirect (`linkAsk`, `linkAnswer`, `inviteAsk`, `inviteAccepted`, `oidcStart`, `oidcRedirect`). Still open: the opened link's sign-in, passkey sign-in, the providers list, the provider's answer (`oidc.sign_in`), SAML, and the typed values of the invitation form | 3, 5 |
 | 7 (partly done) | Second factors and step-up: the waiting sign-in and the second-factor code (`signInWaiting`, `secondSubmit`, `secondRefused`), the step-up (`stepUpRequired`, `stepUpSubmit`, `stepUpAnswer`, `stepUpCancel`), the factor requests and their answers (`factorsAsk`, `factorsAnswer`). Still open: the passkey as a second factor, the enrolment and recovery-code details, and the redispatch of a refused action once confirmed | 3, 6 |
-| 8 | The person's sessions and passkeys on the desk | 3, 7 |
+| 8 (partly done) | The person's sessions and passkeys on the desk: the revocations and the passkey removal (`deskAsk`), the registration (`passkeyAddAsk`, `personalCeremony`, `passkeyCompleted`, `passkeyDeclined`), and their answers (`personalAnswerReload`, `personalAnswerQuiet`). Still open: the list reads, the support check of passkeys, and the toasts | 3, 7 |
 | 9 | Records: the editor's saves, publish and unpublish, preview, row actions, paging, the client's record-rule check and its log | 3, 5 |
 | 10 | Settings: the definitions, saves by level, setting notices | 3, 5 |
 | 11 | Tenant interface: manifest, parts, tenant screens by address, tenant forms and actions, lost drafts, the held part (`Loop`) | 3, 5 |
@@ -704,7 +704,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 ### 7.7 Counts
 
 The messages table has 80 rows (a row is one message, or one family of messages with the same handling):
-33 covered, 17 partly, 30 not covered (after slice 7). The effects table has
+33 covered, 19 partly, 28 not covered (after slice 8). The effects table has
 15 rows: 8 covered, 4 partly, 3 not covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.

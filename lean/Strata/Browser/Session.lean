@@ -94,7 +94,8 @@ def switched (s : State) (who : Option Principal) (r : Route) : State :=
     loginValues := []
     loginError := false
     factorPrompt := false
-    stepUp := false }
+    stepUp := false
+    ceremony := none }
 
 /-- The kernel's transitions for the routing and session slice. -/
 inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect → Prop
@@ -596,6 +597,57 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
       pendingOf s id .personal →
       Allowed cat s (.factorsAnswer id) { s with pending := dropId s.pending id } []
 
+  /-- A session or passkey action of the desk is asked for the person signed in: the revocation of a session
+  or of the others, or the removal of a passkey. -/
+  | deskAsk {s : State} {name arg : String} :
+      name ∈ deskRequests →
+      Allowed cat s (.action name arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- Adding a passkey starts its registration: the challenge is asked for. -/
+  | passkeyAddAsk {s : State} {arg : String} :
+      Allowed cat s (.action "passkeys.add" arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- A request for the person's lists is answered, and the answer changed a list: the list is read again. -/
+  | personalAnswerReload {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.personalAnswer id true)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: dropId s.pending id }
+        (fetch s.nextId .personal)
+  /-- A request for the person's lists is answered, and nothing changed. -/
+  | personalAnswerQuiet {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.personalAnswer id false) { s with pending := dropId s.pending id } []
+  /-- The registration's challenge came back: the browser's passkey prompt is asked for, under the next id. -/
+  | personalCeremony {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.personalChallenge id)
+        { s with
+          pending := dropId s.pending id
+          ceremony := some s.nextId
+          nextId := s.nextId + 1 }
+        [.passkey "create" s.nextId]
+  /-- The browser's prompt completed: the passkey is registered (`register_finish`). -/
+  | passkeyCompleted {s : State} {id : Nat} :
+      s.ceremony = some id →
+      Allowed cat s (.passkeyResult id true)
+        { s with
+          ceremony := none
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- The browser's prompt was cancelled or did not complete: the ceremony ends. -/
+  | passkeyDeclined {s : State} {id : Nat} :
+      s.ceremony = some id →
+      Allowed cat s (.passkeyResult id false) { s with ceremony := none } []
+
 /-- The states the kernel can reach from the initial state by allowed steps. -/
 inductive Reachable (cat : Catalogue) : State → Prop
   | start : Reachable cat
@@ -730,7 +782,7 @@ mode to the next one and stores exactly that mode. -/
 theorem theme_choice_stored (cat : Catalogue) {s s' : State} {m : Msg} {arg : String} {es : List Effect}
     (hm : m = .action "theme" arg) (ha : Allowed cat s m s' es) :
     s'.themeMode = s.themeMode.next ∧ es = [.store "strata.theme" s.themeMode.next.key] := by
-  cases ha <;> simp_all [factorsRequests]
+  cases ha <;> simp_all [factorsRequests, deskRequests]
 
 /-- **A change of person keeps the colour scheme.** The scheme is the browser's, not the person's. -/
 theorem session_change_keeps_theme (cat : Catalogue) {s s' : State} {m : Msg} {es : List Effect}
@@ -817,6 +869,21 @@ theorem refused_second_keeps_prompt (cat : Catalogue) {s s' : State} {id : Nat} 
     (ha : Allowed cat s (.failure id) s' es) (hp : s.factorPrompt = true) :
     s'.session = s.session ∧ s'.factorPrompt = true := by
   cases ha <;> simp_all
+
+/-! ### The desk's sessions and passkeys (slice 8) -/
+
+/-- **A passkey prompt is asked for only while a ceremony is in flight, and its answer is for that ceremony.**
+-/
+theorem passkey_answer_for_ceremony (cat : Catalogue) {s s' : State} {id : Nat} {ok : Bool}
+    {es : List Effect} (ha : Allowed cat s (.passkeyResult id ok) s' es) (hes : es ≠ []) :
+    s.ceremony = some id := by
+  cases ha <;> simp_all
+
+/-- **A change to the person's list is read again, and only that.** -/
+theorem changed_list_is_read_again (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}
+    (ha : Allowed cat s (.personalAnswer id true) s' es) :
+    es = fetch s.nextId .personal := by
+  cases ha <;> rfl
 
 /-! ## Non-vacuity -/
 

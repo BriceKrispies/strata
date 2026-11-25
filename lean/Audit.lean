@@ -317,3 +317,5 @@ import Strata
 #print axioms Strata.Browser.second_factor_sent_only_when_waiting
 #print axioms Strata.Browser.sign_in_ends_prompt
 #print axioms Strata.Browser.refused_second_keeps_prompt
+#print axioms Strata.Browser.passkey_answer_for_ceremony
+#print axioms Strata.Browser.changed_list_is_read_again

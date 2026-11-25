@@ -185,6 +185,8 @@ structure State where
   factorPrompt : Bool := false
   /-- A request was refused for want of a fresh authentication: the step-up prompt is shown. -/
   stepUp : Bool := false
+  /-- The passkey ceremony in flight: the request id the browser's prompt answers under. -/
+  ceremony : Option Nat := none
 
 /-- Effects out of the kernel. `http` and `timer "request"` are the request and its deadline; the
 other effects are the page's own (URL, scroll), the live connection, storage, the browser's passkey
@@ -252,6 +254,16 @@ inductive Msg where
   | stepUpAnswer (id : Nat)
   /-- A factor request (enrol, remove, new recovery codes) was answered. -/
   | factorsAnswer (id : Nat)
+  /-- A request for the person's own lists (sessions, passkeys) was answered; `reload` says whether the
+  answer changed the list, so that it is read again. -/
+  | personalAnswer (id : Nat) (reload : Bool)
+  /-- The passkey registration started: its challenge came back, and the browser's prompt is asked for. -/
+  | personalChallenge (id : Nat)
+
+/-- The desk's actions that make a request for the person signed in: the revocation of a session or of the
+others, and the removal of a passkey (`sessions.js`, `passkeys.js`). -/
+def deskRequests : List String :=
+  ["sessions.revoke", "sessions.revoke_others", "passkeys.remove"]
 
 /-- The factor actions that make a request for the signed-in person (`factors.*` in `factors.js`). -/
 def factorsRequests : List String :=
