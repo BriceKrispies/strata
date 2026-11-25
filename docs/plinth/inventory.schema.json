@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "strata/docs/plinth/inventory.schema.json",
+  "title": "Plinth Suite module inventory for the Strata port",
+  "description": "One file per module group (docs/plinth/inventory/<group>.json). Every item is extracted from Plinth's own contract and code (showpiece branch integration) with a source reference, and classified against Strata: expressible today as product metadata, or blocked on a named general fundamental. Nothing here is a design decision; decisions go to the Strata specification.",
+  "type": "object",
+  "required": ["group", "modules", "fundamentals"],
+  "additionalProperties": false,
+  "properties": {
+    "group": { "type": "string" },
+    "modules": { "type": "array", "items": { "$ref": "#/$defs/module" } },
+    "fundamentals": {
+      "description": "Every general capability Strata lacks that an item below needs. Ids are F-<kebab-slug>, named for the capability, never for the Plinth feature (F-scheduled-jobs, not F-promotion-scheduler).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/fundamental" }
+    }
+  },
+  "$defs": {
+    "source": {
+      "description": "Where the item is stated: 'CONTRACT.md §7.2', 'packages/engine/src/suite/ledger.ts:120', 'UI-MAP.md §2'.",
+      "type": "array", "minItems": 1, "items": { "type": "string" }
+    },
+    "strata": {
+      "type": "object",
+      "required": ["status"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "enum": ["expressible", "partly", "needs-fundamental", "out-of-scope"] },
+        "how": { "type": "string", "description": "For expressible or partly: the Strata product declarations that carry it (object, field types, policy, operation steps, query/aggregate, view, screen, presentation, setting, ledger unit, segment, trigger, automation), naming the Strata spec types or docs sections relied on." },
+        "fundamentals": { "type": "array", "items": { "type": "string", "pattern": "^F-[a-z0-9-]+$" } },
+        "evidence": { "type": "array", "items": { "type": "string" }, "description": "Strata files or spec refs checked, e.g. 'specifications/boundary.jsonc tenant-operation-step', 'crates/kernel/src/ledger.rs:88'." },
+        "note": { "type": "string" }
+      }
+    },
+    "field": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" }, "type": { "type": "string", "description": "Plinth type as written (text, int, numeric(12,2), timestamptz, uuid ref -> table, enum(...), jsonb shape)." },
+        "required": { "type": "boolean" }, "unique": { "type": "boolean" }, "personal": { "type": "boolean", "description": "Personal data (name, email, address...)." },
+        "notes": { "type": "string" }
+      }
+    },
+    "module": {
+      "type": "object",
+      "required": ["id", "title", "source", "entities", "operations", "queries", "events", "screens", "invariants"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "description": "Plinth module id, e.g. M3." },
+        "title": { "type": "string" },
+        "source": { "$ref": "#/$defs/source" },
+        "entities": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["id", "kind", "fields", "source", "strata"], "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" }, "kind": { "enum": ["table", "node", "view", "append-only-log"] },
+              "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } },
+              "states": { "type": "array", "items": { "type": "string" }, "description": "Lifecycle states and allowed transitions, e.g. 'placed -> approved'." },
+              "relations": { "type": "array", "items": { "type": "string" } },
+              "retention": { "type": "string" },
+              "source": { "$ref": "#/$defs/source" }, "strata": { "$ref": "#/$defs/strata" }
+            }
+          }
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["id", "inputs", "authz", "effects", "source", "strata"], "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "description": "Plinth action id, e.g. points.award." },
+              "http": { "type": "string" },
+              "inputs": { "type": "array", "items": { "$ref": "#/$defs/field" } },
+              "authz": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                  "permission": { "type": "string" }, "roles": { "type": "array", "items": { "type": "string" } },
+                  "rowPredicate": { "type": "string" }, "ownerOnly": { "type": "boolean" },
+                  "approval": { "type": "string", "description": "Who must approve and under what rule (K4/K5 commit rules)." },
+                  "stepUp": { "type": "boolean" }, "separationOfDuties": { "type": "string" }, "agentMay": { "type": "boolean" }
+                }
+              },
+              "preconditions": { "type": "array", "items": { "type": "string" } },
+              "effects": { "type": "array", "items": { "type": "string" }, "description": "Records created/changed/deleted, ledger postings with accounts and amounts, notifications, realtime events, audit entries, in order." },
+              "atomic": { "type": "boolean" }, "idempotency": { "type": "string" }, "errors": { "type": "array", "items": { "type": "string" } },
+              "audit": { "type": "string" },
+              "source": { "$ref": "#/$defs/source" }, "strata": { "$ref": "#/$defs/strata" }
+            }
+          }
+        },
+        "queries": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["id", "source", "strata"], "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" }, "description": { "type": "string" }, "filter": { "type": "string" }, "sort": { "type": "string" },
+              "aggregates": { "type": "array", "items": { "type": "string" } }, "pagination": { "type": "string" }, "visibility": { "type": "string" },
+              "source": { "$ref": "#/$defs/source" }, "strata": { "$ref": "#/$defs/strata" }
+            }
+          }
+        },
+        "events": {
+          "type": "array", "description": "Realtime events, notifications, automation triggers.",
+          "items": {
+            "type": "object", "required": ["id", "audience", "source", "strata"], "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" }, "audience": { "type": "string" }, "payload": { "type": "string" }, "trigger": { "type": "string" },
+              "source": { "$ref": "#/$defs/source" }, "strata": { "$ref": "#/$defs/strata" }
+            }
+          }
+        },
+        "settings": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["id", "source", "strata"], "additionalProperties": false,
+            "properties": { "id": { "type": "string" }, "type": { "type": "string" }, "levels": { "type": "string" }, "default": { "type": "string" }, "allowed": { "type": "string" },
+              "source": { "$ref": "#/$defs/source" }, "strata": { "$ref": "#/$defs/strata" } }
+          }
+        },
+        "screens": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["route", "widgets", "source"], "additionalProperties": false,
+            "properties": {
+              "route": { "type": "string" }, "nav": { "type": "string" }, "permission": { "type": "string" },
+              "widgets": {
+                "type": "array",
+                "items": {
+                  "type": "object", "required": ["id", "purpose", "strata"], "additionalProperties": false,
+                  "properties": {
+                    "id": { "type": "string" }, "purpose": { "type": "string" }, "data": { "type": "string" }, "interactions": { "type": "array", "items": { "type": "string" } },
+                    "a11y": { "type": "string", "description": "What Plinth's widget does for accessibility: roles, aria-* attributes, keyboard, live regions, from its source." },
+                    "strata": { "$ref": "#/$defs/strata" }
+                  }
+                }
+              },
+              "source": { "$ref": "#/$defs/source" }
+            }
+          }
+        },
+        "invariants": {
+          "type": "array", "description": "Rules that must always hold (points balance = sum of postings, stock never negative, an approver is not the requester).",
+          "items": {
+            "type": "object", "required": ["id", "statement", "source", "strata"], "additionalProperties": false,
+            "properties": { "id": { "type": "string" }, "statement": { "type": "string" }, "security": { "type": "boolean" },
+              "source": { "$ref": "#/$defs/source" }, "strata": { "$ref": "#/$defs/strata" } }
+          }
+        }
+      }
+    },
+    "fundamental": {
+      "type": "object",
+      "required": ["id", "capability", "why", "neededBy", "security"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^F-[a-z0-9-]+$" },
+        "capability": { "type": "string", "description": "The general platform capability, stated so any product could use it." },
+        "why": { "type": "string", "description": "Why a Strata product cannot express it today, citing what was checked." },
+        "neededBy": { "type": "array", "items": { "type": "string" }, "description": "Item ids (module.operation, module.entity...) that need it." },
+        "existingTask": { "type": "string", "description": "A Workgraph task that already covers it (e.g. WG-5507), or empty." },
+        "security": { "type": "boolean", "description": "True when it bears on authorization, grants, admin, audit or the ledger." },
+        "touches": { "type": "array", "items": { "type": "string" }, "description": "Strata areas it would change: spec part, kernel module, substrate, backend, BFF, specc, web." }
+      }
+    }
+  }
+}
