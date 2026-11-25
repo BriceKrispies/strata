@@ -7121,6 +7121,40 @@
       "schemaVersion": 1,
       "realisation": "shipped",
       "owner": "sqlite-adapter",
+      "id": "tbl-audit-anchors",
+      "name": "Audit chain anchors (control database)",
+      "scope": "platform",
+      "key": [
+        "tenant"
+      ],
+      "fields": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "seq",
+          "type": "u64"
+        },
+        {
+          "name": "chain",
+          "type": "string"
+        },
+        {
+          "name": "at",
+          "type": "timestamp"
+        }
+      ],
+      "retention": "As long as the tenant exists: the anchor only moves forward, and the deletion of the tenant removes its row.",
+      "erasure": {
+        "point": "the deletion of the tenant"
+      },
+      "description": "Table audit_anchors of the control database: for each tenant, the newest chained audit line's number and chain value at the last anchor, kept outside the tenant's file so a rewrite of the file cannot rewrite it (OBS-3129, D-8423)."
+    },
+    {
+      "schemaVersion": 1,
+      "realisation": "shipped",
+      "owner": "sqlite-adapter",
       "id": "tbl-passkeys",
       "name": "Passkeys (tenant file)",
       "scope": "platform",

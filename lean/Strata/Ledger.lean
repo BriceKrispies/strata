@@ -322,7 +322,9 @@ theorem ledger_replay_idempotent (s : State) (t : Tx) :
 
 /-- No accepted step takes an account below its floor or above its cap: an account that is below
 its floor after a step was below it before and has not moved away from it, and likewise for the
-cap. -/
+cap.
+
+Verifies: LDG-2932 -/
 theorem ledger_no_overdraft (s s' : State) (t : Tx) (r : Bool) (h : step s t = .ok (s', r))
     (a u : Nat) :
     (∀ f, s.floor a u = some f → balance s'.journal a u < f →

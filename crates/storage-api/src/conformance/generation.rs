@@ -720,6 +720,14 @@ fn cases<'a>() -> Vec<Case<'a>> {
     case!("audit_chain", Expect::Same, |f| {
         let _ = f.store.audit_chain(&f.alpha, 0, 10);
     });
+    // The audit anchor is kept in the control database, outside the tenant's state (OBS-3129), so
+    // neither reading nor advancing it changes what a load of the tenant returns.
+    case!("audit_anchor", Expect::Same, |f| {
+        let _ = f.store.audit_anchor(&f.alpha);
+    });
+    case!("audit_anchor_advance", Expect::Same, |f| {
+        let _ = f.store.audit_anchor_advance(&f.alpha, 30_000);
+    });
     case!("verified_address", Expect::Same, |f| {
         let _ = f
             .store
