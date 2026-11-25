@@ -2461,3 +2461,123 @@ type 2 record 3 owner=101 v=1 4=i:1 5=b:1
 tenant 2 next=1 required=1
 type 2 required=
 end
+scenario h-a-stranger-holds-only-public
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-the-system-holds-no-role
+err unauthorized
+err unauthorized
+err unauthorized
+ok
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=2 required=1
+record 1 owner=101 v=1 1=s:oak 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-anonymous-caller-creates-a-part-with-no-creator
+ok
+ok
+ok
+state
+tenant 1 next=4 required=1
+type 2 required=
+type 2 record 1 owner=- v=1 4=i:1
+type 2 record 2 owner=- v=1 4=i:2 5=b:1
+type 2 record 3 owner=101 v=1 4=i:3 5=b:0
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-anonymous-caller-may-not-create-an-item
+err unauthorized
+err unauthorized
+err unknown_object
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-anonymous-caller-may-not-change-a-record
+ok
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=2 required=1
+record 1 owner=101 v=1 1=s:oak 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-writer-changes-only-its-own-records
+ok
+ok
+ok
+err unauthorized
+err unauthorized
+ok
+ok
+state
+tenant 1 next=3 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-editor-changes-any-record
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-writer-cannot-tell-a-missing-record-from-another-writers
+err unauthorized
+err unauthorized
+err not_found
+err not_found
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-the-owner-may-do-everything
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=3 required=1
+type 2 required=
+type 2 record 2 owner=100 v=1 4=i:9 5=b:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-editor-may-not-change-the-schema
+err unauthorized
+err unauthorized
+err unauthorized
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end

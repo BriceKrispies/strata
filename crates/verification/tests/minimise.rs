@@ -206,9 +206,9 @@ fn operation_forms() -> Vec<(&'static str, fn(&[&str]) -> bool)> {
 
 #[test]
 fn the_full_generator_emits_every_operation_form() {
-    let text = ScenarioStream::full(20_261_125).batch(300);
+    let text = ScenarioStream::full(20_261_125).batch(2000);
     let ops: Vec<String> = parse_cases(&text).into_iter().flat_map(|c| c.ops).collect();
-    assert!(ops.len() > 300 * 10, "only {} operations", ops.len());
+    assert!(ops.len() > 2000 * 10, "only {} operations", ops.len());
     let missing: Vec<&str> = operation_forms()
         .into_iter()
         .filter(|(_, form)| {
