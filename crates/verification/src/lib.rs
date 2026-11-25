@@ -4,10 +4,12 @@
 //! - [`invariants`]: state invariants, evaluated with the kernel's own validation.
 //! - [`obligations`]: which claim is backed by which Lean theorem and which Rust test.
 //! - [`lean`]: building the Lean project, auditing its axioms, and the correspondence fixtures.
+//! - [`drt`]: differential random testing of the kernel against the model at scale, with a minimiser.
 //!
 //! Nothing here is needed to serve a request. The backend calls into it only when someone
 //! asks for a verification report or runs a simulation.
 
+pub mod drt;
 pub mod evidence;
 pub mod invariants;
 pub mod lean;

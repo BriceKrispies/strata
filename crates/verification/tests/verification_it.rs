@@ -4,5 +4,8 @@
 #[path = "purity.rs"]
 mod purity;
 
+#[path = "minimise.rs"]
+mod minimise;
+
 #[path = "state_machine.rs"]
 mod state_machine;
