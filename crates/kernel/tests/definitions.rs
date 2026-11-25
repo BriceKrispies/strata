@@ -178,6 +178,7 @@ fn points() -> SchemaChange {
         unit: LedgerUnit::new("points").unwrap(),
         description: "Points".into(),
         expiry: None,
+        transfer: None,
     })
 }
 

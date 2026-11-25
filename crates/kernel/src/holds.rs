@@ -552,6 +552,19 @@ pub(crate) fn file(
     ))
 }
 
+/// Whether the held change is an invocation of a tenant operation that posts a ledger transaction.
+fn holds_ledger_transaction(tenant: &TenantState, change: &HeldChange) -> bool {
+    let HeldChange::InvokeOperation { operation, .. } = change else {
+        return false;
+    };
+    tenant
+        .schema
+        .operations
+        .as_ref()
+        .and_then(|operations| operations.get(operation))
+        .is_some_and(crate::definitions::posts_ledger_transaction)
+}
+
 fn intent_name(change: &HeldChange) -> &'static str {
     match change {
         HeldChange::InvokeOperation { .. } => "invoke-operation",
@@ -623,6 +636,25 @@ pub(crate) fn decide(
         "hold:approver_permission",
         held.approver.to_string(),
     ));
+    // 3a. A held posting of a ledger transaction is not approved by its actor or by the person it
+    // was made for (LDG-2907): the rule is the ledger's, stated on the header of the transaction,
+    // so that no operation can skip it.
+    if holds_ledger_transaction(tenant, &held.change) {
+        if let Some(mut refusal) = crate::ledger_transaction::approval_refusal(
+            &ctx.principal,
+            &held.requester,
+            held.on_behalf_of.as_ref(),
+        ) {
+            let mut checks = evidence.clone();
+            checks.append(&mut refusal.evidence);
+            refusal.evidence = checks;
+            return Err(refusal);
+        }
+        evidence.push(Check::pass(
+            "ledger:self-approval",
+            "the approver is neither the actor of the held transaction nor the person it was made for",
+        ));
+    }
     // 3. Not the requester, and not the person the change acts for.
     if *decider == held.requester || held.on_behalf_of.as_ref() == Some(decider) {
         return Err(refuse(

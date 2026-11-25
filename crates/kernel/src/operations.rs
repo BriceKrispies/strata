@@ -53,15 +53,16 @@ use crate::transition::field_needs;
 use crate::types::{
     BranchTest, Expr, FieldId, FieldTypeExt, ObjectTypeId, OnDelete, OperationSettingLevel,
     PrincipalId, RecordId, RoleId, SettingId, SettingLevel, StateRevision, TenantOperationDef,
-    TenantOperationId, TenantOperationPostingOwner, TenantOperationStep, Value, ValueExt,
+    TenantOperationId, TenantOperationLeg, TenantOperationPostingOwner, TenantOperationStep, Value,
+    ValueExt,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 /// The ledger and result types an invocation produces, as the specification states them.
 pub use strata_model_core::types::{
-    LedgerAmount, LedgerEntry, LedgerOwner, LedgerPostingRequest, LedgerScope, LedgerUnit,
-    TenantOperationResult,
+    LedgerAmount, LedgerEntry, LedgerLeg, LedgerOwner, LedgerPostingRequest, LedgerScope,
+    LedgerTransaction, LedgerUnit, TenantOperationResult,
 };
 
 /// The longest idempotency key of an invocation, in bytes (D-6595; `rec-tenant-operation-run`
@@ -935,6 +936,18 @@ impl Run<'_> {
                 reference,
                 reason,
             } => self.reverse(id, posting, reference, reason),
+            TenantOperationStep::PostLedgerTransaction {
+                id,
+                legs,
+                reason,
+                reference,
+            } => self.post_transaction(id, legs, reason, reference.as_ref()),
+            TenantOperationStep::ReverseLedgerTransaction {
+                id,
+                transaction,
+                reference,
+                reason,
+            } => self.reverse_transaction(id, transaction, reference, reason),
             TenantOperationStep::FindRecord {
                 id,
                 object,
@@ -1646,6 +1659,134 @@ impl Run<'_> {
         Ok(())
     }
 
+    /// A post-ledger-transaction step (D-8430): the legs as one balanced transaction, decided by
+    /// [`crate::ledger_transaction::post`] on the working copy after the steps before it, so a leg
+    /// sees the legs before it and a refused leg refuses the step. Its key is derived as that of a
+    /// post-ledger step is, from the reference when the step has one.
+    fn post_transaction(
+        &mut self,
+        step: &str,
+        legs: &[TenantOperationLeg],
+        reason: &str,
+        reference: Option<&Expr>,
+    ) -> Result<(), DomainError> {
+        let rule = |what: &str| format!("operation:{}:{step}.{what}", self.operation);
+        let mut made = Vec::with_capacity(legs.len());
+        for (n, leg) in legs.iter().enumerate() {
+            let amount = match self.eval(&format!("{step}.legs.{n}.amount"), &leg.amount)? {
+                Value::Int(n) => LedgerAmount(n),
+                other => {
+                    return Err(self.fail(
+                        ErrorKind::InvalidIntent,
+                        rule("amount"),
+                        format!(
+                            "the amount of leg {n} of step {step} is {}, not an int",
+                            other.kind()
+                        ),
+                    ))
+                }
+            };
+            made.push(LedgerLeg {
+                owner: self.posting_owner(step, &leg.owner)?,
+                unit: leg.unit.clone(),
+                amount,
+                scope: self.posting_scope(step, leg.scope.as_ref())?,
+            });
+        }
+        let idempotency_key = match reference {
+            None => posting_key(self.operation, &self.invoker, self.key, step),
+            Some(e) => {
+                let text = self.reference_text(step, e)?;
+                reference_key(self.operation, &text, step)
+            }
+        };
+        let transaction = LedgerTransaction {
+            operation: self.operation.to_string(),
+            idempotency_key,
+            reason: reason.to_string(),
+            on_behalf_of: None,
+            legs: made,
+        };
+        let state = self.ledger_state();
+        let decided = crate::ledger_transaction::post(&state, &self.ops, &transaction, self.ctx)?;
+        self.absorb_transaction(decided);
+        Ok(())
+    }
+
+    /// A reverse-ledger-transaction step (D-8437): the reversal of the whole transaction of the
+    /// post-ledger-transaction step `transaction` of this operation, made under the reference. The
+    /// accounts are the ones its legs name; the reversal is one new transaction keyed by the
+    /// reference of the reversed one, refused when that transaction was never posted or was
+    /// already reversed.
+    fn reverse_transaction(
+        &mut self,
+        step: &str,
+        transaction: &str,
+        reference: &Expr,
+        reason: &str,
+    ) -> Result<(), DomainError> {
+        let op = self.op;
+        let found = crate::definitions::all_steps(&op.steps)
+            .into_iter()
+            .find_map(|s| match s {
+                TenantOperationStep::PostLedgerTransaction { id, legs, .. }
+                    if id == transaction =>
+                {
+                    Some(legs)
+                }
+                _ => None,
+            });
+        let Some(legs) = found else {
+            return Err(self.fail(
+                ErrorKind::InvalidIntent,
+                format!("operation:{}:{step}.transaction", self.operation),
+                format!(
+                    "step {step} reverses {transaction}, which is no post-ledger-transaction step of the operation"
+                ),
+            ));
+        };
+        let text = self.reference_text(step, reference)?;
+        let mut made = Vec::with_capacity(legs.len());
+        for leg in legs {
+            made.push(LedgerLeg {
+                owner: self.posting_owner(step, &leg.owner)?,
+                unit: leg.unit.clone(),
+                // The amount is the negated amount of the entry, which the ledger reads from it.
+                amount: LedgerAmount(0),
+                scope: self.posting_scope(step, leg.scope.as_ref())?,
+            });
+        }
+        let original = LedgerTransaction {
+            operation: self.operation.to_string(),
+            idempotency_key: reference_key(self.operation, &text, transaction),
+            reason: reason.to_string(),
+            on_behalf_of: None,
+            legs: made,
+        };
+        let state = self.ledger_state();
+        let decided = crate::ledger_transaction::reverse_after(
+            &state,
+            &self.ops,
+            &original,
+            &reversal_key(self.operation, &text, transaction),
+            reason,
+            self.ctx,
+        )?;
+        self.absorb_transaction(decided);
+        Ok(())
+    }
+
+    /// What an accepted transaction adds to the invocation: its operations, events, checks and the
+    /// entry of each leg.
+    fn absorb_transaction(&mut self, decided: crate::ledger::Decided) {
+        self.evidence.extend(decided.evidence);
+        self.ops.extend(decided.ops);
+        self.events.extend(decided.events);
+        if let Output::LedgerPosted { results } = decided.output {
+            self.entries.extend(results.into_iter().map(|r| r.entry));
+        }
+    }
+
     /// The one call into the ledger engine (contract decide-ledger-posting CT-280): the posting
     /// is decided against the working copy after the operations of the steps before it
     /// ([`crate::ledger::post_after`]), so it sees the headers and entries an earlier posting step
@@ -1930,6 +2071,42 @@ fn plan(
                     });
                 if let Some((owner, unit, scope)) = found {
                     posting_needs_of(loaded, owner, unit, scope, subject, inputs, out);
+                }
+            }
+            TenantOperationStep::PostLedgerTransaction { legs, .. } => {
+                for leg in legs {
+                    posting_needs_of(
+                        loaded,
+                        &leg.owner,
+                        &leg.unit,
+                        leg.scope.as_ref(),
+                        subject,
+                        inputs,
+                        out,
+                    );
+                }
+            }
+            TenantOperationStep::ReverseLedgerTransaction { transaction, .. } => {
+                let found = crate::definitions::all_steps(&op.steps)
+                    .into_iter()
+                    .find_map(|s| match s {
+                        TenantOperationStep::PostLedgerTransaction { id, legs, .. }
+                            if id == transaction =>
+                        {
+                            Some(legs)
+                        }
+                        _ => None,
+                    });
+                for leg in found.into_iter().flatten() {
+                    posting_needs_of(
+                        loaded,
+                        &leg.owner,
+                        &leg.unit,
+                        leg.scope.as_ref(),
+                        subject,
+                        inputs,
+                        out,
+                    );
                 }
             }
         }

@@ -441,10 +441,12 @@ mod journal {
                         unit: LedgerUnit::new("points").unwrap(),
                         description: "Points".into(),
                         expiry: None,
+                        transfer: None,
                     }),
                     SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
                         pool: LedgerPoolName::new("budget").unwrap(),
                         description: "Budget".into(),
+                        parent: None,
                     }),
                 ],
                 expected_version: None,

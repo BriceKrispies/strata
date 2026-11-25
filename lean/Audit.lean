@@ -245,3 +245,8 @@ import Strata
 #print axioms Strata.UI.Visibility.selectNarrowed_eq_selectServed
 #print axioms Strata.UI.Loop.hidden_reference_not_followed
 #print axioms Strata.UI.Loop.early_change_to_reachable_visible
+
+#print axioms Strata.Ledger.ledger_conserves_units
+#print axioms Strata.Ledger.ledger_append_only
+#print axioms Strata.Ledger.ledger_replay_idempotent
+#print axioms Strata.Ledger.ledger_no_overdraft

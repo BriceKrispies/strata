@@ -1410,6 +1410,7 @@ fn the_ledger_is_kept_with_its_commit_and_never_rewritten(store: &dyn Store) {
                     unit: unit.clone(),
                     description: "Points".into(),
                     expiry: None,
+                    transfer: None,
                 }),
                 SchemaChange::SetLedgerLimit(LedgerLimit {
                     unit: unit.clone(),
@@ -3062,10 +3063,12 @@ pub fn a_ledger_transaction_is_audited_in_its_commit_and_a_restore_cannot_drop_i
                     unit: unit.clone(),
                     description: "Points".into(),
                     expiry: None,
+                    transfer: None,
                 }),
                 SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
                     pool: pool.clone(),
                     description: "Budget".into(),
+                    parent: None,
                 }),
             ],
             expected_version: None,

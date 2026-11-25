@@ -379,10 +379,12 @@ fn schema_changes() -> Vec<SchemaChange> {
             unit: points(),
             description: "Points".into(),
             expiry: None,
+            transfer: None,
         }),
         SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
             pool: LedgerPoolName::new("budget").unwrap(),
             description: "Budget".into(),
+            parent: None,
         }),
         SchemaChange::SetLedgerLimit(LedgerLimit {
             unit: points(),

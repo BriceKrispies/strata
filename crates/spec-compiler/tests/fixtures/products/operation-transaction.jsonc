@@ -1,0 +1,102 @@
+{
+  // A points programme whose operations post balanced ledger transactions (D-8430, D-8437). Awarding
+  // moves points from the budget pool to a person in one transaction of two entries; a transfer moves
+  // them between two people within the limits the programme declares for the unit (LDG-2916); and an
+  // order is charged and refunded under one reference, the refund reversing the whole charge. The
+  // budget pool rolls up into the treasury pool (LDG-2909). The file declares everything it names in
+  // its own namespace points__ (D-6582).
+  "product": { "id": "points", "name": "Points", "version": "1.0.0", "platform": { "min": "0.2" }, "imports": { "spec": "../../../../../specifications/spec.jsonc", "entities": [] } },
+  "ledgerUnits": [
+    {
+      "id": "points__points",
+      "description": "Points a person holds.",
+      // One transfer moves from five to a hundred points.
+      "transfer": { "min": 5, "max": 100 }
+    }
+  ],
+  "ledgerPools": [
+    { "id": "points__treasury", "description": "Everything the programme issued." },
+    { "id": "points__budget", "description": "The budget awards are paid from.", "parent": "points__treasury" }
+  ],
+  "operations": [
+    {
+      "id": "points__award",
+      "label": "Award points",
+      "inputs": [
+        { "name": "to", "ty": "Str", "required": true },
+        { "name": "amount", "ty": "Int", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [
+        {
+          "PostLedgerTransaction": {
+            "id": "award",
+            "reason": "award",
+            "legs": [
+              { "owner": { "Pool": { "pool": "points__budget" } }, "unit": "points__points", "amount": "0 - param.amount" },
+              { "owner": { "Principal": { "principal": "param.to" } }, "unit": "points__points", "amount": "param.amount" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "points__transfer",
+      "label": "Transfer points",
+      "inputs": [
+        { "name": "to", "ty": "Str", "required": true },
+        { "name": "amount", "ty": "Int", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [
+        {
+          "PostLedgerTransaction": {
+            "id": "transfer",
+            "reason": "transfer",
+            "legs": [
+              { "owner": "Invoker", "unit": "points__points", "amount": "0 - param.amount" },
+              { "owner": { "Principal": { "principal": "param.to" } }, "unit": "points__points", "amount": "param.amount" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "points__order",
+      "label": "Charge an order, or refund it",
+      "inputs": [
+        { "name": "order", "ty": "Str", "required": true },
+        { "name": "to", "ty": "Str", "required": true },
+        { "name": "refund", "ty": "Bool", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [
+        {
+          "Branch": {
+            "id": "which",
+            "test": { "Condition": { "expr": "param.refund" } },
+            "matched": [
+              { "ReverseLedgerTransaction": { "id": "refunded", "transaction": "charge", "reference": "param.order", "reason": "refund" } }
+            ],
+            "unmatched": [
+              {
+                "PostLedgerTransaction": {
+                  "id": "charge",
+                  "reason": "purchase",
+                  "reference": "param.order",
+                  "legs": [
+                    { "owner": { "Principal": { "principal": "param.to" } }, "unit": "points__points", "amount": "0 - 10" },
+                    { "owner": { "Pool": { "pool": "points__budget" } }, "unit": "points__points", "amount": "10" }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

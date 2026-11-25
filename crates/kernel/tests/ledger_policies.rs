@@ -64,6 +64,7 @@ fn unit_decl(unit: LedgerUnit, expiry: Option<LedgerExpiry>) -> SchemaChange {
         description: unit.to_string(),
         unit,
         expiry,
+        transfer: None,
     })
 }
 
@@ -79,6 +80,7 @@ fn ledger_world() -> World {
             SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
                 pool: budget(),
                 description: "Promotion budget".into(),
+                parent: None,
             }),
         ],
     )

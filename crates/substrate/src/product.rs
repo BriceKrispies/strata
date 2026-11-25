@@ -506,6 +506,31 @@ fn expressions_of_action(action: &mut Json, at: &str, operation: bool) -> Result
                     expr_at(fields, "predicate", at)?;
                     continue;
                 }
+                // The steps that post a ledger transaction and reverse one (D-8430, D-8437): the
+                // reference, and in each leg the owner's principal, the scope and the amount.
+                "PostLedgerTransaction" => {
+                    expr_at(fields, "reference", at)?;
+                    if let Some(Json::Array(legs)) = fields.get_mut("legs") {
+                        for (index, leg) in legs.iter_mut().enumerate() {
+                            let Json::Object(leg) = leg else {
+                                continue;
+                            };
+                            let at = format!("{at}.leg {index}");
+                            if let Some(Json::Object(owner)) = leg.get_mut("owner") {
+                                if let Some(Json::Object(principal)) = owner.get_mut("Principal") {
+                                    expr_at(principal, "principal", &format!("{at}.owner"))?;
+                                }
+                            }
+                            expr_at(leg, "scope", &at)?;
+                            expr_at(leg, "amount", &at)?;
+                        }
+                    }
+                    continue;
+                }
+                "ReverseLedgerTransaction" => {
+                    expr_at(fields, "reference", at)?;
+                    continue;
+                }
                 "Branch" => {
                     if let Some(Json::Object(test)) = fields.get_mut("test") {
                         if let Some(Json::Object(condition)) = test.get_mut("Condition") {

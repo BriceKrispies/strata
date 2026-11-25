@@ -142,6 +142,7 @@ fn populated(store: &dyn Store) -> (Pair<'_>, u64) {
                     unit: unit.clone(),
                     description: "Points".into(),
                     expiry: None,
+                    transfer: None,
                 }),
                 SchemaChange::SetLedgerLimit(LedgerLimit {
                     unit: unit.clone(),
