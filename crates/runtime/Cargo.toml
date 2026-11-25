@@ -20,6 +20,7 @@ reqwest.workspace = true
 rusqlite.workspace = true
 getrandom.workspace = true
 sha2.workspace = true
+strata-protocol.workspace = true
 
 [[test]]
 name = "runtime_it"

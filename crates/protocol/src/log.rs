@@ -8,7 +8,28 @@
 
 use serde_json::{json, Map, Value as Json};
 use std::io::Write;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Write one finished log line (no trailing newline in `line`).
+///
+/// Every structured log in Strata goes through here, the runtime's telemetry included. The line
+/// is written with `print!`, so a service writes the same bytes to standard output as before, while
+/// a test binary captures it the way libtest captures any printed output: it is shown only when
+/// the test fails. Setting `STRATA_TEST_LOG` writes lines straight to standard output instead, past
+/// the capture, so a developer can read a test's logs. The variable is read once per process.
+///
+/// Known difference: `print!` panics if standard output is closed, where the previous direct write
+/// silently dropped the line.
+pub fn emit_line(line: &str) {
+    static DIRECT: OnceLock<bool> = OnceLock::new();
+    if *DIRECT.get_or_init(|| std::env::var_os("STRATA_TEST_LOG").is_some()) {
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{line}");
+    } else {
+        print!("{line}\n");
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -55,8 +76,7 @@ impl Logger {
         if let Json::Object(extra) = fields {
             line.extend(extra);
         }
-        let mut out = std::io::stdout().lock();
-        let _ = writeln!(out, "{}", Json::Object(line));
+        emit_line(&Json::Object(line).to_string());
     }
 
     pub fn info(&self, event: &str, correlation: &str, fields: Json) {
