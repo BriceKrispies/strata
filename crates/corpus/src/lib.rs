@@ -1,7 +1,7 @@
 //! The enterprise tenant corpus: the 14 product files of `tests/corpus/enterprise` installed into
 //! one tenant on any [`Store`], and the tenant filled with seeded records.
 //!
-//! ```ignore
+//! ```text
 //! let store = strata_storage_api::memory::MemoryStore::new();
 //! let built = strata_corpus::load_and_populate(&store, Scale::Small, 7)?;
 //! let tenant = built.catalogue.tenant;          // "enterprise"

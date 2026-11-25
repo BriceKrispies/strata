@@ -14,7 +14,7 @@
 //! The compile-time guarantee, shown on the wiring fixture, where `scheduler` calls `reports` and
 //! `gateway` calls `scheduler`:
 //!
-//! ```
+//! ```text
 //! use strata_spec_compiler_wiring_fixture::deps::SchedulerDeps;
 //! use strata_spec_compiler_wiring_fixture::routes::ReportsClient;
 //!
@@ -23,9 +23,10 @@
 //! }
 //! ```
 //!
-//! and a call `scheduler` does not declare (it does not call `gateway`) does not compile:
+//! and a call `scheduler` does not declare (it does not call `gateway`) does not compile (the
+//! `a_component_reaches_only_the_clients_its_calls_declare` test of the golden fixtures holds both):
 //!
-//! ```compile_fail
+//! ```text
 //! use strata_spec_compiler_wiring_fixture::deps::SchedulerDeps;
 //! use strata_spec_compiler_wiring_fixture::routes::GatewayClient;
 //!

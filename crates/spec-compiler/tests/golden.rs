@@ -115,6 +115,30 @@ fn wiring_golden_output_matches_its_fixture_crate() {
     );
 }
 
+/// The compile-time guarantee of the `deps` module, shown on the wiring fixture, where `scheduler`
+/// calls `reports` and `gateway` calls `scheduler`: the first function compiles; a client of a
+/// component `scheduler` does not call has no accessor in the generated `SchedulerDeps`.
+#[test]
+fn a_component_reaches_only_the_clients_its_calls_declare() {
+    use strata_spec_compiler_wiring_fixture::deps::SchedulerDeps;
+    use strata_spec_compiler_wiring_fixture::routes::ReportsClient;
+
+    fn reach(deps: &SchedulerDeps) -> &ReportsClient {
+        deps.reports()
+    }
+    let _ = reach;
+
+    let deps = wiring_files()
+        .iter()
+        .find(|f| f.path.ends_with("deps.rs"))
+        .expect("the wiring fixture generates deps.rs");
+    let start = deps.contents.find("pub struct SchedulerDeps").unwrap();
+    let end = deps.contents.find("pub struct ReportsDeps").unwrap();
+    let scheduler = &deps.contents[start..end];
+    assert!(scheduler.contains("pub fn reports("));
+    assert!(!scheduler.contains("gateway"), "{scheduler}");
+}
+
 const CORE_SPEC: &str = "crates/spec-compiler/tests/fixtures/core/spec.jsonc";
 const CORE_CRATE: &str = "strata-spec-compiler-core-fixture";
 
