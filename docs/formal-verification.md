@@ -603,6 +603,20 @@ changed by its owner.
   (`wsRefusedKeep`, `wsRefusedStop`) and states `refusal_counts_and_stops`. B2 must count one of them;
   the spec's count is the one that cannot be lost.
 
+**Status of the findings above.** All seven are fixed in `web/src/kernel/update.js`, each with a test
+in `web/test/kernel.test.js` that drives `update` through the scenario's messages:
+
+- F1: `a session end drops the view read for the former person, on a page that needs no session`.
+- F2: `a view asked for before the person changed is not applied after the change`. The test changes
+  the person by a session read; a session end already replaces the view's request id on the quiet
+  refresh, so it did not show the fault.
+- F3: `a session read naming another person, or nobody, drops what the former person held`.
+- F4: `a cold start holds no view that answers before the session does, and reads it again once the
+  session is known`.
+- F5: `navigate_away` is declared in `web/src/kernel/types.js`, with no test of its own.
+- F6: `a change of person clears the sign-in form, the typed name too`.
+- F7: `a refused upgrade is counted when the socket closes, and the fifth stops live updates`.
+
 ### 7.4 What the spec leaves out, by design
 
 - **The generated tables.** Routes, screens, contracts, forms, actions, error wording, live bindings and
