@@ -42,7 +42,7 @@ use crate::schema::{Action, FieldType, ObjectTypeDef, Resource, TenantSchema};
 use crate::state::{Need, Principal, Record, RecordExt, State};
 use crate::types::{
     AggregateDef, AggregateGroup, AggregateId, AggregateKind, AggregateRequest, AggregateResult,
-    FieldId, FieldTypeExt, ObjectTypeId, QueryDef, RecordId, Value, ValueExt, ValueMap,
+    ArgSource, FieldId, FieldTypeExt, ObjectTypeId, QueryDef, RecordId, Value, ValueExt, ValueMap,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -812,4 +812,78 @@ pub fn section_aggregate<'a>(
         .queries
         .get(query)
         .and_then(|def| aggregates_of(def).iter().find(|a| a.id == *aggregate))
+}
+
+/// What is wrong with a row mark or a row join of a view section (WG-5599), added to `problems`.
+/// The query must declare the aggregate and the list parameter `key` the section's row ids are
+/// given in; the aggregate groups by a reference field of the query's object that points at the
+/// section's object (the row), and a mark counts, grouped by that field alone, while a join groups
+/// by a second field as well. Each argument is a parameter of the query and not another section's
+/// attribute, which a row lookup does not read.
+pub fn row_lookup_problems(
+    schema: &TenantSchema,
+    at: &str,
+    section_object: &ObjectTypeId,
+    lookup: (
+        &crate::types::QueryId,
+        &AggregateId,
+        &str,
+        Option<&BTreeMap<String, ArgSource>>,
+    ),
+    mark: bool,
+    problems: &mut Vec<String>,
+) {
+    let (query_id, aggregate_id, key, args) = lookup;
+    let Some(query) = schema.queries.get(query_id) else {
+        problems.push(format!("{at}: unknown query {query_id}"));
+        return;
+    };
+    if !query.params.contains(key) {
+        problems.push(format!(
+            "{at}: query {query_id} has no list parameter {key} for the rows"
+        ));
+    }
+    for (param, source) in args.into_iter().flatten() {
+        if !query.params.contains(param) {
+            problems.push(format!("{at}: query {query_id} has no parameter {param}"));
+        }
+        if param == key {
+            problems.push(format!("{at}: {key} is given the rows, not an argument"));
+        }
+        if matches!(source, ArgSource::Section { .. }) {
+            problems.push(format!(
+                "{at}: {param} reads a section, which a row lookup does not"
+            ));
+        }
+    }
+    let Some(agg) = aggregates_of(query).iter().find(|a| a.id == *aggregate_id) else {
+        problems.push(format!(
+            "{at}: query {query_id} declares no aggregate {aggregate_id}"
+        ));
+        return;
+    };
+    let points_at_rows = match (&agg.group_by, schema.objects.get(&query.object)) {
+        (Some(field), Some(object)) => object
+            .fields
+            .get(field)
+            .and_then(|f| f.ty.ref_target())
+            .is_some_and(|(target, _, _)| target == section_object),
+        _ => false,
+    };
+    if !points_at_rows {
+        problems.push(format!(
+            "{at}: aggregate {aggregate_id} must group by a reference field to {section_object}"
+        ));
+    }
+    if mark {
+        if agg.kind != AggregateKind::Count || agg.group_by_second.is_some() {
+            problems.push(format!(
+                "{at}: a mark is a count grouped by the row reference alone"
+            ));
+        }
+    } else if agg.group_by_second.is_none() {
+        problems.push(format!(
+            "{at}: a join groups by the row reference and a second field"
+        ));
+    }
 }

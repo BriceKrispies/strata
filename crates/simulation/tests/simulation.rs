@@ -189,6 +189,8 @@ fn neutral_changes(schema: &TenantSchema) -> Vec<(&'static str, Vec<SchemaChange
                     sections: [(
                         "posts".to_string(),
                         ViewSection {
+                            marks: None,
+                            joins: None,
                             query: QueryId::new("unused_query").unwrap(),
                             args: Default::default(),
                             include: vec![],

@@ -228,6 +228,8 @@ fn schema_changes() -> Vec<SchemaChange> {
         sections: [(
             "notes".to_string(),
             ViewSection {
+                marks: None,
+                joins: None,
                 query: QueryId::new("recent").unwrap(),
                 args: [
                     ("a".to_string(), ArgSource::Route("slug".into())),

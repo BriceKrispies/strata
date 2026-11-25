@@ -163,6 +163,8 @@ fn by_title_view() -> SchemaChange {
         sections: BTreeMap::from([(
             "main".to_string(),
             ViewSection {
+                marks: None,
+                joins: None,
                 query: QueryId::new("by_title").unwrap(),
                 args: BTreeMap::new(),
                 include: vec![field("a")],
