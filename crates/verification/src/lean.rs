@@ -985,7 +985,24 @@ pub fn run_model(lean_dir: &Path, fixture: &str) -> Result<String, String> {
         .join("build")
         .join("bin")
         .join(format!("strata_model{}", std::env::consts::EXE_SUFFIX));
-    let output = Command::new(&exe)
+    let mut command = Command::new(&exe);
+    // STRATA_LEAN_KERNEL selects which Lean kernel prints: `spec` (the default, the model),
+    // `impl` (the executable kernel, stage 1) or `indexed` (stage 2, the one meant to run).
+    match std::env::var("STRATA_LEAN_KERNEL").as_deref() {
+        Ok("impl") => {
+            command.arg("--impl");
+        }
+        Ok("indexed") => {
+            command.arg("--indexed");
+        }
+        Ok("spec") | Err(_) => {}
+        Ok(other) => {
+            return Err(format!(
+                "STRATA_LEAN_KERNEL={other}: expected spec, impl or indexed"
+            ))
+        }
+    }
+    let output = command
         .arg(fixture)
         .current_dir(lean_dir)
         .output()
