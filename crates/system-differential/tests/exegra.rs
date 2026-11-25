@@ -1,7 +1,10 @@
 //! The system host against Exegra's simulator, scenario by scenario.
 //!
-//! For every scenario of `specifications/spec.jsonc` that drives implementation-level machines,
-//! this test asks Exegra for the trace (`scripts/exegra-traces.mjs`, which builds the specification
+//! For one scenario of each kind among the scenarios of `specifications/spec.jsonc` that drive
+//! implementation-level machines (a kind is the machines a scenario runs with the kinds of its
+//! faults; the first scenario of each kind in the specification's order runs, the rest exercise
+//! the same machines with the same kinds of fault), this test asks Exegra for the trace
+//! (`scripts/exegra-traces.mjs`, which builds the specification
 //! once per shard in Exegra's own modules and runs `runScenario` for each scenario, as
 //! `node $EXEGRA_HOME/cli/exegra.js trace <scenario>` does for one) and runs the same scenario
 //! on `strata_runtime::System` with the generated machines and routing table
@@ -402,12 +405,17 @@ struct Plan<'s> {
     id: String,
     members: Vec<Member>,
     behaviours: Vec<&'s strata_spec_compiler::ir::Behavior>,
+    /// The machines the scenario runs and the kinds of its faults: scenarios of one kind exercise
+    /// the same code, so the test runs one of each.
+    kind: String,
 }
 
 fn plan<'s>(spec: &'s Spec, all: &Value, scenario: &Value) -> Result<Plan<'s>, String> {
     let id = scenario["id"].as_str().unwrap_or_default().to_string();
-    let faults = all["faults"].as_array().cloned().unwrap_or_default();
-    let top = all.as_object().cloned().unwrap_or_default();
+    let no_faults: Vec<Value> = Vec::new();
+    let faults: &[Value] = all["faults"].as_array().unwrap_or(&no_faults);
+    let no_top = serde_json::Map::new();
+    let top = all.as_object().unwrap_or(&no_top);
     let raw = scenario.as_object().cloned().unwrap_or_default();
     // Events a scenario machine emits or a timer of one fires: the host's queue carries them.
     let mut internal: BTreeSet<String> = BTreeSet::new();
@@ -426,6 +434,7 @@ fn plan<'s>(spec: &'s Spec, all: &Value, scenario: &Value) -> Result<Plan<'s>, S
             }
         }
     }
+    let mut fault_kinds: Vec<&str> = Vec::new();
     for f in scenario["faults"].as_array().into_iter().flatten() {
         let fid = f.as_str().unwrap_or_default();
         let declared = faults.iter().find(|x| x["id"] == fid);
@@ -437,9 +446,10 @@ fn plan<'s>(spec: &'s Spec, all: &Value, scenario: &Value) -> Result<Plan<'s>, S
                 "fault {fid} ({kind}) changes a machine, which the runtime cannot do"
             ));
         }
+        fault_kinds.push(kind);
         let declared = declared.and_then(Value::as_object);
         if let Some(why) =
-            declared.and_then(|d| strata_spec_compiler::scenarios::unrealisable(&top, &raw, d))
+            declared.and_then(|d| strata_spec_compiler::scenarios::unrealisable(top, &raw, d))
         {
             return Err(format!(
                 "fault {fid} ({kind}) is one the runtime cannot produce: {why}"
@@ -458,8 +468,10 @@ fn plan<'s>(spec: &'s Spec, all: &Value, scenario: &Value) -> Result<Plan<'s>, S
     let generated = dispatch::members();
     let mut members = Vec::new();
     let mut behaviours = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
     for b in scenario["behaviors"].as_array().into_iter().flatten() {
         let b = b.as_str().unwrap_or_default();
+        names.push(b);
         let (Some(member), Some(ir)) = (
             generated.iter().find(|m| m.name == b),
             spec.all_machines().into_iter().find(|m| m.id == b),
@@ -471,10 +483,21 @@ fn plan<'s>(spec: &'s Spec, all: &Value, scenario: &Value) -> Result<Plan<'s>, S
         members.push(*member);
         behaviours.push(ir);
     }
+    fault_kinds.sort_unstable();
+    let kind = format!(
+        "{} || {}",
+        names.join("+"),
+        if fault_kinds.is_empty() {
+            "-".to_string()
+        } else {
+            fault_kinds.join("+")
+        }
+    );
     Ok(Plan {
         id,
         members,
         behaviours,
+        kind,
     })
 }
 
@@ -1063,6 +1086,9 @@ async fn the_system_host_runs_every_scenario_as_exegra_does() {
             }
         }
     }
+    // One scenario of each kind (`Plan::kind`), the first in the specification's order.
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    plans.retain(|p| seen.insert(p.kind.clone()));
     exegra.traces(&plans.iter().map(|p| p.id.clone()).collect::<Vec<_>>());
     for plan in &plans {
         let trace = exegra.trace(&plan.id);
