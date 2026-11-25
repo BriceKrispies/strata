@@ -36,8 +36,8 @@ namespace Strata
 
 /-- The checks before the unique clash pass for a value that passes every check, and the
     unique-size test is not met. -/
-theorem valueProblem_conds {L : Limits} {uniq : Bool} {rs : Records} {self : RecordId}
-    {f : FieldId} {d : FieldDef} {v : Val} (h : valueProblem L uniq rs self f d v = none) :
+theorem valueProblem_conds {L : Limits} {uniq : Bool} {env : Env} {rs : Records} {self : RecordId}
+    {f : FieldId} {d : FieldDef} {v : Val} (h : valueProblem L uniq env rs self f d v = none) :
     v.overLimit L = false ∧ (d.unique && decide (L.maxUnique < v.size)) = false ∧
       v.hasType d.ty = true := by
   have hov : v.overLimit L = false := (valueProblem_none h).1
@@ -50,12 +50,12 @@ theorem valueProblem_conds {L : Limits} {uniq : Bool} {rs : Records} {self : Rec
 
 /-- Without the unique checks, a value that passes is passed with them, or refused with
     `uniqueViolated`. -/
-theorem valueProblem_uniq_dichotomy {L : Limits} {rs : Records} {self : RecordId} {f : FieldId}
-    {d : FieldDef} {v : Val} (h : valueProblem L false rs self f d v = none) :
-    valueProblem L true rs self f d v = none ∨
-      valueProblem L true rs self f d v = some .uniqueViolated := by
+theorem valueProblem_uniq_dichotomy {L : Limits} {env : Env} {rs : Records} {self : RecordId} {f : FieldId}
+    {d : FieldDef} {v : Val} (h : valueProblem L false env rs self f d v = none) :
+    valueProblem L true env rs self f d v = none ∨
+      valueProblem L true env rs self f d v = some .uniqueViolated := by
   obtain ⟨hov, hb, hty⟩ := valueProblem_conds h
-  have hres : v.resolves rs = true := (valueProblem_none h).2.2.1
+  have hres : v.resolves env d.ty = true := (valueProblem_none h).2.2.1
   by_cases hc : (d.unique && clashAt rs self f v) = true
   · right
     have hu : d.unique = true := (Bool.and_eq_true _ _).mp hc |>.1
@@ -72,10 +72,10 @@ theorem valueProblem_uniq_dichotomy {L : Limits} {rs : Records} {self : RecordId
 
 /-- A value that passes every check before the unique clash, and clashes, is refused with
     `uniqueViolated`. -/
-theorem valueProblem_clash {L : Limits} {rs : Records} {self : RecordId} {f : FieldId}
-    {d : FieldDef} {v : Val} (h : valueProblem L false rs self f d v = none) (hu : d.unique = true)
+theorem valueProblem_clash {L : Limits} {env : Env} {rs : Records} {self : RecordId} {f : FieldId}
+    {d : FieldDef} {v : Val} (h : valueProblem L false env rs self f d v = none) (hu : d.unique = true)
     (hc : clashAt rs self f v = true) :
-    valueProblem L true rs self f d v = some .uniqueViolated := by
+    valueProblem L true env rs self f d v = some .uniqueViolated := by
   obtain ⟨hov, hb, hty⟩ := valueProblem_conds h
   have hsz : ¬ (L.maxUnique < v.size) := by
     have hb' := hb
@@ -117,10 +117,10 @@ theorem findSome_hit {α β : Type} (f : α → Option β) (e : β) (l : List α
 
 /-- The field-level dichotomy: a field that passes its checks without the unique checks passes
     them, or is refused with `uniqueViolated`. -/
-theorem fieldProblem_uniq_dichotomy {L : Limits} {rs : Records} {self : RecordId}
-    {fs : Fields} {fd : FieldId × FieldDef} (h : fieldProblem L false rs self fs fd = none) :
-    fieldProblem L true rs self fs fd = none ∨
-      fieldProblem L true rs self fs fd = some .uniqueViolated := by
+theorem fieldProblem_uniq_dichotomy {L : Limits} {env : Env} {rs : Records} {self : RecordId}
+    {fs : Fields} {fd : FieldId × FieldDef} (h : fieldProblem L false env rs self fs fd = none) :
+    fieldProblem L true env rs self fs fd = none ∨
+      fieldProblem L true env rs self fs fd = some .uniqueViolated := by
   obtain ⟨-, hall⟩ := fieldProblem_none h
   unfold fieldProblem at h ⊢
   by_cases hc : (fd.2.required && (fs.valuesOf fd.1).isEmpty) = true
@@ -130,11 +130,11 @@ theorem fieldProblem_uniq_dichotomy {L : Limits} {rs : Records} {self : RecordId
 
 /-- A field that passes its checks without the unique checks, and holds a value another record
     clashes with, is refused with `uniqueViolated`. -/
-theorem fieldProblem_clash {L : Limits} {rs : Records} {self : RecordId} {fs : Fields}
-    {fd : FieldId × FieldDef} (h : fieldProblem L false rs self fs fd = none)
+theorem fieldProblem_clash {L : Limits} {env : Env} {rs : Records} {self : RecordId} {fs : Fields}
+    {fd : FieldId × FieldDef} (h : fieldProblem L false env rs self fs fd = none)
     (hu : fd.2.unique = true) (v : Val) (hv : v ∈ fs.valuesOf fd.1)
     (hc : clashAt rs self fd.1 v = true) :
-    fieldProblem L true rs self fs fd = some .uniqueViolated := by
+    fieldProblem L true env rs self fs fd = some .uniqueViolated := by
   obtain ⟨-, hall⟩ := fieldProblem_none h
   have hval := valueProblem_clash (hall v hv) hu hc
   have hne : (fs.valuesOf fd.1).isEmpty = false := by
@@ -153,8 +153,8 @@ theorem fieldProblem_clash {L : Limits} {rs : Records} {self : RecordId} {fs : F
 /-- A write the unique checks pass names no other record's unique value, and no other record on
     every field of a composite constraint. -/
 theorem problem_unique_none {L : Limits} {schema : Schema} {us : List (List FieldId)}
-    {rs : Records} {self : RecordId} {r : Record}
-    (h : problem L schema us true rs self r = none) :
+    {env : Env} {rs : Records} {self : RecordId} {r : Record}
+    (h : problem L schema us true env rs self r = none) :
     (∀ fd ∈ schema, fd.2.unique = true → ∀ q ∈ rs, q.1 ≠ self →
         agreeOn [fd.1] r.fields q.2.fields = false) ∧
     (∀ u ∈ us, ∀ q ∈ rs, q.1 ≠ self → agreeOn u r.fields q.2.fields = false) := by
@@ -201,22 +201,22 @@ theorem problem_unique_none {L : Limits} {schema : Schema} {us : List (List Fiel
 /-- The refusal of a write that passes the checks without the unique ones, and then clashes: the
     unique checks refuse it, with `uniqueViolated`. Either way the write is not accepted. -/
 theorem problem_uniq_dichotomy {L : Limits} {schema : Schema} {us : List (List FieldId)}
-    {rs : Records} {self : RecordId} {r : Record}
-    (h : problem L schema us false rs self r = none) :
-    problem L schema us true rs self r = none ∨
-      problem L schema us true rs self r = some .uniqueViolated := by
+    {env : Env} {rs : Records} {self : RecordId} {r : Record}
+    (h : problem L schema us false env rs self r = none) :
+    problem L schema us true env rs self r = none ∨
+      problem L schema us true env rs self r = some .uniqueViolated := by
   unfold problem at h ⊢
   by_cases hs : decide (L.maxRecord < r.size) = true
   · simp only [hs, if_true] at h; cases h
   · simp only [hs, Bool.false_eq_true, if_false] at h ⊢
     by_cases hk : (r.fields.all (fun fv => (schema.lookup fv.1).isSome)) = true
     · simp only [hk, if_true] at h ⊢
-      cases hf : schema.findSome? (fieldProblem L false rs self r.fields) with
+      cases hf : schema.findSome? (fieldProblem L false env rs self r.fields) with
       | some e => simp [hf] at h
       | none =>
         rw [hf] at h
         have hall := List.findSome?_eq_none_iff.mp hf
-        rcases findSome_dichotomy (fieldProblem L true rs self r.fields) .uniqueViolated schema
+        rcases findSome_dichotomy (fieldProblem L true env rs self r.fields) .uniqueViolated schema
             (fun x hx => fieldProblem_uniq_dichotomy (hall x hx)) with h1 | h1
         · rw [h1]
           unfold compositeProblem at h ⊢
@@ -232,12 +232,12 @@ theorem problem_uniq_dichotomy {L : Limits} {schema : Schema} {us : List (List F
     write, that is, one the checks without the unique ones pass, which another record clashes with
     on a unique field or a composite constraint, is refused with `uniqueViolated`. -/
 theorem problem_uniq_refusal {L : Limits} {schema : Schema} {us : List (List FieldId)}
-    {rs : Records} {self : RecordId} {r : Record}
-    (hfree : problem L schema us false rs self r = none)
+    {env : Env} {rs : Records} {self : RecordId} {r : Record}
+    (hfree : problem L schema us false env rs self r = none)
     (hclash : (∃ fd ∈ schema, fd.2.unique = true ∧
         ∃ q ∈ rs, q.1 ≠ self ∧ agreeOn [fd.1] r.fields q.2.fields = true) ∨
       (∃ u ∈ us, ∃ q ∈ rs, q.1 ≠ self ∧ agreeOn u r.fields q.2.fields = true)) :
-    problem L schema us true rs self r = some .uniqueViolated := by
+    problem L schema us true env rs self r = some .uniqueViolated := by
   rcases problem_uniq_dichotomy hfree with h | h
   · exfalso
     obtain ⟨h1, h2⟩ := problem_unique_none h
@@ -298,77 +298,6 @@ theorem get_cons_ne (k f : FieldId) (h : k ≠ f) (v : Val) (fs : Fields) :
     Fields.get ((k, v) :: fs) f = Fields.get fs f := by
   have hfk : (f == k) = false := beq_eq_false_iff_ne.mpr (Ne.symm h)
   simp [Fields.get, List.lookup, hfk]
-
-/-- The value of a field after the references to a record are cleared: the value it had, cleared
-    through `dropRef`. Fields hold one value per name. -/
-theorem get_clearFields_eq (id : RecordId) (f : FieldId) :
-    ∀ (fs : Fields), (fs.map Prod.fst).Nodup →
-      Fields.get (clearFields id fs) f = ((Fields.get fs f).dropRef id).getD .null
-  | [], _ => by simp [clearFields, Fields.get, List.lookup, Val.dropRef]
-  | (k, v) :: fs, hnd => by
-    have hnd' := List.nodup_cons.mp hnd
-    have ih := get_clearFields_eq id f fs hnd'.2
-    have hk : k ∉ fs.map Prod.fst := hnd'.1
-    have hfs : Fields.get fs k = .null := by
-      unfold Fields.get
-      cases hl : fs.lookup k with
-      | none => rfl
-      | some u => exact absurd (List.mem_map.mpr ⟨(k, u), lookup_mem hl, rfl⟩) hk
-    cases hd : v.dropRef id with
-    | none =>
-      have hcf : clearFields id ((k, v) :: fs) = clearFields id fs := by
-        simp [clearFields, hd]
-      rw [hcf, ih]
-      by_cases hkf : k = f
-      · subst hkf
-        rw [get_cons_self, hd, hfs]; rfl
-      · rw [get_cons_ne k f hkf v fs]
-    | some w =>
-      have hcf : clearFields id ((k, v) :: fs) = (k, w) :: clearFields id fs := by
-        simp [clearFields, hd]
-      rw [hcf]
-      by_cases hkf : k = f
-      · subst hkf
-        rw [get_cons_self, get_cons_self, hd]
-        rfl
-      · rw [get_cons_ne k f hkf w, get_cons_ne k f hkf v, ih]
-
-/-- Clearing a record's references keeps only the values it had: a value that is keyed after the
-    clearing is keyed before it, and unchanged. -/
-theorem clearRef_keyed {id : RecordId} {r : Record} (hnd : (r.fields.map Prod.fst).Nodup)
-    (f : FieldId) (hk : ((clearRef id r).fields.get f).keyed = true) :
-    (clearRef id r).fields.get f = r.fields.get f ∧ (r.fields.get f).keyed = true := by
-  by_cases hr : r.refersTo id = true
-  · have hc : clearRef id r =
-        { r with fields := clearFields id r.fields, version := r.version + 1 } := by
-      unfold clearRef; simp [hr]
-    rw [hc] at hk ⊢
-    dsimp only at hk ⊢
-    rw [get_clearFields_eq id f r.fields hnd] at hk ⊢
-    exact dropRef_getD_keyed id _ hk
-  · have hc : clearRef id r = r := by unfold clearRef; simp [hr]
-    rw [hc] at hk ⊢
-    exact ⟨rfl, hk⟩
-
-/-- Clearing references keeps agreement only where it was: records that agree on fields after the
-    clearing agreed before it. -/
-theorem agreeOn_clearRef {id : RecordId} {r₁ r₂ : Record} (hn₁ : (r₁.fields.map Prod.fst).Nodup)
-    (hn₂ : (r₂.fields.map Prod.fst).Nodup) (us : List FieldId)
-    (h : agreeOn us (clearRef id r₁).fields (clearRef id r₂).fields = true) :
-    agreeOn us r₁.fields r₂.fields = true := by
-  unfold agreeOn at h ⊢
-  rw [List.all_eq_true] at h ⊢
-  intro f hf
-  have hf' := h f hf
-  simp only [Bool.and_eq_true, beq_iff_eq] at hf'
-  obtain ⟨hk1, heq⟩ := hf'
-  obtain ⟨e1, k1⟩ := clearRef_keyed hn₁ f hk1
-  have hk2 : ((clearRef id r₂).fields.get f).keyed = true := by
-    rw [← heq]; exact hk1
-  obtain ⟨e2, k2⟩ := clearRef_keyed hn₂ f hk2
-  simp only [Bool.and_eq_true, beq_iff_eq]
-  refine ⟨k1, ?_⟩
-  rw [← e1, ← e2, heq]
 
 /-! ## Lemmas: names stay distinct -/
 
@@ -485,18 +414,142 @@ theorem newRecord_nodup (schema : Schema) (p : PrincipalId) (fs : Fields)
         rw [hfsnone] at hmatch
         cases hmatch
 
-theorem clearRef_nodup (id : RecordId) (r : Record) (hnd : (r.fields.map Prod.fst).Nodup) :
-    ((clearRef id r).fields.map Prod.fst).Nodup := by
+
+theorem fieldRefers_null (schema : Schema) (T : TypeId) (id : RecordId) (f : FieldId) :
+    fieldRefers schema T id (f, .null) = false := by
+  unfold fieldRefers
+  cases schema.lookup f with
+  | none => rfl
+  | some d => simp [Val.refersTo]
+
+theorem get_clearFields_eq (schema : Schema) (T : TypeId) (id : RecordId) (f : FieldId) :
+    ∀ (fs : Fields), (fs.map Prod.fst).Nodup →
+      Fields.get (clearFields schema T id fs) f =
+        if fieldRefers schema T id (f, Fields.get fs f) then ((Fields.get fs f).dropRef id).getD .null
+        else Fields.get fs f
+  | [], _ => by
+    have h0 : fieldRefers schema T id (f, Fields.get [] f) = false := fieldRefers_null _ _ _ _
+    rw [if_neg (by simp [h0])]
+    rfl
+  | (k, v) :: fs, hnd => by
+    have hnd' := List.nodup_cons.mp hnd
+    have ih := get_clearFields_eq schema T id f fs hnd'.2
+    have hk : k ∉ fs.map Prod.fst := hnd'.1
+    have hfs : Fields.get fs k = .null := by
+      unfold Fields.get
+      cases hl : fs.lookup k with
+      | none => rfl
+      | some u => exact absurd (List.mem_map.mpr ⟨(k, u), lookup_mem hl, rfl⟩) hk
+    by_cases hkf : k = f
+    · have hg : Fields.get ((k, v) :: fs) f = v := by rw [← hkf]; exact get_cons_self k v fs
+      have hgf : Fields.get fs f = .null := by rw [← hkf]; exact hfs
+      rw [hg]
+      by_cases hr : fieldRefers schema T id (f, v) = true
+      · rw [if_pos hr]
+        have hrk : fieldRefers schema T id (k, v) = true := by rw [hkf]; exact hr
+        cases hd : v.dropRef id with
+        | none =>
+          have hcf : clearFields schema T id ((k, v) :: fs) = clearFields schema T id fs := by
+            simp [clearFields, hrk, hd]
+          rw [hcf, ih, hgf, fieldRefers_null]
+          simp
+        | some w =>
+          have hcf : clearFields schema T id ((k, v) :: fs) = (k, w) :: clearFields schema T id fs := by
+            simp [clearFields, hrk, hd]
+          rw [hcf, ← hkf, get_cons_self]
+          simp
+      · have hr' : fieldRefers schema T id (f, v) = false := by simpa using hr
+        rw [if_neg hr]
+        have hrk : fieldRefers schema T id (k, v) = false := by rw [hkf]; exact hr'
+        have hcf : clearFields schema T id ((k, v) :: fs) = (k, v) :: clearFields schema T id fs := by
+          simp [clearFields, hrk]
+        rw [hcf, ← hkf, get_cons_self]
+    · rw [get_cons_ne k f hkf v fs]
+      have hcf : Fields.get (clearFields schema T id ((k, v) :: fs)) f =
+          Fields.get (clearFields schema T id fs) f := by
+        by_cases hr : fieldRefers schema T id (k, v) = true
+        · cases hd : v.dropRef id with
+          | none =>
+            have hc2 : clearFields schema T id ((k, v) :: fs) = clearFields schema T id fs := by
+              simp [clearFields, hr, hd]
+            rw [hc2]
+          | some w =>
+            have hc2 : clearFields schema T id ((k, v) :: fs) =
+                (k, w) :: clearFields schema T id fs := by
+              simp [clearFields, hr, hd]
+            rw [hc2, get_cons_ne k f hkf w]
+        · have hr' : fieldRefers schema T id (k, v) = false := by simpa using hr
+          have hc2 : clearFields schema T id ((k, v) :: fs) = (k, v) :: clearFields schema T id fs := by
+            simp [clearFields, hr']
+          rw [hc2, get_cons_ne k f hkf v]
+      rw [hcf, ih]
+
+
+/-- Clearing a record's references keeps only the values it had: a value that is keyed after the
+    clearing is keyed before it, and unchanged. -/
+theorem clearRef_keyed {schema : Schema} {T : TypeId} {id : RecordId} {r : Record}
+    (hnd : (r.fields.map Prod.fst).Nodup) (f : FieldId)
+    (hk : ((clearRef schema T id r).fields.get f).keyed = true) :
+    (clearRef schema T id r).fields.get f = r.fields.get f ∧ (r.fields.get f).keyed = true := by
+  by_cases hr : recRefers schema T id r = true
+  · have hc : clearRef schema T id r =
+        { r with fields := clearFields schema T id r.fields, version := r.version + 1 } := by
+      unfold clearRef; rw [if_pos hr]
+    rw [hc] at hk ⊢
+    dsimp only at hk ⊢
+    rw [get_clearFields_eq schema T id f r.fields hnd] at hk ⊢
+    by_cases hf : fieldRefers schema T id (f, r.fields.get f) = true
+    · rw [if_pos hf] at hk ⊢
+      exact dropRef_getD_keyed id _ hk
+    · rw [if_neg hf] at hk ⊢
+      exact ⟨rfl, hk⟩
+  · have hc : clearRef schema T id r = r := by unfold clearRef; rw [if_neg hr]
+    rw [hc] at hk ⊢
+    exact ⟨rfl, hk⟩
+
+/-- Clearing references keeps agreement only where it was: records that agree on fields after the
+    clearing agreed before it. -/
+theorem agreeOn_clearRef {schema : Schema} {T : TypeId} {id : RecordId} {r₁ r₂ : Record}
+    (hn₁ : (r₁.fields.map Prod.fst).Nodup) (hn₂ : (r₂.fields.map Prod.fst).Nodup)
+    (us : List FieldId)
+    (h : agreeOn us (clearRef schema T id r₁).fields (clearRef schema T id r₂).fields = true) :
+    agreeOn us r₁.fields r₂.fields = true := by
+  unfold agreeOn at h ⊢
+  rw [List.all_eq_true] at h ⊢
+  intro f hf
+  have hf' := h f hf
+  simp only [Bool.and_eq_true, beq_iff_eq] at hf'
+  obtain ⟨hk1, heq⟩ := hf'
+  obtain ⟨e1, k1⟩ := clearRef_keyed (schema := schema) (T := T) (id := id) hn₁ f hk1
+  have hk2 : (((clearRef schema T id r₂).fields).get f).keyed = true := by
+    rw [← heq]; exact hk1
+  obtain ⟨e2, k2⟩ := clearRef_keyed (schema := schema) (T := T) (id := id) hn₂ f hk2
+  simp only [Bool.and_eq_true, beq_iff_eq]
+  refine ⟨k1, ?_⟩
+  rw [← e1, ← e2, heq]
+
+theorem clearFields_nodup (schema : Schema) (T : TypeId) (id : RecordId) (fs : Fields)
+    (hnd : (fs.map Prod.fst).Nodup) : ((clearFields schema T id fs).map Prod.fst).Nodup := by
+  unfold clearFields
+  refine nodup_filterMap_fst
+    (fun fv => if fieldRefers schema T id fv = true then (fv.2.dropRef id).map (fun v => (fv.1, v))
+      else some fv) ?_ fs hnd
+  intro x y hxy
+  by_cases hr : fieldRefers schema T id x = true
+  · rw [if_pos hr] at hxy
+    cases hd : x.2.dropRef id with
+    | none => rw [hd, Option.map_none] at hxy; cases hxy
+    | some v => rw [hd, Option.map_some, Option.some.injEq] at hxy; rw [← hxy]
+  · rw [if_neg hr, Option.some.injEq] at hxy
+    rw [← hxy]
+
+theorem clearRef_nodup (schema : Schema) (T : TypeId) (id : RecordId) (r : Record)
+    (hnd : (r.fields.map Prod.fst).Nodup) : ((clearRef schema T id r).fields.map Prod.fst).Nodup := by
   unfold clearRef
   split
-  · exact nodup_filterMap_fst (fun fv => (fv.2.dropRef id).map (fun v => (fv.1, v)))
-      (fun x y hxy => by
-        cases hd : x.2.dropRef id with
-        | none => simp only [hd, Option.map_none] at hxy; cases hxy
-        | some v =>
-          simp only [hd, Option.map_some] at hxy
-          cases hxy; rfl) r.fields hnd
+  · exact clearFields_nodup schema T id r.fields hnd
   · exact hnd
+
 
 theorem keys_makeRequired (s : Schema) (f : FieldId) :
     (makeRequired s f).map Prod.fst = s.map Prod.fst := by
@@ -536,10 +589,8 @@ theorem mem_makeUnique {s : Schema} {f : FieldId} {fd : FieldId × FieldDef}
   · subst he
     exact ⟨a, ha, rfl, Or.inr rfl⟩
 
-/-! ## Lemmas: the records a write leaves -/
-
 /-- A record replaced by id: the replacement, or a record the replacement does not touch. -/
-theorem mem_replace {rs : Records} {id : RecordId} {r : Record} {x : RecordId} {z : Record}
+theorem mem_replace {env : Env} {rs : Records} {id : RecordId} {r : Record} {x : RecordId} {z : Record}
     (h : (x, z) ∈ rs.map (fun q => if q.1 == id then (q.1, r) else q)) :
     (x = id ∧ z = r) ∨ ((x, z) ∈ rs ∧ x ≠ id) := by
   obtain ⟨a, ha, he⟩ := List.mem_map.mp h
@@ -555,244 +606,665 @@ theorem mem_replace {rs : Records} {id : RecordId} {r : Record} {x : RecordId} {
     subst he
     exact ⟨ha, hne⟩
 
-/-- Clearing and deleting keep an old record's name in the new records. -/
+/-! ## Lemmas: the tables of a tenant -/
+
+/-- What a table that passes the schema check satisfies: every record conforms to the schema, and
+    no two distinct records agree on a unique field or on a composite constraint. -/
+theorem tableViolated_false {L : Limits} {o : ObjType} (h : tableViolated L o = false) :
+    (∀ q ∈ o.records, conforms o.schema q.2 = true) ∧
+    (∀ fd ∈ o.schema, fd.2.unique = true → ∀ q₁ ∈ o.records, ∀ q₂ ∈ o.records, q₁.1 ≠ q₂.1 →
+        agreeOn [fd.1] q₁.2.fields q₂.2.fields = false) ∧
+    (∀ u ∈ o.uniques, ∀ q₁ ∈ o.records, ∀ q₂ ∈ o.records, q₁.1 ≠ q₂.1 →
+        agreeOn u q₁.2.fields q₂.2.fields = false) := by
+  unfold tableViolated at h
+  rw [Bool.or_eq_false_iff, Bool.or_eq_false_iff] at h
+  obtain ⟨⟨hA, hB⟩, hC⟩ := h
+  refine ⟨?_, ?_, ?_⟩
+  · intro q hq
+    have hA' : (o.records.all (fun q => conforms o.schema q.2)) = true := by
+      simpa using hA
+    exact List.all_eq_true.mp hA' q hq
+  · intro fd hfd hu q₁ hq₁ q₂ hq₂ hne
+    have hB' := List.any_eq_false.mp hB fd hfd
+    have hdup : dupFields o.records [fd.1] = false := by
+      cases hdf : dupFields o.records [fd.1]
+      · rfl
+      · exfalso; apply hB'; simp [hu, hdf]
+    exact dupFields_false hdup hq₁ hq₂ hne
+  · intro u hu q₁ hq₁ q₂ hq₂ hne
+    have hC' := List.any_eq_false.mp hC u hu
+    have hdup : dupFields o.records u = false := by simpa using hC'
+    exact dupFields_false hdup hq₁ hq₂ hne
+
+/-- A schema that passes the check leaves every object type's table passing it. -/
+theorem tableViolated_of_schemaViolated {L : Limits} {types : List (TypeId × ObjType)}
+    (h : schemaViolated L types = false) {T : TypeId} {o : ObjType} (ho : (T, o) ∈ types) :
+    tableViolated L o = false :=
+  by simpa using List.any_eq_false.mp h (T, o) ho
+
+theorem keys_putTypeList (l : List (TypeId × ObjType)) (ty : TypeId) (o' : ObjType) :
+    (putTypeList l ty o').map Prod.fst = l.map Prod.fst := by
+  induction l with
+  | nil => rfl
+  | cons e es ih =>
+    obtain ⟨k, p⟩ := e
+    unfold putTypeList
+    split
+    · rename_i h
+      have hk : k = ty := by simpa using h
+      subst hk
+      rfl
+    · simp [ih]
+
+theorem types_keys_putType (t : Tenant) (ty : TypeId) (o' : ObjType) :
+    (t.putType ty o').types.map Prod.fst = t.types.map Prod.fst :=
+  keys_putTypeList t.types ty o'
+
+theorem types_keys_afterDelete (t : Tenant) (ty id : TypeId) :
+    (t.afterDelete ty id).types.map Prod.fst = t.types.map Prod.fst := by
+  unfold Tenant.afterDelete
+  rw [List.map_map]
+  rfl
+
+/-! ## Lemmas: a schema change that is accepted leaves the tables conforming -/
+
+/-- A strict schema change that is accepted leaves every table passing the check. -/
+theorem schemaViolated_of_strict (t t' : Tenant) (p : PrincipalId) (i : Intent)
+    (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t') :
+    schemaViolated t.limits t'.types = false := by
+  cases i with
+  | create ty fs => simp [Intent.isSchema] at hi
+  | update ty id fs ev => simp [Intent.isSchema] at hi
+  | delete ty id ev => simp [Intent.isSchema] at hi
+  | setRequired ty f strict =>
+    simp only [Intent.strict] at hs
+    subst hs
+    simp only [stepTenant] at h
+    split at h
+    · cases h
+    · cases hT : t.typ? ty with
+      | none => simp [hT] at h
+      | some o =>
+        simp only [hT] at h
+        split at h
+        · cases h
+        · rename_i hc
+          have ht := Except.ok.inj h
+          subst ht
+          simpa [schemaChangeRefused] using hc
+  | setUnique ty f strict =>
+    simp only [Intent.strict] at hs
+    subst hs
+    simp only [stepTenant] at h
+    split at h
+    · cases h
+    · cases hT : t.typ? ty with
+      | none => simp [hT] at h
+      | some o =>
+        simp only [hT] at h
+        split at h
+        · cases h
+        · split at h
+          · cases h
+          · split at h
+            · cases h
+            · rename_i hc
+              have ht := Except.ok.inj h
+              subst ht
+              simpa [schemaChangeRefused] using hc
+  | defineUnique ty fs =>
+    simp only [stepTenant] at h
+    split at h
+    · cases h
+    · cases hT : t.typ? ty with
+      | none => simp [hT] at h
+      | some o =>
+        simp only [hT] at h
+        split at h
+        · cases h
+        · split at h
+          · cases h
+          · split at h
+            · cases h
+            · rename_i hc
+              have ht := Except.ok.inj h
+              subst ht
+              simpa [schemaChangeRefused] using hc
+
+/-- An accepted strict schema change leaves every record conforming and every table's unique
+    constraints holding. -/
+theorem strict_schema_change_conforms (t t' : Tenant) (p : PrincipalId) (i : Intent)
+    (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t') :
+    t'.Conform ∧ t'.UniqueRecords := by
+  have hv := schemaViolated_of_strict t t' p i hi hs h
+  have key : ∀ T o, t'.typ? T = some o →
+      (∀ q ∈ o.records, conforms o.schema q.2 = true) ∧
+      (∀ fd ∈ o.schema, fd.2.unique = true → ∀ q₁ ∈ o.records, ∀ q₂ ∈ o.records, q₁.1 ≠ q₂.1 →
+        agreeOn [fd.1] q₁.2.fields q₂.2.fields = false) ∧
+      (∀ u ∈ o.uniques, ∀ q₁ ∈ o.records, ∀ q₂ ∈ o.records, q₁.1 ≠ q₂.1 →
+        agreeOn u q₁.2.fields q₂.2.fields = false) := by
+    intro T o ho
+    have hmem : (T, o) ∈ t'.types := lookup_mem ho
+    exact tableViolated_false (L := t.limits) (tableViolated_of_schemaViolated hv hmem)
+  refine ⟨fun T o ho q hq => (key T o ho).1 q hq, fun T o ho q₁ hq₁ q₂ hq₂ hne => ⟨?_, ?_⟩⟩
+  · intro fd hfd hu
+    exact (key T o ho).2.1 fd hfd hu q₁ hq₁ q₂ hq₂ hne
+  · intro u hu
+    exact (key T o ho).2.2 u hu q₁ hq₁ q₂ hq₂ hne
+
+/-! ## The invariant through accepted steps -/
+
+/-- The names an accepted step leaves distinct: the object types, each schema, and each record's
+    fields. -/
+theorem stepTenant_preserves_distinct (t t' : Tenant) (p : PrincipalId) (i : Intent)
+    (hd : t.Distinct) (h : stepTenant t p i = .ok t') : t'.Distinct := by
+  obtain ⟨hkeys, hD⟩ := hd
+  cases i with
+  | create ty fs =>
+    cases hty : t.typ? ty with
+    | none => simp [stepTenant, hty] at h
+    | some o =>
+      simp only [stepTenant, hty] at h
+      split at h
+      · cases h
+      · cases hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId
+            (newRecord o.schema p fs) with
+        | some e => simp [hP] at h
+        | none =>
+          simp only [hP] at h
+          have ht := Except.ok.inj h
+          subst ht
+          refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
+          change (t.putType ty { o with records := (t.nextId, newRecord o.schema p fs) :: o.records }).typ? T = some o' at hT'
+          by_cases hTy : T = ty
+          · subst hTy
+            rw [typ?_putType_self t T o _ hty] at hT'
+            cases hT'
+            obtain ⟨hs, hr⟩ := hD T o hty
+            refine ⟨hs, fun q hq => ?_⟩
+            rcases List.mem_cons.mp hq with rfl | hq'
+            · exact newRecord_nodup o.schema p fs hs
+            · exact hr q hq'
+          · rw [typ?_putType_other t ty T _ hTy] at hT'
+            exact hD T o' hT'
+  | update ty id fs ev =>
+    cases hty : t.typ? ty with
+    | none => simp [stepTenant, hty] at h
+    | some o =>
+      cases hL : o.records.lookup id with
+      | none => simp [stepTenant, hty, hL, missingRecord] at h
+      | some old =>
+        simp only [stepTenant, hty, hL] at h
+        split at h
+        · cases h
+        · split at h
+          · cases h
+          · cases hP : problem t.limits o.schema o.uniques true t.env o.records id
+                (patched old fs) with
+            | some e => simp [hP] at h
+            | none =>
+              simp only [hP] at h
+              have ht := Except.ok.inj h
+              subst ht
+              refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
+              by_cases hTy : T = ty
+              · subst hTy
+                rw [typ?_putType_self t T o _ hty] at hT'
+                cases hT'
+                obtain ⟨hs, hr⟩ := hD T o hty
+                refine ⟨hs, fun q hq => ?_⟩
+                obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+                by_cases hid : (q₀.1 == id) = true
+                · simp only [hid, if_true] at hmap
+                  rw [← hmap]
+                  have hold : (old.fields.map Prod.fst).Nodup := by
+                    have hm : (id, old) ∈ o.records := lookup_mem hL
+                    exact hr (id, old) hm
+                  exact patch_nodup fs old.fields hold
+                · simp only [hid, if_false] at hmap
+                  rw [← hmap]
+                  exact hr q₀ hq₀
+              · rw [typ?_putType_other t ty T _ hTy] at hT'
+                exact hD T o' hT'
+  | delete ty id ev =>
+    have ht := stepTenant_delete_eq h
+    subst ht
+    refine ⟨by rw [types_keys_afterDelete]; exact hkeys, fun T o' hT' => ?_⟩
+    rw [typ?_afterDelete] at hT'
+    cases ho : t.typ? T with
+    | none => rw [ho] at hT'; cases hT'
+    | some o =>
+      rw [ho] at hT'
+      simp only [Option.map_some, Option.some.injEq] at hT'
+      subst hT'
+      obtain ⟨hs, hr⟩ := hD T o ho
+      refine ⟨hs, fun q hq => ?_⟩
+      obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+      subst hmap
+      have hq₀' : q₀ ∈ o.records := by
+        by_cases hTy : (T == ty) = true
+        · rw [if_pos hTy] at hq₀
+          exact (List.mem_filter.mp hq₀).1
+        · rw [if_neg hTy] at hq₀
+          exact hq₀
+      exact clearRef_nodup o.schema ty id q₀.2 (hr q₀ hq₀')
+  | setRequired ty f strict =>
+    cases hty : t.typ? ty with
+    | none => simp only [stepTenant, hty] at h; split at h <;> cases h
+    | some o =>
+      simp only [stepTenant, hty] at h
+      repeat' split at h
+      all_goals try cases h
+      refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
+      by_cases hTy : T = ty
+      · subst hTy
+        rw [typ?_putType_self t T o _ hty] at hT'
+        cases hT'
+        obtain ⟨hs, hr⟩ := hD T o hty
+        exact ⟨by rw [keys_makeRequired]; exact hs, hr⟩
+      · rw [typ?_putType_other t ty T _ hTy] at hT'
+        exact hD T o' hT'
+  | setUnique ty f strict =>
+    cases hty : t.typ? ty with
+    | none => simp only [stepTenant, hty] at h; split at h <;> cases h
+    | some o =>
+      simp only [stepTenant, hty] at h
+      repeat' split at h
+      all_goals try cases h
+      refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
+      by_cases hTy : T = ty
+      · subst hTy
+        rw [typ?_putType_self t T o _ hty] at hT'
+        cases hT'
+        obtain ⟨hs, hr⟩ := hD T o hty
+        exact ⟨by rw [keys_makeUnique]; exact hs, hr⟩
+      · rw [typ?_putType_other t ty T _ hTy] at hT'
+        exact hD T o' hT'
+  | defineUnique ty fs =>
+    cases hty : t.typ? ty with
+    | none => simp only [stepTenant, hty] at h; split at h <;> cases h
+    | some o =>
+      simp only [stepTenant, hty] at h
+      repeat' split at h
+      all_goals try cases h
+      refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
+      by_cases hTy : T = ty
+      · subst hTy
+        rw [typ?_putType_self t T o _ hty] at hT'
+        cases hT'
+        obtain ⟨hs, hr⟩ := hD T o hty
+        exact ⟨hs, hr⟩
+      · rw [typ?_putType_other t ty T _ hTy] at hT'
+        exact hD T o' hT'
+
+
+
+/-- The records of one object type with the unique constraints of the type hold: no two distinct
+    records agree on a unique field, or on a composite constraint. -/
+def UniqOn (schema : Schema) (us : List (List FieldId)) (rs : Records) : Prop :=
+  ∀ q₁ ∈ rs, ∀ q₂ ∈ rs, q₁.1 ≠ q₂.1 →
+    (∀ fd ∈ schema, fd.2.unique = true → agreeOn [fd.1] q₁.2.fields q₂.2.fields = false) ∧
+    (∀ u ∈ us, agreeOn u q₁.2.fields q₂.2.fields = false)
+
+/-- A fresh record that the unique checks pass joins records that hold the constraints. -/
+theorem uniqOn_cons_fresh {L : Limits} {env : Env} {schema : Schema} {us : List (List FieldId)}
+    {rs : Records} {self : RecordId} {r : Record}
+    (hU : UniqOn schema us rs) (hp : problem L schema us true env rs self r = none)
+    (hids : ∀ q ∈ rs, q.1 ≠ self) : UniqOn schema us ((self, r) :: rs) := by
+  intro q₁ hq₁ q₂ hq₂ hne
+  have hnew := problem_unique_none hp
+  rcases List.mem_cons.mp hq₁ with rfl | hq₁' <;> rcases List.mem_cons.mp hq₂ with rfl | hq₂'
+  · exact absurd rfl hne
+  · exact ⟨fun fd hfd hu => hnew.1 fd hfd hu q₂ hq₂' (hids q₂ hq₂'),
+      fun u hu => hnew.2 u hu q₂ hq₂' (hids q₂ hq₂')⟩
+  · refine ⟨fun fd hfd hu => ?_, fun u hu => ?_⟩
+    · rw [agreeOn_comm]; exact hnew.1 fd hfd hu q₁ hq₁' (hids q₁ hq₁')
+    · rw [agreeOn_comm]; exact hnew.2 u hu q₁ hq₁' (hids q₁ hq₁')
+  · exact hU q₁ hq₁' q₂ hq₂' hne
+
+/-- A record replaced by a write that the unique checks pass keeps the constraints. -/
+theorem uniqOn_replace {L : Limits} {env : Env} {schema : Schema} {us : List (List FieldId)}
+    {rs : Records} {id : RecordId} {r : Record}
+    (hU : UniqOn schema us rs) (hp : problem L schema us true env rs id r = none) :
+    UniqOn schema us (rs.map (fun q => if q.1 == id then (q.1, r) else q)) := by
+  intro q₁ hq₁ q₂ hq₂ hne
+  obtain ⟨a₁, ha₁, rfl⟩ := List.mem_map.mp hq₁
+  obtain ⟨a₂, ha₂, rfl⟩ := List.mem_map.mp hq₂
+  have hnew := problem_unique_none hp
+  by_cases h1 : (a₁.1 == id) = true <;> by_cases h2 : (a₂.1 == id) = true
+  · have e1 : a₁.1 = id := by simpa using h1
+    have e2 : a₂.1 = id := by simpa using h2
+    simp only [h1, h2, if_true] at hne
+    exact absurd (e1.trans e2.symm) hne
+  · have hn2 : a₂.1 ≠ id := by simpa using h2
+    simp only [h1, h2, if_true, Bool.false_eq_true, if_false] at hne ⊢
+    refine ⟨fun fd hfd hu => ?_, fun u hu => ?_⟩
+    · exact hnew.1 fd hfd hu a₂ ha₂ hn2
+    · exact hnew.2 u hu a₂ ha₂ hn2
+  · have hn1 : a₁.1 ≠ id := by simpa using h1
+    simp only [h1, h2, if_true, Bool.false_eq_true, if_false] at hne ⊢
+    refine ⟨fun fd hfd hu => ?_, fun u hu => ?_⟩
+    · rw [agreeOn_comm]; exact hnew.1 fd hfd hu a₁ ha₁ hn1
+    · rw [agreeOn_comm]; exact hnew.2 u hu a₁ ha₁ hn1
+  · have hn1 : a₁.1 ≠ id := by simpa using h1
+    have hn2 : a₂.1 ≠ id := by simpa using h2
+    simp only [h1, h2, Bool.false_eq_true, if_false] at hne ⊢
+    exact hU a₁ ha₁ a₂ ha₂ hne
+
+
+/-- Records that one delete leaves, with the references to the deleted record cleared, keep the
+    constraints: two of them agreeing after the clearing agreed before it. -/
+theorem uniqOn_delClear (schema : Schema) (us : List (List FieldId)) (ty : TypeId) (id : RecordId)
+    {rs rs' : Records} (hU : UniqOn schema us rs) (hsub : ∀ q ∈ rs', q ∈ rs)
+    (hnd : ∀ q ∈ rs, (q.2.fields.map Prod.fst).Nodup) :
+    UniqOn schema us (delClear schema ty id rs') := by
+  intro q₁ hq₁ q₂ hq₂ hne
+  obtain ⟨a₁, ha₁, rfl⟩ := List.mem_map.mp hq₁
+  obtain ⟨a₂, ha₂, rfl⟩ := List.mem_map.mp hq₂
+  have hm₁ := hsub a₁ ha₁
+  have hm₂ := hsub a₂ ha₂
+  have hne' : a₁.1 ≠ a₂.1 := hne
+  obtain ⟨hA, hB⟩ := hU a₁ hm₁ a₂ hm₂ hne'
+  refine ⟨fun fd hfd hu => ?_, fun u hu => ?_⟩
+  · show agreeOn [fd.1] (clearRef schema ty id a₁.2).fields (clearRef schema ty id a₂.2).fields = false
+    cases hag : agreeOn [fd.1] (clearRef schema ty id a₁.2).fields (clearRef schema ty id a₂.2).fields
+    · rfl
+    · exfalso
+      have := agreeOn_clearRef (hnd a₁ hm₁) (hnd a₂ hm₂) [fd.1] hag
+      rw [hA fd hfd hu] at this
+      cases this
+  · show agreeOn u (clearRef schema ty id a₁.2).fields (clearRef schema ty id a₂.2).fields = false
+    cases hag : agreeOn u (clearRef schema ty id a₁.2).fields (clearRef schema ty id a₂.2).fields
+    · rfl
+    · exfalso
+      have := agreeOn_clearRef (hnd a₁ hm₁) (hnd a₂ hm₂) u hag
+      rw [hB u hu] at this
+      cases this
+
+/-! ## The uniqueness invariant through accepted steps -/
+
+/-- An accepted strict step keeps every object type's records unique under its constraints. -/
+theorem stepTenant_preserves_unique (t t' : Tenant) (p : PrincipalId) (i : Intent)
+    (hwf : t.WF) (hstrict : i.strict = true) (h : stepTenant t p i = .ok t') :
+    t'.UniqueRecords := by
+  obtain ⟨-, hids, -, hd, hu⟩ := hwf
+  cases i with
+  | create ty fs =>
+    cases hty : t.typ? ty with
+    | none => simp [stepTenant, hty] at h
+    | some o =>
+      simp only [stepTenant, hty] at h
+      split at h
+      · cases h
+      · cases hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId
+            (newRecord o.schema p fs) with
+        | some e => simp [hP] at h
+        | none =>
+          simp only [hP] at h
+          have ht := Except.ok.inj h
+          subst ht
+          intro T o' hT' q₁ hq₁ q₂ hq₂ hne
+          by_cases hTy : T = ty
+          · subst hTy
+            change (t.putType T { o with records := (t.nextId, newRecord o.schema p fs) ::
+              o.records }).typ? T = some o' at hT'
+            rw [typ?_putType_self t T o _ hty] at hT'
+            cases hT'
+            exact (uniqOn_cons_fresh (L := t.limits) (env := t.env) (hu T o hty) hP
+              (fun q hq => Nat.ne_of_lt (hids T o hty q hq))) q₁ hq₁ q₂ hq₂ hne
+          · change (t.putType ty { o with records := (t.nextId, newRecord o.schema p fs) ::
+              o.records }).typ? T = some o' at hT'
+            rw [typ?_putType_other t ty T _ hTy] at hT'
+            exact hu T o' hT' q₁ hq₁ q₂ hq₂ hne
+  | update ty id fs ev =>
+    cases hty : t.typ? ty with
+    | none => simp [stepTenant, hty] at h
+    | some o =>
+      cases hL : o.records.lookup id with
+      | none => simp [stepTenant, hty, hL, missingRecord] at h
+      | some old =>
+        simp only [stepTenant, hty, hL] at h
+        split at h
+        · cases h
+        · split at h
+          · cases h
+          · cases hP : problem t.limits o.schema o.uniques true t.env o.records id
+                (patched old fs) with
+            | some e => simp [hP] at h
+            | none =>
+              simp only [hP] at h
+              have ht := Except.ok.inj h
+              subst ht
+              intro T o' hT' q₁ hq₁ q₂ hq₂ hne
+              by_cases hTy : T = ty
+              · subst hTy
+                rw [typ?_putType_self t T o _ hty] at hT'
+                cases hT'
+                exact (uniqOn_replace (L := t.limits) (env := t.env) (hu T o hty) hP) q₁ hq₁ q₂ hq₂ hne
+              · rw [typ?_putType_other t ty T _ hTy] at hT'
+                exact hu T o' hT' q₁ hq₁ q₂ hq₂ hne
+  | delete ty id ev =>
+    have ht := stepTenant_delete_eq h
+    subst ht
+    intro T o' hT' q₁ hq₁ q₂ hq₂ hne
+    rw [typ?_afterDelete] at hT'
+    cases ho : t.typ? T with
+    | none => rw [ho] at hT'; cases hT'
+    | some o =>
+      rw [ho] at hT'
+      simp only [Option.map_some, Option.some.injEq] at hT'
+      subst hT'
+      have hsub : ∀ q ∈ (if (T == ty) = true then o.records.filter (fun q => q.1 != id)
+          else o.records), q ∈ o.records := by
+        intro q hq
+        by_cases hTy : (T == ty) = true
+        · rw [if_pos hTy] at hq; exact (List.mem_filter.mp hq).1
+        · rw [if_neg hTy] at hq; exact hq
+      exact uniqOn_delClear o.schema o.uniques ty id (hu T o ho) hsub
+        (fun q hq => (hd.2 T o ho).2 q hq) q₁ hq₁ q₂ hq₂ hne
+  | setRequired ty f strict =>
+    exact (strict_schema_change_conforms t t' p _ rfl hstrict h).2
+  | setUnique ty f strict =>
+    exact (strict_schema_change_conforms t t' p _ rfl hstrict h).2
+  | defineUnique ty fs =>
+    exact (strict_schema_change_conforms t t' p _ rfl hstrict h).2
+
+/-! ## Duplicates refused -/
+
+theorem create_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId) (o : ObjType)
+    (fs : Fields) (ht : w c.tenant = some t) (ho : t.typ? ty = some o)
+    (hc : canCreate t c.principal = true)
+    (hfree : problem t.limits o.schema o.uniques false t.env o.records t.nextId
+      (newRecord o.schema c.principal fs) = none)
+    (hclash : (∃ fd ∈ o.schema, fd.2.unique = true ∧ ∃ q ∈ o.records, q.1 ≠ t.nextId ∧
+        agreeOn [fd.1] (newRecord o.schema c.principal fs).fields q.2.fields = true) ∨
+      (∃ u ∈ o.uniques, ∃ q ∈ o.records, q.1 ≠ t.nextId ∧
+        agreeOn u (newRecord o.schema c.principal fs).fields q.2.fields = true)) :
+    step w (.create ty fs) c = .error .uniqueViolated ∧
+      ∀ w', step w (.create ty fs) c ≠ .ok w' := by
+  have hs : step w (.create ty fs) c = .error .uniqueViolated := by
+    simp [step, ht, stepTenant, ho, hc, problem_uniq_refusal hfree hclash]
+  exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
+
+theorem update_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId) (o : ObjType)
+    (id : RecordId) (fs : Fields) (old : Record) (ev : Option Nat)
+    (ht : w c.tenant = some t) (ho : t.typ? ty = some o) (hl : o.records.lookup id = some old)
+    (hcan : canEdit t c.principal old = true) (hv : versionClash ev old = false)
+    (hfree : problem t.limits o.schema o.uniques false t.env o.records id (patched old fs) = none)
+    (hclash : (∃ fd ∈ o.schema, fd.2.unique = true ∧ ∃ q ∈ o.records, q.1 ≠ id ∧
+        agreeOn [fd.1] (patched old fs).fields q.2.fields = true) ∨
+      (∃ u ∈ o.uniques, ∃ q ∈ o.records, q.1 ≠ id ∧
+        agreeOn u (patched old fs).fields q.2.fields = true)) :
+    step w (.update ty id fs ev) c = .error .uniqueViolated ∧
+      ∀ w', step w (.update ty id fs ev) c ≠ .ok w' := by
+  have hs : step w (.update ty id fs ev) c = .error .uniqueViolated := by
+    simp [step, ht, stepTenant, ho, hl, hcan, hv, problem_uniq_refusal hfree hclash]
+  exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
+
+theorem define_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (ty : TypeId)
+    (o : ObjType) (fs : List FieldId) (ht : w c.tenant = some t) (ho : t.typ? ty = some o)
+    (hp : c.principal = t.owner) (hok : uniqueFieldsOk o.schema fs = true)
+    (hdup : dupFields o.records fs = true) :
+    step w (.defineUnique ty fs) c = .error .uniqueViolated ∧
+      ∀ w', step w (.defineUnique ty fs) c ≠ .ok w' := by
+  have hs : step w (.defineUnique ty fs) c = .error .uniqueViolated := by
+    simp [step, ht, stepTenant, ho, hp, hok, hdup]
+  exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
+
+
+theorem set_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (ty : TypeId)
+    (o : ObjType) (f : FieldId) (d : FieldDef) (ht : w c.tenant = some t)
+    (ho : t.typ? ty = some o) (hp : c.principal = t.owner) (hd : o.schema.lookup f = some d)
+    (hl : d.ty.isList = false) (hdup : dupFields o.records [f] = true) :
+    step w (.setUnique ty f true) c = .error .migrationRejected ∧
+      ∀ w', step w (.setUnique ty f true) c ≠ .ok w' := by
+  have hmem : (ty, { o with schema := makeUnique o.schema f }) ∈
+      (t.putType ty { o with schema := makeUnique o.schema f }).types :=
+    lookup_mem (typ?_putType_self t ty o _ ho)
+  have hfd : (f, d) ∈ o.schema := lookup_mem hd
+  have hfu : (f, { d with unique := true }) ∈ makeUnique o.schema f := by
+    unfold makeUnique
+    exact List.mem_map.mpr ⟨(f, d), hfd, by simp⟩
+  have hviol : tableViolated t.limits { o with schema := makeUnique o.schema f } = true := by
+    unfold tableViolated
+    simp only [Bool.or_eq_true, List.any_eq_true]
+    left; right
+    exact ⟨(f, { d with unique := true }), hfu, by simp [hdup]⟩
+  have hv : schemaChangeRefused t.limits
+      (t.putType ty { o with schema := makeUnique o.schema f }).types true = true := by
+    unfold schemaChangeRefused schemaViolated
+    simp only [Bool.true_and, List.any_eq_true]
+    exact ⟨_, hmem, hviol⟩
+  have hs : step w (.setUnique ty f true) c = .error .migrationRejected := by
+    simp [step, ht, stepTenant, ho, hp, hd, hl, hv]
+  exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
+
+/-- A table of one integer field, with two records that agree on it. -/
+def laxObj : ObjType :=
+  { schema := [(1, { ty := .int, required := false })],
+    records := [(0, { owner := 0, version := 1, fields := [(1, .int 5)] }),
+                (1, { owner := 0, version := 1, fields := [(1, .int 5)] })] }
+
+def laxUniqueTenant : Tenant :=
+  { types := [(1, laxObj)], owner := 0, editors := [], writers := [], nextId := 2 }
+
+theorem laxUniqueTenant_typ (T : TypeId) (o : ObjType) (h : laxUniqueTenant.typ? T = some o) :
+    T = 1 ∧ o = laxObj := by
+  unfold laxUniqueTenant Tenant.typ? at h
+  by_cases hT : T = 1
+  · subst hT
+    simp [List.lookup, laxObj] at h
+    exact ⟨rfl, h.symm⟩
+  · have hb : (T == 1) = false := by simpa using hT
+    simp [List.lookup, hb] at h
+
+theorem laxUniqueTenant_wf : laxUniqueTenant.WF := by
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · intro T o ho q hq
+    obtain ⟨rfl, rfl⟩ := laxUniqueTenant_typ T o ho
+    have hall : ∀ q ∈ laxObj.records, conforms laxObj.schema q.2 = true := by decide
+    exact hall q hq
+  · intro T o ho q hq
+    obtain ⟨rfl, rfl⟩ := laxUniqueTenant_typ T o ho
+    have hall : ∀ q ∈ laxObj.records, q.1 < laxUniqueTenant.nextId := by decide
+    exact hall q hq
+  · intro T o ho q hq
+    obtain ⟨rfl, rfl⟩ := laxUniqueTenant_typ T o ho
+    have hall : ∀ q ∈ laxObj.records, refsOk laxUniqueTenant.env laxObj.schema q.2 = true := by
+      decide
+    exact hall q hq
+  · refine ⟨by decide, fun T o ho => ?_⟩
+    obtain ⟨rfl, rfl⟩ := laxUniqueTenant_typ T o ho
+    exact ⟨by decide, by decide⟩
+  · intro T o ho q₁ hq₁ q₂ hq₂ hne
+    obtain ⟨rfl, rfl⟩ := laxUniqueTenant_typ T o ho
+    have hU : ∀ q₁ ∈ laxObj.records, ∀ q₂ ∈ laxObj.records, q₁.1 ≠ q₂.1 →
+        (∀ fd ∈ laxObj.schema, fd.2.unique = true →
+          agreeOn [fd.1] q₁.2.fields q₂.2.fields = false) ∧
+        (∀ u ∈ laxObj.uniques, agreeOn u q₁.2.fields q₂.2.fields = false) := by decide
+    exact hU q₁ hq₁ q₂ hq₂ hne
+
+/-- The exclusion of the non-strict field change is necessary for uniqueness, as it is for
+    conformance: a lax `setUnique` over two records that agree on the field leaves a tenant that is
+    not well formed. -/
+theorem lax_unique_change_can_break_wf :
+    ∃ (t t' : Tenant) (p : PrincipalId),
+      t.WF ∧ stepTenant t p (.setUnique 1 1 false) = .ok t' ∧ ¬ t'.UniqueRecords := by
+  refine ⟨laxUniqueTenant, laxUniqueTenant.putType 1 { laxObj with
+    schema := makeUnique laxObj.schema 1 }, 0, laxUniqueTenant_wf, rfl, ?_⟩
+  intro hU
+  have hT1 := typ?_putType_self laxUniqueTenant 1 laxObj
+    { laxObj with schema := makeUnique laxObj.schema 1 } rfl
+  have h1 := hU 1 _ hT1 (0, { owner := 0, version := 1, fields := [(1, .int 5)] }) (by decide)
+    (1, { owner := 0, version := 1, fields := [(1, .int 5)] }) (by decide) (by decide)
+  have h2 := h1.1 (1, { ty := .int, required := false, unique := true }) (by decide) rfl
+  revert h2
+  decide
+
+
+/-! ## Restored slice-3 statements, typed (slice 4) -/
+
+/-- Clearing and deleting keep an old record's name in the new records: each new record is the
+    clearing of an old one, and so is named by it. -/
 theorem mem_afterDelete {rs : Records} {id : RecordId} {x : RecordId} {z : Record}
-    (h : (x, z) ∈ (rs.filter (fun q => q.1 != id)).map (fun q => (q.1, clearRef id q.2))) :
-    ∃ a ∈ rs, a.1 = x ∧ a.1 ≠ id ∧ z = clearRef id a.2 := by
+    {g : Record → Record}
+    (h : (x, z) ∈ (rs.filter (fun q => q.1 != id)).map (fun q => (q.1, g q.2))) :
+    ∃ a ∈ rs, a.1 = x ∧ a.1 ≠ id ∧ z = g a.2 := by
   obtain ⟨a, ha, he⟩ := List.mem_map.mp h
   obtain ⟨hmem, hne⟩ := List.mem_filter.mp ha
   refine ⟨a, hmem, by simp at he; exact he.1 ▸ rfl, by simpa using hne, by simp at he; exact he.2.symm⟩
 
-/-! ## The invariant through accepted steps -/
+/-- The check of a schema change passes for every object type: every record of the type conforms
+    to its schema, and no two distinct records agree on a unique field of it or on a composite
+    constraint. -/
+theorem schemaViolated_false {L : Limits} {types : List (TypeId × ObjType)}
+    (h : schemaViolated L types = false) :
+    ∀ e ∈ types, (∀ q ∈ e.2.records, conforms e.2.schema q.2 = true) ∧
+      (∀ fd ∈ e.2.schema, fd.2.unique = true → ∀ q₁ ∈ e.2.records, ∀ q₂ ∈ e.2.records,
+        q₁.1 ≠ q₂.1 → agreeOn [fd.1] q₁.2.fields q₂.2.fields = false) ∧
+      ∀ u ∈ e.2.uniques, ∀ q₁ ∈ e.2.records, ∀ q₂ ∈ e.2.records,
+        q₁.1 ≠ q₂.1 → agreeOn u q₁.2.fields q₂.2.fields = false := by
+  intro e he
+  have hx : tableViolated L e.2 = false := by
+    simpa [schemaViolated] using List.any_eq_false.mp h e he
+  obtain ⟨h1, h2, h3⟩ := tableViolated_false hx
+  exact ⟨h1, h2, h3⟩
 
-/-- The names an accepted step leaves distinct. -/
-theorem stepTenant_preserves_distinct (t t' : Tenant) (p : PrincipalId) (i : Intent)
-    (hd : t.Distinct) (h : stepTenant t p i = .ok t') : t'.Distinct := by
-  obtain ⟨hs, hr⟩ := hd
-  cases i with
-  | create fs =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · rename_i hp
-        cases h
-        refine ⟨hs, ?_⟩
-        intro q hq
-        rcases List.mem_cons.mp hq with rfl | hq'
-        · exact newRecord_nodup t.schema p fs hs
-        · exact hr q hq'
-  | update id fs ev =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · rename_i old hl
-      split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · rename_i hp
-            cases h
-            refine ⟨hs, ?_⟩
-            intro ⟨x, z⟩ hq
-            rcases mem_replace hq with ⟨-, rfl⟩ | ⟨hq', -⟩
-            · exact patch_nodup fs old.fields (hr (id, old) (lookup_mem hl))
-            · exact hr (x, z) hq'
-  | delete id ev =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · cases h
-            refine ⟨hs, ?_⟩
-            intro ⟨x, z⟩ hq
-            obtain ⟨a, ha, -, -, rfl⟩ := mem_afterDelete hq
-            exact clearRef_nodup id a.2 (hr a ha)
-  | setRequired f strict =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · cases h
-        refine ⟨?_, hr⟩
-        rw [keys_makeRequired]; exact hs
-  | setUnique f strict =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · cases h
-            refine ⟨?_, hr⟩
-            rw [keys_makeUnique]; exact hs
-  | defineUnique fs =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · cases h
-            exact ⟨hs, hr⟩
+/-- A field made required changes the counter and the records of no type. -/
+theorem setRequired_spec (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (f : FieldId) (s : Bool)
+    (h : stepTenant t p (.setRequired ty f s) = .ok t') :
+    t'.nextId = t.nextId ∧ ∀ T, t'.env T = t.env T :=
+  setRequired_records t t' p ty f s h
 
-/-! ## A strict schema change leaves the tenant conforming -/
-
-/-- The check of a schema change passes: every record conforms to the schema, and no two distinct
-    records agree on a unique field of it or on a composite constraint. -/
-theorem schemaViolated_false {L : Limits} {schema : Schema} {us : List (List FieldId)}
-    {rs : Records} (h : schemaViolated L schema us rs = false) :
-    (∀ q ∈ rs, conforms schema q.2 = true) ∧
-      ∀ q₁ ∈ rs, ∀ q₂ ∈ rs, q₁.1 ≠ q₂.1 →
-        (∀ fd ∈ schema, fd.2.unique = true → agreeOn [fd.1] q₁.2.fields q₂.2.fields = false) ∧
-        (∀ u ∈ us, agreeOn u q₁.2.fields q₂.2.fields = false) := by
-  unfold schemaViolated at h
-  obtain ⟨hab, hus⟩ := Bool.or_eq_false_iff.mp h
-  obtain ⟨ha, hany⟩ := Bool.or_eq_false_iff.mp hab
-  have hconf : rs.all (fun q => conforms schema q.2) = true := by simpa using ha
-  refine ⟨fun q hq => List.all_eq_true.mp hconf q hq, ?_⟩
-  intro q₁ h₁ q₂ h₂ hne
-  refine ⟨?_, ?_⟩
-  · intro fd hfd hu
-    have hf := List.any_eq_false.mp hany fd hfd
-    have hd : (dupFields rs [fd.1] ||
-        rs.any (fun q => decide (L.maxUnique < (q.2.fields.get fd.1).size))) = false := by
-      cases hx : (dupFields rs [fd.1] ||
-          rs.any (fun q => decide (L.maxUnique < (q.2.fields.get fd.1).size))) with
-      | false => rfl
-      | true => exact absurd ((Bool.and_eq_true _ _).mpr ⟨hu, hx⟩) hf
-    exact dupFields_false (Bool.or_eq_false_iff.mp hd).1 h₁ h₂ hne
-  · intro u hu'
-    have hu'' : dupFields rs u = false := Bool.eq_false_iff.mpr (List.any_eq_false.mp hus u hu')
-    exact dupFields_false hu'' h₁ h₂ hne
-
-/-- A strict schema change is accepted only if the tenant that results conforms: every record
-    conforms to the resulting schema, and the unique fields and composite constraints hold across
-    the records. This is the rule the kernel's `Reject` applies to every schema change, so a
-    violation a lax change left behind refuses a later strict change whatever it is about. -/
-theorem strict_schema_change_conforms (t t' : Tenant) (p : PrincipalId) (i : Intent)
-    (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t') :
-    (∀ q ∈ t'.records, conforms t'.schema q.2 = true) ∧ t'.UniqueRecords := by
-  cases i with
-  | create fs => simp [Intent.isSchema] at hi
-  | update id fs ev => simp [Intent.isSchema] at hi
-  | delete id ev => simp [Intent.isSchema] at hi
-  | setRequired f s =>
-    simp only [Intent.strict] at hs
-    subst hs
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · rename_i hn
-        cases h
-        have hv : schemaViolated t.limits (makeRequired t.schema f) t.uniques t.records = false := by
-          cases hb : schemaViolated t.limits (makeRequired t.schema f) t.uniques t.records with
-          | false => rfl
-          | true => exfalso; apply hn; simp [schemaChangeRefused, hb]
-        exact schemaViolated_false hv
-  | setUnique f s =>
-    simp only [Intent.strict] at hs
-    subst hs
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · rename_i hn
-            cases h
-            have hv : schemaViolated t.limits (makeUnique t.schema f) t.uniques t.records = false := by
-              cases hb : schemaViolated t.limits (makeUnique t.schema f) t.uniques t.records with
-              | false => rfl
-              | true => exfalso; apply hn; simp [schemaChangeRefused, hb]
-            exact schemaViolated_false hv
-  | defineUnique fs =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · rename_i hn
-            cases h
-            have hv : schemaViolated t.limits t.schema (t.uniques ++ [fs]) t.records = false := by
-              cases hb : schemaViolated t.limits t.schema (t.uniques ++ [fs]) t.records with
-              | false => rfl
-              | true => exfalso; apply hn; simp [schemaChangeRefused, hb]
-            exact schemaViolated_false hv
-
-/-- A schema change that leaves the records as they are, with the nextid and records named. -/
-theorem setRequired_spec (t t' : Tenant) (p : PrincipalId) (f : FieldId) (s : Bool)
-    (h : stepTenant t p (.setRequired f s) = .ok t') :
-    t'.nextId = t.nextId ∧ t'.records = t.records := by
-  simp only [stepTenant] at h
+/-- A field made unique changes the counter, the records of no type, and the one type's schema
+    and only that. -/
+theorem setUnique_spec (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (f : FieldId) (s : Bool)
+    (h : stepTenant t p (.setUnique ty f s) = .ok t') :
+    t'.nextId = t.nextId ∧ (∀ T, t'.env T = t.env T) ∧
+      ∀ o, t.typ? ty = some o → t'.typ? ty = some { o with schema := makeUnique o.schema f } := by
+  refine ⟨(setUnique_records t t' p ty f s h).1, (setUnique_records t t' p ty f s h).2, fun o hT => ?_⟩
+  simp only [stepTenant, hT] at h
   repeat' split at h
   all_goals (try cases h)
-  all_goals exact ⟨rfl, rfl⟩
+  all_goals exact typ?_putType_self t ty o _ hT
 
-/-! ## The schema changes, and conformance under the unique flag -/
-
-/-- A field made unique changes only the schema, and only its unique flag. -/
-theorem setUnique_spec (t t' : Tenant) (p : PrincipalId) (f : FieldId) (s : Bool)
-    (h : stepTenant t p (.setUnique f s) = .ok t') :
-    t'.nextId = t.nextId ∧ t'.records = t.records ∧ t'.schema = makeUnique t.schema f ∧
-      t'.uniques = t.uniques := by
-  simp only [stepTenant] at h
+/-- A composite constraint changes the counter, the records of no type, and the one type's
+    constraints and only that. -/
+theorem defineUnique_spec (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (fs : List FieldId)
+    (h : stepTenant t p (.defineUnique ty fs) = .ok t') :
+    t'.nextId = t.nextId ∧ (∀ T, t'.env T = t.env T) ∧
+      ∀ o, t.typ? ty = some o → t'.typ? ty = some { o with uniques := o.uniques ++ [fs] } := by
+  refine ⟨(defineUnique_records t t' p ty fs h).1, (defineUnique_records t t' p ty fs h).2,
+    fun o hT => ?_⟩
+  simp only [stepTenant, hT] at h
   repeat' split at h
   all_goals (try cases h)
-  all_goals exact ⟨rfl, rfl, rfl, rfl⟩
-
-/-- A composite constraint changes only the list of constraints. -/
-theorem defineUnique_spec (t t' : Tenant) (p : PrincipalId) (fs : List FieldId)
-    (h : stepTenant t p (.defineUnique fs) = .ok t') :
-    t'.nextId = t.nextId ∧ t'.records = t.records ∧ t'.schema = t.schema ∧
-      t'.uniques = t.uniques ++ [fs] := by
-  simp only [stepTenant] at h
-  repeat' split at h
-  all_goals (try cases h)
-  all_goals exact ⟨rfl, rfl, rfl, rfl⟩
-
-theorem lookup_map_ty (g : FieldId × FieldDef → FieldId × FieldDef)
-    (hg : ∀ x, (g x).1 = x.1 ∧ (g x).2.ty = x.2.ty) (s : Schema) (k : FieldId) :
-    ((s.map g).lookup k).map FieldDef.ty = (s.lookup k).map FieldDef.ty := by
-  induction s with
-  | nil => rfl
-  | cons x rest ih =>
-    obtain ⟨h1, h2⟩ := hg x
-    simp only [List.map_cons, List.lookup, h1]
-    split
-    · simp [h2]
-    · exact ih
+  all_goals exact typ?_putType_self t ty o _ hT
 
 theorem lookup_makeUnique_ty (s : Schema) (f k : FieldId) :
     ((makeUnique s f).lookup k).map FieldDef.ty = (s.lookup k).map FieldDef.ty := by
   unfold makeUnique
-  apply lookup_map_ty
-  intro x
-  split <;> simp
+  exact lookup_map_ty s _ (fun e => by split <;> simp) k
 
 theorem fieldOk_makeUnique (s : Schema) (f : FieldId) (fv : FieldId × Val) :
     fieldOk (makeUnique s f) fv = fieldOk s fv := by
@@ -816,194 +1288,5 @@ theorem conforms_makeUnique {s : Schema} {f : FieldId} {r : Record} (h : conform
     subst he
     unfold requiredOk at h3 ⊢
     split <;> simpa using h3
-
-/-! ## The uniqueness invariant through accepted steps -/
-
-/-- An accepted strict step keeps the unique fields and the composite constraints unique. -/
-theorem stepTenant_preserves_unique (t t' : Tenant) (p : PrincipalId) (i : Intent)
-    (hwf : t.WF) (hstrict : i.strict = true) (h : stepTenant t p i = .ok t') :
-    t'.UniqueRecords := by
-  obtain ⟨-, hids, -, hd, hU⟩ := hwf
-  cases i with
-  | create fs =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · rename_i hp
-        cases h
-        unfold Tenant.UniqueRecords
-        intro q₁ hq₁ q₂ hq₂ hne
-        have hnew : ∀ q ∈ t.records, q.1 ≠ t.nextId := fun q hq => Nat.ne_of_lt (hids q hq)
-        have hP := problem_unique_none hp
-        rcases List.mem_cons.mp hq₁ with rfl | h₁ <;>
-          rcases List.mem_cons.mp hq₂ with rfl | h₂
-        · exact absurd rfl hne
-        · exact ⟨fun fd hfd hu => hP.1 fd hfd hu q₂ h₂ (hnew q₂ h₂),
-            fun u hu' => hP.2 u hu' q₂ h₂ (hnew q₂ h₂)⟩
-        · exact ⟨fun fd hfd hu => by
-            rw [agreeOn_comm]; exact hP.1 fd hfd hu q₁ h₁ (hnew q₁ h₁),
-            fun u hu' => by rw [agreeOn_comm]; exact hP.2 u hu' q₁ h₁ (hnew q₁ h₁)⟩
-        · exact hU q₁ h₁ q₂ h₂ hne
-  | update id fs ev =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · rename_i old hl
-      split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · rename_i hp
-            cases h
-            unfold Tenant.UniqueRecords
-            rintro ⟨x, z⟩ hq₁ ⟨y, z'⟩ hq₂ hne
-            have hP := problem_unique_none hp
-            rcases mem_replace hq₁ with ⟨hx, rfl⟩ | ⟨h₁, hx₁⟩ <;>
-              rcases mem_replace hq₂ with ⟨hy, rfl⟩ | ⟨h₂, hy₂⟩
-            · exact absurd (hx.trans hy.symm) hne
-            · exact ⟨fun fd hfd hu => hP.1 fd hfd hu (y, z') h₂ hy₂,
-                fun u hu' => hP.2 u hu' (y, z') h₂ hy₂⟩
-            · exact ⟨fun fd hfd hu => by
-                rw [agreeOn_comm]; exact hP.1 fd hfd hu (x, z) h₁ hx₁,
-                fun u hu' => by rw [agreeOn_comm]; exact hP.2 u hu' (x, z) h₁ hx₁⟩
-            · exact hU (x, z) h₁ (y, z') h₂ hne
-  | delete id ev =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · cases h
-            unfold Tenant.UniqueRecords
-            rintro ⟨x, z⟩ hq₁ ⟨y, z'⟩ hq₂ hne
-            obtain ⟨a, ha, hxa, -, rfl⟩ := mem_afterDelete hq₁
-            obtain ⟨b, hb, hyb, -, rfl⟩ := mem_afterDelete hq₂
-            have hab : a.1 ≠ b.1 := by rw [hxa, hyb]; exact hne
-            have hU' := hU a ha b hb hab
-            refine ⟨fun fd hfd hu => ?_, fun u hu' => ?_⟩
-            · show agreeOn [fd.1] (clearRef id a.2).fields (clearRef id b.2).fields = false
-              cases hag : agreeOn [fd.1] (clearRef id a.2).fields (clearRef id b.2).fields with
-              | false => rfl
-              | true =>
-                have h2 := agreeOn_clearRef (hd.2 a ha) (hd.2 b hb) [fd.1] hag
-                rw [hU'.1 fd hfd hu] at h2
-                cases h2
-            · show agreeOn u (clearRef id a.2).fields (clearRef id b.2).fields = false
-              cases hag : agreeOn u (clearRef id a.2).fields (clearRef id b.2).fields with
-              | false => rfl
-              | true =>
-                have h2 := agreeOn_clearRef (hd.2 a ha) (hd.2 b hb) u hag
-                rw [hU'.2 u hu'] at h2
-                cases h2
-  | setRequired f strict =>
-    exact (strict_schema_change_conforms t t' p (.setRequired f strict) rfl hstrict h).2
-  | setUnique f strict =>
-    exact (strict_schema_change_conforms t t' p (.setUnique f strict) rfl hstrict h).2
-  | defineUnique fs =>
-    exact (strict_schema_change_conforms t t' p (.defineUnique fs) rfl hstrict h).2
-
-/-! ## Refusals -/
-
-/-- A create that would duplicate another record's unique value, or composite values, and is
-    otherwise valid, is refused with `uniqueViolated`, and no state follows. -/
-theorem create_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (fs : Fields)
-    (ht : w c.tenant = some t) (hc : canCreate t c.principal = true)
-    (hfree : problem t.limits t.schema t.uniques false t.records t.nextId
-      (newRecord t.schema c.principal fs) = none)
-    (hclash : (∃ fd ∈ t.schema, fd.2.unique = true ∧ ∃ q ∈ t.records, q.1 ≠ t.nextId ∧
-        agreeOn [fd.1] (newRecord t.schema c.principal fs).fields q.2.fields = true) ∨
-      (∃ u ∈ t.uniques, ∃ q ∈ t.records, q.1 ≠ t.nextId ∧
-        agreeOn u (newRecord t.schema c.principal fs).fields q.2.fields = true)) :
-    step w (.create fs) c = .error .uniqueViolated ∧
-      ∀ w', step w (.create fs) c ≠ .ok w' := by
-  have hs : step w (.create fs) c = .error .uniqueViolated := by
-    simp [step, ht, stepTenant, hc, problem_uniq_refusal hfree hclash]
-  exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
-
-/-- An update that would duplicate another record's unique value, or composite values, and is
-    otherwise valid, is refused with `uniqueViolated`, and no state follows. -/
-theorem update_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (id : RecordId) (fs : Fields)
-    (ev : Option Nat) (old : Record)
-    (ht : w c.tenant = some t) (hl : t.records.lookup id = some old)
-    (hcan : canEdit t c.principal old = true) (hv : versionClash ev old = false)
-    (hfree : problem t.limits t.schema t.uniques false t.records id (patched old fs) = none)
-    (hclash : (∃ fd ∈ t.schema, fd.2.unique = true ∧ ∃ q ∈ t.records, q.1 ≠ id ∧
-        agreeOn [fd.1] (patched old fs).fields q.2.fields = true) ∨
-      (∃ u ∈ t.uniques, ∃ q ∈ t.records, q.1 ≠ id ∧
-        agreeOn u (patched old fs).fields q.2.fields = true)) :
-    step w (.update id fs ev) c = .error .uniqueViolated ∧
-      ∀ w', step w (.update id fs ev) c ≠ .ok w' := by
-  have hs : step w (.update id fs ev) c = .error .uniqueViolated := by
-    simp [step, ht, stepTenant, hl, hcan, hv, problem_uniq_refusal hfree hclash]
-  exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
-
-/-- A composite constraint that existing records already violate is refused with `uniqueViolated`,
-    and no state follows. -/
-theorem define_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (fs : List FieldId)
-    (ht : w c.tenant = some t) (hp : c.principal = t.owner)
-    (hok : uniqueFieldsOk t.schema fs = true) (hdup : dupFields t.records fs = true) :
-    step w (.defineUnique fs) c = .error .uniqueViolated ∧
-      ∀ w', step w (.defineUnique fs) c ≠ .ok w' := by
-  have hs : step w (.defineUnique fs) c = .error .uniqueViolated := by
-    simp [step, ht, stepTenant, hp, hok, hdup]
-  exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
-
-/-- Making a field unique strictly, over records that already agree on it, is refused with
-    `migrationRejected` (the strict schema change's refusal, as the kernel gives it), and no state
-    follows. -/
-theorem set_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (f : FieldId)
-    (d : FieldDef)
-    (ht : w c.tenant = some t) (hp : c.principal = t.owner)
-    (hd : t.schema.lookup f = some d) (hl : d.ty.isList = false)
-    (hdup : dupFields t.records [f] = true) :
-    step w (.setUnique f true) c = .error .migrationRejected ∧
-      ∀ w', step w (.setUnique f true) c ≠ .ok w' := by
-  have hs : step w (.setUnique f true) c = .error .migrationRejected := by
-    have hany : (makeUnique t.schema f).any (fun fd => fd.2.unique &&
-        (dupFields t.records [fd.1] ||
-          t.records.any (fun q => decide (t.limits.maxUnique < (q.2.fields.get fd.1).size)))) = true := by
-      refine List.any_eq_true.mpr ⟨(f, { d with unique := true }), ?_, ?_⟩
-      · unfold makeUnique
-        exact List.mem_map.mpr ⟨(f, d), lookup_mem hd, by simp⟩
-      · simp [hdup]
-    have hv : schemaChangeRefused t.limits (makeUnique t.schema f) t.uniques t.records true = true := by
-      unfold schemaChangeRefused schemaViolated
-      simp [hany]
-    simp [step, ht, stepTenant, hp, hd, hl, hv]
-  exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
-
-/-! ## A lax change can break uniqueness -/
-
-/-- Two records that agree on field 1, which is not unique. -/
-def laxUniqueTenant : Tenant :=
-  { schema := [(1, { ty := .int, required := false })], owner := 0, editors := [], writers := [],
-    records := [(0, { owner := 0, version := 1, fields := [(1, .int 5)] }),
-                (1, { owner := 0, version := 1, fields := [(1, .int 5)] })],
-    nextId := 2 }
-
-/-- The exclusion of the non-strict field change is necessary for uniqueness, as it is for
-    conformance: a lax `setUnique` over two records that agree on the field leaves a tenant that is
-    not well formed. -/
-theorem lax_unique_change_can_break_wf :
-    ∃ (t t' : Tenant) (p : PrincipalId) (f : FieldId),
-      t.WF ∧ stepTenant t p (.setUnique f false) = .ok t' ∧ ¬ t'.UniqueRecords := by
-  refine ⟨laxUniqueTenant, { laxUniqueTenant with schema := makeUnique laxUniqueTenant.schema 1 },
-    0, 1, ?_, rfl, ?_⟩
-  · unfold laxUniqueTenant Tenant.WF Tenant.RefsOk Tenant.Distinct Tenant.UniqueRecords
-    decide
-  · intro h
-    have h1 := (h (0, { owner := 0, version := 1, fields := [(1, .int 5)] }) (by decide)
-      (1, { owner := 0, version := 1, fields := [(1, .int 5)] }) (by decide) (by decide)).1
-    have h2 := h1 (1, { ty := .int, required := false, unique := true }) (by decide) rfl
-    revert h2
-    decide
 
 end Strata

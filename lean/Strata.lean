@@ -43,3 +43,5 @@ import Strata.Reduction.Backend
 import Strata.Codec.Core
 import Strata.Codec.Boundary
 import Strata.Codec.Fixtures
+
+import Strata.ObjectTypes

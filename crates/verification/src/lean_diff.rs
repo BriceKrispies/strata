@@ -53,6 +53,9 @@ pub struct ByDesign {
 pub struct Op {
     pub tenant: u64,
     pub principal: u64,
+    /// The object type the intent names: `1` is `item`, `2` is `part`, and any other number names
+    /// a type the tenant does not have. Rendered as `type <n>` unless it is `1`.
+    pub object: u64,
     pub kind: OpKind,
 }
 
@@ -88,7 +91,11 @@ fn expected_text(expected: Option<u64>) -> String {
 
 impl Op {
     pub fn render(&self) -> String {
-        let head = format!("op {} {}", self.tenant, self.principal);
+        let head = if self.object == 1 {
+            format!("op {} {}", self.tenant, self.principal)
+        } else {
+            format!("op {} {} type {}", self.tenant, self.principal, self.object)
+        };
         match &self.kind {
             OpKind::Create(f) => format!("{head} create{}", fields_text(f)),
             OpKind::Update(id, v, f) => {
@@ -510,6 +517,7 @@ pub fn generate(seed: u64) -> Scenario {
             let owner = |kind| Op {
                 tenant,
                 principal: home,
+                object: 1,
                 kind,
             };
             ops.push(owner(OpKind::Create(vec![(
@@ -668,9 +676,17 @@ pub fn generate(seed: u64) -> Scenario {
         } else {
             principal
         };
+        // Most intents name `item`; one in four names `part` (whose fields are its own), and one
+        // in twelve names a type the tenant does not have, so the unknown-type refusals occur.
+        let object = match rng.below(12) {
+            0 => 9,
+            1..=3 => 2,
+            _ => 1,
+        };
         ops.push(Op {
             tenant,
             principal,
+            object,
             kind,
         });
     }

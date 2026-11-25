@@ -635,3 +635,15 @@ import Strata
 #print axioms Strata.Codec.fix_intent_update
 #print axioms Strata.Codec.fix_result_ok
 #print axioms Strata.Codec.boundary_codecs
+
+
+-- Slice 4: several object types
+#print axioms Strata.unknown_type_refused
+#print axioms Strata.unknown_type_owner
+#print axioms Strata.unknown_type_other
+#print axioms Strata.unknown_type_hidden
+#print axioms Strata.create_refs_resolve
+#print axioms Strata.update_refs_resolve
+#print axioms Strata.write_refused_dangling_across_types
+#print axioms Strata.update_refused_dangling_across_types
+#print axioms Strata.unknown_type_schema_refused

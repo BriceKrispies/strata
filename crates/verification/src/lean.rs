@@ -11,8 +11,10 @@
 //!
 //! | Lean model | Rust kernel in these fixtures |
 //! |---|---|
-//! | tenant `n` | tenant `t<n>` with one object type `item` |
-//! | fields 0 to 8 and 10 | `f0: list of ref item, restrict`, `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict`, `f6: int, default 7`, `f7: list of string`, `f8: list of ref item, set-null`, `f10: string, unique` |
+//! | tenant `n` | tenant `t<n>` with two object types: `item` (the model's type `1`, the default) and `part` (type `2`) |
+//! | fields 0 to 8, 10, 11, 12 of type 1 | `f0: list of ref item, restrict`, `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict`, `f6: int, default 7`, `f7: list of string`, `f8: list of ref item, set-null`, `f10: string, unique`, `f11: ref part, restrict`, `f12: ref part, set-null` |
+//! | fields 1 to 4 of type 2 | `f1: ref item, restrict`, `f2: ref item, set-null`, `f3: list of ref item, set-null`, `f4: int` |
+//! | `type <n>` before the intent | the object type of the intent; any number but `1` and `2` names a type the tenant does not have |
 //! | owner, editors, writers | the `owner` role; an `editor` role allowed everything on `item`; a `writer` role allowed to create, and to update or delete where `record.$created_by == principal` |
 //! | `create fs` | `CreateRecord` |
 //! | `update id [v=n] fs` | `UpdateRecord` naming fields `f0` to `f8` and `f10`, absent ones as `null` |
@@ -24,6 +26,7 @@
 //! | `Err.danglingReference`, `Err.stillReferenced` | `DanglingReference`, `StillReferenced` |
 //! | `Err.invalid` | `TypeMismatch`, `MissingRequired`, `UnknownField` |
 //! | `Err.uniqueViolated`, `Err.invalidSchema` | `UniqueViolated`, `InvalidSchema` |
+//! | `Err.unknownObject` | `UnknownObject` (the owner's refusal of a type the tenant does not have) |
 //! | `Err.versionConflict`, `Err.limitExceeded` | `VersionConflict`, `LimitExceeded` |
 //!
 //! # The Main.lean protocol
@@ -33,7 +36,7 @@
 //!
 //! ```text
 //! scenario <name>              starts a scenario from the initial world
-//! op <tenant> <principal> <intent> [args]
+//! op <tenant> <principal> [type <n>] <intent> [args]
 //!                              one intent, as `create f=v ..`, `update <id> [v=n] f=v ..`,
 //!                              `patch <id> [v=n] f=v ..`, `delete <id> [v=n]`,
 //!                              `require <field> strict|lax`
@@ -237,6 +240,33 @@ fn item() -> ObjectTypeId {
     id("item".to_string())
 }
 
+/// The second object type of the fixture (the model's type `2`). Its references point into items
+/// and back.
+fn part() -> ObjectTypeId {
+    id("part".to_string())
+}
+
+/// The object type an intent names: `1` is `item`, `2` is `part`, and any other number is a type
+/// the tenant does not have.
+fn object_of(ty: u64) -> ObjectTypeId {
+    match ty {
+        1 => item(),
+        2 => part(),
+        n => id(format!("type{n}")),
+    }
+}
+
+/// The fields an `update` line names for an object type, as the model's `fieldsOf` lists them.
+fn fixture_fields(object: &ObjectTypeId) -> Vec<u64> {
+    if *object == item() {
+        vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]
+    } else if *object == part() {
+        vec![1, 2, 3, 4]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Field `n` of the fixture. The kernel checks a record's fields in the order of their ids, which
 /// are strings; the model checks them by number. Two-digit ids (`f04`, `f10`) make the two orders
 /// the same, so the fixture does not invent a check-order difference the kernel does not have.
@@ -256,7 +286,14 @@ fn field_type(n: u64) -> FieldType {
         target: item(),
         on_delete,
     };
+    let part_reference = |on_delete| FieldType::Ref {
+        target: part(),
+        on_delete,
+    };
     match n {
+        // Fields 11 and 12 of an item refer to a part; 11 restricts the part's delete, 12 clears.
+        11 => part_reference(OnDelete::Restrict),
+        12 => part_reference(OnDelete::SetNull),
         0 => FieldType::List(Box::new(reference(OnDelete::Restrict))),
         1 => FieldType::Str,
         2 | 6 => FieldType::Int,
@@ -286,6 +323,46 @@ fn field_def(n: u64, required: bool) -> FieldDef {
         personal: None,
         normalise: None,
         computed: None,
+    }
+}
+
+/// Field `n` of a part: `1` an item reference that restricts the delete, `2` an item reference
+/// that clears (set-null), `3` a list of item references that clear, `4` an integer.
+fn part_field_type(n: u64) -> FieldType {
+    let item_reference = |on_delete| FieldType::Ref {
+        target: item(),
+        on_delete,
+    };
+    match n {
+        1 => item_reference(OnDelete::Restrict),
+        2 => item_reference(OnDelete::SetNull),
+        3 => FieldType::List(Box::new(item_reference(OnDelete::SetNull))),
+        _ => FieldType::Int,
+    }
+}
+
+fn part_field_def(n: u64) -> FieldDef {
+    FieldDef {
+        id: field_id(n),
+        label: format!("f{n}"),
+        ty: part_field_type(n),
+        required: false,
+        unique: false,
+        default: None,
+        read: None,
+        personal: None,
+        normalise: None,
+        computed: None,
+    }
+}
+
+/// The definition a `require` or `unique` line falls back to when the tenant does not have the
+/// field yet, as `field_def` and `part_field_def` define the fixture's fields.
+fn fallback_field(object: &ObjectTypeId, n: u64) -> FieldDef {
+    if *object == part() {
+        part_field_def(n)
+    } else {
+        field_def(n, false)
     }
 }
 
@@ -331,11 +408,15 @@ fn initial_world() -> World {
             id: id(name.to_string()),
             label: name.to_string(),
         };
-        let policy = |name: &str, role: &str, actions: &[Action], condition: Option<Expr>| {
+        let policy = |object: ObjectTypeId,
+                      name: &str,
+                      role: &str,
+                      actions: &[Action],
+                      condition: Option<Expr>| {
             SchemaChange::DefinePolicy(PolicyDef {
                 id: id(name.to_string()),
                 role: id(role.to_string()),
-                resource: Resource::Object(item()),
+                resource: Resource::Object(object),
                 actions: actions.iter().copied().collect(),
                 condition,
             })
@@ -345,7 +426,7 @@ fn initial_world() -> World {
             Box::new(Expr::Var(Scope::Record, "$created_by".into())),
             Box::new(Expr::Principal),
         );
-        let changes = vec![
+        let mut changes = vec![
             SchemaChange::DefineRole(role("editor")),
             SchemaChange::DefineRole(role("writer")),
             SchemaChange::DefineObject {
@@ -357,28 +438,60 @@ fn initial_world() -> World {
                 field: field_def(1, true),
             },
         ];
-        let mut changes = changes;
         changes.extend(
             [0u64, 2, 3, 4, 5, 6, 7, 8, 10].map(|n| SchemaChange::DefineField {
                 object: item(),
                 field: field_def(n, false),
             }),
         );
+        // The part type comes after the item type, since its references point into items.
+        changes.push(SchemaChange::DefineObject {
+            id: part(),
+            label: "Part".into(),
+        });
+        changes.extend([1u64, 2, 3, 4].map(|n| SchemaChange::DefineField {
+            object: part(),
+            field: part_field_def(n),
+        }));
         changes.extend([
             policy(
+                item(),
                 "editors_all",
                 "editor",
                 &[Action::Read, Action::Create, Action::Update, Action::Delete],
                 None,
             ),
             policy(
+                item(),
                 "writers_create",
                 "writer",
                 &[Action::Read, Action::Create],
                 None,
             ),
             policy(
+                item(),
                 "writers_own",
+                "writer",
+                &[Action::Update, Action::Delete],
+                Some(own.clone()),
+            ),
+            policy(
+                part(),
+                "part_editors_all",
+                "editor",
+                &[Action::Read, Action::Create, Action::Update, Action::Delete],
+                None,
+            ),
+            policy(
+                part(),
+                "part_writers_create",
+                "writer",
+                &[Action::Read, Action::Create],
+                None,
+            ),
+            policy(
+                part(),
+                "part_writers_own",
                 "writer",
                 &[Action::Update, Action::Delete],
                 Some(own),
@@ -389,6 +502,21 @@ fn initial_world() -> World {
             principal(owner),
             Intent::ChangeSchema {
                 changes,
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
+        );
+        // Fields 11 and 12 of an item refer to parts, so they follow the part type.
+        world = run(
+            &world,
+            principal(owner),
+            Intent::ChangeSchema {
+                changes: [11u64, 12]
+                    .map(|n| SchemaChange::DefineField {
+                        object: item(),
+                        field: field_def(n, false),
+                    })
+                    .to_vec(),
                 expected_version: None,
                 existing: ExistingData::Reject,
             },
@@ -515,6 +643,7 @@ fn show_error(kind: ErrorKind) -> &'static str {
         ErrorKind::LimitExceeded => "limit_exceeded",
         ErrorKind::UniqueViolated => "unique_violated",
         ErrorKind::InvalidSchema => "invalid_schema",
+        ErrorKind::UnknownObject => "unknown_object",
         _ => "unmodelled",
     }
 }
@@ -526,46 +655,56 @@ fn show_world(world: &World) -> Vec<String> {
             out.push(format!("tenant {n} absent"));
             continue;
         };
-        // Fields print in the model's order, by number (`f10` after `f6`), not by name.
-        let mut required: Vec<u64> = tenant.schema.objects[&item()]
-            .fields
-            .values()
-            .filter(|f| f.required)
-            .map(|f| field_number(&f.id))
-            .collect();
-        required.sort_unstable();
-        let required: Vec<String> = required.iter().map(u64::to_string).collect();
+        // The required fields of an object type, by number, as the model's `requiredOf` prints
+        // them. Fields print in the model's order, by number (`f10` after `f6`), not by name.
+        let required_text = |object: &ObjectTypeId| -> String {
+            let mut required: Vec<u64> = tenant.schema.objects[object]
+                .fields
+                .values()
+                .filter(|f| f.required)
+                .map(|f| field_number(&f.id))
+                .collect();
+            required.sort_unstable();
+            let required: Vec<String> = required.iter().map(u64::to_string).collect();
+            required.join(",")
+        };
         out.push(format!(
             "tenant {n} next={} required={}",
             tenant.next_record,
-            required.join(",")
+            required_text(&item())
         ));
-        for record in tenant.records_of(&item()) {
-            let owner = record
-                .created_by
-                .as_ref()
-                .map_or("0", |p| &p.as_str()[1..])
-                .to_string();
-            let mut numbered: Vec<(u64, &Value)> = record
-                .fields
-                .iter()
-                .map(|(field, value)| (field_number(field), value))
-                .collect();
-            numbered.sort_by_key(|(n, _)| *n);
-            let fields: Vec<String> = numbered
-                .iter()
-                .map(|(n, value)| format!("{n}={}", show_value(value)))
-                .collect();
-            out.push(
-                format!(
-                    "record {} owner={owner} v={} {}",
-                    record.id,
-                    record.version,
-                    fields.join(" ")
-                )
-                .trim_end()
-                .to_string(),
-            );
+        // The item's records, then the part type's (the model's type `2`), with its own header.
+        for (object, pre) in [(item(), ""), (part(), "type 2 ")] {
+            if !pre.is_empty() {
+                out.push(format!("type 2 required={}", required_text(&object)));
+            }
+            for record in tenant.records_of(&object) {
+                let owner = record
+                    .created_by
+                    .as_ref()
+                    .map_or("0", |p| &p.as_str()[1..])
+                    .to_string();
+                let mut numbered: Vec<(u64, &Value)> = record
+                    .fields
+                    .iter()
+                    .map(|(field, value)| (field_number(field), value))
+                    .collect();
+                numbered.sort_by_key(|(n, _)| *n);
+                let fields: Vec<String> = numbered
+                    .iter()
+                    .map(|(n, value)| format!("{n}={}", show_value(value)))
+                    .collect();
+                out.push(
+                    format!(
+                        "{pre}record {} owner={owner} v={} {}",
+                        record.id,
+                        record.version,
+                        fields.join(" ")
+                    )
+                    .trim_end()
+                    .to_string(),
+                );
+            }
         }
     }
     out
@@ -573,12 +712,17 @@ fn show_world(world: &World) -> Vec<String> {
 
 /// The definition of field `n` as the tenant's schema holds it now. The kernel's `DefineField`
 /// replaces the whole definition, so a change to one attribute starts from this one.
-fn current_field(world: &World, tenant: &TenantId, n: u64) -> Option<FieldDef> {
+fn current_field(
+    world: &World,
+    tenant: &TenantId,
+    object: &ObjectTypeId,
+    n: u64,
+) -> Option<FieldDef> {
     let state = world.tenants.get(tenant)?;
     state
         .schema
         .objects
-        .get(&item())?
+        .get(object)?
         .fields
         .get(&field_id(n))
         .cloned()
@@ -604,7 +748,11 @@ pub fn kernel_output(scenarios: &str) -> String {
                 out.push("end".to_string());
                 world = initial.clone();
             }
-            ["op", tenant, who, rest @ ..] => {
+            ["op", tenant, who, after_who @ ..] => {
+                let (object, rest): (ObjectTypeId, &[&str]) = match after_who {
+                    ["type", ty, tail @ ..] => (object_of(ty.parse().expect("object type")), tail),
+                    _ => (item(), after_who),
+                };
                 at += 1;
                 let ctx = Context {
                     tenant: id(format!("t{tenant}")),
@@ -620,19 +768,19 @@ pub fn kernel_output(scenarios: &str) -> String {
                 };
                 let intent = match rest {
                     ["create", fields @ ..] => Intent::CreateRecord {
-                        object: item(),
+                        object: object.clone(),
                         fields: parse_fields(fields),
                     },
                     ["update", record, after_id @ ..] => {
                         // The model replaces a record; a patch that names every field does too.
                         let (expected_version, fields) = split_expected_version(after_id);
-                        let mut all: BTreeMap<FieldId, Value> = [0u64, 1, 2, 3, 4, 5, 6, 7, 8, 10]
+                        let mut all: BTreeMap<FieldId, Value> = fixture_fields(&object)
                             .into_iter()
                             .map(|n| (field_id(n), Value::Null))
                             .collect();
                         all.extend(parse_fields(fields));
                         Intent::UpdateRecord {
-                            object: item(),
+                            object: object.clone(),
                             id: RecordId(record.parse().expect("id")),
                             fields: all,
                             expected_version,
@@ -641,7 +789,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                     ["patch", record, after_id @ ..] => {
                         let (expected_version, fields) = split_expected_version(after_id);
                         Intent::UpdateRecord {
-                            object: item(),
+                            object: object.clone(),
                             id: RecordId(record.parse().expect("id")),
                             fields: parse_fields(fields),
                             expected_version,
@@ -654,7 +802,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                             continue;
                         }
                         Intent::DeleteRecord {
-                            object: item(),
+                            object: object.clone(),
                             id: RecordId(record.parse().expect("id")),
                             expected_version,
                         }
@@ -663,12 +811,12 @@ pub fn kernel_output(scenarios: &str) -> String {
                         let n: u64 = field.parse().expect("field");
                         // A field the tenant does not have (or a tenant that does not exist) is
                         // defined afresh, as before uniqueness; the kernel decides what follows.
-                        let mut def = current_field(&world, &ctx.tenant, n)
-                            .unwrap_or_else(|| field_def(n, false));
+                        let mut def = current_field(&world, &ctx.tenant, &object, n)
+                            .unwrap_or_else(|| fallback_field(&object, n));
                         def.required = true;
                         Intent::ChangeSchema {
                             changes: vec![SchemaChange::DefineField {
-                                object: item(),
+                                object: object.clone(),
                                 field: def,
                             }],
                             expected_version: None,
@@ -683,12 +831,12 @@ pub fn kernel_output(scenarios: &str) -> String {
                         let n: u64 = field.parse().expect("field");
                         // A field the tenant does not have (or a tenant that does not exist) is
                         // defined afresh, as before uniqueness; the kernel decides what follows.
-                        let mut def = current_field(&world, &ctx.tenant, n)
-                            .unwrap_or_else(|| field_def(n, false));
+                        let mut def = current_field(&world, &ctx.tenant, &object, n)
+                            .unwrap_or_else(|| fallback_field(&object, n));
                         def.unique = true;
                         Intent::ChangeSchema {
                             changes: vec![SchemaChange::DefineField {
-                                object: item(),
+                                object: object.clone(),
                                 field: def,
                             }],
                             expected_version: None,
@@ -715,7 +863,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                         };
                         Intent::ChangeSchema {
                             changes: vec![SchemaChange::DefineUnique {
-                                object: item(),
+                                object: object.clone(),
                                 unique,
                             }],
                             expected_version: None,
