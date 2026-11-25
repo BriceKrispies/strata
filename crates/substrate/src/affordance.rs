@@ -6,12 +6,13 @@
 //! is advisory: the invocation decides, and a refusal at the click refreshes the affordance.
 //!
 //! The budget of preflight answers belongs to the session, so one session cannot make the kernel
-//! answer without limit. It is kept here, in the process, and an answer past it is `unknown`.
+//! answer without limit. This module is pure: the caller (the backend, the impure shell) holds each
+//! session's remaining budget, passes it in, and keeps the budget that is left after the reply.
+//! An answer past the budget is `unknown`.
 
 use crate::project::SectionData;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Mutex, OnceLock};
 use strata_kernel::operations::{
     operation_of, preflight, reads_individual, Preflight, PreflightBudget, UnknownReason,
 };
@@ -24,12 +25,9 @@ use strata_kernel::{
 /// a valid invocation key, which preflight checks as the decision does.
 const PREFLIGHT_KEY: &str = "preflight";
 
-/// The preflight answers one session may ask for before every answer is `unknown`.
+/// The preflight answers one session may ask for before every answer is `unknown`: the budget a
+/// session that the backend has not seen starts with.
 pub const SESSION_BUDGET: u32 = 5_000;
-
-/// The sessions a process keeps a budget for; past it the table starts again, so memory is bounded
-/// and a session that spent its budget may get a fresh one after a restart.
-const MAX_SESSIONS: usize = 100_000;
 
 /// The answer for one row action on one row, as the view reply carries it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,15 +114,16 @@ fn reason_name(reason: &UnknownReason) -> &'static str {
 
 /// The affordances of every row action of `view` on the rows of `sections`, asked of the kernel
 /// for `tenant` under `coverage` and `ctx`, and whether any of them reads the principal or the
-/// clock (so the reply is individual to the reader and never stored as a shared copy).
+/// clock (so the reply is individual to the reader and never stored as a shared copy). The budget
+/// the session has left goes in, and the budget left after these answers comes out.
 pub fn row_affordances(
     tenant: &TenantState,
     coverage: &Coverage,
     ctx: &Context,
     view: &ViewId,
     sections: &BTreeMap<String, SectionData>,
-    budget: &mut PreflightBudget,
-) -> (Affordances, bool) {
+    mut budget: PreflightBudget,
+) -> (Affordances, bool, PreflightBudget) {
     let mut out: Affordances = BTreeMap::new();
     let mut individual = false;
     for action in row_actions(&tenant.schema, view) {
@@ -142,7 +141,7 @@ pub fn row_affordances(
                 &action.operation,
                 &inputs,
                 PREFLIGHT_KEY,
-                budget,
+                &mut budget,
             ) {
                 Preflight::Allowed => RowAffordance::Allowed,
                 Preflight::Refused { code, detail } => {
@@ -167,29 +166,7 @@ pub fn row_affordances(
                 .insert(action.id.clone(), answer);
         }
     }
-    (out, individual)
-}
-
-fn budgets() -> &'static Mutex<BTreeMap<String, u32>> {
-    static BUDGETS: OnceLock<Mutex<BTreeMap<String, u32>>> = OnceLock::new();
-    BUDGETS.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-
-/// The preflight budget `session` has left: the full [`SESSION_BUDGET`] for a session new to the
-/// process.
-pub fn session_budget(session: &str) -> PreflightBudget {
-    let mut table = budgets().lock().unwrap_or_else(|e| e.into_inner());
-    if table.len() >= MAX_SESSIONS && !table.contains_key(session) {
-        table.clear();
-    }
-    let left = *table.entry(session.to_string()).or_insert(SESSION_BUDGET);
-    PreflightBudget::new(left)
-}
-
-/// Keep what is left of a session's budget after a reply.
-pub fn spend_session_budget(session: &str, budget: &PreflightBudget) {
-    let mut table = budgets().lock().unwrap_or_else(|e| e.into_inner());
-    table.insert(session.to_string(), budget.remaining());
+    (out, individual, budget)
 }
 
 #[cfg(test)]
@@ -249,14 +226,6 @@ mod tests {
             .unwrap(),
             serde_json::json!({ "state": "unknown", "reason": "withheld-read" })
         );
-    }
-
-    #[test]
-    fn a_session_keeps_what_its_replies_left_of_its_budget() {
-        let session = "affordance-test-session-budget";
-        assert_eq!(session_budget(session).remaining(), SESSION_BUDGET);
-        spend_session_budget(session, &PreflightBudget::new(SESSION_BUDGET - 3));
-        assert_eq!(session_budget(session).remaining(), SESSION_BUDGET - 3);
     }
 
     /// Alpha's notes with a view of them and a row action on its `notes` section: discard, which
@@ -448,34 +417,35 @@ mod tests {
         )]);
         let view = ViewId::new("notes_view").unwrap();
         let context = ctx("alpha", user("alpha:writer1"), 9_000);
-        let (answers, individual) = row_affordances(
+        let (answers, individual, left) = row_affordances(
             tenant,
             &Coverage::Complete,
             &context,
             &view,
             &sections,
-            &mut PreflightBudget::new(100),
+            PreflightBudget::new(100),
         );
-        assert_eq!(answers["notes"]["1"]["discard"], RowAffordance::Allowed);
+        assert_eq!(answers["notes"]["1"]["discard_row"], RowAffordance::Allowed);
         assert_eq!(
-            answers["notes"]["2"]["discard"],
+            answers["notes"]["2"]["discard_row"],
             RowAffordance::Refused {
                 code: "not-published".into(),
                 detail: "Only a published note can be discarded.".into(),
             }
         );
         assert!(!individual);
+        assert_eq!(left.remaining(), 100 - 2, "two rows, one answer each");
 
-        let (spent, _) = row_affordances(
+        let (spent, _, _) = row_affordances(
             tenant,
             &Coverage::Complete,
             &context,
             &view,
             &sections,
-            &mut PreflightBudget::new(0),
+            PreflightBudget::new(0),
         );
         assert_eq!(
-            spent["notes"]["1"]["discard"],
+            spent["notes"]["1"]["discard_row"],
             RowAffordance::Unknown {
                 reason: "budget".into()
             }

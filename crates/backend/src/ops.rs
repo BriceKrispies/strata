@@ -21,7 +21,7 @@ use strata_protocol::api::{
     ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest, MAX_VIEW_LIMIT,
 };
 use strata_storage_api::{execute_admitting, execute_at, ExecuteError, Executed, StoreError};
-use strata_substrate::affordance::{row_affordances, session_budget, spend_session_budget};
+use strata_substrate::affordance::{row_affordances, SESSION_BUDGET};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
     aggregate_request_with, decode_cursor, encode_cursor, included_refs, match_route,
@@ -591,6 +591,38 @@ fn aggregate_loaded(
 /// so it can only take away from what the reader may see (CMS-163, CMS-164).
 ///
 /// Implements: CT-093
+/// The sessions the process keeps a preflight budget for (WG-5466). Past this many, the table starts
+/// again: memory is bounded, and a session that spent its budget may get a fresh one after the
+/// table is cleared.
+const MAX_BUDGET_SESSIONS: usize = 100_000;
+
+/// The preflight answers each session has left, by session, as the impure shell keeps them. The
+/// substrate takes the budget in and gives the rest back; this table is where it is held.
+fn preflight_budgets() -> &'static std::sync::Mutex<BTreeMap<String, u32>> {
+    static BUDGETS: std::sync::OnceLock<std::sync::Mutex<BTreeMap<String, u32>>> =
+        std::sync::OnceLock::new();
+    BUDGETS.get_or_init(|| std::sync::Mutex::new(BTreeMap::new()))
+}
+
+/// What is left of `session`'s preflight budget: the full budget for a session new to the table.
+fn preflight_budget_left(session: &str) -> u32 {
+    let table = preflight_budgets()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    table.get(session).copied().unwrap_or(SESSION_BUDGET)
+}
+
+/// Keep what is left of `session`'s preflight budget after a reply.
+fn keep_preflight_budget(session: &str, left: u32) {
+    let mut table = preflight_budgets()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if table.len() >= MAX_BUDGET_SESSIONS && !table.contains_key(session) {
+        table.clear();
+    }
+    table.insert(session.to_string(), left);
+}
+
 pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<ViewData, ApiError> {
     let tenant = header(app, identity)?;
     let schema = &tenant.schema;
@@ -870,11 +902,17 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                 .session
                 .as_ref()
                 .map_or_else(|| "no-session".to_string(), |s| s.id.0.clone());
-            let mut budget = session_budget(&session);
-            let answered =
-                row_affordances(held, &state.coverage, &ctx, &def.id, &sections, &mut budget);
-            spend_session_budget(&session, &budget);
-            answered
+            let left = preflight_budget_left(&session);
+            let (answered, individual, spent) = row_affordances(
+                held,
+                &state.coverage,
+                &ctx,
+                &def.id,
+                &sections,
+                strata_kernel::operations::PreflightBudget::new(left),
+            );
+            keep_preflight_budget(&session, spent.remaining());
+            (answered, individual)
         }
         None => (Default::default(), false),
     };

@@ -285,6 +285,25 @@ fn form_problems(
     outcome_problems(&at, &form.on_success, screens, problems);
 }
 
+/// The fields of the object type a list section of a screen's view reads, or `None` when the
+/// screen, the view or the section does not exist.
+fn row_fields(
+    schema: &TenantSchema,
+    screen: Option<&&UiScreen>,
+    section: &str,
+) -> Option<BTreeSet<String>> {
+    let view = schema.views.get(&screen?.view)?;
+    let query = schema.queries.get(&view.sections.get(section)?.query)?;
+    let object = schema.objects.get(&query.object)?;
+    Some(
+        object
+            .fields
+            .keys()
+            .map(|field| field.as_str().to_string())
+            .collect(),
+    )
+}
+
 fn action_problems(
     schema: &TenantSchema,
     id: &str,
@@ -352,11 +371,33 @@ fn action_problems(
                 form.is_some_and(|form| form.fields.iter().any(|f| f.name == field))
             }
             Some(("route", param)) => route.contains(param),
+            // A row source (D-DS-32): only on a row action, and a field of the section's object
+            // (or the record's id).
+            Some(("row", field)) => {
+                match &action.row {
+                    None => problems.push(format!(
+                        "{at}: fills {input} from {source}, but it is not a row action (set row to its list section)"
+                    )),
+                    Some(section) => match row_fields(schema, screen, section) {
+                        None => problems.push(format!(
+                            "{at}: its row {section} is not a section of its screen's view"
+                        )),
+                        Some(fields) if field != "id" && !fields.contains(field) => {
+                            problems.push(format!(
+                                "{at}: fills {input} from {source}, which is not a field of the object of {section}"
+                            ))
+                        }
+                        Some(_) => {}
+                    },
+                }
+                // Already reported above when it is wrong; a row source counts as known here.
+                true
+            }
             _ => false,
         };
         if !known {
             problems.push(format!(
-                "{at}: fills {input} from {source}, which is neither form.<a field of its form> nor route.<a parameter of its screen>"
+                "{at}: fills {input} from {source}, which is neither form.<a field of its form>, route.<a parameter of its screen> nor row.<a field of its row>"
             ));
         }
     }
