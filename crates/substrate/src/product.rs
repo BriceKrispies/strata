@@ -745,6 +745,18 @@ fn parse_role_permissions(
     Ok(out)
 }
 
+/// The setting definitions of a bundle, the section `settings` (SET-001, WG-5601). A product and a
+/// tenant declare them in the same shape and go through the same checks; the section is taken out
+/// of `content`.
+pub(crate) fn read_settings(
+    content: &mut Map<String, Json>,
+) -> Result<BTreeMap<SettingId, SettingDef>, BundleError> {
+    let none = |_: &mut Json, _: &str| -> Result<(), String> { Ok(()) };
+    parse_list(content, "settings", "id", &none, &|d: &SettingDef| {
+        d.id.clone()
+    })
+}
+
 /// The declarations of a bundle the kernel takes as one schema change apiece: the sections
 /// `capabilities`, `settings`, `ledger-units`, `ledger-pools` and `ledger-limits` (D-6590,
 /// D-5046, D-5000), each a list. The sections are taken out of `content`.
@@ -765,9 +777,7 @@ fn read_declarations(content: &mut Map<String, Json>) -> Result<Declarations, Bu
         &none,
         &|c: &CapabilityDef| c.id.clone(),
     )?;
-    let settings = parse_list(content, "settings", "id", &none, &|d: &SettingDef| {
-        d.id.clone()
-    })?;
+    let settings = read_settings(content)?;
     let ledger_units = parse_list(
         content,
         "ledger-units",
