@@ -445,6 +445,70 @@ has `Time` and `File` values, its field ids are strings, and its `Intent` has mo
 mapping from kernel values to these boundary types is a separate piece of work (the correspondence
 in `docs/verification.md`) and is not part of this codec.
 
+## Executable kernel (A2, WG-5652)
+
+The executable Lean kernel for the slices the spec covers (slices 0 to 3) lives in
+`lean/Strata/Impl/` and `lean/Strata/Fixture.lean`. The spec (`Strata/Model.lean`) is unchanged;
+it stays the readable reference. The work follows IronFleet's two steps: a functional
+implementation first, proved against the spec, then an indexed one, proved against the first.
+
+**Stage 1, done (functional, records in slots).** `Store.lean` holds the data:
+
+- `ITenant` keeps the spec's tenant fields, with `slots : Array (Option Record)`. Slot `i` holds
+  the record with id `i`, or nothing once it is deleted. A lookup by id is an array index, a
+  create is an append.
+- `absSlots` is the abstraction of a slot array: the spec's record list, in the spec's order
+  (most recent first), built by `ascend`. `ITenant.abs` and `absW` lift it to a tenant and a
+  world.
+- `anyFrom` is the record scan, a loop over the slots with no list built.
+
+`Problem.lean` is the spec's `problem` with the record set read from the slots. Only the four
+places that read the record set are restated (`clashAtI`, `Val.resolvesI`, the composite clash
+in `compositeProblemI`, and the lookups); every other function is the spec's own, called
+unchanged. `Step.lean` is `stepTenantI` and `stepI`. The permission tests, the version check and
+the record constructors are the spec's. The schema changes check the whole table: they call the
+spec's `schemaChangeRefused` and `dupFields` on `absSlots`, once per change.
+
+`World.lean` carries the refinement to the world and the start state:
+
+- `stepTenantI_refines`: `(stepTenantI t p i).map ITenant.abs = stepTenant t.abs p i`, under
+  `t.slots.size = t.nextId`. The same refusal, or the abstraction of the accepted tenant.
+- `stepI_refines`: `(stepI w i c).map absW = step (absW w) i c`, under `IWorld.Inv`.
+- `stepI_inv`, `stepTenantI_inv`: an accepted step keeps the invariant (one slot per id below the
+  counter), so the refinement applies to the next step as well.
+- `absW_implInitial`: the fixture world, started as empty slots, abstracts to the spec's fixture
+  world (`Strata/Fixture.lean`, which both executables now start from).
+
+The scenario runner (`lean/Main.lean`) drives either kernel: `lake exe strata_model <file>` runs
+the spec, `lake exe strata_model --impl <file>` runs the executable kernel, and the state printed
+for the latter is read back through `absW`. On `lean/fixtures/scenarios.txt` (2074 output lines),
+the spec's output, the executable kernel's output and `lean/fixtures/expected.txt` are identical.
+
+**What stage 1 does not do.** The uniqueness check (`clashAtI`), the reference check (`hasI`
+through the slots) and the referrer check of a delete (`anyFrom ... blocks`) are scans over the
+slots, so a write costs O(records) in those checks, not O(1). `absSlots` builds the list with
+appends, so the schema-change paths and the printer are quadratic in the record count.
+
+**Stage 2, not started (indexes).** Still to do, each piece with its invariant proved preserved by
+every accepted step:
+
+1. A unique-value index keyed by (field, keyed value), and a composite index keyed by a
+   constraint's value list, so a clash check does not scan. The consistency invariant: the index
+   holds exactly the ids of the records that hold each keyed value in each unique field and each
+   composite constraint.
+2. A referrer index from a target id to the records that name it through a restricting or
+   clearing field, so a delete does not scan. The invariant is the same shape: the index is the
+   set of referring (record, field) pairs of the slots.
+3. The schema as an indexed structure (field id to definition) instead of an association list.
+4. An `ascend`-free abstraction for the schema-change paths (an accumulator), if they show up in
+   measurements.
+
+Stage 2 extends both the spec's and the implementation's statements together when a later slice
+of WG-5373 adds a rule.
+
+Theorems: `lean/Audit.lean` prints the axioms of each one (the stage-1 block). None depends on
+`sorryAx`; each uses only `propext`, `Classical.choice` and `Quot.sound` at most.
+
 ## Temporal logic library
 
 Built for C2 (WG-5656) in `lean/Strata/Temporal/`, imported from `lean/Strata.lean`. It has no

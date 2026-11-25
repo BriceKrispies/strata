@@ -2,68 +2,19 @@
 The abstract model as a program. Reads scenarios from the file named on the command line,
 runs each through `Strata.step`, and prints every outcome and the final state.
 
+With `--impl` before the file name, the same scenarios run through the executable kernel
+(`Strata.Impl.stepI`, the records held in slots) and print the same text, the state read back
+through the abstraction. The differential harness compares both with the Rust kernel.
+
 The Rust kernel is run on the same scenarios and must print the same text. See
 `crates/verification/src/lean.rs` for the other half and the file format.
 -/
 
-import Strata.Model
+import Strata.Impl.World
 
 open Strata
+open Strata.Impl
 
-/-- The object type every `op` without a `type` names (id `1`, the "item" type). Its fields:
-    `0` an optional list of references to items that restricts the delete of the item;
-    `1` a required string; `2` an optional integer; `3` an optional boolean;
-    `4` an optional item reference cleared when its target is deleted (`set-null`);
-    `5` an optional item reference that restricts the delete (`restrict`);
-    `6` an optional integer whose default is the constant `7`;
-    `7` an optional list of strings;
-    `8` an optional list of item references that loses an element when its target is deleted;
-    `10` an optional string that is unique (slice 3);
-    `11` an optional reference to a part that restricts the delete of the part;
-    `12` an optional reference to a part cleared when the part is deleted (`set-null`). -/
-def itemSchema : Schema :=
-  [(0, { ty := .list (.ref 1 .restrict), required := false }),
-   (1, { ty := .str, required := true }), (2, { ty := .int, required := false }),
-   (3, { ty := .bool, required := false }),
-   (4, { ty := .ref 1 .setNull, required := false }),
-   (5, { ty := .ref 1 .restrict, required := false }),
-   (6, { ty := .int, required := false, default := .int 7 }),
-   (7, { ty := .list .str, required := false }),
-   (8, { ty := .list (.ref 1 .setNull), required := false }),
-   (10, { ty := .str, required := false, unique := true }),
-   (11, { ty := .ref 2 .restrict, required := false }),
-   (12, { ty := .ref 2 .setNull, required := false })]
-
-/-- The second object type, "part" (id `2`), whose references point into items and back:
-    `1` a reference to an item that restricts its delete; `2` a reference to an item cleared when
-    it is deleted (`set-null`); `3` a list of item references, each cleared (`set-null`);
-    `4` an optional integer. -/
-def partSchema : Schema :=
-  [(1, { ty := .ref 1 .restrict, required := false }),
-   (2, { ty := .ref 1 .setNull, required := false }),
-   (3, { ty := .list (.ref 1 .setNull), required := false }),
-   (4, { ty := .int, required := false })]
-
-/-- The two object types every scenario starts from, each tenant with an owner, an editor and two
-    writers. The size limits are the kernel's. -/
-def initialTenant (n : Nat) : Tenant :=
-  { types := [(1, { schema := itemSchema }), (2, { schema := partSchema })],
-    owner := n * 100,
-    editors := [n * 100 + 1],
-    writers := [n * 100 + 2, n * 100 + 3],
-    nextId := 1,
-    limits := Limits.kernel }
-
-/-- The fields an `update` line names for each object type: the item's fields, or the part's.
-    A line that does not name one of them gives it `null`, so it replaces the record (`patch`
-    patches). -/
-def fieldsOf (ty : TypeId) : List FieldId :=
-  if ty = 1 then [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]
-  else if ty = 2 then [1, 2, 3, 4]
-  else []
-
-def initialWorld : World := fun x =>
-  if x = 1 then some (initialTenant 1) else if x = 2 then some (initialTenant 2) else none
 
 /-- The string without its first `n` characters. -/
 def dropChars (s : String) (n : Nat) : String :=
@@ -245,31 +196,54 @@ def showWorld (w : World) : List String :=
     | some t => showTenant id t
     | none => [s!"tenant {id} absent"]
 
-partial def runLines (lines : List String) (w : World) (out : Array String) : Array String :=
+
+/-- One kernel the scenario runner drives: its start state, its transition function and how it
+    prints its state. -/
+structure Kernel (W : Type) where
+  init : W
+  step : W → Intent → Ctx → Except Err W
+  render : W → List String
+
+/-- The spec's kernel: the model as written. -/
+def specKernel : Kernel World :=
+  { init := initialWorld, step := step, render := showWorld }
+
+/-- The executable kernel: the slots, printed through the abstraction. -/
+def implKernel : Kernel IWorld :=
+  { init := implInitial, step := stepI, render := fun w => showWorld (absW w) }
+
+partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (out : Array String) :
+    Array String :=
   match lines with
   | [] => out
   | line :: rest =>
     let tokens := (line.splitOn " ").filter (· ≠ "")
     match tokens with
-    | [] => runLines rest w out
-    | "scenario" :: name => runLines rest initialWorld (out.push s!"scenario {" ".intercalate name}")
-    | ["end"] => runLines rest initialWorld ((out.push "state" ++ (showWorld w).toArray).push "end")
+    | [] => runLines K rest w out
+    | "scenario" :: name => runLines K rest K.init (out.push s!"scenario {" ".intercalate name}")
+    | ["end"] => runLines K rest K.init ((out.push "state" ++ (K.render w).toArray).push "end")
     | _ =>
       match parseOp tokens with
-      | none => runLines rest w (out.push s!"unparsed {line}")
+      | none => runLines K rest w (out.push s!"unparsed {line}")
       | some (c, i) =>
-        match step w i c with
-        | .ok w' => runLines rest w' (out.push "ok")
-        | .error e => runLines rest w (out.push s!"err {showErr e}")
+        match K.step w i c with
+        | .ok w' => runLines K rest w' (out.push "ok")
+        | .error e => runLines K rest w (out.push s!"err {showErr e}")
+
+def runScenarios {W : Type} (K : Kernel W) (path : String) : IO Unit := do
+  let text ← IO.FS.readFile path
+  let lines := (text.splitOn "\n").map trimEnd
+  for line in runLines K lines K.init #[] do
+    IO.println line
 
 def main (args : List String) : IO UInt32 := do
   match args with
   | [path] =>
-    let text ← IO.FS.readFile path
-    let lines := (text.splitOn "\n").map trimEnd
-    for line in runLines lines initialWorld #[] do
-      IO.println line
+    runScenarios specKernel path
+    pure 0
+  | ["--impl", path] =>
+    runScenarios implKernel path
     pure 0
   | _ =>
-    IO.eprintln "usage: strata_model <scenarios file>"
+    IO.eprintln "usage: strata_model [--impl] <scenarios file>"
     pure 2
