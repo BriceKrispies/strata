@@ -372,3 +372,24 @@ fn a_presentation_that_names_what_does_not_exist_is_refused() {
         "{diagnostics:?}"
     );
 }
+
+/// Verifies: WG-5510
+///
+/// A query that declares the tree form (`tree`: via, root and max-depth) keeps it in the bundle, with
+/// the keys of the product file; the view that reads it takes its root from another section's $id.
+#[test]
+fn golden_bundle_of_a_product_with_a_descendants_query() {
+    let output = bundle_of(&product("bundle/thread.jsonc"));
+    assert_eq!(output.files[0].path, "thread.bundle.json");
+    let bundle = the_bundle(&output);
+    let tree = &bundle["content"]["queries"]["thread__replies"]["tree"];
+    assert_eq!(tree["via"], "parent");
+    assert_eq!(tree["root"], "root");
+    assert_eq!(tree["max-depth"], 8);
+    assert_eq!(
+        bundle["content"]["views"]["thread__view"]["sections"]["replies"]["args"]["root"]
+            ["Section"]["attribute"],
+        "$id"
+    );
+    check_golden(&output);
+}

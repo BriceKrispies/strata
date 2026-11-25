@@ -1,0 +1,116 @@
+{
+  "content": {
+    "objects": {
+      "thread__comment": {
+        "constraints": {},
+        "fields": {
+          "body": {
+            "id": "body",
+            "label": "Body",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          },
+          "parent": {
+            "id": "parent",
+            "label": "Parent",
+            "required": false,
+            "ty": {
+              "Ref": {
+                "on-delete": "Restrict",
+                "target": "thread__comment"
+              }
+            },
+            "unique": false
+          },
+          "slug": {
+            "id": "slug",
+            "label": "Slug",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          }
+        },
+        "id": "thread__comment",
+        "label": "Comment"
+      }
+    },
+    "queries": {
+      "thread__by_slug": {
+        "filter": "record.slug == param.slug",
+        "id": "thread__by_slug",
+        "limit": 1,
+        "object": "thread__comment",
+        "order": [],
+        "params": [
+          "slug"
+        ]
+      },
+      "thread__replies": {
+        "id": "thread__replies",
+        "object": "thread__comment",
+        "order": [],
+        "params": [
+          "root"
+        ],
+        "tree": {
+          "max-depth": 8,
+          "root": "root",
+          "via": "parent"
+        }
+      }
+    },
+    "ui": {
+      "thread__screen": {
+        "Screen": {
+          "auth": "session",
+          "kind": "list",
+          "query": [],
+          "route": "/threads/:slug",
+          "title": "Thread",
+          "view": "thread__view"
+        }
+      }
+    },
+    "views": {
+      "thread__view": {
+        "id": "thread__view",
+        "route": "/threads/:slug",
+        "sections": {
+          "replies": {
+            "args": {
+              "root": {
+                "Section": {
+                  "attribute": "$id",
+                  "section": "thread"
+                }
+              }
+            },
+            "include": [],
+            "markdown": [],
+            "query": "thread__replies",
+            "single": false
+          },
+          "thread": {
+            "args": {
+              "slug": {
+                "Route": "slug"
+              }
+            },
+            "include": [],
+            "markdown": [],
+            "query": "thread__by_slug",
+            "single": true
+          }
+        },
+        "title": "Thread"
+      }
+    }
+  },
+  "name": "Thread",
+  "platform": {
+    "min": "0.2"
+  },
+  "product": "thread",
+  "version": "1.0.0"
+}

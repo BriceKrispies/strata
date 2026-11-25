@@ -414,6 +414,7 @@ mod tests {
                 ref_targets: BTreeMap::new(),
                 next: None,
                 aggregate: None,
+                depths: None,
             },
         )]);
         let view = ViewId::new("notes_view").unwrap();

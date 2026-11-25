@@ -228,6 +228,19 @@ pub struct QuerySpec {
     /// The fields that a request filter or an aggregate may name (D-5060).
     #[serde(default)]
     pub declared_fields: Vec<FieldId>,
+    /// The descendants form of the query (WG-5510): the records below the record the root parameter names.
+    #[serde(default)]
+    pub tree: Option<TreeSpec>,
+}
+
+/// The tree form of a query (WG-5510). `max_depth` is at most 32; the kernel refuses a larger one, or a
+/// `via` that is not a single reference of the query object type, when the bundle is installed.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TreeSpec {
+    pub via: FieldId,
+    pub root: String,
+    pub max_depth: u32,
 }
 
 /// An aggregate of a query: what it computes over which field, grouped by which, and how many
@@ -605,7 +618,14 @@ impl Bundle {
                     .then(|| query.aggregates.iter().map(AggregateSpec::def).collect()),
                 declared_fields: (!query.declared_fields.is_empty())
                     .then(|| query.declared_fields.clone()),
-                tree: None,
+                tree: query
+                    .tree
+                    .as_ref()
+                    .map(|tree| strata_model_core::types::TreeDef {
+                        via: tree.via.as_str().to_string(),
+                        root: tree.root.clone(),
+                        max_depth: tree.max_depth,
+                    }),
             }));
         }
         for view in &self.views {

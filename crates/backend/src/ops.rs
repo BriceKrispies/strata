@@ -730,6 +730,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                     ref_targets: BTreeMap::new(),
                     next: None,
                     aggregate: Some(result),
+                    depths: None,
                 },
             );
             continue;
@@ -859,6 +860,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                     .filter(|_| !section.single)
                     .map(|cursor| format!("{name}:{}", encode_cursor(cursor))),
                 aggregate: None,
+                depths: result.depths.clone(),
             },
         );
     }

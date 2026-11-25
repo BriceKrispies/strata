@@ -186,12 +186,56 @@ A screen part (`GET /api/ui/parts/<hash>`) carries, beside `screen`, `forms`, `a
   `file`, `language`, `ref<object>`, `list<type>`) and `required`, and a `displayType` when one is
   declared (none is yet, so it is left out). An aggregate section has `aggregate` (its id) in place
   of `fields`.
+- A section whose query declares the tree form (a descendants query, WG-5510) adds `depth` to its `shape`, as
+  the type `"int"`: each of its rows carries the same key (see below), so a screen binds it as it binds a field.
 - Each form and action in the part gains `shape`: `{"operation": id, "inputs": [{"name", "type",
   "required"}], "fingerprint"}`.
 - `fingerprint` is the SHA-256, in lower-case hex, of the canonical JSON of the shape without it. A
   change to a field's type, or to what an operation takes, changes the shape, the fingerprint and
   the part's hash.
 
+### Descendants: the depth of a row
+
+A named query may declare the tree form (WG-5510): the records below the record a parameter names, through a
+single reference of the query's own object type. A product writes it in its query, with the keys of the
+product file (`max-depth`, kebab-case like every key of a product):
+
+```json
+"queries": [
+  {
+    "id": "thread__replies",
+    "object": "thread__comment",
+    "params": ["root"],
+    "order": [],
+    "tree": { "via": "parent", "root": "root", "max-depth": 8 }
+  }
+]
+```
+
+`via` names a single reference field of the object type that refers to the record's parent, and `root` a
+parameter of the query. A query with a tree takes no `order`, `limit` or aggregates. The product compiler refuses a
+`via` that is not such a reference, a `root` that is not a parameter, and a `max-depth` outside 1 to 32
+(`layer.tree-invalid`); the kernel refuses the same at install.
+
+A view section that reads the query takes its root from another section of the view, as a `Section` argument
+with `attribute` `$id` (the record the other section holds):
+
+```json
+"replies": {
+  "query": "thread__replies",
+  "args": { "root": { "Section": { "section": "thread", "attribute": "$id" } } },
+  "include": [], "markdown": [], "single": false
+}
+```
+
+The rows of such a section are the records below the root, the root excluded, in level order and then by
+creation order. Each row object of the view model (`data.<section>[i]`) carries `depth`, the level of the row
+below the root (1 for a reply to the root), beside `id`, `object`, `fields` and the other keys of a row. A reader
+does not see a record below a record the reader may not read: the descendants of a hidden record are absent. A
+tree deeper than `max-depth`, a cycle, or a record with more than 200 children makes the read fail with a
+message that names the cause; the section is not sent shorter than the tree is.
+
+A screen whose section reads such a query has `depth` in its section `shape` (above), so the client can bind it.
 ### Presentations: person fields and display types
 
 A tenant's presentation of an object type (a `presentations` section of a product, `ui-presentation`

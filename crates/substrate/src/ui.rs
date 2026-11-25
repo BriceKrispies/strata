@@ -195,6 +195,9 @@ fn section_shapes(schema: &TenantSchema, view: &ViewId) -> Map<String, Json> {
                 shape.insert("aggregate".into(), json!(aggregate.as_str()));
                 shape.remove("fields");
             }
+            if query.tree.is_some() {
+                shape.insert("depth".into(), json!("int"));
+            }
             Some((
                 name.clone(),
                 json!({ "single": section.single, "shape": fingerprinted(shape) }),

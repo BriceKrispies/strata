@@ -175,6 +175,9 @@ pub const CONFIGURATION_OUTSIDE_SETTING: &str = "layer.configuration-outside-set
 /// A product's setting whose `area` names another product, or is not a product's id at all: a
 /// product owns the settings it declares (WG-5600, SET-001).
 pub const SETTING_AREA_OTHER_PRODUCT: &str = "layer.setting-area-other-product";
+/// A query whose tree form (WG-5510) does not name a single reference of its own object type as its parent
+/// field, whose root is not a parameter of the query, or whose max-depth is outside 1 to 32.
+pub const TREE_INVALID: &str = "layer.tree-invalid";
 
 /// Stands for "any section": a key listing it accepts any platform entity.
 const ANY: &[&str] = &[];
@@ -748,6 +751,9 @@ fn check_product(
                         if *section == "eventKinds" {
                             check_event_kind(&file, id, item, out);
                         }
+                        if *section == "queries" {
+                            check_tree(&file, id, item, top, out);
+                        }
                     }
                     None => named_uses(&file, id, item, platform_ids, &imports, &own, out, refs),
                 }
@@ -1247,6 +1253,72 @@ fn check_retention(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic>
 /// record: it can be overwritten, it loses a concurrent write, and it has no journal. A balance is a
 /// ledger unit posted to by `PostLedger`, whose entries are the journal and whose limits hold under
 /// concurrent writes (WG-4998).
+/// The tree form of a query (WG-5510). Its parent field must be a single reference of the query's own
+/// object type, which the product declares; its root must be one of the query's parameters; and its
+/// max-depth must be from 1 to MAX_TREE_DEPTH (32). The platform's own object types are checked by the kernel.
+fn check_tree(
+    file: &str,
+    id: &str,
+    item: &Value,
+    top: &Map<String, Value>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let Some(tree) = item.get("tree").and_then(Value::as_object) else {
+        return;
+    };
+    let text = |key: &str| {
+        tree.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let (via, root) = (text("via"), text("root"));
+    let object = item
+        .get("object")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mut problems = Vec::new();
+    let declared = top
+        .get("objects")
+        .and_then(Value::as_array)
+        .and_then(|objects| {
+            objects
+                .iter()
+                .find(|o| o.get("id").and_then(Value::as_str) == Some(object))
+        });
+    if let Some(def) = declared {
+        let target = def
+            .get("fields")
+            .and_then(|fields| fields.get(&via))
+            .and_then(|field| field.get("ty"))
+            .and_then(|ty| ty.get("Ref"))
+            .and_then(|r| r.get("target"))
+            .and_then(Value::as_str);
+        if target != Some(object) {
+            problems.push(format!(
+                "its parent field \"{via}\" is not a single reference to \"{object}\", its own object type"
+            ));
+        }
+    }
+    let params = item.get("params").and_then(Value::as_array);
+    if !params.is_some_and(|names| names.iter().any(|n| n.as_str() == Some(root.as_str()))) {
+        problems.push(format!(
+            "its root \"{root}\" is not one of the query's parameters"
+        ));
+    }
+    match tree.get("max-depth").and_then(Value::as_u64) {
+        Some(depth) if (1..=32).contains(&depth) => {}
+        _ => problems.push("its max-depth is not a whole number from 1 to 32".to_string()),
+    }
+    for problem in problems {
+        out.push(Diagnostic::new(
+            TREE_INVALID,
+            id,
+            format!("\"{id}\" in {file} declares a tree that is refused: {problem}. A descendants query reads the records below its root through a single reference of its own object type, at most 32 levels down (WG-5510)."),
+        ));
+    }
+}
+
 fn check_balance(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic>) {
     let mut writes: Vec<(String, String)> = Vec::new();
     collect_self_writes(item, &mut writes);

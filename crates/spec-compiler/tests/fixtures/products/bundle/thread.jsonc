@@ -1,0 +1,82 @@
+{
+  // A product with threaded comments (WG-5510): a comment is either at the top of a thread or a reply to
+  // another comment through the single reference parent. The query thread_replies is the descendants of the
+  // record the parameter root names, up to eight levels down (the tree form of a query, max-depth at most 32).
+  // The view at /threads/:slug shows the thread's first comment, and below it the replies, each row carrying
+  // its level in the reply (the section's rows have a depth). The section replies takes its root from the
+  // $id of the section thread, a value of the same view.
+  "product": {
+    "id": "thread",
+    "name": "Thread",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../../../../specifications/spec.jsonc",
+      "entities": []
+    }
+  },
+  "objects": [
+    {
+      "id": "thread__comment",
+      "label": "Comment",
+      "fields": {
+        "slug": { "id": "slug", "label": "Slug", "ty": "Str", "required": true, "unique": false },
+        "body": { "id": "body", "label": "Body", "ty": "Str", "required": true, "unique": false },
+        "parent": {
+          "id": "parent",
+          "label": "Parent",
+          "ty": { "Ref": { "target": "thread__comment", "on-delete": "Restrict" } },
+          "required": false,
+          "unique": false
+        }
+      },
+      "constraints": {}
+    }
+  ],
+  "queries": [
+    {
+      "id": "thread__by_slug",
+      "object": "thread__comment",
+      "filter": "record.slug == param.slug",
+      "params": ["slug"],
+      "order": [],
+      "limit": 1
+    },
+    {
+      "id": "thread__replies",
+      "object": "thread__comment",
+      "params": ["root"],
+      "order": [],
+      "tree": { "via": "parent", "root": "root", "max-depth": 8 }
+    }
+  ],
+  "views": [
+    {
+      "id": "thread__view",
+      "route": "/threads/:slug",
+      "title": "Thread",
+      "sections": {
+        "thread": {
+          "query": "thread__by_slug",
+          "args": { "slug": { "Route": "slug" } },
+          "include": [],
+          "markdown": [],
+          "single": true
+        },
+        "replies": {
+          "query": "thread__replies",
+          "args": { "root": { "Section": { "section": "thread", "attribute": "$id" } } },
+          "include": [],
+          "markdown": [],
+          "single": false
+        }
+      }
+    }
+  ],
+  "screens": [
+    {
+      "id": "thread__screen", "name": "Thread", "route": "/threads/:slug", "viewModel": "thread__view",
+      "kind": "thread.list", "auth": "session", "title": "Thread"
+    }
+  ]
+}

@@ -15,3 +15,6 @@ mod ui_definition;
 
 #[path = "hot_reload_fixtures.rs"]
 mod hot_reload_fixtures;
+
+#[path = "thread_descendants.rs"]
+mod thread_descendants;

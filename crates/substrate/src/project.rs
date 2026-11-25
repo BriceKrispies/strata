@@ -148,6 +148,10 @@ pub struct SectionData {
     /// The result of the aggregate the section names, in place of rows (D-5067, AGG-041).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregate: Option<AggregateResult>,
+    /// For a descendants query (WG-5510), the level of each row below its root, in row order: each row
+    /// carries it as `depth`. Absent for every other query.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depths: Option<Vec<u32>>,
 }
 
 /// The raw result of a view: what the backend hands the BFF.
@@ -560,8 +564,16 @@ fn project_record(
     out
 }
 
-fn project_row(record: &Record, section: &SectionData, people: &mut People<'_>) -> Json {
+fn project_row(
+    record: &Record,
+    section: &SectionData,
+    people: &mut People<'_>,
+    depth: Option<u32>,
+) -> Json {
     let mut out = project_record(record, people, Some(&section.ref_targets));
+    if let Some(depth) = depth {
+        out.insert("depth".into(), json!(depth));
+    }
     let mut refs = Map::new();
     for (field, included) in &section.included {
         let mut resolve = |id: &RecordId| {
@@ -622,16 +634,19 @@ pub fn project(data: &ViewData) -> Json {
         let value = if let Some(aggregate) = &section.aggregate {
             project_aggregate(aggregate)
         } else if section.single {
-            section
-                .rows
-                .first()
-                .map_or(Json::Null, |row| project_row(row, section, &mut people))
+            section.rows.first().map_or(Json::Null, |row| {
+                project_row(row, section, &mut people, None)
+            })
         } else {
             Json::Array(
                 section
                     .rows
                     .iter()
-                    .map(|row| project_row(row, section, &mut people))
+                    .enumerate()
+                    .map(|(index, row)| {
+                        let depth = section.depths.as_ref().and_then(|depths| depths.get(index));
+                        project_row(row, section, &mut people, depth.copied())
+                    })
                     .collect(),
             )
         };
@@ -710,6 +725,7 @@ mod people_and_refs {
             ref_targets,
             next: None,
             aggregate: None,
+            depths: None,
         };
         ViewData {
             view: ViewId::new("home").unwrap(),
