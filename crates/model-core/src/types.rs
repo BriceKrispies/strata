@@ -9613,7 +9613,7 @@ impl UiAuth {
 
 /// UI Form
 ///
-/// A form on a tenant screen whose submission invokes a tenant operation with the values of its fields as the operation's inputs (D-8250).
+/// A form on a tenant screen whose submission invokes a tenant operation with the values of its fields as the operation's inputs (D-8250). prefill: form field -> row.<field>, the field of the row a row action that names this form sits in; the typed text wins over a prefill that arrives later (D-FE-13).
 ///
 /// Specification type `ui-form`: a struct.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -9630,6 +9630,9 @@ pub struct UiForm {
     pub on_success: UiOutcome,
     /// Field `on-error`.
     pub on_error: UiErrorDisplay,
+    /// Field `prefill`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// UI Field
@@ -9759,9 +9762,35 @@ impl UiErrorDisplay {
     }
 }
 
+/// UI When Refused
+///
+/// What a row action shows on a row where preflight refuses it (D-DS-32): hide removes it, disable draws it disabled beside the condition's wording. An unknown answer is drawn enabled for an ordinary action.
+///
+/// Specification type `ui-when-refused`: an enumeration, serialised as the specification's values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+pub enum UiWhenRefused {
+    /// The value `hide`.
+    #[serde(rename = "hide")]
+    Hide,
+    /// The value `disable`.
+    #[serde(rename = "disable")]
+    Disable,
+}
+
+impl UiWhenRefused {
+    /// The value as the specification writes it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Hide => "hide",
+            Self::Disable => "disable",
+        }
+    }
+}
+
 /// UI Action
 ///
-/// A button on a tenant screen that invokes a tenant operation. arguments: operation input -> form.<field> of the form it names, or route.<param>. confirm: the button asks for a second press with this text.
+/// A button on a tenant screen that invokes a tenant operation. arguments: operation input -> form.<field> of the form it names, route.<param>, or, when row is set, row.id or row.<field> of the row it sits in. row: the list section whose rows it sits in, making it a row action (D-DS-32): its operation is one the screen or a form already offers, its subject is that section's object, and its affordance on each row is answered by preflight. when-refused: what a row where preflight refuses it shows (default disable). confirm: the button asks for a second press with this text.
 ///
 /// Specification type `ui-action`: a struct.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -9775,6 +9804,9 @@ pub struct UiAction {
     /// Field `form`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub form: Option<String>,
+    /// Field `row`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row: Option<String>,
     /// Field `arguments`.
     pub arguments: std::collections::BTreeMap<String, String>,
     /// Field `confirm`.
@@ -9784,6 +9816,9 @@ pub struct UiAction {
     pub on_success: UiOutcome,
     /// Field `on-error`.
     pub on_error: UiErrorDisplay,
+    /// Field `when-refused`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_refused: Option<UiWhenRefused>,
 }
 
 /// UI Live Binding
