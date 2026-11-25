@@ -48,8 +48,8 @@
       "package": "strata-bff",
       "target": "contract_conformance",
       "tier": "full",
-      "seconds": 71.9,
-      "reason": "The generated contract conformance suite (WG-5182): one test per shipped contract with a bffRoute, each starting the real backend on an in-memory SQLite store and the BFF, signing in several development accounts and, for a quota, a second stack"
+      "seconds": 5.1,
+      "reason": "The generated contract conformance suite (WG-5182): one test per shipped contract with a bffRoute, run on one shared backend (in-memory SQLite) and BFF whose development accounts sign in once; the contracts that end sessions or change factors, and the two quotas, start a stack of their own"
     },
     {
       "package": "strata-bff",

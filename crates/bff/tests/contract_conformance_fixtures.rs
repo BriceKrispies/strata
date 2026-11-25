@@ -494,6 +494,11 @@ pub async fn start_target() -> Target {
     Target::new(port, sites, personas)
 }
 
+/// The stand-in is cheap and each fixture breaks it its own way, so every test has its own.
+pub async fn target() -> Target {
+    start_target().await
+}
+
 /// The fixtures cover every rule a test can fail with, and none conforms by accident: every
 /// `violates-` contract is generated to fail.
 #[test]

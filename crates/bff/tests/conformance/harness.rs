@@ -55,6 +55,20 @@ pub const ANONYMOUS_ROLES: &[&str] = &["visitor"];
 pub const MALFORMED_BODY: &str = "{\"conformance\": ";
 /// The development action that ages the caller's authentication past the step-up age.
 pub const AGE_AUTHENTICATION: &str = "/api/dev/age-authentication";
+/// The contracts checked on a stack of their own, because what they do ends or replaces the
+/// session of the person every other test shares (or changes the person's factors): signing out,
+/// revoking the other sessions, stepping a session up, adding or removing a second factor; and
+/// `list-jobs`, whose reply is only checked while no job exists (once another test has scheduled
+/// one, its rows carry members the contract does not declare).
+pub const OWN_STACK: &[&str] = &[
+    "sign-out-of-site",
+    "revoke-other-sessions",
+    "step-up-session",
+    "start-totp-enrolment",
+    "confirm-totp-enrolment",
+    "remove-totp-factor",
+    "list-jobs",
+];
 /// The largest quota the suite exhausts (the generator's `QUOTA_CALLS`).
 pub const QUOTA_CALLS: u64 = 100;
 
@@ -264,6 +278,10 @@ pub struct Target {
     pub sites: Vec<Site>,
     pub personas: Vec<Persona>,
     pub http: reqwest::Client,
+    /// The signed-in sessions of the people the checks use, by site and login (and `aged:` + them for the
+    /// ones whose authentication was aged for the step-up checks). A target shared by many tests
+    /// signs each person in once, which also keeps under the sign-in quota.
+    sessions: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, Session>>>,
 }
 
 impl Target {
@@ -273,10 +291,27 @@ impl Target {
             port,
             sites,
             personas,
-            http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("an HTTP client"),
+            http: Self::client(),
+            sessions: Default::default(),
+        }
+    }
+
+    fn client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("an HTTP client")
+    }
+
+    /// The same target for another test: its sessions are shared, its HTTP client is the test's
+    /// own (a client's pooled connections belong to the runtime that made them).
+    pub fn for_test(&self) -> Target {
+        Target {
+            port: self.port,
+            sites: self.sites.clone(),
+            personas: self.personas.clone(),
+            http: Self::client(),
+            sessions: self.sessions.clone(),
         }
     }
 
@@ -890,20 +925,24 @@ struct Run<'a> {
     target: &'a Target,
     failures: Vec<(String, String)>,
     skips: Vec<(String, String)>,
-    sessions: BTreeMap<String, Session>,
 }
 
 /// Checks one contract against a fresh target and panics with every failure, each as
 /// `[rule] what happened`.
 pub async fn conform(spec: &Spec, contract: &Contract) {
-    let target = super::start_target().await;
+    // A contract that ends or replaces the sessions of the people the other tests share is
+    // checked on a stack of its own.
+    let target = if OWN_STACK.contains(&contract.id) {
+        super::start_target().await
+    } else {
+        super::target().await
+    };
     let mut run = Run {
         spec,
         contract,
         target: &target,
         failures: Vec::new(),
         skips: Vec::new(),
-        sessions: BTreeMap::new(),
     };
     run.no_session().await;
     if contract.origin {
@@ -1011,20 +1050,57 @@ impl Run<'_> {
         able.first().map(|p| (*p).clone())
     }
 
-    async fn session(&mut self, persona: &Persona) -> Option<Session> {
-        if let Some(session) = self.sessions.get(&persona.login) {
+    /// The person's session on the target: signed in once, then shared. `aged` asks for the one
+    /// whose authentication was aged past the step-up age (no check but step-up uses it).
+    async fn session_for(&mut self, persona: &Persona, aged: bool) -> Option<Session> {
+        let key = if aged {
+            format!("aged:{}:{}", persona.site, persona.login)
+        } else {
+            format!("{}:{}", persona.site, persona.login)
+        };
+        let target = self.target;
+        let mut held = target.sessions.lock().await;
+        if let Some(session) = held.get(&key) {
             return Some(session.clone());
         }
-        match sign_in(self.target, persona).await {
+        let made = async {
+            let session = sign_in(target, persona).await?;
+            if aged {
+                let age = Call {
+                    method: Method::POST,
+                    site: 0,
+                    path: AGE_AUTHENTICATION.into(),
+                    origin: OriginHeader::Own,
+                    csrf: Some(session.csrf.clone()),
+                    cookie: Some(session.cookie.clone()),
+                    body: Some("{}".into()),
+                };
+                let aged = send(target, &age).await;
+                if aged.status != 200 {
+                    return Err(format!(
+                        "the authentication could not be aged: {}",
+                        aged.summary()
+                    ));
+                }
+            }
+            Ok(session)
+        }
+        .await;
+        match made {
             Ok(session) => {
-                self.sessions.insert(persona.login.clone(), session.clone());
+                held.insert(key, session.clone());
                 Some(session)
             }
             Err(why) => {
-                self.fail("sign-in", why);
+                drop(held);
+                self.fail(if aged { "step-up" } else { "sign-in" }, why);
                 None
             }
         }
+    }
+
+    async fn session(&mut self, persona: &Persona) -> Option<Session> {
+        self.session_for(persona, false).await
     }
 
     /// The path of a request with its query, the tenant input (on a GET) set to `tenant`.
@@ -1494,9 +1570,8 @@ impl Run<'_> {
             );
             return;
         };
-        let session = match sign_in(self.target, &persona).await {
-            Ok(session) => session,
-            Err(why) => return self.fail("sign-in", why),
+        let Some(session) = self.session(&persona).await else {
+            return;
         };
         let call = self.call(&self.contract.probe, &self.home(), Some(&session), None);
         let answer = self.answer(&call).await;
@@ -1542,27 +1617,10 @@ impl Run<'_> {
                 ),
             );
         };
-        // A session of its own: ageing it must not touch the ones the other checks use.
-        let session = match sign_in(self.target, &persona).await {
-            Ok(session) => session,
-            Err(why) => return self.fail("sign-in", why),
+        // A session aged once and kept apart from the ones the other checks use.
+        let Some(session) = self.session_for(&persona, true).await else {
+            return;
         };
-        let age = Call {
-            method: Method::POST,
-            site: 0,
-            path: AGE_AUTHENTICATION.into(),
-            origin: OriginHeader::Own,
-            csrf: Some(session.csrf.clone()),
-            cookie: Some(session.cookie.clone()),
-            body: Some("{}".into()),
-        };
-        let aged = send(self.target, &age).await;
-        if aged.status != 200 {
-            return self.fail(
-                "step-up",
-                format!("the authentication could not be aged: {}", aged.summary()),
-            );
-        }
         let call = self.call(&self.contract.probe, &self.home(), Some(&session), None);
         let answer = self.answer(&call).await;
         let what = format!("a call by {} with an aged authentication", persona.login);
