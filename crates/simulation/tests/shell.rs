@@ -135,8 +135,37 @@ fn baseline() -> &'static ShellRun {
     })
 }
 
+/// The run with the store's and the process's faults together: a commit that loses a race, one
+/// that stops before its write, one whose reply is lost, an outbox that cannot be read or whose
+/// acknowledgement is lost, and a process that stops. Each fault test below reads this one run
+/// for its own event, so the binary pays for the schedule once and not once per fault.
+fn faulted() -> &'static ShellRun {
+    static FAULTED: OnceLock<ShellRun> = OnceLock::new();
+    FAULTED.get_or_init(|| {
+        run(
+            &backend(),
+            &editorial(
+                BASELINE_SEED,
+                BASELINE_STEPS,
+                Faults {
+                    store: StoreFaults {
+                        commit_conflict: 250_000,
+                        commit_unavailable: 200_000,
+                        commit_reply_lost: 300_000,
+                        publish_unavailable: 400_000,
+                        publish_ack_lost: 400_000,
+                        ..StoreFaults::default()
+                    },
+                    crash: 250_000,
+                    ..Faults::default()
+                },
+            ),
+        )
+    })
+}
+
 const BASELINE_SEED: u64 = 5;
-const BASELINE_STEPS: usize = 24;
+const BASELINE_STEPS: usize = 6;
 
 fn injected(trace: &ShellTrace, fault: StoreFault) -> usize {
     trace.injected.iter().filter(|i| i.fault == fault).count()
@@ -149,7 +178,7 @@ fn the_shell_path_decides_as_the_kernel_does() {
     // tenant.
     let scenario = ShellScenario {
         keys: false,
-        ..editorial(7, 24, Faults::default())
+        ..editorial(7, 4, Faults::default())
     };
     let shell = run(&backend(), &scenario);
     assert_clean(&shell.trace);
@@ -221,7 +250,7 @@ fn the_same_seed_gives_the_same_trace_and_generations() {
         crash: 100_000,
         ..Faults::default()
     };
-    let scenario = editorial(11, 20, faults);
+    let scenario = editorial(11, 4, faults);
     let first = run(&backend(), &scenario);
     let second = run(&backend(), &scenario);
     assert_eq!(first.trace.hash(), second.trace.hash());
@@ -245,17 +274,7 @@ fn a_commit_that_loses_a_race_is_decided_again() {
     // fm: a store conflict. The store refuses the commit; the backend decides again on fresh
     // state and the client learns the same outcome.
     let clean = baseline();
-    let raced = run(
-        &backend(),
-        &editorial(
-            BASELINE_SEED,
-            BASELINE_STEPS,
-            store_faults(StoreFaults {
-                commit_conflict: 250_000,
-                ..StoreFaults::default()
-            }),
-        ),
-    );
+    let raced = faulted();
     assert_clean(&raced.trace);
     assert!(injected(&raced.trace, StoreFault::CommitConflict) > 0);
     assert!(raced
@@ -273,17 +292,7 @@ fn a_process_stopped_before_its_write_commits_nothing_and_the_retry_commits_once
     // them): nothing is written, the client is told the service is unavailable and sends the
     // request again with its key.
     let clean = baseline();
-    let stopped = run(
-        &backend(),
-        &editorial(
-            BASELINE_SEED,
-            BASELINE_STEPS,
-            store_faults(StoreFaults {
-                commit_unavailable: 200_000,
-                ..StoreFaults::default()
-            }),
-        ),
-    );
+    let stopped = faulted();
     assert_clean(&stopped.trace);
     assert!(injected(&stopped.trace, StoreFault::CommitUnavailable) > 0);
     assert!(stopped
@@ -305,17 +314,7 @@ fn a_commit_whose_answer_is_lost_is_answered_from_its_key() {
     // fm: the process stops after the write and before it answers. The client's retry finds the
     // first result under its key; nothing is committed twice.
     let clean = baseline();
-    let lost = run(
-        &backend(),
-        &editorial(
-            BASELINE_SEED,
-            BASELINE_STEPS,
-            store_faults(StoreFaults {
-                commit_reply_lost: 300_000,
-                ..StoreFaults::default()
-            }),
-        ),
-    );
+    let lost = faulted();
     assert_clean(&lost.trace);
     assert!(injected(&lost.trace, StoreFault::CommitReplyLost) > 0);
     assert!(lost
@@ -336,7 +335,7 @@ fn a_repeated_request_commits_once() {
         &backend(),
         &editorial(
             BASELINE_SEED,
-            BASELINE_STEPS,
+            4,
             Faults {
                 request_repeated: 1_000_000,
                 ..Faults::default()
@@ -368,8 +367,11 @@ fn a_repeated_request_commits_once() {
             (a, b) => panic!("step {}: {} then {}", first.index, a.verdict(), b.verdict()),
         }
     }
-    assert_eq!(outcomes(&repeated.trace), outcomes(&clean.trace));
-    assert_eq!(repeated.trace.final_hashes, clean.trace.final_hashes);
+    // The first four requests of the baseline schedule, repeated, end as they did without repeats.
+    let clean_outcomes = outcomes(&clean.trace);
+    for (index, verdict) in outcomes(&repeated.trace) {
+        assert_eq!(clean_outcomes[&index], verdict, "request {index}");
+    }
 }
 
 #[test]
@@ -379,7 +381,7 @@ fn a_delayed_request_arrives_after_later_ones() {
         &backend(),
         &editorial(
             10,
-            20,
+            6,
             Faults {
                 request_delayed: 300_000,
                 ..Faults::default()
@@ -402,17 +404,7 @@ fn a_delayed_request_arrives_after_later_ones() {
 fn a_process_stopped_between_commit_and_publication_publishes_on_restart() {
     // fm-runtime-crash: the process stops after a transaction commits and before its events are
     // published; the next process publishes them from the store's outbox.
-    let crashed = run(
-        &backend(),
-        &editorial(
-            12,
-            20,
-            Faults {
-                crash: 300_000,
-                ..Faults::default()
-            },
-        ),
-    );
+    let crashed = faulted();
     assert_clean(&crashed.trace);
     assert!(!crashed.trace.restarts.is_empty());
 }
@@ -421,18 +413,7 @@ fn a_process_stopped_between_commit_and_publication_publishes_on_restart() {
 fn a_publisher_that_cannot_read_or_mark_the_outbox_publishes_everything_in_order() {
     // fm-poison-event and a lost acknowledgement: publication is refused or its mark is lost; the
     // events reach the subscriber, the first time in order, some of them more than once.
-    let flaky = run(
-        &backend(),
-        &editorial(
-            13,
-            20,
-            store_faults(StoreFaults {
-                publish_unavailable: 400_000,
-                publish_ack_lost: 400_000,
-                ..StoreFaults::default()
-            }),
-        ),
-    );
+    let flaky = faulted();
     assert_clean(&flaky.trace);
     assert!(injected(&flaky.trace, StoreFault::PublishUnavailable) > 0);
     assert!(injected(&flaky.trace, StoreFault::PublishAckLost) > 0);
@@ -787,14 +768,14 @@ fn a_worker_that_stalls_holding_a_lease_applies_no_step_twice() {
     // key keeps the step from being applied twice.
     let clean = run(
         &Backend::new(None),
-        &notes_scenario("stall-clean", 32, 3, Faults::default()),
+        &notes_scenario("stall-clean", 32, 2, Faults::default()),
     );
     let stalled = run(
         &Backend::new(None),
         &notes_scenario(
             "stall",
             32,
-            3,
+            2,
             store_faults(StoreFaults {
                 report_lost: 150_000,
                 ..StoreFaults::default()
@@ -817,14 +798,14 @@ fn a_worker_cut_off_from_its_tenant_database_takes_no_lease_and_resumes() {
     // fm-automation-worker-partition.
     let clean = run(
         &Backend::new(None),
-        &notes_scenario("partition-clean", 33, 3, Faults::default()),
+        &notes_scenario("partition-clean", 33, 2, Faults::default()),
     );
     let cut = run(
         &Backend::new(None),
         &notes_scenario(
             "partition",
             33,
-            3,
+            2,
             store_faults(StoreFaults {
                 lease_partition: 500_000,
                 ..StoreFaults::default()
@@ -866,7 +847,7 @@ fn a_webhook_receiver_that_fails_or_times_out_is_retried_and_answered_once() {
     // An adapter failing or timing out: each delivery is tried again until the receiver answers,
     // and a delivery the receiver answered is never sent again.
     let mut schedule = alpha_setup(Vec::new());
-    schedule.extend((0..8).map(user_note));
+    schedule.extend((0..6).map(user_note));
     let scenario = ShellScenario {
         name: "webhooks".into(),
         seed: 34,

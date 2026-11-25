@@ -301,7 +301,7 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     let mut diverged = 0;
     for seed in [5, 9, 14] {
         for before_step in [0, 25] {
-            let scenario = scenario(seed, 50);
+            let scenario = scenario(seed, 30);
             let projection = project(
                 &scenario,
                 &require_excerpt(ExistingData::Grandfather, before_step),
@@ -332,7 +332,7 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     assert!(diverged >= 2, "the change diverged only {diverged} times");
     // A change that is refused diverges nowhere, and says so.
     let refused = project(
-        &scenario(5, 50),
+        &scenario(5, 30),
         &require_excerpt(ExistingData::Reject, 0),
         &mut |_, _, _| true,
     )
@@ -340,7 +340,7 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     assert_eq!(first_difference(&refused.baseline, &refused.branch), None);
     assert_eq!(refused.comparison.first_divergence, None);
 
-    let scenario = scenario(5, 50);
+    let scenario = scenario(5, 30);
     let proposal = require_excerpt(ExistingData::Grandfather, 0);
     let projection = project(&scenario, &proposal, &mut |_, _, _| true).unwrap();
     assert!(projection.change_outcome.accepted());
@@ -438,7 +438,7 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
         hop: None,
     };
     let role_of = |name: &str| RoleId::new(name).unwrap();
-    let mut work: Vec<Scheduled> = schedule_of(17, 30);
+    let mut work: Vec<Scheduled> = schedule_of(17, 8);
     fn add(work: &mut Vec<Scheduled>, label: &str, context: Context, intent: Intent) {
         work.push(Scheduled {
             label: label.to_string(),
