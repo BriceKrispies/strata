@@ -617,6 +617,7 @@ fn children(e: &Expr) -> Vec<&Expr> {
         | Expr::Duration(_, a)
         | Expr::Text(a) => vec![a.as_ref()],
         Expr::And(items) | Expr::Or(items) => items.iter().collect(),
+        Expr::AncestorOf(a, b, c, d) => vec![a.as_ref(), b.as_ref(), c.as_ref(), d.as_ref()],
         Expr::Cmp(_, a, b)
         | Expr::In(a, b)
         | Expr::Contains(a, b)

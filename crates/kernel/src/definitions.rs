@@ -309,6 +309,9 @@ pub fn expr_nodes(expr: &Expr) -> usize {
         | Expr::Duration(_, a)
         | Expr::Text(a) => expr_nodes(a),
         Expr::And(items) | Expr::Or(items) => items.iter().map(expr_nodes).sum(),
+        Expr::AncestorOf(a, b, c, d) => {
+            expr_nodes(a) + expr_nodes(b) + expr_nodes(c) + expr_nodes(d)
+        }
         Expr::Cmp(_, a, b)
         | Expr::In(a, b)
         | Expr::Contains(a, b)

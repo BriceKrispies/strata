@@ -313,6 +313,12 @@ impl Sub<'_> {
             Expr::Concat(a, b) => {
                 Expr::Concat(Box::new(self.expr(base, a)?), Box::new(self.expr(base, b)?))
             }
+            Expr::AncestorOf(a, b, c, d) => Expr::AncestorOf(
+                Box::new(self.expr(base, a)?),
+                Box::new(self.expr(base, b)?),
+                Box::new(self.expr(base, c)?),
+                Box::new(self.expr(base, d)?),
+            ),
             Expr::If(a, b, c) => Expr::If(
                 Box::new(self.expr(base, a)?),
                 Box::new(self.expr(base, b)?),

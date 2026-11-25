@@ -289,6 +289,8 @@ pub enum Prim {
     Graphemes,
     /// `is-emoji`
     IsEmoji,
+    /// `ancestor-of`: a bounded walk through a self-reference (WG-5510).
+    AncestorOf,
     /// `if`
     If,
     /// `has-role`
@@ -447,6 +449,7 @@ pub const PRIMITIVES: &[PrimitiveInfo] = &[
     prim("is-slug", Prim::IsSlug, Arity::Fixed(1), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::IsSlug -> is_slug"),
     prim("graphemes", Prim::Graphemes, Arity::Fixed(1), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::Graphemes -> graphemes"),
     prim("is-emoji", Prim::IsEmoji, Arity::Fixed(1), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::IsEmoji -> is_emoji"),
+    prim("ancestor-of", Prim::AncestorOf, Arity::Fixed(4), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::AncestorOf"),
     prim("if", Prim::If, Arity::Fixed(3), &["call"], "null-is-false", None, "crates/kernel/src/expr.rs: eval, Expr::If"),
     prim("has-role", Prim::HasRole, Arity::Fixed(0), &["scope"], "total", Some("role-test"), "crates/kernel/src/expr.rs: eval, Expr::HasRole; crates/substrate/src/syntax.rs: primary, \"has_role\""),
     prim("now", Prim::Now, Arity::Fixed(0), &["scope"], "total", Some("constant"), "crates/kernel/src/expr.rs: eval, Expr::Now"),
@@ -775,6 +778,22 @@ impl Bridge<'_> {
                 }
             });
         }
+        if self.plan.uses(Prim::AncestorOf) {
+            let target = self.plan.payload_ty("ref");
+            methods.push(quote! {
+                fn ancestor_of(
+                    &self,
+                    _object: &str,
+                    _field: &str,
+                    _target: &#target,
+                    _from: &#target,
+                ) -> Result<bool, #module::EvalError> {
+                    Err(#module::EvalError(
+                        "ancestor_of needs a lookup, and none is available".to_string(),
+                    ))
+                }
+            });
+        }
         if let (true, Some(t)) = (self.plan.uses(Prim::Param), self.token_of(Prim::Param)) {
             let f = Self::field(t);
             methods.push(quote! {
@@ -920,6 +939,13 @@ impl Bridge<'_> {
                     } else {
                         Err(format!("unknown field {field}"))
                     }
+                }
+            });
+        }
+        if self.plan.uses(Prim::AncestorOf) {
+            methods.push(quote! {
+                fn ancestor_of(&self, _object: &str, _field: &str) -> Result<(), String> {
+                    Err("ancestor_of needs an object type, and none is available".to_string())
                 }
             });
         }
@@ -1650,6 +1676,7 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
             Prim::Principal => &["null", "string"],
             Prim::Param | Prim::Var => &["null"],
             Prim::Through => &["null", "ref"],
+            Prim::AncestorOf => &["null", "ref", "string"],
             Prim::Literal | Prim::ListLiteral => &[],
             Prim::AddChecked
             | Prim::SubChecked
@@ -2240,6 +2267,17 @@ impl<'a> Plan<'a> {
             type_env.push(quote! {
                 /// Checks that a field of the definition site's record is a single reference to an existing object type.
                 fn follow(&self, field: &str) -> Result<(), String>;
+            });
+        }
+        if self.uses(Prim::AncestorOf) {
+            let id = self.payload_ty("ref");
+            env.push(quote! {
+                /// Whether `target` is `from` or one of its ancestors: the walk from `from` through `field` of the object type `object`, bounded (WG-5510). An error when the walk is longer than the limit, returns to a record it visited, or meets a record the snapshot does not cover.
+                fn ancestor_of(&self, object: &str, field: &str, target: &#id, from: &#id) -> Result<bool, EvalError>;
+            });
+            type_env.push(quote! {
+                /// Checks that `field` of the object type `object` is a single reference to `object`, so that the walk can follow it.
+                fn ancestor_of(&self, object: &str, field: &str) -> Result<(), String>;
             });
         }
         if self.uses(Prim::Param) {
@@ -3744,6 +3782,26 @@ impl<'a> Plan<'a> {
                 }
             });
         }
+        if self.uses(Prim::AncestorOf) {
+            let ast = self.ast_ty();
+            let (lit, text) = (
+                self.ops
+                    .iter()
+                    .find(|o| o.info.prim == Prim::Literal)
+                    .map(|o| Self::variant_ident(o.variant))
+                    .expect("the language has a literal operator"),
+                self.value("string"),
+            );
+            helpers.push(quote! {
+                /// The text of a string literal operand of ancestor_of: the object type or the field it names (WG-5510). Any other operand is an error.
+                pub fn literal_text(expr: &#ast) -> Result<String, String> {
+                    match expr {
+                        #ast::#lit(#text(text)) => Ok(text.clone()),
+                        _ => Err("ancestor_of takes a string literal here".to_string()),
+                    }
+                }
+            });
+        }
         if self.uses(Prim::IsEmoji) {
             helpers.push(quote! {
                 /// Whether a string is exactly one emoji grapheme (WG-5597).
@@ -4039,6 +4097,22 @@ impl<'a> Plan<'a> {
                         #null => #null,
                         #s(s) => #i(graphemes(&s)),
                         other => return Err(type_error(#label, &other)),
+                    }
+                }
+            }
+            Prim::AncestorOf => {
+                let (x, y, object, via) = (e(0), e(1), e(2), e(3));
+                let (r, b) = (self.value("ref"), b());
+                quote! {
+                    {
+                        let (x, y) = (eval(#x, env)?, eval(#y, env)?);
+                        let object = literal_text(#object).map_err(EvalError)?;
+                        let via = literal_text(#via).map_err(EvalError)?;
+                        match (x, y) {
+                            (#null, _) | (_, #null) => #null,
+                            (#r(x), #r(y)) => #b(env.ancestor_of(&object, &via, &x, &y)?),
+                            (other, _) => return Err(type_error(#label, &other)),
+                        }
                     }
                 }
             }
@@ -4371,6 +4445,25 @@ impl<'a> Plan<'a> {
                     self.jval("int", "graphemeCount(x)")
                 ));
                 l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::AncestorOf => {
+                let (x, y, object, via) = (e(0), e(1), e(2), e(3));
+                let mut l = vec![
+                    format!("const a = evaluate({x}, env);"),
+                    format!("const b = evaluate({y}, env);"),
+                    format!("const object = literalText({object});"),
+                    format!("const via = literalText({via});"),
+                    t("const [ta, xa] = parts(a);"),
+                    t("const [tb, xb] = parts(b);"),
+                    format!("if (ta === {null} || tb === {null}) return {null};"),
+                    format!("if (ta !== {reference}) throw typeError({label}, a);"),
+                    format!("if (tb !== {reference}) throw typeError({label}, b);"),
+                ];
+                l.push(format!(
+                    "return {};",
+                    self.jval("bool", "env.ancestorOf(object, via, xa, xb)")
+                ));
                 l
             }
             Prim::IsEmoji => {
@@ -4760,6 +4853,20 @@ impl<'a> Plan<'a> {
                     #r
                 }
             }
+            Prim::AncestorOf => {
+                let (x, y, object, via) = (e(0), e(1), e(2), e(3));
+                let ex = self.expect(quote! { check(#x, env)? }, &operands[0], &token);
+                let ey = self.expect(quote! { check(#y, env)? }, &operands[1], &token);
+                let r = result();
+                quote! {
+                    #ex
+                    #ey
+                    let object = literal_text(#object)?;
+                    let via = literal_text(#via)?;
+                    env.ancestor_of(&object, &via)?;
+                    #r
+                }
+            }
             Prim::If => {
                 let (c, t, otherwise) = (e(0), e(1), e(2));
                 let ec = self.expect(quote! { check(#c, env)? }, &operands[0], &token);
@@ -4891,6 +4998,19 @@ impl<'a> Plan<'a> {
                 ];
                 l.extend(self.expect_js("left", &operands[0], "ordering", false));
                 l.extend(self.expect_js("right", &operands[1], "ordering", false));
+                l.push(format!("return {};", result()));
+                l
+            }
+            Prim::AncestorOf => {
+                let mut l = vec![
+                    format!("const first = check({}, env);", e(0)),
+                    format!("const second = check({}, env);", e(1)),
+                ];
+                l.extend(self.expect_js("first", &operands[0], &token, false));
+                l.extend(self.expect_js("second", &operands[1], &token, false));
+                l.push(format!("const object = literalText({});", e(2)));
+                l.push(format!("const via = literalText({});", e(3)));
+                l.push("env.ancestorOf(object, via);".to_string());
                 l.push(format!("return {};", result()));
                 l
             }
@@ -5328,6 +5448,10 @@ impl<'a> Plan<'a> {
             env.push(jt::J_ENV_FOLLOW);
             type_env.push(jt::J_TYPE_ENV_FOLLOW);
         }
+        if self.uses(Prim::AncestorOf) {
+            env.push(jt::J_ENV_ANCESTOR_OF);
+            type_env.push(jt::J_TYPE_ENV_ANCESTOR_OF);
+        }
         if self.uses(Prim::Param) {
             env.push(jt::J_ENV_PARAM);
             type_env.push(jt::J_TYPE_ENV_HAS_PARAM);
@@ -5479,6 +5603,9 @@ impl<'a> Plan<'a> {
         if self.uses(Prim::IsEmoji) {
             b.push(jt::J_IS_EMOJI.to_string());
         }
+        if self.uses(Prim::AncestorOf) {
+            b.push(self.literal_text_js());
+        }
         if self.ops.iter().any(|o| o.info.prim.checked_int()) {
             b.push(jt::J_SAFE.to_string());
         }
@@ -5616,6 +5743,18 @@ impl<'a> Plan<'a> {
     /// One of the three walks over the AST (`print`, `evaluate`, `check`): the function opened by
     /// `head`, a `switch` on the variant, and for each operator the statements `body` gives. A
     /// variant split by a case field switches again on the case.
+    /// The JavaScript twin of the `literal_text` helper: the text of a string literal operand of ancestorOf.
+    fn literal_text_js(&self) -> String {
+        let lit = self
+            .literal_variant()
+            .map(|v| js(&self.tag_of(v)))
+            .unwrap_or_default();
+        let text = self.jt("string");
+        format!(
+            "/**\n * The text of a string literal operand of ancestorOf: the object type or the field it names (WG-5510).\n * @param {{any}} node\n * @returns {{string}}\n */\nfunction literalText(node) {{\n  const [tag, p] = parts(node);\n  if (tag === {lit}) {{\n    const [kind, value] = parts(p);\n    if (kind === {text}) return value;\n  }}\n  throw new Error('ancestor_of takes a string literal here');\n}}"
+        )
+    }
+
     fn walk_js(&self, head: &[&str], body: &dyn Fn(&Op) -> Vec<String>) -> String {
         let mut lines: Vec<String> = head.iter().map(|l| l.to_string()).collect();
         lines.push("  const [tag, p] = parts(expr);".to_string());

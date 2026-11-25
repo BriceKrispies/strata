@@ -659,6 +659,9 @@ fn reads_now(expr: &Expr) -> bool {
         | Expr::Duration(_, a)
         | Expr::Text(a) => reads_now(a),
         Expr::And(items) | Expr::Or(items) => items.iter().any(reads_now),
+        Expr::AncestorOf(a, b, c, d) => {
+            reads_now(a) || reads_now(b) || reads_now(c) || reads_now(d)
+        }
         Expr::Cmp(_, a, b)
         | Expr::In(a, b)
         | Expr::Contains(a, b)
@@ -709,6 +712,7 @@ pub fn indexable(expr: &Expr) -> bool {
         | Expr::Duration(_, a)
         | Expr::Text(a) => indexable(a),
         Expr::And(items) | Expr::Or(items) => items.iter().all(indexable),
+        Expr::AncestorOf(..) => false,
         Expr::In(a, b)
         | Expr::Contains(a, b)
         | Expr::StartsWith(a, b)
@@ -768,6 +772,12 @@ fn walk(expr: &Expr, raw: &mut Raw, problems: &mut Vec<String>) {
             for item in items {
                 walk(item, raw, problems);
             }
+        }
+        Expr::AncestorOf(a, b, c, d) => {
+            walk(a, raw, problems);
+            walk(b, raw, problems);
+            walk(c, raw, problems);
+            walk(d, raw, problems);
         }
         Expr::Cmp(_, a, b)
         | Expr::In(a, b)
@@ -1444,6 +1454,12 @@ fn thresholds(expr: &Expr, env: &Env<'_>, at_zero: &Env<'_>, out: &mut Vec<i64>)
             for item in items {
                 thresholds(item, env, at_zero, out);
             }
+        }
+        Expr::AncestorOf(a, b, c, d) => {
+            thresholds(a, env, at_zero, out);
+            thresholds(b, env, at_zero, out);
+            thresholds(c, env, at_zero, out);
+            thresholds(d, env, at_zero, out);
         }
         Expr::Cmp(_, a, b)
         | Expr::In(a, b)

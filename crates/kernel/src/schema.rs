@@ -621,6 +621,9 @@ fn mentions_field(expr: &Expr) -> bool {
         | Expr::Duration(_, a)
         | Expr::Text(a) => mentions_field(a),
         Expr::And(items) | Expr::Or(items) => items.iter().any(mentions_field),
+        Expr::AncestorOf(a, b, c, d) => {
+            mentions_field(a) || mentions_field(b) || mentions_field(c) || mentions_field(d)
+        }
         Expr::Cmp(_, a, b)
         | Expr::In(a, b)
         | Expr::Contains(a, b)

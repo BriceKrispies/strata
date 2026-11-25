@@ -266,6 +266,12 @@ pub(crate) fn walk(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
         | Expr::Duration(_, a)
         | Expr::Text(a) => walk(a, visit),
         Expr::And(items) | Expr::Or(items) => items.iter().for_each(|e| walk(e, visit)),
+        Expr::AncestorOf(a, b, c, d) => {
+            walk(a, visit);
+            walk(b, visit);
+            walk(c, visit);
+            walk(d, visit);
+        }
         Expr::Cmp(_, a, b)
         | Expr::In(a, b)
         | Expr::Contains(a, b)

@@ -58,6 +58,9 @@ fn reads(expr: &Expr, out: &mut BTreeSet<String>) -> bool {
         | Expr::Duration(_, a)
         | Expr::Text(a) => reads(a, out),
         Expr::And(items) | Expr::Or(items) => items.iter().all(|item| reads(item, out)),
+        Expr::AncestorOf(a, b, c, d) => {
+            reads(a, out) && reads(b, out) && reads(c, out) && reads(d, out)
+        }
         Expr::Cmp(_, a, b)
         | Expr::In(a, b)
         | Expr::Contains(a, b)

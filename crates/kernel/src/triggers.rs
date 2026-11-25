@@ -319,6 +319,12 @@ fn reads<'e>(expr: &'e Expr, out: &mut Vec<Reads<'e>>) {
                 reads(item, out);
             }
         }
+        Expr::AncestorOf(a, b, c, d) => {
+            reads(a, out);
+            reads(b, out);
+            reads(c, out);
+            reads(d, out);
+        }
         Expr::Cmp(_, a, b)
         | Expr::In(a, b)
         | Expr::Contains(a, b)

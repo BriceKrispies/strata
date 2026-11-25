@@ -31,6 +31,8 @@ pub const DEFAULT_PAGE_SIZE: u32 = 50;
 pub const MAX_PAGE_SIZE: u32 = 200;
 /// The most records a named query that is not bounded by its order may examine.
 pub const MAX_SCAN_RECORDS: u32 = 10_000;
+/// The most reference hops an `ancestor_of` walk may take (WG-5510). Past it the walk is an error, never a silent answer.
+pub const MAX_ANCESTOR_HOPS: u32 = 32;
 /// The most triggers a schema may define (CT-790).
 pub const MAX_TRIGGERS: usize = 100;
 /// The most steps one automation may declare (automation-def, CT-792).

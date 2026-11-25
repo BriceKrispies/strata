@@ -59,6 +59,8 @@ pub(crate) const J_ENV_NOW: &str =
 
 pub(crate) const J_ENV_PRINCIPAL: &str = r####" * @property {() => string | null} principal The acting principal's id for a user, null for an anonymous or system principal."####;
 
+pub(crate) const J_ENV_ANCESTOR_OF: &str = r####" * @property {(object: string, field: string, target: number, from: number) => boolean} ancestorOf Whether target is from or one of its ancestors: the walk from from through field of the object type, bounded (WG-5510). Throws EvalError when the walk is longer than the limit, returns to a record it visited, or meets a record the snapshot does not cover."####;
+
 pub(crate) const J_ENV_HAS_ROLE: &str = r####" * @property {(role: string) => boolean} hasRole Whether the acting principal holds the role."####;
 
 pub(crate) const J_TYPE_ENV_HEAD: &str = r####"/**
@@ -68,6 +70,8 @@ pub(crate) const J_TYPE_ENV_HEAD: &str = r####"/**
 pub(crate) const J_TYPE_ENV_FIELD_SHAPE: &str = r####" * @property {(through: string | null, name: string) => string} fieldShape The shape of a field that is not a system attribute: of the definition site's record, or, with `through`, of the record that reference field points at. Throws CheckError when the name is not a field id or names no field."####;
 
 pub(crate) const J_TYPE_ENV_FOLLOW: &str = r####" * @property {(field: string) => void} follow Checks that a field of the definition site's record is a single reference to an existing object type; throws CheckError when it is not."####;
+
+pub(crate) const J_TYPE_ENV_ANCESTOR_OF: &str = r####" * @property {(object: string, field: string) => void} ancestorOf Checks that field of the object type object is a single reference to object, so that the walk can follow it; throws CheckError when it is not."####;
 
 pub(crate) const J_TYPE_ENV_HAS_PARAM: &str = r####" * @property {(name: string) => boolean} hasParam Whether the definition site declares the parameter."####;
 

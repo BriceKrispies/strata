@@ -1332,6 +1332,9 @@ fn mentions_through(expr: &Expr) -> bool {
         | Expr::Arith(_, a, b)
         | Expr::MsBetween(a, b)
         | Expr::Concat(a, b) => mentions_through(a) || mentions_through(b),
+        Expr::AncestorOf(a, b, c, d) => {
+            mentions_through(a) || mentions_through(b) || mentions_through(c) || mentions_through(d)
+        }
         Expr::If(a, b, c) => mentions_through(a) || mentions_through(b) || mentions_through(c),
     }
 }
@@ -1363,6 +1366,9 @@ fn reads_a_field(expr: &Expr, named: &dyn Fn(&str) -> bool) -> bool {
         | Expr::Arith(_, a, b)
         | Expr::MsBetween(a, b)
         | Expr::Concat(a, b) => reads_a_field(a, named) || reads_a_field(b, named),
+        Expr::AncestorOf(a, b, c, d) => {
+            [a, b, c, d].iter().any(|item| reads_a_field(item, named))
+        }
         Expr::If(a, b, c) => {
             reads_a_field(a, named) || reads_a_field(b, named) || reads_a_field(c, named)
         }

@@ -19,6 +19,8 @@
 //! error `integer-overflow`, never a wrapped value (D-6540, D-6541); `concat` past 4,096 bytes is
 //! `string-too-long` (D-6542). Like any evaluation error, either fails the decision it belongs to.
 
+use crate::intent::{DomainError, DomainErrorExt, ErrorKind};
+use crate::limits;
 use crate::rules::Lookup;
 use crate::schema::{FieldDef, ObjectTypeDef};
 use crate::state::{Need, Principal, Record, RecordExt};
@@ -71,6 +73,9 @@ fn first_missing(expr: &Expr, env: &Env<'_>, lookup: Lookup<'_>) -> Option<Need>
             };
             lookup.record(object, *target).err().and_then(|e| e.missing)
         }
+        Expr::AncestorOf(x, y, object, via) => first_missing(x, env, lookup)
+            .or_else(|| first_missing(y, env, lookup))
+            .or_else(|| ancestor_missing(x, y, object, via, env, lookup)),
         Expr::Var(..)
         | Expr::Lit(_)
         | Expr::Param(_)
@@ -102,6 +107,75 @@ fn first_missing(expr: &Expr, env: &Env<'_>, lookup: Lookup<'_>) -> Option<Need>
             .or_else(|| first_missing(b, env, lookup))
             .or_else(|| first_missing(c, env, lookup)),
     }
+}
+
+/// The walk of `ancestor_of` (WG-5510): whether `target` is `from` or one of its ancestors through the
+/// single reference field `field` of the object type `object`. The walk reads one record per hop from the
+/// lookup, so it never loads more than `limits::MAX_ANCESTOR_HOPS` records. A record the snapshot does not
+/// cover is an error that names it; a covered record that is absent, or a null reference, ends the walk with
+/// false. A walk longer than the limit, or one that returns to a record it has visited (a cycle), is an error.
+fn ancestor_walk(
+    lookup: Lookup<'_>,
+    object: &str,
+    field: &str,
+    target: &RecordId,
+    from: &RecordId,
+) -> Result<bool, DomainError> {
+    let invalid = |message: String| DomainError::new(ErrorKind::InvalidIntent, message);
+    let object = ObjectTypeId::new(object).map_err(|e| invalid(e.to_string()))?;
+    let field = FieldId::new(field).map_err(|e| invalid(e.to_string()))?;
+    let mut current = *from;
+    let mut visited = BTreeSet::new();
+    let mut hops: u32 = 0;
+    loop {
+        if current == *target {
+            return Ok(true);
+        }
+        if hops == limits::MAX_ANCESTOR_HOPS {
+            return Err(invalid(format!(
+                "ancestor_of: the walk is longer than {} hops",
+                limits::MAX_ANCESTOR_HOPS
+            )));
+        }
+        if !visited.insert(current) {
+            return Err(invalid(format!(
+                "ancestor_of: the references through {field} form a cycle"
+            )));
+        }
+        let Some(record) = lookup.record(&object, current)? else {
+            return Ok(false);
+        };
+        match record.get(&field) {
+            Value::Null => return Ok(false),
+            Value::Ref(next) => current = *next,
+            other => {
+                return Err(invalid(format!(
+                    "ancestor_of: {field} holds {other:?}, not a reference"
+                )))
+            }
+        }
+        hops += 1;
+    }
+}
+
+/// The first record an `ancestor_of` walk needs that the snapshot lacks, when both references are known.
+fn ancestor_missing(
+    x: &Expr,
+    y: &Expr,
+    object: &Expr,
+    via: &Expr,
+    env: &Env<'_>,
+    lookup: Lookup<'_>,
+) -> Option<Need> {
+    let (Ok(Value::Ref(target)), Ok(Value::Ref(from))) = (eval(x, env), eval(y, env)) else {
+        return None;
+    };
+    let (Ok(Value::Str(object)), Ok(Value::Str(via))) = (eval(object, env), eval(via, env)) else {
+        return None;
+    };
+    ancestor_walk(lookup, &object, &via, &target, &from)
+        .err()
+        .and_then(|e| e.missing)
 }
 
 /// Everything an expression may observe.
@@ -226,6 +300,20 @@ impl language::Env for Scopes<'_, '_> {
         Ok(found.map(|found| Box::new(Row(found.as_ref())) as Box<dyn language::Record + '_>))
     }
 
+    fn ancestor_of(
+        &self,
+        object: &str,
+        field: &str,
+        target: &RecordId,
+        from: &RecordId,
+    ) -> Result<bool, EvalError> {
+        let lookup = self
+            .env
+            .lookup
+            .ok_or_else(|| EvalError(format!("{field} cannot be walked here")))?;
+        ancestor_walk(lookup, object, field, target, from).map_err(|e| EvalError(e.message))
+    }
+
     fn param(&self, name: &str) -> Option<Value> {
         self.env.params.get(name).cloned()
     }
@@ -315,6 +403,23 @@ impl language::TypeEnv for TypeEnv<'_> {
 
     fn follow(&self, field: &str) -> Result<(), String> {
         self.target(field).map(|_| ())
+    }
+
+    fn ancestor_of(&self, object: &str, field: &str) -> Result<(), String> {
+        let object_id = ObjectTypeId::new(object).map_err(|e| e.to_string())?;
+        let def = self
+            .objects
+            .get(&object_id)
+            .ok_or_else(|| format!("unknown object type {object}"))?;
+        let field_id = FieldId::new(field).map_err(|e| e.to_string())?;
+        let field_def = def
+            .fields
+            .get(&field_id)
+            .ok_or_else(|| format!("unknown field {field} of {object}"))?;
+        match field_def.ty.ref_target() {
+            Some((target, _, false)) if *target == object_id => Ok(()),
+            _ => Err(format!("{field} is not a single reference to {object}")),
+        }
     }
 
     fn has_param(&self, name: &str) -> bool {

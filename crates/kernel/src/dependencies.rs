@@ -146,6 +146,12 @@ impl Reads {
                     self.expr(schema, base, item);
                 }
             }
+            Expr::AncestorOf(a, b, c, d) => {
+                self.expr(schema, base, a);
+                self.expr(schema, base, b);
+                self.expr(schema, base, c);
+                self.expr(schema, base, d);
+            }
             Expr::Cmp(_, a, b)
             | Expr::In(a, b)
             | Expr::Contains(a, b)

@@ -1276,6 +1276,12 @@ fn followed(expr: &Expr, out: &mut BTreeSet<String>) {
                 followed(item, out);
             }
         }
+        Expr::AncestorOf(a, b, c, d) => {
+            followed(a, out);
+            followed(b, out);
+            followed(c, out);
+            followed(d, out);
+        }
         Expr::Cmp(_, a, b)
         | Expr::In(a, b)
         | Expr::Contains(a, b)
