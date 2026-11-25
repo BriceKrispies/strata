@@ -356,6 +356,7 @@ fn some_policy_could_authorise(
         Intent::DeleteRecord { object, .. } => (Action::Delete, Resource::Object(object.clone())),
         Intent::ChangeSchema { .. } => (Action::Manage, Resource::Schema),
         Intent::AssignRole { .. }
+        | Intent::AssignScopedRole { .. }
         | Intent::RevokeRole { .. }
         | Intent::DefineTeam { .. }
         | Intent::AssignTeamRole { .. }

@@ -169,6 +169,18 @@
 //!      fails to evaluate where the kernel follows it. A read has one record as old and new and
 //!      cannot reach this. Guarded: an update of the corpus never changes a reference, and
 //!      `compare_attributed` fails on an intent that does.
+//!  17. Not exercised, and not mirrored: scoped role assignments, the self-action of an operation,
+//!      the duties the platform keeps apart and the last-owner guard on the paths the generator
+//!      does not draw (D-8403, D-8405, D-8415, D-8426). The generated `intent-decision` refuses
+//!      `AssignScopedRole` with `scoped_role:decided_by_the_kernel`, and its `authorize-needing`,
+//!      `schema-problems`, `operation-problems` and `change-schema` state no scope, no
+//!      `self-action`, no separation (`strata_kernel::duties`, `ConflictingRoles`), no refusal of a
+//!      change to the owner role (`LastOwner`) and no ledger refusal of a correction by the owner
+//!      of the account (`SelfAction`); the generated `tenant-schema` carries `scoped-roles` through
+//!      each change. Mirrored: the kind `LastOwner` of a revocation or a team change that leaves no
+//!      owner (`change-member`, `team-role`, `team-member`). The generator draws no scoped
+//!      assignment, no operation with a self-action, no role that grants `ledger-post` with
+//!      `ledger-read`, no owner-role change and no posting by the owner of the account.
 //!
 //! Every difference that is not compared through an adjustment is guarded, so that a corpus that
 //! grows into one is told to mirror the rule or to count the difference here:
@@ -1072,6 +1084,7 @@ fn redeem() -> TenantOperationDef {
         subject: Some(TenantOperationSubject {
             object: object("note"),
             input: "note".into(),
+            self_action: None,
         }),
         conditions: vec![TenantOperationCondition {
             id: "drafted".into(),

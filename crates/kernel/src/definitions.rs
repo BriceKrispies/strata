@@ -945,6 +945,20 @@ pub fn operation_problems(
                         subject.input, subject.object
                     ));
                 }
+                // D-8405: the field that names the person the subject is about holds text.
+                if let Some(person) = &subject.self_action {
+                    match fields.get(person) {
+                        Some(field) if field.ty == FieldType::Str => {}
+                        Some(_) => problems.push(format!(
+                            "{at}: self-action field {person} of {} is not text",
+                            subject.object
+                        )),
+                        None => problems.push(format!(
+                            "{at}: self-action field {person} is not a field of {}",
+                            subject.object
+                        )),
+                    }
+                }
                 fields
             }
         };

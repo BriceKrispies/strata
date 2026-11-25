@@ -532,6 +532,33 @@ pub fn post_after(
         }
         _ => evidence.push(Check::pass("ledger:owner", "the owner exists")),
     }
+    // D-8426, ADM-1629: nobody corrects their own balance. A posting whose reason is adjust or
+    // reverse is refused when its actor owns the account, whatever roles the actor holds: a role
+    // that gains a permission cannot get around it. A posting that only names the entry it
+    // corrects (a reversal an operation makes of its own earlier posting, such as a reaction
+    // taken back) is no adjustment and is not asked this.
+    if let (LedgerOwner::Principal { principal }, Principal::User(actor)) =
+        (&request.owner, &ctx.principal)
+    {
+        let correction = request.reason == "adjust" || request.reason == "reverse";
+        if correction && principal == actor {
+            return Err(refused(
+                evidence,
+                ErrorKind::SelfAction,
+                "ledger:self_action",
+                format!(
+                    "{actor} does not post an {} to their own account",
+                    request.reason
+                ),
+            ));
+        }
+        if correction {
+            evidence.push(Check::pass(
+                "ledger:self_action",
+                "the actor does not correct their own account",
+            ));
+        }
+    }
     let amount = request.amount.0;
     if amount == 0 || amount.unsigned_abs() > limits::MAX_LEDGER_AMOUNT as u64 {
         return Err(refused(

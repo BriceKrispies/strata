@@ -173,6 +173,7 @@ fn run_intent_unaudited_at(
             if error.kind == ErrorKind::ViewReadOnly {
                 app.audit("view.write_refused", &ctx.correlation, line.clone());
             }
+            audit_separation_refusal(app, ctx, intent, error);
             app.stats.recent_rejections.push(line);
         }
         Err(ExecuteError::Store(error)) => {
@@ -189,6 +190,47 @@ fn run_intent_unaudited_at(
         }
         _ => ApiError::execute(error, anonymous),
     })
+}
+
+/// ADM-1613, ADM-1624, ADM-1629, ADM-1630, ADM-1611: a refusal for acting on oneself, for leaving
+/// the tenant without an owner, for giving one person two duties the platform keeps apart, and
+/// for a scope that names a field the object type does not have is an audit entry of the tenant,
+/// naming the actor, the intent, the kind and the checks that failed, on top of the line the
+/// kernel's rejection already writes to the log.
+fn audit_separation_refusal(
+    app: &App,
+    ctx: &Context,
+    intent: &Intent,
+    error: &strata_kernel::DomainError,
+) {
+    let event = match error.kind {
+        ErrorKind::SelfAction => "refused.self_action",
+        ErrorKind::LastOwner => "refused.last_owner",
+        ErrorKind::ConflictingRoles => "refused.conflicting_roles",
+        ErrorKind::ScopeUnknownField => "refused.scope_unknown_field",
+        _ => return,
+    };
+    let failed: Vec<&str> = error
+        .evidence
+        .iter()
+        .filter(|check| !check.passed)
+        .map(|check| check.rule.as_str())
+        .collect();
+    app.audit(
+        event,
+        &ctx.correlation,
+        json!({
+            "tenant": ctx.tenant.as_str(),
+            "intent": intent.name(),
+            "kind": format!("{:?}", error.kind),
+            "actor": match &ctx.principal {
+                strata_kernel::Principal::User(id) => json!(id.as_str()),
+                other => json!(format!("{other:?}").to_lowercase()),
+            },
+            "failed": failed,
+            "message": error.message,
+        }),
+    );
 }
 
 fn object_id(name: &str) -> Result<ObjectTypeId, ApiError> {

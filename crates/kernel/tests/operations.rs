@@ -55,6 +55,7 @@ fn feature() -> TenantOperationDef {
         subject: Some(TenantOperationSubject {
             object: object("note"),
             input: "note".into(),
+            self_action: None,
         }),
         conditions: vec![TenantOperationCondition {
             id: "published".into(),
@@ -115,6 +116,7 @@ fn discard() -> TenantOperationDef {
         subject: Some(TenantOperationSubject {
             object: object("note"),
             input: "note".into(),
+            self_action: None,
         }),
         conditions: vec![],
         steps: vec![TenantOperationStep::DeleteRecord {

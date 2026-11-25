@@ -161,6 +161,20 @@ pub fn assigned_roles(
     roles
 }
 
+/// The principals who hold the `owner` role in effect, directly or through a team (ADM-1081,
+/// ADM-1624): what a path that disables an owner outside the kernel counts.
+pub fn owners_of(tenant: &TenantState) -> BTreeSet<PrincipalId> {
+    let mut candidates: BTreeSet<&PrincipalId> = tenant.members.keys().collect();
+    for team in tenant.schema.all_teams() {
+        candidates.extend(team.members.iter());
+    }
+    candidates
+        .into_iter()
+        .filter(|p| assigned_roles(&tenant.members, &tenant.schema, p).contains(&owner_role()))
+        .cloned()
+        .collect()
+}
+
 /// The roles a principal holds in a tenant, directly or through a team. Everyone but the
 /// system holds `public`, except an automation principal, which holds the run-as roles of its
 /// automation and no other ([`crate::automation`]).
@@ -583,6 +597,97 @@ pub(crate) fn authorize_needing(
                     checks.push(Check::fail(rule, format!("{condition}: {e}")));
                 }
             },
+        }
+    }
+    // D-8403, ADM-1611: the roles the principal holds only through a scope (crate::scoped) give
+    // their permissions and policies on this object type where the scope holds on the record. The
+    // scope is ANDed into the condition of each policy, so a scoped role never reaches a record
+    // the role itself would not, and these roles are read nowhere else.
+    if let (Principal::User(id), Resource::Object(object)) = (principal, resource) {
+        for scoped in crate::scoped::of(schema, id).filter(|s| s.object == *object) {
+            let rule = format!("scope:{}", scoped.role);
+            match expr::eval(&scoped.scope, &env) {
+                Ok(Value::Bool(true)) => {}
+                Ok(other) => {
+                    checks.push(Check::fail(
+                        rule,
+                        format!(
+                            "{} is {}",
+                            scoped.scope,
+                            if other.is_null() { "null" } else { "false" }
+                        ),
+                    ));
+                    continue;
+                }
+                Err(e) => {
+                    if needed.is_none() {
+                        needed = expr::missing(&scoped.scope, &env);
+                    }
+                    checks.push(Check::fail(rule, format!("{}: {e}", scoped.scope)));
+                    continue;
+                }
+            }
+            if let Some(verb) = ObjectAction::of(action) {
+                if schema
+                    .grants_of(&scoped.role)
+                    .contains(&Grant::Object(object.clone(), verb))
+                {
+                    return (
+                        true,
+                        vec![Check::pass(
+                            format!("permission:scoped:{}", scoped.role),
+                            format!("{what} where {}", scoped.scope),
+                        )],
+                        None,
+                    );
+                }
+            }
+            for policy in schema.policies.values() {
+                let applies = policy.role == scoped.role
+                    && policy.actions.contains(&action)
+                    && match (&policy.resource, resource) {
+                        (Resource::AnyObject, Resource::Object(_)) => true,
+                        (a, b) => a == b,
+                    };
+                if !applies {
+                    continue;
+                }
+                let rule = format!("policy:{}:scoped:{}", policy.id, scoped.role);
+                match &policy.condition {
+                    None => {
+                        return (
+                            true,
+                            vec![Check::pass(rule, format!("{what} where {}", scoped.scope))],
+                            None,
+                        )
+                    }
+                    Some(condition) => match expr::eval(condition, &env) {
+                        Ok(Value::Bool(true)) => {
+                            return (
+                                true,
+                                vec![Check::pass(
+                                    rule,
+                                    format!("{what} where {condition} and {}", scoped.scope),
+                                )],
+                                None,
+                            )
+                        }
+                        Ok(other) => checks.push(Check::fail(
+                            rule,
+                            format!(
+                                "{condition} is {}",
+                                if other.is_null() { "null" } else { "false" }
+                            ),
+                        )),
+                        Err(e) => {
+                            if needed.is_none() {
+                                needed = expr::missing(condition, &env);
+                            }
+                            checks.push(Check::fail(rule, format!("{condition}: {e}")));
+                        }
+                    },
+                }
+            }
         }
     }
     if checks.is_empty() {

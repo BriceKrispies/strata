@@ -1096,7 +1096,7 @@ fn no_sequence_of_revocations_leaves_a_tenant_without_an_owner() {
             principal: principal_id("alpha:writer1"),
         },
     ));
-    assert_eq!(error.kind, ErrorKind::InvalidIntent);
+    assert_eq!(error.kind, ErrorKind::LastOwner);
     let error = refused(step(
         &world,
         "alpha",
@@ -1107,7 +1107,7 @@ fn no_sequence_of_revocations_leaves_a_tenant_without_an_owner() {
             role: role("owner"),
         },
     ));
-    assert_eq!(error.kind, ErrorKind::InvalidIntent);
+    assert_eq!(error.kind, ErrorKind::LastOwner);
 
     // With another owner in place, leaving is allowed.
     let world = must(

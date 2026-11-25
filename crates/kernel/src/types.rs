@@ -15,8 +15,8 @@ pub use strata_model_core::types::{
     FieldType, Grant, Intent, InvitationDef, InvitationId, Need, ObjectAction, ObjectTypeDef,
     ObjectTypeId, OnDelete, OrderKey, Output, PageCursor, Permission, PolicyDef, PolicyId,
     Principal, PrincipalId, QueryDef, QueryId, ReadRequest, ReadResult, Record, RecordId, Resource,
-    RoleDef, RoleId, RowJoin, RowMark, SchemaChange, SchemaVersion, Scope, SessionId, State,
-    StateDelta, StateRevision, TeamDef, TeamId, TenantId, TenantSchema, TenantState, Value,
+    RoleDef, RoleId, RowJoin, RowMark, SchemaChange, SchemaVersion, Scope, ScopedRole, SessionId,
+    State, StateDelta, StateRevision, TeamDef, TeamId, TenantId, TenantSchema, TenantState, Value,
     ViewDef, ViewId, ViewSection, WorkflowDef, WorkflowId, WorkflowTransition,
 };
 

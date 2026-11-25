@@ -391,6 +391,49 @@ fn clean_name(value: &Json) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+/// ADM-1624: a person whose provider deactivates or deletes them leaves the tenant, and the
+/// tenant keeps an owner. Counts the people who hold the owner role (directly or through a team)
+/// and are not deactivated; when `principal` is the last of them, nothing changes and the
+/// provider is answered 409 with the kind `LastOwner`. The refusal is audited. It runs before
+/// the person is touched, so a refused deactivation or deletion leaves their sessions, tokens and
+/// roles as they were.
+fn last_owner_refusal(
+    app: &App,
+    caller: &Caller,
+    principal: &PrincipalId,
+    action: &str,
+) -> Result<Option<Answer>, ApiError> {
+    let Some(state) = app.store.load(&caller.site, &[])?.tenant else {
+        return Ok(None);
+    };
+    let owners = strata_kernel::rules::owners_of(&state);
+    if !owners.contains(principal) {
+        return Ok(None);
+    }
+    for other in owners.iter().filter(|other| *other != principal) {
+        if !super::is_disabled(app, &caller.site, other)? {
+            return Ok(None);
+        }
+    }
+    app.audit(
+        "scim.refused.last_owner",
+        &caller.correlation,
+        json!({
+            "tenant": caller.site.as_str(),
+            "principal": principal.as_str(),
+            "action": action,
+            "kind": "LastOwner",
+        }),
+    );
+    let (status, mut body) = error(
+        409,
+        "The tenant keeps at least one active owner: hand the ownership on first.",
+        Some("invalidValue"),
+    );
+    body["kind"] = json!("LastOwner");
+    Ok(Some((status, body)))
+}
+
 /// Deactivate or reactivate. Deactivation ends the person's sessions and, because the person is
 /// no subject of a token any more, the tokens made in their name (FED-015).
 fn set_active(
@@ -637,6 +680,13 @@ fn replace_user(app: &App, caller: &Caller, id: &str, body: &Json) -> Result<Ans
         let Some(active) = flag(value) else {
             return Ok(error(400, "active is a boolean.", Some("invalidValue")));
         };
+        if !active && user.active {
+            let principal = PrincipalId::new(user.principal.clone())
+                .map_err(|e| ApiError::hidden(ErrorCode::Internal, e.to_string()))?;
+            if let Some(refusal) = last_owner_refusal(app, caller, &principal, "deactivate")? {
+                return Ok(refusal);
+            }
+        }
         set_active(app, &caller.site, &caller.correlation, &mut user, active)?;
     }
     save_user(app, &caller.site, &user)?;
@@ -736,6 +786,13 @@ fn patch_user(app: &App, caller: &Caller, id: &str, body: &Json) -> Result<Answe
         user.display_name = name;
     }
     if let Some(active) = active {
+        if !active && user.active {
+            let principal = PrincipalId::new(user.principal.clone())
+                .map_err(|e| ApiError::hidden(ErrorCode::Internal, e.to_string()))?;
+            if let Some(refusal) = last_owner_refusal(app, caller, &principal, "deactivate")? {
+                return Ok(refusal);
+            }
+        }
         set_active(app, &caller.site, &caller.correlation, &mut user, active)?;
     }
     save_user(app, &caller.site, &user)?;
@@ -748,6 +805,10 @@ fn delete_user(app: &App, caller: &Caller, id: &str) -> Result<Answer, ApiError>
     };
     let principal = PrincipalId::new(user.principal.clone())
         .map_err(|e| ApiError::hidden(ErrorCode::Internal, e.to_string()))?;
+    // The check comes first: a refused deletion changes nothing of the person (ADM-1624).
+    if let Some(refusal) = last_owner_refusal(app, caller, &principal, "delete")? {
+        return Ok(refusal);
+    }
     // Deactivated first, so that nothing issued in their name is accepted from here on.
     put(
         app,

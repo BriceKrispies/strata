@@ -308,6 +308,7 @@ mod tests {
             subject: Some(TenantOperationSubject {
                 object: object("note"),
                 input: "note".into(),
+                self_action: None,
             }),
             conditions: vec![TenantOperationCondition {
                 id: "published".into(),

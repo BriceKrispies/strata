@@ -357,6 +357,15 @@ pub fn decide(
             next_schema.put_team(def);
         }
     }
+    // D-8403: the scoped role assignments of the subject go with the subject.
+    let scoped_before = next_schema.scoped_roles.as_ref().map_or(0, Vec::len);
+    if let Some(held) = &mut next_schema.scoped_roles {
+        held.retain(|assignment| assignment.principal != *subject);
+        if held.is_empty() {
+            next_schema.scoped_roles = None;
+        }
+    }
+    let scoped_removed = scoped_before != next_schema.scoped_roles.as_ref().map_or(0, Vec::len);
     let mut touched_invitations = Vec::new();
     for offer in schema.all_invitations() {
         let issued_open = offer.created_by == *subject
@@ -380,13 +389,15 @@ pub fn decide(
             touched_invitations.push(offer.id.clone());
         }
     }
-    let memberships_changed =
-        member_removed || !changed_teams.is_empty() || !touched_invitations.is_empty();
+    let memberships_changed = member_removed
+        || scoped_removed
+        || !changed_teams.is_empty()
+        || !touched_invitations.is_empty();
     if memberships_changed {
         let before = owners(&tenant.members, schema).len();
         if before > 0 && owners(&members, &next_schema).is_empty() {
             return Err(refuse(
-                ErrorKind::InvalidIntent,
+                ErrorKind::LastOwner,
                 "erasure:an_owner_remains",
                 "a tenant keeps at least one owner: hand the ownership on before erasing the last owner",
             ));
@@ -402,7 +413,7 @@ pub fn decide(
             roles: BTreeSet::new(),
         });
     }
-    if !changed_teams.is_empty() || !touched_invitations.is_empty() {
+    if !changed_teams.is_empty() || !touched_invitations.is_empty() || scoped_removed {
         ops.push(DeltaOp::PutSchema(Arc::new(next_schema)));
     }
     if member_removed || !changed_teams.is_empty() {

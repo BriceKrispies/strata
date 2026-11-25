@@ -19,6 +19,7 @@ impl IntentExt for Intent {
             Intent::CreateTenant { .. } => "create_tenant",
             Intent::ChangeSchema { .. } => "change_schema",
             Intent::AssignRole { .. } => "assign_role",
+            Intent::AssignScopedRole { .. } => "assign_scoped_role",
             Intent::RevokeRole { .. } => "revoke_role",
             Intent::DefineTeam { .. } => "define_team",
             Intent::AssignTeamRole { .. } => "assign_team_role",

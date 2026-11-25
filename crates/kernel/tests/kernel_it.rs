@@ -69,5 +69,7 @@ mod computed;
 #[path = "role_widening.rs"]
 mod role_widening;
 
+#[path = "role_duties.rs"]
+mod role_duties;
 #[path = "visibility.rs"]
 mod visibility;

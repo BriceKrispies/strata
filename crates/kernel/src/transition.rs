@@ -4,7 +4,7 @@ use crate::definitions::{operation_powers, uniques, AUTOMATIONS_DEFINE};
 use crate::dependencies::{self, Assessment, ChangeClass, DependencyGraph};
 use crate::erasure::BATCH;
 use crate::evolution::{self, PinBook};
-use crate::expr::{self, Env};
+use crate::expr::{self, Env, Expr};
 use crate::intent::{
     Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, DomainEvent, Effect, ErrorKind,
     EventBody, ExistingData, Intent, Output, SchemaChange, StateDelta, Transition,
@@ -21,8 +21,8 @@ use crate::schema::{
 use crate::state::{Need, Principal, Record, RecordExt, State, TenantState, TenantStateExt};
 use crate::types::{
     owner_role, public_role, refs_in, ConstraintId, FieldId, FieldType, FieldTypeExt, InvitationId,
-    ObjectTypeId, OnDelete, PrincipalId, RecordId, RoleId, SchemaVersion, StateRevision, TeamId,
-    TenantOperationDef, Timestamp, UniqueDef, Value, ValueExt, ViewId,
+    ObjectTypeId, OnDelete, PrincipalId, RecordId, RoleId, SchemaVersion, ScopedRole,
+    StateRevision, TeamId, TenantOperationDef, Timestamp, UniqueDef, Value, ValueExt, ViewId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -111,6 +111,12 @@ pub fn transition_pinned(
             &mut pins_out,
         )?,
         Intent::AssignRole { principal, role } => change_member(&mut draft, principal, role, true)?,
+        Intent::AssignScopedRole {
+            principal,
+            role,
+            object,
+            scope,
+        } => assign_scoped_role(&mut draft, principal, role, object, scope)?,
         Intent::RevokeRole { principal, role } => {
             change_member(&mut draft, principal, role, false)?
         }
@@ -244,9 +250,9 @@ const TEAM_PREFIX: &str = "team:";
 fn refuse_reserved_principals(intent: &Intent, ctx: &Context) -> Result<(), DomainError> {
     let named: Option<&PrincipalId> = match intent {
         Intent::CreateTenant { owner, .. } => Some(owner),
-        Intent::AssignRole { principal, .. } | Intent::AddTeamMember { principal, .. } => {
-            Some(principal)
-        }
+        Intent::AssignRole { principal, .. }
+        | Intent::AssignScopedRole { principal, .. }
+        | Intent::AddTeamMember { principal, .. } => Some(principal),
         _ => None,
     };
     let caller = match &ctx.principal {
@@ -293,6 +299,7 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
     match intent {
         Intent::CreateTenant { .. }
         | Intent::AssignRole { .. }
+        | Intent::AssignScopedRole { .. }
         | Intent::RevokeRole { .. }
         | Intent::DefineTeam { .. }
         | Intent::AssignTeamRole { .. }
@@ -1199,12 +1206,22 @@ fn change_member(
         .get(principal)
         .cloned()
         .unwrap_or_default();
+    let mut members = draft.tenant.members.clone();
+    // D-8403: taking a role away takes the scoped assignments of it too.
+    let mut schema_after: Option<TenantSchema> = None;
     if grant {
         roles.insert(role.clone());
+        members.insert(principal.clone(), roles.clone());
+        require_duties_apart(draft, &members, &draft.tenant.schema)?;
     } else {
         roles.remove(role);
-        let mut members = draft.tenant.members.clone();
         members.insert(principal.clone(), roles.clone());
+        let (kept, changed) = crate::scoped::without(&draft.tenant.schema, principal, role);
+        if changed {
+            let mut schema = TenantSchema::clone(&draft.tenant.schema);
+            schema.scoped_roles = kept;
+            schema_after = Some(schema);
+        }
         require_an_owner_remains(draft, &members, &draft.tenant.schema)?;
     }
     let through_teams = assigned_roles(&BTreeMap::new(), &draft.tenant.schema, principal);
@@ -1217,11 +1234,94 @@ fn change_member(
         principal: principal.clone(),
         roles: roles.clone(),
     });
+    if let Some(schema) = schema_after {
+        draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
+    }
     draft.events.push(EventBody::MemberChanged {
         principal: principal.clone(),
         roles: roles.union(&through_teams).cloned().collect(),
     });
     Ok(Output::Member)
+}
+
+/// D-8403, ADM-1611: give a principal a role narrowed by a predicate over the records of one
+/// object type. Asked as much of the acting principal as a direct assignment of the role
+/// (ADM-152): it must hold every permission and capability the role grants, so a scope never
+/// lets someone hand out a role they could not hand out whole. The owner role and `public` are
+/// not narrowed. The predicate is checked against the fields of the object type, and a field it
+/// does not declare is `ScopeUnknownField`. The assignment replaces one of the same role to the
+/// same principal on the same object type, and adds nothing to the roles the principal holds
+/// (see [`crate::scoped`]), so it is not a way around the owner count or the widening check.
+fn assign_scoped_role(
+    draft: &mut Draft<'_>,
+    principal: &PrincipalId,
+    role: &RoleId,
+    object: &ObjectTypeId,
+    scope: &Expr,
+) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    if !draft.tenant.schema.roles.contains_key(role) {
+        return Err(draft.reject(ErrorKind::UnknownRole, format!("no role {role}")));
+    }
+    if *role == public_role() || *role == owner_role() {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            format!("the role {role} is not narrowed by a scope"),
+        ));
+    }
+    if crate::products::is_staging_role(&role.0) {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            format!("the role {role} is reserved for a staged upgrade and is not assigned"),
+        ));
+    }
+    if let Some((kind, message)) =
+        crate::scoped::predicate_problem(&draft.tenant.schema, object, scope)
+    {
+        draft
+            .evidence
+            .push(Check::fail("scope:predicate", message.clone()));
+        return Err(draft.reject(kind, message));
+    }
+    require_conferrable(draft, [role])?;
+    let mut schema = TenantSchema::clone(&draft.tenant.schema);
+    let held = schema.scoped_roles.get_or_insert_with(Vec::new);
+    held.retain(|a| !(a.principal == *principal && a.role == *role && a.object == *object));
+    held.push(ScopedRole {
+        principal: principal.clone(),
+        role: role.clone(),
+        object: object.clone(),
+        scope: scope.clone(),
+    });
+    if held.len() > crate::scoped::MAX_SCOPED_ROLES {
+        return Err(draft.reject(
+            ErrorKind::LimitExceeded,
+            format!(
+                "more than {} scoped role assignments",
+                crate::scoped::MAX_SCOPED_ROLES
+            ),
+        ));
+    }
+    require_duties_apart(draft, &draft.tenant.members, &schema)?;
+    draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
+    Ok(Output::Member)
+}
+
+/// ADM-1630: a change must not give a principal two duties the platform keeps apart
+/// ([`crate::duties`]). `members` and the schema are the state after the change; a pair the
+/// tenant held before it is not made worse by it. The refusal is `ConflictingRoles`.
+fn require_duties_apart(
+    draft: &Draft<'_>,
+    members: &BTreeMap<PrincipalId, BTreeSet<RoleId>>,
+    schema: &TenantSchema,
+) -> Result<(), DomainError> {
+    match crate::duties::made_by(
+        (&draft.tenant.members, &draft.tenant.schema),
+        (members, schema),
+    ) {
+        Some(message) => Err(draft.reject(ErrorKind::ConflictingRoles, message)),
+        None => Ok(()),
+    }
 }
 
 /// ADM-152: every role in `roles` must be one the acting principal may confer, which is to say
@@ -1273,10 +1373,7 @@ fn require_an_owner_remains(
 ) -> Result<(), DomainError> {
     let before = effective_owners(&draft.tenant.members, &draft.tenant.schema).len();
     if before > 0 && effective_owners(members, schema).is_empty() {
-        return Err(draft.reject(
-            ErrorKind::InvalidIntent,
-            "a tenant keeps at least one owner",
-        ));
+        return Err(draft.reject(ErrorKind::LastOwner, "a tenant keeps at least one owner"));
     }
     Ok(())
 }
@@ -1354,7 +1451,9 @@ fn team_role(
     let schema = TenantSchema::clone(&draft.tenant.schema);
     let mut after = schema.clone();
     after.put_team(def.clone());
-    if !grant {
+    if grant {
+        require_duties_apart(draft, &draft.tenant.members, &after)?;
+    } else {
         require_an_owner_remains(draft, &draft.tenant.members, &after)?;
     }
     let lost: Vec<PrincipalId> = if grant {
@@ -1398,7 +1497,9 @@ fn team_member(
     // The member is no longer in `def.members` after a removal, so it gets its own event here.
     let mut after = schema.clone();
     after.put_team(def.clone());
-    if !add {
+    if add {
+        require_duties_apart(draft, &draft.tenant.members, &after)?;
+    } else {
         require_an_owner_remains(draft, &draft.tenant.members, &after)?;
     }
     let roles = assigned_roles(&draft.tenant.members, &after, principal);
@@ -1643,6 +1744,12 @@ fn redeem_invitation(
     if let Some(stored) = schema.invitation_mut(invitation) {
         stored.redeemed_by = Some(redeemer.clone());
     }
+    // ADM-1624, ADM-1630: redeeming gives roles, so it can end up with two duties kept apart in
+    // one person, and it is checked for the owner too (it never takes one away).
+    let mut after = tenant.members.clone();
+    after.insert(redeemer.clone(), roles.clone());
+    require_duties_apart(draft, &after, &schema)?;
+    require_an_owner_remains(draft, &after, &schema)?;
     let effective: BTreeSet<RoleId> = {
         let mut members = tenant.members.clone();
         members.insert(redeemer.clone(), roles.clone());
@@ -2271,6 +2378,7 @@ fn change_schema(
         ));
     }
     require_definition_authority(draft, changes)?;
+    require_owner_role_kept(draft, changes)?;
     // D-6582, INT-1582: an entity a product owns changes only through that product.
     if let Some(message) = crate::products::foreign_change(&draft.tenant.schema, changes) {
         return Err(draft.reject(ErrorKind::InvalidSchema, message));
@@ -2491,6 +2599,11 @@ fn change_schema(
         return Err(draft.reject(ErrorKind::InvalidSchema, message));
     }
 
+    // ADM-1624, ADM-1630: what the schema now says each role grants must neither leave the tenant
+    // without an owner nor give a principal two duties the platform keeps apart.
+    require_an_owner_remains(draft, &draft.tenant.members, &migration.schema)?;
+    require_duties_apart(draft, &draft.tenant.members, &migration.schema)?;
+
     let version = migration.schema.version;
     draft
         .ops
@@ -2520,6 +2633,25 @@ fn change_schema(
         draft.events.push(EventBody::RecordDeleted { before });
     }
     Ok(Output::Schema { version })
+}
+
+/// ADM-1624: a change of role definitions does not remove or redefine the built-in `owner` role
+/// while the tenant has an owner, because every owner would be demoted with it. A product's
+/// install, upgrade and staged upgrade reach the schema through this same change, so the rule
+/// holds for them too. The refusal is `LastOwner`.
+fn require_owner_role_kept(draft: &Draft<'_>, changes: &[SchemaChange]) -> Result<(), DomainError> {
+    let touches_owner = changes.iter().any(|change| match change {
+        SchemaChange::RemoveRole(role) => *role == owner_role(),
+        SchemaChange::DefineRole(def) => def.id == owner_role(),
+        _ => false,
+    });
+    if touches_owner && !effective_owners(&draft.tenant.members, &draft.tenant.schema).is_empty() {
+        return Err(draft.reject(
+            ErrorKind::LastOwner,
+            "a tenant keeps at least one owner: the owner role is not redefined or removed",
+        ));
+    }
+    Ok(())
 }
 
 /// The authority a change of definitions asks of the principal making it, beyond Manage on

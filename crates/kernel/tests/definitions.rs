@@ -144,6 +144,7 @@ fn redeem() -> TenantOperationDef {
         subject: Some(TenantOperationSubject {
             object: object("note"),
             input: "note".into(),
+            self_action: None,
         }),
         conditions: vec![TenantOperationCondition {
             id: "drafted".into(),
@@ -429,6 +430,7 @@ fn the_bounds_and_names_of_a_tenant_operation_are_checked_when_it_is_defined() {
     op.subject = Some(TenantOperationSubject {
         object: object("tag"),
         input: "note".into(),
+        self_action: None,
     });
     assert_eq!(
         problem(op),

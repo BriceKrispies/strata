@@ -588,3 +588,171 @@ async fn a_provisioning_token_records_its_use_and_can_expire() {
         .await;
     assert_eq!(status, 422);
 }
+
+/// The kernel decides `intent` for the tenant as `principal`, on the store of the backend.
+fn decide(backend: &Backend, principal: &PrincipalId, intent: strata_kernel::Intent) {
+    let context = strata_kernel::Context {
+        tenant: TenantId::new("fieldnotes").unwrap(),
+        principal: strata_kernel::Principal::User(principal.clone()),
+        session: None,
+        now: Timestamp(now_ms()),
+        correlation: "t-last-owner".into(),
+        verified_address: None,
+        idempotency_key: None,
+        language: None,
+        hop: None,
+    };
+    strata_storage_api::execute(backend.store.as_ref(), &intent, &context)
+        .unwrap_or_else(|e| panic!("the kernel refused: {e:?}"));
+}
+
+/// Verifies: ADM-1624
+///
+/// The identity provider cannot deactivate or delete the last owner: the answer is 409 with the
+/// kind `LastOwner`, the person is left active and whole, and the refusal is audited. With another
+/// active owner both are accepted, and a deactivated owner does not count as one.
+#[tokio::test]
+async fn a_provider_cannot_deactivate_or_delete_the_last_owner() {
+    let backend = start().await;
+    let owner = backend.owner().await;
+    let token = backend.provisioning_token("fieldnotes", &owner).await;
+    let tenant = TenantId::new("fieldnotes").unwrap();
+    let state = backend.store.load(&tenant, &[]).unwrap().tenant.unwrap();
+    let admin = strata_kernel::rules::owners_of(&state)
+        .into_iter()
+        .next()
+        .expect("the tenant has an owner");
+
+    let make = |name: &'static str| {
+        let (backend, token) = (&backend, token.clone());
+        async move {
+            let (_, user) = backend
+                .scim("fieldnotes", Some(&token), "POST", "Users", person(name))
+                .await;
+            user["id"].as_str().unwrap().to_string()
+        }
+    };
+    let owner_role = strata_kernel::RoleId::new("owner").unwrap();
+    let first = make("first@acme.example").await;
+    let second = make("second@acme.example").await;
+    for id in [&first, &second] {
+        decide(
+            &backend,
+            &admin,
+            strata_kernel::Intent::AssignRole {
+                principal: PrincipalId::new(id.as_str()).unwrap(),
+                role: owner_role.clone(),
+            },
+        );
+    }
+    // The administrator steps down: the two provisioned owners are the tenant's owners.
+    decide(
+        &backend,
+        &admin,
+        strata_kernel::Intent::RevokeRole {
+            principal: admin.clone(),
+            role: owner_role.clone(),
+        },
+    );
+    let deactivate = json!({ "Operations": [{ "op": "replace", "value": { "active": false } }] });
+
+    // One of two owners may go: deactivated, the other is now the last one.
+    let (status, _) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "PATCH",
+            &format!("Users/{first}"),
+            deactivate.clone(),
+        )
+        .await;
+    assert_eq!(status, 200);
+
+    // The last active owner: neither the deactivation nor the deletion is accepted.
+    let (status, body) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "PATCH",
+            &format!("Users/{second}"),
+            deactivate.clone(),
+        )
+        .await;
+    assert_eq!(
+        (status, body["kind"].as_str()),
+        (409, Some("LastOwner")),
+        "{body}"
+    );
+    let (status, body) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "PUT",
+            &format!("Users/{second}"),
+            json!({ "active": false }),
+        )
+        .await;
+    assert_eq!(
+        (status, body["kind"].as_str()),
+        (409, Some("LastOwner")),
+        "{body}"
+    );
+    let (status, body) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "DELETE",
+            &format!("Users/{second}"),
+            Json::Null,
+        )
+        .await;
+    assert_eq!(
+        (status, body["kind"].as_str()),
+        (409, Some("LastOwner")),
+        "{body}"
+    );
+    // Nothing of the person changed: still active, still an owner.
+    let (status, body) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "GET",
+            &format!("Users/{second}"),
+            Json::Null,
+        )
+        .await;
+    assert_eq!((status, body["active"].as_bool()), (200, Some(true)));
+    assert_eq!(backend.roles_of(&second).await, ["owner"]);
+
+    // Two refusals of the deactivation and one of the deletion are in the audit trail.
+    let audited: Vec<String> = backend
+        .store
+        .audit_list(&tenant, Some("audit"), 1_000)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.event == "scim.refused.last_owner")
+        .map(|entry| entry.data)
+        .collect();
+    assert_eq!(audited.len(), 3, "{audited:?}");
+    assert!(audited.iter().any(|line| line.contains("\"delete\"")));
+
+    // With the administrator an owner again, the last provisioned owner may be deleted.
+    decide(
+        &backend,
+        &PrincipalId::new(second.as_str()).unwrap(),
+        strata_kernel::Intent::AssignRole {
+            principal: admin.clone(),
+            role: owner_role,
+        },
+    );
+    let (status, _) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "DELETE",
+            &format!("Users/{second}"),
+            Json::Null,
+        )
+        .await;
+    assert_eq!(status, 204);
+}
