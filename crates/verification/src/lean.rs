@@ -108,52 +108,79 @@ fn field_tokens(rng: &mut Lcg) -> String {
     tokens.join(" ")
 }
 
+/// One scenario, named `s<n>`, written from the generator's random stream.
+fn write_scenario(rng: &mut Lcg, n: usize, out: &mut String) {
+    out.push_str(&format!("scenario s{n}\n"));
+    for _ in 0..(10 + rng.below(16)) {
+        let tenant = match rng.below(12) {
+            0 => 3,
+            1 | 2 => 2,
+            _ => 1,
+        };
+        let home = if tenant == 2 { 200 } else { 100 };
+        let principal = match rng.below(14) {
+            0 => 999,
+            1 => {
+                if home == 100 {
+                    201
+                } else {
+                    101
+                }
+            }
+            2 | 3 => home,
+            4 | 5 => home + 1,
+            6..=9 => home + 2,
+            _ => home + 3,
+        };
+        let op = match rng.below(20) {
+            0..=7 => format!("create {}", field_tokens(rng)),
+            8..=13 => format!("update {} {}", 1 + rng.below(6), field_tokens(rng)),
+            14..=16 => format!("delete {}", 1 + rng.below(6)),
+            17 => format!("require {} strict", 1 + rng.below(3)),
+            _ => format!("require {} lax", 1 + rng.below(3)),
+        };
+        // Schema changes are mostly attempted by the owner, so that both strict outcomes occur.
+        let principal = if op.starts_with("require") && rng.below(4) != 0 {
+            home
+        } else {
+            principal
+        };
+        out.push_str(format!("op {tenant} {principal} {op}").trim_end());
+        out.push('\n');
+    }
+    out.push_str("end\n");
+}
+
+/// The generator behind [`scenarios`], read a batch at a time. Each batch continues the random
+/// stream and numbers its scenarios on from the last, so the batches of one stream, concatenated,
+/// are exactly what [`scenarios`] writes for the same seed and total count.
+pub struct ScenarioStream {
+    rng: Lcg,
+    next: usize,
+}
+
+impl ScenarioStream {
+    pub fn new(seed: u64) -> Self {
+        Self {
+            rng: Lcg(seed),
+            next: 0,
+        }
+    }
+
+    /// The next `count` scenarios, as a scenario file.
+    pub fn batch(&mut self, count: usize) -> String {
+        let mut out = String::new();
+        for n in self.next..self.next + count {
+            write_scenario(&mut self.rng, n, &mut out);
+        }
+        self.next += count;
+        out
+    }
+}
+
 /// The scenario file both sides run. Deterministic in `seed`.
 pub fn scenarios(seed: u64, count: usize) -> String {
-    let mut rng = Lcg(seed);
-    let mut out = String::new();
-    for n in 0..count {
-        out.push_str(&format!("scenario s{n}\n"));
-        for _ in 0..(10 + rng.below(16)) {
-            let tenant = match rng.below(12) {
-                0 => 3,
-                1 | 2 => 2,
-                _ => 1,
-            };
-            let home = if tenant == 2 { 200 } else { 100 };
-            let principal = match rng.below(14) {
-                0 => 999,
-                1 => {
-                    if home == 100 {
-                        201
-                    } else {
-                        101
-                    }
-                }
-                2 | 3 => home,
-                4 | 5 => home + 1,
-                6..=9 => home + 2,
-                _ => home + 3,
-            };
-            let op = match rng.below(20) {
-                0..=7 => format!("create {}", field_tokens(&mut rng)),
-                8..=13 => format!("update {} {}", 1 + rng.below(6), field_tokens(&mut rng)),
-                14..=16 => format!("delete {}", 1 + rng.below(6)),
-                17 => format!("require {} strict", 1 + rng.below(3)),
-                _ => format!("require {} lax", 1 + rng.below(3)),
-            };
-            // Schema changes are mostly attempted by the owner, so that both strict outcomes occur.
-            let principal = if op.starts_with("require") && rng.below(4) != 0 {
-                home
-            } else {
-                principal
-            };
-            out.push_str(format!("op {tenant} {principal} {op}").trim_end());
-            out.push('\n');
-        }
-        out.push_str("end\n");
-    }
-    out
+    ScenarioStream::new(seed).batch(count)
 }
 
 fn id<T: TryFrom<String>>(text: String) -> T

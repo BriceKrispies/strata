@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
+use strata_verification::drt;
 use strata_verification::lean::{
     compare_outputs, hand_written, kernel_output, model_output, parse_audit, scenarios, verify,
     FIXTURE_COUNT, FIXTURE_SEED,
@@ -373,6 +374,25 @@ fn words(code: &str) -> impl Iterator<Item = (&str, &str)> {
         }
     }
     out.into_iter()
+}
+
+/// The differential harness (`drt::run`, the example `drt`) runs end to end through the model: a
+/// small count, in batches, with one Lean process per batch. The minimiser's logic is tested
+/// without Lean, in `tests/minimise.rs`.
+#[test]
+fn the_differential_harness_runs_through_the_model() {
+    let _lake = require_lake();
+    let out = std::env::temp_dir().join(format!("strata-drt-smoke-{}", std::process::id()));
+    let totals = drt::run(&lean_dir(), &out, DEFAULT_DIFF_SEED, 20, 8).expect("the harness runs");
+    let _ = std::fs::remove_dir_all(&out);
+    assert_eq!(totals.scenarios, 20);
+    assert_eq!(totals.batches, 3);
+    assert!(totals.operations >= 20 * 10);
+    assert_eq!(
+        totals.disagreements, 0,
+        "the model and the kernel differ: {:?}",
+        totals.minimised
+    );
 }
 
 #[test]

@@ -241,6 +241,28 @@ testing of the Rust kernel against the model, at scale) WG-5651, A1 WG-5373, A2 
 WG-5653, A3 WG-5658, A4 (requirements point to theorems) WG-5662, B1 WG-5654, B2 WG-5659, C1
 WG-5655, C2 WG-5656, C3 WG-5661, C4 WG-5660.
 
+### A0: differential random testing at scale
+
+The fixture scenarios (87 committed, about 1,400 operations) are a floor. A0 runs the same
+comparison on many more random scenarios, in the way Cedar tests its Rust implementation against
+its Lean model: the generator of `crates/verification/src/lean.rs` (`ScenarioStream`) writes the
+scenarios in batches, each batch goes to `lake exe strata_model` in one process and through the
+Rust kernel in process, and the outputs are compared scenario by scenario.
+
+```sh
+cargo run -p strata-verification --example drt -- --seed <S> --count <N> [--batch 1000] [--out target/drt]
+```
+
+The run prints the scenario, operation, batch and disagreement counts and the elapsed time. Exit
+status 1 means a disagreement. The first one is minimised by delta debugging (whole scenarios,
+then the operations of each, while the model and the kernel still disagree) and written to
+`<out>/h-drt-<seed>-<n>.txt` as a hand-written scenario. Appending that scenario to
+`lean/fixtures/scenarios.txt` and running `bless_fixtures` turns it into a committed regression
+case. A disagreement is a bug in the model or in the kernel until shown otherwise.
+
+Each scenario starts from the model's initial world, so the minimiser's candidates are scenarios
+of their own. Their Lean runs happen only when there is a disagreement to shrink.
+
 ## Sources
 
 - C. Hawblitzel et al., *IronFleet: Proving Practical Distributed Systems Correct*, SOSP 2015:
