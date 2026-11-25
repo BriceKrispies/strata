@@ -8082,7 +8082,7 @@ impl SettingType {
 
 /// Setting Def
 ///
-/// A definition of a setting (SET-001): its name, type, default and the levels that may override it. locked-by is platform or tenant and closes every level below it (SET-023). A definition is metadata: a tenant's definitions are part of its schema, and the platform's come with a release (D-5047).
+/// A definition of a setting (SET-001): its name, type, default and the levels that may override it. locked-by is platform or tenant and closes every level below it (SET-023). A definition is metadata: a tenant's definitions are part of its schema, and the platform's come with a release (D-5047). area is the product that owns the setting, which a product file's setting must name as itself (WG-5600). description says what the setting does, for the people who change it. allowed closes the values a write may take (WG-5600).
 ///
 /// Specification type `setting-def`: a struct.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -8101,6 +8101,79 @@ pub struct SettingDef {
     /// Field `locked-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked_by: Option<SettingLevel>,
+    /// Field `area`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<ProductId>,
+    /// Field `description`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Field `allowed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed: Option<SettingAllowed>,
+}
+
+/// Setting Allowed
+///
+/// The values a setting may take beyond its type (WG-5600): a closed list of values, an inclusive range of whole numbers, or the id of a record of an object type, which the value names by its id as a whole number. A write outside it is refused (SET-021).
+///
+/// Specification type `setting-allowed`: a union, externally tagged.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum SettingAllowed {
+    /// The variant `closed`.
+    #[serde(rename = "closed")]
+    Closed {
+        /// Field `values`.
+        values: Vec<Value>,
+    },
+    /// The variant `range`.
+    #[serde(rename = "range")]
+    Range {
+        /// Field `min`.
+        min: i64,
+        /// Field `max`.
+        max: i64,
+    },
+    /// The variant `reference`.
+    #[serde(rename = "reference")]
+    Reference {
+        /// Field `object`.
+        object: ObjectTypeId,
+    },
+}
+
+/// Setting Entry
+///
+/// A setting as the caller may see it (WG-5600): its definition, the value the caller reads, the level the value comes from, whether a lock closes the levels below it, and the levels the caller may write.
+///
+/// Specification type `setting-entry`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct SettingEntry {
+    /// Field `id`.
+    pub id: SettingId,
+    /// Field `label`.
+    pub label: String,
+    /// Field `description`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Field `area`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<ProductId>,
+    /// Field `type`.
+    pub r#type: SettingType,
+    /// Field `allowed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed: Option<SettingAllowed>,
+    /// Field `value`.
+    pub value: Value,
+    /// Field `source`.
+    pub source: SettingSource,
+    /// Field `team`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<TeamId>,
+    /// Field `locked`.
+    pub locked: bool,
+    /// Field `writable-levels`.
+    pub writable_levels: Vec<SettingLevel>,
 }
 
 /// Setting Resolution

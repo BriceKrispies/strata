@@ -57,6 +57,9 @@ fn layered(id: &str, ty: &str, default: Value) -> SettingDef {
             SettingLevel::Person,
         ]),
         locked_by: None,
+        area: None,
+        description: None,
+        allowed: None,
     }
 }
 

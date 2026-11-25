@@ -34,6 +34,9 @@ pub fn setting_def(theme: &str) -> Result<SettingDef, String> {
         default: Value::Str((*theme).to_string()),
         levels: BTreeSet::from([SettingLevel::Tenant]),
         locked_by: None,
+        area: None,
+        description: None,
+        allowed: None,
     })
 }
 

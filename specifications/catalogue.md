@@ -4,7 +4,7 @@
 
 What a product feature can build on: the public contracts, the domain events, the capabilities, the quotas, the plans and the types they use. After `by`, the status is the implementing component's: NOT IMPLEMENTED means no running code serves the contract yet.
 
-## Public contracts (261)
+## Public contracts (262)
 
 id: name | in name:type (? optional) | out | err | needs capabilities | auth scheme | idem | by component (status)
 
@@ -219,6 +219,7 @@ id: name | in name:type (? optional) | out | err | needs capabilities | auth sch
 - set-ledger-limit: Set the limits of a unit or of one account | in tenant:tenant-id, limit:ledger-limit | out limit:ledger-limit | err unauthenticated,forbidden,invalid,tenant-mismatch | needs ledger-configure | auth session | idem yes | by runtime (manual)
 - set-notice-read: Mark inbox notices read or unread | in tenant:tenant-id, notices:list\<string\>, read:bool | out unread:u32 | err unauthenticated,forbidden,not-found,invalid,tenant-mismatch | needs notifications-manage | auth session | idem yes | by notification-service (manual)
 - set-notification-preference: Set a notification preference of the caller | in tenant:tenant-id, category:message-category-id, channel:notification-channel, mode:notification-mode, period?:digest-period | out - | err unauthenticated,forbidden,not-found,invalid,tenant-mismatch | needs notifications-manage | auth session | idem yes | by notification-service (manual)
+- setting-definitions: List the setting definitions the caller may see | in - | out settings:list\<setting-entry\> | err unauthenticated,forbidden,unavailable | needs setting-read | auth session | idem yes | by gateway (manual)
 - setting-resolve: Read a setting for the caller | in setting:setting-id | out resolution:setting-resolution | err unauthenticated,forbidden,not-found,unavailable | needs setting-read | auth session | idem yes | by gateway (manual)
 - setting-resolve-all: List the settings for the caller | in - | out settings:list\<setting-resolution\> | err unauthenticated,forbidden,unavailable | needs setting-read | auth session | idem yes | by gateway (manual)
 - setting-save-definition: Define or change a setting of the tenant | in definition:setting-def, expected-version:schema-version | out version:schema-version | err unauthenticated,forbidden,invalid,type-locked,conflict,unavailable | needs setting-define | auth session | idem no | by gateway (manual)
@@ -678,7 +679,8 @@ id: limit per window, on exceed
 - session-summary: {id:session-id, created-at:timestamp, last-seen-at:timestamp, expires-at:timestamp, current:bool}
 - session-token: scalar string
 - session-view: {authenticated:bool, tenant:tenant-id, tenant-name:string, theme?:string, session-id?:session-id, principal?:principal-id, display-name?:display-name, roles:list\<string\>, csrf-token?:secret, expires-at?:timestamp, may:map\<string, list\<string\>\>, may-manage-schema:bool}
-- setting-def: {id:setting-id, label:string, type:setting-type, default:value, levels:set\<setting-level\>, locked-by?:setting-level}
+- setting-def: {id:setting-id, label:string, type:setting-type, default:value, levels:set\<setting-level\>, locked-by?:setting-level, area?:product-id, description?:string, allowed?:setting-allowed}
+- setting-entry: {id:setting-id, label:string, description?:string, area?:product-id, type:setting-type, allowed?:setting-allowed, value:value, source:setting-source, team?:team-id, locked:bool, writable-levels:list\<setting-level\>}
 - setting-id: id string
 - setting-level: platform|tenant|team|person
 - setting-resolution: {setting:setting-id, value:value, source:setting-source, team?:team-id, platform-revision:u64, tenant-revision:u64}
