@@ -356,3 +356,20 @@ test('a session read naming another person, or nobody, drops what the former per
     assert.ok(replied.effects.some((e) => e.type === 'http' && e.path.startsWith('/api/view')), 'the view is read again');
   }
 });
+
+// F2: a view asked for before the person changed was applied after the change, because a view request was not
+// a person-scoped kind: its reply was judged by its request id alone. The spec drops the replies to the former
+// person's requests (the generation moves on). The change here is a session read naming another person; a
+// session end refreshes the view quietly and so already replaces the request id, which is why the session
+// read is the path that shows it on the current code.
+test('a view asked for before the person changed is not applied after the change', () => {
+  const start = boot({ path: '/', session: { session: member }, view: homeModel() }).state;
+  const visit = update(start, { type: 'navigate', href: '/topics', ...stamp });
+  const asked = visit.effects.find((e) => e.type === 'http');
+  const refused = update(visit.state, { type: 'ws_closed', refused: true, ...stamp });
+  const read = refused.effects.find((e) => e.type === 'http' && e.path === '/api/session');
+  const changed = update(refused.state, { type: 'http_result', id: read.id, ok: true, status: 200, body: { session: { ...member, principal: 'user:omar', csrf_token: 'tok2' } }, ...stamp });
+  const late = update(changed.state, { type: 'http_result', id: asked.id, ok: true, status: 200, body: homeModel({ view: 'topics', path: '/topics' }), ...stamp });
+  assert.equal(late.state.view.model, null, 'the reply for the former person\'s view is not held');
+  assert.equal(late.state.view.status, 'loading', 'the page waits for the view it reads again');
+});

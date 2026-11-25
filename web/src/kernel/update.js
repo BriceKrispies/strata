@@ -73,6 +73,9 @@ const LATEST_ONLY = ['session', 'sessions.list', 'passkeys.list', 'factors.summa
 const REQUEST_TIMEOUT_MS = 30000;
 const USER_KIND_PREFIXES = ['sessions.', 'lab.', 'editor.', 'post.', 'settings.', 'tenant.'];
 const USER_KINDS = [
+  // The view is read for the person signed in (a guarded page, or the model's principal), so a reply to a
+  // view asked for before the person changed belongs to the former person (F2).
+  'view',
   'passkeys.list', 'passkeys.register_start', 'passkeys.register_finish', 'passkeys.remove',
   'factors.summary', 'factors.enrol_start', 'factors.enrol_finish', 'factors.remove_totp', 'factors.new_codes', 'factors.stepup',
 ];
