@@ -1008,7 +1008,8 @@ before it), not by a sequence of single swaps.
 `Backend.lean` instantiates `reduction` for the protocol of section 8:
 
 - `Role`: the client, the BFF, the backend, the store and the publisher. `Own` is the state a host owns:
-  the backend its transactions and its answers without a session, the store the tenant's history and
+  the backend its transactions, its answers without a session and each request's attempt number (the
+  `att` field, which `load` and `snap` packets carry), the store the tenant's history and
   decisions, the others nothing.
 - `RStep`: one constructor per protocol step (`PNext`), with the owning host's state before and after,
   the packets it receives (at most one) and the packets it sends, and `idle`, a host step that does

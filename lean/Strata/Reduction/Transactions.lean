@@ -523,7 +523,8 @@ def storeOf (Wd : TenantId → Option Tenant) (S : TState) : StoreState :=
 
 /-- A protocol state with the given packets and the store of the model. -/
 def mkP (Wd : TenantId → Option Tenant) (S : TState) (net : Packet → Prop) : PState :=
-  { net := net, txns := fun _ => none, noSession := fun _ => false, store := storeOf Wd S }
+  { net := net, txns := fun _ => none, noSession := fun _ => false, attempt := fun _ => 0,
+    store := storeOf Wd S }
 
 theorem storeState_eq' (a b : StoreState) (h1 : a.hist = b.hist) (h2 : a.rev = b.rev)
     (h3 : a.evs = b.evs) (h4 : a.decided = b.decided) : a = b := by

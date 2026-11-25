@@ -47,11 +47,13 @@ structure Own where
   txns : RequestId → Option Txn
   noS : RequestId → Bool
   store : StoreState
+  att : RequestId → Nat
 
 /-- The owned state of every host at the start: the protocol's initial state. -/
 def ownInit (w0 : World) : Own :=
   { txns := fun _ => none
     noS := fun _ => false
+    att := fun _ => 0
     store := { hist := fun t _ => w0 t, rev := fun _ => 0, evs := [], decided := fun _ => none } }
 
 /-- One host step: the host `r` with owned state `s` receives `rs` (none, or one packet), takes no
@@ -73,16 +75,17 @@ inductive RStep (K : Kernel) (C : Config) :
   | begin (s : Own) (rid : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : PrincipalId)
       (hx : s.txns rid = none) (hn : s.noS rid = false) (hs : C.sessions tok = some (t, p)) :
       RStep K C .backend s [.fwd rid tok i] none
-        { s with txns := updTxn s.txns rid ⟨tok, t, p, i, .loading⟩ } [.load rid t]
+        { s with txns := updTxn s.txns rid ⟨tok, t, p, i, .loading⟩ } [.load rid t (s.att rid)]
   /-- The backend answers a request whose token has no session. -/
   | noSession (s : Own) (rid : RequestId) (tok : Token) (i : Intent)
       (hx : s.txns rid = none) (hn : s.noS rid = false) (hs : C.sessions tok = none) :
       RStep K C .backend s [.fwd rid tok i] none
         { s with noS := fun r => if r = rid then true else s.noS r } [.reply rid .noSession]
   /-- The backend receives a snapshot. -/
-  | snap (s : Own) (rid : RequestId) (t : TenantId) (v : Option Tenant) (base : Nat) (x : Txn)
-      (hx : s.txns rid = some x) (ht : x.tenant = t) (hl : x.phase = .loading) :
-      RStep K C .backend s [.snap rid t v base] none
+  | snap (s : Own) (rid : RequestId) (t : TenantId) (v : Option Tenant) (base : Nat) (a : Nat)
+      (x : Txn) (hx : s.txns rid = some x) (ht : x.tenant = t) (hl : x.phase = .loading)
+      (hat : s.att rid = a) :
+      RStep K C .backend s [.snap rid t v base a] none
         { s with txns := updTxn s.txns rid { x with phase := .ready v base } } []
   /-- The backend computes the verdict and sends the commit. -/
   | commit (s : Own) (rid : RequestId) (x : Txn) (v : Option Tenant) (base : Nat)
@@ -94,15 +97,16 @@ inductive RStep (K : Kernel) (C : Config) :
   | conflict (s : Own) (rid : RequestId) (base : Nat) (x : Txn) (v : Option Tenant)
       (hx : s.txns rid = some x) (hp : x.phase = .committing v base) :
       RStep K C .backend s [.conflict rid base] none
-        { s with txns := updTxn s.txns rid { x with phase := .loading } } [.load rid x.tenant]
+        ({ s with txns := updTxn s.txns rid { x with phase := .loading }, att := updAtt s.att rid (s.att rid + 1) })
+        [.load rid x.tenant (s.att rid + 1)]
   /-- The store decided the request: the backend replies. -/
   | done (s : Own) (rid : RequestId) (o : Outcome) (x : Txn) (hx : s.txns rid = some x) :
       RStep K C .backend s [.done rid o] none
         { s with txns := updTxn s.txns rid { x with phase := .finished o } } [.reply rid o]
   /-- The store answers a load with the tenant's current state and revision. -/
-  | load (s : Own) (rid : RequestId) (t : TenantId) :
-      RStep K C .store s [.load rid t] none s
-        [.snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t)]
+  | load (s : Own) (rid : RequestId) (t : TenantId) (a : Nat) :
+      RStep K C .store s [.load rid t a] none s
+        [.snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t) a]
   /-- A commit for a request the store has decided: the decision is sent again. -/
   | storeDecided (s : Own) (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId)
       (i : Intent) (base : Nat) (res : Except Err Tenant) (o : Outcome)
@@ -156,29 +160,30 @@ theorem rstep_empty {K : Kernel} {C : Config} {r : Role} {s s' : Own}
     other hosts' state is untouched. -/
 theorem bridge_backend {K : Kernel} {C : Config} {s s' : Own} {rs ss : List Packet}
     (h : RStep K C .backend s rs none s' ss) (G : PState)
-    (hT : G.txns = s.txns) (hN : G.noSession = s.noS) (hnet : ∀ p ∈ rs, G.net p) :
+    (hT : G.txns = s.txns) (hN : G.noSession = s.noS) (hA : G.attempt = s.att)
+    (hnet : ∀ p ∈ rs, G.net p) :
     ∃ G', Star (PNext K C) G G' ∧ (∀ q, G'.net q ↔ (G.net q ∨ q ∈ ss)) ∧
-      G'.txns = s'.txns ∧ G'.noSession = s'.noS ∧ G'.store = G.store := by
+      G'.txns = s'.txns ∧ G'.noSession = s'.noS ∧ G'.store = G.store ∧ G'.attempt = s'.att := by
   cases h with
-  | idle _ _ => exact ⟨G, Star.refl G, fun q => by simp, hT, hN, rfl⟩
+  | idle _ _ => exact ⟨G, Star.refl G, fun q => by simp, hT, hN, rfl, hA⟩
   | begin s rid tok i t p hx hn hs =>
     refine ⟨_, Star.tail (Star.refl G) (PNext.begin G rid tok i t p (hnet _ (by simp))
-      (by rw [hT]; exact hx) (by rw [hN]; exact hn) hs), ?_, ?_, ?_, rfl⟩
-    · intro q; simp [sendOne]
+      (by rw [hT]; exact hx) (by rw [hN]; exact hn) hs), ?_, ?_, ?_, rfl, hA⟩
+    · intro q; simp [sendOne, hA]
     · show updTxn G.txns rid ⟨tok, t, p, i, .loading⟩ = updTxn s.txns rid ⟨tok, t, p, i, .loading⟩
       rw [hT]
     · exact hN
   | noSession s rid tok i hx hn hs =>
     refine ⟨_, Star.tail (Star.refl G) (PNext.noSession G rid tok i (hnet _ (by simp))
-      (by rw [hT]; exact hx) (by rw [hN]; exact hn) hs), ?_, ?_, ?_, rfl⟩
+      (by rw [hT]; exact hx) (by rw [hN]; exact hn) hs), ?_, ?_, ?_, rfl, hA⟩
     · intro q; simp [sendOne]
     · exact hT
     · show (fun r => if r = rid then true else G.noSession r) =
         (fun r => if r = rid then true else s.noS r)
       rw [hN]
-  | snap s rid t v base x hx ht hl =>
-    refine ⟨_, Star.tail (Star.refl G) (PNext.snap G rid t v base x (hnet _ (by simp))
-      (by rw [hT]; exact hx) ht hl), ?_, ?_, ?_, rfl⟩
+  | snap s rid t v base a x hx ht hl hat =>
+    refine ⟨_, Star.tail (Star.refl G) (PNext.snap G rid t v base a x (hnet _ (by simp))
+      (by rw [hT]; exact hx) ht hl (by rw [hA]; exact hat)), ?_, ?_, ?_, rfl, hA⟩
     · intro q; simp
     · show updTxn G.txns rid { x with phase := .ready v base } =
         updTxn s.txns rid { x with phase := .ready v base }
@@ -186,7 +191,7 @@ theorem bridge_backend {K : Kernel} {C : Config} {s s' : Own} {rs ss : List Pack
     · exact hN
   | commit s rid x v base hx hp =>
     refine ⟨_, Star.tail (Star.refl G) (PNext.commit G rid x v base (by rw [hT]; exact hx) hp),
-      ?_, ?_, ?_, rfl⟩
+      ?_, ?_, ?_, rfl, hA⟩
     · intro q; simp [sendOne]
     · show updTxn G.txns rid { x with phase := .committing v base } =
         updTxn s.txns rid { x with phase := .committing v base }
@@ -194,15 +199,17 @@ theorem bridge_backend {K : Kernel} {C : Config} {s s' : Own} {rs ss : List Pack
     · exact hN
   | conflict s rid base x v hx hp =>
     refine ⟨_, Star.tail (Star.refl G) (PNext.conflict G rid base x v (hnet _ (by simp))
-      (by rw [hT]; exact hx) hp), ?_, ?_, ?_, rfl⟩
-    · intro q; simp [sendOne]
+      (by rw [hT]; exact hx) hp), ?_, ?_, ?_, rfl, ?_⟩
+    · intro q; simp [sendOne, hA]
     · show updTxn G.txns rid { x with phase := .loading } =
         updTxn s.txns rid { x with phase := .loading }
       rw [hT]
     · exact hN
+    · show updAtt G.attempt rid (G.attempt rid + 1) = updAtt s.att rid (s.att rid + 1)
+      rw [hA]
   | done s rid o x hx =>
     refine ⟨_, Star.tail (Star.refl G) (PNext.done G rid o x (hnet _ (by simp))
-      (by rw [hT]; exact hx)), ?_, ?_, ?_, rfl⟩
+      (by rw [hT]; exact hx)), ?_, ?_, ?_, rfl, hA⟩
     · intro q; simp [sendOne]
     · show updTxn G.txns rid { x with phase := .finished o } =
         updTxn s.txns rid { x with phase := .finished o }
@@ -214,35 +221,37 @@ theorem bridge_store {K : Kernel} {C : Config} {s s' : Own} {rs ss : List Packet
     (h : RStep K C .store s rs none s' ss) (G : PState)
     (hS : G.store = s.store) (hnet : ∀ p ∈ rs, G.net p) :
     ∃ G', Star (PNext K C) G G' ∧ (∀ q, G'.net q ↔ (G.net q ∨ q ∈ ss)) ∧
-      G'.store = s'.store ∧ G'.txns = G.txns ∧ G'.noSession = G.noSession := by
+      G'.store = s'.store ∧ G'.txns = G.txns ∧ G'.noSession = G.noSession ∧
+      G'.attempt = G.attempt := by
   cases h with
-  | idle _ _ => exact ⟨G, Star.refl G, fun q => by simp, hS, rfl, rfl⟩
-  | load s rid t =>
-    refine ⟨_, Star.tail (Star.refl G) (PNext.load G rid t (hnet _ (by simp))), ?_, ?_, rfl, rfl⟩
+  | idle _ _ => exact ⟨G, Star.refl G, fun q => by simp, hS, rfl, rfl, rfl⟩
+  | load s rid t a =>
+    refine ⟨_, Star.tail (Star.refl G) (PNext.load G rid t a (hnet _ (by simp))), ?_, ?_, rfl, rfl,
+      rfl⟩
     · intro q; simp [sendOne, hS]
     · show G.store = s.store
       exact hS
   | storeDecided s rid tok t p i base res o hd =>
     refine ⟨_, Star.tail (Star.refl G) (PNext.storeDecided G rid tok t p i base res o
-      (hnet _ (by simp)) (by rw [hS]; exact hd)), ?_, ?_, rfl, rfl⟩
+      (hnet _ (by simp)) (by rw [hS]; exact hd)), ?_, ?_, rfl, rfl, rfl⟩
     · intro q; simp [sendOne]
     · show G.store = s.store
       exact hS
   | storeConflict s rid tok t p i base res hd hb =>
     refine ⟨_, Star.tail (Star.refl G) (PNext.storeConflict G rid tok t p i base res
-      (hnet _ (by simp)) (by rw [hS]; exact hd) (by rw [hS]; exact hb)), ?_, ?_, rfl, rfl⟩
+      (hnet _ (by simp)) (by rw [hS]; exact hd) (by rw [hS]; exact hb)), ?_, ?_, rfl, rfl, rfl⟩
     · intro q; simp [sendOne]
     · show G.store = s.store
       exact hS
   | storeAccept s rid tok t p i base res t' hd hb hr =>
     refine ⟨_, Star.tail (Star.refl G) (PNext.storeAccept G rid tok t p i base res t'
-      (hnet _ (by simp)) (by rw [hS]; exact hd) (by rw [hS]; exact hb) hr), ?_, ?_, rfl, rfl⟩
-    · intro q; simp
+      (hnet _ (by simp)) (by rw [hS]; exact hd) (by rw [hS]; exact hb) hr), ?_, ?_, rfl, rfl, rfl⟩
+    · intro q; simp [sendOne]
     · dsimp only
       rw [hS]
   | storeRefuse s rid tok t p i base res e hd hb hr =>
     refine ⟨_, Star.tail (Star.refl G) (PNext.storeRefuse G rid tok t p i base res e
-      (hnet _ (by simp)) (by rw [hS]; exact hd) (by rw [hS]; exact hb) hr), ?_, ?_, rfl, rfl⟩
+      (hnet _ (by simp)) (by rw [hS]; exact hd) (by rw [hS]; exact hb) hr), ?_, ?_, rfl, rfl, rfl⟩
     · intro q; simp [sendOne]
     · dsimp only
       rw [hS]
@@ -253,18 +262,20 @@ theorem bridge_other {K : Kernel} {C : Config} {r : Role} (hb : r ≠ .backend) 
     {s s' : Own} {rs ss : List Packet}
     (h : RStep K C r s rs none s' ss) (G : PState) (hnet : ∀ p ∈ rs, G.net p) :
     ∃ G', Star (PNext K C) G G' ∧ (∀ q, G'.net q ↔ (G.net q ∨ q ∈ ss)) ∧
-      G'.txns = G.txns ∧ G'.noSession = G.noSession ∧ G'.store = G.store := by
+      G'.txns = G.txns ∧ G'.noSession = G.noSession ∧ G'.store = G.store ∧
+      G'.attempt = G.attempt := by
   cases h with
-  | idle _ _ => exact ⟨G, Star.refl G, fun q => by simp, rfl, rfl, rfl⟩
+  | idle _ _ => exact ⟨G, Star.refl G, fun q => by simp, rfl, rfl, rfl, rfl⟩
   | clientReq s rid tok i =>
-    refine ⟨_, Star.tail (Star.refl G) (PNext.clientReq G rid tok i), ?_, rfl, rfl, rfl⟩
+    refine ⟨_, Star.tail (Star.refl G) (PNext.clientReq G rid tok i), ?_, rfl, rfl, rfl, rfl⟩
     intro q; simp [sendOne]
   | bffForward s rid tok i =>
     refine ⟨_, Star.tail (Star.refl G) (PNext.bffForward G rid tok i (hnet _ (by simp))),
-      ?_, rfl, rfl, rfl⟩
+      ?_, rfl, rfl, rfl, rfl⟩
     intro q; simp [sendOne]
   | bffRelay s rid o =>
-    refine ⟨_, Star.tail (Star.refl G) (PNext.bffRelay G rid o (hnet _ (by simp))), ?_, rfl, rfl, rfl⟩
+    refine ⟨_, Star.tail (Star.refl G) (PNext.bffRelay G rid o (hnet _ (by simp))), ?_, rfl, rfl,
+      rfl, rfl⟩
     intro q; simp [sendOne]
   | begin => exact absurd rfl hb
   | noSession => exact absurd rfl hb
@@ -279,7 +290,7 @@ theorem bridge_other {K : Kernel} {C : Config} {r : Role} (hb : r ≠ .backend) 
   | storeRefuse => exact absurd rfl hst
   | publish s sid e t p hs ht hr =>
     refine ⟨_, Star.tail (Star.refl G) (PNext.publish G sid e t p (hnet _ (by simp)) hs ht hr),
-      ?_, rfl, rfl, rfl⟩
+      ?_, rfl, rfl, rfl, rfl⟩
     intro q; simp [sendOne]
 
 /-! ## Helper lemmas -/
@@ -361,15 +372,16 @@ def initState (w0 : World) : PState :=
   { net := fun _ => False
     txns := fun _ => none
     noSession := fun _ => false
+    attempt := fun _ => 0
     store := { hist := fun t _ => w0 t, rev := fun _ => 0, evs := [], decided := fun _ => none } }
 
 theorem initState_pinit (w0 : World) : PInit w0 (initState w0) :=
-  ⟨fun _ h => h, fun _ => rfl, fun _ => rfl, fun _ _ => rfl, fun _ => rfl, rfl, fun _ => rfl⟩
+  ⟨fun _ h => h, fun _ => rfl, fun _ => rfl, fun _ _ => rfl, fun _ => rfl, rfl, fun _ => rfl, fun _ => rfl⟩
 
 /-- The owned states of the backend and the store, as the protocol state shows them. -/
 def Glob (st : Role → Nat → Own) (c : Role → Nat) (G : PState) : Prop :=
   G.txns = (st .backend (c .backend)).txns ∧ G.noSession = (st .backend (c .backend)).noS ∧
-    G.store = (st .store (c .store)).store
+    G.store = (st .store (c .store)).store ∧ G.attempt = (st .backend (c .backend)).att
 
 /-- The counters, with one host's counter set to `v`. -/
 def cupd (c : Role → Nat) (r : Role) (v : Nat) : Role → Nat :=
@@ -387,44 +399,51 @@ theorem step_role (K : Kernel) (C : Config) (st : Role → Nat → Own) (c : Rol
       Glob st (cupd c r (k + 1)) G' := by
   cases r with
   | client =>
-    obtain ⟨G', hs, hn, htx, hno, hst'⟩ := bridge_other (by decide) (by decide) hR G hrecv
+    obtain ⟨G', hs, hn, htx, hno, hsto, hat⟩ := bridge_other (by decide) (by decide) hR G hrecv
     exact ⟨G', hs, hn, by
-      refine ⟨?_, ?_, ?_⟩
+      refine ⟨?_, ?_, ?_, ?_⟩
       · rw [htx]; simpa [cupd] using hG.1
       · rw [hno]; simpa [cupd] using hG.2.1
-      · rw [hst']; simpa [cupd] using hG.2.2⟩
+      · rw [hsto]; simpa [cupd] using hG.2.2.1
+      · rw [hat]; simpa [cupd] using hG.2.2.2⟩
   | bff =>
-    obtain ⟨G', hs, hn, htx, hno, hst'⟩ := bridge_other (by decide) (by decide) hR G hrecv
+    obtain ⟨G', hs, hn, htx, hno, hsto, hat⟩ := bridge_other (by decide) (by decide) hR G hrecv
     exact ⟨G', hs, hn, by
-      refine ⟨?_, ?_, ?_⟩
+      refine ⟨?_, ?_, ?_, ?_⟩
       · rw [htx]; simpa [cupd] using hG.1
       · rw [hno]; simpa [cupd] using hG.2.1
-      · rw [hst']; simpa [cupd] using hG.2.2⟩
+      · rw [hsto]; simpa [cupd] using hG.2.2.1
+      · rw [hat]; simpa [cupd] using hG.2.2.2⟩
   | publisher =>
-    obtain ⟨G', hs, hn, htx, hno, hst'⟩ := bridge_other (by decide) (by decide) hR G hrecv
+    obtain ⟨G', hs, hn, htx, hno, hsto, hat⟩ := bridge_other (by decide) (by decide) hR G hrecv
     exact ⟨G', hs, hn, by
-      refine ⟨?_, ?_, ?_⟩
+      refine ⟨?_, ?_, ?_, ?_⟩
       · rw [htx]; simpa [cupd] using hG.1
       · rw [hno]; simpa [cupd] using hG.2.1
-      · rw [hst']; simpa [cupd] using hG.2.2⟩
+      · rw [hsto]; simpa [cupd] using hG.2.2.1
+      · rw [hat]; simpa [cupd] using hG.2.2.2⟩
   | backend =>
     have hT : G.txns = (st .backend k).txns := by rw [hG.1, hst]
     have hN : G.noSession = (st .backend k).noS := by rw [hG.2.1, hst]
-    obtain ⟨G', hs, hn, htx, hno, hsto⟩ := bridge_backend hR G hT hN hrecv
-    refine ⟨G', hs, hn, ?_, ?_, ?_⟩
+    have hA : G.attempt = (st .backend k).att := by rw [hG.2.2.2, hst]
+    obtain ⟨G', hs, hn, htx, hno, hsto, hat⟩ := bridge_backend hR G hT hN hA hrecv
+    refine ⟨G', hs, hn, ?_, ?_, ?_, ?_⟩
     · simp only [cupd, if_true]; exact htx
     · simp only [cupd, if_true]; exact hno
     · have : (cupd c .backend (k + 1)) .store = c .store := by simp [cupd]
-      rw [hsto, this]; exact hG.2.2
+      rw [hsto, this]; exact hG.2.2.1
+    · simp only [cupd, if_true]; exact hat
   | store =>
-    have hS : G.store = (st .store k).store := by rw [hG.2.2, hst]
-    obtain ⟨G', hs, hn, hsto, htx, hno⟩ := bridge_store hR G hS hrecv
-    refine ⟨G', hs, hn, ?_, ?_, ?_⟩
+    have hS : G.store = (st .store k).store := by rw [hG.2.2.1, hst]
+    obtain ⟨G', hs, hn, hsto, htx, hno, hat⟩ := bridge_store hR G hS hrecv
+    refine ⟨G', hs, hn, ?_, ?_, ?_, ?_⟩
     · have : (cupd c .store (k + 1)) .backend = c .backend := by simp [cupd]
       rw [htx, this]; exact hG.1
     · have : (cupd c .store (k + 1)) .backend = c .backend := by simp [cupd]
       rw [hno, this]; exact hG.2.1
     · simp only [cupd, if_true]; exact hsto
+    · have : (cupd c .store (k + 1)) .backend = c .backend := by simp [cupd]
+      rw [hat, this]; exact hG.2.2.2
 
 /-! ## The block order -/
 
