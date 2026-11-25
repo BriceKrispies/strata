@@ -288,6 +288,21 @@ cannot pass quietly. A line the model could not read is counted as `unparsed`. C
 outcomes occurred, not whether each was reached through the rule it names; the unit test
 `the_full_generator_emits_every_operation_form` checks the forms of the generator itself.
 
+**Results (2026-11-25, release build).**
+
+- `--seed 20261125 --count 51000 --batch 1000 --require-coverage` (full generator): 51,000
+  scenarios, 1,015,305 operations, 51 batches, **0 disagreements**, every outcome kind present,
+  92.1 s. At 50,000 scenarios (995,674 operations) the smallest counts were `update ok` 2,294,
+  `patch ok` 5,848, `migration_rejected` 9,671 and `still_referenced` 11,419.
+- Planted divergence: the model's update version-conflict refusal changed to `invalid`
+  (`lean/Strata/Model.lean`, the `.update` arm). `--seed 7 --count 2000 --batch 500` found 289
+  disagreements; the first was minimised from 24 operations to 2 and reproduced on its own
+  (`lean err invalid`, `kernel err version_conflict`). The same planted change was missed with 0
+  disagreements by the fixture generator, which is why it is not the default.
+- Not yet exercised: uniqueness (the fixture schema has no unique field until slice 3 of WG-5373
+  lands) and `require` on an undeclared field, where the kernel may define a field the model does
+  not; that difference is to be settled in the model, not hidden by the generator.
+
 ## Sources
 
 - C. Hawblitzel et al., *IronFleet: Proving Practical Distributed Systems Correct*, SOSP 2015:
