@@ -705,7 +705,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 
 The messages table has 80 rows (a row is one message, or one family of messages with the same handling):
 33 covered, 19 partly, 28 not covered (after slice 8). The effects table has
-15 rows: 8 covered, 4 partly, 3 not covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
+15 rows: 8 covered, 5 partly, 2 not covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
 
