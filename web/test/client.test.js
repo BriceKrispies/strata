@@ -327,9 +327,11 @@ test('the navigation, the tools and the current entry come from the generated sc
   const topic = view(boot('/topics/joinery', anonymous, homeShell()).state).shell;
   assert.deepEqual(topic.nav.filter((i) => i.current).map((i) => i.href), ['/topics']);
   const desk = view(boot('/desk', editor, deskModel).state).shell;
-  assert.deepEqual(desk.tools.map((i) => [i.href, i.current]), [['/desk', true]]);
+  // The Settings page is a signed-in tool beside the desk (WG-5601), so an editor sees both; only
+  // the desk is current on the desk.
+  assert.deepEqual(desk.tools.map((i) => [i.href, i.current]), [['/desk', true], ['/settings', false]]);
   const lab = view(boot('/lab', editor, { ...deskModel, view: 'lab', path: '/lab' }).state).shell;
-  assert.deepEqual(lab.tools.map((i) => i.current), [true], 'the lab is current on the desk entry');
+  assert.deepEqual(lab.tools.map((i) => i.current), [true, false], 'the lab is current on the desk entry, not on Settings');
 });
 
 test('a screen added to the generated screens is in the navigation with no change to the client', () => {
