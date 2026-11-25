@@ -58,6 +58,9 @@ pub enum DependentId {
     Unique(ObjectTypeId, ConstraintId),
     /// The read rule of a field, an expression over its own object type.
     FieldRule(ObjectTypeId, FieldId),
+    /// A computed field: the expression the kernel recomputes from the record and the record it
+    /// refers to (D-8307).
+    Computed(ObjectTypeId, FieldId),
     /// A reference field: it depends on the object type it points at.
     Reference(ObjectTypeId, FieldId),
     /// The settings of an object type that name fields: language, translation group, search,
@@ -77,6 +80,7 @@ impl fmt::Display for DependentId {
             DependentId::Constraint(object, id) => write!(f, "constraint {object}.{id}"),
             DependentId::Unique(object, id) => write!(f, "unique constraint {object}.{id}"),
             DependentId::FieldRule(object, field) => write!(f, "read rule of {object}.{field}"),
+            DependentId::Computed(object, field) => write!(f, "computed field {object}.{field}"),
             DependentId::Reference(object, field) => write!(f, "reference {object}.{field}"),
             DependentId::ObjectSetting(object) => write!(f, "settings of {object}"),
         }
@@ -192,6 +196,15 @@ impl DependencyGraph {
                     r.expr(schema, Some(&object.id), rule);
                     reads.insert(
                         DependentId::FieldRule(object.id.clone(), field.id.clone()),
+                        r,
+                    );
+                }
+                if let Some(computed) = &field.computed {
+                    let mut r = Reads::default();
+                    r.object(&object.id);
+                    r.expr(schema, Some(&object.id), computed);
+                    reads.insert(
+                        DependentId::Computed(object.id.clone(), field.id.clone()),
                         r,
                     );
                 }

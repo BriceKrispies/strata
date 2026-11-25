@@ -153,6 +153,10 @@ pub struct FieldSpec {
     /// Left out, everyone who can read the record reads the field.
     #[serde(default)]
     pub read: Option<String>,
+    /// The computed expression of the field, the kernel's value derived from the record (D-8307).
+    /// Left out, the field is stored as written.
+    #[serde(default)]
+    pub computed: Option<String>,
     /// For references: `restrict` (the default) or `set_null`.
     #[serde(default)]
     pub on_delete: Option<String>,
@@ -458,6 +462,7 @@ impl Bundle {
                         unique: field.unique,
                         default: optional(&field.default).map_err(|e| format!("{at}: {e}"))?,
                         read: optional(&field.read).map_err(|e| format!("{at}: {e}"))?,
+                        computed: optional(&field.computed).map_err(|e| format!("{at}: {e}"))?,
                         personal: field.personal.clone(),
                         normalise: match field.normalise.as_deref() {
                             None => None,

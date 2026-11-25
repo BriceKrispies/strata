@@ -78,6 +78,7 @@ fn def(name: &str, unique: bool, personal: Option<bool>) -> FieldDef {
             searchable,
         }),
         normalise: None,
+        computed: None,
     }
 }
 

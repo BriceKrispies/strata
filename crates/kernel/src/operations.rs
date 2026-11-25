@@ -598,7 +598,7 @@ fn stage_conditions(
 }
 
 /// The direct sub-expressions of an expression.
-fn children(e: &Expr) -> Vec<&Expr> {
+pub(crate) fn children(e: &Expr) -> Vec<&Expr> {
     match e {
         Expr::Lit(_)
         | Expr::Var(..)

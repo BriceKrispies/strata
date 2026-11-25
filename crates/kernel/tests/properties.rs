@@ -366,6 +366,8 @@ fn some_policy_could_authorise(
         | Intent::RevokeInvitation { .. }
         | Intent::EraseSubject { .. }
         | Intent::ExpireRecords { .. } => (Action::Manage, Resource::Members),
+        // A refresh of computed fields is the system's alone (D-8307).
+        Intent::RefreshComputed { .. } => return *principal == Principal::System,
         // Redeeming needs no policy: any signed-in person may try.
         Intent::RedeemInvitation { .. } => return matches!(principal, Principal::User(_)),
         // An invocation is authorised by the operation's invokers, not by a policy (D-6547).

@@ -326,6 +326,7 @@ impl TenantSchemaExt for TenantSchema {
                     }
                 }
             }
+            crate::computed::problems(self, object, &roles, &mut problems);
             for constraint in object.constraints.values() {
                 match expr::check(&constraint.expr, &env) {
                     Ok(expr::Shape::Bool | expr::Shape::Any) => {}
@@ -494,6 +495,8 @@ impl TenantSchemaExt for TenantSchema {
                 }
             }
         }
+
+        crate::computed::writer_problems(self, &mut problems);
 
         for query in self.queries.values() {
             let at = format!("query {}", query.id);

@@ -25,6 +25,7 @@ pub mod automation;
 pub mod blocks;
 pub mod canon;
 pub mod capabilities;
+pub mod computed;
 pub mod declared_types;
 pub mod definitions;
 pub mod dependencies;

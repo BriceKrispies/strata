@@ -203,6 +203,7 @@ fn field_def(n: u64, required: bool) -> FieldDef {
         read: None,
         personal: None,
         normalise: None,
+        computed: None,
     }
 }
 

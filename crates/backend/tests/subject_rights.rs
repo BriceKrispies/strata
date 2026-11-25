@@ -99,6 +99,7 @@ fn declared(
                 searchable: true,
             }),
             normalise: None,
+            computed: None,
         },
     )
 }
