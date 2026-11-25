@@ -117,3 +117,5 @@ both on the same generated scenarios, and is labelled evidence, not proof.
 when `STRATA_DEV=1`. Passwords are stored as Argon2id hashes; a missing login costs the same time
 as a wrong password; repeated failures lock a login for a while (the limits are `ThrottleLimits` in
 `crates/backend/src/app.rs`).
+
+**D22. A pure crate may depend on Unicode data crates.** A crate the specification declares pure (the kernel and its generated types, the pure model crate) may depend on Unicode data and algorithm crates that do no I/O, read no clock or environment, and hold no mutable global state. Named crates only: unicode-normalization (NFC), unicode-segmentation (grapheme clusters) and unicode-properties (the emoji properties). Any other addition to a pure crate's dependencies is still a change to the purity tests in crates/verification/tests/purity.rs and crates/model-core/tests/dependencies.rs, with a decision of its own.
