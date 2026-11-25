@@ -86,6 +86,7 @@ fn aggregate(id: &str, kind: AggregateKind, field_name: Option<&str>) -> Aggrega
         kind,
         field: field_name.map(field),
         group_by: None,
+        group_by_second: None,
         n: None,
         descending: false,
         scan_bound: 1_000,

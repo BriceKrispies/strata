@@ -303,6 +303,11 @@ pub const TYPES: &[TypeDecl] = &[
                 optional: true,
             },
             Field {
+                wire: "key_second",
+                ty: Ty::Named("value"),
+                optional: true,
+            },
+            Field {
                 wire: "value",
                 ty: Ty::Named("value"),
                 optional: true,

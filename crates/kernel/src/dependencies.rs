@@ -262,7 +262,12 @@ impl DependencyGraph {
                 r.cell(&query.object, &key.field);
             }
             for aggregate in query.aggregates.iter().flatten() {
-                for field in aggregate.field.iter().chain(aggregate.group_by.iter()) {
+                for field in aggregate
+                    .field
+                    .iter()
+                    .chain(aggregate.group_by.iter())
+                    .chain(aggregate.group_by_second.iter())
+                {
                     r.field(&query.object, field);
                 }
             }

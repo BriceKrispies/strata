@@ -395,9 +395,9 @@ pub fn aggregate_request_with(
     }
 }
 
-/// An aggregate result as the browser's view model holds it: each group with its key (null for
-/// the records that have none), its value and, for a top list, its rows, and the object types the
-/// result depends on (AGG-042).
+/// An aggregate result as the browser's view model holds it: each group with its key and second
+/// key (null for the records that have none), its value and, for a top list, its rows, and the
+/// object types the result depends on (AGG-042).
 pub fn project_aggregate(result: &AggregateResult) -> Json {
     let groups: Vec<Json> = result
         .groups
@@ -405,6 +405,7 @@ pub fn project_aggregate(result: &AggregateResult) -> Json {
         .map(|group| {
             json!({
                 "key": group.key.as_ref().map(to_plain),
+                "key_second": group.key_second.as_ref().map(to_plain),
                 "value": group.value.as_ref().map(to_plain),
                 "rows": group
                     .rows

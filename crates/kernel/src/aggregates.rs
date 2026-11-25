@@ -10,15 +10,18 @@
 //! may read (AGG-016), and a count, a sum, a group or a place in a top list never reveals a
 //! record the reader may not read.
 //!
-//! The work is a scan. The records the kernel examines are the records of the object type, in id
-//! order, up to a window of [`limits::MAX_SCAN_RECORDS`] + 1 loaded through one `Need::PageOf`
-//! ([`needs`]); a smaller window cannot serve a count, because a count has to see every record
-//! the reader may read. Of those records, the ones the reader may read and the filter selects are
-//! counted against the scan bound the aggregate declares (D-5062): more than the bound is refused
-//! with the rule `scan-bound-exceeded` and no result at all (AGG-020, AGG-021), and so is an object
-//! type that holds more records than the window, whatever the reader may read of them (AGG-2324),
-//! since the records beyond the window cannot be examined and not examining them would answer
-//! in part.
+//! The records the kernel examines are those the query filter may select. When the filter is
+//! index-answerable (AGG-2326, [`filter_access`]) they are the records the record index holds for
+//! its values, loaded through `Need::ByField`, and a type of any size is read only as far as those
+//! go. Otherwise the work is a scan: the records of the object type, in id order, up to a window
+//! of [`limits::MAX_SCAN_RECORDS`] + 1 loaded through one `Need::PageOf` ([`needs`]); a smaller
+//! window cannot serve a count, because a count has to see every record the reader may read. Of
+//! the records examined, the ones the reader may read and the filter selects are counted against
+//! the scan bound the aggregate declares (D-5062): more than the bound is refused with the rule
+//! `scan-bound-exceeded` and no result at all (AGG-020, AGG-021). A scan of an object type that
+//! holds more records than the window is refused whatever the reader may read of them (AGG-2324),
+//! since the records beyond the window cannot be examined and not examining them would answer in
+//! part.
 //!
 //! The result names the object types it depends on ([`dependencies`], AGG-042), and the audience
 //! class of a reader for it is derived by [`crate::audience`]. `run` is a pure computation for the
@@ -32,6 +35,7 @@
 use crate::expr::{self, Env, Expr};
 use crate::intent::{Check, CheckExt, Context, DomainError, DomainErrorExt, ErrorKind};
 use crate::limits;
+use crate::query_plan::{filter_access, FilterAccess};
 use crate::read::visible_in;
 use crate::rules::{missing_error, roles_of, Lookup};
 use crate::schema::{Action, FieldType, ObjectTypeDef, Resource, TenantSchema};
@@ -60,8 +64,9 @@ pub(crate) fn declared_of(def: &QueryDef) -> &[FieldId] {
     def.declared_fields.as_deref().unwrap_or_default()
 }
 
-/// The state an aggregate is expected to need: one window of the object type of the query, the
-/// same window a scan of a named query loads. A request the kernel will refuse needs nothing.
+/// The state an aggregate is expected to need: the records the record index holds for the values
+/// its filter names (AGG-2326), or else one window of the object type of the query, the same window
+/// a scan of a named query loads. A request the kernel will refuse needs nothing.
 pub fn needs(schema: &TenantSchema, request: &AggregateRequest) -> Vec<Need> {
     let Some(def) = schema.queries.get(&request.query) else {
         return Vec::new();
@@ -69,11 +74,23 @@ pub fn needs(schema: &TenantSchema, request: &AggregateRequest) -> Vec<Need> {
     if !aggregates_of(def).iter().any(|a| a.id == request.aggregate) {
         return Vec::new();
     }
-    vec![Need::PageOf {
-        object: def.object.clone(),
-        after: None,
-        limit: limits::MAX_SCAN_RECORDS + 1,
-    }]
+    match filter_access(schema, def, &request.params, None) {
+        // The principal is named by the filter and not known yet: `run` asks for those records.
+        FilterAccess::Unknown => Vec::new(),
+        FilterAccess::Scan => vec![Need::PageOf {
+            object: def.object.clone(),
+            after: None,
+            limit: limits::MAX_SCAN_RECORDS + 1,
+        }],
+        FilterAccess::Values { field, values } => values
+            .into_iter()
+            .map(|value| Need::ByField {
+                object: def.object.clone(),
+                field: field.clone(),
+                value,
+            })
+            .collect(),
+    }
 }
 
 fn refusal(kind: ErrorKind, rule: &str, message: String) -> DomainError {
@@ -118,11 +135,23 @@ fn plain(value: &Value) -> serde_json::Value {
     }
 }
 
+/// The key of a group: for each group field in order, the value (tagged `0`) or, for a record that
+/// has none, the tag `1`, which sorts after every value. So the records with no value come last.
+type GroupKey = Vec<(u8, Value)>;
+
+/// The value of the group field at `at` in a group key, `None` when the records of the group have
+/// none there.
+fn group_value(key: &[(u8, Value)], at: usize) -> Option<Value> {
+    key.get(at)
+        .filter(|(tag, _)| *tag == 0)
+        .map(|(_, value)| value.clone())
+}
+
 /// What one selected record contributes to an aggregate.
 struct Row {
     id: RecordId,
-    /// The value of the group field, `None` for a record that has none.
-    group: Option<Value>,
+    /// The record's group key, empty for an ungrouped aggregate.
+    key: GroupKey,
     /// The value of the field the aggregate reads, `None` for a record that has none.
     value: Option<Value>,
 }
@@ -157,6 +186,29 @@ fn finish(
                 )
             })?;
             Ok((Some(Value::Int(total)), Vec::new()))
+        }
+        AggregateKind::Average => {
+            // Summed exactly, then divided once: the integer part of the mean, toward zero, of the
+            // records that have a value. No record with a value, no mean.
+            let mut total: i128 = 0;
+            let mut count: i128 = 0;
+            for row in rows {
+                if let Some(Value::Int(n)) = &row.value {
+                    total += i128::from(*n);
+                    count += 1;
+                }
+            }
+            if count == 0 {
+                return Ok((None, Vec::new()));
+            }
+            let mean = i64::try_from(total / count).map_err(|_| {
+                refusal(
+                    ErrorKind::LimitExceeded,
+                    SUM_OVERFLOW,
+                    "an average does not fit the type of its field".to_string(),
+                )
+            })?;
+            Ok((Some(Value::Int(mean)), Vec::new()))
         }
         AggregateKind::Minimum => Ok((
             rows.iter().filter_map(|r| r.value.as_ref()).min().cloned(),
@@ -271,6 +323,7 @@ fn depends_on(schema: &TenantSchema, def: &QueryDef, agg: &AggregateDef) -> BTre
         .iter()
         .chain(agg.field.iter())
         .chain(agg.group_by.iter())
+        .chain(agg.group_by_second.iter())
         .collect();
     for field in named {
         if let Some(rule) = object.fields.get(field).and_then(|f| f.read.as_ref()) {
@@ -364,10 +417,11 @@ pub fn run(
         }
     }
 
-    // The fields the aggregate names: the one it reads, the one it groups by and the filter's.
+    // The fields the aggregate names: the one it reads, the ones it groups by and the filter's.
     let mut named: BTreeSet<&FieldId> = request.filter.keys().collect();
     named.extend(agg.field.iter());
     named.extend(agg.group_by.iter());
+    named.extend(agg.group_by_second.iter());
     let mut types = BTreeMap::new();
     let mut rules: Vec<(&FieldId, &Expr)> = Vec::new();
     for field in named {
@@ -383,27 +437,57 @@ pub fn run(
         }
     }
 
-    let window = lookup.page_of(&def.object, None, limits::MAX_SCAN_RECORDS + 1)?;
-    if window.len() > limits::MAX_SCAN_RECORDS as usize {
-        return Err(refusal(
-            ErrorKind::LimitExceeded,
-            SCAN_BOUND_EXCEEDED,
-            format!(
-                "aggregate {} of query {query} reads {}, which holds more records than the scan \
-                 window of {}",
-                agg.id,
-                def.object,
-                limits::MAX_SCAN_RECORDS
-            ),
-        ));
-    }
+    // The records the filter may select: those the index holds for its values (AGG-2326), or else
+    // the window of the object type, which an unindexed filter has to be scanned through.
+    let candidates: Vec<&Arc<Record>> =
+        match filter_access(schema, def, &request.params, Some(&ctx.principal)) {
+            FilterAccess::Values { field, values } => {
+                let mut found = Vec::new();
+                for value in &values {
+                    found.extend(lookup.by_field(&def.object, &field, value)?);
+                }
+                if found.len() > limits::MAX_SCAN_RECORDS as usize {
+                    return Err(refusal(
+                        ErrorKind::LimitExceeded,
+                        SCAN_BOUND_EXCEEDED,
+                        format!(
+                        "aggregate {} of query {query} matches {} records through the index of \
+                         {field}, more than the scan window of {}",
+                        agg.id,
+                        found.len(),
+                        limits::MAX_SCAN_RECORDS
+                    ),
+                    ));
+                }
+                found.sort_by_key(|record| record.id);
+                found
+            }
+            // Unknown only without a principal, and `run` always has one.
+            FilterAccess::Scan | FilterAccess::Unknown => {
+                let window = lookup.page_of(&def.object, None, limits::MAX_SCAN_RECORDS + 1)?;
+                if window.len() > limits::MAX_SCAN_RECORDS as usize {
+                    return Err(refusal(
+                        ErrorKind::LimitExceeded,
+                        SCAN_BOUND_EXCEEDED,
+                        format!(
+                        "aggregate {} of query {query} reads {}, which holds more records than \
+                         the scan window of {}",
+                        agg.id,
+                        def.object,
+                        limits::MAX_SCAN_RECORDS
+                    ),
+                    ));
+                }
+                window
+            }
+        };
     let bound = agg.scan_bound.min(limits::MAX_SCAN_RECORDS) as usize;
 
     let roles = roles_of(tenant, &ctx.principal);
     let no_params = BTreeMap::new();
     let reads_everything = matches!(ctx.principal, Principal::System);
     let mut selected: Vec<Arc<Record>> = Vec::new();
-    for record in window {
+    for record in candidates {
         if !visible_in(lookup, &ctx.principal, record, ctx.now)? {
             continue;
         }
@@ -480,40 +564,52 @@ pub fn run(
         ));
     }
 
+    let group_fields: Vec<&FieldId> = agg
+        .group_by
+        .iter()
+        .chain(agg.group_by_second.iter())
+        .collect();
     let rows: Vec<Row> = selected
         .iter()
         .map(|record| Row {
             id: record.id,
-            group: value_in(record, agg.group_by.as_ref(), &types),
+            key: group_fields
+                .iter()
+                .map(|field| match value_in(record, Some(*field), &types) {
+                    Some(value) => (0, value),
+                    None => (1, Value::Null),
+                })
+                .collect(),
             value: value_in(record, agg.field.as_ref(), &types),
         })
         .collect();
-    let mut keyed: BTreeMap<&Value, Vec<&Row>> = BTreeMap::new();
-    let mut keyless: Vec<&Row> = Vec::new();
-    for row in &rows {
-        match (&agg.group_by, &row.group) {
-            (Some(_), Some(key)) => keyed.entry(key).or_default().push(row),
-            _ => keyless.push(row),
-        }
-    }
     let mut groups = Vec::new();
-    // Groups in ascending order of the group value, the records with none last (D-5063). An
-    // ungrouped aggregate is one group, present when there are no records at all.
-    for (key, members) in &keyed {
-        let (value, listed) = finish(agg, members)?;
-        groups.push(AggregateGroup {
-            key: Some((*key).clone()),
-            value,
-            rows: listed,
-        });
-    }
-    if agg.group_by.is_none() || !keyless.is_empty() {
-        let (value, listed) = finish(agg, &keyless)?;
+    if group_fields.is_empty() {
+        // An ungrouped aggregate is one group, present when there are no records at all.
+        let every: Vec<&Row> = rows.iter().collect();
+        let (value, listed) = finish(agg, &every)?;
         groups.push(AggregateGroup {
             key: None,
+            key_second: None,
             value,
             rows: listed,
         });
+    } else {
+        // Groups in ascending order of their values, the records with none last (D-5063). A group
+        // exists only when a record of the reader falls in it.
+        let mut keyed: BTreeMap<&GroupKey, Vec<&Row>> = BTreeMap::new();
+        for row in &rows {
+            keyed.entry(&row.key).or_default().push(row);
+        }
+        for (key, members) in &keyed {
+            let (value, listed) = finish(agg, members)?;
+            groups.push(AggregateGroup {
+                key: group_value(key, 0),
+                key_second: group_value(key, 1),
+                value,
+                rows: listed,
+            });
+        }
     }
     if groups.len() > limits::MAX_AGGREGATE_GROUPS {
         return Err(refusal(
@@ -630,7 +726,7 @@ pub fn problems(schema: &TenantSchema, problems: &mut Vec<String>) {
                 (AggregateKind::Count, Some(field)) => {
                     problems.push(format!("{at}: a count names no field, not {field}"))
                 }
-                (AggregateKind::Sum, Some(field)) => {
+                (AggregateKind::Sum | AggregateKind::Average, Some(field)) => {
                     let admits: fn(&FieldType) -> bool = |ty| matches!(ty, FieldType::Int);
                     named_field(problems, &at, declared, object, "sum field", field, admits)
                 }
@@ -640,6 +736,22 @@ pub fn problems(schema: &TenantSchema, problems: &mut Vec<String>) {
                 (kind, None) => problems.push(format!("{at}: a {} names a field", kind.as_str())),
             }
             if let Some(field) = &agg.group_by {
+                named_field(
+                    problems,
+                    &at,
+                    declared,
+                    object,
+                    "group field",
+                    field,
+                    groupable,
+                );
+            }
+            if let Some(field) = &agg.group_by_second {
+                if agg.group_by.is_none() {
+                    problems.push(format!("{at}: a second group field needs a first one"));
+                } else if agg.group_by.as_ref() == Some(field) {
+                    problems.push(format!("{at}: the group fields are both {field}"));
+                }
                 named_field(
                     problems,
                     &at,

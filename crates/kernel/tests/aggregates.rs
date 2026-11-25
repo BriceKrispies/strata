@@ -42,6 +42,7 @@ fn aggregate(
         kind,
         field: field_name.map(field),
         group_by: group.map(field),
+        group_by_second: None,
         n,
         descending,
         scan_bound,
@@ -491,6 +492,27 @@ fn thin(full: &State, needs: &[Need]) -> State {
     let tenant = full.tenant.as_ref().unwrap();
     let mut records: BTreeMap<ObjectTypeId, BTreeMap<RecordId, Arc<Record>>> = BTreeMap::new();
     for need in needs {
+        // The records an index answers for one value: the matches and nothing else.
+        if let Need::ByField {
+            object: kind,
+            field: name,
+            value,
+        } = need
+        {
+            for record in tenant
+                .records_of(kind)
+                .filter(|record| match record.get(name) {
+                    Value::List(items) => items.contains(value),
+                    other => other == value,
+                })
+            {
+                records
+                    .entry(kind.clone())
+                    .or_default()
+                    .insert(record.id, record.clone());
+            }
+            continue;
+        }
         let Need::PageOf {
             object: kind,
             after,
@@ -561,6 +583,384 @@ fn an_object_type_past_the_platform_window_is_refused_and_no_more_than_10001_rec
     // A request the kernel will refuse needs nothing.
     let schema = schema_of(&world.state(&tenant_id("alpha")));
     assert!(aggregates::needs(&schema, &request("no_such", &[])).is_empty());
+}
+
+/// The notes counted by team: `team == $team` is answered by the record index (AGG-2326). Its
+/// `count_in_tight` has a bound of 3.
+fn by_team_query() -> QueryDef {
+    use AggregateKind::*;
+    QueryDef {
+        id: QueryId::new("by_team").unwrap(),
+        object: object("note"),
+        filter: Some(eq(var(Scope::Record, "team"), Expr::Param("team".into()))),
+        params: BTreeSet::from(["team".to_string()]),
+        order: vec![],
+        limit: None,
+        aggregates: Some(vec![
+            aggregate("count_rows", Count, None, None, None, false, 100),
+            aggregate(
+                "count_by_status",
+                Count,
+                None,
+                Some("status"),
+                None,
+                false,
+                100,
+            ),
+            aggregate("count_in_tight", Count, None, None, None, false, 3),
+        ]),
+        declared_fields: Some(vec![field("status"), field("rank")]),
+    }
+}
+
+/// The notes filtered by score, which has a read rule and so no index (AGG-2326).
+fn scored_query() -> QueryDef {
+    use AggregateKind::*;
+    QueryDef {
+        id: QueryId::new("scored").unwrap(),
+        object: object("note"),
+        filter: Some(eq(var(Scope::Record, "score"), Expr::Param("score".into()))),
+        params: BTreeSet::from(["score".to_string()]),
+        order: vec![],
+        limit: None,
+        aggregates: Some(vec![aggregate(
+            "count_rows",
+            Count,
+            None,
+            None,
+            None,
+            false,
+            100,
+        )]),
+        declared_fields: Some(vec![field("status")]),
+    }
+}
+
+/// Every note, with the averages and the two-field groups of the hand computations.
+fn more_query() -> QueryDef {
+    use AggregateKind::*;
+    QueryDef {
+        id: QueryId::new("more").unwrap(),
+        object: object("note"),
+        filter: None,
+        params: BTreeSet::new(),
+        order: vec![],
+        limit: None,
+        aggregates: Some(vec![
+            aggregate("avg_rank", Average, Some("rank"), None, None, false, 100),
+            aggregate(
+                "avg_by_team",
+                Average,
+                Some("rank"),
+                Some("team"),
+                None,
+                false,
+                100,
+            ),
+            AggregateDef {
+                group_by_second: Some(field("status")),
+                ..aggregate(
+                    "count_by_team_status",
+                    Count,
+                    None,
+                    Some("team"),
+                    None,
+                    false,
+                    100,
+                )
+            },
+        ]),
+        declared_fields: Some(vec![field("rank"), field("status"), field("team")]),
+    }
+}
+
+/// `base()` with the queries of the index tests and of the averages and two-field groups.
+fn with_queries() -> World {
+    change(
+        &base(),
+        3_500,
+        vec![
+            SchemaChange::DefineQuery(by_team_query()),
+            SchemaChange::DefineQuery(scored_query()),
+            SchemaChange::DefineQuery(more_query()),
+        ],
+    )
+    .expect("the queries are accepted")
+}
+
+fn ask(query: &str, aggregate_name: &str, params: &[(&str, Value)]) -> AggregateRequest {
+    AggregateRequest {
+        query: QueryId::new(query).unwrap(),
+        aggregate: agg_id(aggregate_name),
+        params: params
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.clone()))
+            .collect(),
+        filter: BTreeMap::new(),
+    }
+}
+
+fn run_request(
+    world: &World,
+    who: &Principal,
+    request: &AggregateRequest,
+) -> Result<AggregateResult, DomainError> {
+    let state = world.state(&tenant_id("alpha"));
+    aggregates::run(&state, request, &ctx("alpha", who.clone(), 90_000))
+}
+
+/// The groups of a result as (key, second key, value) triples.
+fn triples(result: &AggregateResult) -> Vec<(Option<Value>, Option<Value>, Option<Value>)> {
+    result
+        .groups
+        .iter()
+        .map(|g| (g.key.clone(), g.key_second.clone(), g.value.clone()))
+        .collect()
+}
+
+/// As `crowded`, with the first `red` notes in team red and the others in no team.
+fn crowded_with_team(world: &World, n: u64, red: u64) -> State {
+    let state = crowded(world, n);
+    let mut tenant = TenantState::clone(state.tenant.as_ref().unwrap());
+    let notes = tenant.records.entry(object("note")).or_default();
+    for i in 1..=red {
+        let id = RecordId(1_000 + i);
+        let mut record = Record::clone(notes.get(&id).expect("a crowded note"));
+        record.fields.insert(field("team"), text("red"));
+        notes.insert(id, Arc::new(record));
+    }
+    State {
+        tenant_id: state.tenant_id,
+        tenant: Some(Arc::new(tenant)),
+        coverage: Coverage::Complete,
+    }
+}
+
+// Verifies: AGG-2326
+// Verifies: AGG-2324
+#[test]
+fn an_index_answerable_aggregate_reads_only_its_matches_past_the_window_and_a_scanned_one_is_refused(
+) {
+    let world = with_queries();
+    let full = crowded_with_team(&world, 10_001, 30);
+    let schema = full.tenant.as_ref().unwrap().schema.clone();
+
+    // The filter `team == red` is answered by the record index: exactly its 30 notes are loaded.
+    let red = ask("by_team", "count_rows", &[("team", text("red"))]);
+    let needs = aggregates::needs(&schema, &red);
+    assert_eq!(
+        needs,
+        vec![Need::ByField {
+            object: object("note"),
+            field: field("team"),
+            value: text("red"),
+        }]
+    );
+    let state = thin(&full, &needs);
+    assert_eq!(
+        state
+            .tenant
+            .as_ref()
+            .unwrap()
+            .records_of(&object("note"))
+            .count(),
+        30
+    );
+    let result = run_request(&world, &Principal::Anonymous, &red).unwrap();
+    assert_eq!(single(&result), Some(int(30)));
+    assert_eq!(result.scanned, 30);
+    let by_status = ask("by_team", "count_by_status", &[("team", text("red"))]);
+    assert_eq!(
+        pairs(&run_request(&world, &Principal::Anonymous, &by_status).unwrap()),
+        vec![(Some(text("published")), Some(int(30)))]
+    );
+    // A team with no notes is answered from no records at all.
+    let blue = ask("by_team", "count_rows", &[("team", text("blue"))]);
+    let needs = aggregates::needs(&schema, &blue);
+    let state = thin(&full, &needs);
+    assert_eq!(
+        state
+            .tenant
+            .as_ref()
+            .unwrap()
+            .records_of(&object("note"))
+            .count(),
+        0
+    );
+    assert_eq!(
+        single(&run_request(&world, &Principal::Anonymous, &blue).unwrap()),
+        Some(int(0))
+    );
+
+    // `scored` filters on a field with a read rule, so no index answers it and the type is scanned:
+    // past the window it is refused, as before.
+    let scored = ask("scored", "count_rows", &[("score", int(1))]);
+    assert_eq!(
+        aggregates::needs(&schema, &scored),
+        vec![Need::PageOf {
+            object: object("note"),
+            after: None,
+            limit: limits::MAX_SCAN_RECORDS + 1,
+        }]
+    );
+    let error = run_request(&world, &Principal::Anonymous, &scored).unwrap_err();
+    assert_eq!(error.kind, ErrorKind::LimitExceeded);
+    assert_eq!(failed_rule(&error), aggregates::SCAN_BOUND_EXCEEDED);
+}
+
+// Verifies: AGG-2326
+// Verifies: AGG-015
+// Verifies: AGG-017
+#[test]
+fn an_index_answerable_aggregate_counts_only_the_matches_the_reader_may_read() {
+    let (world, _) = populate(
+        &with_queries(),
+        &[
+            row(Some(5), true, Some("red"), None),
+            row(Some(3), true, Some("red"), None),
+            // A draft, which the public may not read, among the red notes.
+            row(Some(1), false, Some("red"), None),
+            row(Some(8), true, Some("blue"), None),
+        ],
+    );
+    let red = ask("by_team", "count_rows", &[("team", text("red"))]);
+    // The public counts the two published red notes; the editor counts all three.
+    assert_eq!(
+        single(&run_request(&world, &Principal::Anonymous, &red).unwrap()),
+        Some(int(2))
+    );
+    let editor_result = run_request(&world, &editor(), &red).unwrap();
+    assert_eq!(single(&editor_result), Some(int(3)));
+    assert_eq!(editor_result.scanned, 3);
+    // The bound of `count_in_tight` is 3: the editor's three are at it, and one more would not be.
+    let tight = ask("by_team", "count_in_tight", &[("team", text("red"))]);
+    assert_eq!(
+        single(&run_request(&world, &editor(), &tight).unwrap()),
+        Some(int(3))
+    );
+    let (world, _) = populate(&world, &[row(Some(9), true, Some("red"), None)]);
+    let error = run_request(&world, &editor(), &tight).unwrap_err();
+    assert_eq!(failed_rule(&error), aggregates::SCAN_BOUND_EXCEEDED);
+}
+
+// Verifies: AGG-010
+// Verifies: AGG-011
+// Verifies: AGG-016
+// Verifies: AGG-001
+#[test]
+fn an_average_is_the_integer_part_of_the_mean_and_null_without_a_value() {
+    let (world, _) = populate(
+        &with_queries(),
+        &[
+            row(Some(5), true, Some("red"), None),
+            row(Some(3), true, Some("red"), None),
+            row(Some(8), true, Some("blue"), None),
+            row(Some(8), false, Some("blue"), None),
+            row(Some(2), false, None, None),
+            row(None, true, Some("blue"), None),
+        ],
+    );
+    let editor = editor();
+    // 5 + 3 + 8 + 8 + 2 = 26 over five values: 5.2, which is 5.
+    assert_eq!(
+        single(&run_request(&world, &editor, &ask("more", "avg_rank", &[])).unwrap()),
+        Some(int(5))
+    );
+    // blue 16 over two values, red 8 over two, no team 2.
+    assert_eq!(
+        pairs(&run_request(&world, &editor, &ask("more", "avg_by_team", &[])).unwrap()),
+        vec![
+            (Some(text("blue")), Some(int(8))),
+            (Some(text("red")), Some(int(4))),
+            (None, Some(int(2))),
+        ]
+    );
+    // No note of the team has a rank, so the average of the team is null.
+    let (world, _) = populate(&world, &[row(None, true, Some("green"), None)]);
+    let green = AggregateRequest {
+        filter: BTreeMap::from([(field("team"), text("green"))]),
+        ..ask("more", "avg_rank", &[])
+    };
+    assert_eq!(single(&run_request(&world, &editor, &green).unwrap()), None);
+}
+
+// Verifies: AGG-016
+#[test]
+fn an_average_rounds_toward_zero() {
+    let (world, _) = populate(
+        &with_queries(),
+        &[
+            row(Some(-3), true, None, None),
+            row(Some(-4), true, None, None),
+        ],
+    );
+    // -7 over two values is -3.5, which is -3.
+    assert_eq!(
+        single(&run_request(&world, &editor(), &ask("more", "avg_rank", &[])).unwrap()),
+        Some(int(-3))
+    );
+}
+
+// Verifies: AGG-005
+// Verifies: AGG-014
+#[test]
+fn a_group_by_two_fields_gives_one_result_per_pair_in_order_and_the_records_without_a_value_last() {
+    let (world, _) = six();
+    let world = change(&world, 3_500, vec![SchemaChange::DefineQuery(more_query())])
+        .expect("the query is accepted");
+    // blue draft: n4; blue published: n3 and n6; red published: n1 and n2; no team, draft: n5.
+    let result = run_request(&world, &editor(), &ask("more", "count_by_team_status", &[])).unwrap();
+    assert_eq!(
+        triples(&result),
+        vec![
+            (Some(text("blue")), Some(text("draft")), Some(int(1))),
+            (Some(text("blue")), Some(text("published")), Some(int(2))),
+            (Some(text("red")), Some(text("published")), Some(int(2))),
+            (None, Some(text("draft")), Some(int(1))),
+        ]
+    );
+}
+
+// Verifies: AGG-2321
+// Verifies: AGG-2322
+// Verifies: AGG-005
+#[test]
+fn a_second_group_field_and_an_average_are_refused_when_they_cannot_mean_anything() {
+    use AggregateKind::*;
+    let pair = |group: Option<&str>, second: &str| AggregateDef {
+        group_by_second: Some(field(second)),
+        ..aggregate("pair", Count, None, group, None, false, 100)
+    };
+    refused(
+        define(vec![pair(None, "team")], &["team"]),
+        "needs a first one",
+    );
+    refused(
+        define(vec![pair(Some("team"), "team")], &["team"]),
+        "both team",
+    );
+    refused(
+        define(
+            vec![aggregate("avg_none", Average, None, None, None, false, 100)],
+            &["rank"],
+        ),
+        "names a field",
+    );
+    refused(
+        define(
+            vec![aggregate(
+                "avg_text",
+                Average,
+                Some("team"),
+                None,
+                None,
+                false,
+                100,
+            )],
+            &["team"],
+        ),
+        "not one this aggregate admits",
+    );
 }
 
 // Verifies: AGG-040
