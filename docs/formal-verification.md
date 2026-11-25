@@ -241,6 +241,37 @@ testing of the Rust kernel against the model, at scale) WG-5651, A1 WG-5373, A2 
 WG-5653, A3 WG-5658, A4 (requirements point to theorems) WG-5662, B1 WG-5654, B2 WG-5659, C1
 WG-5655, C2 WG-5656, C3 WG-5661, C4 WG-5660.
 
+## Temporal logic library
+
+Built for C2 (WG-5656) in `lean/Strata/Temporal/`, imported from `lean/Strata.lean`. It has no
+dependencies beyond Lean 4.36 core. Every theorem below is listed in `lean/Audit.lean`, and
+`lake build` plus `lake env lean Audit.lean` show that each depends only on `propext`,
+`Classical.choice` and `Quot.sound`.
+
+- **Embedding** (`Formula.lean`). A behaviour is `Nat → σ`; a temporal formula is a predicate on
+  behaviours. `lift` (state predicate), `act` (action on the first two states), `always`,
+  `eventually`, `next`, `leadsTo`, the propositional connectives, and `suffix` for shifting a
+  behaviour. Duality, `□` and `◇` basics: `always_elim`, `always_always`, `eventually_eventually`,
+  `not_always_iff`, `not_eventually_iff`, `always_mono`, `always_imp`, `always_conj`,
+  `eventually_disj`.
+- **Fairness and the spec form** (`Fairness.lean`). `enabled A`, the stuttering box `stepBox`,
+  `weakFair A` (`◇□Enabled A ⇒ □◇A`), `strongFair A` (`□◇Enabled A ⇒ □◇A`), and
+  `spec Init N v F` for `Init ∧ □[N]_v ∧ F`. Fairness counts steps, not state changes, as IronFleet
+  does. `strong_implies_weak`.
+- **Leads-to** (`Rules.lean`). `leadsTo_refl`, `leadsTo_trans`, `leadsTo_disj` (`P ~> R` and
+  `Q ~> R` give `P ∨ Q ~> R`), `leadsTo_of_always_imp` (`□(P → Q)` gives `P ~> Q`), `leadsTo_apply`,
+  and well-founded induction `leadsTo_wf` on a measure.
+- **Invariance** (`Rules.lean`). `invariant_of` (`Init` and steps preserving `I` give `□I`) and
+  `invariant_of_spec` for a spec.
+- **WF1 and the always-enabled form** (`Rules.lean`). `wf1` (Lamport's rule). `always_enabled_leadsTo`
+  is WF1 for an action enabled in every state, so a progress step of the action becomes a leads-to.
+  `always_enabled_infinitely_often` says such an action is taken infinitely often.
+- **Worked example** (`LockService.lean`). IronFleet's lock service: `N` hosts pass a lock around a
+  ring with always-enabled host actions ("if you hold it, grant it to the next host, otherwise do
+  nothing") and a weakly fair network that delivers grants. `Lock.lock_liveness` proves every host
+  eventually holds the lock under the spec's fairness. `Lock.lock_nonvacuous` exhibits a behaviour
+  satisfying the spec for two hosts, so the assumptions are consistent.
+
 ## Sources
 
 - C. Hawblitzel et al., *IronFleet: Proving Practical Distributed Systems Correct*, SOSP 2015:
