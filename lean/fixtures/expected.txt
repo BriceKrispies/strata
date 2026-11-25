@@ -2052,3 +2052,23 @@ record 2 owner=100 v=2 1=s:ash 6=i:7 10=s:b
 record 3 owner=100 v=1 1=s:elm 6=i:7 10=s:a
 tenant 2 next=1 required=1
 end
+scenario h-strict-change-needs-conforming-records
+ok
+ok
+err migration_rejected
+state
+tenant 1 next=2 required=1,4
+record 1 owner=100 v=1 1=s:yew 6=i:7
+tenant 2 next=1 required=1
+end
+scenario h-strict-change-refuses-a-grandfathered-duplicate
+ok
+ok
+ok
+err migration_rejected
+state
+tenant 1 next=3 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7
+record 2 owner=101 v=1 1=s:fir 3=b:0 6=i:7
+tenant 2 next=1 required=1
+end

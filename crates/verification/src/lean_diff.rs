@@ -25,8 +25,15 @@ use crate::lean::{build_model, kernel_output, run_model};
 use std::path::Path;
 
 /// The intent kinds the generator produces; each is the word after the principal in an `op` line.
-pub const GENERATED_INTENTS: [&str; 7] =
-    ["create", "update", "patch", "delete", "require", "unique", "composite"];
+pub const GENERATED_INTENTS: [&str; 7] = [
+    "create",
+    "update",
+    "patch",
+    "delete",
+    "require",
+    "unique",
+    "composite",
+];
 
 /// Known differences between the model and the kernel that are intended, each with its reason.
 /// A differing pair of lines is accepted only if an entry explains it. Empty means the two agree
@@ -837,7 +844,9 @@ pub fn diff_batch_counted(
 fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
     match kind {
         OpKind::Create(f) | OpKind::Update(_, _, f) | OpKind::Patch(_, _, f) => Some(f),
-        OpKind::Delete(..) | OpKind::Require(..) | OpKind::Unique(..) | OpKind::Composite(..) => None,
+        OpKind::Delete(..) | OpKind::Require(..) | OpKind::Unique(..) | OpKind::Composite(..) => {
+            None
+        }
     }
 }
 

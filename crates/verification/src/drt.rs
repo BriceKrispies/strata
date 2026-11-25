@@ -224,14 +224,18 @@ fn minimise_disagreement(
 }
 
 /// The accepted outcome kinds, one per intent kind of the scenario format: the intent's name
-/// followed by `ok`. `require` is split by its mode, as the model's two schema outcomes differ.
-pub const ACCEPTED_KINDS: [&str; 6] = [
+/// followed by `ok`. `require` and `unique` are split by their mode, as the model's strict and lax
+/// schema outcomes differ.
+pub const ACCEPTED_KINDS: [&str; 9] = [
     "create ok",
     "update ok",
     "patch ok",
     "delete ok",
     "require-strict ok",
     "require-lax ok",
+    "unique-strict ok",
+    "unique-lax ok",
+    "composite ok",
 ];
 
 /// What a run found.
@@ -265,7 +269,7 @@ impl Totals {
 }
 
 /// The intent of an `op` line, as the coverage names it: `create`, `update`, `patch`, `delete`,
-/// `require-strict` or `require-lax`.
+/// `require-strict`, `require-lax`, `unique-strict`, `unique-lax` or `composite`.
 fn intent_of(op: &str) -> &'static str {
     let tokens: Vec<&str> = op.split_whitespace().collect();
     match tokens.get(3).copied() {
@@ -275,6 +279,9 @@ fn intent_of(op: &str) -> &'static str {
         Some("delete") => "delete",
         Some("require") if tokens.get(5).copied() == Some("strict") => "require-strict",
         Some("require") => "require-lax",
+        Some("unique") if tokens.get(5).copied() == Some("strict") => "unique-strict",
+        Some("unique") => "unique-lax",
+        Some("composite") => "composite",
         _ => "unknown",
     }
 }
