@@ -161,6 +161,15 @@ fn value_of(ty: Option<&str>, json: &Json_) -> Result<Value, ApiError> {
             })
         }
         Json_::String(text) => Ok(Value::Str(text.clone())),
+        // The tagged form the replies send (`{"Int": 4}`), read back as the kernel holds it.
+        Json_::Object(map) if map.len() == 1 => match serde_json::from_value::<Value>(json.clone())
+        {
+            Ok(Value::Int(whole)) if ty == Some("timestamp") => Ok(Value::Time(whole)),
+            Ok(value @ (Value::Bool(_) | Value::Int(_) | Value::Str(_) | Value::Time(_))) => {
+                Ok(value)
+            }
+            _ => Err(invalid("A value is a flag, a whole number or text.")),
+        },
         _ => Err(invalid("A value is a flag, a whole number or text.")),
     }
 }
@@ -177,11 +186,18 @@ fn json_of(value: &Value) -> Json_ {
     }
 }
 
+/// A kernel value as the specification's `value` union sends it: externally tagged, as the kernel
+/// serialises it (`{"Str": "members"}`, `{"Int": 4}`), the form product files and the definitions
+/// reply use (WG-5600).
+fn value_wire(value: &Value) -> Json_ {
+    serde_json::to_value(value).unwrap_or(Json_::Null)
+}
+
 /// The answer of a read of a setting (`setting-resolution`).
 fn resolution_json(resolution: &SettingResolution) -> Json_ {
     json!({
         "setting": resolution.setting.as_str(),
-        "value": json_of(&resolution.value),
+        "value": value_wire(&resolution.value),
         "source": resolution.source.as_str(),
         "team": resolution.team.as_ref().map(TeamId::as_str),
         "platform_revision": resolution.platform_revision,
@@ -268,7 +284,7 @@ pub async fn resolve_all(
 fn allowed_json(allowed: &SettingAllowed) -> Json_ {
     match allowed {
         SettingAllowed::Closed { values } => json!({
-            "closed": { "values": values.iter().map(json_of).collect::<Vec<_>>() }
+            "closed": { "values": values.iter().map(value_wire).collect::<Vec<_>>() }
         }),
         SettingAllowed::Range { min, max } => json!({ "range": { "min": min, "max": max } }),
         SettingAllowed::Reference { object } => {
@@ -290,7 +306,7 @@ fn entry_json(view: &kernel::SettingView) -> Json_ {
         "area": def.area.as_ref().map(|area| area.as_str()),
         "type": def.r#type.as_str(),
         "allowed": def.allowed.as_ref().map(allowed_json),
-        "value": json_of(&resolution.value),
+        "value": value_wire(&resolution.value),
         "source": resolution.source.as_str(),
         "team": resolution.team.as_ref().map(TeamId::as_str),
         "locked": def.locked_by.is_some(),
