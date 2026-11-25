@@ -59,7 +59,8 @@ theorem lawful_onDelete : Lawful encOnDelete decOnDelete := by
         repeat' split at h
         all_goals first | omega | simp at h
 
-/-- The kernel's errors: twelve tags, no payload. `unknownObject` is the last, tag `11`. -/
+/-- The kernel's errors: fourteen tags, no payload. `unknownObject` is tag `11`,
+    `constraintViolated` `12` and `evaluation` `13`. -/
 def encErr : Err → Bytes
   | .noTenant => [tag 0]
   | .unauthorized => [tag 1]
@@ -73,6 +74,8 @@ def encErr : Err → Bytes
   | .uniqueViolated => [tag 9]
   | .invalidSchema => [tag 10]
   | .unknownObject => [tag 11]
+  | .constraintViolated => [tag 12]
+  | .evaluation => [tag 13]
 
 def decErr : Dec Err := fun bs =>
   match bs with
@@ -91,6 +94,8 @@ def decErr : Dec Err := fun bs =>
     | 9 => some (.uniqueViolated, r)
     | 10 => some (.invalidSchema, r)
     | 11 => some (.unknownObject, r)
+    | 12 => some (.constraintViolated, r)
+    | 13 => some (.evaluation, r)
     | _ => none
 
 theorem lawful_err : Lawful encErr decErr := by
@@ -103,8 +108,8 @@ theorem lawful_err : Lawful encErr decErr := by
     | cons b r =>
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
           b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨
-          b.toNat = 10 ∨ b.toNat = 11 ∨ 12 ≤ b.toNat by omega)
-        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
+          b.toNat = 10 ∨ b.toNat = 11 ∨ b.toNat = 12 ∨ b.toNat = 13 ∨ 14 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 0 hk]
@@ -141,8 +146,13 @@ theorem lawful_err : Lawful encErr decErr := by
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 11 hk]
+      · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encErr, byte_eq_tag b 12 hk]
+      · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encErr, byte_eq_tag b 13 hk]
       · simp only [decErr] at h
-        exfalso
         repeat' split at h
         all_goals first | omega | simp at h
 
@@ -425,6 +435,380 @@ theorem lawful_val : Lawful encVal decVal := by
         repeat' split at h
         all_goals first | omega | simp at h
 
+/-! ## Expressions (slice 5)
+
+An expression is encoded in prefix order: a tag byte, then its parts. The tags are `0` for a
+literal (its value follows), `1` for a field (its scope byte, then the field id), `2` for the
+principal, `3` for a comparison (its operator byte, then its two operands), `4` and `5` for `and`
+and `or` (two operands each), `6` for `not` and `7` for `isNull` (one operand). A scope is `0` for
+the record, `1` for old, `2` for new; a comparison operator is `0`..`5` for `eq`, `ne`, `lt`, `le`,
+`gt`, `ge`.
+
+A decoder takes a fuel: `decExprN n` spends one unit of fuel on each nested expression it reads,
+and `decExpr` takes the length of its input as the fuel. Every node is at least one byte, so the
+length of an expression's encoding bounds its node count, and that fuel is enough. The round trip
+is stated for any fuel that covers the nodes (`decExprN_encExpr`); canonicity needs no fuel
+(`decExprN_canon`). -/
+
+def encScope : Scope → Bytes
+  | .record => [tag 0]
+  | .old => [tag 1]
+  | .new => [tag 2]
+
+def decScope : Dec Scope := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.record, r)
+    | 1 => some (.old, r)
+    | 2 => some (.new, r)
+    | _ => none
+
+theorem lawful_scope : Lawful encScope decScope := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x <;> simp [encScope, decScope, tag]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decScope] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ 3 ≤ b.toNat by omega)
+        with hk | hk | hk | hk
+      · simp only [decScope, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encScope, byte_eq_tag b 0 hk]
+      · simp only [decScope, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encScope, byte_eq_tag b 1 hk]
+      · simp only [decScope, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encScope, byte_eq_tag b 2 hk]
+      · simp only [decScope] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+def encCmpOp : CmpOp → Bytes
+  | .eq => [tag 0]
+  | .ne => [tag 1]
+  | .lt => [tag 2]
+  | .le => [tag 3]
+  | .gt => [tag 4]
+  | .ge => [tag 5]
+
+def decCmpOp : Dec CmpOp := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.eq, r)
+    | 1 => some (.ne, r)
+    | 2 => some (.lt, r)
+    | 3 => some (.le, r)
+    | 4 => some (.gt, r)
+    | 5 => some (.ge, r)
+    | _ => none
+
+theorem lawful_cmpOp : Lawful encCmpOp decCmpOp := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x <;> simp [encCmpOp, decCmpOp, tag]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decCmpOp] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
+          b.toNat = 5 ∨ 6 ≤ b.toNat by omega) with hk | hk | hk | hk | hk | hk | hk
+      · simp only [decCmpOp, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encCmpOp, byte_eq_tag b 0 hk]
+      · simp only [decCmpOp, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encCmpOp, byte_eq_tag b 1 hk]
+      · simp only [decCmpOp, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encCmpOp, byte_eq_tag b 2 hk]
+      · simp only [decCmpOp, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encCmpOp, byte_eq_tag b 3 hk]
+      · simp only [decCmpOp, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encCmpOp, byte_eq_tag b 4 hk]
+      · simp only [decCmpOp, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encCmpOp, byte_eq_tag b 5 hk]
+      · simp only [decCmpOp] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+/-- The number of nodes of an expression. Each node is at least one byte. -/
+def _root_.Strata.Expr.nodes : Expr → Nat
+  | .lit _ => 1
+  | .field _ _ => 1
+  | .principal => 1
+  | .cmp _ a b => 1 + a.nodes + b.nodes
+  | .and a b => 1 + a.nodes + b.nodes
+  | .or a b => 1 + a.nodes + b.nodes
+  | .not a => 1 + a.nodes
+  | .isNull a => 1 + a.nodes
+
+def encExpr : Expr → Bytes
+  | .lit v => tag 0 :: encVal v
+  | .field s f => tag 1 :: (encScope s ++ encNat f)
+  | .principal => [tag 2]
+  | .cmp op a b => tag 3 :: (encCmpOp op ++ (encExpr a ++ encExpr b))
+  | .and a b => tag 4 :: (encExpr a ++ encExpr b)
+  | .or a b => tag 5 :: (encExpr a ++ encExpr b)
+  | .not a => tag 6 :: encExpr a
+  | .isNull a => tag 7 :: encExpr a
+
+/-- The decoder with fuel `n`: each nested expression read spends one unit of fuel. -/
+def decExprN : Nat → Dec Expr
+  | 0, _ => none
+  | n + 1, bs =>
+    match bs with
+    | [] => none
+    | b :: r =>
+      match b.toNat with
+      | 0 => match decVal r with
+        | some (v, r') => some (.lit v, r')
+        | none => none
+      | 1 => match decScope r with
+        | some (s, r1) => match decNat r1 with
+          | some (f, r2) => some (.field s f, r2)
+          | none => none
+        | none => none
+      | 2 => some (.principal, r)
+      | 3 => match decCmpOp r with
+        | some (op, r1) => match decExprN n r1 with
+          | some (a, r2) => match decExprN n r2 with
+            | some (b', r3) => some (.cmp op a b', r3)
+            | none => none
+          | none => none
+        | none => none
+      | 4 => match decExprN n r with
+        | some (a, r1) => match decExprN n r1 with
+          | some (b', r2) => some (.and a b', r2)
+          | none => none
+        | none => none
+      | 5 => match decExprN n r with
+        | some (a, r1) => match decExprN n r1 with
+          | some (b', r2) => some (.or a b', r2)
+          | none => none
+        | none => none
+      | 6 => match decExprN n r with
+        | some (a, r') => some (.not a, r')
+        | none => none
+      | 7 => match decExprN n r with
+        | some (a, r') => some (.isNull a, r')
+        | none => none
+      | _ => none
+
+def decExpr : Dec Expr := fun bs => decExprN bs.length bs
+
+/-- An expression's encoding is at least as long as its node count. -/
+theorem nodes_le_length : ∀ (e : Expr), e.nodes ≤ (encExpr e).length
+  | .lit v => by
+    simp only [Strata.Expr.nodes, encExpr, List.length_cons]
+    omega
+  | .field s f => by
+    simp only [Strata.Expr.nodes, encExpr, List.length_cons, List.length_append]
+    omega
+  | .principal => by simp [Expr.nodes, encExpr]
+  | .cmp op a b => by
+    have ha := nodes_le_length a
+    have hb := nodes_le_length b
+    simp only [Strata.Expr.nodes, encExpr, List.length_cons, List.length_append, encCmpOp]
+    omega
+  | .and a b => by
+    have ha := nodes_le_length a
+    have hb := nodes_le_length b
+    simp only [Strata.Expr.nodes, encExpr, List.length_cons, List.length_append]
+    omega
+  | .or a b => by
+    have ha := nodes_le_length a
+    have hb := nodes_le_length b
+    simp only [Strata.Expr.nodes, encExpr, List.length_cons, List.length_append]
+    omega
+  | .not a => by
+    have ha := nodes_le_length a
+    simp only [Strata.Expr.nodes, encExpr, List.length_cons]
+    omega
+  | .isNull a => by
+    have ha := nodes_le_length a
+    simp only [Strata.Expr.nodes, encExpr, List.length_cons]
+    omega
+
+/-- The round trip, for any fuel that covers the nodes of the expression. -/
+theorem decExprN_encExpr : ∀ (e : Expr) (rest : Bytes) (n : Nat), e.nodes ≤ n →
+    decExprN n (encExpr e ++ rest) = some (e, rest)
+  | .lit v, rest, n, hn => by
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
+    simp [encExpr, decExprN, tag, lawful_val.1 v rest]
+  | .field s f, rest, n, hn => by
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
+    simp [encExpr, decExprN, tag, lawful_scope.1 s, lawful_nat.1 f rest]
+  | .principal, rest, n, hn => by
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
+    simp [encExpr, decExprN, tag]
+  | .cmp op a b, rest, n, hn => by
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
+    have hab : a.nodes ≤ m := by simp [Strata.Expr.nodes] at hn; omega
+    have hbb : b.nodes ≤ m := by simp [Strata.Expr.nodes] at hn; omega
+    have ha := decExprN_encExpr a (encExpr b ++ rest) m hab
+    have hb := decExprN_encExpr b rest m hbb
+    simp [encExpr, decExprN, tag, lawful_cmpOp.1 op, ha, hb]
+  | .and a b, rest, n, hn => by
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
+    have hab : a.nodes ≤ m := by simp [Strata.Expr.nodes] at hn; omega
+    have hbb : b.nodes ≤ m := by simp [Strata.Expr.nodes] at hn; omega
+    have ha := decExprN_encExpr a (encExpr b ++ rest) m hab
+    have hb := decExprN_encExpr b rest m hbb
+    simp [encExpr, decExprN, tag, ha, hb]
+  | .or a b, rest, n, hn => by
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
+    have hab : a.nodes ≤ m := by simp [Strata.Expr.nodes] at hn; omega
+    have hbb : b.nodes ≤ m := by simp [Strata.Expr.nodes] at hn; omega
+    have ha := decExprN_encExpr a (encExpr b ++ rest) m hab
+    have hb := decExprN_encExpr b rest m hbb
+    simp [encExpr, decExprN, tag, ha, hb]
+  | .not a, rest, n, hn => by
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
+    have ha := decExprN_encExpr a rest m (by simp [Strata.Expr.nodes] at hn; omega)
+    simp [encExpr, decExprN, tag, ha]
+  | .isNull a, rest, n, hn => by
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
+    have ha := decExprN_encExpr a rest m (by simp [Strata.Expr.nodes] at hn; omega)
+    simp [encExpr, decExprN, tag, ha]
+
+/-- Every decoding with fuel `n` is canonical. -/
+theorem decExprN_canon : ∀ (n : Nat) (bs : Bytes) (e : Expr) (rest : Bytes),
+    decExprN n bs = some (e, rest) → bs = encExpr e ++ rest := by
+  intro n
+  induction n with
+  | zero => intro bs e rest h; simp [decExprN] at h
+  | succ m ih =>
+    intro bs e rest h
+    cases bs with
+    | nil => simp [decExprN] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
+          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ 8 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk
+      · simp only [decExprN, hk] at h
+        cases hv : decVal r with
+        | none => simp [hv] at h
+        | some p =>
+          obtain ⟨v, r'⟩ := p
+          simp only [hv, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hr := lawful_val.2 r v r' hv
+          simp [encExpr, byte_eq_tag b 0 hk, hr]
+      · simp only [decExprN, hk] at h
+        cases hs : decScope r with
+        | none => simp [hs] at h
+        | some p =>
+          obtain ⟨s, r1⟩ := p
+          simp only [hs] at h
+          cases hf : decNat r1 with
+          | none => simp [hf] at h
+          | some q =>
+            obtain ⟨f, r2⟩ := q
+            simp only [hf, Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            have hs' := lawful_scope.2 r s r1 hs
+            have hf' := lawful_nat.2 r1 f r2 hf
+            simp [encExpr, byte_eq_tag b 1 hk, hs', hf']
+      · simp only [decExprN, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encExpr, byte_eq_tag b 2 hk]
+      · simp only [decExprN, hk] at h
+        cases hc : decCmpOp r with
+        | none => simp [hc] at h
+        | some p =>
+          obtain ⟨op, r1⟩ := p
+          simp only [hc] at h
+          cases ha : decExprN m r1 with
+          | none => simp [ha] at h
+          | some q =>
+            obtain ⟨a, r2⟩ := q
+            simp only [ha] at h
+            cases hb : decExprN m r2 with
+            | none => simp [hb] at h
+            | some s =>
+              obtain ⟨b', r3⟩ := s
+              simp only [hb, Option.some.injEq, Prod.mk.injEq] at h
+              obtain ⟨rfl, rfl⟩ := h
+              have hc' := lawful_cmpOp.2 r op r1 hc
+              have ha' := ih r1 a r2 ha
+              have hb' := ih r2 b' r3 hb
+              simp only [encExpr, byte_eq_tag b 3 hk, hc', ha', hb', List.append_assoc]
+              simp
+      · simp only [decExprN, hk] at h
+        cases ha : decExprN m r with
+        | none => simp [ha] at h
+        | some q =>
+          obtain ⟨a, r1⟩ := q
+          simp only [ha] at h
+          cases hb : decExprN m r1 with
+          | none => simp [hb] at h
+          | some s =>
+            obtain ⟨b', r2⟩ := s
+            simp only [hb, Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            have ha' := ih r a r1 ha
+            have hb' := ih r1 b' r2 hb
+            simp only [encExpr, byte_eq_tag b 4 hk, ha', hb', List.append_assoc]
+            simp
+      · simp only [decExprN, hk] at h
+        cases ha : decExprN m r with
+        | none => simp [ha] at h
+        | some q =>
+          obtain ⟨a, r1⟩ := q
+          simp only [ha] at h
+          cases hb : decExprN m r1 with
+          | none => simp [hb] at h
+          | some s =>
+            obtain ⟨b', r2⟩ := s
+            simp only [hb, Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            have ha' := ih r a r1 ha
+            have hb' := ih r1 b' r2 hb
+            simp only [encExpr, byte_eq_tag b 5 hk, ha', hb', List.append_assoc]
+            simp
+      · simp only [decExprN, hk] at h
+        cases ha : decExprN m r with
+        | none => simp [ha] at h
+        | some q =>
+          obtain ⟨a, r'⟩ := q
+          simp only [ha, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have ha' := ih r a r' ha
+          simp [encExpr, byte_eq_tag b 6 hk, ha']
+      · simp only [decExprN, hk] at h
+        cases ha : decExprN m r with
+        | none => simp [ha] at h
+        | some q =>
+          obtain ⟨a, r'⟩ := q
+          simp only [ha, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have ha' := ih r a r' ha
+          simp [encExpr, byte_eq_tag b 7 hk, ha']
+      · simp only [decExprN] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+theorem lawful_expr : Lawful encExpr decExpr := by
+  refine ⟨?_, ?_⟩
+  · intro e rest
+    unfold decExpr
+    apply decExprN_encExpr e rest
+    have h1 := nodes_le_length e
+    simp only [List.length_append]
+    omega
+  · intro bs e rest h
+    exact decExprN_canon _ bs e rest h
+
 /-! ## Fields, limits, records, schemas, tenants
 
 Each structure is encoded as the nested product of its fields, in declaration order, through
@@ -432,15 +816,15 @@ Each structure is encoded as the nested product of its fields, in declaration or
 
 /-- A field definition: type, required, unique, default. -/
 def encFieldDef : FieldDef → Bytes :=
-  encIso (encPair encTy (encPair encBool (encPair encBool encVal)))
+  encIso (encPair encTy (encPair encBool (encPair encBool encExpr)))
     (fun fd => (fd.ty, fd.required, fd.unique, fd.default))
 
 def decFieldDef : Dec FieldDef :=
-  decIso (decPair decTy (decPair decBool (decPair decBool decVal)))
+  decIso (decPair decTy (decPair decBool (decPair decBool decExpr)))
     (fun p => { ty := p.1, required := p.2.1, unique := p.2.2.1, default := p.2.2.2 })
 
 theorem lawful_fieldDef : Lawful encFieldDef decFieldDef :=
-  lawful_iso (lawful_pair lawful_ty (lawful_pair lawful_bool (lawful_pair lawful_bool lawful_val)))
+  lawful_iso (lawful_pair lawful_ty (lawful_pair lawful_bool (lawful_pair lawful_bool lawful_expr)))
     (fun fd => by cases fd; rfl) (fun _ => rfl)
 
 /-- The limits: the string, list, unique and record bounds, as four naturals. -/
@@ -492,19 +876,21 @@ def decRecordEntry : Dec (RecordId × Record) := decPair decNat decRecord
 theorem lawful_recordEntry : Lawful encRecordEntry decRecordEntry :=
   lawful_pair lawful_nat lawful_record
 
-/-- An object type: its schema, its composite constraints, then its records. -/
+/-- An object type: its schema, its composite constraints, its records, then its constraints. -/
 def encObjType : ObjType → Bytes :=
-  encIso (encPair (encList encSchemaEntry) (encPair (encList (encList encNat)) (encList encRecordEntry)))
-    (fun o => (o.schema, o.uniques, o.records))
+  encIso (encPair (encList encSchemaEntry)
+    (encPair (encList (encList encNat)) (encPair (encList encRecordEntry) (encList encExpr))))
+    (fun o => (o.schema, o.uniques, o.records, o.constraints))
 
 def decObjType : Dec ObjType :=
   decIso (decPair (decList decSchemaEntry)
-      (decPair (decList (decList decNat)) (decList decRecordEntry)))
-    (fun p => { schema := p.1, uniques := p.2.1, records := p.2.2 })
+      (decPair (decList (decList decNat)) (decPair (decList decRecordEntry) (decList decExpr))))
+    (fun p => { schema := p.1, uniques := p.2.1, records := p.2.2.1, constraints := p.2.2.2 })
 
 theorem lawful_objType : Lawful encObjType decObjType :=
   lawful_iso (lawful_pair (lawful_list lawful_schemaEntry)
-      (lawful_pair (lawful_list (lawful_list lawful_nat)) (lawful_list lawful_recordEntry)))
+      (lawful_pair (lawful_list (lawful_list lawful_nat))
+        (lawful_pair (lawful_list lawful_recordEntry) (lawful_list lawful_expr))))
     (fun o => by cases o; rfl) (fun _ => rfl)
 
 /-- A type of the tenant: its id, then the object type. -/

@@ -57,15 +57,17 @@ theorem unknown_type_other (t : Tenant) (p : PrincipalId) (hp : p ≠ t.owner) :
 theorem unknown_type_hidden (t : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
     (id : RecordId) (ev : Option Nat) (hc : canCreate t p = false) (he : canEditAny t p = false) :
     (t.typ? ty = none → stepTenant t p (.create ty fs) = .error .unauthorized) ∧
-    (∀ o, t.typ? ty = some o → stepTenant t p (.create ty fs) = .error .unauthorized) ∧
+    (∀ o, t.typ? ty = some o → (∃ r, newRecord o.schema p fs = .ok r) →
+      stepTenant t p (.create ty fs) = .error .unauthorized) ∧
     (t.typ? ty = none → stepTenant t p (.update ty id fs ev) = .error .unauthorized) ∧
     (∀ o, t.typ? ty = some o → o.records.lookup id = none →
       stepTenant t p (.update ty id fs ev) = .error .unauthorized) := by
   have hp : p ≠ t.owner := by
     intro hpo; subst hpo; simp [canEditAny] at he
-  refine ⟨fun h => ?_, fun o ho => ?_, fun h => ?_, fun o ho hl => ?_⟩
+  refine ⟨fun h => ?_, fun o ho hn => ?_, fun h => ?_, fun o ho hl => ?_⟩
   · simp [stepTenant, h, unknownType, hp]
-  · simp [stepTenant, ho, hc]
+  · obtain ⟨r, hr⟩ := hn
+    simp [stepTenant, ho, hr, hc]
   · simp [stepTenant, h, unknownType, hp]
   · simp [stepTenant, ho, hl, missingRecord, he]
 
@@ -73,14 +75,9 @@ theorem unknown_type_hidden (t : Tenant) (p : PrincipalId) (ty : TypeId) (fs : F
     create is accepted. -/
 theorem create_refs_resolve (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
     (o : ObjType) (ho : t.typ? ty = some o) (h : stepTenant t p (.create ty fs) = .ok t') :
-    refsOk t.env o.schema (newRecord o.schema p fs) = true := by
-  simp only [stepTenant, ho] at h
-  split at h
-  · cases h
-  · cases hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId
-        (newRecord o.schema p fs) with
-    | some e => simp [hP] at h
-    | none => exact (problem_none hP).2
+    ∃ r, newRecord o.schema p fs = .ok r ∧ refsOk t.env o.schema r = true := by
+  obtain ⟨r, hN, hP, -, -⟩ := create_ok_parts ho h
+  exact ⟨r, hN, (problem_none hP).2⟩
 
 /-- The references of a record updated in a tenant resolve in the types they name, if the update
     is accepted. -/
@@ -89,29 +86,25 @@ theorem update_refs_resolve (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (id 
     (hl : o.records.lookup id = some old)
     (h : stepTenant t p (.update ty id fs ev) = .ok t') :
     refsOk t.env o.schema (patched old fs) = true := by
-  simp only [stepTenant, ho, hl] at h
-  split at h
-  · cases h
-  · split at h
-    · cases h
-    · cases hP : problem t.limits o.schema o.uniques true t.env o.records id (patched old fs) with
-      | some e => simp [hP] at h
-      | none => exact (problem_none hP).2
+  obtain ⟨hP, -, -⟩ := update_ok_parts ho hl h
+  exact (problem_none hP).2
 
 /-- **Dangling writes are refused across types.** A create whose record holds a reference that
     does not name a record of the type its field names is never accepted. -/
 theorem write_refused_dangling_across_types (t : Tenant) (p : PrincipalId) (ty : TypeId)
-    (fs : Fields) (o : ObjType) (ho : t.typ? ty = some o)
-    (fv : FieldId × Val) (hfv : fv ∈ (newRecord o.schema p fs).fields) (d : FieldDef)
+    (fs : Fields) (o : ObjType) (ho : t.typ? ty = some o) (r : Record)
+    (hN : newRecord o.schema p fs = .ok r)
+    (fv : FieldId × Val) (hfv : fv ∈ r.fields) (d : FieldDef)
     (hd : o.schema.lookup fv.1 = some d) (hbad : fv.2.resolves t.env d.ty = false) :
     ∀ t', stepTenant t p (.create ty fs) ≠ .ok t' := by
   intro t' h
-  have hr := create_refs_resolve t t' p ty fs o ho h
+  obtain ⟨r', hN', hr⟩ := create_refs_resolve t t' p ty fs o ho h
+  have hrr : r = r' := Except.ok.inj (hN.symm.trans hN')
+  subst hrr
   unfold refsOk at hr
   have := (List.all_eq_true.mp hr) fv hfv
   rw [hd] at this
   simp [hbad] at this
-
 /-- **Dangling updates are refused across types.** An update whose patched record holds a
     reference that does not name a record of the type its field names is never accepted. -/
 theorem update_refused_dangling_across_types (t : Tenant) (p : PrincipalId) (ty : TypeId)

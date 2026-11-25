@@ -100,20 +100,25 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     match core.typ? ty with
     | none => .error (unknownTypeI core p, ⟨core, ux, cx, rx⟩)
     | some o =>
-      if !canCreateI core p then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
-      else
-        let r := newRecord o.schema p fs
-        match problemX core.limits o.schema o.uniques true core.slotsOf ux cx ty core.nextId r with
-        | some e => .error (e, ⟨core, ux, cx, rx⟩)
-        | none =>
-          let id := core.nextId
-          let sch := o.schema
-          let us := o.uniques
-          .ok (XTenant.reindex
-            { core.modifyType ty
-                (fun o => { o with slots := (padTo o.slots id).push (some r) }) with
-              nextId := id + 1 }
-            ux cx rx ty id sch us none (some r))
+      match newRecord o.schema p fs with
+      | .error _ => .error (.evaluation, ⟨core, ux, cx, rx⟩)
+      | .ok r =>
+        if !canCreateI core p then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
+        else
+          match problemX core.limits o.schema o.uniques true core.slotsOf ux cx ty core.nextId r with
+          | some e => .error (e, ⟨core, ux, cx, rx⟩)
+          | none =>
+            match constraintProblem (writeEnv p r none) o.constraints with
+            | some e => .error (e, ⟨core, ux, cx, rx⟩)
+            | none =>
+              let id := core.nextId
+              let sch := o.schema
+              let us := o.uniques
+              .ok (XTenant.reindex
+                { core.modifyType ty
+                    (fun o => { o with slots := (padTo o.slots id).push (some r) }) with
+                  nextId := id + 1 }
+                ux cx rx ty id sch us none (some r))
   | .update ty id fs ev =>
     match core.typ? ty with
     | none => .error (unknownTypeI core p, ⟨core, ux, cx, rx⟩)
@@ -128,11 +133,14 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
           match problemX core.limits o.schema o.uniques true core.slotsOf ux cx ty id r with
           | some e => .error (e, ⟨core, ux, cx, rx⟩)
           | none =>
-            let sch := o.schema
-            let us := o.uniques
-            .ok (XTenant.reindex
-              (core.modifyType ty (fun o => { o with slots := setSlot o.slots id (some r) }))
-              ux cx rx ty id sch us (some old) (some r))
+            match constraintProblem (writeEnv p r (some old)) o.constraints with
+            | some e => .error (e, ⟨core, ux, cx, rx⟩)
+            | none =>
+              let sch := o.schema
+              let us := o.uniques
+              .ok (XTenant.reindex
+                (core.modifyType ty (fun o => { o with slots := setSlot o.slots id (some r) }))
+                ux cx rx ty id sch us (some old) (some r))
   | .delete ty id ev =>
     match core.typ? ty with
     | none => .error (unknownTypeI core p, ⟨core, ux, cx, rx⟩)

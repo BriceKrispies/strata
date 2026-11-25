@@ -392,14 +392,15 @@ The types, with their tags:
 | `Ty` | `00` int, `01` str, `02` bool, `03` ref restrict then the object type id (natural), `04` ref setNull then the object type id (natural), `05` list then the element type |
 | `Elem` | `00` null, `01` int, `02` str, `03` bool, `04` ref (natural) |
 | `Val` | `00` null, `01` int, `02` str, `03` bool, `04` ref (natural), `05` list (count, elements) |
-| `FieldDef` | `ty`, `required` (bool), `unique` (bool), `default` (`Val`) |
+| `FieldDef` | `ty`, `required` (bool), `unique` (bool), `default` (`Expr`, slice 5: the constant default is `lit v`) |
 | `Limits` | `maxString`, `maxList`, `maxUnique`, `maxRecord` (naturals) |
 | `Record` | `owner`, `version`, then the fields as a list of (field id, `Val`) |
-| `ObjType` | `schema` (list of (field id, `FieldDef`)), `uniques` (list of lists of field ids), `records` (list of (record id, `Record`)) |
+| `ObjType` | `schema` (list of (field id, `FieldDef`)), `uniques` (list of lists of field ids), `records` (list of (record id, `Record`)), `constraints` (list of `Expr`, slice 5) |
 | `Tenant` | `types` (list of (object type id, `ObjType`)), `owner`, `editors` (list), `writers` (list), `nextId`, `limits` |
 | `Ctx` | `tenant`, `principal` |
 | `Intent` | each begins with its tag, then the object type id (natural): `00` create (fields); `01` update (id, fields, option expected version); `02` delete (id, option expected version); `03` setRequired (field, strict); `04` setUnique (field, strict); `05` defineUnique (list of field ids) |
-| `Err` | one byte: `00` noTenant, `01` unauthorized, `02` notFound, `03` invalid, `04` migrationRejected, `05` danglingReference, `06` stillReferenced, `07` versionConflict, `08` limitExceeded, `09` uniqueViolated, `0A` invalidSchema, `0B` unknownObject |
+| `Err` | one byte: `00` noTenant, `01` unauthorized, `02` notFound, `03` invalid, `04` migrationRejected, `05` danglingReference, `06` stillReferenced, `07` versionConflict, `08` limitExceeded, `09` uniqueViolated, `0A` invalidSchema, `0B` unknownObject, `0C` constraintViolated, `0D` evaluation |
+| `Expr` (slice 5) | one tag byte, then its parts in prefix order: `00` lit (`Val`); `01` field (scope: `00` record, `01` old, `02` new; field id); `02` principal; `03` comparison (operator: `00` eq, `01` ne, `02` lt, `03` le, `04` gt, `05` ge; two operands); `04` and and `05` or (two operands each); `06` not and `07` isNull (one operand) |
 | step result (`Except Err Tenant`) | `00` then `Err`, or `01` then `Tenant` |
 
 Fixtures (each proved by evaluation in `Fixtures.lean`; the Rust tests assert the same bytes):
@@ -408,9 +409,11 @@ Fixtures (each proved by evaluation in `Fixtures.lean`; the Rust tests assert th
 - `encTy (.list (.ref 0 .setNull)) = [5, 4, 0]` and `encTy (.ref 300 .restrict) = [3, 172, 2]`;
 - `encIntent (.update 1 5 [(1, .str "x")] none) = [1, 1, 5, 1, 1, 2, 1, 120, 0]`;
 - `encTenant fxTenant`, a tenant with one string field, owner 7, next id 1 and the kernel's limits,
-  is `01 01 01 01 01 01 00 00 00 00 07 00 00 01 80 80 04 E8 07 C8 01 80 80 10` (24 bytes): one
-  object type, id `01`, with one field (id `01`, str, required, not unique, null default), no
-  uniques and no records, then the owner, the two empty role lists, the next id and the limits;
+  is `01 01 01 01 01 01 00 00 00 00 00 00 07 00 00 01 80 80 04 E8 07 C8 01 80 80 10` (26 bytes): one
+  object type, id `01`, with one field (id `01`, str, required, not unique, default the literal
+  null), no
+  uniques, no records and no constraints, then the owner, the two empty role lists, the next id and
+  the limits;
 - `encResult (.error .unauthorized) = [0, 1]`.
 
 `World` (a function from tenant ids to tenants) is not encoded. The boundary carries one tenant.
@@ -447,67 +450,82 @@ in `docs/verification.md`) and is not part of this codec.
 
 ## Executable kernel (A2, WG-5652)
 
-The executable Lean kernel for the slices the spec covers (slices 0 to 3) lives in
-`lean/Strata/Impl/` and `lean/Strata/Fixture.lean`. The spec (`Strata/Model.lean`) is unchanged;
-it stays the readable reference. The work follows IronFleet's two steps: a functional
-implementation first, proved against the spec, then an indexed one, proved against the first.
+The executable Lean kernel for the slices the spec covers (slices 0 to 5) lives in
+`lean/Strata/Impl/` and `lean/Strata/Fixture.lean`. The spec (`Strata/Model.lean`) is unchanged; it
+stays the readable reference. The work follows IronFleet's two steps: a functional implementation
+first, proved against the spec (stage 1), then an indexed one, proved against the first (stage 2),
+and the two proofs compose.
 
-**Stage 1, done (functional, records in slots).** `Store.lean` holds the data:
+**Stage 1 (records in slots).** `Tenant.lean`: an implementation tenant (`ITenant`) keeps each object
+type (`IObj`: schema, constraints, composite constraints, records) with the records in an
+`Array (Option Record)`; slot `i` holds the record with id `i`. Ids come from one counter for the
+tenant, so a type's array may be shorter than the counter and `padTo` fills the gap on a create.
+`absSlots` / `IObj.abs` / `ITenant.abs` / `absW` read the state back as the spec's. `Problem.lean` is
+the spec's `problem` with the record sets read from slots; `Step.lean` is `stepTenantI`; `World.lean`
+the world. Theorems: `stepTenantI_refines` (`(stepTenantI t p i).map ITenant.abs = stepTenant t.abs p i`
+under `ITenant.Inv`, no array longer than the counter), `stepI_refines`, `stepI_inv`,
+`absW_implInitial`. The unique, composite and referrer checks are scans here.
 
-- `ITenant` keeps the spec's tenant fields, with `slots : Array (Option Record)`. Slot `i` holds
-  the record with id `i`, or nothing once it is deleted. A lookup by id is an array index, a
-  create is an append.
-- `absSlots` is the abstraction of a slot array: the spec's record list, in the spec's order
-  (most recent first), built by `ascend`. `ITenant.abs` and `absW` lift it to a tenant and a
-  world.
-- `anyFrom` is the record scan, a loop over the slots with no list built.
+**Stage 2 (indexes).** `XIndex.lean` is a hash-map multimap (`MM`, `Std.HashMap` from key to the
+cells that hold it) with the operations the steps need and the invariant `MM.Inv m ck` (a cell is
+listed under a key iff the key is one of the cell's keys). `XTenant.lean` defines three indexes, each
+kept equal to a key function of the stored records:
 
-`Problem.lean` is the spec's `problem` with the record set read from the slots. Only the four
-places that read the record set are restated (`clashAtI`, `Val.resolvesI`, the composite clash
-in `compositeProblemI`, and the lookups); every other function is the spec's own, called
-unchanged. `Step.lean` is `stepTenantI` and `stepI`. The permission tests, the version check and
-the record constructors are the spec's. The schema changes check the whole table: they call the
-spec's `schemaChangeRefused` and `dupFields` on `absSlots`, once per change.
+- `uidx`: key (type, field, value), for each field the schema declares unique, with a keyed value;
+- `cidx`: key (type, constraint, values), for each composite constraint whose fields are all keyed;
+- `ridx`: key (target type, target id), the cells whose record names that target through a
+  reference field (alone or as a list element).
 
-`World.lean` carries the refinement to the world and the start state:
+`XTenant.Ok` says the slot invariant holds, the object type ids are distinct, and each index is
+exactly its key function. `XProblem.lean`: a clash is `clashX` / `compClashX`, a lookup; `problemX_eq`
+says it equals the stage 1 check under `Ok`. `XStep.lean`: `stepParts` / `stepTenantXL` /
+`stepTenantX`. A delete reads the blockers from `ridx` (`blockedX_eq`) and clears the references
+through the listed cells only (`XTenant.deleteX`, `ClearedFrom`, `deleteX_good`); every accepted write
+updates the indexes for the cells it changes (`XTenant.ok_reindex`); `setUnique` and `defineUnique`
+index the existing records for the new key (`MM.inv_addCells`). Schema changes still run the spec's
+strict re-validation on the abstraction once per change (a strict change must look at every record it
+touches). A refusal hands the tenant back (`stepTenantXL`), so a caller that keeps no other reference
+lets the compiled code update arrays and maps in place.
 
-- `stepTenantI_refines`: `(stepTenantI t p i).map ITenant.abs = stepTenant t.abs p i`, under
-  `t.slots.size = t.nextId`. The same refusal, or the abstraction of the accepted tenant.
-- `stepI_refines`: `(stepI w i c).map absW = step (absW w) i c`, under `IWorld.Inv`.
-- `stepI_inv`, `stepTenantI_inv`: an accepted step keeps the invariant (one slot per id below the
-  counter), so the refinement applies to the next step as well.
-- `absW_implInitial`: the fixture world, started as empty slots, abstracts to the spec's fixture
-  world (`Strata/Fixture.lean`, which both executables now start from).
+Theorems (`XWorld.lean`, `XProofs.lean`, `XDelete.lean`, `XSchema.lean`):
 
-The scenario runner (`lean/Main.lean`) drives either kernel: `lake exe strata_model <file>` runs
-the spec, `lake exe strata_model --impl <file>` runs the executable kernel, and the state printed
-for the latter is read back through `absW`. On `lean/fixtures/scenarios.txt` (2074 output lines),
-the spec's output, the executable kernel's output and `lean/fixtures/expected.txt` are identical.
+- `stepTenantXL_good` / `stepTenantX_good`: for `Ok` input, the indexed outcome is stage 1's (same
+  refusal, or same tenant), and an accepted tenant is `Ok`;
+- `stepTenantX_refines`: `(stepTenantX x p i).map XTenant.abs = stepTenant x.abs p i`;
+- `stepX_refines`: `(stepX w i c).map absX = step (absX w) i c` under `XWorld.Ok`;
+- `stepX_ok`: an accepted step keeps `XWorld.Ok`; `xInitial_ok`, `absX_xInitial`: the fixture world
+  starts `Ok` and abstracts to the spec's.
 
-**What stage 1 does not do.** The uniqueness check (`clashAtI`), the reference check (`hasI`
-through the slots) and the referrer check of a delete (`anyFrom ... blocks`) are scans over the
-slots, so a write costs O(records) in those checks, not O(1). `absSlots` builds the list with
-appends, so the schema-change paths and the printer are quadratic in the record count.
+Every theorem is in `lean/Audit.lean` and uses at most `propext`, `Classical.choice`, `Quot.sound`.
 
-**Stage 2, not started (indexes).** Still to do, each piece with its invariant proved preserved by
-every accepted step:
+**Output check.** `strata_model <file>` (spec), `strata_model --impl <file>` (stage 1) and
+`strata_model --indexed <file>` (stage 2) print the same 2463 lines on `lean/fixtures/scenarios.txt`,
+equal to `lean/fixtures/expected.txt`.
 
-1. A unique-value index keyed by (field, keyed value), and a composite index keyed by a
-   constraint's value list, so a clash check does not scan. The consistency invariant: the index
-   holds exactly the ids of the records that hold each keyed value in each unique field and each
-   composite constraint.
-2. A referrer index from a target id to the records that name it through a restricting or
-   clearing field, so a delete does not scan. The invariant is the same shape: the index is the
-   set of referring (record, field) pairs of the slots.
-3. The schema as an indexed structure (field id to definition) instead of an association list.
-4. An `ascend`-free abstraction for the schema-change paths (an accumulator), if they show up in
-   measurements.
+**Measurements** (`strata_model --bench <n>`; one thread, one machine; the workload is generated by
+running the indexed kernel: creates with unique fields and references, updates that change and clash
+on a unique field, deletes that are refused or clear references; all kernels end with the same
+accepted count and record checksum):
 
-Stage 2 extends both the spec's and the implementation's statements together when a later slice
-of WG-5373 adds a rule.
+| n | spec ops/s | stage 1 ops/s | indexed ops/s |
+|---|---|---|---|
+| 1000 | 76,900 | 58,800 | 500,000 |
+| 2000 | 27,000 | 23,800 | 400,000 |
+| 8000 | 6,900 | 6,100 | 444,000 |
+| 16000 | 3,500 | 3,100 | 485,000 |
+| 32000 | not run | not run | 390,000 |
+| 128000 | not run | not run | 286,000 |
 
-Theorems: `lean/Audit.lean` prints the axioms of each one (the stage-1 block). None depends on
-`sorryAx`; each uses only `propext`, `Classical.choice` and `Quot.sound` at most.
+The spec and stage 1 are quadratic (throughput falls with the count); the indexed kernel stays within
+a factor of about two over two orders of magnitude (hash maps and cache effects). The stage 1 and spec
+rows run through their pure interfaces, so they also copy arrays on a refused step.
+
+**What remains.** Schema lookups are still association lists (their size is the schema's, not the
+data's); the schema-change checks and `absSlots` (used by the printer and by the strict checks) are
+not indexed and are quadratic in the record count; a referrer list is scanned linearly per change of
+a record that is referenced by many; the workload generator in `Bench.lean` is itself quadratic;
+the world-level `stepX` rebuilds a closure per step and is not the performance interface (use
+`stepTenantXL`). Stage 2 extends with the spec when a later slice adds a rule.
 
 ## Temporal logic library
 

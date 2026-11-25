@@ -95,14 +95,14 @@ structure ClearedFrom (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y : 
   limits : y.core.limits = y0.core.limits
   isSome : ∀ T, (y.core.typ? T).isSome = (y0.core.typ? T).isSome
   typ : ∀ T o0, y0.core.typ? T = some o0 → ∃ o, y.core.typ? T = some o ∧ o.schema = o0.schema ∧
-    o.uniques = o0.uniques ∧ o.slots.size = o0.slots.size ∧
+    o.uniques = o0.uniques ∧ o.constraints = o0.constraints ∧ o.slots.size = o0.slots.size ∧
     ∀ i, (S (T, i) → getRec o.slots i = (getRec o0.slots i).map (clearRef o0.schema ty id)) ∧
       (¬ S (T, i) → getRec o.slots i = getRec o0.slots i)
 
 theorem ClearedFrom.refl (ty : TypeId) (id : RecordId) (y : XTenant) (h : y.Ok) :
     ClearedFrom ty id (fun _ => False) y y :=
   ⟨h, rfl, rfl, rfl, rfl, rfl, rfl, fun _ => rfl,
-    fun T o0 ho => ⟨o0, ho, rfl, rfl, rfl, fun i => ⟨fun h => h.elim, fun _ => rfl⟩⟩⟩
+    fun T o0 ho => ⟨o0, ho, rfl, rfl, rfl, rfl, fun i => ⟨fun h => h.elim, fun _ => rfl⟩⟩⟩
 
 theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y : XTenant)
     (c : Cell) (h : ClearedFrom ty id S y0 y) :
@@ -117,8 +117,8 @@ theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y
     intro hcase
     refine ⟨h.ok, h.keys, h.nextId, h.owner, h.editors, h.writers, h.limits, h.isSome, ?_⟩
     intro T o0 ho0
-    obtain ⟨o, hT, hs, hu', hsz, hi⟩ := h.typ T o0 ho0
-    refine ⟨o, hT, hs, hu', hsz, fun i => ⟨?_, ?_⟩⟩
+    obtain ⟨o, hT, hs, hu', hcn, hsz, hi⟩ := h.typ T o0 ho0
+    refine ⟨o, hT, hs, hu', hcn, hsz, fun i => ⟨?_, ?_⟩⟩
     · rintro (hS | hcell)
       · exact (hi i).1 hS
       · -- the cell is `c`, which holds no record
@@ -194,12 +194,12 @@ theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y
           rw [typ?_putType_other _ _ _ _ hT]
           exact h.isSome T
       · intro T o0 ho0
-        obtain ⟨oy, hT, hs, hu', hsz', hi⟩ := h.typ T o0 ho0
+        obtain ⟨oy, hT, hs, hu', hcn, hsz', hi⟩ := h.typ T o0 ho0
         by_cases hTc : T = c.1
         · subst hTc
           have hoy : oy = o := by rw [hty] at hT; exact (Option.some.inj hT).symm
           subst hoy
-          refine ⟨_, typ?_putType_same _ _ _ _ hty, hs, hu', ?_, ?_⟩
+          refine ⟨_, typ?_putType_same _ _ _ _ hty, hs, hu', hcn, ?_, ?_⟩
           · simp [size_setSlot, hsz']
           · intro i
             by_cases hic : i = c.2
@@ -232,7 +232,7 @@ theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y
               · show getRec (setSlot oy.slots c.2 _) i = _
                 rw [hrefl i hic]
                 exact (hi i).2 (fun hS => hn (Or.inl hS))
-        · refine ⟨oy, ?_, hs, hu', hsz', ?_⟩
+        · refine ⟨oy, ?_, hs, hu', hcn, hsz', ?_⟩
           · show (core.putType c.1 _).typ? T = _
             rw [typ?_putType_other _ _ _ _ hTc]; exact hT
           · intro i
@@ -248,8 +248,8 @@ theorem ClearedFrom.congr {ty : TypeId} {id : RecordId} {S S' : Cell → Prop} {
     (hS : ∀ c, S c ↔ S' c) (h : ClearedFrom ty id S y0 y) : ClearedFrom ty id S' y0 y := by
   refine ⟨h.ok, h.keys, h.nextId, h.owner, h.editors, h.writers, h.limits, h.isSome, ?_⟩
   intro T o0 ho0
-  obtain ⟨o, hT, hs, hu, hsz, hi⟩ := h.typ T o0 ho0
-  exact ⟨o, hT, hs, hu, hsz, fun i => ⟨fun h' => (hi i).1 ((hS _).mpr h'),
+  obtain ⟨o, hT, hs, hu, hcn, hsz, hi⟩ := h.typ T o0 ho0
+  exact ⟨o, hT, hs, hu, hcn, hsz, fun i => ⟨fun h' => (hi i).1 ((hS _).mpr h'),
     fun h' => (hi i).2 (fun h'' => h' ((hS _).mp h''))⟩⟩
 
 theorem clearAll_cleared (ty : TypeId) (id : RecordId) (ds : List Cell) :
@@ -330,7 +330,7 @@ theorem list_ext_lookup (l1 l2 : List (TypeId × IObj)) (hnd : (l1.map Prod.fst)
       rw [this]
 
 theorem IObj.ext' (a b : IObj) (h1 : a.schema = b.schema) (h2 : a.uniques = b.uniques)
-    (h3 : a.slots = b.slots) : a = b := by
+    (h3 : a.slots = b.slots) (h4 : a.constraints = b.constraints) : a = b := by
   cases a; cases b; simp_all
 
 theorem ITenant.ext' (a b : ITenant) (h1 : a.types = b.types) (h2 : a.owner = b.owner)
@@ -429,24 +429,24 @@ theorem deleteX_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
       | some oc =>
         -- the object of `T` before the fold
         have hx1T : ∃ o0, x1.core.typ? T = some o0 ∧ o0.schema = oc.schema ∧
-            o0.uniques = oc.uniques ∧ o0.slots.size = oc.slots.size ∧
+            o0.uniques = oc.uniques ∧ o0.constraints = oc.constraints ∧ o0.slots.size = oc.slots.size ∧
             ∀ i, getRec o0.slots i = if T = ty ∧ i = id then none else getRec oc.slots i := by
           by_cases hT : T = ty
           · subst hT
             have hoo : oc = o := by rw [hct] at hty; exact Option.some.inj hty
             subst hoo
-            refine ⟨{ oc with slots := setSlot oc.slots id none }, ?_, rfl, rfl, ?_, ?_⟩
+            refine ⟨{ oc with slots := setSlot oc.slots id none }, ?_, rfl, rfl, rfl, ?_, ?_⟩
             · rw [hx1core]; exact typ?_putType_same _ _ _ _ hct
             · simp [size_setSlot]
             · intro i
               show getRec (setSlot oc.slots id none) i = _
               rw [getRec_setSlot _ _ _ hlt]
               by_cases hi : i = id <;> simp [hi]
-          · refine ⟨oc, ?_, rfl, rfl, rfl, ?_⟩
+          · refine ⟨oc, ?_, rfl, rfl, rfl, rfl, ?_⟩
             · rw [hx1core, typ?_putType_other _ _ _ _ hT]; exact hct
             · intro i; simp [hT]
-        obtain ⟨o0, hT0, hs0, hu0, hsz0, hget0⟩ := hx1T
-        obtain ⟨oy, hTy, hs, hu', hsz', hi⟩ := hcl.typ T o0 hT0
+        obtain ⟨o0, hT0, hs0, hu0, hcn0, hsz0, hget0⟩ := hx1T
+        obtain ⟨oy, hTy, hs, hu', hcn, hsz', hi⟩ := hcl.typ T o0 hT0
         rw [hTy, Option.map_some]
         congr 1
         have hlt' : T = ty → id < oc.slots.size := by
@@ -475,6 +475,7 @@ theorem deleteX_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
             by_cases hh : T = ty ∧ i = id
             · simp [hh]
             · simp [hh]
+        · rw [hcn, hcn0]; rfl
   · exact hcl.owner.trans (by rw [hx1core]; rfl)
   · exact hcl.editors.trans (by rw [hx1core]; rfl)
   · exact hcl.writers.trans (by rw [hx1core]; rfl)

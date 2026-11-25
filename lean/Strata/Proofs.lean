@@ -85,9 +85,11 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
         simp only [stepTenant, hT] at hs
         split at hs
         · cases hs
-        · rename_i hc
-          have hc' : canCreate t c.principal = true := by simpa using hc
-          simp [authorized, hT, hc']
+        · split at hs
+          · cases hs
+          · rename_i hc
+            have hc' : canCreate t c.principal = true := by simpa using hc
+            simp [authorized, hT, hc']
     | update ty id fs ev =>
       cases hT : t.typ? ty with
       | none => simp [stepTenant, hT] at hs
@@ -219,42 +221,32 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : PrincipalId) (i : Intent)
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h
     | some o =>
-      simp only [stepTenant, hT] at h
-      split at h
-      · cases h
-      · cases hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId
-            (newRecord o.schema p fs) with
-        | some e => simp [hP] at h
-        | none =>
-          simp only [hP] at h
-          have ht := Except.ok.inj h
-          subst ht
-          constructor
-          · intro T o' hT' q hq
-            change (t.putType ty { o with records := (t.nextId, newRecord o.schema p fs) ::
-              o.records }).typ? T = some o' at hT'
-            by_cases hTy : T = ty
-            · subst hTy
-              rw [typ?_putType_self t T o _ hT] at hT'
-              cases hT'
-              rcases List.mem_cons.mp hq with rfl | hq'
-              · exact (problem_none hP).1
-              · exact hconf T o hT q hq'
-            · rw [typ?_putType_other t ty T _ hTy] at hT'
-              exact hconf T o' hT' q hq
-          · intro T o' hT' q hq
-            change (t.putType ty { o with records := (t.nextId, newRecord o.schema p fs) ::
-              o.records }).typ? T = some o' at hT'
-            show q.1 < t.nextId + 1
-            by_cases hTy : T = ty
-            · subst hTy
-              rw [typ?_putType_self t T o _ hT] at hT'
-              cases hT'
-              rcases List.mem_cons.mp hq with rfl | hq'
-              · exact Nat.lt_succ_self _
-              · exact Nat.lt_succ_of_lt (hids T o hT q hq')
-            · rw [typ?_putType_other t ty T _ hTy] at hT'
-              exact Nat.lt_succ_of_lt (hids T o' hT' q hq)
+      obtain ⟨r, -, hP, -, ht⟩ := create_ok_parts hT h
+      subst ht
+      constructor
+      · intro T o' hT' q hq
+        change (t.putType ty { o with records := (t.nextId, r) :: o.records }).typ? T = some o' at hT'
+        by_cases hTy : T = ty
+        · subst hTy
+          rw [typ?_putType_self t T o _ hT] at hT'
+          cases hT'
+          rcases List.mem_cons.mp hq with rfl | hq'
+          · exact (problem_none hP).1
+          · exact hconf T o hT q hq'
+        · rw [typ?_putType_other t ty T _ hTy] at hT'
+          exact hconf T o' hT' q hq
+      · intro T o' hT' q hq
+        change (t.putType ty { o with records := (t.nextId, r) :: o.records }).typ? T = some o' at hT'
+        show q.1 < t.nextId + 1
+        by_cases hTy : T = ty
+        · subst hTy
+          rw [typ?_putType_self t T o _ hT] at hT'
+          cases hT'
+          rcases List.mem_cons.mp hq with rfl | hq'
+          · exact Nat.lt_succ_self _
+          · exact Nat.lt_succ_of_lt (hids T o hT q hq')
+        · rw [typ?_putType_other t ty T _ hTy] at hT'
+          exact Nat.lt_succ_of_lt (hids T o' hT' q hq)
   | update ty id fs ev =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h
@@ -262,49 +254,39 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : PrincipalId) (i : Intent)
       cases hL : o.records.lookup id with
       | none => simp [stepTenant, hT, hL, missingRecord] at h
       | some old =>
-        simp only [stepTenant, hT, hL] at h
-        split at h
-        · cases h
-        · split at h
-          · cases h
-          · cases hP : problem t.limits o.schema o.uniques true t.env o.records id
-                (patched old fs) with
-            | some e => simp [hP] at h
-            | none =>
-              simp only [hP] at h
-              have ht := Except.ok.inj h
-              subst ht
-              constructor
-              · intro T o' hT' q hq
-                by_cases hTy : T = ty
-                · subst hTy
-                  rw [typ?_putType_self t T o _ hT] at hT'
-                  cases hT'
-                  obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
-                  by_cases hid : (q₀.1 == id) = true
-                  · simp only [hid, if_true] at hmap
-                    rw [← hmap]
-                    exact (problem_none hP).1
-                  · simp only [hid, if_false] at hmap
-                    rw [← hmap]
-                    exact hconf T o hT q₀ hq₀
-                · rw [typ?_putType_other t ty T _ hTy] at hT'
-                  exact hconf T o' hT' q hq
-              · intro T o' hT' q hq
-                by_cases hTy : T = ty
-                · subst hTy
-                  rw [typ?_putType_self t T o _ hT] at hT'
-                  cases hT'
-                  obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
-                  by_cases hid : (q₀.1 == id) = true
-                  · simp only [hid, if_true] at hmap
-                    rw [← hmap]
-                    exact hids T o hT q₀ hq₀
-                  · simp only [hid, if_false] at hmap
-                    rw [← hmap]
-                    exact hids T o hT q₀ hq₀
-                · rw [typ?_putType_other t ty T _ hTy] at hT'
-                  exact hids T o' hT' q hq
+        obtain ⟨hP, -, ht⟩ := update_ok_parts hT hL h
+        subst ht
+        constructor
+        · intro T o' hT' q hq
+          by_cases hTy : T = ty
+          · subst hTy
+            rw [typ?_putType_self t T o _ hT] at hT'
+            cases hT'
+            obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+            by_cases hid : (q₀.1 == id) = true
+            · simp only [hid, if_true] at hmap
+              rw [← hmap]
+              exact (problem_none hP).1
+            · simp only [hid, if_false] at hmap
+              rw [← hmap]
+              exact hconf T o hT q₀ hq₀
+          · rw [typ?_putType_other t ty T _ hTy] at hT'
+            exact hconf T o' hT' q hq
+        · intro T o' hT' q hq
+          by_cases hTy : T = ty
+          · subst hTy
+            rw [typ?_putType_self t T o _ hT] at hT'
+            cases hT'
+            obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+            by_cases hid : (q₀.1 == id) = true
+            · simp only [hid, if_true] at hmap
+              rw [← hmap]
+              exact hids T o hT q₀ hq₀
+            · simp only [hid, if_false] at hmap
+              rw [← hmap]
+              exact hids T o hT q₀ hq₀
+          · rw [typ?_putType_other t ty T _ hTy] at hT'
+            exact hids T o' hT' q hq
   | delete ty id ev =>
     have ht := stepTenant_delete_eq h
     subst ht

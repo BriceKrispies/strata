@@ -67,6 +67,45 @@ inductive Ty where
   | list (elem : Ty)
   deriving DecidableEq, Repr
 
+/-- Which record an expression reads a field from: the record being checked (the kernel's
+    `record`), the stored record an update replaces (`old`, absent on a create) or the new record
+    (`new`, the same as `record` on a write). -/
+inductive Scope where
+  | record
+  | old
+  | new
+  deriving DecidableEq, Repr
+
+inductive CmpOp where
+  | eq
+  | ne
+  | lt
+  | le
+  | gt
+  | ge
+  deriving DecidableEq, Repr
+
+/-- The expression language of constraints and expression defaults (slice 5): the kernel's
+    `tenant-rule-language` restricted to literals, field reads of the three scopes, the principal,
+    comparisons, the three-valued connectives and `isNull`. Its evaluation, and the errors it can
+    raise, are in the section "Expressions" below. -/
+inductive Expr where
+  /-- A literal value. -/
+  | lit (v : Val)
+  /-- A field of the record in the scope; `null` when there is no such record or it lacks the field. -/
+  | field (s : Scope) (f : FieldId)
+  /-- The acting principal, as the kernel names it: the string `p<n>` for the principal `n` (the
+      fixtures name principals so); `null` for the system, which the schema-change checks run as. -/
+  | principal
+  | cmp (op : CmpOp) (a b : Expr)
+  /-- Kleene `and`: `false` if either operand is `false`, `null` if one is `null`, else `true`. -/
+  | and (a b : Expr)
+  /-- Kleene `or`: `true` if either operand is `true`, `null` if one is `null`, else `false`. -/
+  | or (a b : Expr)
+  | not (a : Expr)
+  | isNull (a : Expr)
+  deriving DecidableEq, Repr
+
 structure FieldDef where
   ty : Ty
   required : Bool
@@ -74,9 +113,9 @@ structure FieldDef where
       in it (`Val.keyed`). A unique value has a bound of its own on its encoded size, and a list
       field is never unique (`setUnique` and `defineUnique` refuse one). -/
   unique : Bool := false
-  /-- The constant a create fills the field with when the intent does not name it; `null` for no
-      default. -/
-  default : Val := .null
+  /-- The expression a create fills the field with when the intent does not name it. The constant
+      default is `.lit v`; `.lit .null`, the default of a field with none, fills nothing. -/
+  default : Expr := .lit .null
   deriving DecidableEq, Repr
 
 /-- Whether a list element has a type. `null` has none. -/
@@ -184,6 +223,151 @@ def Fields.get (fs : Fields) (f : FieldId) : Val :=
   | some v => v
   | none => .null
 
+/-! ## Expressions (slice 5)
+
+An expression is evaluated in an environment: the record being checked, the stored record an
+update replaces, and the principal. A value is a `Val`, `null` included, and an evaluation can fail:
+the result is `Except Unit Val`, where `error ()` is the kernel's `EvalError`. The rules are the
+kernel's (`crates/model-core/src/tenant_rule_language.rs`, `kleene`, `equality`, `order`):
+
+- a field read of an absent record is `null`, and so is a field the record lacks;
+- a comparison with `null` on either side is `null`; comparing two kinds that differ is an error;
+  an ordering (`<`, `<=`, `>`, `>=`) is defined for integers and strings only, so an ordering of
+  booleans, references or lists is an error;
+- `not` and the connectives take booleans and `null`, and any other operand is an error; `and` and
+  `or` are Kleene: a decisive operand (`false` for `and`, `true` for `or`) decides the result
+  whatever the other operand is, even an error, because the kernel stops at it; otherwise `null`
+  if either is `null`, else the non-decisive value.
+
+Left to right, the first error decides, and a decisive operand before it does not. The truth tables
+are lemmas in `Strata/Constraints.lean`. -/
+
+/-- The outcome of evaluating an expression: a value, or an evaluation error. -/
+abbrev EvalResult := Except Unit Val
+
+/-- What an expression may observe: the record being checked, the stored record an update replaces
+    (none on a create), and the principal (none for the system). -/
+structure ExprEnv where
+  record : Option Record := none
+  old : Option Record := none
+  new : Option Record := none
+  principal : Option PrincipalId := none
+
+/-- The record an expression reads from a scope, if there is one. -/
+def ExprEnv.scoped (env : ExprEnv) : Scope → Option Record
+  | .record => env.record
+  | .old => env.old
+  | .new => env.new
+
+/-- Two values of the same kind (`null` is of no kind). -/
+def Val.sameKind : Val → Val → Bool
+  | .int _, .int _ => true
+  | .str _, .str _ => true
+  | .bool _, .bool _ => true
+  | .ref _, .ref _ => true
+  | .list _, .list _ => true
+  | .null, .null => true
+  | _, _ => false
+
+/-- The truth of an ordering test from whether the left is less than the right and whether they are
+    equal. -/
+def ordTest : CmpOp → Bool → Bool → Bool
+  | .lt, lt, _ => lt
+  | .le, lt, eq => lt || eq
+  | .gt, lt, eq => !(lt || eq)
+  | .ge, lt, _ => !lt
+  | .eq, _, eq => eq
+  | .ne, _, eq => !eq
+
+/-- A comparison: `null` when either side is `null`; an error when the kinds differ, or when an
+    ordering is asked of a kind that has none. -/
+def compareVals (op : CmpOp) (x y : Val) : EvalResult :=
+  if x == .null || y == .null then .ok .null
+  else if !x.sameKind y then .error ()
+  else match op with
+    | .eq => .ok (.bool (x == y))
+    | .ne => .ok (.bool (!(x == y)))
+    | _ => match x, y with
+      | .int a, .int b => .ok (.bool (ordTest op (decide (a < b)) (decide (a = b))))
+      | .str a, .str b => .ok (.bool (ordTest op (decide (a < b)) (decide (a = b))))
+      | _, _ => .error ()
+
+/-- An operand of `not` or of a connective: a boolean, or `null`. -/
+def truthOf : Val → EvalResult
+  | .bool b => .ok (.bool b)
+  | .null => .ok .null
+  | _ => .error ()
+
+/-- Kleene connective: `d` is the decisive value (`false` for `and`, `true` for `or`). The left
+    operand decides when it is `d`, whatever the right one is. -/
+def connective (d : Bool) (x y : EvalResult) : EvalResult :=
+  match x with
+  | .error _ => .error ()
+  | .ok (.bool b) =>
+    if b == d then .ok (.bool d)
+    else match y with
+      | .error _ => .error ()
+      | .ok w => truthOf w
+  | .ok .null =>
+    match y with
+    | .error _ => .error ()
+    | .ok (.bool c) => if c == d then .ok (.bool d) else .ok .null
+    | .ok .null => .ok .null
+    | .ok _ => .error ()
+  | .ok _ => .error ()
+
+/-- Evaluate an expression in an environment. -/
+def evalExpr (env : ExprEnv) : Expr → EvalResult
+  | .lit v => .ok v
+  | .field s f => .ok (match env.scoped s with
+      | some r => r.fields.get f
+      | none => .null)
+  | .principal => .ok (match env.principal with
+      | some p => .str ("p" ++ toString p)
+      | none => .null)
+  | .cmp op a b => match evalExpr env a, evalExpr env b with
+    | .ok x, .ok y => compareVals op x y
+    | _, _ => .error ()
+  | .and a b => connective false (evalExpr env a) (evalExpr env b)
+  | .or a b => connective true (evalExpr env a) (evalExpr env b)
+  | .not a => match evalExpr env a with
+    | .ok (.bool b) => .ok (.bool (!b))
+    | .ok .null => .ok .null
+    | _ => .error ()
+  | .isNull a => match evalExpr env a with
+    | .ok .null => .ok (.bool true)
+    | .ok _ => .ok (.bool false)
+    | .error _ => .error ()
+
+/-- The environment a write's constraints and defaults are checked in: the candidate record (as
+    `record` and as `new`), the stored record it replaces (none on a create), and the caller. -/
+def writeEnv (p : PrincipalId) (candidate : Record) (old : Option Record) : ExprEnv :=
+  { record := some candidate, old := old, new := some candidate, principal := some p }
+
+/-- The environment a stored record is checked in when a schema change re-validates it: the record
+    as `record` and `new`, no old record, and the system as principal (as the kernel's `Reject`
+    does). -/
+def storedEnv (r : Record) : ExprEnv :=
+  { record := some r, new := some r }
+
+/-- The fields a create writes beyond the named ones: the default of each field of the schema the
+    intent does not name, when it evaluates to something other than `null`. Any default that cannot
+    be evaluated fails the whole create. The defaults are evaluated with no record (a field reads as
+    `null`) and the caller as principal. -/
+def defaultsOf (env : ExprEnv) : Schema → Fields → Except Unit Fields
+  | [], _ => .ok []
+  | (f, d) :: ss, fs =>
+    match defaultsOf env ss fs with
+    | .error _ => .error ()
+    | .ok rest =>
+      if fs.any (fun fv => fv.1 == f) then .ok rest
+      else match evalExpr env d.default with
+        | .error _ => .error ()
+        | .ok .null => .ok rest
+        | .ok v => .ok ((f, v) :: rest)
+
+/-! ## Field checks -/
+
 /-- A field of a record is known to the schema and has the declared type. -/
 def fieldOk (schema : Schema) (fv : FieldId × Val) : Bool :=
   match schema.lookup fv.1 with
@@ -222,7 +406,21 @@ inductive Err where
   /-- The intent names an object type the tenant does not have, and the caller could act on that
       type. -/
   | unknownObject
+  /-- A constraint of the record's type is `false` on the record written (slice 5). -/
+  | constraintViolated
+  /-- An expression that a write or a default needs cannot be evaluated (a type error, or an
+      operand it cannot read): the kernel's `Evaluation` (slice 5). -/
+  | evaluation
   deriving DecidableEq, Repr
+
+/-- The first constraint that fails on the record, in the order given: `false` is
+    `constraintViolated`, an evaluation error is `evaluation`; `true` and `null` pass. -/
+def constraintProblem (env : ExprEnv) : List Expr → Option Err
+  | [] => none
+  | c :: cs => match evalExpr env c with
+    | .error _ => some Err.evaluation
+    | .ok (.bool false) => some Err.constraintViolated
+    | .ok _ => constraintProblem env cs
 
 /-! ## Records of the tenant
 
@@ -410,6 +608,9 @@ structure ObjType where
   /-- The composite unique constraints, each a list of fields (the kernel's `UniqueDef`). -/
   uniques : List (List FieldId) := []
   records : Records := []
+  /-- The constraints of the type, in the kernel's order (by constraint id): each must not be
+      `false` on a record of the type, checked after every other check of a write (slice 5). -/
+  constraints : List Expr := []
   deriving Repr
 
 /-- Everything one tenant owns. -/
@@ -513,17 +714,16 @@ def Fields.patch (fs ps : Fields) : Fields :=
 def normalise (fs : Fields) : Fields :=
   fs.foldl Fields.set []
 
-/-- The fields a create writes: the named ones that are not `null`, then the default of every field
-    of the schema that the intent does not name at all and whose default is not `null`. (The
-    kernel's rule: a field named as `null` gets no default.) -/
-def withDefaults (schema : Schema) (fs : Fields) : Fields :=
-  normalise fs ++ schema.filterMap (fun fd =>
-    if fs.any (fun fv => fv.1 == fd.1) || fd.2.default == .null then none
-    else some (fd.1, fd.2.default))
+/-- The fields a create writes: the named ones that are not `null`, then the defaults of the fields
+    of the schema that the intent does not name at all (`defaultsOf`). A field named as `null` gets
+    no default, the kernel's rule. An evaluation error in a default is an error of the create. -/
+def withDefaults (env : ExprEnv) (schema : Schema) (fs : Fields) : Except Unit Fields :=
+  (defaultsOf env schema fs).map (fun ds => normalise fs ++ ds)
 
-/-- The record a create by `p` writes, at version 1. -/
-def newRecord (schema : Schema) (p : PrincipalId) (fs : Fields) : Record :=
-  { owner := p, version := 1, fields := withDefaults schema fs }
+/-- The record a create by `p` writes, at version 1, or the error of its defaults. -/
+def newRecord (schema : Schema) (p : PrincipalId) (fs : Fields) : Except Unit Record :=
+  (withDefaults { principal := some p } schema fs).map
+    (fun fs' => { owner := p, version := 1, fields := fs' })
 
 /-- The record an accepted update writes: patched, one version on. -/
 def patched (old : Record) (ps : Fields) : Record :=
@@ -548,7 +748,8 @@ def tableViolated (L : Limits) (o : ObjType) : Bool :=
     o.schema.any (fun fd => fd.2.unique &&
       (dupFields o.records [fd.1] ||
         o.records.any (fun q => decide (L.maxUnique < (q.2.fields.get fd.1).size)))) ||
-    o.uniques.any (fun u => dupFields o.records u)
+    o.uniques.any (fun u => dupFields o.records u) ||
+    o.records.any (fun q => (constraintProblem (storedEnv q.2) o.constraints).isSome)
 
 /-- Whether the records of any object type of the tenant would violate the schema of their type.
     The kernel's `Reject` checks every record of every type against the resulting schema, so a
@@ -619,14 +820,20 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
     match t.typ? ty with
     | none => .error (unknownType t p)
     | some o =>
-      if !canCreate t p then .error .unauthorized
-      else
-        let r := newRecord o.schema p fs
-        match problem t.limits o.schema o.uniques true t.env o.records t.nextId r with
-        | some e => .error e
-        | none =>
-          let o' := { o with records := (t.nextId, r) :: o.records }
-          .ok { t.putType ty o' with nextId := t.nextId + 1 }
+      -- The defaults are evaluated before the permission is asked (the kernel's `create_record`).
+      match newRecord o.schema p fs with
+      | .error _ => .error .evaluation
+      | .ok r =>
+        if !canCreate t p then .error .unauthorized
+        else
+          match problem t.limits o.schema o.uniques true t.env o.records t.nextId r with
+          | some e => .error e
+          | none =>
+            match constraintProblem (writeEnv p r none) o.constraints with
+            | some e => .error e
+            | none =>
+              let o' := { o with records := (t.nextId, r) :: o.records }
+              .ok { t.putType ty o' with nextId := t.nextId + 1 }
   | .update ty id fs ev =>
     match t.typ? ty with
     | none => .error (unknownType t p)
@@ -641,8 +848,11 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
           match problem t.limits o.schema o.uniques true t.env o.records id r with
           | some e => .error e
           | none =>
-            let rs' := o.records.map (fun q => if q.1 == id then (q.1, r) else q)
-            .ok (t.putType ty { o with records := rs' })
+            match constraintProblem (writeEnv p r (some old)) o.constraints with
+            | some e => .error e
+            | none =>
+              let rs' := o.records.map (fun q => if q.1 == id then (q.1, r) else q)
+              .ok (t.putType ty { o with records := rs' })
   | .delete ty id ev =>
     match t.typ? ty with
     | none => .error (unknownType t p)
@@ -777,5 +987,29 @@ def World.WF (w : World) : Prop :=
 
 def World.RefsOk (w : World) : Prop :=
   ∀ x t, w x = some t → t.RefsOk
+
+/-! ## Constraints as an invariant (slice 5) -/
+
+/-- An expression that reads no old record and no principal: its value on a record does not depend
+    on which write checks it, so a constraint of this kind holds of a stored record exactly when
+    it holds of the record as a write checked it. -/
+def Expr.stateOnly : Expr → Bool
+  | .lit _ => true
+  | .field s _ => s != .old
+  | .principal => false
+  | .cmp _ a b => a.stateOnly && b.stateOnly
+  | .and a b => a.stateOnly && b.stateOnly
+  | .or a b => a.stateOnly && b.stateOnly
+  | .not a => a.stateOnly
+  | .isNull a => a.stateOnly
+
+/-- Every constraint of the tenant holds of every stored record: none is `false` or unevaluable. -/
+def Tenant.Satisfied (t : Tenant) : Prop :=
+  ∀ T o, t.typ? T = some o → ∀ q ∈ o.records,
+    constraintProblem (storedEnv q.2) o.constraints = none
+
+/-- Every constraint of the tenant is state-only (`Expr.stateOnly`). -/
+def Tenant.StateConstraints (t : Tenant) : Prop :=
+  ∀ T o, t.typ? T = some o → ∀ c ∈ o.constraints, c.stateOnly = true
 
 end Strata

@@ -19,7 +19,15 @@
 //! tag (`3` restricts, `4` clears) and the natural id of the object type it names; a tenant holds
 //! its object types as a list of entries, each an id and then the type's schema, composite
 //! constraints and records; an intent is its tag and then the natural id of the object type it acts
-//! on, before its other fields. The kernel's refusal `UnknownObject` is tag `11`.
+//! on, before its other fields. The kernel's refusal `UnknownObject` is tag `11`, `ConstraintViolated`
+//! `12` and `Evaluation` `13`.
+//!
+//! An expression (slice 5) is its tag and then its parts, in prefix order: a literal is `0` and its
+//! value, a field read `1` and its scope (`0` record, `1` old, `2` new) and its field id, the
+//! principal `2`, a comparison `3` and its operator (`0` eq, `1` ne, `2` lt, `3` le, `4` gt, `5` ge)
+//! and two operands, `and` `4` and `or` `5` with two operands each, `not` `6` and `isNull` `7` with
+//! one. A field's default is an expression, and an object type lists its constraints after its
+//! records. The nesting of an expression is bounded by [`MAX_EXPR_DEPTH`].
 //!
 //! Every value has one encoding and the decoders accept nothing else: [`decode_all`] requires the
 //! input to be consumed exactly.
@@ -36,6 +44,11 @@
 /// The deepest nesting of list types the decoder accepts. The kernel's schema admits one level of
 /// list; the codec allows more so that any type the Rust types hold round-trips.
 pub const MAX_TY_DEPTH: usize = 64;
+
+/// The deepest nesting of expressions the decoder accepts (constraints and defaults, slice 5). The
+/// Lean decoder takes its fuel from the input length, so any depth it decodes is bounded by the
+/// input; the codec here stops at this depth, so that a crafted input cannot exhaust the stack.
+pub const MAX_EXPR_DEPTH: usize = 256;
 
 /// The kernel's `on_delete` of a reference: refuse the delete, or clear the referring field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,13 +89,49 @@ pub enum Val {
     List(Vec<Elem>),
 }
 
-/// The definition of a field of the schema.
+/// Which record an expression reads a field from: the record being checked (`0`), the stored record
+/// an update replaces (`1`), or the new record (`2`). Lean's `Scope`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    Record,
+    Old,
+    New,
+}
+
+/// A comparison operator: `0` eq, `1` ne, `2` lt, `3` le, `4` gt, `5` ge. Lean's `CmpOp`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmpOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+/// An expression of a constraint or of a field default (slice 5). Lean's `Expr`: a literal (tag
+/// `0`), a field read (`1`, the scope and the field id), the principal (`2`), a comparison (`3`),
+/// `and` (`4`), `or` (`5`), `not` (`6`) and `isNull` (`7`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Expr {
+    Lit(Val),
+    Field(Scope, u64),
+    Principal,
+    Cmp(CmpOp, Box<Expr>, Box<Expr>),
+    And(Box<Expr>, Box<Expr>),
+    Or(Box<Expr>, Box<Expr>),
+    Not(Box<Expr>),
+    IsNull(Box<Expr>),
+}
+
+/// The definition of a field of the schema. `default` is the expression a create fills the field
+/// with when the intent does not name it; `Expr::Lit(Val::Null)` is no default.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FieldDef {
     pub ty: Ty,
     pub required: bool,
     pub unique: bool,
-    pub default: Val,
+    pub default: Expr,
 }
 
 /// The size bounds of a tenant.
@@ -113,12 +162,14 @@ pub struct Record {
     pub fields: Vec<(u64, Val)>,
 }
 
-/// An object type of a tenant: its schema, its composite unique constraints, and its records.
+/// An object type of a tenant: its schema, its composite unique constraints, its records, and its
+/// constraints (slice 5), in the kernel's order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjType {
     pub schema: Vec<(u64, FieldDef)>,
     pub uniques: Vec<Vec<u64>>,
     pub records: Vec<(u64, Record)>,
+    pub constraints: Vec<Expr>,
 }
 
 /// Everything one tenant owns, as the boundary carries it: its object types by id, its owner,
@@ -155,6 +206,8 @@ pub enum Refusal {
     UniqueViolated,
     InvalidSchema,
     UnknownObject,
+    ConstraintViolated,
+    Evaluation,
 }
 
 /// What a caller asks the kernel to do. Each intent names the object type it acts on.
@@ -334,11 +387,70 @@ fn put_ty(out: &mut Vec<u8>, t: &Ty) {
     }
 }
 
+fn put_scope(out: &mut Vec<u8>, s: &Scope) {
+    out.push(match s {
+        Scope::Record => 0,
+        Scope::Old => 1,
+        Scope::New => 2,
+    });
+}
+
+fn put_cmp_op(out: &mut Vec<u8>, op: &CmpOp) {
+    out.push(match op {
+        CmpOp::Eq => 0,
+        CmpOp::Ne => 1,
+        CmpOp::Lt => 2,
+        CmpOp::Le => 3,
+        CmpOp::Gt => 4,
+        CmpOp::Ge => 5,
+    });
+}
+
+/// An expression, in prefix order (`encExpr`).
+fn put_expr(out: &mut Vec<u8>, e: &Expr) {
+    match e {
+        Expr::Lit(v) => {
+            out.push(0);
+            put_val(out, v);
+        }
+        Expr::Field(s, f) => {
+            out.push(1);
+            put_scope(out, s);
+            put_nat(out, *f);
+        }
+        Expr::Principal => out.push(2),
+        Expr::Cmp(op, a, b) => {
+            out.push(3);
+            put_cmp_op(out, op);
+            put_expr(out, a);
+            put_expr(out, b);
+        }
+        Expr::And(a, b) => {
+            out.push(4);
+            put_expr(out, a);
+            put_expr(out, b);
+        }
+        Expr::Or(a, b) => {
+            out.push(5);
+            put_expr(out, a);
+            put_expr(out, b);
+        }
+        Expr::Not(a) => {
+            out.push(6);
+            put_expr(out, a);
+        }
+        Expr::IsNull(a) => {
+            out.push(7);
+            put_expr(out, a);
+        }
+    }
+}
+
 fn put_field_def(out: &mut Vec<u8>, fd: &FieldDef) {
     put_ty(out, &fd.ty);
     put_bool(out, fd.required);
     put_bool(out, fd.unique);
-    put_val(out, &fd.default);
+    put_expr(out, &fd.default);
 }
 
 fn put_schema_entry(out: &mut Vec<u8>, e: &(u64, FieldDef)) {
@@ -368,6 +480,12 @@ fn put_obj_type(out: &mut Vec<u8>, o: &ObjType) {
     put_list(out, o.schema.as_slice(), put_schema_entry);
     put_list(out, o.uniques.as_slice(), put_u64_list);
     put_list(out, o.records.as_slice(), put_record_entry);
+    put_list(out, o.constraints.as_slice(), put_expr_root);
+}
+
+/// An expression as a list element: the encoder of a constraint in a list (`encList encExpr`).
+fn put_expr_root(out: &mut Vec<u8>, e: &Expr) {
+    put_expr(out, e);
 }
 
 fn put_type_entry(out: &mut Vec<u8>, e: &(u64, ObjType)) {
@@ -448,6 +566,8 @@ fn put_refusal(out: &mut Vec<u8>, e: &Refusal) {
         Refusal::UniqueViolated => 9,
         Refusal::InvalidSchema => 10,
         Refusal::UnknownObject => 11,
+        Refusal::ConstraintViolated => 12,
+        Refusal::Evaluation => 13,
     });
 }
 
@@ -704,11 +824,71 @@ fn get_ty(r: &mut Reader<'_>, depth: usize) -> Option<Ty> {
     }
 }
 
+fn get_scope(r: &mut Reader<'_>) -> Option<Scope> {
+    match r.byte()? {
+        0 => Some(Scope::Record),
+        1 => Some(Scope::Old),
+        2 => Some(Scope::New),
+        _ => None,
+    }
+}
+
+fn get_cmp_op(r: &mut Reader<'_>) -> Option<CmpOp> {
+    match r.byte()? {
+        0 => Some(CmpOp::Eq),
+        1 => Some(CmpOp::Ne),
+        2 => Some(CmpOp::Lt),
+        3 => Some(CmpOp::Le),
+        4 => Some(CmpOp::Gt),
+        5 => Some(CmpOp::Ge),
+        _ => None,
+    }
+}
+
+/// An expression. The depth of its nesting is bounded by [`MAX_EXPR_DEPTH`].
+fn get_expr(r: &mut Reader<'_>, depth: usize) -> Option<Expr> {
+    if depth > MAX_EXPR_DEPTH {
+        return None;
+    }
+    match r.byte()? {
+        0 => Some(Expr::Lit(get_val(r)?)),
+        1 => {
+            let s = get_scope(r)?;
+            Some(Expr::Field(s, get_nat(r)?))
+        }
+        2 => Some(Expr::Principal),
+        3 => {
+            let op = get_cmp_op(r)?;
+            let a = get_expr(r, depth + 1)?;
+            let b = get_expr(r, depth + 1)?;
+            Some(Expr::Cmp(op, Box::new(a), Box::new(b)))
+        }
+        4 => {
+            let a = get_expr(r, depth + 1)?;
+            let b = get_expr(r, depth + 1)?;
+            Some(Expr::And(Box::new(a), Box::new(b)))
+        }
+        5 => {
+            let a = get_expr(r, depth + 1)?;
+            let b = get_expr(r, depth + 1)?;
+            Some(Expr::Or(Box::new(a), Box::new(b)))
+        }
+        6 => Some(Expr::Not(Box::new(get_expr(r, depth + 1)?))),
+        7 => Some(Expr::IsNull(Box::new(get_expr(r, depth + 1)?))),
+        _ => None,
+    }
+}
+
+/// An expression as a list element, from the root of the nesting.
+fn get_expr_root(r: &mut Reader<'_>) -> Option<Expr> {
+    get_expr(r, 0)
+}
+
 fn get_field_def(r: &mut Reader<'_>) -> Option<FieldDef> {
     let ty = get_ty(r, 0)?;
     let required = get_bool(r)?;
     let unique = get_bool(r)?;
-    let default = get_val(r)?;
+    let default = get_expr(r, 0)?;
     Some(FieldDef {
         ty,
         required,
@@ -757,10 +937,12 @@ fn get_obj_type(r: &mut Reader<'_>) -> Option<ObjType> {
     let schema = get_list(r, get_schema_entry)?;
     let uniques = get_list(r, get_u64_list)?;
     let records = get_list(r, get_record_entry)?;
+    let constraints = get_list(r, get_expr_root)?;
     Some(ObjType {
         schema,
         uniques,
         records,
+        constraints,
     })
 }
 
@@ -853,6 +1035,8 @@ fn get_refusal(r: &mut Reader<'_>) -> Option<Refusal> {
         9 => Some(Refusal::UniqueViolated),
         10 => Some(Refusal::InvalidSchema),
         11 => Some(Refusal::UnknownObject),
+        12 => Some(Refusal::ConstraintViolated),
+        13 => Some(Refusal::Evaluation),
         _ => None,
     }
 }

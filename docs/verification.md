@@ -23,7 +23,8 @@ clears (slice 1, below), and lists of scalars or of references, whose elements a
 (slice 2). `step` is a total, computable function. Slice 3 adds unique fields and composite unique constraints, checked on a write and when a
 constraint is defined over existing data. Slice 4 adds several object types per tenant: a write
 may name any of them, a reference may name a record of another type, and an intent naming a type
-the tenant lacks is refused. It has no constraints,
+the tenant lacks is refused. Slice 5 adds expressions, constraints and expression defaults, and the model
+ has no
 workflows, queries, events or policy conditions: the assumptions below list each
 omission, and the gap analysis further down says which slice will add each. The theorems are
 about this model. The Rust kernel is compared with it on generated scenarios, which is evidence and
@@ -64,6 +65,18 @@ builds their module, without reading the statements (`specifications/README.md`)
 | | `lax_unique_change_can_break_wf` | The exclusion of the non-strict unique change is necessary: a lax `setUnique` over two records that agree leaves a tenant that is not well formed |
 | | `strict_schema_change_conforms`, `schemaViolated_false` | An accepted strict schema change (`setRequired`, `setUnique`, `defineUnique`, and any strict change refused by the same check) leaves the whole tenant conforming: every record conforms to the resulting schema, and `UniqueRecords` holds for it, including records and unique values a lax change left behind |
 | | `setUnique_records`, `defineUnique_records`, `stepTenant_conform_ids` | A schema change leaves the records as they are, and every accepted step keeps them conforming and their ids below the counter |
+| Expressions (slice 5) | `and_null_false`, `and_null_true`, `and_null_null`, `and_true_null`, `and_true_true`, `and_true_false`, `or_null_true`, `or_null_false`, `or_false_null`, `or_false_true`, `not_null`, `isNull_null`, `cmp_null_operand`, `cmp_int_lt`, `cmp_str_ge`, `cmp_ref_eq` | The truth tables of the three-valued connectives, comparisons and `not`, decided by evaluation on closed terms: `null` is contagious and the operands of `and`/`or` are Kleene |
+| | `and_false_shortcircuit`, `or_true_shortcircuit`, `and_false_left`, `or_true_left`, `and_null_left_nonfalse`, `and_error_left` | A decisive operand decides before the other is looked at, so an evaluation error there is not seen (`false and x` is `false` whatever `x` is); an error in an operand that is looked at is an error of the connective |
+| | `and_null_error`, `and_int_error`, `or_false_error`, `cmp_kind_error`, `cmp_bool_order_error`, `not_int` | A comparison of two kinds, an ordering of booleans, and a non-boolean connective operand are evaluation errors |
+| Constraints (slice 5) | `constraint_violated_refused`, `constraint_evaluation_refused`, `null_constraint_passes`, `constraint_first_failure` | The first constraint that is `false` gives `constraintViolated`, the first that cannot be evaluated gives `evaluation`; `true` and `null` pass; the first failure decides |
+| | `create_constraint_refused`, `update_constraint_refused` | A write whose structural checks pass and whose constraint fails on the record it writes is refused with that error, and no state follows |
+| Defaults as expressions (slice 5) | `create_default_error_first`, `default_error_before_permission` | A create whose default expression fails is refused with `evaluation` whether or not the caller may create: the defaults come before the permission |
+| | `create_checks_defaulted_record`, `default_refused_by_constraint`, `named_value_accepted` | An accepted create's record, with its defaults in it, satisfies the constraints; a default that violates a constraint refuses the create (a concrete tenant) |
+| | `create_fills_default` (restated for a constant default `.lit v`), `defaultsOf_mem`, `newRecord_parts`, `defaultsOf_nodup`, `newRecord_nodup` | An accepted create writes the constant default of each unnamed field; the defaults add no duplicate name |
+| Constraint invariant (slice 5) | `stepTenant_preserves_satisfied`, `step_preserves_satisfied` | For constraints that are state-only (`Tenant.StateConstraints`), an accepted create, update or schema change leaves every stored record satisfying every constraint of its type; it needs the state before to satisfy them (`Tenant.Satisfied`) |
+| | `evalExpr_congr`, `constraintProblem_congr`, `satisfied_of_putType` | A state-only constraint has the same value on a stored record as on the record a write checks (the old record and the principal do not enter it), and replacing a type's schema keeps its records' constraints |
+| | `delete_breaks_satisfied` | The invariant is not preserved by a delete: an accepted delete can leave a record violating a constraint, since the kernel's clearing of a reference does not re-check the constraints of the record it rewrites (a concrete counterexample, `brkAfter_not_satisfied`) |
+| Codec (slice 5) | `lawful_expr`, `decExprN_encExpr`, `decExprN_canon`, `lawful_objType`, `lawful_fieldDef`, `lawful_err` | The expression encoding round-trips for any fuel that covers its nodes, and every decoding is canonical; the object type and the field definition carry their constraints and default expressions; the error tags are fourteen |
 
 `lake build` checks them. `lake env lean Audit.lean` prints the axioms each depends on: only
 Lean's standard `propext`, `Classical.choice` and `Quot.sound`. There is no `sorry`, no `admit`
@@ -72,7 +85,8 @@ and no added axiom; a test fails if the sources contain one or the audit reports
 ### Assumptions
 
 1. The object of every theorem is the model, not the Rust source.
-2. The model has no constraints, workflows, queries or events. Its unique fields and composite
+2. The model has no workflows, queries or events. Its constraints are of the state-only kind
+   (slice 5: they read neither the old record nor the principal). Its unique fields and composite
    constraints are checked on written values only; the kernel's schema rules for them (a list
    field cannot be unique, a composite names two to four distinct fields of the object) are the
    model's `invalidSchema` refusals and nothing more. Its references are
@@ -315,7 +329,7 @@ From `transition::create_record`, `update_record`, `delete_record` and `rules::v
 | The caller may not create, update (judged on the old and the new record) or delete | `Unauthorized` | partly: owner, editors, writers on their own records | 6 |
 | `expected_version` given and not the stored version, checked after authorization | `VersionConflict` | covered (`versionClash`) | 2 |
 | Update is a patch: named fields replaced, `null` removes, others kept; version + 1 | | covered (`patched`) | 2 |
-| Create fills absent fields from their defaults; a default that fails to evaluate | `Evaluation` | partly: constant defaults (`withDefaults`, a field named as `null` gets none); expressions not | 2 (constant), 5 (expression) |
+| Create fills absent fields from their defaults; a default that fails to evaluate | `Evaluation` | covered: constant and expression defaults (`withDefaults`, `defaultsOf`, a field named as `null` gets none); a failing default is refused before the permission | 2 (constant), 5 (expression) |
 | A new record's workflow field is not an initial state | `WorkflowViolation` | not covered | 8 |
 | An update that changes a workflow field needs a declared transition whose guard is true; its assignments apply; the update is authorized again if they changed the record | `WorkflowViolation`, `Evaluation`, `Unauthorized` | not covered | 8 |
 | Validation; the first failure names the refusal, in this order: | | | |
@@ -326,9 +340,10 @@ From `transition::create_record`, `update_record`, `delete_record` and `rules::v
 | 5. per field in id order, after its type: a reference to a record that does not exist | `DanglingReference` | covered for single references and list elements, across types too | 1, 2, 4 |
 | 6. composite unique constraints whose fields all have values, held by another record | `UniqueViolated` | covered (`compositeProblem`, after every field) | 3 |
 | 7. a workflow field holding a value that is not one of its states | `WorkflowViolation` | not covered | 8 |
-| 8. only if nothing above failed: constraints, failing on `false`; `Evaluation` when one cannot be evaluated | `ConstraintViolated`, `Evaluation` | not covered | 5 |
+| 8. only if nothing above failed: constraints, failing on `false`; `Evaluation` when one cannot be evaluated | `ConstraintViolated`, `Evaluation` | covered for the expression fragment of slice 5 (`constraintProblem`, after every other check); the kernel's static check of a schema is not modelled (slice 11) | 5 |
 | Accepted create: the record under the next id, `created_by` the caller (none for the system), counter + 1 | | covered (owner = caller) | 0 |
 | Delete: another record of any type referring through a `restrict` field, or through a required single reference, blocks it; a record referring to itself does not | `StillReferenced` | covered for references and lists, across types too (a required list never blocks) | 1, 2, 4 |
+| A delete clears a referrer's reference without checking the referrer's constraints (the kernel does not either); a stored record can then violate a constraint | | covered (`delete_breaks_satisfied`): the counterexample shows the invariant is not kept by a delete | 5 |
 | Accepted delete: the record removed; every other reference to it cleared (a list loses the element); each cleared record's version + 1 | | covered within the one type | 1, 2 |
 | Events: `RecordCreated`, `RecordUpdated` (naming the transitions fired), `RecordDeleted`, an update event per cleared referrer; revision + 1; one `Publish` effect per event | | not covered | 9 |
 
@@ -349,7 +364,7 @@ From `transition::change_schema`, `plan_migration`, `apply_change` and `schema::
 | A breaking change that reaches dependents not all pinned at the version in force, or past their window, or that is not a retype; a retype whose stored values do not round-trip | `InvalidSchema` | not covered in `step`; modelled in `Strata.Evolution` (`accepted`) | 11 |
 | A field change whose stored values cannot be carried | `MigrationRejected` | not covered | 11 |
 | Settings effects, such as a setting retyped while overrides exist | `InvalidSchema` | not covered | 12 |
-| `Reject` and a record violates the new schema | `MigrationRejected` | covered for making a field required (`strict`) | 0, 11 |
+| `Reject` and a record violates the new schema, constraints included | `MigrationRejected` | covered for making a field required (`strict`) and for the constraints of the touched types (slice 5); not for a unique field, which slice 3 covers | 0, 3, 5, 11 |
 | `Grandfather`: violating records stay, counted in the event | | covered for making a field required (`lax`); the count not | 0, 9 |
 | An object type removed while it has records and the change does not delete them; a role removed while held | `MigrationRejected`, `InvalidSchema` | not covered | 11 |
 | Accepted: the new schema at version + 1, rewritten and deleted records, `SchemaChanged` | | partly: the required flag | 11 |
@@ -467,6 +482,26 @@ deleted, the others kept with a reason. Approvals (`approvals::decide`) are a pu
 the approver (not a person, without `workflow-approve`, not named by the step's policy, the one
 who started it, past the deadline) and go with slice 8.
 
+### Expressions and constraints (slice 5)
+
+From `expr::eval`, `rules::validate_record` (the constraint loop), `transition::create_record` (the
+defaults) and `schema::problems` (the static check of expressions). The fragment is in
+`lean/Strata/Model.lean` ("Expressions").
+
+| Decision | Refusal | Model | Slice |
+|---|---|---|---|
+| The clock: `now`, and a time value in a comparison | `Evaluation` (a kind mismatch) | not covered: the model has no clock and no time value | 10 |
+| Roles: `hasRole` | none (`false`) | not covered: roles and the principal's role set are slice 6 | 6 |
+| Arithmetic (`+`, `-`, `*`, `ms_between`, `days`), checked within 2^53 - 1 | `Evaluation` (`integer-overflow`) | not covered | 10 |
+| Text functions (`concat`, `len`, `lower`, `graphemes`, slugs, emoji), the 4,096-byte bound | `Evaluation` (`string-too-long`) | not covered | 10 |
+| `in`, `contains`, `starts_with` | `Evaluation` on a kind mismatch | not covered | 10 |
+| Following a reference (`through`) and `ancestor_of`: a target the snapshot lacks | `InsufficientState` (not a refusal), `Evaluation` for a cycle or a non-reference | not covered: the model reads the whole tenant (see "Snapshot coverage") | 10 |
+| Parameters (`param`) | `Evaluation` when unbound | not covered: no parameters in constraints or defaults | 10 |
+| System attributes (`$version`, `$created_at`, ...) | `Evaluation` for an unknown name | not covered: the model's records have an owner and a version, not the attributes | 10 |
+| A constraint that is not a truth value, or compares two shapes, at definition (`expr::check`) | `InvalidSchema` | not covered: the schema validity predicate is slice 11; the fixtures define only checked constraints | 11 |
+| Defining a constraint by a schema change | `InvalidSchema` (names, shapes), `MigrationRejected` (existing records) | not covered: `ChangeSchema` is slice 11; the fixtures define the constraints in the initial tenant | 11 |
+| A constraint that reads the old record, or the principal, and so is not state-only | none | not covered: the model admits only state-only constraints (`Expr.stateOnly`) | 11 |
+
 ### Slices, in dependency order
 
 Each slice extends the model abstractly (outcomes, not the kernel's algorithm), keeps `step`
@@ -479,7 +514,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **2 (done)** | Record writes in full: patch updates, versions and `expected_version`, constant defaults, lists (of scalars and of references: element removal on delete, a required list never blocks), the size limits as an abstract bound | 1 |
 | **3 (done)** | Uniqueness: single-field and composite (only when every field has a value), on write and on defining a constraint over existing data | 2 |
 | **4 (done)** | Several object types: `UnknownObject` with its hiding rule, references and referrers across types | 1 |
-| 5 | Expressions as an abstract three-valued language over record, old, new, principal, roles and `now`, with evaluation errors; constraints (checked last); expression defaults | 2, 4 |
+| **5 (done)** | Expressions: literals, field reads of the record, the old record and the new record, the principal, comparisons, the three-valued connectives, `isNull`, evaluation errors; constraints (checked last, state-only); expression defaults | 2, 4 |
 | 6 | Roles and policies as data, replacing the fixed tiers: the owner role, role permissions, policies with conditions, capabilities, the system and anonymous principals | 5 |
 | 7 | Tenants, members, teams, invitations, reserved principal ids | 6 |
 | 8 | Workflows: initial states, transitions with guards and assignments, re-authorization, state validity; approvals | 5, 6 |
@@ -675,6 +710,82 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
   permissions, and the kernel's referrer index are not modelled. Fields `11` and `12` are the only
   item fields that name a part; a reference to a type the fixture does not define is refused by the
   kernel's own schema check, which the model does not state.
+
+### Slice 5 review note: what was abstracted
+
+- **The expression language is a fragment of the kernel's.** `Expr` has literals, field reads of the
+  record, the old record and the new record, the principal, comparisons (`=`, `!=`, `<`, `<=`, `>`,
+  `>=`), `and`, `or`, `not` and `isNull`. It is the set the fixtures and the model's properties use.
+  Not modelled: `now` (the model has no clock), `hasRole` (roles are slice 6), arithmetic and the
+  text functions, `in`, `through` (following a reference, which needs the other record in the
+  snapshot), `ancestor_of`, parameters, system attributes such as `$version`, and the timestamp and
+  list kinds. The kernel's static check (`expr::check`) runs on every expression of a schema; the
+  model's schema validity is not yet defined, so it takes no part in a write (slice 11).
+- **The principal is a string in both.** The kernel names a principal `p<n>`, and its `principal`
+  reads that string. The model's principal is a number, and `Expr.principal` reads it as `"p" ++
+  toString n`. That is the fixtures' naming (`p100` is principal `100`), and a comparison of the
+  principal with a field is a comparison of strings. Any other naming would need its own rendering.
+- **Three-valued semantics, as the kernel's `kleene` and `equality`.** A comparison with `null` on
+  either side is `null`; a comparison of two different kinds is an error; an ordering is defined for
+  integers and strings only. `and` and `or` are Kleene: the first operand that decides (`false` for
+  `and`, `true` for `or`) decides the result without its right operand being looked at, so an error
+  there is not seen; otherwise `null` is contagious, and an operand that is neither a boolean nor
+  `null` is an error. The truth tables are the closed lemmas `and_null_false`, `or_null_true`,
+  `and_false_shortcircuit`, and so on (`Strata/Constraints.lean`).
+- **Constraints are checked last and the first failure decides.** A write's structural checks
+  (`problem`) run first; the constraints run only when they pass, in the order the object type lists
+  them (the kernel's `constraints` by id). The first constraint that is `false` gives
+  `constraintViolated`, the first that cannot be evaluated gives `evaluation`, and `true` and `null`
+  pass. This is the kernel's `validate_record`, whose constraint loop runs only when no earlier check
+  failed.
+- **The constraints the model admits read only the record.** `Tenant.StateConstraints` says a
+  constraint reads neither the old record nor the principal (`Expr.stateOnly`). The kernel's
+  constraints may read the old record, which its own migration check does not give; the model's
+  invariant needs the restriction, and the fixtures respect it. With it, a constraint's value on a
+  stored record is the value a write checked (`constraintProblem_congr`).
+- **Defaults are expressions, evaluated before the permission is asked.** A field's default is an
+  `Expr` (`.lit v` for a constant), evaluated with no record and the caller as principal. The
+  kernel's `create_record` evaluates the defaults before `require(Create)`, so an unauthorized caller
+  whose defaults fail is refused `evaluation`, not `unauthorized` (`create_default_error_first`,
+  `default_error_before_permission`). This is an observable order, and a leak: a caller who may not
+  create learns that an existing type has a failing default, where an unknown type gives
+  `unauthorized`. The model follows the kernel, and `unknown_type_hidden` now takes as a premise
+  that the defaults of the type evaluate.
+- **Constraints are re-checked by a strict schema change.** The kernel's `plan_migration` runs
+  `validate_record` on the stored records of the types it touches, constraints included, so a strict
+  change is refused when a stored record violates a constraint. The model's `tableViolated` now says
+  so. A lax change keeps the records, and a constraint's value does not depend on the schema, so it
+  cannot break one.
+- **A delete does not keep the constraints.** The kernel's delete clears a referrer's reference and
+  writes the referrer with its version raised, without checking the constraints of the referrer. The
+  model does the same. So an accepted delete can leave a stored record that violates a constraint:
+  `delete_breaks_satisfied` gives a concrete tenant (a constraint reads a reference that a delete
+  clears). The invariant `Tenant.Satisfied` is therefore preserved by creates, updates and schema
+  changes (`stepTenant_preserves_satisfied`) and not by deletes; that is a finding about the kernel,
+  not a property of the model.
+- **Static checks make an evaluation error unreachable from a schema the kernel accepts.** The
+  kernel's `expr::check` refuses at definition any constraint that is not a truth value and any
+  comparison of two different shapes (in a constraint or a default). The model's evaluator can
+  still fail on those, so `evaluation` is reachable in the model only on schemas the kernel refuses.
+  The fixtures therefore contain no such expression, and the h- scenario that needed one was
+  removed. The model keeps the error so that its evaluator is total and the schema validity predicate
+  (slice 11) has a case to exclude.
+- **Changed statements.** `create_fills_default` is about a constant default, `.lit v`.
+  `create_refs_resolve`, `write_refused_dangling_across_types`, `create_within_limits` and
+  `create_refused_over_record_bound` take the record that the defaults give (`newRecord = .ok r`),
+  since the defaults can now fail. `unknown_type_hidden` has the premise above. The `WorkingSet` mirror
+  (`decideTenant`, `decideTenant_faithful`) follows the new order, and its `TypeHead` carries the
+  constraints.
+- **Codec.** `Err` has `constraintViolated` (tag `12`) and `evaluation` (`13`); `FieldDef.default` is
+  an expression; `ObjType` lists its constraints after its records; an expression is encoded in
+  prefix order (`encExpr`). The Lean decoder takes its fuel from the input length, so it accepts any
+  nesting that the input holds. The Rust codec stops at `MAX_EXPR_DEPTH` (256), a deviation the module
+  documents: an input nested deeper is refused by Rust and accepted by Lean.
+- **Not modelled.** The schema validity predicate (a constraint must be a truth value, and its
+  shapes must agree); defining a constraint by a schema change (the fixtures define them in the
+  initial tenant; `ChangeSchema` is slice 11); the clock; roles; the string and arithmetic functions;
+  the reference-following and ancestor expressions; and the kernel's `Expr::Or`/`And` over lists, which
+  the model's binary connectives represent exactly.
 
 ## What covers the rest
 

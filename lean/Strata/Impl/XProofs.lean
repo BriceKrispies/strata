@@ -33,40 +33,46 @@ theorem create_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
   | none => exact good_error _ _
   | some o =>
     simp only [hty]
-    by_cases hca : canCreateI core p = true
-    · simp only [hca, Bool.not_true, if_false, Bool.false_eq_true]
-      have hp := problemX_eq ⟨core, ux, cx, rx⟩ hok ty o hty core.limits true core.nextId
-        (newRecord o.schema p fs)
-      dsimp only at hp
-      rw [hp]
-      cases hq : problemI core.limits o.schema o.uniques true core.slotsOf o.slots core.nextId
-          (newRecord o.schema p fs) with
-      | some e => exact good_error _ e
-      | none =>
-        simp only []
-        have hsz := hinv ty o hty
-        have hmod := ITenant.modifyType_eq core ty
-          (fun o' => { o' with slots := (padTo o'.slots core.nextId).push (some (newRecord o.schema p fs)) })
-          o hty
-        refine ⟨?_, fun e x' h => (by cases h), ?_⟩
-        · simp only [Except.mapError, Except.map, XTenant.reindex]
-          rw [hmod]
-        · intro y hy
-          simp only [Except.ok.injEq] at hy
-          subst hy
-          rw [hmod]
-          refine XTenant.ok_reindex ⟨core, ux, cx, rx⟩ _ ty core.nextId o none
-            (some (newRecord o.schema p fs)) hok ?_ hty (getRec_of_ge _ _ hsz) ?_
-          · exact CellChange.withNextId (cc_putType core ty core.nextId (some (newRecord o.schema p fs)) o
-              { o with slots := (padTo o.slots core.nextId).push (some (newRecord o.schema p fs)) }
-              hty rfl rfl
-              (fun i hi => by rw [getRec_push_padTo _ _ _ hsz]; simp [hi])
-              (by rw [getRec_push_padTo _ _ _ hsz]; simp only [if_true])) _
-          · exact inv_putType core ty _ (core.nextId + 1) (by omega)
-              (by simp [size_padTo _ _ hsz]) hinv
-    · have : canCreateI core p = false := by simpa using hca
-      simp only [this, Bool.not_false, if_true]
-      exact good_error _ _
+    cases hr : newRecord o.schema p fs with
+    | error u => simp only [hr]; exact good_error _ _
+    | ok r =>
+      simp only [hr]
+      by_cases hca : canCreateI core p = true
+      · simp only [hca, Bool.not_true, if_false, Bool.false_eq_true]
+        have hp := problemX_eq ⟨core, ux, cx, rx⟩ hok ty o hty core.limits true core.nextId r
+        dsimp only at hp
+        rw [hp]
+        cases hq : problemI core.limits o.schema o.uniques true core.slotsOf o.slots core.nextId
+            r with
+        | some e => exact good_error _ e
+        | none =>
+          simp only []
+          cases hk : constraintProblem (writeEnv p r none) o.constraints with
+          | some e => simp only [hk]; exact good_error _ e
+          | none =>
+            simp only [hk]
+            have hsz := hinv ty o hty
+            have hmod := ITenant.modifyType_eq core ty
+              (fun o' => { o' with slots := (padTo o'.slots core.nextId).push (some r) }) o hty
+            refine ⟨?_, fun e x' h => (by cases h), ?_⟩
+            · simp only [Except.mapError, Except.map, XTenant.reindex]
+              rw [hmod]
+            · intro y hy
+              simp only [Except.ok.injEq] at hy
+              subst hy
+              rw [hmod]
+              refine XTenant.ok_reindex ⟨core, ux, cx, rx⟩ _ ty core.nextId o none (some r) hok ?_
+                hty (getRec_of_ge _ _ hsz) ?_
+              · exact CellChange.withNextId (cc_putType core ty core.nextId (some r) o
+                  { o with slots := (padTo o.slots core.nextId).push (some r) }
+                  hty rfl rfl
+                  (fun i hi => by rw [getRec_push_padTo _ _ _ hsz]; simp [hi])
+                  (by rw [getRec_push_padTo _ _ _ hsz]; simp only [if_true])) _
+              · exact inv_putType core ty _ (core.nextId + 1) (by omega)
+                  (by simp [size_padTo _ _ hsz]) hinv
+      · have : canCreateI core p = false := by simpa using hca
+        simp only [this, Bool.not_false, if_true]
+        exact good_error _ _
 
 theorem update_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
@@ -100,6 +106,10 @@ theorem update_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
           | some e => exact good_error _ e
           | none =>
             simp only []
+            cases hk : constraintProblem (writeEnv p (patched old fs) (some old)) o.constraints with
+            | some e => simp only [hk]; exact good_error _ e
+            | none =>
+            simp only [hk]
             have hsz := hinv ty o hty
             have hlt := lt_of_getRec _ _ _ hg
             have hmod := ITenant.modifyType_eq core ty

@@ -28,32 +28,26 @@ theorem stepTenantI_inv (t : ITenant) (p : PrincipalId) (i : Intent) (t' : ITena
     | none => simp [hty] at h
     | some o =>
       simp only [hty] at h
-      split at h
-      · cases h
-      · split at h
-        · cases h
-        · simp only [Except.ok.injEq] at h
-          subst h
-          have hsz := hinv ty o hty
-          intro T q hq
-          have := inv_putType t ty { o with slots := (padTo o.slots t.nextId).push (some _) }
-            (t.nextId + 1) (by omega) (by simp [size_padTo _ _ hsz]) hinv T q hq
-          exact this
+      repeat' split at h
+      all_goals try (cases h; done)
+      all_goals
+        simp only [Except.ok.injEq] at h
+        subst h
+        have hsz := hinv ty o hty
+        intro T q hq
+        have := inv_putType t ty { o with slots := (padTo o.slots t.nextId).push (some _) }
+          (t.nextId + 1) (by omega) (by simp [size_padTo _ _ hsz]) hinv T q hq
+        exact this
   | update ty id fs ev =>
     simp only [stepTenantI] at h
     cases hty : t.typ? ty with
     | none => simp [hty] at h
     | some o =>
       simp only [hty] at h
-      split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · split at h
-            · cases h
-            · simp only [Except.ok.injEq] at h
+      repeat' split at h
+      all_goals try (cases h; done)
+      all_goals
+              simp only [Except.ok.injEq] at h
               subst h
               have hsz := hinv ty o hty
               intro T q hq
@@ -192,7 +186,8 @@ theorem stepI_inv (w : IWorld) (i : Intent) (c : Ctx) (w' : IWorld) (hw : w.Inv)
         exact hw x s hx
 
 /-- An implementation object type with no records. -/
-def IObj.ofEmpty (o : ObjType) : IObj := { schema := o.schema, uniques := o.uniques, slots := #[] }
+def IObj.ofEmpty (o : ObjType) : IObj :=
+  { schema := o.schema, uniques := o.uniques, slots := #[], constraints := o.constraints }
 
 /-- A tenant with no records, as the implementation starts it: every slot array empty. -/
 def ITenant.ofEmpty (t : Tenant) : ITenant :=

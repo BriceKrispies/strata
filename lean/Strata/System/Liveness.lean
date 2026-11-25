@@ -1909,7 +1909,7 @@ theorem tail_weak {A : PState → PState → Prop} {b : Behaviour PState} {S : P
 
 /-- The tenant after the accepted create of request 1 (the kernel's verdict on the empty create). -/
 def aT1 : Tenant :=
-  { wTenant with types := [(1, { schema := [], records := [(0, newRecord [] 7 [])] })], nextId := 1 }
+  { wTenant with types := [(1, { schema := [], records := [(0, { owner := 7, version := 1, fields := [] })] })], nextId := 1 }
 
 theorem aT1_spec : stepTenant wTenant 7 (.create 1 []) = .ok aT1 := rfl
 

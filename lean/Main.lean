@@ -163,6 +163,8 @@ def showErr : Err → String
   | .limitExceeded => "limit_exceeded"
   | .uniqueViolated => "unique_violated"
   | .invalidSchema => "invalid_schema"
+  | .constraintViolated => "constraint_violated"
+  | .evaluation => "evaluation"
 
 /-- Insertion sort on a key; the lists here are a handful of elements. -/
 def sortBy {α : Type} (key : α → Nat) : List α → List α

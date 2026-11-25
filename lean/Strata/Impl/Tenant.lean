@@ -22,6 +22,7 @@ structure IObj where
   schema : Schema
   uniques : List (List FieldId) := []
   slots : Array (Option Record) := #[]
+  constraints : List Expr := []
 
 /-- One tenant, each type's records held in slots. -/
 structure ITenant where
@@ -37,7 +38,8 @@ abbrev IWorld := TenantId → Option ITenant
 
 /-- The spec's object type for an implementation one. -/
 def IObj.abs (o : IObj) : ObjType :=
-  { schema := o.schema, uniques := o.uniques, records := absSlots o.slots }
+  { schema := o.schema, uniques := o.uniques, records := absSlots o.slots,
+    constraints := o.constraints }
 
 theorem IObj.abs_schema (o : IObj) (s : Schema) : { o with schema := s }.abs = { o.abs with schema := s } :=
   rfl

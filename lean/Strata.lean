@@ -3,6 +3,7 @@ import Strata.References
 import Strata.Uniqueness
 import Strata.Proofs
 import Strata.Writes
+import Strata.Constraints
 import Strata.Ledger
 import Strata.Evolution.Model
 import Strata.Evolution.Lemmas

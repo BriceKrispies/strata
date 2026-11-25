@@ -226,9 +226,15 @@ fn value_token(rng: &mut Lcg, field: u64) -> String {
         (_, 3) => 2,
         (_, 7) => 6,
         (_, 10) => 0,
+        // Field 9 is the caller's principal by default, a string (slice 5).
+        (_, 9) => 0,
         _ => 4,
     };
+    // Field 1 is refused by a constraint when it is `forbidden` (slice 5), so that is sometimes
+    // written.
+    let forbidden = field == 1 && rng.below(12) == 0;
     match kind {
+        0 if forbidden => "s:forbidden".to_string(),
         0 => format!("s:{}", word(rng)),
         1 => format!("i:{}", rng.below(40) as i64 - 5),
         2 => format!("b:{}", rng.below(2)),
@@ -252,7 +258,7 @@ fn field_list(rng: &mut Lcg) -> Vec<(u64, String)> {
             out.push((field, value_token(rng, field)));
         }
     }
-    for (field, odds) in [(0u64, 4), (4, 3), (5, 4), (7, 4), (8, 4), (10, 3)] {
+    for (field, odds) in [(0u64, 4), (4, 3), (5, 4), (7, 4), (8, 4), (10, 3), (9, 4)] {
         if rng.below(odds) == 0 {
             out.push((field, value_token(rng, field)));
         }
@@ -262,12 +268,17 @@ fn field_list(rng: &mut Lcg) -> Vec<(u64, String)> {
     if rng.below(5) == 0 {
         out.push((6, value_token(rng, 6)));
     }
+    // Field 13 is declared by no type: an unknown field, refused as invalid. (Field 9 played this
+    // part until slice 5 declared it.)
     if rng.below(25) == 0 {
-        out.push((9, "i:1".to_string()));
+        out.push((UNDECLARED_FIELD, "i:1".to_string()));
     }
     out.sort_by_key(|(f, _)| *f);
     out
 }
+
+/// A field no fixture type declares.
+const UNDECLARED_FIELD: u64 = 13;
 
 /// A patch: one to three fields, each often removed (`n`).
 fn patch_fields(rng: &mut Lcg) -> Vec<(u64, String)> {
@@ -285,7 +296,7 @@ fn patch_fields(rng: &mut Lcg) -> Vec<(u64, String)> {
         out.push((field, token));
     }
     if rng.below(40) == 0 {
-        out.push((9, "i:1".to_string()));
+        out.push((UNDECLARED_FIELD, "i:1".to_string()));
     }
     out.sort_by_key(|(f, _)| *f);
     out
