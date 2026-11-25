@@ -975,10 +975,33 @@ pub fn build_model(lean_dir: &Path) -> Result<(), String> {
     }
 }
 
-/// Run the already built model on a scenario file (a path `lake exe` can open from `lean_dir`:
-/// relative to it, or absolute) and return what it prints.
+/// Run the already built model on a scenario file (a path relative to `lean_dir`, or absolute)
+/// and return what it prints.
 pub fn run_model(lean_dir: &Path, fixture: &str) -> Result<String, String> {
-    let (ok, text) = lake(lean_dir, &["exe", "strata_model", fixture])?;
+    // Run the built executable itself, not `lake exe`: Lake replays the build's warnings onto
+    // stdout before the program's output, and those lines would be compared as model output.
+    let exe = lean_dir
+        .join(".lake")
+        .join("build")
+        .join("bin")
+        .join(format!("strata_model{}", std::env::consts::EXE_SUFFIX));
+    let output = Command::new(&exe)
+        .arg(fixture)
+        .current_dir(lean_dir)
+        .output()
+        .map_err(|e| {
+            format!(
+                "could not run {} (build it with `lake build strata_model`): {e}",
+                exe.display()
+            )
+        })?;
+    let ok = output.status.success();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .replace("\r\n", "\n");
     if ok {
         Ok(text)
     } else {
