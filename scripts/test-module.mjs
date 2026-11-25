@@ -35,7 +35,7 @@ import { freemem, totalmem } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readSpecValue } from './spec-parts.mjs';
-import { productArgs, semanticHashDetail } from './spec-hash.mjs';
+import { checkoutHash, productArgs } from './spec-hash.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 export const DEFAULT_BUDGET_SECONDS = 120;
@@ -219,7 +219,7 @@ async function main(argv) {
   }
   const scope = moduleScope(spec, options.module);
   const home = resolve(root, process.env.EXEGRA_HOME ?? '../exegra');
-  const hash = !options.dryRun && existsSync(join(home, 'cli/exegra.js')) ? semanticHashDetail(home, process.env.EXEGRA_PROJECT ?? 'strata').hash : null;
+  const hash = !options.dryRun && existsSync(join(home, 'cli/exegra.js')) ? checkoutHash(home, root, process.env.EXEGRA_PROJECT ?? 'strata').hash : null;
   const steps = planSteps(scope, { home, hash, products: productArgs(root) });
   for (const line of describePlan(scope, steps)) console.log(line);
   if (options.dryRun) return 0;

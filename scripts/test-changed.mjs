@@ -20,7 +20,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { cargoArgs, readWorkspace, scopedTargets, selectScope } from './test-select.mjs';
 import { readTiers } from './test-tiers.mjs';
-import { productArgs, semanticHashDetail } from './spec-hash.mjs';
+import { checkoutHash, productArgs } from './spec-hash.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 
@@ -85,7 +85,7 @@ function main(argv) {
   if (scope.specification) {
     const exegraHome = resolve(root, process.env.EXEGRA_HOME ?? '../exegra');
     steps.push(['exegra validate', process.execPath, [join(exegraHome, 'cli', 'exegra.js'), 'validate', '--spec', 'specifications/spec.jsonc', ...productArgs(root)], {}]);
-    const hash = existsSync(join(exegraHome, 'cli/exegra.js')) ? semanticHashDetail(exegraHome, process.env.EXEGRA_PROJECT ?? 'strata').hash : null;
+    const hash = existsSync(join(exegraHome, 'cli/exegra.js')) ? checkoutHash(exegraHome, root, process.env.EXEGRA_PROJECT ?? 'strata').hash : null;
     const products = productArgs(root);
     const specc = (name, extra) => ['cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--', name, ...extra], env];
     const hashArgs = hash ? ['--spec-hash', hash] : [];
