@@ -87,10 +87,14 @@ Terms used below:
    name. Invariants marked `security` need a test before the module is installed.
 
 10. **Install into a test tenant.** The corpus loader is `crates/corpus`. Put the product file in
-    the corpus directory the loader reads (`--corpus <dir>`), then run `cargo run -p strata-corpus -- check --product plinth-<slug>`
-    (the product id is `plinth-<slug>`), and `cargo run -p strata-corpus -- load --store memory --tenant <id>`.
-    Expected: the products load with no error. Check the installed tenant's bundle hash
-    (`strata-corpus hash --tenant <id>`) changes when the product changes.
+    the corpus directory the loader reads (`--corpus <dir>`; the generated products are in `docs/plinth/products`).
+    One module, into a fresh tenant of a store that outlives the process:
+    `cargo run -p strata-corpus -- load --store sqlite:var/plinth-proof.db --tenant <id> --corpus docs/plinth/products --product <file stem>`
+    (the tenant id is letters, digits and hyphens without a leading hyphen, as the loader checks it).
+    Without `--product`, `load` installs every product of the directory. Expected: the product loads, and the
+    verification line reports the owned entities present with 0 missing. `strata-corpus check --product <product id>`
+    (for example `plinth-store`) installs the product alone on a fresh in-memory tenant and lists every kernel problem. Check the installed
+    tenant's bundle hash (`strata-corpus hash --store <store> --tenant <id>`) changes when the product changes.
 
 11. **Check the screens.** Each live screen needs: a `title` and a `route`, a landmark (one `main`
     region per screen), a heading in order, a label on each form field and an accessible name for
@@ -116,6 +120,24 @@ Compile failures found during the port, and the generator change that fixed each
 Readability change, not a compile failure: invariants and events are in a `CHECKS` comment block at
 the end of each product file, not among the operations.
 
+Rules added with the M4 proof (each one recurs across modules; the rule and the defect it addresses):
+
+- A `PRIMARY KEY (a, b)` pseudo-field was emitted as a column. It is now a `unique` key over the named
+  fields (`primaryKeyOf`), so `cart_items` and `wishlist_items` keep their key.
+- A `workspace_id` column is not declared: the tenant is the workspace. Its references to `workspaces`
+  were MANUAL and held as text on every table of every module that has one (`fieldDecls`, `buildOperation`).
+- A uuid input named `<noun>_id` that names a live entity is a `Ref` to it (`entityNamed`). An
+  `Update <noun> ...` effect becomes an `UpdateRecord` on that reference input, with the fields the input
+  of the same name sets; a `<name>_at` timestamp is set to `now`; a `<name>_by` or principal field to
+  `principal`. A field the rules cannot set keeps the effect unmapped (`updateTarget`).
+- An effect that names an event (`review.created`, `order.status_changed ...`) is a notice, not a step; the
+  events section declares it, so it no longer makes the operation manual (`EVENT_EFFECT`).
+- A precondition of the form `<input> <op> <input or number> (CODE)` becomes a condition with the code as
+  its error (`simpleCondition`). Other preconditions stay prose, as before.
+- An enum input admits only its listed values: a condition `param.<name> in [...]` (`buildOperation`).
+- Runner: `strata-corpus load --product <file stem>` installs one product of a directory, so one module can
+  be proven in a fresh tenant without the other products (`crates/corpus/src/main.rs`).
+
 ## What remains manual, by class
 
 These are what the generator does not decide, and what steps 6 to 9 cover:
@@ -132,34 +154,59 @@ These are what the generator does not decide, and what steps 6 to 9 cover:
 
 ## Proof log
 
-Two modules with the fewest planned items, from `node docs/plinth/gen-product.mjs --all` (the
-table is printed in full there; the ranking is by planned items, then by module id):
+The ranking is `node docs/plinth/gen-product.mjs --all`. Its score is live objects plus live operations
+plus live screens; planned items do not add to the score, and they break ties (fewest planned first).
+The table prints both counts (objects and operations) and the planned, manual and out-of-scope totals.
+The first rows, as generated after the rules below were added:
 
-| module | title | live | planned | manual | blocked by |
-|---|---|---:|---:|---:|---|
-| COND | Condition grammar: CondTree, facts and the pure evaluator | 0 | 0 | 9 | - |
-| M17 | Builder catalogue | 0 | 1 | 4 | F-visibility 1 |
+| rank | module | score | objects | operations | screens | planned | manual |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | M4 | 9 | 8 | 1 | 0 | 48 | 10 |
+| 2 | M1 | 4 | 4 | 0 | 0 | 20 | 12 |
+| 3 | M2 | 3 | 3 | 0 | 0 | 19 | 23 |
+| 4 | M7 | 3 | 3 | 0 | 0 | 37 | 36 |
+| 5 | AUTHZ | 3 | 3 | 0 | 0 | 83 | 33 |
 
-- **COND** (`docs/plinth/products/cond.jsonc`): compiles with `specc bundle` as generated. Hand-finished: nothing.
-  Why: the module has no stored entity, operation, query or screen. Its two entities are read models
-  (`kind: view`, MANUAL), and its seven invariants are MANUAL (tests, step 9). It declares no product
-  content, so the bundle is empty.
-- **M17** (`docs/plinth/products/m17.jsonc`): compiles with `specc bundle` as generated. Hand-finished: nothing.
-  Why: the catalogue is a read-only description of the product's own schema (`kind: view`), which
-  Strata answers with the platform's `describe` intent, not with a product declaration. Its one
-  query has no object, so it stays MANUAL. The one PLANNED item is invariant M17-I2 on F-visibility
-  (which sources a member may see).
+M4 is the module proven (below). Its operation count is the generator's view: one operation is generated
+live, and three more are hand-finished, so the proof has four live operations in all. MCP, the other
+candidate, has no live object or operation after the rules, so it cannot meet the three-and-three bar.
 
-Caveat: the planned-count ranking selects modules that declare nothing. Both proofs compile, but
-neither exercises an object, an operation, a view or a screen, so they show that the generator's
-output is accepted, not that a module installs and has its screens. The next proof should use the
-lowest-ranked module with live operations (for example MCP, which has one live operation and
-twelve planned items), once its MANUAL items are resolved in steps 6 to 9.
+- **M4** (`docs/plinth/products/m4.jsonc`, first line `HAND-FINISHED`). Live: 8 objects (generated),
+  4 operations (1 generated, 3 hand-finished), 3 ledger declarations (hand-finished), 4 roles.
+  Compile: `specc bundle --product docs/plinth/products/m4.jsonc` writes one file, as generated and after the
+  hand-finish.
+  Install: `CARGO_BUILD_JOBS=2 cargo run -q -p strata-corpus --bin strata-corpus -- load --store sqlite:var/plinth-proof.db --tenant plinth01 --corpus docs/plinth/products --product m4`.
+  Output: `installed 1 products into tenant plinth01: 23 entities owned, schema version 2, 2 commits`, then
+  `plinth-store v0.1.0 23 entities`, then `verified 23 owned entities present (0 missing, 1 not checkable)`.
+  Tenant ids cannot contain a hyphen, so the tenant is `plinth01`.
+  Hand-finishes, and whether each became a rule:
+  1. `wishlist.add` and `wishlist.remove` take the product as a reference input (`product`, a Ref to
+     `plinth_store__product_inventory`), not the slug. The find step looks up the member's wishlist row; `add`
+     creates it in the unmatched branch, `remove` deletes it in the matched branch. Not a rule: changing a
+     slug into a record reference changes the operation's contract with its callers, which is a decision.
+     The same shape recurs in `cart.set_item` and `store.review_create`, so the decision is owed once for all.
+  2. The "product exists" precondition of `wishlist.add` is dropped: a Ref input already names an existing
+     record, so there is nothing to check.
+  3. `inventory.adjust` takes the product as a reference input and posts the stock change to a ledger unit
+     (`plinth_store__stock`, pool `plinth_store__stock_pool`, floor 0). The first version wrote
+     `on_hand = on_hand + delta` on the record, and specc refused it with `layer.balance-outside-ledger`: a
+     count that moves up and down is a ledger unit. Not a rule yet: choosing the unit, the pool and the
+     floor is a ledger design decision (PORTING step 6, `PostLedger`), and it recurs wherever a table holds
+     a count (`product_inventory.on_hand`, `inventory_movements`). The generator should propose it once the
+     decision is made for one module.
+  4. The `inventory_movements` row of `inventory.adjust` is not emitted: that table is `partly`, blocked on a
+     fundamental, so it stays PLANNED in the file's comments.
+  5. Generator defect found while porting, now a rule (below): the `PRIMARY KEY (...)` pseudo-field of
+     `cart_items` and `wishlist_items` was emitted as a column named `primary_key`.
+
+Caveat: the M4 product installs into a fresh tenant and its objects and operations are in the tenant. The
+product has no screens and no policies yet (policies are planned on F-visibility), so the screen and row-scope
+parts of step 11 and step 7 are not proven here.
 
 ## Where the generator stands
 
-All 24 modules compile with `specc bundle` as generated, with no hand-finish. An operation is live only when the
-inventory marks it expressible without a fundamental, it has no prose precondition, no effect
-beyond a create, and no row scope. An object is live when the inventory does not block it; its
-approximate-type and personal fields stay live with a MANUAL note beside them. So a module's live
-count is small by design.
+Twenty-three modules are generated as before. M4 is hand-finished (its file is kept by the generator, as the
+recipe says). An operation is live when the inventory marks it expressible without a fundamental, it has no
+row scope, and every one of its effects and preconditions maps to a Strata step or condition (see the rules
+under "Generator history"). An object is live when the inventory does not block it; its approximate-type and
+personal fields stay live with a MANUAL note beside them. So a module's live count is small by design.
