@@ -34,6 +34,7 @@ fn aggregate(
         kind,
         field: field_name.map(field),
         group_by: group.map(field),
+        group_by_second: None,
         n: (kind == AggregateKind::Top).then_some(2),
         descending: true,
         scan_bound: 1_000,

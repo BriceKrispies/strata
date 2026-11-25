@@ -137,6 +137,7 @@ fn declared(
         kind,
         field: field.map(|f| FieldId::new(f).unwrap()),
         group_by: group.map(|f| FieldId::new(f).unwrap()),
+        group_by_second: None,
         n: (kind == AggregateKind::Top).then_some(2),
         descending: true,
         scan_bound: if name == "tight" { 2 } else { 1_000 },

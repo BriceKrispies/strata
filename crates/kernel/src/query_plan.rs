@@ -420,6 +420,74 @@ pub fn plan_query(schema: &TenantSchema, def: &QueryDef) -> QueryPlan {
     }
 }
 
+/// How an aggregate reaches the records its query filter selects (AGG-2326).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FilterAccess {
+    /// No index answers the filter: the aggregate reads the window of the object type.
+    Scan,
+    /// The filter names the principal, which is not known yet (`needs` before the reader is).
+    Unknown,
+    /// The records whose `field` equals one of `values` (distinct, each keyable, a null value
+    /// dropped as matching nothing), read through the record index.
+    Values { field: FieldId, values: Vec<Value> },
+}
+
+/// How the query filter of `def` reaches its records. An equality or a list of values on an
+/// indexable field at the top level of the filter is answered by the record index; the first such
+/// condition is used, equalities before lists. Anything else, or a value the index cannot hold, is
+/// [`FilterAccess::Scan`]. The whole filter is still evaluated on each record it returns.
+pub(crate) fn filter_access(
+    schema: &TenantSchema,
+    def: &QueryDef,
+    params: &BTreeMap<String, Value>,
+    principal: Option<&Principal>,
+) -> FilterAccess {
+    let (Some(filter), Some(object)) = (&def.filter, schema.objects.get(&def.object)) else {
+        return FilterAccess::Scan;
+    };
+    let mut parts = Vec::new();
+    conjuncts(filter, &mut parts);
+    let atoms: Vec<(&str, Atom)> = parts.iter().filter_map(|p| atom_of(p, def)).collect();
+    let equalities = atoms.iter().filter(|(_, atom)| matches!(atom, Atom::Eq(_)));
+    let lists = atoms.iter().filter(|(_, atom)| matches!(atom, Atom::In(_)));
+    for (name, atom) in equalities.chain(lists) {
+        let Ok((field, _)) = indexable(object, name) else {
+            continue;
+        };
+        let items = match atom {
+            Atom::Eq(operand) => match operand_value(operand, params, principal) {
+                None => return FilterAccess::Unknown,
+                Some(value) => vec![value],
+            },
+            Atom::In(Probe::InList(items)) => items.clone(),
+            Atom::In(Probe::InParam(param)) => match params.get(param) {
+                Some(Value::List(items)) => items.clone(),
+                _ => Vec::new(),
+            },
+            Atom::In(_) | Atom::Bound(..) => continue,
+        };
+        let mut values = BTreeSet::new();
+        for item in items {
+            match item {
+                Value::Null => {}
+                Value::List(_) => return FilterAccess::Scan,
+                value if !keyable(&value) => return FilterAccess::Scan,
+                value => {
+                    values.insert(value);
+                }
+            }
+        }
+        if values.len() > MAX_IN_VALUES {
+            return FilterAccess::Scan;
+        }
+        return FilterAccess::Values {
+            field,
+            values: values.into_iter().collect(),
+        };
+    }
+    FilterAccess::Scan
+}
+
 /// Whether the pair index orders by `name`, or why not: `$created_at`, `$updated_at`, and an
 /// integer or time field an index may use (KRN-2920).
 fn orderable(object: &ObjectTypeDef, name: &str) -> Result<(), String> {

@@ -189,6 +189,7 @@ impl<'a> Footprint<'a> {
         let mut named: Vec<&FieldId> = declared_of(def).iter().collect();
         named.extend(agg.field.iter());
         named.extend(agg.group_by.iter());
+        named.extend(agg.group_by_second.iter());
         self.add_query(def, Fields::Named(named));
     }
 

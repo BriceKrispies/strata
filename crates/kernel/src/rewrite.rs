@@ -568,6 +568,11 @@ pub fn rewrite_schema(
                         .as_ref()
                         .map(|f| sub.name(object, f))
                         .transpose()?;
+                    a.group_by_second = a
+                        .group_by_second
+                        .as_ref()
+                        .map(|f| sub.name(object, f))
+                        .transpose()?;
                     rewritten.push(a);
                 }
                 new.aggregates = Some(rewritten);

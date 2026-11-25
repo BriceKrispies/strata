@@ -240,6 +240,9 @@ pub struct AggregateSpec {
     pub field: Option<FieldId>,
     #[serde(default)]
     pub group_by: Option<FieldId>,
+    /// The second field the groups are made by, after `group_by`.
+    #[serde(default)]
+    pub group_by_second: Option<FieldId>,
     /// The length of a top list.
     #[serde(default)]
     pub n: Option<u32>,
@@ -257,6 +260,7 @@ impl AggregateSpec {
             kind: self.kind,
             field: self.field.clone(),
             group_by: self.group_by.clone(),
+            group_by_second: self.group_by_second.clone(),
             n: self.n,
             descending: self.descending,
             scan_bound: self.scan_bound,
