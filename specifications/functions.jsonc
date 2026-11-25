@@ -65328,8 +65328,427 @@
       ]
     },
     {
+      "id": "object-action-action",
+      "description": "The action an object action names: an object permission's verb as the Action that holds_power asks for (ObjectActionExt::action).",
+      "params": [
+        {
+          "name": "a",
+          "type": "object-action"
+        }
+      ],
+      "returns": "action",
+      "body": "match a { read => action.read, create => action.create, update => action.update, delete => action.delete }",
+      "examples": [
+        {
+          "description": "An object update is the action update.",
+          "args": {
+            "a": "update"
+          },
+          "result": "update"
+        }
+      ]
+    },
+    {
+      "id": "object-action-word",
+      "description": "The lowercase name of an object action, as describe_grant writes it in a sentence fragment.",
+      "params": [
+        {
+          "name": "a",
+          "type": "object-action"
+        }
+      ],
+      "returns": "string",
+      "body": "match a { read => 'read', create => 'create', update => 'update', delete => 'delete' }",
+      "examples": [
+        {
+          "description": "The word of an object create is create.",
+          "args": {
+            "a": "create"
+          },
+          "result": "create"
+        }
+      ]
+    },
+    {
+      "id": "grant-description",
+      "description": "rules.rs describe_grant: a grant as a sentence fragment, capability <name> or <object>:<verb> with the verb lowercase.",
+      "params": [
+        {
+          "name": "g",
+          "type": "grant"
+        }
+      ],
+      "returns": "string",
+      "body": "match g { capability(name) => format('capability {}', name), object{object, action} => format('{}:{}', object, call object-action-word(action)) }",
+      "examples": [
+        {
+          "description": "A capability is named by its name.",
+          "args": {
+            "g": {
+              "capability": "content-write"
+            }
+          },
+          "result": "capability content-write"
+        },
+        {
+          "description": "An object permission is named by its object and its lowercase verb.",
+          "args": {
+            "g": {
+              "object": {
+                "object": "note",
+                "action": "update"
+              }
+            }
+          },
+          "result": "note:update"
+        }
+      ]
+    },
+    {
+      "id": "grant-held",
+      "description": "rules.rs holds_role_power for a grant (ADM-1088): a capability is held when the principal is the owner or a role it holds names it; an object permission is held as holds_power asks, the owner holding it, a role permission or an unconditional policy giving it.",
+      "params": [
+        {
+          "name": "tenant",
+          "type": "tenant-state"
+        },
+        {
+          "name": "principal",
+          "type": "principal"
+        },
+        {
+          "name": "g",
+          "type": "grant"
+        }
+      ],
+      "returns": "bool",
+      "body": "match g { capability(name) => any(r in call roles-of(tenant, principal), r == 'owner') || any(x in call effective-permissions(tenant, principal), x == grant.capability(name)), object{object, action} => call holds-power(tenant, principal, call object-action-action(action), resource.object(object)) }",
+      "examples": [
+        {
+          "description": "A writer holds the capability its role names.",
+          "args": {
+            "tenant": {
+              "fixture": "fx-tenant-state-15",
+              "with": {
+                "members.alpha:writer1": [
+                  "editor",
+                  "writer"
+                ]
+              }
+            },
+            "principal": {
+              "user": "alpha:writer1"
+            },
+            "g": {
+              "capability": "content-write"
+            }
+          },
+          "result": true
+        },
+        {
+          "description": "A capability no role of the writer names is not held.",
+          "args": {
+            "tenant": {
+              "fixture": "fx-tenant-state-15",
+              "with": {
+                "members.alpha:writer1": [
+                  "editor",
+                  "writer"
+                ]
+              }
+            },
+            "principal": {
+              "user": "alpha:writer1"
+            },
+            "g": {
+              "capability": "bundle-install"
+            }
+          },
+          "result": false
+        }
+      ]
+    },
+    {
+      "id": "widening-grants",
+      "description": "rules.rs powers_added, the permission part (ADM-1085): for a define-role-permissions of a role the schema names, the grants its permissions give that the role does not already grant, in the order of the permissions and each as often as it is named; none for any other change or for a role the schema does not name.",
+      "params": [
+        {
+          "name": "schema",
+          "type": "tenant-schema"
+        },
+        {
+          "name": "c",
+          "type": "schema-change"
+        }
+      ],
+      "returns": "list<grant>",
+      "body": "match c { define-role-permissions{role, permissions} => match get(schema.roles, role) { Some(_) => fold(g in fold(p in permissions, acc = [], concat(acc, match p { capability(name) => [grant.capability(name)], object{object, actions} => map(a in actions, grant.object{object, action: a}) })), acc2 = [], if any(x in call grants-of(schema, role), x == g) then acc2 else concat(acc2, [g])), None => [] }, _ => [] }",
+      "examples": [
+        {
+          "description": "A role the schema does not name adds no grant.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-1"
+            },
+            "c": {
+              "define-role-permissions": {
+                "role": "nosuch",
+                "permissions": [
+                  {
+                    "capability": "bundle-install"
+                  }
+                ]
+              }
+            }
+          },
+          "result": []
+        }
+      ]
+    },
+    {
+      "id": "widening-policy-actions",
+      "description": "rules.rs powers_added, the policy part (ADM-1085): for a define-policy, the actions the policy names that the same policy did not already give the same role, on the same resource and condition, in the order of the actions; none for any other change.",
+      "params": [
+        {
+          "name": "schema",
+          "type": "tenant-schema"
+        },
+        {
+          "name": "c",
+          "type": "schema-change"
+        }
+      ],
+      "returns": "list<action>",
+      "body": "match c { define-policy(p) => fold(a in p.actions, acc = [], if (match get(schema.policies, p.id) { Some(old) => old.role == p.role && old.resource == p.resource && old.condition == p.condition && any(x in old.actions, x == a), None => false }) then acc else concat(acc, [a])), _ => [] }",
+      "examples": [
+        {
+          "description": "A policy the schema does not hold gives every action it names.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-1"
+            },
+            "c": {
+              "define-policy": {
+                "id": "reviewers_update_notes",
+                "role": "writer",
+                "resource": {
+                  "object": "note"
+                },
+                "actions": [
+                  "update"
+                ],
+                "condition": null
+              }
+            }
+          },
+          "result": [
+            "update"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "widening-added",
+      "description": "rules.rs powers_added (ADM-1085): the powers a schema change adds to the role it names, each as the sentence fragment rules.rs describe_role_power writes: a grant as grant-description, a policy power as policy <id>: <Action> on <Resource>.",
+      "params": [
+        {
+          "name": "schema",
+          "type": "tenant-schema"
+        },
+        {
+          "name": "c",
+          "type": "schema-change"
+        }
+      ],
+      "returns": "list<string>",
+      "body": "match c { define-policy(p) => map(a in call widening-policy-actions(schema, c), format('policy {}: {} on {}', p.id, call action-debug(a), call resource-debug(p.resource))), define-role-permissions{role, permissions} => map(g in call widening-grants(schema, c), call grant-description(g)), _ => [] }",
+      "examples": [
+        {
+          "description": "A policy power is named by its policy, action and resource.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-1"
+            },
+            "c": {
+              "define-policy": {
+                "id": "reviewers_update_notes",
+                "role": "writer",
+                "resource": {
+                  "object": "note"
+                },
+                "actions": [
+                  "update"
+                ],
+                "condition": null
+              }
+            }
+          },
+          "result": [
+            "policy reviewers_update_notes: Update on Object(ObjectTypeId(\"note\"))"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "widening-lacking",
+      "description": "rules.rs holds_role_power over the powers a schema change adds (ADM-1088): the sentence fragments of the added powers the principal does not hold, in the order of the added powers. A refusal names exactly these.",
+      "params": [
+        {
+          "name": "tenant",
+          "type": "tenant-state"
+        },
+        {
+          "name": "principal",
+          "type": "principal"
+        },
+        {
+          "name": "schema",
+          "type": "tenant-schema"
+        },
+        {
+          "name": "c",
+          "type": "schema-change"
+        }
+      ],
+      "returns": "list<string>",
+      "body": "match c { define-policy(p) => fold(a in call widening-policy-actions(schema, c), acc = [], if call holds-policy-power(tenant, principal, a, p.resource, p.condition) then acc else concat(acc, [format('policy {}: {} on {}', p.id, call action-debug(a), call resource-debug(p.resource))])), define-role-permissions{role, permissions} => map(g in fold(x in call widening-grants(schema, c), acc = [], if call grant-held(tenant, principal, x) then acc else concat(acc, [x])), call grant-description(g)), _ => [] }",
+      "examples": [
+        {
+          "description": "A writer lacks the update it adds to its role.",
+          "args": {
+            "tenant": {
+              "fixture": "fx-tenant-state-15",
+              "with": {
+                "members.alpha:writer1": [
+                  "writer"
+                ]
+              }
+            },
+            "principal": {
+              "user": "alpha:writer1"
+            },
+            "schema": {
+              "fixture": "fx-tenant-schema-1"
+            },
+            "c": {
+              "define-policy": {
+                "id": "reviewers_update_notes",
+                "role": "writer",
+                "resource": {
+                  "object": "note"
+                },
+                "actions": [
+                  "update"
+                ],
+                "condition": null
+              }
+            }
+          },
+          "result": [
+            "policy reviewers_update_notes: Update on Object(ObjectTypeId(\"note\"))"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "require-widening",
+      "description": "transition.rs require_powers_held (ADM-1085, ADM-1088): a schema change that adds a power to a role is refused unless the acting principal holds every power it adds, the refusal naming each power it lacks; the check is evidence permission:widen:<role>, passed with the detail 'holds every power the change adds to role <role>'. A change that adds nothing is not asked anything and leaves the draft as it is. The owner holds every power.",
+      "params": [
+        {
+          "name": "d",
+          "type": "draft"
+        },
+        {
+          "name": "c",
+          "type": "schema-change"
+        }
+      ],
+      "returns": "draft",
+      "errors": "rejection",
+      "let": [
+        {
+          "name": "added",
+          "expr": "call widening-added(d.tenant.schema, c)"
+        },
+        {
+          "name": "lacking",
+          "expr": "call widening-lacking(d.tenant, d.ctx.principal, d.tenant.schema, c)"
+        },
+        {
+          "name": "role",
+          "expr": "match c { define-role-permissions{role, permissions} => role, define-policy(p) => p.role, _ => 'none' }"
+        },
+        {
+          "name": "rule",
+          "expr": "format('permission:widen:{}', role)"
+        },
+        {
+          "name": "detail",
+          "expr": "fold(l in lacking, acc = '', if acc == '' then l else format('{}, {}', acc, l))"
+        }
+      ],
+      "body": "if added == [] then d else if lacking == [] then draft{tenant: d.tenant, ctx: d.ctx, coverage: d.coverage, ops: d.ops, events: d.events, effects: d.effects, evidence: concat(d.evidence, [check{rule, passed: true, detail: format('holds every power the change adds to role {}', role)}]), next-record: d.next-record} else fail(call draft-reject(concat(d.evidence, [check{rule, passed: false, detail}]), error-kind.unauthorized, format('may not widen role {}: lacks {}', role, detail)))",
+      "examples": [
+        {
+          "description": "A writer that lacks the update a policy adds to its role is refused, and the refusal names it.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-22"
+            },
+            "c": {
+              "define-policy": {
+                "id": "reviewers_update_notes",
+                "role": "writer",
+                "resource": {
+                  "object": "note"
+                },
+                "actions": [
+                  "update"
+                ],
+                "condition": null
+              }
+            }
+          },
+          "error": {
+            "rejected": {
+              "kind": "unauthorized",
+              "message": "may not widen role writer: lacks policy reviewers_update_notes: Update on Object(ObjectTypeId(\"note\"))",
+              "evidence": [
+                {
+                  "rule": "permission:widen:writer",
+                  "passed": false,
+                  "detail": "policy reviewers_update_notes: Update on Object(ObjectTypeId(\"note\"))"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "A change that adds no power to a role is not asked anything.",
+          "args": {
+            "d": {
+              "fixture": "fx-draft-22"
+            },
+            "c": {
+              "define-role-permissions": {
+                "role": "nosuch",
+                "permissions": [
+                  {
+                    "capability": "bundle-install"
+                  }
+                ]
+              }
+            }
+          },
+          "result": {
+            "fixture": "fx-draft-22"
+          }
+        }
+      ]
+    },
+    {
       "id": "require-definition-authority",
-      "description": "transition.rs require_definition_authority: beyond Manage on Schema, a change of a trigger or an automation needs the capability automations-define (WFL-1520), checked once and first; then, in the order of the changes, every run-as role of a defined automation is one the principal may confer (require-conferrable, ADM-152, WFL-1528) and the definer of a tenant operation holds every power its steps use (require-operation-powers). A change of a setting definition needs the capability setting-define, checked after the capability of automations (settings.rs SETTING_DEFINE). A change of the ledger declarations needs the capability ledger-configure, checked after setting-define (ledger.rs LEDGER_CONFIGURE).",
+      "description": "transition.rs require_definition_authority: beyond Manage on Schema, a change of a trigger or an automation needs the capability automations-define (WFL-1520), checked once and first; then, in the order of the changes, every run-as role of a defined automation is one the principal may confer (require-conferrable, ADM-152, WFL-1528) and the definer of a tenant operation holds every power its steps use (require-operation-powers). A change of a setting definition needs the capability setting-define, checked after the capability of automations (settings.rs SETTING_DEFINE). A change of the ledger declarations needs the capability ledger-configure, checked after setting-define (ledger.rs LEDGER_CONFIGURE). Last, each change in order is checked by require-widening: a change that adds a power to a role needs the principal to hold every power it adds (ADM-1088).",
       "params": [
         {
           "name": "d",
@@ -65366,9 +65785,13 @@
         {
           "name": "d1c",
           "expr": "if ledger then try call require-capability(d1b, 'ledger-configure') else d1b"
+        },
+        {
+          "name": "d2",
+          "expr": "fold(c in changes, acc = d1c, match c { define-automation(a) => try call require-conferrable(acc, map(r in a.run-as.roles, r)), define-operation(op) => try call require-operation-powers(acc, op), _ => acc })"
         }
       ],
-      "body": "fold(c in changes, acc = d1c, match c { define-automation(a) => try call require-conferrable(acc, map(r in a.run-as.roles, r)), define-operation(op) => try call require-operation-powers(acc, op), _ => acc })",
+      "body": "fold(c in changes, acc = d2, try call require-widening(acc, c))",
       "examples": [
         {
           "description": "An editor holding automations-define defines an automation that acts as an editor (WFL-1528).",
