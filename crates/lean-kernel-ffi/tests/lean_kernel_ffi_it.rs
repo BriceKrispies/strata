@@ -5,7 +5,8 @@ use strata_lean_kernel_ffi::codec::{
     decode_ctx, decode_field_def, decode_intent, decode_record, decode_refusal, decode_step_result,
     decode_tenant, decode_ty, decode_val, encode_ctx, encode_field_def, encode_intent,
     encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val, Ctx,
-    Elem, FieldDef, Intent, Limits, OnDelete, Record, Refusal, StepResult, Tenant, Ty, Val,
+    Elem, FieldDef, Intent, Limits, ObjType, OnDelete, Record, Refusal, StepResult, Tenant, Ty,
+    Val,
     MAX_TY_DEPTH,
 };
 use strata_lean_kernel_ffi::{step, step_reference};
@@ -46,30 +47,36 @@ fn many_tokio_worker_threads_call_lean_at_once() {
 // Lean encoder produces for the same values.
 // ----------------------------------------------------------------------------------------------
 
-/// The fixture tenant of `lean/Strata/Codec/Fixtures.lean` (`fxTenant`).
+/// The fixture tenant of `lean/Strata/Codec/Fixtures.lean` (`fxTenant`): one object type, `1`,
+/// with one string field, no constraints and no records.
 fn fixture_tenant() -> Tenant {
     Tenant {
-        schema: vec![(
+        types: vec![(
             1,
-            FieldDef {
-                ty: Ty::Str,
-                required: true,
-                unique: false,
-                default: Val::Null,
+            ObjType {
+                schema: vec![(
+                    1,
+                    FieldDef {
+                        ty: Ty::Str,
+                        required: true,
+                        unique: false,
+                        default: Val::Null,
+                    },
+                )],
+                uniques: vec![],
+                records: vec![],
             },
         )],
         owner: 7,
         editors: vec![],
         writers: vec![],
-        records: vec![],
         next_id: 1,
         limits: Limits::KERNEL,
-        uniques: vec![],
     }
 }
 
 const FIXTURE_TENANT: &[u8] = &[
-    1, 1, 1, 1, 0, 0, 7, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 0,
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 7, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
 ];
 
 #[test]
@@ -83,9 +90,10 @@ fn codec_fixtures_match_the_lean_encoder() {
         vec![5, 2, 1, 0, 5, 0]
     );
     assert_eq!(
-        encode_ty(&Ty::List(Box::new(Ty::Ref(OnDelete::SetNull)))),
-        vec![5, 4]
+        encode_ty(&Ty::List(Box::new(Ty::Ref(0, OnDelete::SetNull)))),
+        vec![5, 4, 0]
     );
+    assert_eq!(encode_ty(&Ty::Ref(300, OnDelete::Restrict)), vec![3, 172, 2]);
     let field = FieldDef {
         ty: Ty::Int,
         required: false,
@@ -109,19 +117,28 @@ fn codec_fixtures_match_the_lean_encoder() {
     );
     assert_eq!(
         encode_intent(&Intent::SetRequired {
+            ty: 1,
             field: 2,
             strict: false
         }),
-        vec![3, 2, 0]
+        vec![3, 1, 2, 0]
     );
     let update = Intent::Update {
+        ty: 1,
         id: 5,
         fields: vec![(1, Val::Str("x".into()))],
         expected: None,
     };
-    assert_eq!(encode_intent(&update), vec![1, 5, 1, 1, 2, 1, 120, 0]);
-    assert_eq!(encode_intent(&Intent::Create(vec![])), vec![0, 0]);
+    assert_eq!(encode_intent(&update), vec![1, 1, 5, 1, 1, 2, 1, 120, 0]);
+    assert_eq!(
+        encode_intent(&Intent::Create {
+            ty: 1,
+            fields: vec![]
+        }),
+        vec![0, 1, 0]
+    );
     assert_eq!(encode_refusal(&Refusal::LimitExceeded), vec![8]);
+    assert_eq!(encode_refusal(&Refusal::UnknownObject), vec![11]);
     assert_eq!(
         encode_step_result(&StepResult::Refused(Refusal::Unauthorized)),
         vec![0, 1]
@@ -141,10 +158,17 @@ fn codec_fixtures_match_the_lean_encoder() {
     assert_eq!(decode_field_def(&[0, 0, 1, 1, 1, 1]), Some(field));
     assert_eq!(decode_record(&[4, 1, 1, 2, 3, 1]), Some(record));
     assert_eq!(decode_tenant(FIXTURE_TENANT), Some(fixture_tenant()));
-    assert_eq!(decode_intent(&[1, 5, 1, 1, 2, 1, 120, 0]), Some(update));
     assert_eq!(
-        decode_ty(&[5, 4]),
-        Some(Ty::List(Box::new(Ty::Ref(OnDelete::SetNull))))
+        decode_intent(&[1, 1, 5, 1, 1, 2, 1, 120, 0]),
+        Some(update)
+    );
+    assert_eq!(
+        decode_ty(&[5, 4, 0]),
+        Some(Ty::List(Box::new(Ty::Ref(0, OnDelete::SetNull))))
+    );
+    assert_eq!(
+        decode_ty(&[3, 172, 2]),
+        Some(Ty::Ref(300, OnDelete::Restrict))
     );
     assert_eq!(
         decode_ctx(&[3, 9]),
@@ -249,8 +273,8 @@ fn gen_ty(rng: &mut Rng, depth: u32) -> Ty {
         0 => Ty::Int,
         1 => Ty::Str,
         2 => Ty::Bool,
-        3 => Ty::Ref(OnDelete::Restrict),
-        _ => Ty::Ref(OnDelete::SetNull),
+        3 => Ty::Ref(gen_nat(rng), OnDelete::Restrict),
+        _ => Ty::Ref(gen_nat(rng), OnDelete::SetNull),
     }
 }
 
@@ -298,22 +322,40 @@ fn gen_ids(rng: &mut Rng, max_len: u64) -> Vec<u64> {
     ids
 }
 
-fn gen_tenant(rng: &mut Rng) -> Tenant {
+fn gen_obj_type(rng: &mut Rng) -> ObjType {
     let mut schema = Vec::new();
     for _ in 0..rng.below(3) {
         let id = gen_nat(rng);
         let fd = gen_field_def(rng);
         schema.push((id, fd));
     }
-    let owner = gen_nat(rng);
-    let editors = gen_ids(rng, 3);
-    let writers = gen_ids(rng, 3);
+    let mut uniques = Vec::new();
+    for _ in 0..rng.below(3) {
+        uniques.push(gen_ids(rng, 4));
+    }
     let mut records = Vec::new();
     for _ in 0..rng.below(3) {
         let id = gen_nat(rng);
         let rec = gen_record(rng);
         records.push((id, rec));
     }
+    ObjType {
+        schema,
+        uniques,
+        records,
+    }
+}
+
+fn gen_tenant(rng: &mut Rng) -> Tenant {
+    let mut types = Vec::new();
+    for _ in 0..rng.below(3) {
+        let id = gen_nat(rng);
+        let obj = gen_obj_type(rng);
+        types.push((id, obj));
+    }
+    let owner = gen_nat(rng);
+    let editors = gen_ids(rng, 3);
+    let writers = gen_ids(rng, 3);
     let next_id = gen_nat(rng);
     let limits = Limits {
         max_string: gen_nat(rng),
@@ -321,19 +363,13 @@ fn gen_tenant(rng: &mut Rng) -> Tenant {
         max_unique: gen_nat(rng),
         max_record: gen_nat(rng),
     };
-    let mut uniques = Vec::new();
-    for _ in 0..rng.below(3) {
-        uniques.push(gen_ids(rng, 4));
-    }
     Tenant {
-        schema,
+        types,
         owner,
         editors,
         writers,
-        records,
         next_id,
         limits,
-        uniques,
     }
 }
 
@@ -347,38 +383,52 @@ fn gen_opt(rng: &mut Rng) -> Option<u64> {
 
 fn gen_intent(rng: &mut Rng) -> Intent {
     match rng.below(6) {
-        0 => Intent::Create(gen_fields(rng)),
+        0 => Intent::Create {
+            ty: gen_nat(rng),
+            fields: gen_fields(rng),
+        },
         1 => {
+            let ty = gen_nat(rng);
             let id = gen_nat(rng);
             let fields = gen_fields(rng);
             let expected = gen_opt(rng);
             Intent::Update {
+                ty,
                 id,
                 fields,
                 expected,
             }
         }
         2 => {
+            let ty = gen_nat(rng);
             let id = gen_nat(rng);
             let expected = gen_opt(rng);
-            Intent::Delete { id, expected }
+            Intent::Delete { ty, id, expected }
         }
         3 => {
+            let ty = gen_nat(rng);
             let field = gen_nat(rng);
             let strict = rng.coin();
-            Intent::SetRequired { field, strict }
+            Intent::SetRequired { ty, field, strict }
         }
         4 => {
+            let ty = gen_nat(rng);
             let field = gen_nat(rng);
             let strict = rng.coin();
-            Intent::SetUnique { field, strict }
+            Intent::SetUnique { ty, field, strict }
         }
-        _ => Intent::DefineUnique(gen_ids(rng, 4)),
+        _ => {
+            let ty = gen_nat(rng);
+            Intent::DefineUnique {
+                ty,
+                fields: gen_ids(rng, 4),
+            }
+        }
     }
 }
 
 fn gen_refusal(rng: &mut Rng) -> Refusal {
-    match rng.below(11) {
+    match rng.below(12) {
         0 => Refusal::NoTenant,
         1 => Refusal::Unauthorized,
         2 => Refusal::NotFound,
@@ -389,7 +439,8 @@ fn gen_refusal(rng: &mut Rng) -> Refusal {
         7 => Refusal::VersionConflict,
         8 => Refusal::LimitExceeded,
         9 => Refusal::UniqueViolated,
-        _ => Refusal::InvalidSchema,
+        10 => Refusal::InvalidSchema,
+        _ => Refusal::UnknownObject,
     }
 }
 
@@ -465,6 +516,7 @@ fn damaged_encodings_do_not_decode() {
     );
     check_refuses_damage(
         &encode_intent(&Intent::Update {
+            ty: 1,
             id: 5,
             fields: vec![(1, Val::Str("x".into()))],
             expected: Some(300),

@@ -371,6 +371,8 @@ does not decode (`decodeBytes`).
 ### Format, byte by byte
 
 - **Tag**: one byte, the constructor's index in declaration order.
+- **Object type id**: a natural, as the other ids. A reference type and an intent each carry one
+  (slice 4 of the model: several object types per tenant).
 - **Natural**: minimal LEB128. Seven bits per byte, low group first, bit 7 set on every byte but
   the last. A multi-byte natural never ends in `0x00`, so `0` is `00`, `128` is `80 01`, and
   `300` is `AC 02`.
@@ -387,24 +389,28 @@ The types, with their tags:
 | Type | Encoding |
 |---|---|
 | `OnDelete` | `00` restrict, `01` setNull |
-| `Ty` | `00` int, `01` str, `02` bool, `03` ref restrict, `04` ref setNull, `05` list then the element type |
+| `Ty` | `00` int, `01` str, `02` bool, `03` ref restrict then the object type id (natural), `04` ref setNull then the object type id (natural), `05` list then the element type |
 | `Elem` | `00` null, `01` int, `02` str, `03` bool, `04` ref (natural) |
 | `Val` | `00` null, `01` int, `02` str, `03` bool, `04` ref (natural), `05` list (count, elements) |
 | `FieldDef` | `ty`, `required` (bool), `unique` (bool), `default` (`Val`) |
 | `Limits` | `maxString`, `maxList`, `maxUnique`, `maxRecord` (naturals) |
 | `Record` | `owner`, `version`, then the fields as a list of (field id, `Val`) |
-| `Tenant` | `schema` (list of (field id, `FieldDef`)), `owner`, `editors` (list), `writers` (list), `records` (list of (record id, `Record`)), `nextId`, `limits`, `uniques` (list of lists of field ids) |
+| `ObjType` | `schema` (list of (field id, `FieldDef`)), `uniques` (list of lists of field ids), `records` (list of (record id, `Record`)) |
+| `Tenant` | `types` (list of (object type id, `ObjType`)), `owner`, `editors` (list), `writers` (list), `nextId`, `limits` |
 | `Ctx` | `tenant`, `principal` |
-| `Intent` | `00` create (fields); `01` update (id, fields, option expected version); `02` delete (id, option expected version); `03` setRequired (field, strict); `04` setUnique (field, strict); `05` defineUnique (list of field ids) |
-| `Err` | one byte: `00` noTenant, `01` unauthorized, `02` notFound, `03` invalid, `04` migrationRejected, `05` danglingReference, `06` stillReferenced, `07` versionConflict, `08` limitExceeded, `09` uniqueViolated, `0A` invalidSchema |
+| `Intent` | each begins with its tag, then the object type id (natural): `00` create (fields); `01` update (id, fields, option expected version); `02` delete (id, option expected version); `03` setRequired (field, strict); `04` setUnique (field, strict); `05` defineUnique (list of field ids) |
+| `Err` | one byte: `00` noTenant, `01` unauthorized, `02` notFound, `03` invalid, `04` migrationRejected, `05` danglingReference, `06` stillReferenced, `07` versionConflict, `08` limitExceeded, `09` uniqueViolated, `0A` invalidSchema, `0B` unknownObject |
 | step result (`Except Err Tenant`) | `00` then `Err`, or `01` then `Tenant` |
 
 Fixtures (each proved by evaluation in `Fixtures.lean`; the Rust tests assert the same bytes):
 - `encVal (.ref 300) = [4, 172, 2]`, that is `04 AC 02`;
 - `encVal (.list [.int 5, .null]) = [5, 2, 1, 0, 5, 0]`;
-- `encIntent (.update 5 [(1, .str "x")] none) = [1, 5, 1, 1, 2, 1, 120, 0]`;
+- `encTy (.list (.ref 0 .setNull)) = [5, 4, 0]` and `encTy (.ref 300 .restrict) = [3, 172, 2]`;
+- `encIntent (.update 1 5 [(1, .str "x")] none) = [1, 1, 5, 1, 1, 2, 1, 120, 0]`;
 - `encTenant fxTenant`, a tenant with one string field, owner 7, next id 1 and the kernel's limits,
-  is `01 01 01 01 00 00 07 00 00 00 01 80 80 04 E8 07 C8 01 80 80 10 00` (22 bytes);
+  is `01 01 01 01 01 01 00 00 00 00 07 00 00 01 80 80 04 E8 07 C8 01 80 80 10` (24 bytes): one
+  object type, id `01`, with one field (id `01`, str, required, not unique, null default), no
+  uniques and no records, then the owner, the two empty role lists, the next id and the limits;
 - `encResult (.error .unauthorized) = [0, 1]`.
 
 `World` (a function from tenant ids to tenants) is not encoded. The boundary carries one tenant.
@@ -416,7 +422,7 @@ Combinators (each proves `Lawful` for its codec, from the `Lawful`s of its parts
 through an isomorphism), `lawful_opt`, `lawful_list`.
 
 Boundary types: `lawful_onDelete`, `lawful_err`, `lawful_ty`, `lawful_elem`, `lawful_val`,
-`lawful_fieldDef`, `lawful_limits`, `lawful_record`, `lawful_tenant`, `lawful_intent`,
+`lawful_fieldDef`, `lawful_limits`, `lawful_record`, `lawful_objType`, `lawful_tenant`, `lawful_intent`,
 `lawful_ctx`, `lawful_result`.
 
 Entry points, for any `Lawful e d`:

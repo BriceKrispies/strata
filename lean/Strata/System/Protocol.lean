@@ -1634,7 +1634,7 @@ theorem duplicate_commit_inert {K : Kernel} {C : Config} (s : PState) (rid : Req
 
 /-- One tenant, owned by principal 7, with no records. -/
 def wTenant : Tenant :=
-  { schema := [], owner := 7, editors := [], writers := [], records := [], nextId := 0 }
+  { types := [(1, { schema := [] })], owner := 7, editors := [], writers := [], nextId := 0 }
 
 /-- The kernel: the step of the kernel's transition function, and a principal reads the tenant when
     it may create records in it. -/
@@ -1664,13 +1664,13 @@ theorem refusal_reachable : ∃ s, ProtoReachable wKernel wConfig wWorld s ∧
     s.net (.clientReply 1 (.refused .unauthorized)) :=
   ⟨_, ⟨wInit, wInit_pinit, Star.tail (Star.tail (Star.tail (Star.tail (Star.tail (Star.tail
       (Star.tail (Star.tail (Star.tail (Star.refl wInit)
-        (PNext.clientReq _ 1 0 (.create [])))
-        (PNext.bffForward _ 1 0 (.create []) (Or.inr rfl)))
-        (PNext.begin _ 1 0 (.create []) 0 9 (Or.inr rfl) rfl rfl rfl))
+        (PNext.clientReq _ 1 0 (.create 1 [])))
+        (PNext.bffForward _ 1 0 (.create 1 []) (Or.inr rfl)))
+        (PNext.begin _ 1 0 (.create 1 []) 0 9 (Or.inr rfl) rfl rfl rfl))
         (PNext.load _ 1 0 0 (Or.inr rfl)))
         (PNext.snap _ 1 _ _ 0 _ _ (Or.inr rfl) rfl rfl rfl rfl))
         (PNext.commit _ 1 _ _ 0 rfl rfl))
-        (PNext.storeRefuse _ 1 0 0 9 (.create []) 0 _ .unauthorized (Or.inr rfl) rfl rfl rfl))
+        (PNext.storeRefuse _ 1 0 0 9 (.create 1 []) 0 _ .unauthorized (Or.inr rfl) rfl rfl rfl))
         (PNext.done _ 1 (.refused .unauthorized) _ (Or.inr rfl) rfl))
         (PNext.bffRelay _ 1 (.refused .unauthorized) (Or.inr rfl))⟩,
     Or.inr rfl⟩

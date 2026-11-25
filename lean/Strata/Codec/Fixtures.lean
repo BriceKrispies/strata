@@ -27,9 +27,9 @@ theorem encNat_big {n : Nat} (h : 128 ≤ n) :
 
 /-- The fixture tenant: one string field, owner 7, next id 1, the kernel's limits. -/
 def fxTenant : Tenant :=
-  { schema := [(1, { ty := .str, required := true, unique := false, default := .null })],
-    owner := 7, editors := [], writers := [], records := [], nextId := 1,
-    limits := ⟨65536, 1000, 200, 262144⟩, uniques := [] }
+  { types := [(1, { schema := [(1, { ty := .str, required := true, unique := false, default := .null })] })],
+    owner := 7, editors := [], writers := [], nextId := 1,
+    limits := ⟨65536, 1000, 200, 262144⟩ }
 
 /-! ## Values and types -/
 
@@ -53,8 +53,11 @@ theorem fix_val_list : encVal (.list [.int 5, .null]) = [5, 2, 1, 0, 5, 0] := by
     List.cons_append, List.nil_append, List.length_cons, List.length_nil, List.flatMap_cons,
     List.flatMap_nil]
 
-theorem fix_ty_list_ref : encTy (.list (.ref .setNull)) = [5, 4] := by
-  simp +decide only [encTy, tag]
+theorem fix_ty_list_ref : encTy (.list (.ref 0 .setNull)) = [5, 4, 0] := by
+  simp +decide only [encTy, encNat_small, tag]
+
+theorem fix_ty_ref : encTy (.ref 300 .restrict) = [3, 172, 2] := by
+  simp +decide only [encTy, encNat_small, encNat_big, tag, List.cons_append, List.nil_append]
 
 /-! ## Schema, limits, records, tenant -/
 
@@ -75,25 +78,29 @@ theorem fix_record : encRecord { owner := 4, version := 1, fields := [(2, .bool 
     encNat_big, tag, List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil,
     List.cons_append, List.nil_append, Nat.reduceAdd]
 
+/-- The fixture tenant has one object type, `1`: its schema is one string field, no constraints and
+    no records. The tenant has owner 7, next id 1 and the kernel's limits. Its bytes are the type
+    list (one entry: id `1`, then schema (one field: id `1`, string, required, not unique, null
+    default), no uniques, no records), then owner, editors, writers, next id, limits. -/
 theorem fix_tenant : encTenant fxTenant =
-    [1, 1, 1, 1, 0, 0, 7, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 0] := by
-  simp +decide only [fxTenant, encTenant, encTenantBody, encIso, encPair, encList, encSchemaEntry,
-    encFieldDef, encTy, encBool, encVal, encLimits, encRecordEntry, encNat_small, encNat_big, tag,
-    List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil, List.cons_append,
-    List.nil_append, Nat.reduceMod, Nat.reduceAdd, Nat.reduceDiv, Nat.reduceLT]
+    [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 7, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16] := by
+  simp +decide only [fxTenant, encTenant, encTenantBody, encIso, encPair, encList, encTypeEntry,
+    encObjType, encSchemaEntry, encFieldDef, encTy, encBool, encVal, encLimits, encNat_small,
+    encNat_big, tag, List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil,
+    List.cons_append, List.nil_append, Nat.reduceMod, Nat.reduceAdd, Nat.reduceDiv, Nat.reduceLT]
 
 /-! ## Intents, the context, errors and the result -/
 
-theorem fix_intent_setRequired : encIntent (.setRequired 2 false) = [3, 2, 0] := by
+theorem fix_intent_setRequired : encIntent (.setRequired 1 2 false) = [3, 1, 2, 0] := by
   simp +decide only [encIntent, encNat_small, encBool, tag, List.cons_append, List.nil_append]
 
 theorem fix_intent_update :
-    encIntent (.update 5 [(1, .str "x")] none) = [1, 5, 1, 1, 2, 1, 120, 0] := by
+    encIntent (.update 1 5 [(1, .str "x")] none) = [1, 1, 5, 1, 1, 2, 1, 120, 0] := by
   simp +decide only [encIntent, encList, encFieldVal, encPair, encVal, encStr, encOpt, encNat_small,
     encNat_big, tag, List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil,
     List.cons_append, List.nil_append, String.toUTF8_eq_toByteArray, String.size_toByteArray]
 
-theorem fix_intent_create : encIntent (.create []) = [0, 0] := by
+theorem fix_intent_create : encIntent (.create 1 []) = [0, 1, 0] := by
   simp +decide only [encIntent, encList, encNat_small, tag, List.length_nil, List.flatMap_nil,
     List.nil_append, List.cons_append]
 
@@ -103,11 +110,14 @@ theorem fix_ctx : encCtx ⟨3, 9⟩ = [3, 9] := by
 theorem fix_err : encErr .limitExceeded = [8] := by
   simp +decide only [encErr, tag]
 
+theorem fix_err_unknownObject : encErr .unknownObject = [11] := by
+  simp +decide only [encErr, tag]
+
 theorem fix_result_error : encResult (.error .unauthorized) = [0, 1] := by
   simp +decide only [encResult, encErr, tag, List.cons_append, List.nil_append]
 
 theorem fix_result_ok : encResult (.ok fxTenant) =
-    [1, 1, 1, 1, 1, 0, 0, 7, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 0] := by
+    [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 7, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16] := by
   simp +decide only [encResult, fix_tenant, tag, List.cons_append]
 
 /-! ## Decoding the fixtures

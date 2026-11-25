@@ -59,7 +59,7 @@ theorem lawful_onDelete : Lawful encOnDelete decOnDelete := by
         repeat' split at h
         all_goals first | omega | simp at h
 
-/-- The kernel's errors: eleven tags, no payload. -/
+/-- The kernel's errors: twelve tags, no payload. `unknownObject` is the last, tag `11`. -/
 def encErr : Err → Bytes
   | .noTenant => [tag 0]
   | .unauthorized => [tag 1]
@@ -72,6 +72,7 @@ def encErr : Err → Bytes
   | .limitExceeded => [tag 8]
   | .uniqueViolated => [tag 9]
   | .invalidSchema => [tag 10]
+  | .unknownObject => [tag 11]
 
 def decErr : Dec Err := fun bs =>
   match bs with
@@ -89,6 +90,7 @@ def decErr : Dec Err := fun bs =>
     | 8 => some (.limitExceeded, r)
     | 9 => some (.uniqueViolated, r)
     | 10 => some (.invalidSchema, r)
+    | 11 => some (.unknownObject, r)
     | _ => none
 
 theorem lawful_err : Lawful encErr decErr := by
@@ -101,8 +103,8 @@ theorem lawful_err : Lawful encErr decErr := by
     | cons b r =>
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
           b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨
-          b.toNat = 10 ∨ 11 ≤ b.toNat by omega)
-        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
+          b.toNat = 10 ∨ b.toNat = 11 ∨ 12 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 0 hk]
@@ -136,6 +138,9 @@ theorem lawful_err : Lawful encErr decErr := by
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 10 hk]
+      · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encErr, byte_eq_tag b 11 hk]
       · simp only [decErr] at h
         exfalso
         repeat' split at h
@@ -143,13 +148,15 @@ theorem lawful_err : Lawful encErr decErr := by
 
 /-! ## Types -/
 
-/-- A type: tag `0`..`4` for the scalars and references, `5` for a list and its element type. -/
+/-- A type: tags `0`..`2` for the scalars; `3` for a reference that restricts its delete and `4`
+    for one that clears, each followed by the id of the object type it names; `5` for a list and
+    its element type. -/
 def encTy : Ty → Bytes
   | .int => [tag 0]
   | .str => [tag 1]
   | .bool => [tag 2]
-  | .ref .restrict => [tag 3]
-  | .ref .setNull => [tag 4]
+  | .ref t .restrict => tag 3 :: encNat t
+  | .ref t .setNull => tag 4 :: encNat t
   | .list e => tag 5 :: encTy e
 
 def decTy : Bytes → Option (Ty × Bytes)
@@ -159,8 +166,12 @@ def decTy : Bytes → Option (Ty × Bytes)
     | 0 => some (.int, r)
     | 1 => some (.str, r)
     | 2 => some (.bool, r)
-    | 3 => some (.ref .restrict, r)
-    | 4 => some (.ref .setNull, r)
+    | 3 => match decNat r with
+      | some (t, r') => some (.ref t .restrict, r')
+      | none => none
+    | 4 => match decNat r with
+      | some (t, r') => some (.ref t .setNull, r')
+      | none => none
     | 5 => match decTy r with
       | some (e, r') => some (.list e, r')
       | none => none
@@ -170,8 +181,8 @@ theorem decTy_encTy : ∀ (t : Ty) (rest : Bytes), decTy (encTy t ++ rest) = som
   | .int, rest => by simp [encTy, decTy, tag]
   | .str, rest => by simp [encTy, decTy, tag]
   | .bool, rest => by simp [encTy, decTy, tag]
-  | .ref .restrict, rest => by simp [encTy, decTy, tag]
-  | .ref .setNull, rest => by simp [encTy, decTy, tag]
+  | .ref t .restrict, rest => by simp [encTy, decTy, tag, lawful_nat.1]
+  | .ref t .setNull, rest => by simp [encTy, decTy, tag, lawful_nat.1]
   | .list e, rest => by
     have ih := decTy_encTy e rest
     simp [encTy, decTy, tag, ih]
@@ -191,12 +202,24 @@ theorem decTy_canon : ∀ (bs : Bytes) (t : Ty) (rest : Bytes),
     · simp only [decTy, hk, Option.some.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl⟩ := h
       simp [encTy, byte_eq_tag b 2 hk]
-    · simp only [decTy, hk, Option.some.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl⟩ := h
-      simp [encTy, byte_eq_tag b 3 hk]
-    · simp only [decTy, hk, Option.some.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl⟩ := h
-      simp [encTy, byte_eq_tag b 4 hk]
+    · simp only [decTy, hk] at h
+      cases hd : decNat r with
+      | none => simp [hd] at h
+      | some p =>
+        obtain ⟨t', r'⟩ := p
+        simp only [hd, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        have hr := lawful_nat.2 r t' r' hd
+        simp [encTy, byte_eq_tag b 3 hk, hr]
+    · simp only [decTy, hk] at h
+      cases hd : decNat r with
+      | none => simp [hd] at h
+      | some p =>
+        obtain ⟨t', r'⟩ := p
+        simp only [hd, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        have hr := lawful_nat.2 r t' r' hd
+        simp [encTy, byte_eq_tag b 4 hk, hr]
     · simp only [decTy, hk] at h
       cases hd : decTy r with
       | none => simp [hd] at h
@@ -469,45 +492,60 @@ def decRecordEntry : Dec (RecordId × Record) := decPair decNat decRecord
 theorem lawful_recordEntry : Lawful encRecordEntry decRecordEntry :=
   lawful_pair lawful_nat lawful_record
 
-/-- The tenant's fields as one nested product: schema, owner, editors, writers, records, next id,
-    limits, composite uniques. -/
-def encTenantBody : Schema × Nat × List Nat × List Nat × Records × Nat × Limits × List (List Nat)
-    → Bytes :=
-  encPair (encList encSchemaEntry)
+/-- An object type: its schema, its composite constraints, then its records. -/
+def encObjType : ObjType → Bytes :=
+  encIso (encPair (encList encSchemaEntry) (encPair (encList (encList encNat)) (encList encRecordEntry)))
+    (fun o => (o.schema, o.uniques, o.records))
+
+def decObjType : Dec ObjType :=
+  decIso (decPair (decList decSchemaEntry)
+      (decPair (decList (decList decNat)) (decList decRecordEntry)))
+    (fun p => { schema := p.1, uniques := p.2.1, records := p.2.2 })
+
+theorem lawful_objType : Lawful encObjType decObjType :=
+  lawful_iso (lawful_pair (lawful_list lawful_schemaEntry)
+      (lawful_pair (lawful_list (lawful_list lawful_nat)) (lawful_list lawful_recordEntry)))
+    (fun o => by cases o; rfl) (fun _ => rfl)
+
+/-- A type of the tenant: its id, then the object type. -/
+def encTypeEntry : TypeId × ObjType → Bytes := encPair encNat encObjType
+
+def decTypeEntry : Dec (TypeId × ObjType) := decPair decNat decObjType
+
+theorem lawful_typeEntry : Lawful encTypeEntry decTypeEntry :=
+  lawful_pair lawful_nat lawful_objType
+
+/-- The tenant's fields as one nested product: its object types, owner, editors, writers, next id,
+    limits. -/
+def encTenantBody : List (TypeId × ObjType) × Nat × List Nat × List Nat × Nat × Limits → Bytes :=
+  encPair (encList encTypeEntry)
     (encPair encNat
       (encPair (encList encNat)
         (encPair (encList encNat)
-          (encPair (encList encRecordEntry)
-            (encPair encNat
-              (encPair encLimits (encList (encList encNat))))))))
+          (encPair encNat encLimits))))
 
 def decTenantBody :
-    Dec (Schema × Nat × List Nat × List Nat × Records × Nat × Limits × List (List Nat)) :=
-  decPair (decList decSchemaEntry)
+    Dec (List (TypeId × ObjType) × Nat × List Nat × List Nat × Nat × Limits) :=
+  decPair (decList decTypeEntry)
     (decPair decNat
       (decPair (decList decNat)
         (decPair (decList decNat)
-          (decPair (decList decRecordEntry)
-            (decPair decNat
-              (decPair decLimits (decList (decList decNat))))))))
+          (decPair decNat decLimits))))
 
 theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
-  lawful_pair (lawful_list lawful_schemaEntry)
+  lawful_pair (lawful_list lawful_typeEntry)
     (lawful_pair lawful_nat
       (lawful_pair (lawful_list lawful_nat)
         (lawful_pair (lawful_list lawful_nat)
-          (lawful_pair (lawful_list lawful_recordEntry)
-            (lawful_pair lawful_nat
-              (lawful_pair lawful_limits (lawful_list (lawful_list lawful_nat))))))))
+          (lawful_pair lawful_nat lawful_limits))))
 
 def encTenant : Tenant → Bytes :=
   encIso encTenantBody
-    (fun t => (t.schema, t.owner, t.editors, t.writers, t.records, t.nextId, t.limits, t.uniques))
+    (fun t => (t.types, t.owner, t.editors, t.writers, t.nextId, t.limits))
 
 def decTenant : Dec Tenant :=
   decIso decTenantBody fun p =>
-    ⟨p.1, p.2.1, p.2.2.1, p.2.2.2.1, p.2.2.2.2.1, p.2.2.2.2.2.1, p.2.2.2.2.2.2.1,
-      p.2.2.2.2.2.2.2⟩
+    ⟨p.1, p.2.1, p.2.2.1, p.2.2.2.1, p.2.2.2.2.1, p.2.2.2.2.2⟩
 
 theorem lawful_tenant : Lawful encTenant decTenant :=
   lawful_iso lawful_tenantBody (fun t => by cases t; rfl) (fun _ => rfl)
@@ -515,47 +553,60 @@ theorem lawful_tenant : Lawful encTenant decTenant :=
 /-! ## Intents, contexts and results -/
 
 /-- An intent: tag `0` create, `1` update, `2` delete, `3` set required, `4` set unique, `5`
-    define a composite unique constraint. -/
+    define a composite unique constraint. Each names its object type first, right after the tag,
+    as a natural. -/
 def encIntent : Intent → Bytes
-  | .create fs => tag 0 :: encList encFieldVal fs
-  | .update id fs ev => tag 1 :: (encNat id ++ encList encFieldVal fs ++ encOpt encNat ev)
-  | .delete id ev => tag 2 :: (encNat id ++ encOpt encNat ev)
-  | .setRequired f s => tag 3 :: (encNat f ++ encBool s)
-  | .setUnique f s => tag 4 :: (encNat f ++ encBool s)
-  | .defineUnique fs => tag 5 :: encList encNat fs
+  | .create ty fs => tag 0 :: (encNat ty ++ encList encFieldVal fs)
+  | .update ty id fs ev => tag 1 :: (encNat ty ++ encNat id ++ encList encFieldVal fs ++ encOpt encNat ev)
+  | .delete ty id ev => tag 2 :: (encNat ty ++ encNat id ++ encOpt encNat ev)
+  | .setRequired ty f s => tag 3 :: (encNat ty ++ encNat f ++ encBool s)
+  | .setUnique ty f s => tag 4 :: (encNat ty ++ encNat f ++ encBool s)
+  | .defineUnique ty fs => tag 5 :: (encNat ty ++ encList encNat fs)
 
 def decIntent : Dec Intent := fun bs =>
   match bs with
   | [] => none
   | b :: r =>
     match b.toNat with
-    | 0 => match decList decFieldVal r with
-      | some (fs, r') => some (.create fs, r')
+    | 0 => match decNat r with
+      | some (ty, r1) => match decList decFieldVal r1 with
+        | some (fs, r2) => some (.create ty fs, r2)
+        | none => none
       | none => none
     | 1 => match decNat r with
-      | some (id, r1) => match decList decFieldVal r1 with
-        | some (fs, r2) => match decOpt decNat r2 with
-          | some (ev, r3) => some (.update id fs ev, r3)
+      | some (ty, r1) => match decNat r1 with
+        | some (id, r2) => match decList decFieldVal r2 with
+          | some (fs, r3) => match decOpt decNat r3 with
+            | some (ev, r4) => some (.update ty id fs ev, r4)
+            | none => none
           | none => none
         | none => none
       | none => none
     | 2 => match decNat r with
-      | some (id, r1) => match decOpt decNat r1 with
-        | some (ev, r2) => some (.delete id ev, r2)
+      | some (ty, r1) => match decNat r1 with
+        | some (id, r2) => match decOpt decNat r2 with
+          | some (ev, r3) => some (.delete ty id ev, r3)
+          | none => none
         | none => none
       | none => none
     | 3 => match decNat r with
-      | some (f, r1) => match decBool r1 with
-        | some (s, r2) => some (.setRequired f s, r2)
+      | some (ty, r1) => match decNat r1 with
+        | some (f, r2) => match decBool r2 with
+          | some (s, r3) => some (.setRequired ty f s, r3)
+          | none => none
         | none => none
       | none => none
     | 4 => match decNat r with
-      | some (f, r1) => match decBool r1 with
-        | some (s, r2) => some (.setUnique f s, r2)
+      | some (ty, r1) => match decNat r1 with
+        | some (f, r2) => match decBool r2 with
+          | some (s, r3) => some (.setUnique ty f s, r3)
+          | none => none
         | none => none
       | none => none
-    | 5 => match decList decNat r with
-      | some (fs, r') => some (.defineUnique fs, r')
+    | 5 => match decNat r with
+      | some (ty, r1) => match decList decNat r1 with
+        | some (fs, r2) => some (.defineUnique ty fs, r2)
+        | none => none
       | none => none
     | _ => none
 
@@ -563,14 +614,19 @@ theorem lawful_intent : Lawful encIntent decIntent := by
   refine ⟨?_, ?_⟩
   · intro x rest
     cases x with
-    | create fs => simp [encIntent, decIntent, tag, (lawful_list lawful_fieldVal).1]
-    | update id fs ev =>
+    | create ty fs =>
+      simp [encIntent, decIntent, tag, lawful_nat.1, (lawful_list lawful_fieldVal).1, List.append_assoc]
+    | update ty id fs ev =>
       simp [encIntent, decIntent, tag, lawful_nat.1, (lawful_list lawful_fieldVal).1,
-        (lawful_opt lawful_nat).1]
-    | delete id ev => simp [encIntent, decIntent, tag, lawful_nat.1, (lawful_opt lawful_nat).1]
-    | setRequired f s => simp [encIntent, decIntent, tag, lawful_nat.1, lawful_bool.1]
-    | setUnique f s => simp [encIntent, decIntent, tag, lawful_nat.1, lawful_bool.1]
-    | defineUnique fs => simp [encIntent, decIntent, tag, (lawful_list lawful_nat).1]
+        (lawful_opt lawful_nat).1, List.append_assoc]
+    | delete ty id ev =>
+      simp [encIntent, decIntent, tag, lawful_nat.1, (lawful_opt lawful_nat).1, List.append_assoc]
+    | setRequired ty f s =>
+      simp [encIntent, decIntent, tag, lawful_nat.1, lawful_bool.1, List.append_assoc]
+    | setUnique ty f s =>
+      simp [encIntent, decIntent, tag, lawful_nat.1, lawful_bool.1, List.append_assoc]
+    | defineUnique ty fs =>
+      simp [encIntent, decIntent, tag, lawful_nat.1, (lawful_list lawful_nat).1, List.append_assoc]
   · intro bs x rest h
     cases bs with
     | nil => simp [decIntent] at h
@@ -578,84 +634,114 @@ theorem lawful_intent : Lawful encIntent decIntent := by
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
           b.toNat = 5 ∨ 6 ≤ b.toNat by omega) with hk | hk | hk | hk | hk | hk | hk
       · simp only [decIntent, hk] at h
-        cases hd : decList decFieldVal r with
-        | none => simp [hd] at h
-        | some p =>
-          obtain ⟨fs, r'⟩ := p
-          simp only [hd, Option.some.injEq, Prod.mk.injEq] at h
-          obtain ⟨rfl, rfl⟩ := h
-          have hr := (lawful_list lawful_fieldVal).2 r fs r' hd
-          simp [encIntent, byte_eq_tag b 0 hk, hr]
-      · simp only [decIntent, hk] at h
         cases hd1 : decNat r with
         | none => simp [hd1] at h
         | some p1 =>
-          obtain ⟨id, r1⟩ := p1
+          obtain ⟨ty, r1⟩ := p1
           cases hd2 : decList decFieldVal r1 with
           | none => simp [hd1, hd2] at h
           | some p2 =>
             obtain ⟨fs, r2⟩ := p2
+            simp only [hd1, hd2, Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            have e1 := lawful_nat.2 r ty r1 hd1
+            have e2 := (lawful_list lawful_fieldVal).2 r1 fs r2 hd2
+            simp [encIntent, byte_eq_tag b 0 hk, e1, e2, List.append_assoc]
+      · simp only [decIntent, hk] at h
+        cases hd1 : decNat r with
+        | none => simp [hd1] at h
+        | some p1 =>
+          obtain ⟨ty, r1⟩ := p1
+          cases hd2 : decNat r1 with
+          | none => simp [hd1, hd2] at h
+          | some p2 =>
+            obtain ⟨id, r2⟩ := p2
+            cases hd3 : decList decFieldVal r2 with
+            | none => simp [hd1, hd2, hd3] at h
+            | some p3 =>
+              obtain ⟨fs, r3⟩ := p3
+              cases hd4 : decOpt decNat r3 with
+              | none => simp [hd1, hd2, hd3, hd4] at h
+              | some p4 =>
+                obtain ⟨ev, r4⟩ := p4
+                simp only [hd1, hd2, hd3, hd4, Option.some.injEq, Prod.mk.injEq] at h
+                obtain ⟨rfl, rfl⟩ := h
+                have e1 := lawful_nat.2 r ty r1 hd1
+                have e2 := lawful_nat.2 r1 id r2 hd2
+                have e3 := (lawful_list lawful_fieldVal).2 r2 fs r3 hd3
+                have e4 := (lawful_opt lawful_nat).2 r3 ev r4 hd4
+                simp [encIntent, byte_eq_tag b 1 hk, e1, e2, e3, e4, List.append_assoc]
+      · simp only [decIntent, hk] at h
+        cases hd1 : decNat r with
+        | none => simp [hd1] at h
+        | some p1 =>
+          obtain ⟨ty, r1⟩ := p1
+          cases hd2 : decNat r1 with
+          | none => simp [hd1, hd2] at h
+          | some p2 =>
+            obtain ⟨id, r2⟩ := p2
             cases hd3 : decOpt decNat r2 with
             | none => simp [hd1, hd2, hd3] at h
             | some p3 =>
               obtain ⟨ev, r3⟩ := p3
               simp only [hd1, hd2, hd3, Option.some.injEq, Prod.mk.injEq] at h
               obtain ⟨rfl, rfl⟩ := h
-              have e1 := lawful_nat.2 r id r1 hd1
-              have e2 := (lawful_list lawful_fieldVal).2 r1 fs r2 hd2
+              have e1 := lawful_nat.2 r ty r1 hd1
+              have e2 := lawful_nat.2 r1 id r2 hd2
               have e3 := (lawful_opt lawful_nat).2 r2 ev r3 hd3
-              simp [encIntent, byte_eq_tag b 1 hk, e1, e2, e3, List.append_assoc]
+              simp [encIntent, byte_eq_tag b 2 hk, e1, e2, e3, List.append_assoc]
       · simp only [decIntent, hk] at h
         cases hd1 : decNat r with
         | none => simp [hd1] at h
         | some p1 =>
-          obtain ⟨id, r1⟩ := p1
-          cases hd2 : decOpt decNat r1 with
+          obtain ⟨ty, r1⟩ := p1
+          cases hd2 : decNat r1 with
           | none => simp [hd1, hd2] at h
           | some p2 =>
-            obtain ⟨ev, r2⟩ := p2
-            simp only [hd1, hd2, Option.some.injEq, Prod.mk.injEq] at h
-            obtain ⟨rfl, rfl⟩ := h
-            have e1 := lawful_nat.2 r id r1 hd1
-            have e2 := (lawful_opt lawful_nat).2 r1 ev r2 hd2
-            simp [encIntent, byte_eq_tag b 2 hk, e1, e2, List.append_assoc]
+            obtain ⟨f, r2⟩ := p2
+            cases hd3 : decBool r2 with
+            | none => simp [hd1, hd2, hd3] at h
+            | some p3 =>
+              obtain ⟨s, r3⟩ := p3
+              simp only [hd1, hd2, hd3, Option.some.injEq, Prod.mk.injEq] at h
+              obtain ⟨rfl, rfl⟩ := h
+              have e1 := lawful_nat.2 r ty r1 hd1
+              have e2 := lawful_nat.2 r1 f r2 hd2
+              have e3 := lawful_bool.2 r2 s r3 hd3
+              simp [encIntent, byte_eq_tag b 3 hk, e1, e2, e3, List.append_assoc]
       · simp only [decIntent, hk] at h
         cases hd1 : decNat r with
         | none => simp [hd1] at h
         | some p1 =>
-          obtain ⟨f, r1⟩ := p1
-          cases hd2 : decBool r1 with
+          obtain ⟨ty, r1⟩ := p1
+          cases hd2 : decNat r1 with
           | none => simp [hd1, hd2] at h
           | some p2 =>
-            obtain ⟨s, r2⟩ := p2
-            simp only [hd1, hd2, Option.some.injEq, Prod.mk.injEq] at h
-            obtain ⟨rfl, rfl⟩ := h
-            have e1 := lawful_nat.2 r f r1 hd1
-            have e2 := lawful_bool.2 r1 s r2 hd2
-            simp [encIntent, byte_eq_tag b 3 hk, e1, e2, List.append_assoc]
+            obtain ⟨f, r2⟩ := p2
+            cases hd3 : decBool r2 with
+            | none => simp [hd1, hd2, hd3] at h
+            | some p3 =>
+              obtain ⟨s, r3⟩ := p3
+              simp only [hd1, hd2, hd3, Option.some.injEq, Prod.mk.injEq] at h
+              obtain ⟨rfl, rfl⟩ := h
+              have e1 := lawful_nat.2 r ty r1 hd1
+              have e2 := lawful_nat.2 r1 f r2 hd2
+              have e3 := lawful_bool.2 r2 s r3 hd3
+              simp [encIntent, byte_eq_tag b 4 hk, e1, e2, e3, List.append_assoc]
       · simp only [decIntent, hk] at h
         cases hd1 : decNat r with
         | none => simp [hd1] at h
         | some p1 =>
-          obtain ⟨f, r1⟩ := p1
-          cases hd2 : decBool r1 with
+          obtain ⟨ty, r1⟩ := p1
+          cases hd2 : decList decNat r1 with
           | none => simp [hd1, hd2] at h
           | some p2 =>
-            obtain ⟨s, r2⟩ := p2
+            obtain ⟨fs, r2⟩ := p2
             simp only [hd1, hd2, Option.some.injEq, Prod.mk.injEq] at h
             obtain ⟨rfl, rfl⟩ := h
-            have e1 := lawful_nat.2 r f r1 hd1
-            have e2 := lawful_bool.2 r1 s r2 hd2
-            simp [encIntent, byte_eq_tag b 4 hk, e1, e2, List.append_assoc]
-      · simp only [decIntent, hk] at h
-        cases hd : decList decNat r with
-        | none => simp [hd] at h
-        | some p =>
-          obtain ⟨fs, r'⟩ := p
-          simp only [hd, Option.some.injEq, Prod.mk.injEq] at h
-          obtain ⟨rfl, rfl⟩ := h
-          have hr := (lawful_list lawful_nat).2 r fs r' hd
-          simp [encIntent, byte_eq_tag b 5 hk, hr]
+            have e1 := lawful_nat.2 r ty r1 hd1
+            have e2 := (lawful_list lawful_nat).2 r1 fs r2 hd2
+            simp [encIntent, byte_eq_tag b 5 hk, e1, e2, List.append_assoc]
       · simp only [decIntent] at h
         exfalso
         repeat' split at h

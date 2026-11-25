@@ -15,6 +15,12 @@
 //! - a list is the natural count and then the elements; an option is `0`, or `1` and the value;
 //! - a structure is its fields in declaration order.
 //!
+//! Three shapes carry the object types of a tenant (slice 4 of the model): a reference type is its
+//! tag (`3` restricts, `4` clears) and the natural id of the object type it names; a tenant holds
+//! its object types as a list of entries, each an id and then the type's schema, composite
+//! constraints and records; an intent is its tag and then the natural id of the object type it acts
+//! on, before its other fields. The kernel's refusal `UnknownObject` is tag `11`.
+//!
 //! Every value has one encoding and the decoders accept nothing else: [`decode_all`] requires the
 //! input to be consumed exactly.
 //!
@@ -44,7 +50,8 @@ pub enum Ty {
     Int,
     Str,
     Bool,
-    Ref(OnDelete),
+    /// A reference to the object type of this id, and what its delete does.
+    Ref(u64, OnDelete),
     List(Box<Ty>),
 }
 
@@ -106,17 +113,24 @@ pub struct Record {
     pub fields: Vec<(u64, Val)>,
 }
 
-/// Everything one tenant owns, as the boundary carries it.
+/// An object type of a tenant: its schema, its composite unique constraints, and its records.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjType {
+    pub schema: Vec<(u64, FieldDef)>,
+    pub uniques: Vec<Vec<u64>>,
+    pub records: Vec<(u64, Record)>,
+}
+
+/// Everything one tenant owns, as the boundary carries it: its object types by id, its owner,
+/// editors and writers, the next record id, and the size bounds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tenant {
-    pub schema: Vec<(u64, FieldDef)>,
+    pub types: Vec<(u64, ObjType)>,
     pub owner: u64,
     pub editors: Vec<u64>,
     pub writers: Vec<u64>,
-    pub records: Vec<(u64, Record)>,
     pub next_id: u64,
     pub limits: Limits,
-    pub uniques: Vec<Vec<u64>>,
 }
 
 /// The acting context of a step: which tenant, and who is acting.
@@ -140,30 +154,41 @@ pub enum Refusal {
     LimitExceeded,
     UniqueViolated,
     InvalidSchema,
+    UnknownObject,
 }
 
-/// What a caller asks the kernel to do.
+/// What a caller asks the kernel to do. Each intent names the object type it acts on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Intent {
-    Create(Vec<(u64, Val)>),
+    Create {
+        ty: u64,
+        fields: Vec<(u64, Val)>,
+    },
     Update {
+        ty: u64,
         id: u64,
         fields: Vec<(u64, Val)>,
         expected: Option<u64>,
     },
     Delete {
+        ty: u64,
         id: u64,
         expected: Option<u64>,
     },
     SetRequired {
+        ty: u64,
         field: u64,
         strict: bool,
     },
     SetUnique {
+        ty: u64,
         field: u64,
         strict: bool,
     },
-    DefineUnique(Vec<u64>),
+    DefineUnique {
+        ty: u64,
+        fields: Vec<u64>,
+    },
 }
 
 /// The result of a step: the refusal, or the tenant after the change (Lean's `Except Err Tenant`).
@@ -294,8 +319,14 @@ fn put_ty(out: &mut Vec<u8>, t: &Ty) {
         Ty::Int => out.push(0),
         Ty::Str => out.push(1),
         Ty::Bool => out.push(2),
-        Ty::Ref(OnDelete::Restrict) => out.push(3),
-        Ty::Ref(OnDelete::SetNull) => out.push(4),
+        Ty::Ref(target, OnDelete::Restrict) => {
+            out.push(3);
+            put_nat(out, *target);
+        }
+        Ty::Ref(target, OnDelete::SetNull) => {
+            out.push(4);
+            put_nat(out, *target);
+        }
         Ty::List(elem) => {
             out.push(5);
             put_ty(out, elem);
@@ -333,15 +364,24 @@ fn put_record_entry(out: &mut Vec<u8>, e: &(u64, Record)) {
     put_record(out, &e.1);
 }
 
+fn put_obj_type(out: &mut Vec<u8>, o: &ObjType) {
+    put_list(out, o.schema.as_slice(), put_schema_entry);
+    put_list(out, o.uniques.as_slice(), put_u64_list);
+    put_list(out, o.records.as_slice(), put_record_entry);
+}
+
+fn put_type_entry(out: &mut Vec<u8>, e: &(u64, ObjType)) {
+    put_nat(out, e.0);
+    put_obj_type(out, &e.1);
+}
+
 fn put_tenant(out: &mut Vec<u8>, t: &Tenant) {
-    put_list(out, t.schema.as_slice(), put_schema_entry);
+    put_list(out, t.types.as_slice(), put_type_entry);
     put_nat(out, t.owner);
     put_list(out, t.editors.as_slice(), put_u64);
     put_list(out, t.writers.as_slice(), put_u64);
-    put_list(out, t.records.as_slice(), put_record_entry);
     put_nat(out, t.next_id);
     put_limits(out, &t.limits);
-    put_list(out, t.uniques.as_slice(), put_u64_list);
 }
 
 fn put_ctx(out: &mut Vec<u8>, c: &Ctx) {
@@ -351,37 +391,44 @@ fn put_ctx(out: &mut Vec<u8>, c: &Ctx) {
 
 fn put_intent(out: &mut Vec<u8>, i: &Intent) {
     match i {
-        Intent::Create(fields) => {
+        Intent::Create { ty, fields } => {
             out.push(0);
+            put_nat(out, *ty);
             put_list(out, fields.as_slice(), put_field);
         }
         Intent::Update {
+            ty,
             id,
             fields,
             expected,
         } => {
             out.push(1);
+            put_nat(out, *ty);
             put_nat(out, *id);
             put_list(out, fields.as_slice(), put_field);
             put_opt_nat(out, *expected);
         }
-        Intent::Delete { id, expected } => {
+        Intent::Delete { ty, id, expected } => {
             out.push(2);
+            put_nat(out, *ty);
             put_nat(out, *id);
             put_opt_nat(out, *expected);
         }
-        Intent::SetRequired { field, strict } => {
+        Intent::SetRequired { ty, field, strict } => {
             out.push(3);
+            put_nat(out, *ty);
             put_nat(out, *field);
             put_bool(out, *strict);
         }
-        Intent::SetUnique { field, strict } => {
+        Intent::SetUnique { ty, field, strict } => {
             out.push(4);
+            put_nat(out, *ty);
             put_nat(out, *field);
             put_bool(out, *strict);
         }
-        Intent::DefineUnique(fields) => {
+        Intent::DefineUnique { ty, fields } => {
             out.push(5);
+            put_nat(out, *ty);
             put_list(out, fields.as_slice(), put_u64);
         }
     }
@@ -400,6 +447,7 @@ fn put_refusal(out: &mut Vec<u8>, e: &Refusal) {
         Refusal::LimitExceeded => 8,
         Refusal::UniqueViolated => 9,
         Refusal::InvalidSchema => 10,
+        Refusal::UnknownObject => 11,
     });
 }
 
@@ -649,8 +697,8 @@ fn get_ty(r: &mut Reader<'_>, depth: usize) -> Option<Ty> {
         0 => Some(Ty::Int),
         1 => Some(Ty::Str),
         2 => Some(Ty::Bool),
-        3 => Some(Ty::Ref(OnDelete::Restrict)),
-        4 => Some(Ty::Ref(OnDelete::SetNull)),
+        3 => Some(Ty::Ref(get_nat(r)?, OnDelete::Restrict)),
+        4 => Some(Ty::Ref(get_nat(r)?, OnDelete::SetNull)),
         5 => Some(Ty::List(Box::new(get_ty(r, depth + 1)?))),
         _ => None,
     }
@@ -705,24 +753,37 @@ fn get_record_entry(r: &mut Reader<'_>) -> Option<(u64, Record)> {
     Some((id, rec))
 }
 
-fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
+fn get_obj_type(r: &mut Reader<'_>) -> Option<ObjType> {
     let schema = get_list(r, get_schema_entry)?;
+    let uniques = get_list(r, get_u64_list)?;
+    let records = get_list(r, get_record_entry)?;
+    Some(ObjType {
+        schema,
+        uniques,
+        records,
+    })
+}
+
+fn get_type_entry(r: &mut Reader<'_>) -> Option<(u64, ObjType)> {
+    let id = get_nat(r)?;
+    let obj = get_obj_type(r)?;
+    Some((id, obj))
+}
+
+fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
+    let types = get_list(r, get_type_entry)?;
     let owner = get_nat(r)?;
     let editors = get_u64_list(r)?;
     let writers = get_u64_list(r)?;
-    let records = get_list(r, get_record_entry)?;
     let next_id = get_nat(r)?;
     let limits = get_limits(r)?;
-    let uniques = get_list(r, get_u64_list)?;
     Some(Tenant {
-        schema,
+        types,
         owner,
         editors,
         writers,
-        records,
         next_id,
         limits,
-        uniques,
     })
 }
 
@@ -734,33 +795,46 @@ fn get_ctx(r: &mut Reader<'_>) -> Option<Ctx> {
 
 fn get_intent(r: &mut Reader<'_>) -> Option<Intent> {
     match r.byte()? {
-        0 => Some(Intent::Create(get_list(r, get_field)?)),
+        0 => {
+            let ty = get_nat(r)?;
+            let fields = get_list(r, get_field)?;
+            Some(Intent::Create { ty, fields })
+        }
         1 => {
+            let ty = get_nat(r)?;
             let id = get_nat(r)?;
             let fields = get_list(r, get_field)?;
             let expected = get_opt_nat(r)?;
             Some(Intent::Update {
+                ty,
                 id,
                 fields,
                 expected,
             })
         }
         2 => {
+            let ty = get_nat(r)?;
             let id = get_nat(r)?;
             let expected = get_opt_nat(r)?;
-            Some(Intent::Delete { id, expected })
+            Some(Intent::Delete { ty, id, expected })
         }
         3 => {
+            let ty = get_nat(r)?;
             let field = get_nat(r)?;
             let strict = get_bool(r)?;
-            Some(Intent::SetRequired { field, strict })
+            Some(Intent::SetRequired { ty, field, strict })
         }
         4 => {
+            let ty = get_nat(r)?;
             let field = get_nat(r)?;
             let strict = get_bool(r)?;
-            Some(Intent::SetUnique { field, strict })
+            Some(Intent::SetUnique { ty, field, strict })
         }
-        5 => Some(Intent::DefineUnique(get_u64_list(r)?)),
+        5 => {
+            let ty = get_nat(r)?;
+            let fields = get_u64_list(r)?;
+            Some(Intent::DefineUnique { ty, fields })
+        }
         _ => None,
     }
 }
@@ -778,6 +852,7 @@ fn get_refusal(r: &mut Reader<'_>) -> Option<Refusal> {
         8 => Some(Refusal::LimitExceeded),
         9 => Some(Refusal::UniqueViolated),
         10 => Some(Refusal::InvalidSchema),
+        11 => Some(Refusal::UnknownObject),
         _ => None,
     }
 }
