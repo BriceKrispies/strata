@@ -308,65 +308,118 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   /-- The socket opened: the refusals are forgotten, and live updates may run again. -/
   | socketOpened {s : State} :
       Allowed cat s .wsOpen { s with wsRefusals := 0, wsStopped := false } []
-  /-- The welcome of a first connection: the subscription starts at the server's head, the view is
-  read again (what changed before it is not replayed), and the heartbeat starts. -/
-  | welcomeFirst {s : State} {head : Nat} :
+  /-- The welcome of a first connection (`lv-first-welcome-i`): the subscription starts from the beginning,
+  the head becomes the acknowledged number, the counts start again, the heartbeat is the one the welcome
+  announces, and the view is read again, since what changed before it is not replayed. -/
+  | welcomeFirst {s : State} {head hb : Nat} :
+      s.wsState = .connecting →
       s.wsLast = 0 →
-      Allowed cat s (.welcome head)
+      Allowed cat s (.welcome head hb)
         { askView s s.route with
           wsState := .opened
           wsLast := head
+          wsAttempts := 0
+          wsLastN := 0
+          wsMissed := 0
+          wsHeartbeatMs := hb
           nextId := s.nextId + 2
           wsHeartbeat := some (s.nextId + 1) }
-        ([.wsSend "subscribe"] ++ fetch s.nextId .view ++ [.timer "heartbeat" (s.nextId + 1) cat.heartbeatMs])
-  /-- The welcome of a resumed connection: the subscription goes on from the last notice; nothing is read
-  again. -/
-  | welcomeResume {s : State} {head : Nat} :
+        ([.wsSend "subscribe"] ++ fetch s.nextId .view ++ [.timer "heartbeat" (s.nextId + 1) hb])
+  /-- The welcome of a resumed connection (`lv-resume-welcome-i`): the subscription goes on from the last
+  notice, and nothing is read again. -/
+  | welcomeResume {s : State} {head hb : Nat} :
+      s.wsState = .connecting →
       s.wsLast ≠ 0 →
-      Allowed cat s (.welcome head)
+      Allowed cat s (.welcome head hb)
         { s with
           wsState := .opened
+          wsAttempts := 0
+          wsLastN := 0
+          wsMissed := 0
+          wsHeartbeatMs := hb
           nextId := s.nextId + 1
           wsHeartbeat := some s.nextId }
-        [.wsSend "subscribe", .timer "heartbeat" s.nextId cat.heartbeatMs]
-  /-- The next notice: it is acknowledged, and the page's live bindings read the view again for it. -/
-  | eventRefresh {s : State} {seq : Nat} :
-      seq = s.wsLast + 1 →
-      Allowed cat s (.frameEvent seq true) { askView s s.route with wsLast := seq }
+        [.wsSend "subscribe", .timer "heartbeat" s.nextId hb]
+  /-- A notice that is the next in the count and newer than the last acknowledged one, with the page's
+  live bindings reading the view again for it (`lv-frame-advance-i`). -/
+  | frameAdvanceRefresh {s : State} {n seq : Nat} :
+      s.wsState = .opened →
+      n = s.wsLastN + 1 →
+      s.wsLast < seq →
+      Allowed cat s (.frameEvent n seq true)
+        { askView s s.route with wsLastN := n, wsLast := seq }
         ([.wsSend "ack"] ++ fetch s.nextId .view)
-  /-- The next notice, and no live binding reads the view again for it: acknowledged. -/
-  | eventQuiet {s : State} {seq : Nat} :
-      seq = s.wsLast + 1 →
-      Allowed cat s (.frameEvent seq false) { s with wsLast := seq } [.wsSend "ack"]
-  /-- A notice that is not the next one: a frame went missing, so the socket is closed and the view is
-  read again. -/
-  | eventGap {s : State} {seq : Nat} {refresh : Bool} :
-      seq ≠ s.wsLast + 1 →
-      Allowed cat s (.frameEvent seq refresh) (askView s s.route) ([.wsClose] ++ fetch s.nextId .view)
-  /-- A resync: the page is too far behind to replay, so it carries on from the head, reading the view
-  again. -/
+  /-- The same notice, and no live binding reads the view again for it: acknowledged, and the count and the
+  acknowledged number move on. -/
+  | frameAdvanceQuiet {s : State} {n seq : Nat} :
+      s.wsState = .opened →
+      n = s.wsLastN + 1 →
+      s.wsLast < seq →
+      Allowed cat s (.frameEvent n seq false) { s with wsLastN := n, wsLast := seq } [.wsSend "ack"]
+  /-- A notice in the count but not newer than the last acknowledged one, with the view read again
+  (`lv-frame-same-i`): acknowledged, and the count moves on. -/
+  | frameSameRefresh {s : State} {n seq : Nat} :
+      s.wsState = .opened →
+      n = s.wsLastN + 1 →
+      seq ≤ s.wsLast →
+      Allowed cat s (.frameEvent n seq true) { askView s s.route with wsLastN := n }
+        ([.wsSend "ack"] ++ fetch s.nextId .view)
+  /-- The same, with no live binding reading the view again. -/
+  | frameSameQuiet {s : State} {n seq : Nat} :
+      s.wsState = .opened →
+      n = s.wsLastN + 1 →
+      seq ≤ s.wsLast →
+      Allowed cat s (.frameEvent n seq false) { s with wsLastN := n } [.wsSend "ack"]
+  /-- A notice out of the count (`lv-frame-gap-i`): a frame went missing, so the acknowledged number starts
+  again from 0, the socket is closed, and the view is read again. -/
+  | frameGap {s : State} {n seq : Nat} {refresh : Bool} :
+      s.wsState = .opened →
+      n ≠ s.wsLastN + 1 →
+      Allowed cat s (.frameEvent n seq refresh)
+        { askView s s.route with wsLast := 0 }
+        ([.wsClose] ++ fetch s.nextId .view)
+  /-- A resync (`lv-resync-i`): the acknowledged number moves to the head, and the view is read again. -/
   | resyncRefresh {s : State} {head : Nat} :
+      s.wsState = .opened →
       Allowed cat s (.resync head) { askView s s.route with wsLast := head } (fetch s.nextId .view)
-  /-- A pong that names a head ahead of the notices the page has: the view is read again. -/
+  /-- A pong ahead of the page's notices (`lv-pong-advance-i`): the acknowledged number moves to the head,
+  the missed pings start again, and the view is read again. -/
   | pongBehind {s : State} {head : Nat} :
+      s.wsState = .opened →
       s.wsLast < head →
-      Allowed cat s (.pong head) (askView s s.route) (fetch s.nextId .view)
-  /-- A pong that is not ahead of the page's notices changes nothing. -/
+      Allowed cat s (.pong head) { askView s s.route with wsLast := head, wsMissed := 0 }
+        (fetch s.nextId .view)
+  /-- A pong that is not ahead (`lv-pong-same-i`): the missed pings start again. -/
   | pongCurrent {s : State} {head : Nat} :
+      s.wsState = .opened →
       head ≤ s.wsLast →
-      Allowed cat s (.pong head) s []
-  /-- The socket closed after it had opened: the page waits and tries again after the reconnect delay. -/
-  | wsClosedLater {s : State} :
+      Allowed cat s (.pong head) { s with wsMissed := 0 } []
+  /-- The socket closed after it had opened (`lv-closed-open-1-i`): the page waits half a second, and the
+  heartbeat is cancelled. -/
+  | closedOpen {s : State} :
       s.wsState = .opened →
       Allowed cat s (.wsClosed false)
         { s with
           wsState := .waiting
+          wsAttempts := s.wsAttempts + 1
           wsHeartbeat := none
           wsReconnect := some s.nextId
           nextId := s.nextId + 1 }
-        [.timer "reconnect" s.nextId cat.reconnectMs]
-  /-- An upgrade was refused, and that is not the limit yet: the session is read again (the refusal may be
-  an expired request token), and the page waits to try again. -/
+        [.timer "reconnect" s.nextId 500]
+  /-- The socket closed before it opened, not refused (`lv-closed-connecting-*-i`): the page waits the
+  back-off for the closes so far. -/
+  | closedConnecting {s : State} :
+      s.wsState = .connecting →
+      Allowed cat s (.wsClosed false)
+        { s with
+          wsState := .waiting
+          wsAttempts := s.wsAttempts + 1
+          wsHeartbeat := none
+          wsReconnect := some s.nextId
+          nextId := s.nextId + 1 }
+        [.timer "reconnect" s.nextId (backoffMs s.wsAttempts)]
+  /-- An upgrade was refused, and that is not the limit yet: the refusal is counted, the session is read
+  again (the refusal may be an expired request token), and the page waits the back-off. -/
   | wsRefusedKeep {s : State} :
       s.wsState = .connecting →
       s.wsRefusals + 1 < refusalLimit →
@@ -374,12 +427,14 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
         { s with
           wsState := .waiting
           wsRefusals := s.wsRefusals + 1
+          wsAttempts := s.wsAttempts + 1
           wsHeartbeat := none
           wsReconnect := some (s.nextId + 1)
           nextId := s.nextId + 2
           pending := ⟨s.nextId, .session, s.generation⟩ :: s.pending }
-        (fetch s.nextId .session ++ [.timer "reconnect" (s.nextId + 1) cat.reconnectMs])
-  /-- The refusal that reaches the limit: live updates stop, and no attempt is made again. -/
+        (fetch s.nextId .session ++ [.timer "reconnect" (s.nextId + 1) (backoffMs s.wsAttempts)])
+  /-- The refusal that reaches the limit: live updates stop, and the session is read. The reconnect timer
+  still runs, as the machine's does, but its attempt is ignored once live updates have stopped. -/
   | wsRefusedStop {s : State} :
       s.wsState = .connecting →
       refusalLimit ≤ s.wsRefusals + 1 →
@@ -387,13 +442,14 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
         { s with
           wsState := .waiting
           wsRefusals := s.wsRefusals + 1
+          wsAttempts := s.wsAttempts + 1
           wsStopped := true
           wsHeartbeat := none
-          wsReconnect := none
-          nextId := s.nextId + 1
+          wsReconnect := some (s.nextId + 1)
+          nextId := s.nextId + 2
           pending := ⟨s.nextId, .session, s.generation⟩ :: s.pending }
-        (fetch s.nextId .session)
-  /-- The reconnect timer runs out while live updates have not stopped: the socket connects again. -/
+        (fetch s.nextId .session ++ [.timer "reconnect" (s.nextId + 1) (backoffMs s.wsAttempts)])
+  /-- The reconnect timer runs out while live updates have not stopped: the socket is opened again. -/
   | reconnectFires {s : State} {token : Nat} :
       s.wsReconnect = some token →
       s.wsStopped = false →
@@ -404,19 +460,36 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   | reconnectStale {s : State} {token : Nat} :
       (s.wsReconnect ≠ some token ∨ s.wsStopped = true) →
       Allowed cat s (.timer "reconnect" token) s []
-  /-- The heartbeat is due on an open connection: a ping goes, and the next heartbeat is armed. -/
+  /-- The heartbeat is due and the last two pings went unanswered: the socket is closed (`lv-give-up-i`). -/
+  | heartbeatGiveUp {s : State} {token : Nat} :
+      s.wsHeartbeat = some token →
+      s.wsState = .opened →
+      2 ≤ s.wsMissed →
+      Allowed cat s (.timer "heartbeat" token) s [.wsClose]
+  /-- The heartbeat is due: a ping goes, and the next heartbeat is armed (`lv-ping-i`). -/
   | heartbeatDue {s : State} {token : Nat} :
       s.wsHeartbeat = some token →
       s.wsState = .opened →
+      s.wsMissed < 2 →
       Allowed cat s (.timer "heartbeat" token)
         { s with
+          wsMissed := s.wsMissed + 1
           wsHeartbeat := some s.nextId
           nextId := s.nextId + 1 }
-        [.wsSend "ping", .timer "heartbeat" s.nextId cat.heartbeatMs]
+        [.wsSend "ping", .timer "heartbeat" s.nextId s.wsHeartbeatMs]
   /-- A heartbeat timer that is not the running one, or whose connection is not open, changes nothing. -/
   | heartbeatStale {s : State} {token : Nat} :
       (s.wsHeartbeat ≠ some token ∨ s.wsState ≠ .opened) →
       Allowed cat s (.timer "heartbeat" token) s []
+  /-- The page resets the connection while it is opening or open: the acknowledged number starts again, and
+  the socket is closed (`lv-reset-connecting-i`, `lv-reset-open-i`). -/
+  | resetLive {s : State} :
+      (s.wsState = .connecting ∨ s.wsState = .opened) →
+      Allowed cat s .liveReset { s with wsLast := 0 } [.wsClose]
+  /-- The page resets the connection while it waits to reconnect (`lv-reset-waiting-i`). -/
+  | resetWaiting {s : State} :
+      s.wsState = .waiting →
+      Allowed cat s .liveReset { s with wsLast := 0 } []
   /-- The emailed-link form is complete: the request is sent; it is the same answer whether or not the
   address has an account. -/
   | linkAsk {s : State} {values : List (String × String)} :
@@ -557,7 +630,7 @@ not hold the view; it keeps what it holds and reads the view again once the sess
 theorem cold_answer_changes_no_model (cat : Catalogue) {s s' : State} {id : Nat} {who : Option Principal}
     {scr : Screen} {es : List Effect} (ha : Allowed cat s (.viewAnswer id who scr) s' es)
     (hk : s.sessionKnown = false) : s'.view.model = s.view.model := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-- **A cold start awaits the session.** The state it leads to does not know the session, and a session
 read is in flight. -/
@@ -575,7 +648,7 @@ theorem login_sent_only_complete (cat : Catalogue) {s s' : State} {m : Msg}
     {values : List (String × String)} {es : List Effect}
     (hm : m = .submit "login" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
     cat.validSignIn values = true := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-- **A refused sign-in does not change the session.** Whatever the refusal of a request does to the
 form, it leaves the person signed in, or not, as they were. -/
@@ -586,7 +659,7 @@ theorem failure_keeps_session (cat : Catalogue) {s s' : State} {id : Nat} {es : 
 /-- **A typed value is kept in the form and sends nothing.** -/
 theorem input_login_sends_nothing (cat : Catalogue) {s s' : State} {m : Msg} {name value : String}
     {es : List Effect} (hm : m = .input "login" name value) (ha : Allowed cat s m s' es) : es = [] := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-! ### Presentation (slice 4) -/
 
@@ -599,7 +672,7 @@ mode to the next one and stores exactly that mode. -/
 theorem theme_choice_stored (cat : Catalogue) {s s' : State} {m : Msg} {arg : String} {es : List Effect}
     (hm : m = .action "theme" arg) (ha : Allowed cat s m s' es) :
     s'.themeMode = s.themeMode.next ∧ es = [.store "strata.theme" s.themeMode.next.key] := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-- **A change of person keeps the colour scheme.** The scheme is the browser's, not the person's. -/
 theorem session_change_keeps_theme (cat : Catalogue) {s s' : State} {m : Msg} {es : List Effect}
@@ -614,22 +687,23 @@ theorem dismissed_toast_gone (cat : Catalogue) {s s' : State} {id : Nat} {es : L
 /-- **An expired toast is gone.** -/
 theorem toast_expiry_removes (cat : Catalogue) {s s' : State} {m : Msg} {token : Nat} {es : List Effect}
     (hm : m = .timer "toast" token) (ha : Allowed cat s m s' es) : token ∉ s'.toasts := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-! ### The live connection (slice 5) -/
 
-/-- **An in-order notice is acknowledged, and only an in-order one moves the acknowledged number.** -/
-theorem in_order_notice_acked (cat : Catalogue) {s s' : State} {m : Msg} {seq : Nat} {refresh : Bool}
-    {es : List Effect} (hm : m = .frameEvent seq refresh) (ha : Allowed cat s m s' es)
-    (hin : seq = s.wsLast + 1) : s'.wsLast = seq := by
-  cases ha <;> simp_all
+/-- **An advancing notice is acknowledged, and it moves the count and the acknowledged number together.** -/
+theorem notice_advance_moves_both (cat : Catalogue) {s s' : State} {m : Msg} {n seq : Nat}
+    {refresh : Bool} {es : List Effect} (hm : m = .frameEvent n seq refresh) (ha : Allowed cat s m s' es)
+    (hopen : s.wsState = .opened) (hn : n = s.wsLastN + 1) (hs : s.wsLast < seq) :
+    s'.wsLastN = n ∧ s'.wsLast = seq ∧ Effect.wsSend "ack" ∈ es := by
+  cases ha <;> simp_all <;> omega
 
-/-- **A page that has stopped live updates never tries to reconnect.** A reconnect timer that leads to a
+/-- **A page whose live updates have stopped never tries to reconnect.** A reconnect timer that leads to a
 connection attempt runs only while live updates have not stopped. -/
 theorem stopped_never_reconnects (cat : Catalogue) {s s' : State} {m : Msg} {token : Nat}
     {es : List Effect} (hm : m = .timer "reconnect" token) (ha : Allowed cat s m s' es)
     (hes : es ≠ []) : s.wsStopped = false := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-- **A refused upgrade is counted, and the count reaching the limit stops live updates.** -/
 theorem refusal_counts_and_stops (cat : Catalogue) {s s' : State} {m : Msg} {es : List Effect}
@@ -637,6 +711,12 @@ theorem refusal_counts_and_stops (cat : Catalogue) {s s' : State} {m : Msg} {es 
     (hnot : s.wsStopped = false) :
     s'.wsRefusals = s.wsRefusals + 1 ∧ (s'.wsStopped = true ↔ refusalLimit ≤ s'.wsRefusals) := by
   cases ha <;> simp_all [refusalLimit] <;> omega
+
+/-- **A close before the socket opened waits the back-off of the closes so far.** -/
+theorem reconnect_waits_backoff (cat : Catalogue) {s s' : State} {m : Msg} {es : List Effect}
+    (hm : m = .wsClosed false) (ha : Allowed cat s m s' es) (hconn : s.wsState = .connecting) :
+    es = [.timer "reconnect" s.nextId (backoffMs s.wsAttempts)] := by
+  cases ha <;> simp_all <;> omega
 
 /-! ### The sign-in methods (slice 6) -/
 
@@ -657,7 +737,7 @@ theorem link_sent_only_complete (cat : Catalogue) {s s' : State} {m : Msg}
     {values : List (String × String)} {es : List Effect}
     (hm : m = .submit "link" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
     cat.validLink values = true := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-! ## Non-vacuity -/
 
@@ -668,8 +748,6 @@ def sampleCatalogue : Catalogue :=
     signOutOn := fun _ => true
     validSignIn := fun _ => true
     searchTarget := fun _ => root
-    reconnectMs := 1000
-    heartbeatMs := 15000
     validLink := fun _ => true
     validInvite := fun _ => true
     validProvider := fun _ => true }

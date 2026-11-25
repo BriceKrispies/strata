@@ -43,10 +43,6 @@ structure Catalogue where
   validSignIn : List (String × String) → Bool
   /-- The address a search with these values goes to (the search form's success navigation). -/
   searchTarget : List (String × String) → Route
-  /-- The delay before a reconnect attempt, in milliseconds (the machine's wait, with no jitter). -/
-  reconnectMs : Nat
-  /-- The interval of the heartbeat, in milliseconds. -/
-  heartbeatMs : Nat
   /-- The emailed-link request form is complete. -/
   validLink : List (String × String) → Bool
   /-- The invitation form (the password) is complete. -/
@@ -123,6 +119,15 @@ inductive WsState where
   | waiting
   deriving DecidableEq
 
+/-- The delay before a reconnect after a close, by the number of closes before it (the machine's
+back-off: 0.5, 1, 2, 4 seconds, then 8 seconds). -/
+def backoffMs : Nat → Nat
+  | 0 => 500
+  | 1 => 1000
+  | 2 => 2000
+  | 3 => 4000
+  | _ => 8000
+
 /-- The kernel's state, for the routing and session slice. Later slices add their fields here:
 forms, the live connection, the tenant interface, the Lab and the rest of the page state. -/
 structure State where
@@ -162,6 +167,14 @@ structure State where
   wsReconnect : Option Nat := none
   /-- The token of the running heartbeat timer, if any. -/
   wsHeartbeat : Option Nat := none
+  /-- The sequence number of the last notice the connection has taken in (its frame counter). -/
+  wsLastN : Nat := 0
+  /-- Closes since the last welcome: the back-off of the next reconnect. -/
+  wsAttempts : Nat := 0
+  /-- Heartbeats sent without a pong since the last pong. -/
+  wsMissed : Nat := 0
+  /-- The heartbeat interval the welcome announced (10 seconds until the first welcome). -/
+  wsHeartbeatMs : Nat := 10000
   /-- The emailed-link request was answered: the page says a link is on its way. -/
   linkSent : Bool := false
 
@@ -211,10 +224,12 @@ inductive Msg where
   | sharedAnswer (id : Nat)
   /-- The decoded frames of the live connection: the welcome (with the server's head), a notice (its
   sequence number, and whether the page's live bindings read the view again for it), a resync, a pong. -/
-  | welcome (head : Nat)
-  | frameEvent (seq : Nat) (refresh : Bool)
+  | welcome (head heartbeatMs : Nat)
+  | frameEvent (n seq : Nat) (refresh : Bool)
   | resync (head : Nat)
   | pong (head : Nat)
+  /-- The page resets the live connection (a sign-in or a sign-out, `ui-live-reset`). -/
+  | liveReset
   /-- The answers of the sign-in methods: a link was requested (sent, whether or not the address has an
   account); an invitation was accepted, and the page goes to the reply's address; an identity provider's
   start answered with the address to send the browser to. -/

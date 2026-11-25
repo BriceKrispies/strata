@@ -455,14 +455,14 @@ what the B2 implementation will be proved against.
 | Message | What update does | Status | Slice |
 |---|---|---|---|
 | `ws_open` | resets the refusal count and the stop flag | covered | 5 (`socketOpened`) |
-| `ws_message` welcome | a first connection subscribes from the head and reads the view again; a resumed one subscribes on; the heartbeat starts | partly | 5 (`welcomeFirst`, `welcomeResume`; the generated machine's welcome transition was not read, so the head as the acknowledged number is the spec's reading) |
-| `ws_message` event (a notice or a heartbeat) | acknowledges the next notice; reads the view again when the live bindings say so; a gap closes the socket and reads the view again | partly | 5 (`eventRefresh`, `eventQuiet`, `eventGap`; the live bindings' decision is an input of the message; the manifest on a schema notice: 11; the session on a membership notice: not yet) |
+| `ws_message` welcome | a first connection subscribes from the beginning, takes the head as the acknowledged number, resets the counts and starts the heartbeat at the interval the welcome announces, and reads the view again; a resumed one subscribes on | covered | 5 (`welcomeFirst`, `welcomeResume`; read from `client-live-flow-impl.js`) |
+| `ws_message` event (a notice or a heartbeat) | acknowledges a notice in the count, moves the acknowledged number on when it is newer, and reads the view again when the live bindings say so; a notice out of the count closes the socket, resets the acknowledged number and reads the view again | partly | 5 (`frameAdvanceRefresh`, `frameAdvanceQuiet`, `frameSameRefresh`, `frameSameQuiet`, `frameGap`; the live bindings decide the flag, an input of the message; the session on a membership notice: not yet) |
 | `ws_message` resync | carries on from the head; the view is read again | covered | 5 (`resyncRefresh`; the manifest read again: 11) |
 | `ws_message` pong | a head beyond the connection's own notices reads the view again | covered | 5 (`pongBehind`, `pongCurrent`) |
 | `ws_closed`, not refused | the live state waits; a reconnect timer | covered | 5 (`wsClosedLater`) |
 | `ws_closed`, refused | the refusal is counted; the session is read again; after five, live updates stop (F7) | covered | 5 (`wsRefusedKeep`, `wsRefusedStop`; the count is taken at the close, see F7) |
 | `timer` heartbeat, reconnect | a ping and the next heartbeat; a reconnect attempt unless stopped | covered | 5 (`heartbeatDue`, `reconnectFires`, and the stale cases) |
-| `timer` emit (a delayed frame) | the delayed frame is performed | not covered | 5 |
+| `timer` emit (a delayed frame) | none of this machine's emits is delayed (`afterMs` is never set in `client-live-flow-impl.js`) | covered | 5 (nothing to add) |
 
 #### Presentation
 
@@ -554,7 +554,7 @@ what the B2 implementation will be proved against.
 | `timer` toast | every toast (5 s, or 9 s for a warning) | partly | 4 (expiry is covered; raising a toast is not yet a constructor) |
 | `timer` lab.poll | the Lab's run poll | not covered | 12 |
 | `timer` heartbeat, reconnect | the live connection's heartbeat and reconnect timers | covered | 5 |
-| `timer` emit | the delayed frames of the live connection | not covered | 5 |
+| `timer` emit | the delayed frames of the live connection (none for this machine) | covered | 5 |
 | `push_url` | an address change, with the replace flag | covered | 1 |
 | `scroll_top` | navigation | covered | 1 |
 | `ws_connect` | a socket open with the request token (at init with a session, and when a waiting socket connects) | partly | 5 (`reconnectFires` emits it with no token; the request token, and the socket at init, are not yet in the relation) |
@@ -690,7 +690,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 | 2 (done) | Cold start: the session read at start, a view that answers before the session (dropped and read again), the session answer that makes the session known (`learnSession`); the bootstrapped view remains partly, see row `init` | 1 |
 | 3 (partly done) | Forms, for the sign-in and the search: the typed values, the complete and incomplete submissions, the refusal, the search's navigation (`inputLogin`, `signInIncomplete`, `loginRefused`, `searchSubmit`). Still open in this slice: the csrf token and idempotency key of a request (with the `http` effect), the words of a refusal, focus, and the typed draft (`Drafts.lean`) | 1 |
 | 4 (partly done) | Presentation: the theme and its store effect, the system theme, the menu, dismissing and expiring toasts, the dev expire request (`themeCycle`, `systemThemeSet`, `menuToggle`, `dismissToast`, `toastExpires`, `devExpire`, `sharedAnswer`). Still open: raising a toast (every row's toast), the menu closing on a navigation, and focus and announcements | 1 |
-| 5 (partly done) | Live connection (`welcomeFirst`, `welcomeResume`, `eventRefresh`, `eventQuiet`, `eventGap`, `resyncRefresh`, `pongBehind`, `pongCurrent`, `wsClosedLater`, `wsRefusedKeep`, `wsRefusedStop`, `reconnectFires`, `heartbeatDue`, `socketOpened`). Still open: the session frame when active, the delayed frames (emit), the request token on connect, the session frame of a membership notice, and the schema notice's manifest (11) | 1, 2 |
+| 5 (partly done) | Live connection, read from `client-live-flow-impl.js` (`welcomeFirst`, `welcomeResume`, `eventRefresh`, `eventQuiet`, `eventGap`, `resyncRefresh`, `pongBehind`, `pongCurrent`, `wsClosedLater`, `wsRefusedKeep`, `wsRefusedStop`, `reconnectFires`, `heartbeatDue`, `socketOpened`). Still open: the session frame when active, the request token on connect, the session read on a membership notice, the resync and reset outside the open state, and the schema notice's manifest (11) | 1, 2 |
 | 6 (partly done) | Sign-in methods: emailed links (request and answer), invitations (request and acceptance), the identity provider's start and redirect (`linkAsk`, `linkAnswer`, `inviteAsk`, `inviteAccepted`, `oidcStart`, `oidcRedirect`). Still open: the opened link's sign-in, passkey sign-in, the providers list, the provider's answer (`oidc.sign_in`), SAML, and the typed values of the invitation form | 3, 5 |
 | 7 | Second factors and step-up: the waiting sign-in, the factors section, recovery codes, the step-up prompt and its retry, the passkey as a second factor | 3, 6 |
 | 8 | The person's sessions and passkeys on the desk | 3, 7 |
@@ -704,8 +704,8 @@ How the existing theorems meet this one (no existing theorem is changed):
 ### 7.7 Counts
 
 The messages table has 80 rows (a row is one message, or one family of messages with the same handling):
-29 covered, 14 partly, 37 not covered (after slice 6). The effects table has 15 rows: 7 covered, 4 partly, 4 not
-covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
+31 covered, 13 partly, 36 not covered (after slice 5, corrected from the generated machine). The effects table has
+15 rows: 8 covered, 4 partly, 3 not covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
 
