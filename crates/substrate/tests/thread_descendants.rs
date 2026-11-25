@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::{json, Value as Json};
-use strata_kernel::testkit::{ctx, field, object, user};
+use strata_kernel::testkit::{ctx, field, object};
 use strata_kernel::*;
 use strata_substrate::bundle::{
     install_into, install_product, Bundle, ProductBundle, ProductTarget,
@@ -107,6 +107,7 @@ fn a_thread(world: &mut World) -> RecordId {
     root
 }
 
+// Verifies: INT-5510
 #[test]
 fn the_thread_product_installs_and_its_descendants_read_with_depths() {
     let mut world = world();

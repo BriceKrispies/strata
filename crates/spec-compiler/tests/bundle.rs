@@ -373,7 +373,7 @@ fn a_presentation_that_names_what_does_not_exist_is_refused() {
     );
 }
 
-/// Verifies: WG-5510
+/// Verifies: INT-5510
 ///
 /// A query that declares the tree form (`tree`: via, root and max-depth) keeps it in the bundle, with
 /// the keys of the product file; the view that reads it takes its root from another section's $id.
