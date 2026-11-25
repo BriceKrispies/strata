@@ -2,6 +2,7 @@
 //! path that can touch them (D-8403, D-8405, D-8415, D-8426, D-8427).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use strata_kernel::ledger;
 use strata_kernel::rules::roles_of;
 use strata_kernel::testkit::*;
@@ -1075,4 +1076,221 @@ fn nobody_adjusts_or_reverses_their_own_account() {
         NOW + 38,
         post("writer1", -10, "rev-by-owner", "reverse", Some(1)),
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Scoped roles in lists, queries, aggregates and audiences (ADM-1611, WG-5642).
+// ---------------------------------------------------------------------------------------------
+
+fn named_read(query: &str) -> ReadRequest {
+    ReadRequest::Named {
+        query: QueryId::new(query).unwrap(),
+        params: BTreeMap::new(),
+        page_size: None,
+        cursor: None,
+    }
+}
+
+fn row_ids(world: &World, who: &str, request: &ReadRequest) -> Vec<u64> {
+    world
+        .read(
+            request,
+            &ctx("alpha", user(&format!("alpha:{who}")), NOW + 50),
+        )
+        .expect("the read is answered")
+        .rows
+        .iter()
+        .map(|record| record.id.0)
+        .collect()
+}
+
+/// A query over the notes that declares a count, for the aggregate tests.
+fn tally_query() -> SchemaChange {
+    SchemaChange::DefineQuery(QueryDef {
+        id: QueryId::new("tally").unwrap(),
+        object: object("note"),
+        filter: None,
+        params: BTreeSet::new(),
+        order: vec![],
+        limit: None,
+        aggregates: Some(vec![AggregateDef {
+            id: AggregateId::new("how_many").unwrap(),
+            kind: AggregateKind::Count,
+            field: None,
+            group_by: None,
+            group_by_second: None,
+            n: None,
+            descending: false,
+            scan_bound: 100,
+        }]),
+        declared_fields: Some(vec![field("status")]),
+        tree: None,
+    })
+}
+
+/// Verifies: ADM-1611
+///
+/// A role held through a scope decides a list, a query and an aggregate on each record the way it
+/// decides a single record: a reviewer scoped to the north note reads that note and no other in
+/// a named query, a read by id and the count of an aggregate, and a reader with no scope reads
+/// nothing of the drafts.
+#[test]
+fn a_scoped_role_decides_lists_queries_and_aggregates_like_a_single_record() {
+    let world =
+        change(&base(), "owner", NOW + 2, vec![tally_query()]).expect("the query is defined");
+    let world = must(
+        &world,
+        "owner",
+        NOW + 3,
+        scoped("stranger", "reviewer", slug_is("north")),
+    );
+
+    let list = named_read("notes_by_rank");
+    assert_eq!(row_ids(&world, "stranger", &list), vec![1]);
+    assert_eq!(
+        row_ids(&world, "owner", &list).len(),
+        2,
+        "the owner reads both notes"
+    );
+    assert!(row_ids(&world, "nobody", &list).is_empty());
+
+    let by_id = ReadRequest::Records {
+        object: object("note"),
+        ids: vec![RecordId(1), RecordId(2)],
+    };
+    assert_eq!(row_ids(&world, "stranger", &by_id), vec![1]);
+
+    let count = |who: &str| {
+        let request = AggregateRequest {
+            query: QueryId::new("tally").unwrap(),
+            aggregate: AggregateId::new("how_many").unwrap(),
+            params: BTreeMap::new(),
+            filter: BTreeMap::new(),
+        };
+        let state = world.state(&tenant_id("alpha"));
+        let result = strata_kernel::aggregates::run(
+            &state,
+            &request,
+            &ctx("alpha", user(&format!("alpha:{who}")), NOW + 51),
+        )
+        .expect("the aggregate is answered");
+        result.groups[0].value.clone()
+    };
+    assert_eq!(count("stranger"), Some(Value::Int(1)));
+    assert_eq!(count("owner"), Some(Value::Int(2)));
+    assert_eq!(count("nobody"), Some(Value::Int(0)));
+
+    // Taking the role away takes the rows away.
+    let world = must(&world, "owner", NOW + 4, revoke("stranger", "reviewer"));
+    assert!(row_ids(&world, "stranger", &list).is_empty());
+}
+
+/// Verifies: ADM-1611
+///
+/// A reader who holds a role through a scope on a carried object type is judged alone: their
+/// audience class is the individual, never the class of the readers who hold the same direct
+/// roles, so a copy made for one is neither served to nor taken from the other.
+#[test]
+fn a_reader_with_a_scoped_role_is_an_individual_audience() {
+    let world =
+        change(&base(), "owner", NOW + 2, vec![tally_query()]).expect("the query is defined");
+    let world = must(
+        &world,
+        "owner",
+        NOW + 3,
+        scoped("stranger", "reviewer", slug_is("north")),
+    );
+    let tenant = tenant(&world);
+    let query = QueryId::new("notes_by_rank").unwrap();
+    let aggregate = AggregateId::new("how_many").unwrap();
+    let class = |who: &str, reading: audience::Reading<'_>| {
+        audience::class_of(tenant, reading, &user(&format!("alpha:{who}")))
+    };
+    let readings = [
+        audience::Reading::Query(&query),
+        audience::Reading::Aggregate {
+            query: &QueryId::new("tally").unwrap(),
+            aggregate: &aggregate,
+        },
+    ];
+    for reading in readings {
+        assert!(
+            matches!(
+                class("stranger", reading),
+                audience::AudienceClass::Individual(_)
+            ),
+            "the scoped reader is individual"
+        );
+        assert!(
+            class("writer1", reading).is_shareable(),
+            "a reader with no scope still shares a copy"
+        );
+    }
+}
+
+/// Verifies: ADM-1611
+///
+/// A scope that follows a reference needs the record it reaches like a Read policy does: a list
+/// read for the scoped reader names the person a note's author refers to, and the delivery of an
+/// event about a note loads it, so neither answers for lack of a record that was merely not loaded.
+#[test]
+fn a_scope_that_follows_a_reference_names_the_record_it_needs() {
+    let world = base();
+    let world = must(
+        &world,
+        "owner",
+        NOW + 2,
+        Intent::CreateRecord {
+            object: object("person"),
+            fields: BTreeMap::from([(field("name"), text("Ann"))]),
+        },
+    );
+    let world = must(
+        &world,
+        "owner",
+        NOW + 3,
+        Intent::UpdateRecord {
+            object: object("note"),
+            id: RecordId(1),
+            fields: BTreeMap::from([(field("author"), Value::Ref(RecordId(3)))]),
+            expected_version: None,
+        },
+    );
+    let by_author = eq(
+        Expr::Through(Scope::Record, "author".into(), "name".into()),
+        lit("Ann"),
+    );
+    let world = must(
+        &world,
+        "owner",
+        NOW + 4,
+        scoped("stranger", "reviewer", by_author),
+    );
+
+    // The snapshot holds the notes and nothing the notes refer to.
+    let full = world.state(&tenant_id("alpha"));
+    let mut thin = TenantState::clone(full.tenant.as_deref().unwrap());
+    thin.records.remove(&object("person"));
+    let request = named_read("notes_by_rank");
+    let wanted: BTreeSet<Need> = read_needs(&thin.schema, &request).into_iter().collect();
+    let state = State {
+        tenant_id: tenant_id("alpha"),
+        tenant: Some(Arc::new(thin)),
+        coverage: Coverage::Partial(wanted),
+    };
+    let context = ctx("alpha", user("alpha:stranger"), NOW + 60);
+    let missing = strata_kernel::query_plan::read_missing(&state, &request, &context);
+    assert!(
+        missing.contains(&Need::Record {
+            object: object("person"),
+            id: RecordId(3)
+        }),
+        "the scope follows the author, so the author is named: {missing:?}"
+    );
+
+    let record = tenant(&world)
+        .record(&object("note"), RecordId(1))
+        .unwrap()
+        .clone();
+    assert_eq!(audience_needs(&tenant(&world).schema, &record).len(), 1);
 }
