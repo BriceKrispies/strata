@@ -273,7 +273,9 @@ what the B2 implementation will be proved against.
 | Message | What update does | Status | Slice |
 |---|---|---|---|
 | `init`, bootstrapped session | route and session from the bootstrap; a view request | partly | 1 (route, session, view); 2 (bootstrapped view); 5 (socket start); 6 (link, invitation and provider captures) |
-| `init`, cold start (no bootstrapped session) | a session read and a view read in flight; the view may answer first | not covered | 2 |
+| `init`, cold start (no bootstrapped session) | a session read and a view read in flight; the view may answer first and is held (F4) | covered | 2 (the spec drops a view answer until the session is known, and reads it again after the session answer) |
+| `http_result` view, answered while the session is not known | held with no session to check it against (F4) | covered | 2 (the spec drops it and reads the view again) |
+| `http_result` session, cold start (session not yet known) | the session is set; the view is not read again, so a view answered earlier stays (F4) | covered | 2 (the spec reads the view again once the session is known) |
 | `navigate` | moves the address; a view request; push and scroll unless the same address without replace; tenant parts and manifest for a tenant address; the provider list on the sign-in page | partly | 1 (address, view, push, scroll); 6 (providers); 11 (parts, manifest) |
 | `popstate` | moves the address; a view request; no push, no scroll | partly | 1 (address, view); 11 (tenant parts) |
 | `action reload` | a view request for the current address | covered | 1 |
@@ -449,10 +451,12 @@ changed by its owner.
   `onHttp`'s `session` case calls `sessionRead` with the new session and never calls
   `clearUserState`, so the sessions list, passkeys, factors, Lab, editor and settings forms of the
   former person stay in memory, as does the held model. Requirement: `sessionChanged`.
-- **F4 (for slice 2, not a defect yet): a view may answer before the session is known.** At a cold
-  start the view reply can arrive before the session reply, while the session is unknown. The relation
-  takes a view answer only for the session it holds, so slice 2 must state the rule for an unknown
-  session before the cold start is covered.
+- **F4: a view answered before the session is known is held.** At a cold start the view reply can
+  arrive before the session reply. `onHttp`'s `view` case accepts and holds it while `session` is still
+  null, and the session reply does not read the view again. The page then shows a view read before the
+  person was known, and nothing checks it against the session. The spec drops such an answer
+  (`dropColdView`, `cold_answer_changes_no_model`), keeps no model before the session is known
+  (`held_only_when_known`), and reads the view again once the session answers (`learnSession`).
 - **F5: `navigate_away` is undeclared.** `oidc.js` emits it; `types.js` does not declare it; the worker
   forwards it to the main thread through its default branch. Slice 6 declares it.
 
@@ -540,7 +544,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 | Slice | Adds | Needs |
 |---|---|---|
 | 1 (done) | Routing and session: `init` with a bootstrapped session, `navigate`, `popstate`, `reload`, the view's answers, the session's answers and changes, sign-in and sign-out (their requests and answers), the session ending, a request's deadline; the held model and its theorems | |
-| 2 | Cold start: the session read at start, a view that answers before the session, the bootstrapped view | 1 |
+| 2 (done) | Cold start: the session read at start, a view that answers before the session (dropped and read again), the session answer that makes the session known (`learnSession`); the bootstrapped view remains partly, see row `init` | 1 |
 | 3 | Forms: the form flow (busy, accepted, refused), validation, the refusal's words and focus, the idempotency key and csrf token of a request, the search form's navigation, the typed draft (`Drafts.lean`) | 1 |
 | 4 | Presentation: theme and its store effect, the system theme, the menu, toasts and their timers, dev expire | 1 |
 | 5 | Live connection: the socket machine, the welcome, notices, resync, pong, the session frame when active, refused upgrades, the socket effects and timers | 1, 2 |

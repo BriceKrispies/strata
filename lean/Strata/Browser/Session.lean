@@ -26,7 +26,7 @@ superseded view requests, are dropped and change nothing (`dropFailure`, `dropVi
 liveness of a reply: a request that never answers stays awaited until its deadline, which the driver
 decodes into a `failure`.
 
-Not in this slice: the bootstrapped view (`init` takes the session only), the cold start's session read,
+Slice 2 adds the cold start (`initCold`, `dropColdView`, `learnSession`). Not yet: the bootstrapped view (`init` takes the session only),
 forms beyond the sign-in's validity, the live connection's frames and socket effects, toasts and
 focus, the page builders and every message of a later slice. No unfinished proof and no added axiom.
 -/
@@ -94,6 +94,37 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
           pending := [⟨s.nextId, .view, s.generation⟩], nextId := s.nextId + 1
           view := { status := .loading, model := none, request := some s.nextId } }
         (fetch s.nextId .view)
+  /-- The first message of a page that starts without a bootstrapped session: the session is read and
+  the view of the route is asked for, both in flight; the session is not yet known. -/
+  | initCold {s : State} {r : Route} :
+      s.nextId = 1 →
+      Allowed cat s (.initCold r)
+        { route := r, session := none, generation := s.generation
+          pending := [⟨s.nextId, .session, s.generation⟩, ⟨s.nextId + 1, .view, s.generation⟩]
+          nextId := s.nextId + 2, sessionKnown := false
+          view := { status := .loading, model := none, request := some (s.nextId + 1) } }
+        (fetch s.nextId .session ++ fetch (s.nextId + 1) .view)
+  /-- A view answer that arrives while the session is not known is not held: the person it was read
+  for is not known to be the person signed in, so the view is dropped and read again once the session
+  is known. -/
+  | dropColdView {s : State} {id : Nat} {who : Option Principal} {scr : Screen} :
+      s.sessionKnown = false →
+      s.view.request = some id →
+      Allowed cat s (.viewAnswer id who scr)
+        { s with
+          pending := dropId s.pending id
+          view := { s.view with request := none } }
+        []
+  /-- The session read answers while the session is not known: the session is now known, and the view
+  of the route is asked for again (the one dropped while the session was not known is not kept). -/
+  | learnSession {s : State} {id : Nat} {who : Option Principal} :
+      s.sessionKnown = false →
+      pendingOf s id .session →
+      Allowed cat s (.sessionAnswer id who)
+        { route := s.route, session := who, generation := s.generation
+          pending := [⟨s.nextId, .view, s.generation⟩], nextId := s.nextId + 1
+          view := { status := .loading, model := none, request := some s.nextId } }
+        (fetch s.nextId .view)
   /-- A navigation: the address moves; the page refreshes (the held model stays until the new view
   arrives). A visitor may ask for a guarded address: the gateway answers it, and the page shows that. -/
   | navigate {s : State} {r : Route} {replace : Bool} :
@@ -107,6 +138,7 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   when one is signed in. -/
   | viewAnswer {s : State} {id : Nat} {who : Option Principal} {scr : Screen} :
       s.view.request = some id →
+      s.sessionKnown = true →
       who = s.session →
       (cat.needsSession scr = true → who.isSome = true) →
       Allowed cat s (.viewAnswer id who scr)
@@ -146,11 +178,13 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
       Allowed cat s (.failure id) s []
   /-- The session read answers the same person: nothing changes but the request. -/
   | sessionSame {s : State} {id : Nat} {who : Option Principal} :
+      s.sessionKnown = true →
       pendingOf s id .session →
       who = s.session →
       Allowed cat s (.sessionAnswer id who) { s with pending := dropId s.pending id } []
   /-- The session read names another person (or none): that is a change of person. -/
   | sessionChanged {s : State} {id : Nat} {who : Option Principal} :
+      s.sessionKnown = true →
       pendingOf s id .session →
       who ≠ s.session →
       Allowed cat s (.sessionAnswer id who) (switched s who s.route) (fetch s.nextId .view)
@@ -267,7 +301,38 @@ theorem requests_are_pending (cat : Catalogue) {s s' : State} {m : Msg} {es : Li
     ∀ id k, Effect.http id k ∈ es →
       ∃ p ∈ s'.pending, p.id = id ∧ p.kind = k ∧ p.gen = s'.generation := by
   intro id k hmem
-  cases ha <;> simp_all [askView, switched, fetch, navEffects, dropViews]
+  cases ha <;> first
+    | (simp_all [askView, switched, fetch, navEffects, dropViews]; done)
+    | (simp only [fetch, List.mem_append, List.mem_cons, List.mem_nil_iff, or_false, Effect.http.injEq,
+        reduceCtorEq] at hmem
+       rcases hmem with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> simp_all)
+
+/-! ### Cold start (slice 2) -/
+
+/-- **A page holds a model only once its session is known, and then only for the person signed in.**
+A page that starts without a bootstrapped session holds nothing until the session read answers. -/
+theorem held_only_when_known (cat : Catalogue) {s : State} (hs : Reachable cat s) :
+    ∀ h, s.view.model = some h → s.sessionKnown = true ∧ h.readFor = s.session := by
+  induction hs with
+  | start => intro h hh; simp at hh
+  | step _ ha ih =>
+    rename_i s₀ s₁ m es
+    cases ha <;> simp_all [askView, switched, dropViews]
+
+/-- **A view answer that arrives while the session is not known changes no model.** The cold page does
+not hold the view; it keeps what it holds and reads the view again once the session is known. -/
+theorem cold_answer_changes_no_model (cat : Catalogue) {s s' : State} {id : Nat} {who : Option Principal}
+    {scr : Screen} {es : List Effect} (ha : Allowed cat s (.viewAnswer id who scr) s' es)
+    (hk : s.sessionKnown = false) : s'.view.model = s.view.model := by
+  cases ha <;> simp_all
+
+/-- **A cold start awaits the session.** The state it leads to does not know the session, and a session
+read is in flight. -/
+theorem cold_start_awaits_session (cat : Catalogue) {s s' : State} {r : Route} {es : List Effect}
+    (ha : Allowed cat s (.initCold r) s' es) :
+    s'.sessionKnown = false ∧ ∃ p ∈ s'.pending, p.kind = ReqKind.session := by
+  cases ha
+  exact ⟨rfl, _, List.mem_cons_self, rfl⟩
 
 /-! ## Non-vacuity -/
 
@@ -283,7 +348,7 @@ view of its screen and holds it is a reachable state, holding a model read for t
 theorem signed_in_view_reachable :
     ∃ s, Reachable sampleCatalogue s ∧ s.view.model = some ⟨0, some 7⟩ :=
   ⟨_, Reachable.step (Reachable.step Reachable.start (Allowed.init (s := _) (r := root) (who := some 7) rfl))
-      (Allowed.viewAnswer (s := _) (id := 1) (who := some 7) (scr := 0) rfl rfl (by simp [sampleCatalogue])),
+      (Allowed.viewAnswer (s := _) (id := 1) (who := some 7) (scr := 0) rfl rfl rfl (by simp [sampleCatalogue])),
     rfl⟩
 
 end Strata.Browser

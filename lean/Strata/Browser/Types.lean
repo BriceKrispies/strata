@@ -95,6 +95,9 @@ structure State where
   /-- The next request id the kernel will draw. -/
   nextId : Nat
   view : ViewSlot
+  /-- Whether the session is known. A page that starts cold does not know it until the session read
+  answers; a page that starts with a bootstrapped session knows it from the start. -/
+  sessionKnown : Bool := true
 
 /-- Effects out of the kernel. `http` and `timer "request"` are the request and its deadline; the
 other effects are the page's own (URL, scroll), the live connection, storage, the browser's passkey
@@ -119,6 +122,7 @@ of the socket. `timer "request"` is a request past its deadline, which the kerne
 unreachable site (status 0). -/
 inductive Msg where
   | init (route : Route) (who : Option Principal)
+  | initCold (route : Route)
   | navigate (route : Route) (replace : Bool)
   | popstate (route : Route)
   | input (form name value : String)
