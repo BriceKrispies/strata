@@ -314,3 +314,6 @@ import Strata
 #print axioms Strata.Browser.oidc_redirect_leaves_page
 #print axioms Strata.Browser.link_sent_only_complete
 #print axioms Strata.Browser.reconnect_waits_backoff
+#print axioms Strata.Browser.second_factor_sent_only_when_waiting
+#print axioms Strata.Browser.sign_in_ends_prompt
+#print axioms Strata.Browser.refused_second_keeps_prompt

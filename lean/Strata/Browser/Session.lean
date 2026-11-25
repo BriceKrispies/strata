@@ -92,7 +92,9 @@ def switched (s : State) (who : Option Principal) (r : Route) : State :=
     view := { status := .loading, model := none, request := some s.nextId }
     sessionKnown := true
     loginValues := []
-    loginError := false }
+    loginError := false
+    factorPrompt := false
+    stepUp := false }
 
 /-- The kernel's transitions for the routing and session slice. -/
 inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect → Prop
@@ -239,6 +241,7 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   /-- A sign-in the server refused: the form shows the refusal, and the password is cleared. -/
   | loginRefused {s : State} {id : Nat} :
       pendingOf s id .signIn →
+      s.factorPrompt = false →
       Allowed cat s (.failure id)
         { s with
           pending := dropId s.pending id
@@ -538,6 +541,61 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
       Allowed cat s (.oidcRedirect id href) { s with pending := dropId s.pending id }
         [.navigateAway href]
 
+  /-- The first factor was right and a second is needed (`second_factor` in the reply): the sign-in form
+  waits for the code, and no session is set. -/
+  | signInWaiting {s : State} {id : Nat} :
+      pendingOf s id .signIn →
+      s.factorPrompt = false →
+      Allowed cat s (.signInWaiting id) { s with pending := dropId s.pending id, factorPrompt := true } []
+  /-- The second-factor code is sent, for a sign-in that waits for it. -/
+  | secondSubmit {s : State} {values : List (String × String)} :
+      s.factorPrompt = true →
+      cat.validSecondFactor values = true →
+      Allowed cat s (.submit "second" values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .signIn, s.generation⟩ :: s.pending }
+        (fetch s.nextId .signIn)
+  /-- The second factor was refused: the prompt says so, and it waits again. -/
+  | secondRefused {s : State} {id : Nat} :
+      s.factorPrompt = true →
+      pendingOf s id .signIn →
+      Allowed cat s (.failure id) { s with pending := dropId s.pending id, loginError := true } []
+  /-- A request was refused for want of a fresh authentication: the request is no longer in flight, and the
+  step-up prompt is shown. The refused action is asked again by the page once confirmed (not yet in the
+  relation). -/
+  | stepUpRequired {s : State} {id : Nat} :
+      (∃ p ∈ s.pending, p.id = id ∧ p.kind ≠ ReqKind.view ∧ p.gen = s.generation) →
+      Allowed cat s (.stepUpRequired id) { s with pending := dropId s.pending id, stepUp := true } []
+  /-- The step-up form is sent. -/
+  | stepUpSubmit {s : State} {values : List (String × String)} :
+      s.stepUp = true →
+      cat.validStepUp values = true →
+      Allowed cat s (.submit "stepup" values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .shared, s.generation⟩ :: s.pending }
+        (fetch s.nextId .shared)
+  /-- The step-up is confirmed: the prompt goes. -/
+  | stepUpAnswer {s : State} {id : Nat} :
+      pendingOf s id .shared →
+      Allowed cat s (.stepUpAnswer id) { s with pending := dropId s.pending id, stepUp := false } []
+  /-- The step-up prompt is cancelled. -/
+  | stepUpCancel {s : State} {arg : String} :
+      Allowed cat s (.action "factors.stepup_cancel" arg) { s with stepUp := false } []
+  /-- An enrolment, a removal of the authenticator, or new recovery codes is asked for the person signed in. -/
+  | factorsAsk {s : State} {name arg : String} :
+      name ∈ factorsRequests →
+      Allowed cat s (.action name arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- A factor request is answered. -/
+  | factorsAnswer {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.factorsAnswer id) { s with pending := dropId s.pending id } []
+
 /-- The states the kernel can reach from the initial state by allowed steps. -/
 inductive Reachable (cat : Catalogue) : State → Prop
   | start : Reachable cat
@@ -672,7 +730,7 @@ mode to the next one and stores exactly that mode. -/
 theorem theme_choice_stored (cat : Catalogue) {s s' : State} {m : Msg} {arg : String} {es : List Effect}
     (hm : m = .action "theme" arg) (ha : Allowed cat s m s' es) :
     s'.themeMode = s.themeMode.next ∧ es = [.store "strata.theme" s.themeMode.next.key] := by
-  cases ha <;> simp_all <;> omega
+  cases ha <;> simp_all [factorsRequests]
 
 /-- **A change of person keeps the colour scheme.** The scheme is the browser's, not the person's. -/
 theorem session_change_keeps_theme (cat : Catalogue) {s s' : State} {m : Msg} {es : List Effect}
@@ -739,6 +797,27 @@ theorem link_sent_only_complete (cat : Catalogue) {s s' : State} {m : Msg}
     cat.validLink values = true := by
   cases ha <;> simp_all <;> omega
 
+/-! ### Second factors and step-up (slice 7) -/
+
+/-- **A second-factor code is sent only for a sign-in that is waiting for it, with a complete form.** -/
+theorem second_factor_sent_only_when_waiting (cat : Catalogue) {s s' : State} {m : Msg}
+    {values : List (String × String)} {es : List Effect}
+    (hm : m = .submit "second" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
+    s.factorPrompt = true ∧ cat.validSecondFactor values = true := by
+  cases ha <;> simp_all
+
+/-- **A sign-in that is accepted ends the second-factor prompt.** -/
+theorem sign_in_ends_prompt (cat : Catalogue) {s s' : State} {id : Nat} {who : Principal} {target : Route}
+    {es : List Effect} (ha : Allowed cat s (.signInAnswer id who target) s' es) :
+    s'.factorPrompt = false := by
+  cases ha; rfl
+
+/-- **A refused second factor keeps the person's session as it was and the prompt waiting.** -/
+theorem refused_second_keeps_prompt (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}
+    (ha : Allowed cat s (.failure id) s' es) (hp : s.factorPrompt = true) :
+    s'.session = s.session ∧ s'.factorPrompt = true := by
+  cases ha <;> simp_all
+
 /-! ## Non-vacuity -/
 
 /-- A catalogue with one screen, which needs a signed-in person, for the witness below. -/
@@ -750,7 +829,9 @@ def sampleCatalogue : Catalogue :=
     searchTarget := fun _ => root
     validLink := fun _ => true
     validInvite := fun _ => true
-    validProvider := fun _ => true }
+    validProvider := fun _ => true
+    validSecondFactor := fun _ => true
+    validStepUp := fun _ => true }
 
 /-- The relation is not empty where the theorems look: a page that starts for a person, reads the
 view of its screen and holds it is a reachable state, holding a model read for that person. -/

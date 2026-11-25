@@ -49,6 +49,10 @@ structure Catalogue where
   validInvite : List (String × String) → Bool
   /-- The identity provider named by an action is one the site offers. -/
   validProvider : String → Bool
+  /-- The second-factor form (a code) is complete. -/
+  validSecondFactor : List (String × String) → Bool
+  /-- The step-up form (a password or a code) is complete. -/
+  validStepUp : List (String × String) → Bool
 
 /-- The kind of a request the kernel has in flight. `session`, `view`, `signIn` and `signOut` are the
 kinds slice 1 names. `personal` stands for every request whose reply belongs to the person signed in
@@ -177,6 +181,10 @@ structure State where
   wsHeartbeatMs : Nat := 10000
   /-- The emailed-link request was answered: the page says a link is on its way. -/
   linkSent : Bool := false
+  /-- The first factor was right and a second factor is needed: the sign-in waits for the code. -/
+  factorPrompt : Bool := false
+  /-- A request was refused for want of a fresh authentication: the step-up prompt is shown. -/
+  stepUp : Bool := false
 
 /-- Effects out of the kernel. `http` and `timer "request"` are the request and its deadline; the
 other effects are the page's own (URL, scroll), the live connection, storage, the browser's passkey
@@ -236,5 +244,17 @@ inductive Msg where
   | linkAnswer (id : Nat)
   | inviteAccepted (id : Nat) (target : Route)
   | oidcRedirect (id : Nat) (href : String)
+  /-- The second factor is asked for: the first factor was right (`second_factor` in the sign-in's reply). -/
+  | signInWaiting (id : Nat)
+  /-- A request was refused for want of a fresh authentication (`step_up_required`). -/
+  | stepUpRequired (id : Nat)
+  /-- The step-up was confirmed (the reply to the step-up form). -/
+  | stepUpAnswer (id : Nat)
+  /-- A factor request (enrol, remove, new recovery codes) was answered. -/
+  | factorsAnswer (id : Nat)
+
+/-- The factor actions that make a request for the signed-in person (`factors.*` in `factors.js`). -/
+def factorsRequests : List String :=
+  ["factors.enrol_start", "factors.remove_totp", "factors.new_codes"]
 
 end Strata.Browser

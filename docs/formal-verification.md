@@ -442,7 +442,7 @@ what the B2 implementation will be proved against.
 | `submit` login, complete form | the sign-in request; the form is busy and keeps the values | covered | 1 (request); 3 (values kept, error cleared) |
 | `submit` login, incomplete form | the values are kept and the form says so; no request | covered | 3 (`signInIncomplete`) |
 | `http_result` login, accepted | signed in: session, the person's state cleared, the address moved to the reply's target | partly | 1; 5 (live socket reset) |
-| `http_result` login, second factor waiting | the code prompt, no session yet | not covered | 7 |
+| `http_result` login, second factor waiting | the code prompt; no session yet | covered | 7 (`signInWaiting`) |
 | `http_result` login, refused | the request ends; the form shows the refusal and drops the password (`loginRefused`) | covered | 3 (the refusal's words are wording, and focus is presentation, slice 4) |
 | `action logout` | the sign-out request, when the screen offers sign-out | covered | 1 |
 | `http_result` logout, accepted | no session; the person's state cleared; the address replaced | partly | 1; 5 (live socket reset) |
@@ -481,12 +481,12 @@ what the B2 implementation will be proved against.
 |---|---|---|---|
 | `action passkeys.sign_in`; `http_result` passkeys.challenge, passkeys.sign_in; `passkey_result` (sign-in) | passkey sign-in: challenge, browser prompt, answer; signs in as a login does | not covered | 6 |
 | `action passkeys.add`, `passkeys.remove`; `http_result` passkeys.list, passkeys.register_start, passkeys.register_finish, passkeys.remove; `passkey_result` (registration) | the person's passkeys | not covered | 8 |
-| `action factors.enrol_start`, `factors.enrol_cancel`, `factors.remove_totp`, `factors.new_codes`, `factors.dismiss_codes`, `factors.use`, `factors.use_passkey`, `factors.stepup_cancel` | the authenticator, recovery codes, the factor choice, the step-up prompt | not covered | 7 |
-| `submit` second, totpconfirm, stepup; `input` second, totpconfirm, stepup | the second-factor code, the enrolment confirmation, the re-authentication | not covered | 7 |
-| `http_result` factors.summary (entered with the desk), enrol_start, enrol_finish, remove_totp, new_codes | the factors section's state | not covered | 7 |
+| `action factors.enrol_start`, `factors.enrol_cancel`, `factors.remove_totp`, `factors.new_codes`, `factors.dismiss_codes`, `factors.use`, `factors.use_passkey`, `factors.stepup_cancel` | the authenticator, recovery codes, the factor choice, the step-up prompt | partly | 7 (`factorsAsk`, `factorsAnswer` for enrol_start, remove_totp and new_codes; the other factor actions and the stepup cancel are not yet, except `factors.stepup_cancel` which is covered by `stepUpCancel`) |
+| `submit` second, totpconfirm, stepup; `input` second, totpconfirm, stepup | the second-factor code, the enrolment confirmation, the re-authentication | partly | 7 (`secondSubmit`, `stepUpSubmit`; the totpconfirm form and the typed values are not yet) |
+| `http_result` factors.summary (entered with the desk), enrol_start, enrol_finish, remove_totp, new_codes | the factors section's state | partly | 7 (`factorsAnswer` for enrol_start, remove_totp and new_codes; the summary and enrol_finish are not yet) |
 | `http_result` factors.pk_challenge; `passkey_result` (second factor) | a passkey as the second factor | not covered | 7 |
-| `http_result` factors.second | the second factor completes a sign-in | not covered | 7 |
-| `http_result` factors.stepup; any refusal `step_up_required` | the refused action is asked again once confirmed; the step-up prompt is shown | not covered | 7 |
+| `http_result` factors.second | the second factor completes a sign-in | covered | 7 (the success is `signInAnswer`; `secondRefused` for a refusal) |
+| `http_result` factors.stepup; any refusal `step_up_required` | the refused action is asked again once confirmed; the step-up prompt is shown | partly | 7 (`stepUpRequired`, `stepUpAnswer`; the redispatch of the refused action is not yet) |
 
 #### Sessions list
 
@@ -692,7 +692,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 | 4 (partly done) | Presentation: the theme and its store effect, the system theme, the menu, dismissing and expiring toasts, the dev expire request (`themeCycle`, `systemThemeSet`, `menuToggle`, `dismissToast`, `toastExpires`, `devExpire`, `sharedAnswer`). Still open: raising a toast (every row's toast), the menu closing on a navigation, and focus and announcements | 1 |
 | 5 (partly done) | Live connection, read from `client-live-flow-impl.js` (`welcomeFirst`, `welcomeResume`, `eventRefresh`, `eventQuiet`, `eventGap`, `resyncRefresh`, `pongBehind`, `pongCurrent`, `wsClosedLater`, `wsRefusedKeep`, `wsRefusedStop`, `reconnectFires`, `heartbeatDue`, `socketOpened`). Still open: the session frame when active, the request token on connect, the session read on a membership notice, the resync and reset outside the open state, and the schema notice's manifest (11) | 1, 2 |
 | 6 (partly done) | Sign-in methods: emailed links (request and answer), invitations (request and acceptance), the identity provider's start and redirect (`linkAsk`, `linkAnswer`, `inviteAsk`, `inviteAccepted`, `oidcStart`, `oidcRedirect`). Still open: the opened link's sign-in, passkey sign-in, the providers list, the provider's answer (`oidc.sign_in`), SAML, and the typed values of the invitation form | 3, 5 |
-| 7 | Second factors and step-up: the waiting sign-in, the factors section, recovery codes, the step-up prompt and its retry, the passkey as a second factor | 3, 6 |
+| 7 (partly done) | Second factors and step-up: the waiting sign-in and the second-factor code (`signInWaiting`, `secondSubmit`, `secondRefused`), the step-up (`stepUpRequired`, `stepUpSubmit`, `stepUpAnswer`, `stepUpCancel`), the factor requests and their answers (`factorsAsk`, `factorsAnswer`). Still open: the passkey as a second factor, the enrolment and recovery-code details, and the redispatch of a refused action once confirmed | 3, 6 |
 | 8 | The person's sessions and passkeys on the desk | 3, 7 |
 | 9 | Records: the editor's saves, publish and unpublish, preview, row actions, paging, the client's record-rule check and its log | 3, 5 |
 | 10 | Settings: the definitions, saves by level, setting notices | 3, 5 |
@@ -704,7 +704,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 ### 7.7 Counts
 
 The messages table has 80 rows (a row is one message, or one family of messages with the same handling):
-31 covered, 13 partly, 36 not covered (after slice 5, corrected from the generated machine). The effects table has
+33 covered, 17 partly, 30 not covered (after slice 7). The effects table has
 15 rows: 8 covered, 4 partly, 3 not covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
