@@ -1760,6 +1760,12 @@ Exegra's agent interface (`C:\dev\exegra\docs\agent-interface.md`): one envelope
 positions. The showcase's live driver (`tests/corpus/showcase/live.mjs`) shows every step can go
 through public routes; the corpus loader's staged install is D-DS-16 by hand.
 
+**Plinth widget fundamentals (WG-5623).** The realtime and UI fundamentals that the Plinth port needs
+(docs/plinth/fundamentals.md, theme "Realtime and UI") are proposed as decisions d-8500 to d-8507 in
+`specifications/intent.jsonc`, each stating which entries above already cover it. The requirements that
+add to them are DS-060 to DS-077 (`specifications/design-system.jsonc`, milestone 13) and RT-3400 to
+RT-3403 (`specifications/requirements.jsonc`, the realtime counts).
+
 ## Reserved entries and the enterprise work they wait for
 
 The enterprise sweep (WG-5484) found needs the platform's backend does not meet yet. The design reserves
