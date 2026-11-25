@@ -25,3 +25,6 @@ import Strata.Temporal.Formula
 import Strata.Temporal.Fairness
 import Strata.Temporal.Rules
 import Strata.Temporal.LockService
+
+import Strata.Browser.Types
+import Strata.Browser.Session
