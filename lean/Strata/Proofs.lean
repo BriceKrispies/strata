@@ -8,15 +8,18 @@ A1. The model in `Strata/Model.lean` is the thing being reasoned about. Nothing 
 A2. A world is a total function from tenant ids to optional tenants; a step is addressed to
     exactly one tenant through its context.
 A3. Authorization is the model's: the owner, editors, and writers on their own records.
-A4. `step_preserves_wf` excludes the non-strict schema change (`Intent.strict`), which is
-    allowed to leave non-conforming records by design. Referential integrity, the third part of
-    the invariant, needs no such exclusion (`step_preserves_refs` in `Strata/References.lean`).
+A4. `step_preserves_wf` excludes the non-strict schema changes (`Intent.strict`), which are
+    allowed to leave non-conforming records, and records that agree on a unique field, by design.
+    Referential integrity, the third part of the invariant, needs no such exclusion
+    (`step_preserves_refs` in `Strata/References.lean`). The name and uniqueness parts are in
+    `Strata/Uniqueness.lean`.
 
 No `sorry`, no added axioms. `Audit.lean` prints the axioms each theorem depends on.
 -/
 
 import Strata.Model
 import Strata.References
+import Strata.Uniqueness
 
 namespace Strata
 
@@ -100,6 +103,16 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
       by_cases ho : c.principal = t.owner
       · simp [authorized, ho]
       · simp [ho] at hs
+    | setUnique f strict =>
+      simp only [stepTenant] at hs
+      by_cases ho : c.principal = t.owner
+      · simp [authorized, ho]
+      · simp [ho] at hs
+    | defineUnique fs =>
+      simp only [stepTenant] at hs
+      by_cases ho : c.principal = t.owner
+      · simp [authorized, ho]
+      · simp [ho] at hs
 
 /-- A principal who may not edit a record cannot change it: the step is refused, so no new
     world exists in which the record differs. -/
@@ -149,10 +162,11 @@ theorem unauthorized_cannot_mutate (w : World) (i : Intent) (c : Ctx) (t : Tenan
 /-! ## Property 1: accepted transitions preserve the invariant -/
 
 /-- A strict, accepted step on one well-formed tenant yields a well-formed tenant. -/
-theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
-    (hwf : t.WF) (hstrict : i.strict = true) (h : stepTenant t p i = .ok t') : t'.WF := by
-  obtain ⟨hconf, hids, hrefs⟩ := hwf
-  have hrefs' := stepTenant_preserves_refs t t' p i hrefs h
+theorem stepTenant_conform_ids (t t' : Tenant) (p : PrincipalId) (i : Intent)
+    (hconf : ∀ q ∈ t.records, conforms t.schema q.2 = true)
+    (hids : ∀ q ∈ t.records, q.1 < t.nextId) (hstrict : i.strict = true)
+    (h : stepTenant t p i = .ok t') :
+    (∀ q ∈ t'.records, conforms t'.schema q.2 = true) ∧ (∀ q ∈ t'.records, q.1 < t'.nextId) := by
   cases i with
   | create fs =>
     simp only [stepTenant] at h
@@ -162,7 +176,7 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
       · cases h
       · rename_i hp
         cases h
-        refine ⟨?_, ?_, hrefs'⟩
+        refine ⟨?_, ?_⟩
         · intro q hq
           cases hq with
           | head => exact (problem_none hp).1
@@ -183,7 +197,7 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
           · cases h
           · rename_i hp
             cases h
-            refine ⟨?_, ?_, hrefs'⟩
+            refine ⟨?_, ?_⟩
             · intro q hq
               obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
               by_cases hid : (q₀.1 == id) = true
@@ -207,7 +221,7 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
           rename_i hnb
           have hnb : t.records.any (blocks t.schema id) = false := by simpa using hnb
           cases h
-          refine ⟨?_, ?_, hrefs'⟩
+          refine ⟨?_, ?_⟩
           · intro q hq
             obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
             obtain ⟨hmem, hne⟩ := List.mem_filter.mp hq₀
@@ -225,11 +239,28 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
       · cases h
       · rename_i hall
         cases h
-        refine ⟨?_, hids, hrefs'⟩
+        refine ⟨?_, hids⟩
         intro q hq
         have hall' : (t.records.all fun q => conforms (makeRequired t.schema f) q.2) = true := by
           simpa using hall
         exact List.all_eq_true.mp hall' q hq
+  | setUnique f s =>
+    obtain ⟨hn, hr, hs, -⟩ := setUnique_spec t t' p f s h
+    rw [hn, hr, hs]
+    exact ⟨fun q hq => conforms_makeUnique (hconf q hq), hids⟩
+  | defineUnique fs =>
+    obtain ⟨hn, hr, hs, -⟩ := defineUnique_spec t t' p fs h
+    rw [hn, hr, hs]
+    exact ⟨hconf, hids⟩
+
+/-- The state invariant is kept by every accepted strict step on a tenant. -/
+theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
+    (hwf : t.WF) (hstrict : i.strict = true) (h : stepTenant t p i = .ok t') : t'.WF := by
+  have hu := stepTenant_preserves_unique t t' p i hwf hstrict h
+  obtain ⟨hconf, hids, hrefs, hd, -⟩ := hwf
+  obtain ⟨hc, hi⟩ := stepTenant_conform_ids t t' p i hconf hids hstrict h
+  exact ⟨hc, hi, stepTenant_preserves_refs t t' p i hrefs h,
+    stepTenant_preserves_distinct t t' p i hd h, hu⟩
 
 /-- Property 1 for the world: a strict, accepted step from a well-formed world leads to a
     well-formed world.
@@ -256,6 +287,13 @@ theorem step_preserves_wf (w w' : World) (i : Intent) (c : Ctx)
       · simp [hxc] at hx
         exact hwf x t' hx
 
+/-- Property 1 for uniqueness, for the world: a strict, accepted step from a well-formed world
+    leaves every tenant's unique fields and composite constraints unique. -/
+theorem step_preserves_unique (w w' : World) (i : Intent) (c : Ctx)
+    (hwf : w.WF) (hstrict : i.strict = true) (h : step w i c = .ok w') :
+    ∀ x t', w' x = some t' → t'.UniqueRecords :=
+  fun x t' hx => ((step_preserves_wf w w' i c hwf hstrict h) x t' hx).2.2.2.2
+
 /-- The exclusion in A4 is necessary, not cautious: a non-strict schema change can leave a
     well-formed tenant with a record that no longer conforms. -/
 theorem lax_change_can_break_wf :
@@ -268,7 +306,7 @@ theorem lax_change_can_break_wf :
             writers := [], records := [(0, { owner := 0, version := 1, fields := [] })],
             nextId := 1 },
           0, 1, ?_, ?_, ?_⟩
-  · refine ⟨?_, ?_, ?_⟩
+  · refine ⟨?_, ?_, ?_, ?_, ?_⟩
     · intro q hq
       simp at hq
       subst hq
@@ -280,6 +318,10 @@ theorem lax_change_can_break_wf :
     · intro q hq
       simp at hq
       subst hq
+      decide
+    · unfold Tenant.Distinct
+      decide
+    · unfold Tenant.UniqueRecords
       decide
   · simp [stepTenant, makeRequired]
   · intro hwf

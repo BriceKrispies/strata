@@ -1,5 +1,6 @@
 import Strata.Model
 import Strata.References
+import Strata.Uniqueness
 import Strata.Proofs
 import Strata.Writes
 import Strata.Ledger

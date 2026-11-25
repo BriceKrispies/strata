@@ -1436,3 +1436,79 @@ op 1 100 create 3=b:1 7=l*1001:s:a
 op 1 100 create 9=i:1 1=s*65537:x
 op 1 100 create 1=n 2=s:bad
 end
+scenario h-unique-field-refuses-a-duplicate
+op 1 100 create 1=s:oak 10=s:a
+op 1 100 create 1=s:ash 10=s:a
+op 1 100 create 1=s:elm 10=s:b
+op 1 100 create 1=s:fir
+op 1 100 create 1=s:yew
+op 1 100 update 2 1=s:ash 10=s:b
+op 1 100 update 1 1=s:oak 10=s:a
+op 1 100 patch 3 10=s:a
+op 1 100 create 1=s:oak 10=s:b
+op 1 100 create 1=s:oak 10=s:c
+op 1 100 patch 1 10=n
+op 1 100 create 1=s:ash 10=s:a
+end
+scenario h-unique-checks-follow-the-field-order
+op 1 100 create 10=s:a
+op 1 100 create 1=s:oak 10=s:a
+op 1 100 create 1=s:oak 10=s:a 4=r:99
+op 1 100 create 1=s:oak 10=i:1
+op 1 100 create 1=s:oak 10=s*201:x
+op 1 100 create 1=s:oak 10=s*150:x
+op 1 100 create 1=s:ash 10=s:a
+end
+scenario h-unique-bound-is-in-bytes
+op 1 100 create 1=s:oak 10=s*201:x
+op 1 100 create 1=s:oak 10=s*150:x
+op 1 100 create 1=s:ash 10=s*150:x
+end
+scenario h-composite-unique-needs-every-field
+op 1 100 composite 2 3
+op 1 100 create 1=s:oak 2=i:1 3=b:1
+op 1 100 create 1=s:ash 2=i:1
+op 1 100 create 1=s:elm 2=i:1 3=b:0
+op 1 100 create 1=s:fir 2=i:1 3=b:1
+op 1 100 create 1=s:yew 3=b:1
+op 1 100 patch 3 3=b:1
+op 1 100 patch 3 2=i:2
+op 1 100 create 1=s:oak 2=i:1 3=b:1
+op 1 100 patch 4 2=i:1
+end
+scenario h-composite-over-existing-duplicates-is-refused
+op 1 100 create 1=s:oak 2=i:1 3=b:1
+op 1 100 create 1=s:ash 2=i:1 3=b:1
+op 1 100 composite 2 3
+op 1 100 create 1=s:elm 2=i:1 3=b:1
+op 1 100 create 1=s:fir 2=i:2
+end
+scenario h-unique-over-existing-duplicates
+op 1 100 create 1=s:oak 2=i:1
+op 1 100 create 1=s:oak 2=i:2
+op 1 100 unique 1 strict
+op 1 100 unique 2 strict
+op 1 100 unique 1 lax
+op 1 100 create 1=s:oak 2=i:3
+op 1 100 create 1=s:elm 2=i:4
+op 1 100 update 2 1=s:oak 2=i:2
+op 1 100 update 3 1=s:elm 2=i:4
+end
+scenario h-a-list-field-cannot-be-unique
+op 1 100 unique 0 strict
+op 1 100 unique 7 lax
+op 1 100 composite 2 0
+op 1 100 composite 2 9
+op 1 100 composite 2
+op 1 100 composite 2 2
+op 1 101 unique 2 strict
+op 1 101 composite 2 3
+end
+scenario h-unique-survives-a-delete
+op 1 100 create 1=s:oak 10=s:a
+op 1 100 create 1=s:ash 10=s:b 4=r:1
+op 1 100 delete 1
+op 1 100 create 1=s:elm 10=s:a
+op 1 100 update 2 1=s:ash 10=s:a
+op 1 100 create 1=s:fir 10=s:b
+end

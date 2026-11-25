@@ -108,17 +108,20 @@ theorem null_untyped (ty : Ty) : Val.null.hasType ty = false := by
 
 /-! ## Lemmas: what a write that is not refused satisfies -/
 
-theorem valueProblem_none {L : Limits} {rs : Records} {d : FieldDef} {v : Val}
-    (h : valueProblem L rs d v = none) :
-    v.overLimit L = false ∧ v.hasType d.ty = true ∧ v.resolves rs = true := by
+theorem valueProblem_none {L : Limits} {uniq : Bool} {rs : Records} {self : RecordId}
+    {f : FieldId} {d : FieldDef} {v : Val} (h : valueProblem L uniq rs self f d v = none) :
+    v.overLimit L = false ∧ v.hasType d.ty = true ∧ v.resolves rs = true ∧
+      (uniq = true → d.unique = true → clashAt rs self f v = false) := by
   unfold valueProblem at h
   cases h0 : v.overLimit L <;> cases h1 : (d.unique && decide (L.maxUnique < v.size)) <;>
-    cases h2 : v.hasType d.ty <;> cases h3 : v.resolves rs <;> simp_all
+    cases h2 : v.hasType d.ty <;> cases h3 : (uniq && d.unique && clashAt rs self f v) <;>
+    cases h4 : v.resolves rs <;> simp_all
 
-theorem fieldProblem_none {L : Limits} {rs : Records} {fs : Fields} {fd : FieldId × FieldDef}
-    (h : fieldProblem L rs fs fd = none) :
+theorem fieldProblem_none {L : Limits} {uniq : Bool} {rs : Records} {self : RecordId}
+    {fs : Fields} {fd : FieldId × FieldDef}
+    (h : fieldProblem L uniq rs self fs fd = none) :
     (fd.2.required = true → (fs.valuesOf fd.1).isEmpty = false) ∧
-      ∀ v ∈ fs.valuesOf fd.1, valueProblem L rs fd.2 v = none := by
+      ∀ v ∈ fs.valuesOf fd.1, valueProblem L uniq rs self fd.1 fd.2 v = none := by
   unfold fieldProblem at h
   split at h
   · cases h
@@ -129,31 +132,38 @@ theorem fieldProblem_none {L : Limits} {rs : Records} {fs : Fields} {fd : FieldI
 /-- What a record with nothing to refuse satisfies, part by part: within the record bound, every
     field known with a value that passes its checks, and every field of the schema passing its
     checks. -/
-theorem problem_none_parts {L : Limits} {schema : Schema} {rs : Records} {r : Record}
-    (h : problem L schema rs r = none) :
+theorem problem_none_parts {L : Limits} {schema : Schema} {us : List (List FieldId)}
+    {uniq : Bool} {rs : Records} {self : RecordId} {r : Record}
+    (h : problem L schema us uniq rs self r = none) :
     r.size ≤ L.maxRecord ∧
-      (∀ fv ∈ r.fields, ∃ d, schema.lookup fv.1 = some d ∧ valueProblem L rs d fv.2 = none) ∧
-      ∀ fd ∈ schema, fieldProblem L rs r.fields fd = none := by
+      (∀ fv ∈ r.fields, ∃ d, schema.lookup fv.1 = some d ∧
+        valueProblem L uniq rs self fv.1 d fv.2 = none) ∧
+      ∀ fd ∈ schema, fieldProblem L uniq rs self r.fields fd = none := by
   unfold problem at h
   split at h
   · cases h
   · rename_i hsize
     split at h
     · rename_i hknown
-      have hall := List.findSome?_eq_none_iff.mp h
-      refine ⟨by simpa using hsize, fun fv hfv => ?_, hall⟩
-      have hk := List.all_eq_true.mp hknown fv hfv
-      cases hl : schema.lookup fv.1 with
-      | none => rw [hl] at hk; cases hk
-      | some d =>
-        refine ⟨d, rfl, ?_⟩
-        have hmem := lookup_mem hl
-        exact (fieldProblem_none (hall _ hmem)).2 fv.2 (mem_valuesOf (by simpa using hfv))
+      split at h
+      · cases h
+      · rename_i hall
+        have hall' := List.findSome?_eq_none_iff.mp hall
+        refine ⟨by simpa using hsize, fun fv hfv => ?_, hall'⟩
+        have hk := List.all_eq_true.mp hknown fv hfv
+        cases hl : schema.lookup fv.1 with
+        | none => rw [hl] at hk; cases hk
+        | some d =>
+          refine ⟨d, rfl, ?_⟩
+          have hmem := lookup_mem hl
+          exact (fieldProblem_none (hall' _ hmem)).2 fv.2 (mem_valuesOf (by simpa using hfv))
     · cases h
 
 /-- A record with nothing to refuse conforms to the schema and holds no dangling reference. -/
-theorem problem_none {L : Limits} {schema : Schema} {rs : Records} {r : Record}
-    (h : problem L schema rs r = none) : conforms schema r = true ∧ refsOk rs r = true := by
+theorem problem_none {L : Limits} {schema : Schema} {us : List (List FieldId)} {uniq : Bool}
+    {rs : Records} {self : RecordId} {r : Record}
+    (h : problem L schema us uniq rs self r = none) :
+    conforms schema r = true ∧ refsOk rs r = true := by
   obtain ⟨-, hval, hall⟩ := problem_none_parts h
   refine ⟨?_, ?_⟩
   · unfold conforms
@@ -177,7 +187,7 @@ theorem problem_none {L : Limits} {schema : Schema} {rs : Records} {r : Record}
     rw [List.all_eq_true]
     intro fv hfv
     obtain ⟨d, _, hp⟩ := hval fv hfv
-    exact (valueProblem_none hp).2.2
+    exact (valueProblem_none hp).2.2.1
 
 /-! ## Lemmas: values with references taken out -/
 
@@ -407,6 +417,24 @@ theorem has_replace {rs : Records} {id x : RecordId} {r : Record} :
     · exact ⟨r, (x, r'), hr, by simp [hid]⟩
     · exact ⟨r', (x, r'), hr, by simp [hid]⟩
 
+/-! ## Schema changes that leave the records alone -/
+
+/-- A field made unique leaves every record as it is. -/
+theorem setUnique_records (t t' : Tenant) (p : PrincipalId) (f : FieldId) (s : Bool)
+    (h : stepTenant t p (.setUnique f s) = .ok t') : t'.records = t.records := by
+  simp only [stepTenant] at h
+  repeat' split at h
+  all_goals (try cases h)
+  all_goals rfl
+
+/-- A composite unique constraint leaves every record as it is. -/
+theorem defineUnique_records (t t' : Tenant) (p : PrincipalId) (fs : List FieldId)
+    (h : stepTenant t p (.defineUnique fs) = .ok t') : t'.records = t.records := by
+  simp only [stepTenant] at h
+  repeat' split at h
+  all_goals (try cases h)
+  all_goals rfl
+
 /-! ## The slice's properties -/
 
 /-- Referential integrity is kept by every accepted step on a tenant, strict or not: a write
@@ -476,6 +504,16 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : PrincipalId) (i : Intent)
       · cases h
       · cases h
         exact hrefs
+  | setUnique f strict =>
+    have hrec := setUnique_records t t' p f strict h
+    intro q hq
+    rw [hrec] at hq ⊢
+    exact hrefs q hq
+  | defineUnique fs =>
+    have hrec := defineUnique_records t t' p fs h
+    intro q hq
+    rw [hrec] at hq ⊢
+    exact hrefs q hq
 
 /-- Referential integrity for the world: every accepted step keeps it, strict or not. -/
 theorem step_preserves_refs (w w' : World) (i : Intent) (c : Ctx)

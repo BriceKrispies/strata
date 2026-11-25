@@ -80,16 +80,17 @@ structure Header where
   editors : List PrincipalId
   writers : List PrincipalId
   limits : Limits := Limits.kernel
+  uniques : List (List FieldId) := []
 
 def _root_.Strata.Tenant.header (t : Tenant) : Header :=
   { schema := t.schema, owner := t.owner, editors := t.editors, writers := t.writers,
-    limits := t.limits }
+    limits := t.limits, uniques := t.uniques }
 
 /-- A header as a tenant with no records, so the model's permission functions apply to it. They
     read neither records nor the counter. -/
 def Header.asTenant (h : Header) : Tenant :=
   { schema := h.schema, owner := h.owner, editors := h.editors, writers := h.writers,
-    records := [], nextId := 0, limits := h.limits }
+    records := [], nextId := 0, limits := h.limits, uniques := h.uniques }
 
 /-! ## Keys, values and the store -/
 
@@ -177,7 +178,7 @@ inductive Delta where
   /-- Remove record `id` and clear the references to it held by the records named in `cleared`.
       Like the Rust kernel's `StateDelta`, the delta names every record it writes. -/
   | remove (id : RecordId) (cleared : List RecordId)
-  | schema (s : Schema)
+  | schema (s : Schema) (us : List (List FieldId))
 
 /-- Remove record `id` and clear the references to it in the records named in `cleared`. -/
 def removeRecords (rs : Records) (id : RecordId) (cleared : List RecordId) : Records :=
@@ -188,7 +189,7 @@ def Delta.apply (t : Tenant) : Delta → Tenant
   | .create id r => { t with records := (id, r) :: t.records, nextId := id + 1 }
   | .replace id r => { t with records := t.records.map (fun q => if q.1 == id then (q.1, r) else q) }
   | .remove id cleared => { t with records := removeRecords t.records id cleared }
-  | .schema s => { t with schema := s }
+  | .schema s us => { t with schema := s, uniques := us }
 
 /-! ### Validity read through single records
 
@@ -205,37 +206,46 @@ def resolvesVia (has : RecordId → Bool) : Val → Bool
   | .list vs => vs.all (elemResolvesVia has)
   | _ => true
 
-def valueProblemVia (L : Limits) (has : RecordId → Bool) (d : FieldDef) (v : Val) : Option Err :=
+def valueProblemVia (L : Limits) (uniq : Bool) (has : RecordId → Bool) (rs : Records)
+    (self : RecordId) (f : FieldId) (d : FieldDef) (v : Val) : Option Err :=
   if v.overLimit L then some .limitExceeded
   else if d.unique && decide (L.maxUnique < v.size) then some .limitExceeded
   else if !v.hasType d.ty then some .invalid
+  else if uniq && d.unique && clashAt rs self f v then some .uniqueViolated
   else if !resolvesVia has v then some .danglingReference
   else none
 
-def fieldProblemVia (L : Limits) (has : RecordId → Bool) (fs : Fields) (fd : FieldId × FieldDef) :
-    Option Err :=
+def fieldProblemVia (L : Limits) (uniq : Bool) (has : RecordId → Bool) (rs : Records)
+    (self : RecordId) (fs : Fields) (fd : FieldId × FieldDef) : Option Err :=
   if fd.2.required && (fs.valuesOf fd.1).isEmpty then some .invalid
-  else (fs.valuesOf fd.1).findSome? (valueProblemVia L has fd.2)
+  else (fs.valuesOf fd.1).findSome? (valueProblemVia L uniq has rs self fd.1 fd.2)
 
-def problemVia (L : Limits) (schema : Schema) (has : RecordId → Bool) (r : Record) : Option Err :=
+def problemVia (L : Limits) (schema : Schema) (us : List (List FieldId)) (uniq : Bool)
+    (has : RecordId → Bool) (rs : Records) (self : RecordId) (r : Record) : Option Err :=
   if decide (L.maxRecord < r.size) then some .limitExceeded
   else if r.fields.all (fun fv => (schema.lookup fv.1).isSome) then
-    schema.findSome? (fieldProblemVia L has r.fields)
+    match schema.findSome? (fieldProblemVia L uniq has rs self r.fields) with
+    | some e => some e
+    | none => compositeProblem uniq rs self r.fields us
   else some .invalid
 
-/-- The validity of a written record depends on the other records only through whether the records
-    it references exist. -/
-theorem problem_eq_via (L : Limits) (schema : Schema) (rs : Records) (r : Record) :
-    problem L schema rs r = problemVia L schema (fun id => (rs.lookup id).isSome) r := by
+/-- The validity of a written record depends on the other records through whether the records it
+    references exist (`has`) and, for the unique checks, through the record list (`rs`). -/
+theorem problem_eq_via (L : Limits) (schema : Schema) (us : List (List FieldId)) (uniq : Bool)
+    (rs : Records) (self : RecordId) (r : Record) :
+    problem L schema us uniq rs self r =
+      problemVia L schema us uniq (fun id => (rs.lookup id).isSome) rs self r := by
   have he : Elem.resolves rs = elemResolvesVia (fun id => (rs.lookup id).isSome) := by
     funext e; cases e <;> rfl
   have h0 : Val.resolves rs = resolvesVia (fun id => (rs.lookup id).isSome) := by
     funext v; cases v <;> simp [Val.resolves, resolvesVia, he, Records.has]
-  have h1 : valueProblem L rs = valueProblemVia L (fun id => (rs.lookup id).isSome) := by
-    funext d v; simp only [valueProblem, valueProblemVia, h0]
-  have h2 : fieldProblem L rs = fieldProblemVia L (fun id => (rs.lookup id).isSome) := by
+  have h1 : valueProblem L uniq rs self = valueProblemVia L uniq (fun id => (rs.lookup id).isSome) rs self := by
+    funext f d v; simp only [valueProblem, valueProblemVia, h0]
+  have h2 : fieldProblem L uniq rs self = fieldProblemVia L uniq (fun id => (rs.lookup id).isSome) rs self := by
     funext fs fd; simp only [fieldProblem, fieldProblemVia, h1]
-  simp only [problem, problemVia, h2]
+  unfold problem problemVia
+  rw [h2]
+  rfl
 
 /-- The records that hold a reference to `id`, single or in a list: the ones a delete of `id`
     clears. -/
@@ -262,7 +272,7 @@ def decideTenant (h : Header) (n : Nat) (look : RecordId → Option Record)
     if !canCreate h.asTenant p then .error .unauthorized
     else
       let r := newRecord h.schema p fs
-      match problemVia h.limits h.schema (fun id => (look id).isSome) r with
+      match problemVia h.limits h.schema h.uniques true (fun id => (look id).isSome) all n r with
       | some e => .error e
       | none => .ok (.create n r)
   | .update id fs ev =>
@@ -273,7 +283,7 @@ def decideTenant (h : Header) (n : Nat) (look : RecordId → Option Record)
       else if versionClash ev old then .error .versionConflict
       else
         let r := patched old fs
-        match problemVia h.limits h.schema (fun id => (look id).isSome) r with
+        match problemVia h.limits h.schema h.uniques true (fun id => (look id).isSome) all id r with
         | some e => .error e
         | none => .ok (.replace id r)
   | .delete id ev =>
@@ -289,7 +299,22 @@ def decideTenant (h : Header) (n : Nat) (look : RecordId → Option Record)
     else
       let schema' := makeRequired h.schema f
       if strict && !(all.all (fun q => conforms schema' q.2)) then .error .migrationRejected
-      else .ok (.schema schema')
+      else .ok (.schema schema' h.uniques)
+  | .setUnique f strict =>
+    if p != h.owner then .error .unauthorized
+    else
+      match h.schema.lookup f with
+      | none => .error .invalidSchema
+      | some d =>
+        if d.ty.isList then .error .invalidSchema
+        else if uniqueClash h.limits all f strict then
+          .error .migrationRejected
+        else .ok (.schema (makeUnique h.schema f) h.uniques)
+  | .defineUnique fs =>
+    if p != h.owner then .error .unauthorized
+    else if !uniqueFieldsOk h.schema fs then .error .invalidSchema
+    else if dupFields all fs then .error .uniqueViolated
+    else .ok (.schema h.schema (h.uniques ++ [fs]))
 
 /-- A decision made through any source of key values. It reads keys of tenant `x` only. -/
 def decideOn (get : Key → Payload) (x : TenantId) (p : PrincipalId) (i : Intent) :
@@ -344,6 +369,7 @@ private theorem remove_map_eq (rs : Records) (id : RecordId) :
 @[simp] private theorem header_schema (t : Tenant) : t.header.schema = t.schema := rfl
 @[simp] private theorem header_owner (t : Tenant) : t.header.owner = t.owner := rfl
 @[simp] private theorem header_limits (t : Tenant) : t.header.limits = t.limits := rfl
+@[simp] private theorem header_uniques (t : Tenant) : t.header.uniques = t.uniques := rfl
 @[simp] private theorem canCreate_asTenant (t : Tenant) (p : PrincipalId) :
     canCreate t.header.asTenant p = canCreate t p := rfl
 @[simp] private theorem canEdit_asTenant (t : Tenant) (p : PrincipalId) (r : Record) :
@@ -363,16 +389,16 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
   cases i with
   | create fs =>
     simp only [decideTenant, stepTenant, canCreate_asTenant, header_schema, header_limits,
-      problem_eq_via]
+      header_uniques, problem_eq_via]
     by_cases hc : canCreate t p = true
-    · cases hk : problemVia t.limits t.schema (fun id => (t.records.lookup id).isSome)
-        (newRecord t.schema p fs) with
-      | none => simp [hc, Delta.apply, Except.map]
-      | some e => simp [hc, Except.map]
+    · cases hk : problemVia t.limits t.schema t.uniques true
+          (fun id => (t.records.lookup id).isSome) t.records t.nextId (newRecord t.schema p fs) with
+      | none => simp [hc, hk, Delta.apply, Except.map]
+      | some e => simp [hc, hk, Except.map]
     · simp [hc, Except.map]
   | update id fs ev =>
     simp only [decideTenant, stepTenant, canEdit_asTenant, missingRecord_asTenant, header_schema,
-      header_limits, problem_eq_via]
+      header_limits, header_uniques, problem_eq_via]
     cases hl : t.records.lookup id with
     | none => simp [Except.map]
     | some old =>
@@ -380,8 +406,8 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
       · by_cases hv : versionClash ev old = true
         · simp [hc, hv, Except.map]
         · have hv' : versionClash ev old = false := by simpa using hv
-          cases hk : problemVia t.limits t.schema (fun id => (t.records.lookup id).isSome)
-            (patched old fs) with
+          cases hk : problemVia t.limits t.schema t.uniques true
+              (fun id => (t.records.lookup id).isSome) t.records id (patched old fs) with
           | none => simp [hc, hv', hk, Delta.apply, Except.map]
           | some e => simp [hc, hv', hk, Except.map]
       · simp [hc, Except.map]
@@ -402,11 +428,34 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
             simp only [removeRecords, remove_map_eq]
       · simp [hc, Except.map]
   | setRequired f strict =>
-    simp only [decideTenant, stepTenant, header_owner, header_schema]
+    simp only [decideTenant, stepTenant, header_owner, header_schema, header_uniques]
     by_cases ho : p = t.owner
     · by_cases hs : (strict && !(t.records.all fun q => conforms (makeRequired t.schema f) q.2)) = true
       · simp [ho, hs, Except.map]
       · simp [ho, hs, Delta.apply, Except.map]
+    · simp [ho, Except.map]
+  | setUnique f strict =>
+    simp only [decideTenant, stepTenant, header_owner, header_schema, header_limits, header_uniques]
+    by_cases ho : p = t.owner
+    · cases hl : t.schema.lookup f with
+      | none => simp [ho, hl, Except.map]
+      | some d =>
+        by_cases hd : d.ty.isList = true
+        · simp [ho, hl, hd, Except.map]
+        · by_cases hs : uniqueClash t.limits t.records f strict = true
+          · simp only [ho, hl, hd, hs, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte,
+              Except.map]
+          · simp only [ho, hl, hd, hs, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte,
+              Except.map, Delta.apply]
+    · simp [ho, Except.map]
+  | defineUnique fs =>
+    simp only [decideTenant, stepTenant, header_owner, header_schema, header_limits, header_uniques]
+    by_cases ho : p = t.owner
+    · by_cases hok : uniqueFieldsOk t.schema fs = true
+      · by_cases hd : dupFields t.records fs = true
+        · simp [ho, hok, hd, Except.map]
+        · simp [ho, hok, hd, Delta.apply, Except.map]
+      · simp [ho, hok, Except.map]
     · simp [ho, Except.map]
 
 /-- A decision made through the store's answers is the kernel's step on the store's world. -/
@@ -457,17 +506,17 @@ theorem fetch_applyWorld_other (w : World) (x : TenantId) (d : Delta) (k : Key)
     answer and the list; a schema change changes the header only. Answers are invalidated by any record change of their tenant, the granularity
     of the per-object-type change counters (D-5064). -/
 def touchedIn : Delta → Key → Bool
-  | .schema _, .header _ => true
+  | .schema _ _, .header _ => true
   | _, .header _ => false
   | .create _ _, .counters _ => true
   | _, .counters _ => false
   | .create id' _, .record _ id => id == id'
   | .replace id' _, .record _ id => id == id'
   | .remove id' cl, .record _ id => id == id' || cl.contains id
-  | .schema _, .record _ _ => false
-  | .schema _, .all _ => false
+  | .schema _ _, .record _ _ => false
+  | .schema _ _, .all _ => false
   | _, .all _ => true
-  | .schema _, .answer _ _ _ => false
+  | .schema _ _, .answer _ _ _ => false
   | .create _ _, .answer _ _ _ => true
   | .replace _ _, .answer _ _ _ => true
   | .remove _ _, .answer _ _ _ => true

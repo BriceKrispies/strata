@@ -221,8 +221,9 @@ theorem required_list_never_blocks (schema : Schema) (f : FieldId) (vs : List El
 
 /-! ## Size limits -/
 
-theorem problem_none_within {L : Limits} {schema : Schema} {rs : Records} {r : Record}
-    (h : problem L schema rs r = none) :
+theorem problem_none_within {L : Limits} {schema : Schema} {us : List (List FieldId)}
+    {uniq : Bool} {rs : Records} {self : RecordId} {r : Record}
+    (h : problem L schema us uniq rs self r = none) :
     r.size ≤ L.maxRecord ∧ ∀ fv ∈ r.fields, fv.2.overLimit L = false := by
   obtain ⟨hs, hval, -⟩ := problem_none_parts h
   refine ⟨hs, fun fv hfv => ?_⟩
