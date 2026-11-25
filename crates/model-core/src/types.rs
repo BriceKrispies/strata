@@ -8196,7 +8196,7 @@ impl std::fmt::Display for AggregateId {
 
 /// aggregate-kind
 ///
-/// What an aggregate computes (AGG-001): count counts records, sum adds the values of a field, minimum and maximum take the least and greatest value, top lists the records with the greatest or least value.
+/// What an aggregate computes (AGG-001): count counts records, sum adds the values of a field, average is the integer mean of the values of a field (AGG-011), minimum and maximum take the least and greatest value, top lists the records with the greatest or least value.
 ///
 /// Specification type `aggregate-kind`: an enumeration, serialised as the specification's values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -8208,6 +8208,9 @@ pub enum AggregateKind {
     /// The value `sum`.
     #[serde(rename = "sum")]
     Sum,
+    /// The value `average`.
+    #[serde(rename = "average")]
+    Average,
     /// The value `minimum`.
     #[serde(rename = "minimum")]
     Minimum,
@@ -8225,6 +8228,7 @@ impl AggregateKind {
         match self {
             Self::Count => "count",
             Self::Sum => "sum",
+            Self::Average => "average",
             Self::Minimum => "minimum",
             Self::Maximum => "maximum",
             Self::Top => "top",
@@ -8234,7 +8238,7 @@ impl AggregateKind {
 
 /// Aggregate Def
 ///
-/// The declaration of an aggregate in a named query (AGG-001). field is the field a sum, minimum or maximum reads and the field a top list ranks by, and a count has none. group-by is a declared field. n is the length of a top list, one to one hundred, and descending puts the greatest value first. scan-bound is the number of records the aggregate may examine, at most ten thousand (D-5062).
+/// The declaration of an aggregate in a named query (AGG-001). field is the field a sum, average, minimum or maximum reads and the field a top list ranks by, and a count has none. group-by is a declared field, and group-by-second, when given, a second declared field the groups are made by, after group-by (AGG-005); it needs a group-by. n is the length of a top list, one to one hundred, and descending puts the greatest value first. scan-bound is the number of records the aggregate may examine, at most ten thousand (D-5062).
 ///
 /// Specification type `aggregate-def`: a struct.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -8249,6 +8253,9 @@ pub struct AggregateDef {
     /// Field `group-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_by: Option<FieldId>,
+    /// Field `group-by-second`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by_second: Option<FieldId>,
     /// Field `n`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub n: Option<u32>,
@@ -8260,7 +8267,7 @@ pub struct AggregateDef {
 
 /// Aggregate Group
 ///
-/// One group of an aggregate result: the value of the group field (absent for the group of records with no value, and for an ungrouped aggregate), the count, sum, minimum or maximum, and for a top aggregate the records in rank order.
+/// One group of an aggregate result: the value of the group field and, for an aggregate grouped by two fields, the value of the second (each absent for the records that have no value in it, and both absent for an ungrouped aggregate), the count, sum, average, minimum or maximum, and for a top aggregate the records in rank order.
 ///
 /// Specification type `aggregate-group`: a struct.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -8268,6 +8275,9 @@ pub struct AggregateGroup {
     /// Field `key`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<Value>,
+    /// Field `key-second`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_second: Option<Value>,
     /// Field `value`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
