@@ -324,3 +324,18 @@ test('a message on screen is given a timer and leaves when it fires', () => {
   assert.equal(timer.token, replied.state.toasts[0].id);
   assert.equal(update(replied.state, { type: 'timer', name: 'toast', token: timer.token, ...stamp }).state.toasts.length, 0);
 });
+
+// A person signed in, as the gateway answers the session read.
+const member = { ...anonymous, authenticated: true, principal: 'user:ines', display_name: 'Inès', csrf_token: 'tok', roles: ['public', 'editor'], may: { post: ['create'] } };
+
+// F1 (gap analysis, section 7): on a page that needs no session, a session end kept the view model read
+// for the former person, and the page drew it for the visitor until the next reply. The spec's
+// `switched` drops the model whatever the page, and the view is read again.
+test('a session end drops the view read for the former person, on a page that needs no session', () => {
+  const start = boot({ path: '/', session: { session: member }, view: homeModel() }).state;
+  assert.equal(start.view.model.view, 'home', 'the page holds the model read for the signed-in person');
+  const ended = update(start, { type: 'ws_message', message: { type: 'session', state: 'expired' }, ...stamp });
+  assert.equal(ended.state.view.model, null, 'the former person\'s model is not drawn for the visitor');
+  assert.equal(ended.state.view.status, 'loading', 'the page waits for the view it reads again');
+  assert.ok(ended.effects.some((e) => e.type === 'http'), 'the view is read again');
+});

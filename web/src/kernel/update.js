@@ -330,19 +330,11 @@ function readSession(state, msg, meta = {}) {
   return call(state, 'session', 'read-session-view', {}, msg, meta);
 }
 
-/** True when the screen the address opens needs a signed-in person. */
-function guardedScreen(state) {
-  const screen = screenOf(state);
-  if (screen?.tenant) return screen.tenant.auth === 'session';
-  return routeOf(screen?.screen ?? '')?.auth === 'session';
-}
-
 /**
  * Forget everything that belongs to the person who was signed in: recovery codes, the enrolment
  * secret, the lists of sessions and passkeys, the Lab's overview and results, the editor and
- * settings forms with their drafts, and (on a guarded page) that person's view model. Replies to
- * requests made before this are dropped when they arrive. The caller reads the view again, since
- * a guarded page's model is gone.
+ * settings forms with their drafts, and the view model read for that person, on every page. Replies
+ * to requests made before this are dropped when they arrive. The caller reads the view again.
  * @param {any} state
  */
 function clearUserState(state) {
@@ -361,7 +353,7 @@ function clearUserState(state) {
     forms: { ...state.forms, login: { ...login, values: { ...login.values, password: '' } }, editor: null, settings: null },
     optimistic: {},
     confirmDelete: null,
-    view: guardedScreen(state) ? { status: 'loading', model: null, error: null, request: 0 } : state.view,
+    view: { status: 'loading', model: null, error: null, request: 0 },
   };
 }
 
@@ -654,11 +646,9 @@ function onSocket(state, frame, msg) {
         effects.push(effect);
       }
       next = { ...next, session: { ...state.session, authenticated: false, csrf_token: undefined, roles: ['public'], may: {}, may_manage_schema: false } };
-      // A guarded page's model was cleared with the person's state, so it is always read again.
-      const shown = tenantOnShow(state);
-      const refresh = guardedScreen(state)
-        || (shown.entry ? liveRefreshes(shown.part, 'session-ended', {}, state.view.model) : live.refreshes(screenOf(state)?.screen ?? '', 'ui-session-ended', {}, state.view.model));
-      return refresh ? refreshAfter({ state: next, effects }, msg) : { state: next, effects };
+      // The model read for the person is dropped with their state, on every page, so the view is read
+      // again on every page (the specification's `sessionEnded` always reads it).
+      return refreshAfter({ state: next, effects }, msg);
     }
     case 'run':
       return labUpdate(state, { ...msg, type: 'lab_run', frame }, { request, toast }) ?? { state, effects: [] };
