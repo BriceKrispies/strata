@@ -271,7 +271,11 @@ impl Totals {
 /// The intent of an `op` line, as the coverage names it: `create`, `update`, `patch`, `delete`,
 /// `require-strict`, `require-lax`, `unique-strict`, `unique-lax` or `composite`.
 fn intent_of(op: &str) -> &'static str {
-    let tokens: Vec<&str> = op.split_whitespace().collect();
+    let mut tokens: Vec<&str> = op.split_whitespace().collect();
+    // `op <tenant> <principal> type <n> <intent> ..` names an object type; the intent follows it.
+    if tokens.get(3).copied() == Some("type") {
+        tokens.drain(3..5.min(tokens.len()));
+    }
     match tokens.get(3).copied() {
         Some("create") => "create",
         Some("update") => "update",
