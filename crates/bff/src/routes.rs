@@ -1462,14 +1462,15 @@ struct Paging {
     limit: Option<u32>,
 }
 
-/// The capability a view of the desk or the lab requires, by the address of its screen: the
-/// contracts read-desk-view, read-new-article-view, read-edit-article-view, read-settings-view and
-/// read-lab-view.
+/// The capability a view of the desk, the lab or the Settings page requires, by the address of its
+/// screen: the contracts read-desk-view, read-new-article-view, read-edit-article-view,
+/// read-settings-view, read-lab-view and read-settings-page.
 fn desk_capability(path: &str) -> Option<&'static str> {
     let address = path.split(['?', '#']).next().unwrap_or(path);
     let address = address.trim_end_matches('/');
     match address {
         "/desk/settings" => Some("site-configure"),
+        "/settings" => Some("setting-read"),
         "/desk" | "/desk/new" | "/lab" => Some("content-draft-read"),
         _ if address.starts_with("/desk/edit/") => Some("content-draft-read"),
         _ => None,
