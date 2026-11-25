@@ -178,6 +178,14 @@ pub struct ViewData {
     /// string values are principals, which [`project`] sends as handles into `people`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub person_fields: BTreeMap<ObjectTypeId, BTreeSet<FieldId>>,
+    /// The answers of preflight for the row actions of the view, by section, record and action
+    /// (see [`crate::affordance`]); left out when the view has no row action.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub affordances: crate::affordance::Affordances,
+    /// Whether an affordance reads the principal or the clock: the reply is then individual to the
+    /// reader and is never stored as a shared copy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub individual: bool,
 }
 
 /// Section names in evaluation order: sections that feed others come first.
@@ -650,6 +658,15 @@ pub fn project(data: &ViewData) -> Json {
     if !data.record_rules.is_empty() {
         model["record_rules"] = json!(data.record_rules);
     }
+    // The row actions' answers (WG-5466): by section, record id and action id, each allowed,
+    // refused with its condition's code and wording, or unknown. Individual when one reads the
+    // principal or the clock.
+    if !data.affordances.is_empty() {
+        model["affordances"] = json!(data.affordances);
+    }
+    if data.individual {
+        model["individual"] = json!(true);
+    }
     model
 }
 
@@ -692,6 +709,8 @@ mod people_and_refs {
             record_rules: BTreeMap::new(),
             tenant_theme: None,
             person_fields: BTreeMap::from([(object("post"), BTreeSet::from([field("editor")]))]),
+            affordances: BTreeMap::new(),
+            individual: false,
             people: BTreeMap::from([
                 (
                     "user:ada".to_string(),

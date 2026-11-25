@@ -15,6 +15,7 @@
 //! - [`subscribe`]: what a subscriber is told about an event.
 //! - [`ui`]: the interface definition of a tenant, in parts named by their hashes.
 
+pub mod affordance;
 pub mod bundle;
 pub mod markdown;
 pub mod plain;
