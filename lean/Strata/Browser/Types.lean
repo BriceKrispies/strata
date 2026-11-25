@@ -61,6 +61,9 @@ structure Catalogue where
   tenantActionOk : String → Bool
   /-- The tenant form's values are complete. -/
   validTenantForm : List (String × String) → Bool
+  /-- The projection's form (the change, the existing records, the source, the steps, the seed, the faults)
+  is complete. -/
+  validLabRun : List (String × String) → Bool
 
 /-- The kind of a request the kernel has in flight. `session`, `view`, `signIn` and `signOut` are the
 kinds slice 1 names. `personal` stands for every request whose reply belongs to the person signed in
@@ -201,6 +204,14 @@ structure State where
   editorError : Bool := false
   /-- The schema version of the interface definition the page holds (0 before the first manifest). -/
   manifestVersion : Nat := 0
+  /-- A projection is running (started, and not yet finished or cancelled). -/
+  labRunning : Bool := false
+  /-- The token of the running poll of the projection, if any. -/
+  labPoll : Option Nat := none
+  /-- A finished projection is held and may be applied. -/
+  labReady : Bool := false
+  /-- The projection shown was applied. -/
+  labApplied : Bool := false
 
 /-- Effects out of the kernel. `http` and `timer "request"` are the request and its deadline; the
 other effects are the page's own (URL, scroll), the live connection, storage, the browser's passkey
@@ -281,6 +292,12 @@ inductive Msg where
   | manifestAnswer (id version : Nat)
   /-- A tenant operation (a form or an action of a tenant screen) was answered: the view is read again. -/
   | tenantAnswer (id : Nat)
+  /-- The projection's start was answered: the run is in progress, and it is polled. -/
+  | labRunAnswer (id : Nat)
+  /-- A poll of the projection was answered: finished (its result is held) or still running. -/
+  | labResultAnswer (id : Nat) (finished : Bool)
+  /-- The apply of the projection was answered. -/
+  | labApplyAnswer (id : Nat)
 
 /-- The desk's actions that make a request for the person signed in: the revocation of a session or of the
 others, and the removal of a passkey (`sessions.js`, `passkeys.js`). -/

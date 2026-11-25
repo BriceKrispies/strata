@@ -41,6 +41,9 @@ def requestDeadlineMs : Nat := 30000
 /-- The refused upgrades after which live updates stop (`WS_REFUSAL_LIMIT`). -/
 def refusalLimit : Nat := 5
 
+/-- The interval between polls of a projection that runs, in milliseconds (`POLL_MS`). -/
+def labPollMs : Nat := 1500
+
 /-- The effects of asking for `k` under request `id`: the request and its deadline. -/
 def fetch (id : Nat) (k : ReqKind) : List Effect :=
   [.http id k, .timer "request" id requestDeadlineMs]
@@ -97,7 +100,11 @@ def switched (s : State) (who : Option Principal) (r : Route) : State :=
     stepUp := false
     ceremony := none
     editorValues := []
-    editorError := false }
+    editorError := false
+    labRunning := false
+    labPoll := none
+    labReady := false
+    labApplied := false }
 
 /-- The kernel's transitions for the routing and session slice. -/
 inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect → Prop
@@ -748,6 +755,77 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
           view := { status := .loading, model := s.view.model, request := some s.nextId } }
         (fetch s.nextId .view)
 
+  /-- A projection is started with a complete form (`lab.run`), when none is running. -/
+  | labRun {s : State} {values : List (String × String)} :
+      s.labRunning = false →
+      cat.validLabRun values = true →
+      Allowed cat s (.submit "lab" values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending
+          labApplied := false }
+        (fetch s.nextId .personal)
+  /-- The start is answered: the run is in progress, and its first poll is armed. -/
+  | labRunStarted {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.labRunAnswer id)
+        { s with
+          pending := dropId s.pending id
+          labRunning := true
+          labPoll := some s.nextId
+          nextId := s.nextId + 1 }
+        [.timer "lab.poll" s.nextId labPollMs]
+  /-- A poll fires while the run is in progress: the result is asked for. -/
+  | labPollFires {s : State} {token : Nat} :
+      s.labPoll = some token →
+      s.labRunning = true →
+      Allowed cat s (.timer "lab.poll" token)
+        { s with
+          labPoll := none
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- A poll that is not the running one changes nothing. -/
+  | labPollStale {s : State} {token : Nat} :
+      s.labPoll ≠ some token →
+      Allowed cat s (.timer "lab.poll" token) s []
+  /-- The result is answered finished: the projection is held and may be applied. -/
+  | labFinished {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.labResultAnswer id true)
+        { s with
+          pending := dropId s.pending id
+          labRunning := false
+          labReady := true }
+        []
+  /-- The result is answered still running: the next poll is armed. -/
+  | labStillRunning {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.labResultAnswer id false)
+        { s with
+          pending := dropId s.pending id
+          labPoll := some s.nextId
+          nextId := s.nextId + 1 }
+        [.timer "lab.poll" s.nextId labPollMs]
+  /-- A finished projection that is held is applied (`lab.apply`). -/
+  | labApply {s : State} {arg : String} :
+      s.labReady = true →
+      s.labRunning = false →
+      Allowed cat s (.action "lab.apply" arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- The apply is answered: the projection was applied. -/
+  | labApplyDone {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.labApplyAnswer id)
+        { s with
+          pending := dropId s.pending id
+          labApplied := true
+          labReady := false }
+        []
+
 /-- The states the kernel can reach from the initial state by allowed steps. -/
 inductive Reachable (cat : Catalogue) : State → Prop
   | start : Reachable cat
@@ -1026,6 +1104,27 @@ theorem tenant_answer_reads_view (cat : Catalogue) {s s' : State} {id : Nat} {es
     (ha : Allowed cat s (.tenantAnswer id) s' es) : es = fetch s.nextId .view := by
   cases ha; rfl
 
+/-! ### The Impact Lab (slice 12) -/
+
+/-- **A projection is started only with a complete form, and only when none is running.** -/
+theorem lab_run_sent_only_complete (cat : Catalogue) {s s' : State} {m : Msg}
+    {values : List (String × String)} {es : List Effect}
+    (hm : m = .submit "lab" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
+    s.labRunning = false ∧ cat.validLabRun values = true := by
+  cases ha <;> simp_all
+
+/-- **A projection is polled only while it runs.** -/
+theorem poll_only_while_running (cat : Catalogue) {s s' : State} {m : Msg} {token : Nat}
+    {es : List Effect} (hm : m = .timer "lab.poll" token) (ha : Allowed cat s m s' es)
+    (hes : es ≠ []) : s.labRunning = true := by
+  cases ha <;> simp_all
+
+/-- **A projection is applied only once it is finished and held.** -/
+theorem apply_only_when_ready (cat : Catalogue) {s s' : State} {m : Msg} {arg : String}
+    {es : List Effect} (hm : m = .action "lab.apply" arg) (ha : Allowed cat s m s' es)
+    (hes : es ≠ []) : s.labReady = true := by
+  cases ha <;> simp_all [factorsRequests, deskRequests]
+
 /-! ## Non-vacuity -/
 
 /-- A catalogue with one screen, which needs a signed-in person, for the witness below. -/
@@ -1043,7 +1142,8 @@ def sampleCatalogue : Catalogue :=
     recordOk := fun _ => true
     validSetting := fun _ => true
     tenantActionOk := fun _ => true
-    validTenantForm := fun _ => true }
+    validTenantForm := fun _ => true
+    validLabRun := fun _ => true }
 
 /-- The relation is not empty where the theorems look: a page that starts for a person, reads the
 view of its screen and holds it is a reachable state, holding a model read for that person. -/

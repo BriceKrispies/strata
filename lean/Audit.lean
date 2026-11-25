@@ -325,3 +325,6 @@ import Strata
 #print axioms Strata.Browser.manifest_version_never_drops
 #print axioms Strata.Browser.tenant_action_sent_only_allowed
 #print axioms Strata.Browser.tenant_answer_reads_view
+#print axioms Strata.Browser.lab_run_sent_only_complete
+#print axioms Strata.Browser.poll_only_while_running
+#print axioms Strata.Browser.apply_only_when_ready

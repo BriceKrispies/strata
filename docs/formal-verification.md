@@ -539,10 +539,10 @@ what the B2 implementation will be proved against.
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `action lab.tab`, `lab.preset`, `lab.cancel`, `lab.apply`, `lab.replay`, `lab.verify`, `lab.diagnostics` | the Lab's controls; apply only when the projection is current | not covered | 12 |
-| `submit` lab, `input` lab | the projection's form | not covered | 12 |
-| `http_result` lab.overview (entered with the page), lab.run, lab.result, lab.apply, lab.replay, lab.verify, lab.diagnostics | the Lab's answers; polling the run | not covered | 12 |
-| `timer` lab.poll | polls the run | not covered | 12 |
+| `action lab.apply` | a finished projection that is held is applied (`labApply`); tabs, preset, cancel, replay, verify and diagnostics are not yet | partly | 12 |
+| `submit` lab; `input` lab | a projection is started with a complete form when none runs (`labRun`); the typed values (`input` lab) are not yet | partly | 12 |
+| `http_result` lab.run, lab.result, lab.apply | the start arms the poll (`labRunStarted`); a finished result is held (`labFinished`), a running one arms the next poll (`labStillRunning`); the apply is answered (`labApplyDone`); the overview, replay, verify and diagnostics are not yet | partly | 12 |
+| `timer` lab.poll | polls the run while it runs; a poll that is not the running one changes nothing (`labPollFires`, `labPollStale`) | covered | 12 |
 | `ws_message` run (verification, progress, cancelled, finished) | the run's frames | not covered | 12 |
 
 ### 7.2 Effects
@@ -552,7 +552,7 @@ what the B2 implementation will be proved against.
 | `http` (method, path, body, csrf, idempotency key, correlation) | every request | partly | 1 (id and kind); 3 (csrf token, idempotency key, correlation still open; the sign-in and search bodies are the form's values) |
 | `timer` request | every request (30 000 ms) | covered | 1 |
 | `timer` toast | every toast (5 s, or 9 s for a warning) | partly | 4 (expiry is covered; raising a toast is not yet a constructor) |
-| `timer` lab.poll | the Lab's run poll | not covered | 12 |
+| `timer` lab.poll | the Lab's run poll (see the message row above) | covered | 12 |
 | `timer` heartbeat, reconnect | the live connection's heartbeat and reconnect timers | covered | 5 |
 | `timer` emit | the delayed frames of the live connection (none for this machine) | covered | 5 |
 | `push_url` | an address change, with the replace flag | covered | 1 |
@@ -697,15 +697,15 @@ How the existing theorems meet this one (no existing theorem is changed):
 | 9 (partly done) | Records: the editor's save and publish with the page's check (`editorSave`, `editorSaveRefused`, `editorPublish`, `editorPublishRefused`, `inputEditor`), and the answer that reads the view again (`editorAnswerRefresh`). Still open: unpublish, preview, row actions, paging, the two-step save of a new record, and the drift log | 3, 5 |
 | 10 (partly done) | Settings: a save at one level for a value the setting takes (`settingsWrite`), its success reading the list again (`personalAnswerReload`), the list reply (`personalAnswerQuiet`). Still open: the typed values, the refusal's words, entering the page, and the setting notice's binding | 3, 5 |
 | 11 (partly done) | Tenant interface: the manifest and its version (`manifestAsk`, `manifestNewer`, `manifestOlder`), tenant actions and forms sent for the person (`tenantAction`, `tenantSubmit`), and their answers (`tenantAnswerRefresh`). Still open: the parts, the tenant screens by address, the confirmations and row prefill, the typed values, the navigation of a tenant answer, and the lost drafts | 3, 5 |
-| 12 | Impact Lab: overview, runs and their frames, polling, apply, replay, verify, diagnostics | 3, 5, 7 |
+| 12 (partly done) | Impact Lab: the start of a projection and its poll, the held result, the apply and its answer (`labRun`, `labRunStarted`, `labPollFires`, `labPollStale`, `labFinished`, `labStillRunning`, `labApply`, `labApplyDone`). Still open: the overview, the typed values, the tabs, presets, cancel, replay, verify, diagnostics, and the run's frames | 3, 5, 7 |
 | 13 | View derivation: the page builders per screen kind, the title and navigation, the tenant's composition and display; `render_sound` over the page | 1, 9, 10, 11, 12 |
 | 14 | Browser storage: the view cache with stamps, the offline queue, the leader tab, drafts at rest (`docs/frontend.md`, follow-ups 4 to 9) | 3, 5 |
 
 ### 7.7 Counts
 
 The messages table has 80 rows (a row is one message, or one family of messages with the same handling):
-34 covered, 30 partly, 16 not covered (after slice 11). The effects table has
-15 rows: 8 covered, 5 partly, 2 not covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
+35 covered, 33 partly, 12 not covered (after slice 12). The effects table has
+15 rows: 9 covered, 5 partly, 1 not covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
 
