@@ -764,8 +764,11 @@ of packet: `req`, `fwd`, `reply`, `clientReply`, `load`, `snap`, `commit`, `done
 - **Backend**: one transaction per request id, in phases `loading`, `ready v base`,
   `committing v base` and `finished o`. A transaction loads its tenant, computes the kernel's verdict
   on the snapshot it received, and sends a commit naming the revision it was based on. A `conflict`
-  sends it back to `loading`. Transactions run concurrently; a repeated `fwd` changes nothing. A
-  request without a session is answered with `noSession`.
+  sends it back to `loading` with its attempt number one higher. Each `load` and `snap` packet carries
+  the attempt number it was made for, and a transaction accepts only the snapshot of its current
+  attempt, so a snapshot read for an earlier attempt is never consumed. The attempt number of each
+  request is kept in the state (`attempt`). Transactions run concurrently; a repeated `fwd` changes
+  nothing. A request without a session is answered with `noSession`.
 - **Store**: holds each tenant's state by revision (`hist t k`, `rev t`), the committed events
   (`evs`), and the decision made for each request id (`decided`). A commit for an undecided request
   is decided when its base revision is still current, and answered with `conflict` otherwise. A
@@ -825,8 +828,10 @@ is the spec's reply to its request, and every frame packet is a frame of the spe
    unpublished rows, are not modelled (IronFleet's lesson 4).
 4. Sessions and subscriptions are static configuration. Tenant creation is not modelled: every tenant
    exists from the start.
-5. The protocol has no fairness or liveness. Retries are unbounded, and nothing says they succeed.
-   That is C2.
+5. The protocol itself states no fairness. Its liveness is in "Backend liveness" below,
+   under explicit fairness assumptions. Retries are bounded by the number of competing commits to
+   the tenant (each conflict is caused by an accepted commit, and the attempt number never exceeds the
+   revision).
 6. The protocol's host steps are atomic, and the refinement covers every interleaving of them. C4
    must show that finer implementation steps, interleaved within a host, reduce to these.
 
@@ -845,42 +850,51 @@ is the spec's reply to its request, and every frame packet is a frame of the spe
 
 ### Backend liveness (C2, WG-5656)
 
-`lean/Strata/System/Liveness.lean` proves liveness for the protocol of `Protocol.lean`, which is
-unchanged. It uses the `Temporal` library. Every theorem is listed in `lean/Audit.lean`; each
-depends only on `propext`, `Classical.choice` and `Quot.sound`. There is no `sorry`, no `admit`
+`lean/Strata/System/Liveness.lean` proves liveness for the protocol of `Protocol.lean` under explicit
+fairness assumptions, all of them weak fairness. Every theorem is listed in `lean/Audit.lean`, and
+each depends only on `propext`, `Classical.choice` and `Quot.sound`. There is no `sorry`, no `admit`
 and no new axiom. `lake build` succeeds.
 
+**The protocol change.** The network is a set, so a packet is never removed. Under the earlier
+protocol, a snapshot read for an earlier attempt stayed available after a conflict: a backend could
+take it again and conflict again, forever, while every weakly fair action was still taken. The
+protocol therefore tags each `load` and `snap` packet with the transaction's attempt number, kept
+per request in the state (`attempt`). A conflict raises the number by one and sends a load for the
+new attempt; the backend's snapshot rule accepts only a snapshot tagged with its current attempt.
+The Rust backend reads the store synchronously within each attempt, so an attempt cannot consume a
+snapshot read for an earlier one; the tag models that. Nothing else in the protocol changed.
+
 **The fair spec** (`protoSpec`). The behaviours are `Init ∧ □[Next]` (`PInit`, `PNext`) and the
-fairness `protoFair`. The fairness has one assumption per instance of each host action. An instance
-is a rule of `PNext` with its parameters fixed: the request id, token, intent, tenant, snapshot,
-base revision, or one store commit packet. The rule's action relation is in `Liveness.lean`
-(`actFwd`, `actBegin`, `actRelay`, `actDone`, `actLoad`, `actCommit`, `actConflict`, `StoreStep`,
-`actSnap`, `actPublish`). Every instance is weakly fair, except the snapshot receive `actSnap`,
-which is strongly fair.
+fairness `protoFair`, with one weak-fairness assumption per instance of each host action. An
+instance fixes the request id, token, intent, tenant, snapshot, base revision, attempt, or one
+store commit packet. The action relations are in `Liveness.lean`: `actFwd`, `actBegin`, `actRelay`,
+`actDone`, `actLoad`, `actCommit`, `actConflict`, `StoreStep`, `actSnap`, `actPublish`.
 
 **Assumptions, in English.**
 
 1. *Bounded workload* (hypothesis `hN` of every theorem). There is a bound `N` such that every
-   request id a client sends is below `N`. Clients may reuse ids; nothing else is assumed of them.
-2. *Weak fairness* of: the BFF forwarding each request it has received; the backend beginning the
-   transaction for each forwarded request; the BFF relaying each reply; the backend finishing each
-   decided transaction; the store answering each load; the backend sending each commit and
-   handling each conflict; the store deciding each commit packet; the publisher sending each
-   committed event to each subscriber that may read it.
-3. *Strong fairness* of the backend's snapshot receive, per (request, tenant, snapshot, base).
-   This is the one assumption stronger than weak fairness, and it is needed (see below).
-4. *The network.* Nothing is lost or tampered with (as in the protocol). A host receives a packet
-   by acting on it, and that host action is the fair action of assumption 2 or 3. There is no
-   separate network-delivery action.
-5. The kernel, the sessions and the subscriptions are the static configuration of the safety layer.
+   request id a client sends is below `N`. This corresponds to finitely many competing writes to the
+   tenant while the request is retried: each conflict of the request is caused by a write of another
+   request that the store accepted, each accepted write is a distinct request below `N`, and the
+   revision of the tenant counts them. Clients may reuse ids; nothing else is assumed of them.
+2. *Weak fairness* of every instance of: the BFF forwarding each request; the backend beginning
+   each forwarded request; the BFF relaying each reply; the backend finishing each decided
+   transaction; the store answering each load; the backend sending each commit and handling each
+   conflict; the store deciding each commit packet; the backend taking each snapshot it has been
+   sent, for the attempt it was made for; the publisher sending each committed event to each
+   subscriber that may read it.
+3. *The network.* Nothing is lost or tampered with (as in the protocol). A host receives a packet
+   by acting on it, and that host action is the fair action of assumption 2. There is no separate
+   delivery action.
+4. The kernel, the sessions and the subscriptions are the static configuration of the safety layer.
 
-Fairness is per instance (per packet and per request), not per host. IronFleet states fairness
-per host action. Here a host action names the packet it processes, because the network is a set
-and a host that processes "some pending packet" could keep choosing the same one.
+Fairness is per instance (per packet and per request), not per host. IronFleet states fairness per
+host action. Here a host action names the packet it processes, because the network is a set and a
+host that processes "some pending packet" could keep choosing the same one.
 
 **Theorems** (`Liveness.lean`).
 
-- `reply_leadsTo`: under 1 to 3, a request with a valid session (`C.sessions tok = some (t, p)`)
+- `reply_leadsTo`: under 1 to 2, a request with a valid session (`C.sessions tok = some (t, p)`)
   eventually gets a reply: `req r tok i ~> ∃ o, clientReply r o`.
 - `publish_leadsTo`: under 1 to 2, a committed event (`e ∈ evs`) eventually reaches every
   subscriber `sid` whose tenant matches and whose principal may read the post
@@ -888,48 +902,44 @@ and a host that processes "some pending packet" could keep choosing the same one
 - `decided_relayed_leadsTo`: under 1 to 2, a decided request's reply is eventually relayed:
   `decided r = some o ~> clientReply r o`.
 
-The argument for `reply_leadsTo`, by contradiction. The store's revision of the tenant is
-monotone and bounded by `N` (each accepted event decides a distinct request below `N`), so it is
-eventually final, `R`. Once `R` is final, no commit on `R` is ever sent: the store would decide
-it, and a decision would answer the request. The transaction loads again after each conflict, so the
-store sends it a snapshot of `R`; that snapshot is taken infinitely often under strong fairness,
-so the backend commits on `R`. That is the contradiction. The transaction is loading infinitely
-often by the commit-conflict-load cycle, which weak fairness gives.
+The argument for `reply_leadsTo`, by contradiction. The attempt number of the request's transaction
+never decreases, and it never exceeds the revision of the tenant (an invariant: a conflict happens
+only when the revision is past the base it was based on). The revision is bounded by `N`, so the
+attempt is eventually a constant from some point `T` on. From `T` on there is no conflict, since a
+conflict would raise the attempt. Then there is no commit either: the store would answer an undecided
+commit with a conflict, and that conflict would be taken. A ready transaction is committed by weak
+fairness, which is again a commit. So from `T` on the transaction is loading. Its current load is
+answered by the store with a snapshot tagged with the current attempt, which the backend takes by
+weak fairness, since that snapshot is enabled at every later position. Taking it makes the
+transaction ready, which the argument excludes. The contradiction shows the request is answered.
 
-**Non-vacuity.** `protoSpec_nonvacuous` exhibits a behaviour satisfying `protoSpec`, with the
-bound `N = 2` and request 1 refused and answered. The behaviour is the refusal run of
-`refusal_reachable`, written state by state, then constant. In the final state every enabled host
-action is a no-op, so the constant tail satisfies each fairness assumption. This shows the
-assumptions are consistent and the theorems apply. The witness does not exercise an accepted
-commit; the accept path is covered by the invariants only.
+**Non-vacuity.** `protoSpec_nonvacuous` exhibits a behaviour that satisfies `protoSpec`, with the
+bound `N = 2`. The run is: request 1 from token 1 (principal 7, the owner), sent, forwarded, begun,
+loaded, snapshotted, committed, accepted by the store (revision 0 to 1, one event), decided, replied,
+relayed to the client; then a load answered at the new revision, and the event published to
+subscriber 0 as a frame. The behaviour is constant after its last state, in which every enabled host
+action is a no-op, so the constant tail satisfies each fairness assumption. The witness exhibits the
+accept path, the reply and the frame. `refusal_reachable` (`Protocol.lean`) still gives the refusal
+run.
 
-**What does not hold.**
+**What does not hold, and what is not modelled.**
 
-1. *Reply under weak fairness of the snapshot receive.* The network is a set, so a snapshot is
-   never retired. Take two requests, `r` and `q`, the bound `N = 2`, and the schedule: `r` loads at
-   revision 0 and receives snapshot `S0`; `q` is accepted, so the revision becomes 1; `r` commits
-   on base 0, which conflicts; `r` loads again, and the store sends `S1` on base 1. The adversary
-   then always takes `S0`: `r` takes `S0`, commits on base 0, conflicts, and loads again, forever.
-   Every instance enabled forever is taken, so weak fairness holds. `S1` is enabled only while the
-   transaction is loading, which the schedule leaves each time, so weak fairness imposes nothing on
-   it. Request `r` is never answered. Strong fairness forces `S1` to be taken, which commits on the
-   final base, so the store decides it. This failure is argued here, not formalised; the proof uses
-   assumption 3.
+1. The bounded-workload hypothesis is needed by this argument. Without it, an unbounded stream of
+   accepted writes, each landing between a snapshot of the request and its commit, can make every
+   attempt conflict while each request is still fairly scheduled. This is argued, not formalised.
+2. Not modelled: crash and restart of the outbox, tenant creation, and sessions or subscriptions
+   that change at run time. The publish and decision theorems use the same assumptions 1 to 4.
 
-   *The protocol change that would make weak fairness suffice* (argued, not formalised): tag each
-   load and snapshot with the transaction's attempt number, and let the backend accept only the
-   snapshot of its current attempt. The snapshot of attempt `k+1` is sent after the conflict of
-   attempt `k`, so its base strictly exceeds the base of attempt `k`. Revisions are bounded, so the
-   attempts are finite, and the last attempt commits. This changes a definition of `Protocol.lean`,
-   which this layer does not do.
-
-2. *Reply without the bounded workload.* Take an unbounded stream of other requests, each accepted
-   between a snapshot of `r` and `r`'s commit. Every attempt of `r` then conflicts, while each
-   request is still fairly scheduled. This is argued, not formalised, so the bounded-workload
-   hypothesis is needed for the reply theorem.
-
-3. Not modelled: crash and restart of the outbox, tenant creation, and sessions or subscriptions
-   that change at run time. The publish and decision theorems do not need assumption 3.
+**Changes to `Protocol.lean` for this layer.** `Packet.load` and `Packet.snap` gain an attempt
+argument; `PState` gains `attempt : RequestId → Nat`, and `PInit` requires it to be `0`; the
+`begin` rule sends its load with the request's attempt; the `conflict` rule raises the attempt and
+sends the load for the new one; the `snap` rule takes only a snapshot of the current attempt; the
+`load` rule tags its snapshot with the load's attempt. The store's accept and refuse rules keep the
+attempt. In `Good`, `snapHist`, `snapPhase` and `commitCorrect` quantify over the tag. The statements
+of `good_begin`, `good_snap`, `good_load` and `good_conflict` take the new packet forms, and the
+proofs of every existing theorem were re-checked. The safety theorems (`protocol_refines`,
+`commit_once`, `observed_matches_spec`, `frames_readable`, `commit_is_verdict`, `rev_step`,
+`duplicate_commit_inert`, `refusal_reachable`) keep their statements.
 
 ## 9. Reduction (C4, WG-5660)
 

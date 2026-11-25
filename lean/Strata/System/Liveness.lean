@@ -2,16 +2,17 @@
 Backend liveness (IronFleet's liveness layer, WG-5656).
 
 The fair protocol spec: the protocol's behaviours (`PInit` and `PNext` from `Protocol.lean`) with
-the fairness the backend's hosts provide, stated as one weak-fairness (or, for snapshots, strong
-fairness) assumption per host action instance. Each action below is a rule of `PNext`, restricted
+the fairness the backend's hosts provide, stated as one weak-fairness assumption per host action
+instance. Each action below is a rule of `PNext`, restricted
 to one request id or one packet; the family of all instances is the host's fairness.
 
 Theorems: `reply_leadsTo` (a request with a session gets a reply, under the bounded-workload
 hypothesis), `publish_leadsTo` (a committed event is delivered to every subscriber that may read it),
-and `decided_relayed_leadsTo` (a decided request's reply is relayed to the client). The snapshot
-receive is strongly fair: weak fairness of that one action does not give the reply (see
-`docs/formal-verification.md`, section "Backend liveness", for the counterexample and the
-assumptions in English). `protoSpec_nonvacuous` exhibits a behaviour satisfying the fair spec.
+and `decided_relayed_leadsTo` (a decided request's reply is relayed to the client). Every
+assumption is weak fairness; the attempt tags in `Protocol.lean` are what make that suffice. See
+`docs/formal-verification.md`, section "Backend liveness", for the assumptions in English.
+`protoSpec_nonvacuous` exhibits a behaviour satisfying the fair spec, in which request 1 is accepted,
+answered and published.
 -/
 
 import Strata.System.Protocol
@@ -87,7 +88,7 @@ def actFwd (rid : RequestId) (tok : Token) (i : Intent) (s s' : PState) : Prop :
 def actBegin (C : Config) (rid : RequestId) (tok : Token) (i : Intent) (s s' : PState) : Prop :=
   ∃ t p, C.sessions tok = some (t, p) ∧ s.net (.fwd rid tok i) ∧ s.txns rid = none ∧
     s.noSession rid = false ∧
-    s' = { sendOne s (.load rid t) with txns := updTxn s.txns rid ⟨tok, t, p, i, .loading⟩ }
+    s' = { sendOne s (.load rid t (s.attempt rid)) with txns := updTxn s.txns rid ⟨tok, t, p, i, .loading⟩ }
 
 /-- The BFF relays the backend's reply for `rid` to the client. -/
 def actRelay (rid : RequestId) (o : Outcome) (s s' : PState) : Prop :=
@@ -99,9 +100,9 @@ def actDone (rid : RequestId) (o : Outcome) (s s' : PState) : Prop :=
     s' = { sendOne s (.reply rid o) with txns := updTxn s.txns rid { x with phase := .finished o } }
 
 /-- The store answers a load for `rid` with the tenant's current state and revision. -/
-def actLoad (rid : RequestId) (t : TenantId) (s s' : PState) : Prop :=
-  s.net (.load rid t) ∧
-    s' = sendOne s (.snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t))
+def actLoad (rid : RequestId) (t : TenantId) (a : Nat) (s s' : PState) : Prop :=
+  s.net (.load rid t a) ∧
+    s' = sendOne s (.snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t) a)
 
 /-- The backend computes the verdict on its snapshot and sends the commit. -/
 def actCommit (K : Kernel) (rid : RequestId) (s s' : PState) : Prop :=
@@ -113,11 +114,14 @@ def actCommit (K : Kernel) (rid : RequestId) (s s' : PState) : Prop :=
 /-- The store refused a commit of `rid`; the backend loads again. -/
 def actConflict (rid : RequestId) (s s' : PState) : Prop :=
   ∃ x v b, s.txns rid = some x ∧ x.phase = .committing v b ∧ s.net (.conflict rid b) ∧
-    s' = { sendOne s (.load rid x.tenant) with txns := updTxn s.txns rid { x with phase := .loading } }
+    s' = { sendOne s (.load rid x.tenant (s.attempt rid + 1)) with
+      txns := updTxn s.txns rid { x with phase := .loading },
+      attempt := updAtt s.attempt rid (s.attempt rid + 1) }
 
 /-- The backend takes a snapshot it was sent while it is loading its tenant. -/
-def actSnap (rid : RequestId) (t : TenantId) (v : Option Tenant) (b : Nat) (s s' : PState) : Prop :=
-  ∃ x, s.txns rid = some x ∧ x.tenant = t ∧ x.phase = .loading ∧ s.net (.snap rid t v b) ∧
+def actSnap (rid : RequestId) (t : TenantId) (v : Option Tenant) (b a : Nat) (s s' : PState) : Prop :=
+  ∃ x, s.txns rid = some x ∧ x.tenant = t ∧ x.phase = .loading ∧ s.attempt rid = a ∧
+    s.net (.snap rid t v b a) ∧
     s' = { s with txns := updTxn s.txns rid { x with phase := .ready v b } }
 
 /-- The publisher sends a committed event to a subscriber whose principal may read it. -/
@@ -143,6 +147,7 @@ inductive StoreStep (K : Kernel) (C : Config) (rid : RequestId) (tok : Token) (t
         { net := fun x => s.net x ∨ x = .done rid .accepted ∨ x = .committed (Event.mk t rid t')
           txns := s.txns
           noSession := s.noSession
+          attempt := s.attempt
           store :=
             { hist := fun x k => if x = t ∧ k = base + 1 then some t' else s.store.hist x k
               rev := fun x => if x = t then base + 1 else s.store.rev x
@@ -154,22 +159,23 @@ inductive StoreStep (K : Kernel) (C : Config) (rid : RequestId) (tok : Token) (t
         { net := fun x => s.net x ∨ x = .done rid (.refused e)
           txns := s.txns
           noSession := s.noSession
+          attempt := s.attempt
           store := { s.store with
             decided := fun r => if r = rid then some (.refused e) else s.store.decided r } }
 
 /-- The fairness of the backend's hosts, one assumption per action instance. Each action is
-    weakly fair, except the snapshot receive, which is strongly fair: a backend that keeps
-    taking an old snapshot is not a fair backend (see `docs/formal-verification.md`). -/
+    weakly fair. A snapshot is taken only in the attempt it was read for, so no stale snapshot can
+    keep a transaction conflicting. -/
 def protoFair (K : Kernel) (C : Config) : Temporal PState := fun b =>
   (∀ rid tok i, weakFair (actFwd rid tok i) b) ∧
   (∀ rid tok i, weakFair (actBegin C rid tok i) b) ∧
   (∀ rid o, weakFair (actRelay rid o) b) ∧
   (∀ rid o, weakFair (actDone rid o) b) ∧
-  (∀ rid t, weakFair (actLoad rid t) b) ∧
+  (∀ rid t a, weakFair (actLoad rid t a) b) ∧
   (∀ rid, weakFair (actCommit K rid) b) ∧
   (∀ rid, weakFair (actConflict rid) b) ∧
   (∀ rid tok t p i base res, weakFair (StoreStep K C rid tok t p i base res) b) ∧
-  (∀ rid t v base, strongFair (actSnap rid t v base) b) ∧
+  (∀ rid t v base a, weakFair (actSnap rid t v base a) b) ∧
   (∀ sid e, weakFair (actPublish K C sid e) b)
 
 /-- The fair protocol spec: `Init ∧ □[Next] ∧ fairness`. -/
@@ -188,8 +194,8 @@ def ridOf : Packet → RequestId
   | .fwd r _ _ => r
   | .reply r _ => r
   | .clientReply r _ => r
-  | .load r _ => r
-  | .snap r _ _ _ => r
+  | .load r _ _ => r
+  | .snap r _ _ _ _ => r
   | .commit r _ _ _ _ _ _ => r
   | .done r _ => r
   | .conflict r _ => r
@@ -209,7 +215,14 @@ structure LInv (K : Kernel) (C : Config) (N : Nat) (s : PState) : Prop where
   nsRep : ∀ r, s.noSession r = true → s.net (.reply r .noSession)
   evsCom : ∀ e, e ∈ s.store.evs → s.net (.committed e)
   txnFin : ∀ r x o, s.txns r = some x → x.phase = .finished o → s.store.decided r = some o
-  txnLoad : ∀ r x, s.txns r = some x → s.net (.load r x.tenant)
+  txnLoad : ∀ r x, s.txns r = some x → s.net (.load r x.tenant (s.attempt r))
+  loadRev : ∀ r t a, s.net (.load r t a) → a ≤ s.store.rev t
+  snapAtt : ∀ r t v b a, s.net (.snap r t v b a) → a ≤ b
+  attLe : ∀ r x v b, s.txns r = some x → (x.phase = .ready v b ∨ x.phase = .committing v b) →
+    s.attempt r ≤ b
+  attBound : ∀ r x, s.txns r = some x → s.attempt r ≤ s.store.rev x.tenant
+  conflictLt : ∀ r b, s.net (.conflict r b) → ∃ x, s.txns r = some x ∧ b < s.store.rev x.tenant
+  zeroNone : ∀ r, s.txns r = none → s.attempt r = 0
   txnCom : ∀ r x v b, s.txns r = some x → x.phase = .committing v b →
     s.net (.commit r x.tok x.tenant x.principal x.intent b (verdict K v x.principal x.intent))
 
@@ -261,6 +274,62 @@ theorem bnd_upd {N : Nat} {f : RequestId → Option Txn} {rid : RequestId} {x : 
   · rw [updTxn_ne _ _ _ _ h] at hr
     exact hf r hr
 
+/-- A transaction record persists: once `r` has a transaction, it keeps one, with the same tenant. -/
+theorem txn_keep_step {K : Kernel} {C : Config} {s s' : PState} (h : PNext K C s s')
+    (r : RequestId) (x : Txn) (hx : s.txns r = some x) :
+    ∃ y, s'.txns r = some y ∧ y.tenant = x.tenant := by
+  cases h with
+  | clientReq rid tok i => exact ⟨x, hx, rfl⟩
+  | bffForward rid tok i h1 => exact ⟨x, hx, rfl⟩
+  | bffRelay rid o h1 => exact ⟨x, hx, rfl⟩
+  | begin rid tok i t p' h1 hn0 hn hsn =>
+    by_cases hrr : r = rid
+    · subst hrr; rw [hn0] at hx; cases hx
+    · exact ⟨x, by simpa [updTxn, hrr] using hx, rfl⟩
+  | noSession rid tok i h1 hn0 hn hsn => exact ⟨x, hx, rfl⟩
+  | snap rid t v base a x0 h1 hx0 ht hl hat =>
+    by_cases hrr : r = rid
+    · subst hrr
+      have e := Option.some.inj (hx0.symm.trans hx)
+      subst e
+      exact ⟨{ x0 with phase := .ready v base }, by simp [updTxn], rfl⟩
+    · exact ⟨x, by simpa [updTxn, hrr] using hx, rfl⟩
+  | commit rid x0 v base hx0 hph =>
+    by_cases hrr : r = rid
+    · subst hrr
+      have e := Option.some.inj (hx0.symm.trans hx)
+      subst e
+      exact ⟨{ x0 with phase := .committing v base }, by simp [updTxn], rfl⟩
+    · exact ⟨x, by simpa [updTxn, hrr] using hx, rfl⟩
+  | conflict rid base x0 v h1 hx0 hph =>
+    by_cases hrr : r = rid
+    · subst hrr
+      have e := Option.some.inj (hx0.symm.trans hx)
+      subst e
+      exact ⟨{ x0 with phase := .loading }, by simp [updTxn], rfl⟩
+    · exact ⟨x, by simpa [updTxn, hrr] using hx, rfl⟩
+  | done rid o x0 h1 hx0 =>
+    by_cases hrr : r = rid
+    · subst hrr
+      have e := Option.some.inj (hx0.symm.trans hx)
+      subst e
+      exact ⟨{ x0 with phase := .finished o }, by simp [updTxn], rfl⟩
+    · exact ⟨x, by simpa [updTxn, hrr] using hx, rfl⟩
+  | load rid t a h1 => exact ⟨x, hx, rfl⟩
+  | storeDecided rid tok t p' i base res o h1 hd => exact ⟨x, hx, rfl⟩
+  | storeConflict rid tok t p' i base res h1 hd hb => exact ⟨x, hx, rfl⟩
+  | storeAccept rid tok t p' i base res t' h1 hd hb hr => exact ⟨x, hx, rfl⟩
+  | storeRefuse rid tok t p' i base res e h1 hd hb hr => exact ⟨x, hx, rfl⟩
+  | publish sid e t p' h1 hsub ht hr => exact ⟨x, hx, rfl⟩
+
+theorem rev_mono_step {K : Kernel} {C : Config} {s s' : PState} (h : PNext K C s s') :
+    ∀ t, s.store.rev t ≤ s'.store.rev t := fun t => by
+  rcases rev_step h t with e | e <;> omega
+
+theorem updAtt_ne (f : RequestId → Nat) (rid : RequestId) (n : Nat) (r : RequestId) (h : r ≠ rid) :
+    updAtt f rid n r = f r := by
+  simp [updAtt, h]
+
 theorem linv_bndP {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext K C s s')
     (hI : LInv K C N s) (hreq : ∀ rid tok i, s'.net (.req rid tok i) → rid < N) :
     ∀ p, s'.net p → ridOf p < N := by
@@ -287,7 +356,7 @@ theorem linv_bndP {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext
     rcases hp with h2 | h2
     · exact hs p h2
     · subst h2; exact hs (.fwd rid tok i) h1
-  | snap rid t v base x h1 hx ht hl => exact hs p hp
+  | snap rid t v base a x h1 hx ht hl hat => exact hs p hp
   | commit rid x v base hx hph =>
     rcases hp with h2 | h2
     · exact hs p h2
@@ -300,10 +369,10 @@ theorem linv_bndP {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext
     rcases hp with h2 | h2
     · exact hs p h2
     · subst h2; exact hs (.done rid o) h1
-  | load rid t h1 =>
+  | load rid t a h1 =>
     rcases hp with h2 | h2
     · exact hs p h2
-    · subst h2; exact hs (.load rid t) h1
+    · subst h2; exact hs (.load rid t a) h1
   | storeDecided rid tok t p' i base res o h1 hd =>
     rcases hp with h2 | h2
     · exact hs p h2
@@ -333,14 +402,13 @@ theorem linv_bndT {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext
   | clientReq rid tok i => exact ht
   | bffForward rid tok i h1 => exact ht
   | bffRelay rid o h1 => exact ht
-  | begin rid tok i t p' h1 hx hn hsn =>
-    exact bnd_upd ht (hI.bndP _ h1)
+  | begin rid tok i t p' h1 hx hn hsn => exact bnd_upd ht (hI.bndP _ h1)
   | noSession rid tok i h1 hx hn hsn => exact ht
-  | snap rid t v base x h1 hx ht' hl => exact bnd_upd ht (hI.bndT rid (by rw [hx]; simp))
+  | snap rid t v base a x h1 hx ht' hl hat => exact bnd_upd ht (hI.bndT rid (by rw [hx]; simp))
   | commit rid x v base hx hph => exact bnd_upd ht (hI.bndT rid (by rw [hx]; simp))
   | conflict rid base x v h1 hx hph => exact bnd_upd ht (hI.bndT rid (by rw [hx]; simp))
   | done rid o x h1 hx => exact bnd_upd ht (hI.bndT rid (by rw [hx]; simp))
-  | load rid t h1 => exact ht
+  | load rid t a h1 => exact ht
   | storeDecided rid tok t p' i base res o h1 hd => exact ht
   | storeConflict rid tok t p' i base res h1 hd hb => exact ht
   | storeAccept rid tok t p' i base res t' h1 hd hb hr => exact ht
@@ -356,11 +424,11 @@ theorem linv_rev {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext 
   | bffRelay rid o h1 => exact hr
   | begin rid tok i t p' h1 hx hn hsn => exact hr
   | noSession rid tok i h1 hx hn hsn => exact hr
-  | snap rid t v base x h1 hx ht hl => exact hr
+  | snap rid t v base a x h1 hx ht hl hat => exact hr
   | commit rid x v base hx hph => exact hr
   | conflict rid base x v h1 hx hph => exact hr
   | done rid o x h1 hx => exact hr
-  | load rid t h1 => exact hr
+  | load rid t a h1 => exact hr
   | storeDecided rid tok t p' i base res o h1 hd => exact hr
   | storeConflict rid tok t p' i base res h1 hd hb => exact hr
   | publish sid e t p' h1 hsub ht hr2 => exact hI.rev
@@ -397,11 +465,11 @@ theorem linv_doneDec {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PN
   | bffRelay rid o h1 => exact fun r o' h' => Or.inl (hd r o' h')
   | begin rid tok i t p' h1 hx hn hsn => exact fun r o h' => Or.inl (hd r o h')
   | noSession rid tok i h1 hx hn hsn => exact fun r o h' => Or.inl (hd r o h')
-  | snap rid t v base x h1 hx ht hl => exact fun r o h' => hd r o h'
+  | snap rid t v base a x h1 hx ht hl hat => exact fun r o h' => hd r o h'
   | commit rid x v base hx hph => exact fun r o h' => Or.inl (hd r o h')
   | conflict rid base x v h1 hx hph => exact fun r o h' => Or.inl (hd r o h')
   | done rid o x h1 hx => exact fun r o' h' => Or.inl (hd r o' h')
-  | load rid t h1 => exact fun r o h' => Or.inl (hd r o h')
+  | load rid t a h1 => exact fun r o h' => Or.inl (hd r o h')
   | storeDecided rid tok t p' i base res o h1 hdd => exact fun r o' h' => Or.inl (hd r o' h')
   | storeConflict rid tok t p' i base res h1 hdd hb => exact fun r o h' => Or.inl (hd r o h')
   | storeAccept rid tok t p' i base res t' h1 hdd hb hr =>
@@ -439,11 +507,11 @@ theorem linv_nsRep {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNex
       exact Or.inr rfl
     · have hr' : s.noSession r = true := by simpa [hrr] using hr
       exact Or.inl (hn r hr')
-  | snap rid t v base x h1 hx ht hl => exact fun r hr => hn r hr
+  | snap rid t v base a x h1 hx ht hl hat => exact fun r hr => hn r hr
   | commit rid x v base hx hph => exact fun r hr => Or.inl (hn r hr)
   | conflict rid base x v h1 hx hph => exact fun r hr => Or.inl (hn r hr)
   | done rid o x h1 hx => exact fun r hr => Or.inl (hn r hr)
-  | load rid t h1 => exact fun r hr => Or.inl (hn r hr)
+  | load rid t a h1 => exact fun r hr => Or.inl (hn r hr)
   | storeDecided rid tok t p' i base res o h1 hd => exact fun r hr => Or.inl (hn r hr)
   | storeConflict rid tok t p' i base res h1 hd hb => exact fun r hr => Or.inl (hn r hr)
   | storeAccept rid tok t p' i base res t' h1 hd hb hr => exact fun r hr' => Or.inl (hn r hr')
@@ -459,11 +527,11 @@ theorem linv_evsCom {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNe
   | bffRelay rid o h1 => exact fun e he => Or.inl (hev e he)
   | begin rid tok i t p' h1 hx hn hsn => exact fun e he => Or.inl (hev e he)
   | noSession rid tok i h1 hx hn hsn => exact fun e he => Or.inl (hev e he)
-  | snap rid t v base x h1 hx ht hl => exact fun e he => hev e he
+  | snap rid t v base a x h1 hx ht hl hat => exact fun e he => hev e he
   | commit rid x v base hx hph => exact fun e he => Or.inl (hev e he)
   | conflict rid base x v h1 hx hph => exact fun e he => Or.inl (hev e he)
   | done rid o x h1 hx => exact fun e he => Or.inl (hev e he)
-  | load rid t h1 => exact fun e he => Or.inl (hev e he)
+  | load rid t a h1 => exact fun e he => Or.inl (hev e he)
   | storeDecided rid tok t p' i base res o h1 hd => exact fun e he => Or.inl (hev e he)
   | storeConflict rid tok t p' i base res h1 hd hb => exact fun e he => Or.inl (hev e he)
   | storeAccept rid tok t p' i base res t' h1 hd hb hr =>
@@ -494,7 +562,7 @@ theorem linv_txnFin {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNe
     · simp only [updTxn, hrr, ↓reduceIte] at hr
       exact hf r x' o' hr hph
   | noSession rid tok i h1 hx hn hsn => exact fun r x o hr hph => hf r x o hr hph
-  | snap rid t v base x h1 hx ht hl =>
+  | snap rid t v base a x0 h1 hx ht hl hat =>
     intro r x' o' hr hph
     by_cases hrr : r = rid
     · subst hrr
@@ -503,7 +571,7 @@ theorem linv_txnFin {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNe
       simp at hph
     · simp only [updTxn, hrr, ↓reduceIte] at hr
       exact hf r x' o' hr hph
-  | commit rid x v base hx hph0 =>
+  | commit rid x0 v base hx hph0 =>
     intro r x' o' hr hph
     by_cases hrr : r = rid
     · subst hrr
@@ -512,7 +580,7 @@ theorem linv_txnFin {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNe
       simp at hph
     · simp only [updTxn, hrr, ↓reduceIte] at hr
       exact hf r x' o' hr hph
-  | conflict rid base x v h1 hx hph0 =>
+  | conflict rid base x0 v h1 hx hph0 =>
     intro r x' o' hr hph
     by_cases hrr : r = rid
     · subst hrr
@@ -521,7 +589,7 @@ theorem linv_txnFin {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNe
       simp at hph
     · simp only [updTxn, hrr, ↓reduceIte] at hr
       exact hf r x' o' hr hph
-  | done rid o0 x h1 hx =>
+  | done rid o0 x0 h1 hx =>
     intro r x' o' hr hph
     by_cases hrr : r = rid
     · subst hrr
@@ -532,7 +600,7 @@ theorem linv_txnFin {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNe
       exact hg.doneDecided _ _ h1
     · simp only [updTxn, hrr, ↓reduceIte] at hr
       exact hf r x' o' hr hph
-  | load rid t h1 => exact fun r x o hr hph => hf r x o hr hph
+  | load rid t a h1 => exact fun r x o hr hph => hf r x o hr hph
   | storeDecided rid tok t p' i base res o h1 hd => exact fun r x o' hr hph => hf r x o' hr hph
   | storeConflict rid tok t p' i base res h1 hd hb => exact fun r x o hr hph => hf r x o hr hph
   | storeAccept rid tok t p' i base res t' h1 hd hb hr =>
@@ -558,7 +626,7 @@ theorem linv_txnFin {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNe
   | publish sid e t p' h1 hsub ht hr => exact fun r x o hr' hph => hf r x o hr' hph
 
 theorem linv_txnLoad {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext K C s s')
-    (hI : LInv K C N s) : ∀ r x, s'.txns r = some x → s'.net (.load r x.tenant) := by
+    (hI : LInv K C N s) : ∀ r x, s'.txns r = some x → s'.net (.load r x.tenant (s'.attempt r)) := by
   have hl := hI.txnLoad
   cases h with
   | clientReq rid tok i => exact fun r x hr => Or.inl (hl r x hr)
@@ -574,7 +642,7 @@ theorem linv_txnLoad {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PN
     · simp only [updTxn, hrr, ↓reduceIte] at hr
       exact Or.inl (hl r x' hr)
   | noSession rid tok i h1 hx hn hsn => exact fun r x hr => Or.inl (hl r x hr)
-  | snap rid t v base x0 h1 hx ht hl0 =>
+  | snap rid t v base a x0 h1 hx ht hl0 hat =>
     intro r x' hr
     by_cases hrr : r = rid
     · subst hrr
@@ -598,9 +666,10 @@ theorem linv_txnLoad {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PN
     · subst hrr
       simp only [updTxn, ↓reduceIte, Option.some.injEq] at hr
       subst hr
-      exact Or.inr rfl
+      exact Or.inr (by simp [updAtt])
     · simp only [updTxn, hrr, ↓reduceIte] at hr
-      exact Or.inl (hl r x' hr)
+      have := hl r x' hr
+      exact Or.inl (by simpa [updAtt, hrr] using this)
   | done rid o x0 h1 hx =>
     intro r x' hr
     by_cases hrr : r = rid
@@ -610,7 +679,7 @@ theorem linv_txnLoad {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PN
       exact Or.inl (hl _ x0 hx)
     · simp only [updTxn, hrr, ↓reduceIte] at hr
       exact Or.inl (hl r x' hr)
-  | load rid t h1 => exact fun r x hr => Or.inl (hl r x hr)
+  | load rid t a h1 => exact fun r x hr => Or.inl (hl r x hr)
   | storeDecided rid tok t p' i base res o h1 hd => exact fun r x hr => Or.inl (hl r x hr)
   | storeConflict rid tok t p' i base res h1 hd hb => exact fun r x hr => Or.inl (hl r x hr)
   | storeAccept rid tok t p' i base res t' h1 hd hb hr => exact fun r x hr' => Or.inl (hl r x hr')
@@ -635,7 +704,7 @@ theorem linv_txnCom {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNe
     · simp only [updTxn, hrr, ↓reduceIte] at hr
       exact Or.inl (hc r x' v b hr hph)
   | noSession rid tok i h1 hx hn hsn => exact fun r x v b hr hph => Or.inl (hc r x v b hr hph)
-  | snap rid t v0 base x0 h1 hx ht hl =>
+  | snap rid t v0 base a x0 h1 hx ht hl hat =>
     intro r x' v b hr hph
     by_cases hrr : r = rid
     · subst hrr
@@ -673,36 +742,523 @@ theorem linv_txnCom {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNe
       simp at hph
     · simp only [updTxn, hrr, ↓reduceIte] at hr
       exact Or.inl (hc r x' v b hr hph)
-  | load rid t h1 => exact fun r x v b hr hph => Or.inl (hc r x v b hr hph)
+  | load rid t a h1 => exact fun r x v b hr hph => Or.inl (hc r x v b hr hph)
   | storeDecided rid tok t p' i base res o h1 hd => exact fun r x v b hr hph => Or.inl (hc r x v b hr hph)
   | storeConflict rid tok t p' i base res h1 hd hb => exact fun r x v b hr hph => Or.inl (hc r x v b hr hph)
   | storeAccept rid tok t p' i base res t' h1 hd hb hr => exact fun r x v b hr' hph => Or.inl (hc r x v b hr' hph)
   | storeRefuse rid tok t p' i base res e h1 hd hb hr => exact fun r x v b hr' hph => Or.inl (hc r x v b hr' hph)
   | publish sid e t p' h1 hsub ht hr => exact fun r x v b hr' hph => Or.inl (hc r x v b hr' hph)
 
-/-- Every invariant of `LInv` is preserved by a protocol step. -/
+theorem linv_loadRev {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext K C s s')
+    (hg : Good K C s) (hI : LInv K C N s) :
+    ∀ r t a, s'.net (.load r t a) → a ≤ s'.store.rev t := by
+  have hr := hI.loadRev
+  have hm := rev_mono_step h
+  cases h with
+  | clientReq rid tok i =>
+    intro r t a hp
+    rcases hp with h1 | h1
+    · exact hr r t a h1
+    · cases h1
+  | bffForward rid tok i h1 =>
+    intro r t a hp
+    rcases hp with h2 | h2
+    · exact hr r t a h2
+    · cases h2
+  | bffRelay rid o h1 =>
+    intro r t a hp
+    rcases hp with h2 | h2
+    · exact hr r t a h2
+    · cases h2
+  | begin rid tok i t0 p' h1 hx hn hsn =>
+    intro r t a hp
+    rcases hp with h2 | h2
+    · exact hr r t a h2
+    · obtain ⟨rfl, rfl, rfl⟩ := Packet.load.inj h2
+      rw [hI.zeroNone _ hx]
+      exact Nat.zero_le _
+  | noSession rid tok i h1 hx hn hsn =>
+    intro r t a hp
+    rcases hp with h2 | h2
+    · exact hr r t a h2
+    · cases h2
+  | snap rid t v base a x h1 hx ht hl hat => intro r t' a' hp; exact hr r t' a' hp
+  | commit rid x v base hx hph =>
+    intro r t a hp
+    rcases hp with h2 | h2
+    · exact hr r t a h2
+    · cases h2
+  | conflict rid base x v h1 hx hph =>
+    intro r t a hp
+    rcases hp with h2 | h2
+    · exact hr r t a h2
+    · obtain ⟨rfl, rfl, rfl⟩ := Packet.load.inj h2
+      have hA := hI.attLe _ x v base hx (Or.inr hph)
+      obtain ⟨x', hx', hlt⟩ := hI.conflictLt _ base h1
+      have e : x' = x := Option.some.inj (hx'.symm.trans hx)
+      subst e
+      exact Nat.succ_le_of_lt (Nat.lt_of_le_of_lt hA hlt)
+  | done rid o x h1 hx =>
+    intro r t a hp
+    rcases hp with h2 | h2
+    · exact hr r t a h2
+    · cases h2
+  | load rid t0 a0 h1 =>
+    intro r t a hp
+    rcases hp with h2 | h2
+    · exact hr r t a h2
+    · cases h2
+  | storeDecided rid tok t p' i base res o h1 hd =>
+    intro r t0 a hp
+    rcases hp with h2 | h2
+    · exact Nat.le_trans (hr r t0 a h2) (hm _)
+    · cases h2
+  | storeConflict rid tok t p' i base res h1 hd hb =>
+    intro r t0 a hp
+    rcases hp with h2 | h2
+    · exact Nat.le_trans (hr r t0 a h2) (hm _)
+    · cases h2
+  | storeAccept rid tok t p' i base res t' h1 hd hb hr' =>
+    intro r t0 a hp
+    rcases hp with h2 | h2 | h2
+    · exact Nat.le_trans (hr r t0 a h2) (hm _)
+    · cases h2
+    · cases h2
+  | storeRefuse rid tok t p' i base res e h1 hd hb hr' =>
+    intro r t0 a hp
+    rcases hp with h2 | h2
+    · exact Nat.le_trans (hr r t0 a h2) (hm _)
+    · cases h2
+  | publish sid e t p' h1 hsub ht hr' =>
+    intro r t0 a hp
+    rcases hp with h2 | h2
+    · exact Nat.le_trans (hr r t0 a h2) (hm _)
+    · cases h2
+
+theorem linv_snapAtt {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext K C s s')
+    (hI : LInv K C N s) : ∀ r t v b a, s'.net (.snap r t v b a) → a ≤ b := by
+  have hs := hI.snapAtt
+  cases h with
+  | clientReq rid tok i =>
+    intro r t v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t v b a h2
+    · cases h2
+  | bffForward rid tok i h1 =>
+    intro r t v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t v b a h2
+    · cases h2
+  | bffRelay rid o h1 =>
+    intro r t v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t v b a h2
+    · cases h2
+  | begin rid tok i t0 p' h1 hx hn hsn =>
+    intro r t v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t v b a h2
+    · cases h2
+  | noSession rid tok i h1 hx hn hsn =>
+    intro r t v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t v b a h2
+    · cases h2
+  | snap rid t v base a x h1 hx ht hl hat => intro r t' v' b' a' hp; exact hs r t' v' b' a' hp
+  | commit rid x v base hx hph =>
+    intro r t v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t v b a h2
+    · cases h2
+  | conflict rid base x v h1 hx hph =>
+    intro r t v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t v b a h2
+    · cases h2
+  | done rid o x h1 hx =>
+    intro r t v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t v b a h2
+    · cases h2
+  | load rid t0 a0 h1 =>
+    intro r t v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t v b a h2
+    · obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := Packet.snap.inj h2
+      exact hI.loadRev _ _ _ h1
+  | storeDecided rid tok t p' i base res o h1 hd =>
+    intro r t0 v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t0 v b a h2
+    · cases h2
+  | storeConflict rid tok t p' i base res h1 hd hb =>
+    intro r t0 v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t0 v b a h2
+    · cases h2
+  | storeAccept rid tok t p' i base res t' h1 hd hb hr' =>
+    intro r t0 v b a hp
+    rcases hp with h2 | h2 | h2
+    · exact hs r t0 v b a h2
+    · cases h2
+    · cases h2
+  | storeRefuse rid tok t p' i base res e h1 hd hb hr' =>
+    intro r t0 v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t0 v b a h2
+    · cases h2
+  | publish sid e t p' h1 hsub ht hr' =>
+    intro r t0 v b a hp
+    rcases hp with h2 | h2
+    · exact hs r t0 v b a h2
+    · cases h2
+
+theorem linv_attLe {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext K C s s')
+    (hI : LInv K C N s) : ∀ r x v b, s'.txns r = some x →
+      (x.phase = .ready v b ∨ x.phase = .committing v b) → s'.attempt r ≤ b := by
+  have hA := hI.attLe
+  cases h with
+  | clientReq rid tok i => exact fun r x v b hr hph => hA r x v b hr hph
+  | bffForward rid tok i h1 => exact fun r x v b hr hph => hA r x v b hr hph
+  | bffRelay rid o h1 => exact fun r x v b hr hph => hA r x v b hr hph
+  | begin rid tok i t0 p' h1 hx hn hsn =>
+    intro r x' v b hr hph
+    by_cases hrr : r = rid
+    · subst hrr
+      simp only [updTxn, ↓reduceIte, Option.some.injEq] at hr
+      subst hr
+      simp at hph
+    · simp only [updTxn, hrr, ↓reduceIte] at hr
+      exact hA r x' v b hr hph
+  | noSession rid tok i h1 hx hn hsn => exact fun r x v b hr hph => hA r x v b hr hph
+  | snap rid t v0 base a x0 h1 hx ht hl hat =>
+    intro r x' v b hr hph
+    by_cases hrr : r = rid
+    · subst hrr
+      simp only [updTxn, ↓reduceIte, Option.some.injEq] at hr
+      subst hr
+      have hab := hI.snapAtt _ _ _ _ _ h1
+      show s.attempt _ ≤ _
+      rw [hat]
+      rcases hph with hph | hph
+      · simp only [Phase.ready.injEq] at hph
+        obtain ⟨-, rfl⟩ := hph
+        exact hab
+      · cases hph
+    · simp only [updTxn, hrr, ↓reduceIte] at hr
+      exact hA r x' v b hr hph
+  | commit rid x0 v0 base hx0 hph0 =>
+    intro r x' v b hr hph
+    by_cases hrr : r = rid
+    · subst hrr
+      simp only [updTxn, ↓reduceIte, Option.some.injEq] at hr
+      subst hr
+      rcases hph with hph | hph
+      · cases hph
+      · obtain ⟨hv, hb⟩ := Phase.committing.inj hph
+        have hh := hA _ _ _ _ hx0 (Or.inl hph0)
+        subst hv
+        subst hb
+        exact hh
+    · simp only [updTxn, hrr, ↓reduceIte] at hr
+      exact hA r x' v b hr hph
+  | conflict rid base x0 v0 h1 hx0 hph0 =>
+    intro r x' v b hr hph
+    by_cases hrr : r = rid
+    · subst hrr
+      simp only [updTxn, ↓reduceIte, Option.some.injEq] at hr
+      subst hr
+      simp at hph
+    · simp only [updTxn, hrr, ↓reduceIte] at hr
+      have hu := updAtt_ne s.attempt rid (s.attempt rid + 1) r hrr
+      show updAtt s.attempt rid (s.attempt rid + 1) r ≤ _
+      rw [hu]
+      exact hA r x' v b hr hph
+  | done rid o x0 h1 hx =>
+    intro r x' v b hr hph
+    by_cases hrr : r = rid
+    · subst hrr
+      simp only [updTxn, ↓reduceIte, Option.some.injEq] at hr
+      subst hr
+      simp at hph
+    · simp only [updTxn, hrr, ↓reduceIte] at hr
+      exact hA r x' v b hr hph
+  | load rid t a h1 => exact fun r x v b hr hph => hA r x v b hr hph
+  | storeDecided rid tok t p' i base res o h1 hd => exact fun r x v b hr hph => hA r x v b hr hph
+  | storeConflict rid tok t p' i base res h1 hd hb => exact fun r x v b hr hph => hA r x v b hr hph
+  | storeAccept rid tok t p' i base res t' h1 hd hb hr => exact fun r x v b hr' hph => hA r x v b hr' hph
+  | storeRefuse rid tok t p' i base res e h1 hd hb hr => exact fun r x v b hr' hph => hA r x v b hr' hph
+  | publish sid e t p' h1 hsub ht hr => exact fun r x v b hr' hph => hA r x v b hr' hph
+
+theorem linv_zeroNone {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext K C s s')
+    (hI : LInv K C N s) : ∀ r, s'.txns r = none → s'.attempt r = 0 := by
+  have hz := hI.zeroNone
+  cases h with
+  | clientReq rid tok i => exact fun r hr => hz r hr
+  | bffForward rid tok i h1 => exact fun r hr => hz r hr
+  | bffRelay rid o h1 => exact fun r hr => hz r hr
+  | begin rid tok i t0 p' h1 hx hn hsn =>
+    intro r hr
+    by_cases hrr : r = rid
+    · subst hrr; simp [updTxn] at hr
+    · have hr' : s.txns r = none := by simpa [updTxn, hrr] using hr
+      exact hz r hr'
+  | noSession rid tok i h1 hx hn hsn => exact fun r hr => hz r hr
+  | snap rid t v base a x h1 hx ht hl hat =>
+    intro r hr
+    by_cases hrr : r = rid
+    · subst hrr; simp [updTxn] at hr
+    · have hr' : s.txns r = none := by simpa [updTxn, hrr] using hr
+      exact hz r hr'
+  | commit rid x v base hx hph =>
+    intro r hr
+    by_cases hrr : r = rid
+    · subst hrr; simp [updTxn] at hr
+    · have hr' : s.txns r = none := by simpa [updTxn, hrr] using hr
+      exact hz r hr'
+  | conflict rid base x v h1 hx hph =>
+    intro r hr
+    by_cases hrr : r = rid
+    · subst hrr; simp [updTxn] at hr
+    · have hr' : s.txns r = none := by simpa [updTxn, hrr] using hr
+      have := hz r hr'
+      simpa [updAtt, hrr] using this
+  | done rid o x h1 hx =>
+    intro r hr
+    by_cases hrr : r = rid
+    · subst hrr; simp [updTxn] at hr
+    · have hr' : s.txns r = none := by simpa [updTxn, hrr] using hr
+      exact hz r hr'
+  | load rid t a h1 => exact fun r hr => hz r hr
+  | storeDecided rid tok t p' i base res o h1 hd => exact fun r hr => hz r hr
+  | storeConflict rid tok t p' i base res h1 hd hb => exact fun r hr => hz r hr
+  | storeAccept rid tok t p' i base res t' h1 hd hb hr => exact fun r hr' => hz r hr'
+  | storeRefuse rid tok t p' i base res e h1 hd hb hr => exact fun r hr' => hz r hr'
+  | publish sid e t p' h1 hsub ht hr => exact fun r hr' => hz r hr'
+
+theorem linv_attBound {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext K C s s')
+    (hI : LInv K C N s) : ∀ r x, s'.txns r = some x → s'.attempt r ≤ s'.store.rev x.tenant := by
+  have hB := hI.attBound
+  have hm := rev_mono_step h
+  have hA := hI.attLe
+  have hC := hI.conflictLt
+  have hz := hI.zeroNone
+  cases h with
+  | clientReq rid tok i => intro r x hr; exact Nat.le_trans (hB r x hr) (hm x.tenant)
+  | bffForward rid tok i h1 => intro r x hr; exact Nat.le_trans (hB r x hr) (hm x.tenant)
+  | bffRelay rid o h1 => intro r x hr; exact Nat.le_trans (hB r x hr) (hm x.tenant)
+  | begin rid tok i t0 p' h1 hx hn hsn =>
+    intro r x hr
+    by_cases hrr : r = rid
+    · subst hrr
+      simp only [updTxn, ↓reduceIte, Option.some.injEq] at hr
+      subst hr
+      show s.attempt r ≤ _
+      rw [hz _ hx]
+      exact Nat.zero_le _
+    · simp only [updTxn, hrr, ↓reduceIte] at hr
+      exact Nat.le_trans (hB r x hr) (hm x.tenant)
+  | noSession rid tok i h1 hx hn hsn => intro r x hr; exact Nat.le_trans (hB r x hr) (hm x.tenant)
+  | snap rid t v base a x0 h1 hx ht hl hat =>
+    intro r x' hr
+    by_cases hrr : r = rid
+    · subst hrr
+      simp only [updTxn, ↓reduceIte, Option.some.injEq] at hr
+      subst hr
+      exact Nat.le_trans (hB _ _ hx) (hm _)
+    · simp only [updTxn, hrr, ↓reduceIte] at hr
+      exact Nat.le_trans (hB r x' hr) (hm x'.tenant)
+  | commit rid x0 v base hx hph =>
+    intro r x' hr
+    by_cases hrr : r = rid
+    · subst hrr
+      simp only [updTxn, ↓reduceIte, Option.some.injEq] at hr
+      subst hr
+      exact Nat.le_trans (hB _ _ hx) (hm _)
+    · simp only [updTxn, hrr, ↓reduceIte] at hr
+      exact Nat.le_trans (hB r x' hr) (hm x'.tenant)
+  | conflict rid base x0 v h1 hx hph =>
+    intro r x' hr
+    by_cases hrr : r = rid
+    · subst hrr
+      simp only [updTxn, ↓reduceIte, Option.some.injEq] at hr
+      subst hr
+      obtain ⟨x2, hx2, hlt⟩ := hC _ base h1
+      have e : x2 = x0 := Option.some.inj (hx2.symm.trans hx)
+      subst e
+      have hA' := hA _ x2 v base hx (Or.inr hph)
+      simp only [updAtt, ↓reduceIte]
+      exact Nat.succ_le_of_lt (Nat.lt_of_le_of_lt hA' hlt)
+    · simp only [updTxn, hrr, ↓reduceIte] at hr
+      have hu := updAtt_ne s.attempt rid (s.attempt rid + 1) r hrr
+      show updAtt s.attempt rid (s.attempt rid + 1) r ≤ _
+      rw [hu]
+      exact Nat.le_trans (hB r x' hr) (hm x'.tenant)
+  | done rid o x0 h1 hx =>
+    intro r x' hr
+    by_cases hrr : r = rid
+    · subst hrr
+      simp only [updTxn, ↓reduceIte, Option.some.injEq] at hr
+      subst hr
+      exact Nat.le_trans (hB _ _ hx) (hm _)
+    · simp only [updTxn, hrr, ↓reduceIte] at hr
+      exact Nat.le_trans (hB r x' hr) (hm x'.tenant)
+  | load rid t a h1 => intro r x hr; exact Nat.le_trans (hB r x hr) (hm x.tenant)
+  | storeDecided rid tok t p' i base res o h1 hd => intro r x hr; exact Nat.le_trans (hB r x hr) (hm x.tenant)
+  | storeConflict rid tok t p' i base res h1 hd hb => intro r x hr; exact Nat.le_trans (hB r x hr) (hm x.tenant)
+  | storeAccept rid tok t p' i base res t' h1 hd hb hr' => intro r x hr; exact Nat.le_trans (hB r x hr) (hm x.tenant)
+  | storeRefuse rid tok t p' i base res e h1 hd hb hr' => intro r x hr; exact Nat.le_trans (hB r x hr) (hm x.tenant)
+  | publish sid e t p' h1 hsub ht hr' => intro r x hr; exact Nat.le_trans (hB r x hr) (hm x.tenant)
+
+theorem linv_conflictLt {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext K C s s')
+    (hg : Good K C s) (hI : LInv K C N s) :
+    ∀ r b, s'.net (.conflict r b) → ∃ x, s'.txns r = some x ∧ b < s'.store.rev x.tenant := by
+  have hC := hI.conflictLt
+  have hk := fun r x hx => txn_keep_step h r x hx
+  have hm := rev_mono_step h
+  cases h with
+  | storeConflict rid tok t p' i base res h1 hd hb =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x, hx, hlt⟩ := hC r b h2
+      exact ⟨x, hx, Nat.lt_of_lt_of_le hlt (hm x.tenant)⟩
+    · obtain ⟨hr1, hb1⟩ := Packet.conflict.inj h2
+      rw [hr1, hb1]
+      obtain ⟨x, hx, -, hxt, -⟩ := hg.commitTxn _ _ _ _ _ _ _ h1
+      obtain ⟨v, a, hsn, _⟩ := hg.commitCorrect _ _ _ _ _ _ _ h1
+      have hbl : base ≤ s.store.rev t := (hg.snapHist _ _ _ _ _ hsn).1
+      refine ⟨x, hx, ?_⟩
+      show base < s.store.rev x.tenant
+      rw [hxt]
+      have : base ≠ s.store.rev t := hb
+      omega
+  | clientReq rid tok i =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x, hx, hlt⟩ := hC r b h2
+      exact ⟨x, hx, Nat.lt_of_lt_of_le hlt (hm x.tenant)⟩
+    · cases h2
+  | bffForward rid tok i h1 =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x, hx, hlt⟩ := hC r b h2
+      exact ⟨x, hx, Nat.lt_of_lt_of_le hlt (hm x.tenant)⟩
+    · cases h2
+  | bffRelay rid o h1 =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x, hx, hlt⟩ := hC r b h2
+      exact ⟨x, hx, Nat.lt_of_lt_of_le hlt (hm x.tenant)⟩
+    · cases h2
+  | begin rid tok i t0 p' h1 hx hn hsn =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x, hx', hlt⟩ := hC r b h2
+      obtain ⟨y, hy, hty⟩ := hk r x hx'
+      exact ⟨y, hy, by rw [hty]; exact Nat.lt_of_lt_of_le hlt (hm x.tenant)⟩
+    · cases h2
+  | noSession rid tok i h1 hx hn hsn =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x, hx', hlt⟩ := hC r b h2
+      obtain ⟨y, hy, hty⟩ := hk r x hx'
+      exact ⟨y, hy, by rw [hty]; exact Nat.lt_of_lt_of_le hlt (hm x.tenant)⟩
+    · cases h2
+  | snap rid t v base a x h1 hx ht hl hat =>
+    intro r b hp
+    obtain ⟨x', hx', hlt⟩ := hC r b hp
+    obtain ⟨y, hy, hty⟩ := hk r x' hx'
+    exact ⟨y, hy, by rw [hty]; exact Nat.lt_of_lt_of_le hlt (hm x'.tenant)⟩
+  | commit rid x v base hx hph =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x', hx', hlt⟩ := hC r b h2
+      obtain ⟨y, hy, hty⟩ := hk r x' hx'
+      exact ⟨y, hy, by rw [hty]; exact Nat.lt_of_lt_of_le hlt (hm x'.tenant)⟩
+    · cases h2
+  | conflict rid base x v h1 hx hph =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x', hx', hlt⟩ := hC r b h2
+      obtain ⟨y, hy, hty⟩ := hk r x' hx'
+      exact ⟨y, hy, by rw [hty]; exact Nat.lt_of_lt_of_le hlt (hm x'.tenant)⟩
+    · cases h2
+  | done rid o x h1 hx =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x', hx', hlt⟩ := hC r b h2
+      obtain ⟨y, hy, hty⟩ := hk r x' hx'
+      exact ⟨y, hy, by rw [hty]; exact Nat.lt_of_lt_of_le hlt (hm x'.tenant)⟩
+    · cases h2
+  | load rid t a h1 =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x, hx', hlt⟩ := hC r b h2
+      exact ⟨x, hx', Nat.lt_of_lt_of_le hlt (hm x.tenant)⟩
+    · cases h2
+  | storeDecided rid tok t p' i base res o h1 hd =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x, hx', hlt⟩ := hC r b h2
+      exact ⟨x, hx', Nat.lt_of_lt_of_le hlt (hm x.tenant)⟩
+    · cases h2
+  | storeAccept rid tok t p' i base res t' h1 hd hb hr' =>
+    intro r b hp
+    rcases hp with h2 | h2 | h2
+    · obtain ⟨x, hx', hlt⟩ := hC r b h2
+      exact ⟨x, hx', Nat.lt_of_lt_of_le hlt (hm x.tenant)⟩
+    · cases h2
+    · cases h2
+  | storeRefuse rid tok t p' i base res e h1 hd hb hr' =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x, hx', hlt⟩ := hC r b h2
+      exact ⟨x, hx', Nat.lt_of_lt_of_le hlt (hm x.tenant)⟩
+    · cases h2
+  | publish sid e t p' h1 hsub ht hr' =>
+    intro r b hp
+    rcases hp with h2 | h2
+    · obtain ⟨x, hx', hlt⟩ := hC r b h2
+      exact ⟨x, hx', Nat.lt_of_lt_of_le hlt (hm x.tenant)⟩
+    · cases h2
+
 theorem linv_step {K : Kernel} {C : Config} {N : Nat} {s s' : PState} (h : PNext K C s s')
     (hg : Good K C s) (hI : LInv K C N s) (hreq : ∀ rid tok i, s'.net (.req rid tok i) → rid < N) :
     LInv K C N s' :=
-  ⟨linv_bndP h hI hreq, linv_bndT h hI, linv_rev h hI, linv_doneDec h hI, linv_nsRep h hI,
-    linv_evsCom h hI, linv_txnFin h hg hI, linv_txnLoad h hI, linv_txnCom h hI⟩
-
-/-! ## Sequence invariants and transition facts -/
+  { bndP := linv_bndP h hI hreq
+    bndT := linv_bndT h hI
+    rev := linv_rev h hI
+    doneDec := linv_doneDec h hI
+    nsRep := linv_nsRep h hI
+    evsCom := linv_evsCom h hI
+    txnFin := linv_txnFin h hg hI
+    txnLoad := linv_txnLoad h hI
+    loadRev := linv_loadRev h hg hI
+    snapAtt := linv_snapAtt h hI
+    attLe := linv_attLe h hI
+    attBound := linv_attBound h hI
+    conflictLt := linv_conflictLt h hg hI
+    zeroNone := linv_zeroNone h hI
+    txnCom := linv_txnCom h hI }
 
 theorem linv_init {K : Kernel} {C : Config} {N : Nat} {w0 : World} {s : PState}
     (hi : PInit w0 s) : LInv K C N s where
   bndP := fun p hp => absurd hp (hi.1 p)
   bndT := fun r hr => absurd (hi.2.1 r) hr
   rev := fun t => by rw [hi.2.2.2.2.1 t]; exact Nat.zero_le _
-  doneDec := fun r o h => by rw [hi.2.2.2.2.2.2 r] at h; cases h
+  doneDec := fun r o h => by rw [hi.2.2.2.2.2.2.1 r] at h; cases h
   nsRep := fun r h => by rw [hi.2.2.1 r] at h; cases h
   evsCom := fun e he => by rw [hi.2.2.2.2.2.1] at he; cases he
   txnFin := fun r x o hr _ => by rw [hi.2.1 r] at hr; cases hr
   txnLoad := fun r x hr => by rw [hi.2.1 r] at hr; cases hr
+  loadRev := fun r t a hp => absurd hp (hi.1 _)
+  snapAtt := fun r t v b a hp => absurd hp (hi.1 _)
+  attLe := fun r x v b hr _ => by rw [hi.2.1 r] at hr; cases hr
+  attBound := fun r x hr => by rw [hi.2.1 r] at hr; cases hr
+  conflictLt := fun r b hp => absurd hp (hi.1 _)
+  zeroNone := fun r _ => hi.2.2.2.2.2.2.2 r
   txnCom := fun r x v b hr _ => by rw [hi.2.1 r] at hr; cases hr
 
-/-- Along a behaviour that starts initially and takes protocol steps or stutters, `Good` and
-    `LInv` hold at every position. -/
 theorem seq_inv {K : Kernel} {C : Config} {w0 : World} {N : Nat} {b : Behaviour PState}
     (hinit : PInit w0 (b 0)) (hstep : ∀ n, PNext K C (b n) (b (n+1)) ∨ b (n+1) = b n)
     (hN : ∀ n rid tok i, (b n).net (.req rid tok i) → rid < N) :
@@ -716,54 +1272,6 @@ theorem seq_inv {K : Kernel} {C : Config} {w0 : World} {N : Nat} {b : Behaviour 
       · exact ⟨good_step h ih.1, linv_step h ih.1 ih.2 (hN (n+1))⟩
       · rw [h]; exact ih
   exact ⟨fun n => (key n).1, fun n => (key n).2⟩
-
-/-- A transaction record persists: once `r` has a transaction, it keeps one, with the same tenant. -/
-theorem txn_keep_step {K : Kernel} {C : Config} {s s' : PState} (h : PNext K C s s')
-    (r : RequestId) (x : Txn) (hx : s.txns r = some x) :
-    ∃ y, s'.txns r = some y ∧ y.tenant = x.tenant := by
-  cases h with
-  | clientReq rid tok i => exact ⟨x, hx, rfl⟩
-  | bffForward rid tok i h1 => exact ⟨x, hx, rfl⟩
-  | bffRelay rid o h1 => exact ⟨x, hx, rfl⟩
-  | begin rid tok i t p' h1 hn0 hn hsn =>
-    by_cases hrr : r = rid
-    · subst hrr; rw [hn0] at hx; cases hx
-    · exact ⟨x, by simpa [updTxn, hrr] using hx, rfl⟩
-  | noSession rid tok i h1 hn0 hn hsn => exact ⟨x, hx, rfl⟩
-  | snap rid t v base x0 h1 hx0 ht hl =>
-    by_cases hrr : r = rid
-    · subst hrr
-      have e := Option.some.inj (hx0.symm.trans hx)
-      subst e
-      exact ⟨{ x0 with phase := .ready v base }, by simp [updTxn], rfl⟩
-    · exact ⟨x, by simpa [updTxn, hrr] using hx, rfl⟩
-  | commit rid x0 v base hx0 hph =>
-    by_cases hrr : r = rid
-    · subst hrr
-      have e := Option.some.inj (hx0.symm.trans hx)
-      subst e
-      exact ⟨{ x0 with phase := .committing v base }, by simp [updTxn], rfl⟩
-    · exact ⟨x, by simpa [updTxn, hrr] using hx, rfl⟩
-  | conflict rid base x0 v h1 hx0 hph =>
-    by_cases hrr : r = rid
-    · subst hrr
-      have e := Option.some.inj (hx0.symm.trans hx)
-      subst e
-      exact ⟨{ x0 with phase := .loading }, by simp [updTxn], rfl⟩
-    · exact ⟨x, by simpa [updTxn, hrr] using hx, rfl⟩
-  | done rid o x0 h1 hx0 =>
-    by_cases hrr : r = rid
-    · subst hrr
-      have e := Option.some.inj (hx0.symm.trans hx)
-      subst e
-      exact ⟨{ x0 with phase := .finished o }, by simp [updTxn], rfl⟩
-    · exact ⟨x, by simpa [updTxn, hrr] using hx, rfl⟩
-  | load rid t h1 => exact ⟨x, hx, rfl⟩
-  | storeDecided rid tok t p' i base res o h1 hd => exact ⟨x, hx, rfl⟩
-  | storeConflict rid tok t p' i base res h1 hd hb => exact ⟨x, hx, rfl⟩
-  | storeAccept rid tok t p' i base res t' h1 hd hb hr => exact ⟨x, hx, rfl⟩
-  | storeRefuse rid tok t p' i base res e h1 hd hb hr => exact ⟨x, hx, rfl⟩
-  | publish sid e t p' h1 hsub ht hr => exact ⟨x, hx, rfl⟩
 
 /-- The tenant of a transaction is the same at every later position. -/
 theorem txn_chain {C : Config} {K : Kernel} {b : Behaviour PState} (r : RequestId)
@@ -837,7 +1345,7 @@ theorem ready_keep {K : Kernel} {C : Config} {r : RequestId} {s s' : PState} (h 
     · subst hrr; rw [hn0] at hx; cases hx
     · simp [updTxn, hrr]
   | noSession rid tok i h1 hn0 hn hsn => rfl
-  | snap rid t v0 base x0 h1 hx0 ht hl =>
+  | snap rid t v0 base a x0 h1 hx0 ht hl hat =>
     by_cases hrr : r = rid
     · subst hrr
       have e := Option.some.inj (hx0.symm.trans hx); subst e
@@ -859,7 +1367,7 @@ theorem ready_keep {K : Kernel} {C : Config} {r : RequestId} {s s' : PState} (h 
     by_cases hrr : r = rid
     · subst hrr; exact absurd h1 (hdone o)
     · simp [updTxn, hrr]
-  | load rid t h1 => rfl
+  | load rid t a h1 => rfl
   | storeDecided rid tok t p' i base res o h1 hd => rfl
   | storeConflict rid tok t p' i base res h1 hd hb => rfl
   | storeAccept rid tok t p' i base res t' h1 hd hb hr => rfl
@@ -882,7 +1390,7 @@ theorem committing_keep {K : Kernel} {C : Config} {r : RequestId} {s s' : PState
     · subst hrr; rw [hn0] at hx; cases hx
     · simp [updTxn, hrr]
   | noSession rid tok i h1 hn0 hn hsn => rfl
-  | snap rid t v0 base x0 h1 hx0 ht hl =>
+  | snap rid t v0 base a x0 h1 hx0 ht hl hat =>
     by_cases hrr : r = rid
     · subst hrr
       have e := Option.some.inj (hx0.symm.trans hx); subst e
@@ -904,7 +1412,7 @@ theorem committing_keep {K : Kernel} {C : Config} {r : RequestId} {s s' : PState
     by_cases hrr : r = rid
     · subst hrr; exact absurd h1 (hdone o)
     · simp [updTxn, hrr]
-  | load rid t h1 => rfl
+  | load rid t a h1 => rfl
   | storeDecided rid tok t p' i base res o h1 hd => rfl
   | storeConflict rid tok t p' i base res h1 hd hb => rfl
   | storeAccept rid tok t p' i base res t' h1 hd hb hr => rfl
@@ -1067,11 +1575,11 @@ theorem txn_exists {K : Kernel} {C : Config} {b : Behaviour PState}
   have hp2 : ∀ m, j+1 ≤ m → enabled (actBegin C r tok i) (b m) →
       ¬ actBegin C r tok i (b m) (b (m+1)) → enabled (actBegin C r tok i) (b (m+1)) := by
     intro m hm _ _
-    exact ⟨{ sendOne (b (m+1)) (.load r t) with
+    exact ⟨{ sendOne (b (m+1)) (.load r t ((b (m+1)).attempt r)) with
         txns := updTxn (b (m+1)).txns r ⟨tok, t, p, i, .loading⟩ }, t, p, hs,
       net_seq hstep (j+1) (m+1) (by omega) _ hfwd, hnone (m+1), hnsF (m+1), rfl⟩
   have hen0 : enabled (actBegin C r tok i) (b (j+1)) :=
-    ⟨{ sendOne (b (j+1)) (.load r t) with
+    ⟨{ sendOne (b (j+1)) (.load r t ((b (j+1)).attempt r)) with
         txns := updTxn (b (j+1)).txns r ⟨tok, t, p, i, .loading⟩ }, t, p, hs, hfwd,
       hnone (j+1), hnsF (j+1), rfl⟩
   obtain ⟨j2, _, hB⟩ := fair_pers (hBeg r tok i) hp2 hen0
@@ -1080,130 +1588,141 @@ theorem txn_exists {K : Kernel} {C : Config} {b : Behaviour PState}
   rw [hout] at this
   simp [updTxn] at this
 
-/-- A commit packet on the final revision of a tenant is never sent: the store would decide it. -/
-theorem no_commit_R {K : Kernel} {C : Config} {N : Nat} {b : Behaviour PState}
-    (hstep : ∀ n, PNext K C (b n) (b (n+1)) ∨ b (n+1) = b n)
-    (hStoF : ∀ rid tok t p i base res, weakFair (StoreStep K C rid tok t p i base res) b)
-    (r : RequestId) (t0 : TenantId) (hdecN : ∀ n, (b n).store.decided r = none)
-    (T R : Nat) (hT : ∀ n, T ≤ n → (b n).store.rev t0 = R) :
-    ∀ n tok p i res, ¬ (b n).net (.commit r tok t0 p i R res) := by
-  intro n tok p i res hc
-  have hp : ∀ m, n + T ≤ m → enabled (StoreStep K C r tok t0 p i R res) (b m) →
-      ¬ StoreStep K C r tok t0 p i R res (b m) (b (m+1)) →
-      enabled (StoreStep K C r tok t0 p i R res) (b (m+1)) := by
-    intro m _ hen _
-    obtain ⟨s', hs'⟩ := hen
-    exact store_enabled (net_seq hstep m (m+1) (by omega) _ (storeStep_net hs'))
-  have he : enabled (StoreStep K C r tok t0 p i R res) (b (n+T)) :=
-    store_enabled (net_seq hstep n (n+T) (by omega) _ hc)
-  obtain ⟨j, hj, hA⟩ := fair_pers (hStoF r tok t0 p i R res) hp he
-  have hb := store_step_undecided hA (hdecN j) (hdecN (j+1))
-  exact hb (hT j (by omega)).symm
+/-- The attempt number never decreases. -/
+theorem attempt_mono_step {K : Kernel} {C : Config} {s s' : PState} (h : PNext K C s s')
+    (r : RequestId) : s.attempt r ≤ s'.attempt r := by
+  cases h with
+  | conflict rid base x v h1 hx hph =>
+    by_cases hr : r = rid
+    · subst hr; simp [updAtt]
+    · exact Nat.le_of_eq (updAtt_ne s.attempt rid (s.attempt rid + 1) r hr).symm
+  | _ => exact Nat.le_refl _
 
-/-- Once the revision of `t0` is final, a snapshot of it is in the network from some point on. -/
-theorem snap_eventually {K : Kernel} {C : Config} {N : Nat} {b : Behaviour PState}
-    (hstep : ∀ n, PNext K C (b n) (b (n+1)) ∨ b (n+1) = b n)
-    (hLoadF : ∀ rid t, weakFair (actLoad rid t) b)
-    (r : RequestId) (t0 : TenantId) (n0 : Nat) (hload : (b n0).net (.load r t0))
-    (T R : Nat) (hT : ∀ n, T ≤ n → (b n).store.rev t0 = R) :
-    ∃ M v, ∀ m, M ≤ m → (b m).net (.snap r t0 v R) := by
-  have hp : ∀ m, n0 + T ≤ m → enabled (actLoad r t0) (b m) →
-      ¬ actLoad r t0 (b m) (b (m+1)) → enabled (actLoad r t0) (b (m+1)) := by
-    intro m hm hen _
-    obtain ⟨s', h1, _⟩ := hen
-    exact ⟨sendOne (b (m+1)) (.snap r t0 ((b (m+1)).store.hist t0 ((b (m+1)).store.rev t0))
-      ((b (m+1)).store.rev t0)), net_seq hstep m (m+1) (by omega) _ h1, rfl⟩
-  have he : enabled (actLoad r t0) (b (n0+T)) :=
-    ⟨sendOne (b (n0+T)) (.snap r t0 ((b (n0+T)).store.hist t0 ((b (n0+T)).store.rev t0))
-      ((b (n0+T)).store.rev t0)), net_seq hstep n0 (n0+T) (by omega) _ hload, rfl⟩
-  obtain ⟨j, hj, hA⟩ := fair_pers (hLoadF r t0) hp he
-  have hR := hT j (by omega)
-  have hsnap : (b (j+1)).net (.snap r t0 ((b j).store.hist t0 R) R) := by
-    have h2 : b (j+1) = sendOne (b j) (.snap r t0 ((b j).store.hist t0 ((b j).store.rev t0))
-      ((b j).store.rev t0)) := hA.2
-    rw [h2, hR]
-    exact Or.inr rfl
-  exact ⟨j+1, (b j).store.hist t0 R, fun m hm => net_seq hstep (j+1) m hm _ hsnap⟩
+/-- A conflict step moves the attempt number on by one. -/
+theorem conflict_inc (r : RequestId) (s s' : PState) (h : actConflict r s s') :
+    s'.attempt r = s.attempt r + 1 := by
+  obtain ⟨x, v, b, -, -, -, rfl⟩ := h
+  simp [updAtt]
 
-/-- The transaction of `r` is loading infinitely often, once it exists. The argument: a committing
-    transaction stays committing, its commit is decided only as a conflict, and the conflict sends
-    it back to loading; a ready transaction is committed. -/
-theorem loading_inf {K : Kernel} {C : Config} {N : Nat} {b : Behaviour PState}
-    (hstep : ∀ n, PNext K C (b n) (b (n+1)) ∨ b (n+1) = b n)
-    (hGood : ∀ n, Good K C (b n)) (hLinv : ∀ n, LInv K C N (b n)) (r : RequestId)
-    (hdec : ∀ n, (b n).store.decided r = none)
-    (hCom : weakFair (actCommit K r) b) (hConf : weakFair (actConflict r) b)
-    (hSto : ∀ tok t p i base res, weakFair (StoreStep K C r tok t p i base res) b)
-    (n0 : Nat) (x0 : Txn) (hx0 : (b n0).txns r = some x0) (n : Nat) :
-    ∃ m, n ≤ m ∧ ∃ y, (b m).txns r = some y ∧ y.phase = .loading := by
+/-- The parts of the fair spec. -/
+theorem protoSpec_parts {K : Kernel} {C : Config} {w0 : World} {b : Behaviour PState}
+    (h : protoSpec K C w0 b) :
+    PInit w0 (b 0) ∧ (∀ n, PNext K C (b n) (b (n+1)) ∨ b (n+1) = b n) ∧ protoFair K C b :=
+  ⟨h.1, fun n => h.2.1 n, h.2.2⟩
+
+/-- A request with a valid session is answered: no behaviour of the fair spec keeps it unanswered,
+    under the bounded-workload hypothesis (every request id is below `N`). The argument, by
+    contradiction. The attempt number of the request's transaction never decreases and is bounded
+    by the revision, so it is eventually constant, from `T` on. From `T` on there is no conflict and
+    no commit: a commit would be answered by the store as a conflict, which would move the attempt
+    on. So the transaction is loading from `T` on, and the store answers its load with a snapshot
+    of the current attempt, which the backend takes. That step makes the transaction ready and then
+    committing, which the argument excludes. Only weak fairness is used. -/
+theorem reply_core {K : Kernel} {C : Config} {w0 : World} {N : Nat} {b : Behaviour PState}
+    (hspec : protoSpec K C w0 b) (hN : ∀ n rid tok i, (b n).net (.req rid tok i) → rid < N)
+    (r : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : PrincipalId)
+    (hs : C.sessions tok = some (t, p)) (k : Nat) (hreq : (b k).net (.req r tok i)) :
+    ∃ m o, (b m).net (.clientReply r o) := by
+  obtain ⟨hinit, hstep, hF⟩ := protoSpec_parts hspec
+  obtain ⟨hFwd, hBeg, hRel, hDone, hLoad, hCom, hConf, hSto, hSnap, _⟩ := hF
+  obtain ⟨hGood, hLinv⟩ := seq_inv hinit hstep hN
+  refine Classical.byContradiction fun hcon => ?_
+  have H0 : ∀ m o, ¬ (b m).net (.clientReply r o) := fun m o h => hcon ⟨m, o, h⟩
+  have hnsF := nosession_false hstep hRel hLinv r H0
+  have hdecN := decided_none_of hstep hRel hDone hGood hLinv r H0
   have noDone : ∀ m o, ¬ (b m).net (.done r o) := fun m o h => by
     have := (hGood m).doneDecided r o h
-    rw [hdec m] at this
+    rw [hdecN m] at this
     cases this
   have noFin : ∀ m y o, (b m).txns r = some y → y.phase ≠ .finished o := fun m y o hy hph => by
     have := (hLinv m).txnFin r y o hy hph
-    rw [hdec m] at this
+    rw [hdecN m] at this
     cases this
+  obtain ⟨n0, x0, hx0⟩ := txn_exists hstep hFwd hBeg r tok i t p hs k hreq hnsF
   have recAt : ∀ m, n0 ≤ m → ∃ y, (b m).txns r = some y := fun m hm => by
     obtain ⟨d, rfl⟩ : ∃ d, m = n0 + d := ⟨m - n0, by omega⟩
     obtain ⟨y, hy, _⟩ := txn_chain r hstep n0 x0 hx0 d
     exact ⟨y, hy⟩
-  refine Classical.byContradiction fun hcon => ?_
-  have hnl : ∀ m, n ≤ m → ∀ y, (b m).txns r = some y → y.phase ≠ .loading :=
-    fun m hm y hy hph => hcon ⟨m, hm, y, hy, hph⟩
-  -- a committing transaction never leaves committing: its conflict would load it again
-  have hA : ∀ m, n ≤ m → ∀ y v bb, (b m).txns r = some y → y.phase = .committing v bb → False := by
+  -- the attempt number is bounded by the revision, and never decreases
+  have hbnd : ∀ d, (b (n0 + d)).attempt r ≤ N := by
+    intro d
+    obtain ⟨y, hy, _⟩ := txn_chain r hstep n0 x0 hx0 d
+    exact Nat.le_trans ((hLinv _).attBound r y hy)
+      (Nat.le_trans ((hLinv _).rev y.tenant) (dcount_le _ N))
+  have hmono : ∀ d, (b (n0 + d)).attempt r ≤ (b (n0 + (d+1))).attempt r := by
+    intro d
+    rcases hstep (n0 + d) with h | h
+    · exact attempt_mono_step h r
+    · rw [show n0 + (d+1) = n0 + d + 1 by omega, h]; exact Nat.le_refl _
+  obtain ⟨T', hT'⟩ := eventually_const (fun d => (b (n0 + d)).attempt r) hmono N hbnd
+  have hAconst : ∀ m, n0 + T' ≤ m → (b m).attempt r = (b (n0 + T')).attempt r := by
+    intro m hm
+    have h2 : (b (n0 + (m - n0))).attempt r = (b (n0 + T')).attempt r := hT' (m - n0) (by omega)
+    rw [show n0 + (m - n0) = m by omega] at h2
+    exact h2
+  obtain ⟨T, hnT, hT⟩ : ∃ T, n0 ≤ T ∧ ∀ m, T ≤ m → (b m).attempt r = (b T).attempt r :=
+    ⟨n0 + T', by omega, hAconst⟩
+  -- from `T` on there is no conflict (it would move the attempt on)
+  have noConf : ∀ j, T ≤ j → ¬ actConflict r (b j) (b (j+1)) := by
+    intro j hj hA
+    have h1 := conflict_inc r _ _ hA
+    have h2 := hT (j+1) (by omega)
+    have h3 := hT j hj
+    omega
+  -- committing records persist from `m` on while there is no conflict
+  have commit_frozen : ∀ m, T ≤ m → ∀ y v bb, (b m).txns r = some y → y.phase = .committing v bb →
+      ∀ d, (b (m+d)).txns r = some y := by
+    intro m hm y v bb hy hph d
+    induction d with
+    | zero => exact hy
+    | succ d ih =>
+      show (b (m+d+1)).txns r = some y
+      rcases hstep (m+d) with h | h
+      · have hk := committing_keep h ih hph (fun o => noDone (m+d) o) (noConf (m+d) (by omega))
+        rw [hk]; exact ih
+      · rw [h]; exact ih
+  -- from `T` on there is no commit: the store would answer it with a conflict
+  have noCommitting : ∀ m, T ≤ m → ∀ y v bb, (b m).txns r = some y →
+      y.phase = .committing v bb → False := by
     intro m hm y v bb hy hph
-    have frozen : ∀ d, (b (m+d)).txns r = some y := by
-      intro d
-      induction d with
-      | zero => exact hy
-      | succ d ih =>
-        show (b (m+d+1)).txns r = some y
-        rcases hstep (m+d) with h | h
-        · have hnot : ¬ actConflict r (b (m+d)) (b (m+d+1)) := by
-            intro hAc
-            obtain ⟨y2, v2, b2, _, _, _, hout⟩ := hAc
-            have hl : (b (m+d+1)).txns r = some { y2 with phase := .loading } := by
-              rw [hout]; simp [updTxn]
-            exact (hnl (m+d+1) (by omega) _ hl) rfl
-          have := committing_keep h ih hph (fun o => noDone (m+d) o) hnot
-          rw [this, ih]
-        · rw [h]; exact ih
     have hcp := (hLinv m).txnCom r y v bb hy hph
-    have hstoreFair := hSto y.tok y.tenant y.principal y.intent bb (verdict K v y.principal y.intent)
-    have hpS : ∀ m', m ≤ m' → enabled (StoreStep K C r y.tok y.tenant y.principal y.intent bb
-        (verdict K v y.principal y.intent)) (b m') → ¬ StoreStep K C r y.tok y.tenant y.principal y.intent bb
-        (verdict K v y.principal y.intent) (b m') (b (m'+1)) → enabled (StoreStep K C r y.tok y.tenant
-        y.principal y.intent bb (verdict K v y.principal y.intent)) (b (m'+1)) := by
+    have hpS : ∀ m', m ≤ m' →
+        enabled (StoreStep K C r y.tok y.tenant y.principal y.intent bb (verdict K v y.principal y.intent))
+          (b m') →
+        ¬ StoreStep K C r y.tok y.tenant y.principal y.intent bb (verdict K v y.principal y.intent)
+          (b m') (b (m'+1)) →
+        enabled (StoreStep K C r y.tok y.tenant y.principal y.intent bb (verdict K v y.principal y.intent))
+          (b (m'+1)) := by
       intro m' _ hen _
       obtain ⟨s', hs'⟩ := hen
       exact store_enabled (net_seq hstep m' (m'+1) (by omega) _ (storeStep_net hs'))
-    obtain ⟨j, hj, hSJ⟩ := fair_pers hstoreFair hpS
-      (store_enabled (net_seq hstep m m (Nat.le_refl _) _ hcp))
-    have hconf1 := store_conflict_only hSJ (hdec j) (hdec (j+1))
-    have hconf1 := store_conflict_only hSJ (hdec j) (hdec (j+1))
-    have hyAt : ∀ m', m ≤ m' → (b m').txns r = some y := fun m' hm' => by
-      have := frozen (m' - m)
-      rwa [show m + (m' - m) = m' by omega] at this
+    obtain ⟨j, hj, hSJ⟩ := fair_pers (hSto r y.tok y.tenant y.principal y.intent bb
+      (verdict K v y.principal y.intent)) hpS (store_enabled hcp)
+    have hconf1 := store_conflict_only hSJ (hdecN j) (hdecN (j+1))
     have hpC : ∀ m', j+1 ≤ m' → enabled (actConflict r) (b m') →
         ¬ actConflict r (b m') (b (m'+1)) → enabled (actConflict r) (b (m'+1)) := by
       intro m' hm' _ _
+      have hyk := commit_frozen m hm y v bb hy hph (m' + 1 - m)
+      rw [show m + (m' + 1 - m) = m' + 1 by omega] at hyk
       have hconfm : (b (m'+1)).net (.conflict r bb) := net_seq hstep (j+1) (m'+1) (by omega) _ hconf1
-      exact ⟨{ sendOne (b (m'+1)) (.load r y.tenant) with
-        txns := updTxn (b (m'+1)).txns r { y with phase := .loading } }, y, v, bb,
-        hyAt (m'+1) (by omega), hph, hconfm, rfl⟩
-    have he1 : enabled (actConflict r) (b (j+1)) :=
-      ⟨{ sendOne (b (j+1)) (.load r y.tenant) with
-        txns := updTxn (b (j+1)).txns r { y with phase := .loading } }, y, v, bb,
-        hyAt (j+1) (by omega), hph, hconf1, rfl⟩
-    obtain ⟨j2, _, hC⟩ := fair_pers (hConf) hpC he1
-    obtain ⟨y2, v2, b2, _, _, _, hout⟩ := hC
-    have hl : (b (j2+1)).txns r = some { y2 with phase := .loading } := by
-      rw [hout]; simp [updTxn]
-    exact (hnl (j2+1) (by omega) _ hl) rfl
-  -- a ready transaction is committed, and the commit makes it committing
-  have hB : ∀ m, n ≤ m → ∀ y v bb, (b m).txns r = some y → y.phase = .ready v bb → False := by
+      exact ⟨{ sendOne (b (m'+1)) (.load r y.tenant ((b (m'+1)).attempt r + 1)) with
+        txns := updTxn (b (m'+1)).txns r { y with phase := .loading },
+        attempt := updAtt (b (m'+1)).attempt r ((b (m'+1)).attempt r + 1) },
+        y, v, bb, hyk, hph, hconfm, rfl⟩
+    have he1 : enabled (actConflict r) (b (j+1)) := by
+      have hyk := commit_frozen m hm y v bb hy hph (j + 1 - m)
+      rw [show m + (j + 1 - m) = j + 1 by omega] at hyk
+      exact ⟨{ sendOne (b (j+1)) (.load r y.tenant ((b (j+1)).attempt r + 1)) with
+        txns := updTxn (b (j+1)).txns r { y with phase := .loading },
+        attempt := updAtt (b (j+1)).attempt r ((b (j+1)).attempt r + 1) },
+        y, v, bb, hyk, hph, hconf1, rfl⟩
+    obtain ⟨j2, hj2, hC2⟩ := fair_pers (hConf r) hpC he1
+    have h1 := conflict_inc r _ _ hC2
+    have h2 := hT (j2+1) (by omega)
+    have h3 := hT j2 (by omega)
+    omega
+  -- from `T` on there is no ready record: its commit would be a committing record
+  have noReady : ∀ m, T ≤ m → ∀ y v bb, (b m).txns r = some y → y.phase = .ready v bb → False := by
     intro m hm y v bb hy hph
     have hpR : ∀ m', m ≤ m' → enabled (actCommit K r) (b m') →
         ¬ actCommit K r (b m') (b (m'+1)) → enabled (actCommit K r) (b (m'+1)) := by
@@ -1221,138 +1740,61 @@ theorem loading_inf {K : Kernel} {C : Config} {N : Nat} {b : Behaviour PState}
           (verdict K v y.principal y.intent)) with
           txns := updTxn (b m).txns r { y with phase := .committing v bb } },
         y, v, bb, hy, hph, rfl⟩
-    obtain ⟨j, _, hAc⟩ := fair_pers hCom hpR hen0
-    obtain ⟨y2, v2, b2, _, _, hout⟩ := hAc
+    obtain ⟨j, hjm, hAc⟩ := fair_pers (hCom r) hpR hen0
+    obtain ⟨y2, v2, b2, -, -, hout⟩ := hAc
     have hrec : (b (j+1)).txns r = some { y2 with phase := .committing v2 b2 } := by
       rw [hout]; simp [updTxn]
-    exact hA (j+1) (by omega) _ v2 b2 hrec rfl
-  obtain ⟨y, hy⟩ := recAt (n + n0) (by omega)
-  have hnl' := hnl (n + n0) (by omega) y hy
-  cases hph : y.phase with
-  | loading => exact hnl' hph
-  | ready v bb => exact hB (n + n0) (by omega) y v bb hy hph
-  | committing v bb => exact hA (n + n0) (by omega) y v bb hy hph
-  | finished o => exact noFin (n + n0) y o hy hph
-
-
-/-! ## The theorems -/
-
-/-- The parts of the fair spec. -/
-theorem protoSpec_parts {K : Kernel} {C : Config} {w0 : World} {b : Behaviour PState}
-    (h : protoSpec K C w0 b) :
-    PInit w0 (b 0) ∧ (∀ n, PNext K C (b n) (b (n+1)) ∨ b (n+1) = b n) ∧ protoFair K C b :=
-  ⟨h.1, fun n => h.2.1 n, h.2.2⟩
-
-/-- A request with a valid session is answered: no behaviour of the fair spec keeps it unanswered,
-    under the bounded-workload hypothesis (every request id is below `N`). -/
-theorem reply_core {K : Kernel} {C : Config} {w0 : World} {N : Nat} {b : Behaviour PState}
-    (hspec : protoSpec K C w0 b) (hN : ∀ n rid tok i, (b n).net (.req rid tok i) → rid < N)
-    (r : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : PrincipalId)
-    (hs : C.sessions tok = some (t, p)) (k : Nat) (hreq : (b k).net (.req r tok i)) :
-    ∃ m o, (b m).net (.clientReply r o) := by
-  obtain ⟨hinit, hstep, hF⟩ := protoSpec_parts hspec
-  obtain ⟨hFwd, hBeg, hRel, hDone, hLoad, hCom, hConf, hSto, hSnap, _⟩ := hF
-  obtain ⟨hGood, hLinv⟩ := seq_inv hinit hstep hN
-  refine Classical.byContradiction fun hcon => ?_
-  have H0 : ∀ m o, ¬ (b m).net (.clientReply r o) := fun m o h => hcon ⟨m, o, h⟩
-  have hnsF := nosession_false hstep hRel hLinv r H0
-  have hdecN := decided_none_of hstep hRel hDone hGood hLinv r H0
-  obtain ⟨n0, x0, hx0⟩ := txn_exists hstep hFwd hBeg r tok i t p hs k hreq hnsF
-  -- the tenant's revision is eventually final
-  have hmono : ∀ n, (b n).store.rev x0.tenant ≤ (b (n+1)).store.rev x0.tenant := by
-    intro n
-    rcases hstep n with h | h
-    · rcases rev_step h x0.tenant with h' | h' <;> omega
-    · rw [h]; exact Nat.le_refl _
-  have hbnd : ∀ n, (b n).store.rev x0.tenant ≤ N :=
-    fun n => Nat.le_trans ((hLinv n).rev x0.tenant) (dcount_le _ N)
-  obtain ⟨T, hT⟩ := eventually_const (fun n => (b n).store.rev x0.tenant) hmono N hbnd
-  obtain ⟨R, hR⟩ : ∃ R, ∀ n, T ≤ n → (b n).store.rev x0.tenant = R :=
-    ⟨(b T).store.rev x0.tenant, hT⟩
-  -- no commit of `x0.tenant` on the final revision is ever sent
-  have hNoR := no_commit_R (N := N) hstep hSto r x0.tenant hdecN T R hR
-  have hloadN0 : (b n0).net (.load r x0.tenant) := (hLinv n0).txnLoad r x0 hx0
-  obtain ⟨M, v, hMsnap⟩ := snap_eventually (N := N) hstep hLoad r x0.tenant n0 hloadN0 T R hR
-  have hload_inf := loading_inf hstep hGood hLinv r hdecN (hCom r) (hConf r) (fun tok t p i base res => hSto r tok t p i base res) n0 x0 hx0
-  -- the snapshot of the final revision is taken infinitely often (strong fairness), so the
-  -- transaction takes it and commits on the final revision: a contradiction
-  have hSnapInf : ∀ n, ∃ m, n ≤ m ∧ enabled (actSnap r x0.tenant v R) (b m) := by
-    intro n
-    obtain ⟨m, hm, y, hy, hph⟩ := hload_inf (n + M + n0)
-    have hten : x0.tenant = y.tenant := txn_tenant_const r hstep hx0 hy
-    exact ⟨m, by omega, { b m with txns := updTxn (b m).txns r { y with phase := .ready v R } },
-      y, hy, hten.symm, hph, hMsnap m (by omega), rfl⟩
-  obtain ⟨j0, _, hA0⟩ := sfair_inf (hSnap r x0.tenant v R) hSnapInf 0
-  obtain ⟨xj, hxj, hxj_t, _, _, hout0⟩ := hA0
-  have hrec1 : (b (j0+1)).txns r = some { xj with phase := .ready v R } := by
-    rw [hout0]; simp [updTxn]
-  -- the commit that follows the snapshot
-  have hpC : ∀ m, j0 + 1 ≤ m → enabled (actCommit K r) (b m) →
-      ¬ actCommit K r (b m) (b (m+1)) → enabled (actCommit K r) (b (m+1)) := by
-    intro m _ hen hnot
-    rcases hstep m with h | h
-    · obtain ⟨_, y', v', b', hy', hph', _⟩ := hen
-      have hk := ready_keep h hy' hph' (fun o => fun hd => by
-        have := (hGood m).doneDecided r o hd
-        rw [hdecN m] at this
-        cases this) hnot
-      exact ⟨{ sendOne (b (m+1)) (.commit r y'.tok y'.tenant y'.principal y'.intent b'
-          (verdict K v' y'.principal y'.intent)) with
-          txns := updTxn (b (m+1)).txns r { y' with phase := .committing v' b' } },
-        y', v', b', by rw [hk]; exact hy', hph', rfl⟩
-    · rw [h]; exact hen
-  have hen0 : enabled (actCommit K r) (b (j0+1)) :=
-    ⟨{ sendOne (b (j0+1)) (.commit r xj.tok xj.tenant xj.principal xj.intent R
-          (verdict K v xj.principal xj.intent)) with
-        txns := updTxn (b (j0+1)).txns r { (xj) with phase := .committing v R } },
-      { xj with phase := .ready v R }, v, R, hrec1, rfl, rfl⟩
-  obtain ⟨jc, hjc, hAc⟩ := fair_pers (hCom r) hpC hen0
-  -- the first commit at or after `j0+1`
-  have minimal : ∀ d j, j ≤ d → j0 + 1 ≤ j → actCommit K r (b j) (b (j+1)) →
-      ∃ j', j0 + 1 ≤ j' ∧ actCommit K r (b j') (b (j'+1)) ∧
-        ∀ i, j0 + 1 ≤ i → i < j' → ¬ actCommit K r (b i) (b (i+1)) := by
-    intro d
-    induction d with
-    | zero => intro j hj hJ _; omega
-    | succ d ih =>
-      intro j hj hJ hc
-      by_cases hex : ∃ i, j0 + 1 ≤ i ∧ i < j ∧ actCommit K r (b i) (b (i+1))
-      · obtain ⟨i, hi1, hi2, hi3⟩ := hex
-        exact ih i (by omega) hi1 hi3
-      · exact ⟨j, hJ, hc, fun i h1 h2 h3 => hex ⟨i, h1, h2, h3⟩⟩
-  obtain ⟨js, hjs, hcs, hmin⟩ := minimal jc jc (Nat.le_refl _) hjc hAc
-  -- the transaction's record is unchanged from `j0+1` up to the first commit
-  have hrec : ∀ d, j0 + 1 + d ≤ js → (b (j0 + 1 + d)).txns r = some { xj with phase := .ready v R } := by
-    intro d
-    induction d with
-    | zero => intro _; exact hrec1
-    | succ d ih =>
-      intro hle
-      have hprev := ih (by omega)
-      rcases hstep (j0 + 1 + d) with h | h
-      · have hk := ready_keep h hprev rfl (fun o => fun hd => by
-          have := (hGood (j0 + 1 + d)).doneDecided r o hd
-          rw [hdecN (j0 + 1 + d)] at this
-          cases this) (hmin (j0 + 1 + d) (by omega) (by omega))
-        show (b (j0 + 1 + d + 1)).txns r = _
-        rw [hk]; exact hprev
-      · show (b (j0 + 1 + d + 1)).txns r = _
-        rw [h]; exact hprev
-  -- at the first commit the record is ready on the final revision, so the commit is one of
-  -- `no_commit_R` forbids
-  obtain ⟨xa, va, ba, hxa, hpha, hout⟩ := hcs
-  have hrj := hrec (js - (j0 + 1)) (by omega)
-  rw [show j0 + 1 + (js - (j0 + 1)) = js by omega] at hrj
-  have hxa_eq : xa = { xj with phase := .ready v R } := Option.some.inj (hxa.symm.trans hrj)
-  rw [hxa_eq] at hpha
-  simp at hpha
-  obtain ⟨rfl, rfl⟩ := hpha
-  have h3 : (b (js+1)).net (.commit r xj.tok xj.tenant xj.principal xj.intent R
-      (verdict K v xj.principal xj.intent)) := by
-    rw [hout, hxa_eq]
+    exact noCommitting (j+1) (by omega) _ v2 b2 hrec rfl
+  -- from `T` on the transaction is loading
+  have loadingAt : ∀ m, T ≤ m → ∀ y, (b m).txns r = some y → y.phase = .loading := by
+    intro m hm y hy
+    cases hph : y.phase with
+    | loading => rfl
+    | ready v bb => exact (noReady m hm y v bb hy hph).elim
+    | committing v bb => exact (noCommitting m hm y v bb hy hph).elim
+    | finished o => exact (noFin m y o hy hph).elim
+  -- the store answers the load of the final attempt, and the backend takes the snapshot
+  obtain ⟨y0, hy0⟩ := recAt T (by omega)
+  have hL0 := (hLinv T).txnLoad r y0 hy0
+  have henL : enabled (actLoad r y0.tenant ((b T).attempt r)) (b T) :=
+    ⟨sendOne (b T) (.snap r y0.tenant ((b T).store.hist y0.tenant ((b T).store.rev y0.tenant))
+      ((b T).store.rev y0.tenant) ((b T).attempt r)), hL0, rfl⟩
+  have hpL : ∀ m, T ≤ m → enabled (actLoad r y0.tenant ((b T).attempt r)) (b m) →
+      ¬ actLoad r y0.tenant ((b T).attempt r) (b m) (b (m+1)) →
+      enabled (actLoad r y0.tenant ((b T).attempt r)) (b (m+1)) := by
+    intro m hm hen _
+    obtain ⟨s', h1, _⟩ := hen
+    exact ⟨sendOne (b (m+1)) (.snap r y0.tenant ((b (m+1)).store.hist y0.tenant ((b (m+1)).store.rev y0.tenant))
+      ((b (m+1)).store.rev y0.tenant) ((b T).attempt r)), net_seq hstep m (m+1) (by omega) _ h1, rfl⟩
+  obtain ⟨j, hjT, hLj⟩ := fair_pers (hLoad r y0.tenant ((b T).attempt r)) hpL henL
+  have hsnapj : (b (j+1)).net (.snap r y0.tenant ((b j).store.hist y0.tenant ((b j).store.rev y0.tenant))
+      ((b j).store.rev y0.tenant) ((b T).attempt r)) := by
+    rw [hLj.2]
     exact Or.inr rfl
-  rw [hxj_t] at h3
-  exact hNoR (js+1) xj.tok xj.principal xj.intent (verdict K v xj.principal xj.intent) h3
+  obtain ⟨v, base, hsn⟩ : ∃ v base, (b (j+1)).net (.snap r y0.tenant v base ((b T).attempt r)) :=
+    ⟨_, _, hsnapj⟩
+  have hpS2 : ∀ m, j+1 ≤ m → enabled (actSnap r y0.tenant v base ((b T).attempt r)) (b m) →
+      ¬ actSnap r y0.tenant v base ((b T).attempt r) (b m) (b (m+1)) →
+      enabled (actSnap r y0.tenant v base ((b T).attempt r)) (b (m+1)) := by
+    intro m hm _ _
+    obtain ⟨z, hz⟩ := recAt (m+1) (by omega)
+    have hzl := loadingAt (m+1) (by omega) z hz
+    have hzt : y0.tenant = z.tenant := txn_tenant_const r hstep hy0 hz
+    have hat : (b (m+1)).attempt r = (b T).attempt r := hT (m+1) (by omega)
+    exact ⟨{ b (m+1) with txns := updTxn (b (m+1)).txns r { z with phase := .ready v base } },
+      z, hz, hzt.symm, hzl, hat, net_seq hstep (j+1) (m+1) (by omega) _ hsn, rfl⟩
+  have hen2 : enabled (actSnap r y0.tenant v base ((b T).attempt r)) (b (j+1)) := by
+    obtain ⟨z, hz⟩ := recAt (j+1) (by omega)
+    have hzl := loadingAt (j+1) (by omega) z hz
+    have hzt : y0.tenant = z.tenant := txn_tenant_const r hstep hy0 hz
+    have hat : (b (j+1)).attempt r = (b T).attempt r := hT (j+1) (by omega)
+    exact ⟨{ b (j+1) with txns := updTxn (b (j+1)).txns r { z with phase := .ready v base } },
+      z, hz, hzt.symm, hzl, hat, hsn, rfl⟩
+  obtain ⟨j2, hj2, hS2⟩ := fair_pers (hSnap r y0.tenant v base ((b T).attempt r)) hpS2 hen2
+  obtain ⟨x2, hx2, -, -, -, -, hout2⟩ := hS2
+  have hrec2 : (b (j2+1)).txns r = some { x2 with phase := .ready v base } := by
+    rw [hout2]; simp [updTxn]
+  exact noReady (j2+1) (by omega) _ v base hrec2 rfl
 
 /-- A request with a valid session is eventually answered. -/
 theorem reply_leadsTo {K : Kernel} {C : Config} {w0 : World} {N : Nat} {b : Behaviour PState}
@@ -1426,11 +1868,10 @@ theorem decided_relayed_leadsTo {K : Kernel} {C : Config} {w0 : World} {N : Nat}
   exact hm'
 
 
-/-! ## Non-vacuity: a fair behaviour in which request 1 is refused and answered
+/-! ## Non-vacuity: a fair run in which request 1 is accepted, answered and published
 
-The refusal run of `Protocol.lean` (`refusal_reachable`), written out state by state, then
-stuttering. Once the run has reached its last state, no host action is enabled there except
-actions that change nothing, so the constant tail satisfies every fairness assumption. -/
+The accepting run written out state by state, then constant. In the last state every enabled host
+action is a no-op, so the constant tail satisfies each fairness assumption. -/
 
 /-- A packet already in the network does not change the state when sent again. -/
 theorem sendOne_self (s : PState) (p : Packet) (h : s.net p) : sendOne s p = s := by
@@ -1439,112 +1880,13 @@ theorem sendOne_self (s : PState) (p : Packet) (h : s.net p) : sendOne s p = s :
   show ({ s with net := fun x => s.net x ∨ x = p } : PState) = s
   rw [hf]
 
-def ws1 : PState := sendOne wInit (.req 1 0 (.create []))
-def ws2 : PState := sendOne ws1 (.fwd 1 0 (.create []))
-def ws3 : PState := { sendOne ws2 (.load 1 0) with
-  txns := updTxn ws2.txns 1 ⟨0, 0, 9, .create [], .loading⟩ }
-def ws4 : PState := sendOne ws3 (.snap 1 0 (wWorld 0) 0)
-def ws5 : PState := { ws4 with txns := updTxn ws4.txns 1 ⟨0, 0, 9, .create [], .ready (wWorld 0) 0⟩ }
-def ws6 : PState := { sendOne ws5 (.commit 1 0 0 9 (.create []) 0
-    (verdict wKernel (wWorld 0) 9 (.create []))) with
-  txns := updTxn ws5.txns 1 ⟨0, 0, 9, .create [], .committing (wWorld 0) 0⟩ }
-def ws7 : PState :=
-  { net := fun x => ws6.net x ∨ x = .done 1 (.refused .unauthorized)
-    txns := ws6.txns
-    noSession := ws6.noSession
-    store := { ws6.store with
-      decided := fun r => if r = 1 then some (.refused .unauthorized) else ws6.store.decided r } }
-def ws8 : PState := { sendOne ws7 (.reply 1 (.refused .unauthorized)) with
-  txns := updTxn ws7.txns 1 ⟨0, 0, 9, .create [], .finished (.refused .unauthorized)⟩ }
-def ws9 : PState := sendOne ws8 (.clientReply 1 (.refused .unauthorized))
-
-theorem ws1_step : PNext wKernel wConfig wInit ws1 := PNext.clientReq wInit 1 0 (.create [])
-
-theorem ws2_step : PNext wKernel wConfig ws1 ws2 :=
-  PNext.bffForward ws1 1 0 (.create []) (Or.inr rfl)
-
-theorem ws3_step : PNext wKernel wConfig ws2 ws3 :=
-  PNext.begin ws2 1 0 (.create []) 0 9 (Or.inr rfl) rfl rfl rfl
-
-theorem ws4_step : PNext wKernel wConfig ws3 ws4 :=
-  PNext.load ws3 1 0 (Or.inr rfl)
-
-theorem ws5_step : PNext wKernel wConfig ws4 ws5 :=
-  PNext.snap ws4 1 0 (wWorld 0) 0 ⟨0, 0, 9, .create [], .loading⟩ (Or.inr rfl) rfl rfl rfl
-
-theorem ws6_step : PNext wKernel wConfig ws5 ws6 :=
-  PNext.commit ws5 1 ⟨0, 0, 9, .create [], .ready (wWorld 0) 0⟩ (wWorld 0) 0 rfl rfl
-
-theorem ws7_step : PNext wKernel wConfig ws6 ws7 :=
-  PNext.storeRefuse ws6 1 0 0 9 (.create []) 0 (verdict wKernel (wWorld 0) 9 (.create []))
-    .unauthorized (Or.inr rfl) rfl rfl rfl
-
-theorem ws8_step : PNext wKernel wConfig ws7 ws8 :=
-  PNext.done ws7 1 (.refused .unauthorized) ⟨0, 0, 9, .create [], .committing (wWorld 0) 0⟩
-    (Or.inr rfl) rfl
-
-theorem ws9_step : PNext wKernel wConfig ws8 ws9 :=
-  PNext.bffRelay ws8 1 (.refused .unauthorized) (Or.inr rfl)
-
-/-- The states of the run, then the last state forever. -/
-def wtr : Nat → PState
-  | 0 => wInit
-  | 1 => ws1
-  | 2 => ws2
-  | 3 => ws3
-  | 4 => ws4
-  | 5 => ws5
-  | 6 => ws6
-  | 7 => ws7
-  | 8 => ws8
-  | _ => ws9
-
-theorem wtr_step (n : Nat) : PNext wKernel wConfig (wtr n) (wtr (n+1)) ∨ wtr (n+1) = wtr n := by
-  match n with
-  | 0 => exact Or.inl ws1_step
-  | 1 => exact Or.inl ws2_step
-  | 2 => exact Or.inl ws3_step
-  | 3 => exact Or.inl ws4_step
-  | 4 => exact Or.inl ws5_step
-  | 5 => exact Or.inl ws6_step
-  | 6 => exact Or.inl ws7_step
-  | 7 => exact Or.inl ws8_step
-  | 8 => exact Or.inl ws9_step
-  | k+9 => exact Or.inr rfl
-
-theorem wtr_ge (m : Nat) (h : 9 ≤ m) : wtr m = ws9 := by
-  match m, h with
-  | 9, _ => rfl
-  | k+10, _ => rfl
-
-/-- The last state of the run: its network, transactions and store. -/
-theorem ws9_net (p : Packet) : ws9.net p ↔
-    (p = .req 1 0 (.create []) ∨ p = .fwd 1 0 (.create []) ∨ p = .load 1 0 ∨
-     p = .snap 1 0 (wWorld 0) 0 ∨
-     p = .commit 1 0 0 9 (.create []) 0 (verdict wKernel (wWorld 0) 9 (.create [])) ∨
-     p = .done 1 (.refused .unauthorized) ∨ p = .reply 1 (.refused .unauthorized) ∨
-     p = .clientReply 1 (.refused .unauthorized)) := by
-  simp only [ws9, ws8, ws7, ws6, ws5, ws4, ws3, ws2, ws1, sendOne, wInit]
-  constructor
-  · intro h
-    rcases h with (((((((h | h) | h) | h) | h) | h) | h) | h) | h <;>
-      simp_all
-  · intro h
-    rcases h with h | h | h | h | h | h | h | h <;> simp_all
-
-theorem ws9_txn1 : ws9.txns 1 = some ⟨0, 0, 9, .create [], .finished (.refused .unauthorized)⟩ := rfl
-
-theorem ws9_txne (r : RequestId) (hr : r ≠ 1) : ws9.txns r = none := by
-  show (if r = 1 then _ else _) = none
-  simp [hr, ws8, ws7, ws6, ws5, ws4, ws3, ws2, ws1, wInit, updTxn, sendOne, ws9]
-
-theorem ws9_decided : ws9.store.decided 1 = some (.refused .unauthorized) := rfl
-
-theorem ws9_store_rest : ∀ r, r ≠ 1 → ws9.store.decided r = none := by
-  intro r hr
-  show (if r = 1 then _ else _) = none
-  simp [hr, ws8, ws7, ws6, ws5, ws4, ws3, ws2, ws1, wInit, sendOne, ws9]
-
+/-- Updating a transaction record to the value it already has changes nothing. -/
+theorem updTxn_same (f : RequestId → Option Txn) (rid : RequestId) (x : Txn) (h : f rid = some x) :
+    updTxn f rid x = f := by
+  funext r
+  by_cases hr : r = rid
+  · subst hr; simp [updTxn, h]
+  · simp [updTxn, hr]
 
 /-- A constant tail satisfies an action's weak fairness if every enabled instance of the action is
     a step that leaves the state unchanged. -/
@@ -1565,161 +1907,282 @@ theorem tail_weak {A : PState → PState → Prop} {b : Behaviour PState} {S : P
   rw [hS (n+M) (by omega)] at h1
   exact tail_always hS hself h1
 
-theorem tail_strong {A : PState → PState → Prop} {b : Behaviour PState} {S : PState} {M : Nat}
-    (hS : ∀ m, M ≤ m → b m = S) (hself : enabled A S → A S S) : strongFair A b := by
-  intro hinf
-  obtain ⟨k, hk⟩ := hinf M
-  have h1 : enabled A (b (M + k)) := hk
-  rw [hS (M+k) (by omega)] at h1
-  exact tail_always hS hself h1
+/-- The tenant after the accepted create of request 1 (the kernel's verdict on the empty create). -/
+def aT1 : Tenant := { wTenant with records := [(0, newRecord wTenant.schema 7 [])], nextId := 1 }
 
-/-- Updating a transaction record to the value it already has changes nothing. -/
-theorem updTxn_same (f : RequestId → Option Txn) (rid : RequestId) (x : Txn) (h : f rid = some x) :
-    updTxn f rid x = f := by
-  funext r
-  by_cases hr : r = rid
-  · subst hr; simp [updTxn, h]
-  · simp [updTxn, hr]
+theorem aT1_spec : stepTenant wTenant 7 (.create []) = .ok aT1 := rfl
 
-theorem ws9_clientReply : ws9.net (.clientReply 1 (.refused .unauthorized)) :=
-  (ws9_net _).2 (by simp)
+theorem aT1_owner : aT1.owner = 7 := rfl
 
-theorem ws9_done : ws9.net (.done 1 (.refused .unauthorized)) := (ws9_net _).2 (by simp)
+theorem aT1_can : canCreate aT1 7 = true := rfl
 
-theorem ws9_reply : ws9.net (.reply 1 (.refused .unauthorized)) := (ws9_net _).2 (by simp)
+/-- Token 0 belongs to principal 9 (refused); token 1 to principal 7 (the owner); subscriber 0 reads
+    tenant 0 as principal 7. -/
+def aConfig : Config :=
+  { sessions := fun tok => if tok = 0 then some (0, 9) else if tok = 1 then some (0, 7) else none
+    subs := fun sid => if sid = 0 then some (0, 7) else none }
 
-theorem ws9_snap : ws9.net (.snap 1 0 (wWorld 0) 0) := (ws9_net _).2 (by simp)
+/-- The committed event of request 1. -/
+def aEv : Event := { tenant := 0, rid := 1, post := aT1 }
 
-theorem ws9_fwd : ws9.net (.fwd 1 0 (.create [])) := (ws9_net _).2 (by simp)
+def a1 : PState := sendOne wInit (.req 1 1 (.create []))
+def a2 : PState := sendOne a1 (.fwd 1 1 (.create []))
+def a3 : PState := { sendOne a2 (.load 1 0 0) with
+  txns := updTxn a2.txns 1 ⟨1, 0, 7, .create [], .loading⟩ }
+def a4 : PState := sendOne a3 (.snap 1 0 (wWorld 0) 0 0)
+def a5 : PState := { a4 with txns := updTxn a4.txns 1 ⟨1, 0, 7, .create [], .ready (wWorld 0) 0⟩ }
+def a6 : PState := { sendOne a5 (.commit 1 1 0 7 (.create []) 0
+    (verdict wKernel (wWorld 0) 7 (.create []))) with
+  txns := updTxn a5.txns 1 ⟨1, 0, 7, .create [], .committing (wWorld 0) 0⟩ }
+def a7 : PState :=
+  { net := fun x => a6.net x ∨ x = .done 1 .accepted ∨ x = .committed aEv
+    txns := a6.txns
+    noSession := a6.noSession
+    attempt := a6.attempt
+    store := { hist := fun x k => if x = 0 ∧ k = 0 + 1 then some aT1 else a6.store.hist x k
+               rev := fun x => if x = 0 then 0 + 1 else a6.store.rev x
+               evs := a6.store.evs ++ [aEv]
+               decided := fun r => if r = 1 then some .accepted else a6.store.decided r } }
+def a8 : PState := { sendOne a7 (.reply 1 .accepted) with
+  txns := updTxn a7.txns 1 ⟨1, 0, 7, .create [], .finished .accepted⟩ }
+def a9 : PState := sendOne a8 (.clientReply 1 .accepted)
+def a10 : PState := sendOne a9 (.snap 1 0 (some aT1) 1 0)
+def a11 : PState := sendOne a10 (.frame 0 aEv)
 
+theorem a1_step : PNext wKernel aConfig wInit a1 := PNext.clientReq wInit 1 1 (.create [])
+
+theorem a2_step : PNext wKernel aConfig a1 a2 := PNext.bffForward a1 1 1 (.create []) (Or.inr rfl)
+
+theorem a3_step : PNext wKernel aConfig a2 a3 :=
+  PNext.begin a2 1 1 (.create []) 0 7 (Or.inr rfl) rfl rfl rfl
+
+theorem a4_step : PNext wKernel aConfig a3 a4 := PNext.load a3 1 0 0 (Or.inr rfl)
+
+theorem a5_step : PNext wKernel aConfig a4 a5 :=
+  PNext.snap a4 1 0 (wWorld 0) 0 0 ⟨1, 0, 7, .create [], .loading⟩ (Or.inr rfl) rfl rfl rfl rfl
+
+theorem a6_step : PNext wKernel aConfig a5 a6 :=
+  PNext.commit a5 1 ⟨1, 0, 7, .create [], .ready (wWorld 0) 0⟩ (wWorld 0) 0 rfl rfl
+
+theorem a7_step : PNext wKernel aConfig a6 a7 :=
+  PNext.storeAccept a6 1 1 0 7 (.create []) 0 (verdict wKernel (wWorld 0) 7 (.create [])) aT1
+    (Or.inr rfl) rfl rfl aT1_spec
+
+theorem a8_step : PNext wKernel aConfig a7 a8 :=
+  PNext.done a7 1 .accepted ⟨1, 0, 7, .create [], .committing (wWorld 0) 0⟩ (Or.inr (Or.inl rfl)) rfl
+
+theorem a9_step : PNext wKernel aConfig a8 a9 := PNext.bffRelay a8 1 .accepted (Or.inr rfl)
+
+theorem a9_load : a9.net (.load 1 0 0) := by
+  simp [a9, a8, a7, a6, a5, a4, a3, a2, a1, sendOne, wInit]
+
+theorem a10_step : PNext wKernel aConfig a9 a10 := PNext.load a9 1 0 0 a9_load
+
+theorem a10_committed : a10.net (.committed aEv) := by
+  simp [a10, a9, a8, a7, sendOne]
+
+theorem a11_step : PNext wKernel aConfig a10 a11 :=
+  PNext.publish a10 0 aEv 0 7 a10_committed rfl rfl rfl
+
+/-- The accepted run, then its last state forever. -/
+def atr : Nat → PState
+  | 0 => wInit
+  | 1 => a1
+  | 2 => a2
+  | 3 => a3
+  | 4 => a4
+  | 5 => a5
+  | 6 => a6
+  | 7 => a7
+  | 8 => a8
+  | 9 => a9
+  | 10 => a10
+  | _ => a11
+
+theorem atr_step (n : Nat) : PNext wKernel aConfig (atr n) (atr (n+1)) ∨ atr (n+1) = atr n := by
+  match n with
+  | 0 => exact Or.inl a1_step
+  | 1 => exact Or.inl a2_step
+  | 2 => exact Or.inl a3_step
+  | 3 => exact Or.inl a4_step
+  | 4 => exact Or.inl a5_step
+  | 5 => exact Or.inl a6_step
+  | 6 => exact Or.inl a7_step
+  | 7 => exact Or.inl a8_step
+  | 8 => exact Or.inl a9_step
+  | 9 => exact Or.inl a10_step
+  | 10 => exact Or.inl a11_step
+  | k+11 => exact Or.inr rfl
+
+theorem atr_ge (m : Nat) (h : 11 ≤ m) : atr m = a11 := by
+  match m, h with
+  | 11, _ => rfl
+  | k+12, _ => rfl
+
+/-- The last state: its network. -/
+theorem a11_net (p : Packet) : a11.net p ↔
+    (p = .req 1 1 (.create []) ∨ p = .fwd 1 1 (.create []) ∨ p = .load 1 0 0 ∨
+     p = .snap 1 0 (wWorld 0) 0 0 ∨
+     p = .commit 1 1 0 7 (.create []) 0 (verdict wKernel (wWorld 0) 7 (.create [])) ∨
+     p = .done 1 .accepted ∨ p = .committed aEv ∨ p = .reply 1 .accepted ∨
+     p = .clientReply 1 .accepted ∨ p = .snap 1 0 (some aT1) 1 0 ∨ p = .frame 0 aEv) := by
+  simp only [a11, a10, a9, a8, a7, a6, a5, a4, a3, a2, a1, sendOne, wInit, or_assoc, false_or]
+
+theorem a11_txn1 : a11.txns 1 = some ⟨1, 0, 7, .create [], .finished .accepted⟩ := rfl
+
+theorem a11_txne (r : RequestId) (hr : r ≠ 1) : a11.txns r = none := by
+  simp [a11, a10, a9, a8, a7, a6, a5, a4, a3, a2, a1, sendOne, wInit, updTxn, hr]
+
+theorem a11_decided : a11.store.decided 1 = some .accepted := rfl
+
+theorem a11_decided_rest (r : RequestId) (hr : r ≠ 1) : a11.store.decided r = none := by
+  simp [a11, a10, a9, a8, a7, a6, a5, a4, a3, a2, a1, sendOne, wInit, hr]
+
+theorem a11_hist : a11.store.hist 0 (a11.store.rev 0) = some aT1 := rfl
+
+theorem a11_rev : a11.store.rev 0 = 1 := rfl
+
+theorem a11_attempt (r : RequestId) : a11.attempt r = 0 := rfl
+
+theorem a11_done : a11.net (.done 1 .accepted) := (a11_net _).2 (by simp)
+theorem a11_reply : a11.net (.reply 1 .accepted) := (a11_net _).2 (by simp)
+theorem a11_clientReply : a11.net (.clientReply 1 .accepted) := (a11_net _).2 (by simp)
+theorem a11_commit : a11.net (.commit 1 1 0 7 (.create []) 0 (verdict wKernel (wWorld 0) 7 (.create []))) :=
+  (a11_net _).2 (by simp)
+theorem a11_fwd : a11.net (.fwd 1 1 (.create [])) := (a11_net _).2 (by simp)
+theorem a11_load : a11.net (.load 1 0 0) := (a11_net _).2 (by simp)
+theorem a11_snap : a11.net (.snap 1 0 (some aT1) 1 0) := (a11_net _).2 (by simp)
+theorem a11_frame : a11.net (.frame 0 aEv) := (a11_net _).2 (by simp)
+
+/-- Each enabled instance of each host action is a step that leaves the last state unchanged. -/
 theorem fwd_self (rid : RequestId) (tok : Token) (i : Intent)
-    (hen : enabled (actFwd rid tok i) ws9) : actFwd rid tok i ws9 ws9 := by
+    (hen : enabled (actFwd rid tok i) a11) : actFwd rid tok i a11 a11 := by
   obtain ⟨_, h1, _⟩ := hen
-  have hh : rid = 1 ∧ tok = 0 ∧ i = .create [] := by
-    simpa using (ws9_net _).1 h1
+  have hh : rid = 1 ∧ tok = 1 ∧ i = .create [] := by simpa using (a11_net _).1 h1
   obtain ⟨rfl, rfl, rfl⟩ := hh
-  exact ⟨h1, (sendOne_self ws9 _ ws9_fwd).symm⟩
+  exact ⟨h1, (sendOne_self a11 _ a11_fwd).symm⟩
 
-theorem begin_none (C : Config) (rid : RequestId) (tok : Token) (i : Intent)
-    (hen : enabled (actBegin C rid tok i) ws9) : False := by
+theorem begin_none (rid : RequestId) (tok : Token) (i : Intent) (C : Config)
+    (hen : enabled (actBegin C rid tok i) a11) : False := by
   obtain ⟨_, t, p, _, h1, hnone, _, _⟩ := hen
-  have hh : rid = 1 ∧ tok = 0 ∧ i = .create [] := by
-    simpa using (ws9_net _).1 h1
+  have hh : rid = 1 ∧ tok = 1 ∧ i = .create [] := by simpa using (a11_net _).1 h1
   obtain ⟨rfl, _, _⟩ := hh
-  rw [ws9_txn1] at hnone
+  rw [a11_txn1] at hnone
   cases hnone
 
-theorem relay_self (rid : RequestId) (o : Outcome) (hen : enabled (actRelay rid o) ws9) :
-    actRelay rid o ws9 ws9 := by
+theorem relay_self (rid : RequestId) (o : Outcome) (hen : enabled (actRelay rid o) a11) :
+    actRelay rid o a11 a11 := by
   obtain ⟨_, h1, _⟩ := hen
-  have hh : rid = 1 ∧ o = .refused .unauthorized := by
-    simpa using (ws9_net _).1 h1
+  have hh : rid = 1 ∧ o = .accepted := by simpa using (a11_net _).1 h1
   obtain ⟨rfl, rfl⟩ := hh
-  exact ⟨ws9_reply, (sendOne_self ws9 _ ws9_clientReply).symm⟩
+  exact ⟨a11_reply, (sendOne_self a11 _ a11_clientReply).symm⟩
 
-theorem done_self (rid : RequestId) (o : Outcome) (hen : enabled (actDone rid o) ws9) :
-    actDone rid o ws9 ws9 := by
+theorem done_self (rid : RequestId) (o : Outcome) (hen : enabled (actDone rid o) a11) :
+    actDone rid o a11 a11 := by
   obtain ⟨_, x, hx, hdn, _⟩ := hen
-  have hh : rid = 1 ∧ o = .refused .unauthorized := by
-    simpa using (ws9_net _).1 hdn
+  have hh : rid = 1 ∧ o = .accepted := by simpa using (a11_net _).1 hdn
   obtain ⟨rfl, rfl⟩ := hh
-  have hx' : x = ⟨0, 0, 9, .create [], .finished (.refused .unauthorized)⟩ :=
-    Option.some.inj (hx.symm.trans ws9_txn1)
+  have hx' : x = ⟨1, 0, 7, .create [], .finished .accepted⟩ :=
+    Option.some.inj (hx.symm.trans a11_txn1)
   subst hx'
-  refine ⟨_, ws9_txn1, ws9_done, ?_⟩
-  rw [sendOne_self ws9 _ ws9_reply]
-  exact (congrArg (fun f => { ws9 with txns := f }) (updTxn_same _ 1 _ ws9_txn1)).symm
+  refine ⟨_, a11_txn1, a11_done, ?_⟩
+  rw [sendOne_self a11 _ a11_reply]
+  exact (congrArg (fun f => { a11 with txns := f }) (updTxn_same _ 1 _ a11_txn1)).symm
 
-theorem load_self (rid : RequestId) (t : TenantId) (hen : enabled (actLoad rid t) ws9) :
-    actLoad rid t ws9 ws9 := by
+theorem load_self (rid : RequestId) (t : TenantId) (a : Nat) (hen : enabled (actLoad rid t a) a11) :
+    actLoad rid t a a11 a11 := by
   obtain ⟨_, h1, _⟩ := hen
-  have hh : rid = 1 ∧ t = 0 := by
-    simpa using (ws9_net _).1 h1
-  obtain ⟨rfl, rfl⟩ := hh
-  exact ⟨ws9_fwd |> fun _ => (ws9_net _).2 (by simp), (sendOne_self ws9 _ ws9_snap).symm⟩
+  have hh : rid = 1 ∧ t = 0 ∧ a = 0 := by simpa using (a11_net _).1 h1
+  obtain ⟨rfl, rfl, rfl⟩ := hh
+  exact ⟨a11_load, (sendOne_self a11 _ a11_snap).symm⟩
 
-theorem commit_none (K : Kernel) (rid : RequestId) (hen : enabled (actCommit K rid) ws9) :
-    False := by
+theorem commit_none (K : Kernel) (rid : RequestId) (hen : enabled (actCommit K rid) a11) : False := by
   obtain ⟨_, x, v, b, hx, hph, _⟩ := hen
   by_cases hr : rid = 1
   · subst hr
-    rw [ws9_txn1] at hx
+    rw [a11_txn1] at hx
     cases hx
     cases hph
-  · rw [ws9_txne rid hr] at hx
+  · rw [a11_txne rid hr] at hx
     cases hx
 
-theorem conflict_none (rid : RequestId) (hen : enabled (actConflict rid) ws9) : False := by
+theorem conflict_none (rid : RequestId) (hen : enabled (actConflict rid) a11) : False := by
   obtain ⟨_, x, v, b, hx, hph, _⟩ := hen
   by_cases hr : rid = 1
   · subst hr
-    rw [ws9_txn1] at hx
+    rw [a11_txn1] at hx
     cases hx
     cases hph
-  · rw [ws9_txne rid hr] at hx
+  · rw [a11_txne rid hr] at hx
     cases hx
 
-theorem snap_none (rid : RequestId) (t : TenantId) (v : Option Tenant) (b : Nat)
-    (hen : enabled (actSnap rid t v b) ws9) : False := by
+theorem snap_none (rid : RequestId) (t : TenantId) (v : Option Tenant) (b a : Nat)
+    (hen : enabled (actSnap rid t v b a) a11) : False := by
   obtain ⟨_, x, hx, _, hph, _⟩ := hen
   by_cases hr : rid = 1
   · subst hr
-    rw [ws9_txn1] at hx
+    rw [a11_txn1] at hx
     cases hx
     cases hph
-  · rw [ws9_txne rid hr] at hx
+  · rw [a11_txne rid hr] at hx
     cases hx
 
-theorem publish_none (K : Kernel) (C : Config) (sid : SubId) (e : Event)
-    (hen : enabled (actPublish K C sid e) ws9) : False := by
-  obtain ⟨_, h1, _⟩ := hen
-  have := (ws9_net _).1 h1
-  simp at this
+theorem a11_committed : a11.net (.committed aEv) := (a11_net _).2 (by simp)
+
+theorem publish_self (sid : SubId) (e : Event) (hen : enabled (actPublish wKernel aConfig sid e) a11) :
+    actPublish wKernel aConfig sid e a11 a11 := by
+  obtain ⟨_, hcom, ⟨t, p, hsub, htn, hr⟩, _⟩ := hen
+  have he : e = aEv := by simpa using (a11_net _).1 hcom
+  have hs0 : sid = 0 := Classical.byContradiction fun hne => by
+    simp [aConfig, hne] at hsub
+  subst he
+  subst hs0
+  exact ⟨a11_committed, ⟨0, 7, rfl, rfl, aT1_can⟩, (sendOne_self a11 _ a11_frame).symm⟩
 
 theorem store_self (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId) (i : Intent)
     (base : Nat) (res : Except Err Tenant)
-    (hen : enabled (StoreStep wKernel wConfig rid tok t p i base res) ws9) :
-    StoreStep wKernel wConfig rid tok t p i base res ws9 ws9 := by
+    (hen : enabled (StoreStep wKernel aConfig rid tok t p i base res) a11) :
+    StoreStep wKernel aConfig rid tok t p i base res a11 a11 := by
   obtain ⟨_, hs⟩ := hen
-  have hc : ws9.net (.commit rid tok t p i base res) := storeStep_net hs
-  have hh : rid = 1 ∧ tok = 0 ∧ t = 0 ∧ p = 9 ∧ i = .create [] ∧ base = 0 ∧
-      res = verdict wKernel (wWorld 0) 9 (.create []) := by
-    simpa using (ws9_net _).1 hc
+  have hc : a11.net (.commit rid tok t p i base res) := storeStep_net hs
+  have hh : rid = 1 ∧ tok = 1 ∧ t = 0 ∧ p = 7 ∧ i = .create [] ∧ base = 0 ∧
+      res = verdict wKernel (wWorld 0) 7 (.create []) := by
+    simpa using (a11_net _).1 hc
   obtain ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩ := hh
-  have hs' := StoreStep.decided (K := wKernel) (C := wConfig) ws9 (.refused .unauthorized) hc
-    ws9_decided
-  rw [sendOne_self ws9 _ ws9_done] at hs'
+  have hs' := StoreStep.decided (K := wKernel) (C := aConfig) a11 .accepted hc a11_decided
+  rw [sendOne_self a11 _ a11_done] at hs'
   exact hs'
 
-/-- The refusal run, then stuttering, satisfies the fair spec, and request 1 is refused. -/
-theorem protoSpec_nonvacuous : ∃ b : Behaviour PState, protoSpec wKernel wConfig wWorld b ∧
-    (∃ k, (b k).net (.req 1 0 (.create []))) ∧
+/-- The accepted run, then stuttering, satisfies the fair spec. Request 1 is accepted, its reply is
+    delivered to the client, and the committed event is delivered as a frame to subscriber 0. -/
+theorem protoSpec_nonvacuous : ∃ b : Behaviour PState, protoSpec wKernel aConfig wWorld b ∧
+    (∃ k, (b k).net (.req 1 1 (.create []))) ∧
     (∃ N, ∀ n rid tok i, (b n).net (.req rid tok i) → rid < N) ∧
-    (b 9).net (.clientReply 1 (.refused .unauthorized)) := by
-  have hS : ∀ m, 9 ≤ m → wtr m = ws9 := fun m hm => wtr_ge m hm
-  refine ⟨wtr, ?_, ⟨1, Or.inr rfl⟩, ⟨2, ?_⟩, ws9_clientReply⟩
+    (b 11).net (.clientReply 1 .accepted) ∧ (b 11).net (.frame 0 aEv) := by
+  have hS : ∀ m, 11 ≤ m → atr m = a11 := fun m hm => atr_ge m hm
+  refine ⟨atr, ?_, ⟨1, Or.inr rfl⟩, ⟨2, ?_⟩, a11_clientReply, a11_frame⟩
   · unfold protoSpec
     refine ⟨wInit_pinit, fun n => ?_, ?_⟩
-    · rcases wtr_step n with h | h
+    · rcases atr_step n with h | h
       · exact Or.inl h
       · exact Or.inr (congrArg id h)
     · exact ⟨fun rid tok i => tail_weak hS (fwd_self rid tok i),
-        fun rid tok i => tail_weak hS (fun hen => (begin_none wConfig rid tok i hen).elim),
+        fun rid tok i => tail_weak hS (fun hen => (begin_none rid tok i aConfig hen).elim),
         fun rid o => tail_weak hS (relay_self rid o),
         fun rid o => tail_weak hS (done_self rid o),
-        fun rid t => tail_weak hS (load_self rid t),
+        fun rid t a => tail_weak hS (load_self rid t a),
         fun rid => tail_weak hS (fun hen => (commit_none wKernel rid hen).elim),
         fun rid => tail_weak hS (fun hen => (conflict_none rid hen).elim),
         fun rid tok t p i base res => tail_weak hS (store_self rid tok t p i base res),
-        fun rid t v base => tail_strong hS (fun hen => (snap_none rid t v base hen).elim),
-        fun sid e => tail_weak hS (fun hen => (publish_none wKernel wConfig sid e hen).elim)⟩
+        fun rid t v base a => tail_weak hS (fun hen => (snap_none rid t v base a hen).elim),
+        fun sid e => tail_weak hS (publish_self sid e)⟩
   · intro n rid tok i hn
-    have h9 : ws9.net (.req rid tok i) := by
-      by_cases hle : n ≤ 9
-      · exact net_seq wtr_step n 9 hle _ hn
+    have h9 : a11.net (.req rid tok i) := by
+      by_cases hle : n ≤ 11
+      · exact net_seq atr_step n 11 hle _ hn
       · rw [hS n (by omega)] at hn
         exact hn
-    have key : rid = 1 ∧ tok = 0 ∧ i = .create [] := by simpa using (ws9_net _).1 h9
+    have key : rid = 1 ∧ tok = 1 ∧ i = .create [] := by simpa using (a11_net _).1 h9
     obtain ⟨k1, -, -⟩ := key
     rw [k1]
     decide

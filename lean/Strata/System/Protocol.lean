@@ -10,7 +10,10 @@ Hosts and what they do:
   backend's reply to the client (it keeps no state);
 - the backend runs one transaction per request, concurrently with the others. A transaction loads
   a snapshot of its tenant at some revision, computes the kernel's verdict on it, and sends a
-  commit guarded by that revision. A conflict sends it back to load again;
+  commit guarded by that revision. A conflict sends it back to load again. Each load and snapshot
+  carries the transaction's attempt number (the count of its conflicts so far), and the backend
+  accepts only the snapshot of its current attempt: a snapshot read for an earlier attempt is never
+  consumed;
 - the store keeps each tenant's history of states (index = revision), decides each request once,
   and commits a transaction only when the tenant is still at the revision it was based on;
 - the outbox publisher sends each committed event to the subscribers whose principal may read it.
@@ -38,9 +41,9 @@ inductive Packet where
   /-- BFF to client: the observable reply -/
   | clientReply (rid : RequestId) (o : Outcome)
   /-- backend to store: load the tenant -/
-  | load (rid : RequestId) (t : TenantId)
+  | load (rid : RequestId) (t : TenantId) (a : Nat)
   /-- store to backend: the tenant's state at revision `base` -/
-  | snap (rid : RequestId) (t : TenantId) (v : Option Tenant) (base : Nat)
+  | snap (rid : RequestId) (t : TenantId) (v : Option Tenant) (base : Nat) (a : Nat)
   /-- backend to store: the verdict computed on the snapshot at revision `base` -/
   | commit (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId) (i : Intent)
       (base : Nat) (res : Except Err Tenant)
@@ -83,6 +86,8 @@ structure PState where
   txns : RequestId → Option Txn
   noSession : RequestId → Bool
   store : StoreState
+  /-- the attempt number of each request's transaction: it counts the conflicts so far -/
+  attempt : RequestId → Nat
 
 /-- Packets the protocol sends without changing any invariant's subject. -/
 def Inert : Packet → Prop
@@ -91,6 +96,9 @@ def Inert : Packet → Prop
 
 def sendOne (s : PState) (p : Packet) : PState :=
   { s with net := fun x => s.net x ∨ x = p }
+
+def updAtt (f : RequestId → Nat) (rid : RequestId) (n : Nat) : RequestId → Nat :=
+  fun r => if r = rid then n else f r
 
 def updTxn (f : RequestId → Option Txn) (rid : RequestId) (x : Txn) : RequestId → Option Txn :=
   fun r => if r = rid then some x else f r
@@ -107,7 +115,7 @@ theorem updTxn_ne (f : RequestId → Option Txn) (rid : RequestId) (x : Txn) (r 
 def PInit (w0 : World) (s : PState) : Prop :=
   (∀ p, ¬ s.net p) ∧ (∀ r, s.txns r = none) ∧ (∀ r, s.noSession r = false) ∧
   (∀ t k, s.store.hist t k = w0 t) ∧ (∀ t, s.store.rev t = 0) ∧ s.store.evs = [] ∧
-  (∀ r, s.store.decided r = none)
+  (∀ r, s.store.decided r = none) ∧ (∀ r, s.attempt r = 0)
 
 
 /-- One step of the protocol: exactly one host acts on at most one packet and sends its packets.
@@ -129,7 +137,7 @@ inductive PNext (K : Kernel) (C : Config) : PState → PState → Prop
   | begin (s : PState) (rid : RequestId) (tok : Token) (i : Intent) (t : TenantId)
       (p : PrincipalId) (h : s.net (.fwd rid tok i)) (hx : s.txns rid = none)
       (hn : s.noSession rid = false) (hs : C.sessions tok = some (t, p)) :
-      PNext K C s { sendOne s (.load rid t) with
+      PNext K C s { sendOne s (.load rid t (s.attempt rid)) with
         txns := updTxn s.txns rid ⟨tok, t, p, i, .loading⟩ }
   /-- The backend answers a request whose token has no session. -/
   | noSession (s : PState) (rid : RequestId) (tok : Token) (i : Intent)
@@ -138,9 +146,9 @@ inductive PNext (K : Kernel) (C : Config) : PState → PState → Prop
       PNext K C s { sendOne s (.reply rid .noSession) with
         noSession := fun r => if r = rid then true else s.noSession r }
   /-- A transaction receives a snapshot of its tenant. -/
-  | snap (s : PState) (rid : RequestId) (t : TenantId) (v : Option Tenant) (base : Nat)
-      (x : Txn) (h : s.net (.snap rid t v base)) (hx : s.txns rid = some x)
-      (ht : x.tenant = t) (hl : x.phase = .loading) :
+  | snap (s : PState) (rid : RequestId) (t : TenantId) (v : Option Tenant) (base : Nat) (a : Nat)
+      (x : Txn) (h : s.net (.snap rid t v base a)) (hx : s.txns rid = some x)
+      (ht : x.tenant = t) (hl : x.phase = .loading) (hat : s.attempt rid = a) :
       PNext K C s { s with txns := updTxn s.txns rid { x with phase := .ready v base } }
   /-- A transaction computes the kernel's verdict on its snapshot and sends the commit. -/
   | commit (s : PState) (rid : RequestId) (x : Txn) (v : Option Tenant) (base : Nat)
@@ -152,16 +160,17 @@ inductive PNext (K : Kernel) (C : Config) : PState → PState → Prop
   | conflict (s : PState) (rid : RequestId) (base : Nat) (x : Txn) (v : Option Tenant)
       (h : s.net (.conflict rid base)) (hx : s.txns rid = some x)
       (hp : x.phase = .committing v base) :
-      PNext K C s { sendOne s (.load rid x.tenant) with
-        txns := updTxn s.txns rid { x with phase := .loading } }
+      PNext K C s { sendOne s (.load rid x.tenant (s.attempt rid + 1)) with
+        txns := updTxn s.txns rid { x with phase := .loading },
+        attempt := updAtt s.attempt rid (s.attempt rid + 1) }
   /-- The store decided the request: the backend replies. -/
   | done (s : PState) (rid : RequestId) (o : Outcome) (x : Txn)
       (h : s.net (.done rid o)) (hx : s.txns rid = some x) :
       PNext K C s { sendOne s (.reply rid o) with
         txns := updTxn s.txns rid { x with phase := .finished o } }
   /-- The store answers a load with the tenant's current state and revision. -/
-  | load (s : PState) (rid : RequestId) (t : TenantId) (h : s.net (.load rid t)) :
-      PNext K C s (sendOne s (.snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t)))
+  | load (s : PState) (rid : RequestId) (t : TenantId) (a : Nat) (h : s.net (.load rid t a)) :
+      PNext K C s (sendOne s (.snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t) a))
   /-- A commit for a request the store has decided: the decision is sent again, nothing changes. -/
   | storeDecided (s : PState) (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId)
       (i : Intent) (base : Nat) (res : Except Err Tenant) (o : Outcome)
@@ -183,6 +192,7 @@ inductive PNext (K : Kernel) (C : Config) : PState → PState → Prop
         { net := fun x => s.net x ∨ x = .done rid .accepted ∨ x = .committed (Event.mk t rid t')
           txns := s.txns
           noSession := s.noSession
+          attempt := s.attempt
           store :=
             { hist := fun x k => if x = t ∧ k = base + 1 then some t' else s.store.hist x k
               rev := fun x => if x = t then base + 1 else s.store.rev x
@@ -197,6 +207,7 @@ inductive PNext (K : Kernel) (C : Config) : PState → PState → Prop
         { net := fun x => s.net x ∨ x = .done rid (.refused e)
           txns := s.txns
           noSession := s.noSession
+          attempt := s.attempt
           store := { s.store with
             decided := fun r => if r = rid then some (.refused e) else s.store.decided r } }
   /-- The publisher sends a committed event to a subscriber whose principal may read it. -/
@@ -216,14 +227,20 @@ def absState (s : PState) : SysState :=
     frames := fun f => s.net (.frame f.1 f.2) }
 
 /-- The invariant of reachable protocol states, over the packets sent and the host states. -/
+theorem ex_snap_ex {s s' : PState} {rid : RequestId} {t : TenantId} {v : Option Tenant}
+    {b : Nat} (h : ∃ a, s.net (.snap rid t v b a)) (hm : ∀ p, s.net p → s'.net p) :
+    ∃ a, s'.net (.snap rid t v b a) := by
+  obtain ⟨a, ha⟩ := h
+  exact ⟨a, hm _ ha⟩
+
 structure Good (K : Kernel) (C : Config) (s : PState) : Prop where
   /-- A snapshot is the tenant's state at the revision it names, and that revision exists. -/
-  snapHist : ∀ rid t v base, s.net (.snap rid t v base) →
+  snapHist : ∀ rid t v base a, s.net (.snap rid t v base a) →
     base ≤ s.store.rev t ∧ s.store.hist t base = v
   /-- A transaction in the ready or committing phase holds a snapshot the store sent. -/
   snapPhase : ∀ rid x v base, s.txns rid = some x →
     (x.phase = .ready v base ∨ x.phase = .committing v base) →
-    s.net (.snap rid x.tenant v base)
+    ∃ a, s.net (.snap rid x.tenant v base a)
   /-- A transaction's token is a session of its tenant and principal. -/
   sessionTxn : ∀ rid x, s.txns rid = some x → C.sessions x.tok = some (x.tenant, x.principal)
   /-- A commit belongs to a transaction, with the same token, tenant, principal and intent. -/
@@ -231,7 +248,7 @@ structure Good (K : Kernel) (C : Config) (s : PState) : Prop where
     ∃ x, s.txns rid = some x ∧ x.tok = tok ∧ x.tenant = t ∧ x.principal = p ∧ x.intent = i
   /-- A commit's result is the kernel's verdict on the snapshot it was computed from. -/
   commitCorrect : ∀ rid tok t p i base res, s.net (.commit rid tok t p i base res) →
-    ∃ v, s.net (.snap rid t v base) ∧ res = verdict K v p i
+    ∃ v a, s.net (.snap rid t v base a) ∧ res = verdict K v p i
   /-- A done packet is the store's decision. -/
   doneDecided : ∀ rid o, s.net (.done rid o) → s.store.decided rid = some o
   /-- A reply is the store's decision, or an answer for a request without a session. -/
@@ -248,13 +265,13 @@ theorem good_inert {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s) (
     (hp : Inert p) (hnet : ∀ x, s'.net x ↔ (s.net x ∨ x = p)) (htx : s'.txns = s.txns)
     (hns : s'.noSession = s.noSession) (hst : s'.store = s.store) : Good K C s' := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r t v b h
+  · intro r t v b _ h
     rcases (hnet _).mp h with h | h
-    · rw [hst]; exact hg.snapHist r t v b h
+    · rw [hst]; exact hg.snapHist r t v b _ h
     · subst h; simp [Inert] at hp
   · intro r x v b hx hph
     rw [htx] at hx
-    exact (hnet _).mpr (Or.inl (hg.snapPhase r x v b hx hph))
+    exact ex_snap_ex (hg.snapPhase r x v b hx hph) (fun p hp => (hnet p).mpr (Or.inl hp))
   · intro r x hx
     rw [htx] at hx
     exact hg.sessionTxn r x hx
@@ -265,8 +282,8 @@ theorem good_inert {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s) (
     · subst h; simp [Inert] at hp
   · intro r tok t p' i b res h
     rcases (hnet _).mp h with h | h
-    · obtain ⟨v, hv, he⟩ := hg.commitCorrect r tok t p' i b res h
-      exact ⟨v, (hnet _).mpr (Or.inl hv), he⟩
+    · obtain ⟨v, _, hv, he⟩ := hg.commitCorrect r tok t p' i b res h
+      exact ⟨v, _, (hnet _).mpr (Or.inl hv), he⟩
     · subst h; simp [Inert] at hp
   · intro r o h
     rw [hst]
@@ -299,14 +316,14 @@ theorem good_begin {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
     (rid : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : PrincipalId)
     (hx : s.txns rid = none) (hn : s.noSession rid = false)
     (hs : C.sessions tok = some (t, p))
-    (hnet : ∀ y, s'.net y ↔ (s.net y ∨ y = .load rid t))
+    (hnet : ∀ y, s'.net y ↔ (s.net y ∨ y = .load rid t (s.attempt rid)))
     (htx : s'.txns = updTxn s.txns rid ⟨tok, t, p, i, .loading⟩)
     (hns : s'.noSession = s.noSession) (hst : s'.store = s.store) : Good K C s' := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r t' v b h
+  · intro r t' v b _ h
     rw [hst]
     rcases (hnet _).mp h with h | h
-    · exact hg.snapHist r t' v b h
+    · exact hg.snapHist r t' v b _ h
     · cases h
   · intro r y v b hy hph
     rw [htx] at hy
@@ -315,7 +332,7 @@ theorem good_begin {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
       rw [← Option.some.inj hy] at hph
       simp at hph
     · rw [updTxn_ne _ _ _ _ hr] at hy
-      exact (hnet _).mpr (Or.inl (hg.snapPhase r y v b hy hph))
+      exact ex_snap_ex (hg.snapPhase r y v b hy hph) (fun p hp => (hnet p).mpr (Or.inl hp))
   · intro r y hy
     rw [htx] at hy
     by_cases hr : r = rid
@@ -334,8 +351,8 @@ theorem good_begin {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
     · cases h
   · intro r tok' t' p' i' b res h
     rcases (hnet _).mp h with h | h
-    · obtain ⟨v, hv, he⟩ := hg.commitCorrect r tok' t' p' i' b res h
-      exact ⟨v, (hnet _).mpr (Or.inl hv), he⟩
+    · obtain ⟨v, _, hv, he⟩ := hg.commitCorrect r tok' t' p' i' b res h
+      exact ⟨v, _, (hnet _).mpr (Or.inl hv), he⟩
     · cases h
   · intro r o h
     rw [hst]
@@ -375,14 +392,14 @@ theorem good_noSession {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C 
     (hns : ∀ r, s'.noSession r = if r = rid then true else s.noSession r)
     (hst : s'.store = s.store) : Good K C s' := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r t v b h
+  · intro r t v b _ h
     rw [hst]
     rcases (hnet _).mp h with h | h
-    · exact hg.snapHist r t v b h
+    · exact hg.snapHist r t v b _ h
     · cases h
   · intro r y v b hy hph
     rw [htx] at hy
-    exact (hnet _).mpr (Or.inl (hg.snapPhase r y v b hy hph))
+    exact ex_snap_ex (hg.snapPhase r y v b hy hph) (fun p hp => (hnet p).mpr (Or.inl hp))
   · intro r y hy
     rw [htx] at hy
     exact hg.sessionTxn r y hy
@@ -393,8 +410,8 @@ theorem good_noSession {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C 
     · cases h
   · intro r tok t p' i' b res h
     rcases (hnet _).mp h with h | h
-    · obtain ⟨v, hv, he⟩ := hg.commitCorrect r tok t p' i' b res h
-      exact ⟨v, (hnet _).mpr (Or.inl hv), he⟩
+    · obtain ⟨v, _, hv, he⟩ := hg.commitCorrect r tok t p' i' b res h
+      exact ⟨v, _, (hnet _).mpr (Or.inl hv), he⟩
     · cases h
   · intro r o h
     rw [hst]
@@ -467,15 +484,15 @@ theorem commit_transfer {s s' : PState} {rid : RequestId} {x y : Txn}
 
 theorem good_snap {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
     (rid : RequestId) (t : TenantId) (v : Option Tenant) (base : Nat) (x : Txn)
-    (h : s.net (.snap rid t v base)) (hx : s.txns rid = some x) (ht : x.tenant = t)
+    (a : Nat) (h : s.net (.snap rid t v base a)) (hx : s.txns rid = some x) (ht : x.tenant = t)
     (hnet : ∀ y, s'.net y ↔ s.net y)
     (htx : s'.txns = updTxn s.txns rid { x with phase := .ready v base })
     (hns : s'.noSession = s.noSession) (hst : s'.store = s.store) : Good K C s' := by
   subst ht
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r t' v' b' h'
+  · intro r t' v' b' _ h'
     rw [hst]
-    exact hg.snapHist r t' v' b' ((hnet _).mp h')
+    exact hg.snapHist r t' v' b' _ ((hnet _).mp h')
   · intro r y v' b' hy hph
     rw [htx] at hy
     by_cases hr : r = rid
@@ -486,10 +503,10 @@ theorem good_snap {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
       rcases hph with hph | hph
       · simp at hph
         obtain ⟨rfl, rfl⟩ := hph
-        exact (hnet _).mpr h
+        exact ⟨a, (hnet _).mpr h⟩
       · simp at hph
     · rw [updTxn_ne _ _ _ _ hr] at hy
-      exact (hnet _).mpr (hg.snapPhase r y v' b' hy hph)
+      exact ex_snap_ex (hg.snapPhase r y v' b' hy hph) (fun p hp => (hnet p).mpr hp)
   · intro r y hy
     rw [htx] at hy
     by_cases hr : r = rid
@@ -502,8 +519,8 @@ theorem good_snap {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
   · intro r tok' t' p' i' b' res h'
     exact commit_transfer hx (upd_fields x _) htx (hg.commitTxn r tok' t' p' i' b' res ((hnet _).mp h'))
   · intro r tok' t' p' i' b' res h'
-    obtain ⟨v'', hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res ((hnet _).mp h')
-    exact ⟨v'', (hnet _).mpr hv, he⟩
+    obtain ⟨v'', _, hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res ((hnet _).mp h')
+    exact ⟨v'', _, (hnet _).mpr hv, he⟩
   · intro r o h'
     rw [hst]
     exact hg.doneDecided r o ((hnet _).mp h')
@@ -539,12 +556,12 @@ theorem good_commit {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
       y = .commit rid x.tok x.tenant x.principal x.intent base (verdict K v x.principal x.intent)))
     (htx : s'.txns = updTxn s.txns rid { x with phase := .committing v base })
     (hns : s'.noSession = s.noSession) (hst : s'.store = s.store) : Good K C s' := by
-  have hsnap := hg.snapPhase rid x v base hx (Or.inl hp)
+  obtain ⟨a0, hsnap⟩ := hg.snapPhase rid x v base hx (Or.inl hp)
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r t' v' b' h'
+  · intro r t' v' b' _ h'
     rw [hst]
     rcases (hnet _).mp h' with h' | h'
-    · exact hg.snapHist r t' v' b' h'
+    · exact hg.snapHist r t' v' b' _ h'
     · cases h'
   · intro r y v' b' hy hph
     rw [htx] at hy
@@ -557,9 +574,9 @@ theorem good_commit {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
       · simp at hph
       · simp at hph
         obtain ⟨rfl, rfl⟩ := hph
-        exact (hnet _).mpr (Or.inl hsnap)
+        exact ⟨a0, (hnet _).mpr (Or.inl hsnap)⟩
     · rw [updTxn_ne _ _ _ _ hr] at hy
-      exact (hnet _).mpr (Or.inl (hg.snapPhase r y v' b' hy hph))
+      exact ex_snap_ex (hg.snapPhase r y v' b' hy hph) (fun p hp => (hnet p).mpr (Or.inl hp))
   · intro r y hy
     rw [htx] at hy
     by_cases hr : r = rid
@@ -576,10 +593,10 @@ theorem good_commit {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
       exact ⟨{ x with phase := .committing v base }, by rw [htx, updTxn_self], rfl, rfl, rfl, rfl⟩
   · intro r tok' t' p' i' b' res h'
     rcases (hnet _).mp h' with h' | h'
-    · obtain ⟨v'', hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res h'
-      exact ⟨v'', (hnet _).mpr (Or.inl hv), he⟩
+    · obtain ⟨v'', _, hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res h'
+      exact ⟨v'', _, (hnet _).mpr (Or.inl hv), he⟩
     · cases h'
-      exact ⟨v, (hnet _).mpr (Or.inl hsnap), rfl⟩
+      exact ⟨v, _, (hnet _).mpr (Or.inl hsnap), rfl⟩
   · intro r o h'
     rw [hst]
     rcases (hnet _).mp h' with h' | h'
@@ -618,14 +635,14 @@ theorem good_conflict {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s
     (rid : RequestId) (base : Nat) (x : Txn) (v : Option Tenant)
     (h : s.net (.conflict rid base)) (hx : s.txns rid = some x)
     (hp : x.phase = .committing v base)
-    (hnet : ∀ y, s'.net y ↔ (s.net y ∨ y = .load rid x.tenant))
+    (hnet : ∀ y, s'.net y ↔ (s.net y ∨ y = .load rid x.tenant (s.attempt rid + 1)))
     (htx : s'.txns = updTxn s.txns rid { x with phase := .loading })
     (hns : s'.noSession = s.noSession) (hst : s'.store = s.store) : Good K C s' := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r t' v' b' h'
+  · intro r t' v' b' _ h'
     rw [hst]
     rcases (hnet _).mp h' with h' | h'
-    · exact hg.snapHist r t' v' b' h'
+    · exact hg.snapHist r t' v' b' _ h'
     · cases h'
   · intro r y v' b' hy hph
     rw [htx] at hy
@@ -636,7 +653,7 @@ theorem good_conflict {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s
       subst hye
       rcases hph with hph | hph <;> simp at hph
     · rw [updTxn_ne _ _ _ _ hr] at hy
-      exact (hnet _).mpr (Or.inl (hg.snapPhase r y v' b' hy hph))
+      exact ex_snap_ex (hg.snapPhase r y v' b' hy hph) (fun p hp => (hnet p).mpr (Or.inl hp))
   · intro r y hy
     rw [htx] at hy
     by_cases hr : r = rid
@@ -652,8 +669,8 @@ theorem good_conflict {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s
     · cases h'
   · intro r tok' t' p' i' b' res h'
     rcases (hnet _).mp h' with h' | h'
-    · obtain ⟨v'', hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res h'
-      exact ⟨v'', (hnet _).mpr (Or.inl hv), he⟩
+    · obtain ⟨v'', _, hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res h'
+      exact ⟨v'', _, (hnet _).mpr (Or.inl hv), he⟩
     · cases h'
   · intro r o h'
     rw [hst]
@@ -696,10 +713,10 @@ theorem good_done {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
     (htx : s'.txns = updTxn s.txns rid { x with phase := .finished o })
     (hns : s'.noSession = s.noSession) (hst : s'.store = s.store) : Good K C s' := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r t' v' b' h'
+  · intro r t' v' b' _ h'
     rw [hst]
     rcases (hnet _).mp h' with h' | h'
-    · exact hg.snapHist r t' v' b' h'
+    · exact hg.snapHist r t' v' b' _ h'
     · cases h'
   · intro r y v' b' hy hph
     rw [htx] at hy
@@ -710,7 +727,7 @@ theorem good_done {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
       subst hye
       rcases hph with hph | hph <;> simp at hph
     · rw [updTxn_ne _ _ _ _ hr] at hy
-      exact (hnet _).mpr (Or.inl (hg.snapPhase r y v' b' hy hph))
+      exact ex_snap_ex (hg.snapPhase r y v' b' hy hph) (fun p hp => (hnet p).mpr (Or.inl hp))
   · intro r y hy
     rw [htx] at hy
     by_cases hr : r = rid
@@ -726,8 +743,8 @@ theorem good_done {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
     · cases h'
   · intro r tok' t' p' i' b' res h'
     rcases (hnet _).mp h' with h' | h'
-    · obtain ⟨v'', hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res h'
-      exact ⟨v'', (hnet _).mpr (Or.inl hv), he⟩
+    · obtain ⟨v'', _, hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res h'
+      exact ⟨v'', _, (hnet _).mpr (Or.inl hv), he⟩
     · cases h'
   · intro r o' h'
     rw [hst]
@@ -765,21 +782,21 @@ theorem good_done {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
     · exact ⟨z, by rw [htx, updTxn_ne _ _ _ _ hr]; exact hz⟩
 
 theorem good_load {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
-    (rid : RequestId) (t : TenantId) (h : s.net (.load rid t))
+    (rid : RequestId) (t : TenantId) (a : Nat) (h : s.net (.load rid t a))
     (hnet : ∀ y, s'.net y ↔
-      (s.net y ∨ y = .snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t)))
+      (s.net y ∨ y = .snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t) a))
     (htx : s'.txns = s.txns) (hns : s'.noSession = s.noSession) (hst : s'.store = s.store) :
     Good K C s' := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r t' v' b' h'
+  · intro r t' v' b' _ h'
     rw [hst]
     rcases (hnet _).mp h' with h' | h'
-    · exact hg.snapHist r t' v' b' h'
+    · exact hg.snapHist r t' v' b' _ h'
     · cases h'
       exact ⟨Nat.le_refl _, rfl⟩
   · intro r y v' b' hy hph
     rw [htx] at hy
-    exact (hnet _).mpr (Or.inl (hg.snapPhase r y v' b' hy hph))
+    exact ex_snap_ex (hg.snapPhase r y v' b' hy hph) (fun p hp => (hnet p).mpr (Or.inl hp))
   · intro r y hy
     rw [htx] at hy
     exact hg.sessionTxn r y hy
@@ -790,8 +807,8 @@ theorem good_load {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
     · cases h'
   · intro r tok' t' p' i' b' res h'
     rcases (hnet _).mp h' with h' | h'
-    · obtain ⟨v'', hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res h'
-      exact ⟨v'', (hnet _).mpr (Or.inl hv), he⟩
+    · obtain ⟨v'', _, hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res h'
+      exact ⟨v'', _, (hnet _).mpr (Or.inl hv), he⟩
     · cases h'
   · intro r o h'
     rw [hst]
@@ -826,14 +843,14 @@ theorem good_storeDecided {K : Kernel} {C : Config} {s s' : PState} (hg : Good K
     (htx : s'.txns = s.txns) (hns : s'.noSession = s.noSession) (hst : s'.store = s.store) :
     Good K C s' := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r t' v' b' h'
+  · intro r t' v' b' _ h'
     rw [hst]
     rcases (hnet _).mp h' with h' | h'
-    · exact hg.snapHist r t' v' b' h'
+    · exact hg.snapHist r t' v' b' _ h'
     · cases h'
   · intro r y v' b' hy hph
     rw [htx] at hy
-    exact (hnet _).mpr (Or.inl (hg.snapPhase r y v' b' hy hph))
+    exact ex_snap_ex (hg.snapPhase r y v' b' hy hph) (fun p hp => (hnet p).mpr (Or.inl hp))
   · intro r y hy
     rw [htx] at hy
     exact hg.sessionTxn r y hy
@@ -844,8 +861,8 @@ theorem good_storeDecided {K : Kernel} {C : Config} {s s' : PState} (hg : Good K
     · cases h'
   · intro r tok' t' p' i' b' res' h'
     rcases (hnet _).mp h' with h' | h'
-    · obtain ⟨v'', hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res' h'
-      exact ⟨v'', (hnet _).mpr (Or.inl hv), he⟩
+    · obtain ⟨v'', _, hv, he⟩ := hg.commitCorrect r tok' t' p' i' b' res' h'
+      exact ⟨v'', _, (hnet _).mpr (Or.inl hv), he⟩
     · cases h'
   · intro r o' h'
     rw [hst]
@@ -888,9 +905,9 @@ theorem good_storeAccept {K : Kernel} {C : Config} {s s' : PState} (hg : Good K 
     (hdec : ∀ r, s'.store.decided r = if r = rid then some .accepted else s.store.decided r) :
     Good K C s' := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r x v' k h'
+  · intro r x v' k _ h'
     rcases (hnet _).mp h' with h' | h' | h'
-    · obtain ⟨h1, h2⟩ := hg.snapHist r x v' k h'
+    · obtain ⟨h1, h2⟩ := hg.snapHist r x v' k _ h'
       by_cases hx : x = t
       · have hk : k ≤ base := by rw [hx] at h1; omega
         have hne : ¬ (x = t ∧ k = base + 1) := fun hc => by have := hc.2; omega
@@ -903,7 +920,7 @@ theorem good_storeAccept {K : Kernel} {C : Config} {s s' : PState} (hg : Good K 
     · cases h'
   · intro r y v' b' hy hph
     rw [htx] at hy
-    exact (hnet _).mpr (Or.inl (hg.snapPhase r y v' b' hy hph))
+    exact ex_snap_ex (hg.snapPhase r y v' b' hy hph) (fun p hp => (hnet p).mpr (Or.inl hp))
   · intro r y hy
     rw [htx] at hy
     exact hg.sessionTxn r y hy
@@ -915,8 +932,8 @@ theorem good_storeAccept {K : Kernel} {C : Config} {s s' : PState} (hg : Good K 
     · cases h'
   · intro r tok' t' p' i' b' res' h'
     rcases (hnet _).mp h' with h' | h' | h'
-    · obtain ⟨v'', hv', he⟩ := hg.commitCorrect r tok' t' p' i' b' res' h'
-      exact ⟨v'', (hnet _).mpr (Or.inl hv'), he⟩
+    · obtain ⟨v'', _, hv', he⟩ := hg.commitCorrect r tok' t' p' i' b' res' h'
+      exact ⟨v'', _, (hnet _).mpr (Or.inl hv'), he⟩
     · cases h'
     · cases h'
   · intro r o h'
@@ -974,14 +991,14 @@ theorem good_storeRefuse {K : Kernel} {C : Config} {s s' : PState} (hg : Good K 
     (hevs : s'.store.evs = s.store.evs) :
     Good K C s' := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r x v' k h'
+  · intro r x v' k _ h'
     rw [hrev, hhist]
     rcases (hnet _).mp h' with h' | h'
-    · exact hg.snapHist r x v' k h'
+    · exact hg.snapHist r x v' k _ h'
     · cases h'
   · intro r y v' b' hy hph
     rw [htx] at hy
-    exact (hnet _).mpr (Or.inl (hg.snapPhase r y v' b' hy hph))
+    exact ex_snap_ex (hg.snapPhase r y v' b' hy hph) (fun p hp => (hnet p).mpr (Or.inl hp))
   · intro r y hy
     rw [htx] at hy
     exact hg.sessionTxn r y hy
@@ -992,8 +1009,8 @@ theorem good_storeRefuse {K : Kernel} {C : Config} {s s' : PState} (hg : Good K 
     · cases h'
   · intro r tok' t' p' i' b' res' h'
     rcases (hnet _).mp h' with h' | h'
-    · obtain ⟨v'', hv', he⟩ := hg.commitCorrect r tok' t' p' i' b' res' h'
-      exact ⟨v'', (hnet _).mpr (Or.inl hv'), he⟩
+    · obtain ⟨v'', _, hv', he⟩ := hg.commitCorrect r tok' t' p' i' b' res' h'
+      exact ⟨v'', _, (hnet _).mpr (Or.inl hv'), he⟩
     · cases h'
   · intro r o h'
     rcases (hnet _).mp h' with h' | h'
@@ -1043,14 +1060,14 @@ theorem good_step {K : Kernel} {C : Config} {s s' : PState} (h : PNext K C s s')
     exact good_begin hg rid tok i t p hx hn hs (fun _ => Iff.rfl) rfl rfl rfl
   | noSession rid tok i h hx hn hs =>
     exact good_noSession hg rid hx hn (fun _ => Iff.rfl) rfl (fun _ => rfl) rfl
-  | snap rid t v base x h hx ht hl =>
-    exact good_snap hg rid t v base x h hx ht (fun _ => Iff.rfl) rfl rfl rfl
+  | snap rid t v base a x h hx ht hl hat =>
+    exact good_snap hg rid t v base x a h hx ht (fun _ => Iff.rfl) rfl rfl rfl
   | commit rid x v base hx hp =>
     exact good_commit hg rid x v base hx hp (fun _ => Iff.rfl) rfl rfl rfl
   | conflict rid base x v h hx hp =>
     exact good_conflict hg rid base x v h hx hp (fun _ => Iff.rfl) rfl rfl rfl
   | done rid o x h hx => exact good_done hg rid o x h hx (fun _ => Iff.rfl) rfl rfl rfl
-  | load rid t h => exact good_load hg rid t h (fun _ => Iff.rfl) rfl rfl rfl
+  | load rid t a h => exact good_load hg rid t a h (fun _ => Iff.rfl) rfl rfl rfl
   | storeDecided rid tok t p i base res o h hd =>
     exact good_storeDecided hg rid tok t p i base res o h hd (fun _ => Iff.rfl) rfl rfl rfl
   | storeConflict rid tok t p i base res h hd hb =>
@@ -1068,7 +1085,7 @@ theorem good_init {K : Kernel} {C : Config} {w0 : World} {s : PState} (hi : PIni
     Good K C s := by
   obtain ⟨hn, hT, hNS, -, -, -, hD⟩ := hi
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r t v b h
+  · intro r t v b _ h
     exact absurd h (hn _)
   · intro r x v b hx _
     rw [hT r] at hx
@@ -1090,7 +1107,7 @@ theorem good_init {K : Kernel} {C : Config} {w0 : World} {s : PState} (hi : PIni
     rw [hNS r] at h
     cases h
   · intro r o h
-    rw [hD r] at h
+    rw [hD.1 r] at h
     cases h
 
 
@@ -1179,7 +1196,7 @@ theorem abs_init {w0 : World} {s : PState} (hi : PInit w0 s) : SysInit w0 (absSt
     show (match s.store.decided r with
       | some o => some o
       | none => if s.noSession r then some Outcome.noSession else none) = none
-    rw [hD r]
+    rw [hD.1 r]
     simp [hNS r]
   · intro f
     exact hn _
@@ -1385,7 +1402,7 @@ theorem refine_star {K : Kernel} {C : Config} {s s' : PState} (h : PNext K C s s
   | bffRelay rid o h =>
     exact star_eq_abs rfl rfl (frames_eq_of _ _ (.clientReply rid o) trivial (fun _ => Iff.rfl))
   | begin rid tok i t p h hx hn hs =>
-    exact star_eq_abs rfl rfl (frames_eq_of _ _ (.load rid t) trivial (fun _ => Iff.rfl))
+    exact star_eq_abs rfl rfl (frames_eq_of _ _ (.load rid t (s.attempt rid)) trivial (fun _ => Iff.rfl))
   | noSession rid tok i h hx hn hs =>
     have hd : s.store.decided rid = none := by
       cases hdd : s.store.decided rid with
@@ -1408,12 +1425,12 @@ theorem refine_star {K : Kernel} {C : Config} {s s' : PState} (h : PNext K C s s
       (frames_eq_of _ _ (.commit rid x.tok x.tenant x.principal x.intent base
         (verdict K v x.principal x.intent)) trivial (fun _ => Iff.rfl))
   | conflict rid base x v h hx hp =>
-    exact star_eq_abs rfl rfl (frames_eq_of _ _ (.load rid x.tenant) trivial (fun _ => Iff.rfl))
+    exact star_eq_abs rfl rfl (frames_eq_of _ _ (.load rid x.tenant (s.attempt rid + 1)) trivial (fun _ => Iff.rfl))
   | done rid o x h hx =>
     exact star_eq_abs rfl rfl (frames_eq_of _ _ (.reply rid o) trivial (fun _ => Iff.rfl))
-  | load rid t h =>
+  | load rid t a h =>
     exact star_eq_abs rfl rfl (frames_eq_of _ _
-      (.snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t)) trivial (fun _ => Iff.rfl))
+      (.snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t) a) trivial (fun _ => Iff.rfl))
   | storeDecided rid tok t p i base res o h hd =>
     exact star_eq_abs rfl rfl (frames_eq_of _ _ (.done rid o) trivial (fun _ => Iff.rfl))
   | storeConflict rid tok t p i base res h hd hb =>
@@ -1430,8 +1447,8 @@ theorem refine_star {K : Kernel} {C : Config} {s s' : PState} (h : PNext K C s s
       · have := hg.noSessionTxn rid hb'
         rw [hxs] at this
         cases this
-    obtain ⟨v, hsnap, hv⟩ := hg.commitCorrect rid tok t p i base res h
-    have hvh := hg.snapHist rid t v base hsnap
+    obtain ⟨v, _, hsnap, hv⟩ := hg.commitCorrect rid tok t p i base res h
+    have hvh := hg.snapHist rid t v base _ hsnap
     have hvw : verdict K ((absState s).world t) p i = .ok t1 := by
       show verdict K (s.store.hist t (s.store.rev t)) p i = _
       rw [← hb, hvh.2]
@@ -1456,8 +1473,8 @@ theorem refine_star {K : Kernel} {C : Config} {s s' : PState} (h : PNext K C s s
       · have := hg.noSessionTxn rid hb'
         rw [hxs] at this
         cases this
-    obtain ⟨v, hsnap, hv⟩ := hg.commitCorrect rid tok t p i base res h
-    have hvh := hg.snapHist rid t v base hsnap
+    obtain ⟨v, _, hsnap, hv⟩ := hg.commitCorrect rid tok t p i base res h
+    have hvh := hg.snapHist rid t v base _ hsnap
     have hvw : verdict K ((absState s).world t) p i = .error e := by
       show verdict K (s.store.hist t (s.store.rev t)) p i = _
       rw [← hb, hvh.2]
@@ -1587,8 +1604,8 @@ theorem commit_is_verdict {K : Kernel} {C : Config} {w0 : World} {s : PState}
     (hc : s.net (.commit rid tok t p i base res)) :
     base ≤ s.store.rev t ∧ res = verdict K (s.store.hist t base) p i := by
   obtain ⟨hg, -, -⟩ := protocol_refines h
-  obtain ⟨v, hsnap, hv⟩ := hg.commitCorrect rid tok t p i base res hc
-  obtain ⟨hb, hvv⟩ := hg.snapHist rid t v base hsnap
+  obtain ⟨v, _, hsnap, hv⟩ := hg.commitCorrect rid tok t p i base res hc
+  obtain ⟨hb, hvv⟩ := hg.snapHist rid t v base _ hsnap
   exact ⟨hb, by rw [hvv]; exact hv⟩
 
 /-- One protocol step moves each tenant's revision by nothing or by one, and only a commit that
@@ -1634,6 +1651,7 @@ def wInit : PState :=
   { net := fun _ => False
     txns := fun _ => none
     noSession := fun _ => false
+    attempt := fun _ => 0
     store :=
       { hist := fun t _ => wWorld t
         rev := fun _ => 0
@@ -1641,7 +1659,7 @@ def wInit : PState :=
         decided := fun _ => none } }
 
 theorem wInit_pinit : PInit wWorld wInit :=
-  ⟨fun _ h => h, fun _ => rfl, fun _ => rfl, fun _ _ => rfl, fun _ => rfl, rfl, fun _ => rfl⟩
+  ⟨fun _ h => h, fun _ => rfl, fun _ => rfl, fun _ _ => rfl, fun _ => rfl, rfl, fun _ => rfl, fun _ => rfl⟩
 theorem refusal_reachable : ∃ s, ProtoReachable wKernel wConfig wWorld s ∧
     s.net (.clientReply 1 (.refused .unauthorized)) :=
   ⟨_, ⟨wInit, wInit_pinit, Star.tail (Star.tail (Star.tail (Star.tail (Star.tail (Star.tail
@@ -1649,8 +1667,8 @@ theorem refusal_reachable : ∃ s, ProtoReachable wKernel wConfig wWorld s ∧
         (PNext.clientReq _ 1 0 (.create [])))
         (PNext.bffForward _ 1 0 (.create []) (Or.inr rfl)))
         (PNext.begin _ 1 0 (.create []) 0 9 (Or.inr rfl) rfl rfl rfl))
-        (PNext.load _ 1 0 (Or.inr rfl)))
-        (PNext.snap _ 1 _ _ 0 _ (Or.inr rfl) rfl rfl rfl))
+        (PNext.load _ 1 0 0 (Or.inr rfl)))
+        (PNext.snap _ 1 _ _ 0 _ _ (Or.inr rfl) rfl rfl rfl rfl))
         (PNext.commit _ 1 _ _ 0 rfl rfl))
         (PNext.storeRefuse _ 1 0 0 9 (.create []) 0 _ .unauthorized (Or.inr rfl) rfl rfl rfl))
         (PNext.done _ 1 (.refused .unauthorized) _ (Or.inr rfl) rfl))
