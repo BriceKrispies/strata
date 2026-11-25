@@ -1419,6 +1419,7 @@ fn the_ledger_is_kept_with_its_commit_and_never_rewritten(store: &dyn Store) {
                     period_cap: None,
                     period: None,
                     scope: None,
+                    additions_only: None,
                 }),
             ],
             expected_version: None,

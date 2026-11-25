@@ -1869,6 +1869,11 @@ pub const TYPES: &[TypeDecl] = &[
                 ty: Ty::Named("ledger-scope"),
                 optional: true,
             },
+            Field {
+                wire: "additions_only",
+                ty: Ty::Bool,
+                optional: true,
+            },
         ]),
     },
     TypeDecl {

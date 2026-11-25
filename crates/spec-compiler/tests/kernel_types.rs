@@ -387,6 +387,7 @@ fn schema_changes() -> Vec<SchemaChange> {
             period_cap: Some(10),
             period: Some(LedgerPeriod::Day),
             scope: Some(LedgerScope::new("42").unwrap()),
+            additions_only: None,
         }),
         SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Limit {
             unit: points(),

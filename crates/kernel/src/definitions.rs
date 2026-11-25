@@ -341,7 +341,7 @@ pub fn operation_powers(op: &TenantOperationDef) -> (Vec<(Action, Resource)>, BT
             TenantOperationStep::DeleteRecord { object, .. } => {
                 Some((Action::Delete, Resource::Object(object.clone())))
             }
-            TenantOperationStep::PostLedger { .. } => {
+            TenantOperationStep::PostLedger { .. } | TenantOperationStep::ReverseLedger { .. } => {
                 capabilities.insert(LEDGER_POST.to_string());
                 None
             }
@@ -870,6 +870,18 @@ pub fn operation_problems(
             .iter()
             .filter(|s| matches!(s, TenantOperationStep::PostLedger { .. }))
             .count();
+        for step in &all {
+            if let TenantOperationStep::ReverseLedger { id, posting, .. } = step {
+                let names_posting = all.iter().any(|other| {
+                    matches!(other, TenantOperationStep::PostLedger { id: named, .. } if named == posting)
+                });
+                if !names_posting {
+                    problems.push(format!(
+                        "{at}.{id}: reverses {posting}, which is no posting step of the operation"
+                    ));
+                }
+            }
+        }
         if postings > limits::MAX_OPERATION_POSTINGS {
             problems.push(format!(
                 "{at}: {postings} posting steps is more than the maximum of {}",
@@ -1031,6 +1043,7 @@ fn steps_problems(
                 written_problems(schema, &sat, object, &BTreeMap::new(), &env, problems)
             }
             TenantOperationStep::PostLedger { .. }
+            | TenantOperationStep::ReverseLedger { .. }
             | TenantOperationStep::FindRecord { .. }
             | TenantOperationStep::Branch { .. } => {}
         }
@@ -1044,6 +1057,7 @@ fn steps_problems(
                 scope,
                 amount,
                 unit,
+                reference,
                 ..
             } => {
                 report(ledger_unit_reference(schema, unit), &sat, problems);
@@ -1054,6 +1068,20 @@ fn steps_problems(
                     check_expr(problems, &sat, "scope", scope, &env, false);
                 }
                 check_expr(problems, &sat, "amount", amount, &env, false);
+                if let Some(reference) = reference {
+                    check_expr(problems, &sat, "reference", reference, &env, false);
+                }
+            }
+            TenantOperationStep::ReverseLedger {
+                reference, reason, ..
+            } => {
+                check_expr(problems, &sat, "reference", reference, &env, false);
+                if reason.len() > limits::MAX_LEDGER_REASON_BYTES {
+                    problems.push(format!(
+                        "{sat}: a reason is at most {} bytes",
+                        limits::MAX_LEDGER_REASON_BYTES
+                    ));
+                }
             }
             TenantOperationStep::FindRecord {
                 object,
@@ -1156,6 +1184,7 @@ pub fn step_id(step: &TenantOperationStep) -> &str {
         | TenantOperationStep::UpdateRecord { id, .. }
         | TenantOperationStep::DeleteRecord { id, .. }
         | TenantOperationStep::PostLedger { id, .. }
+        | TenantOperationStep::ReverseLedger { id, .. }
         | TenantOperationStep::FindRecord { id, .. }
         | TenantOperationStep::Branch { id, .. } => id,
     }
