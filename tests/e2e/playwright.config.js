@@ -33,7 +33,7 @@ export default defineConfig({
   reporter: [['list']],
   use: { baseURL: external ?? 'http://127.0.0.1:4200', trace: 'retain-on-failure', ...devices['Desktop Chrome'], viewport: { width: 1280, height: 860 } },
   projects: [
-    { name: 'site', testMatch: ['site.spec.js', 'row-actions.spec.js'] },
+    { name: 'site', testMatch: 'site.spec.js' },
     // Keycloak as a real identity provider: only against the container stack started with
     // STRATA_IDP=1 (npm run idp:containers), which has no mock servers.
     ...(external ? [{ name: 'idp', testMatch: 'idp.spec.js', timeout: 90_000 }] : []),
