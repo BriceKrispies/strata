@@ -71,7 +71,7 @@
     }
   ],
   "objects": [
-    // PLANNED F-ledger-facts-in-rules (ledger_accounts): Balance, lifetime total and tier readable by rules, segments and computed fields. workspace_id: reference to workspaces is in another product (F-cross-product-refs); held as text; member_id: reference to principals is in another product (F-cross-product-refs); held as text; tier: nullable enum; constraint not generated
+    // PLANNED F-ledger-facts-in-rules (ledger_accounts): Balance, lifetime total and tier readable by rules, segments and computed fields. member_id: reference to principals is in another product (F-cross-product-refs); held as text; tier: nullable enum; constraint not generated
     // {
     // "id": "plinth_points__ledger_accounts",
     // "label": "Ledger accounts",
@@ -82,13 +82,6 @@
     // "ty": "Str",
     // "required": true,
     // "unique": true
-    // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
     // },
     // "code": {
     // "id": "code",
@@ -148,7 +141,7 @@
     // }
     // }
     // }
-    // PLANNED F-double-entry-journal (ledger_transactions): Balanced multi-leg transactions with a header, and an account hierarchy. workspace_id: reference to workspaces is in another product (F-cross-product-refs); held as text; actor_id: reference to principals is in another product (F-cross-product-refs); held as text; on_behalf_of: reference to principals is in another product (F-cross-product-refs); held as text; request_hash: Plinth type "bytea" has no direct Strata type; held as text; reverses_txn_id: reference to ledger_transactions is in another product (F-cross-product-refs); held as text; ref_kind: nullable enum; constraint not generated
+    // PLANNED F-double-entry-journal (ledger_transactions): Balanced multi-leg transactions with a header, and an account hierarchy. actor_id: reference to principals is in another product (F-cross-product-refs); held as text; on_behalf_of: reference to principals is in another product (F-cross-product-refs); held as text; request_hash: Plinth type "bytea" has no direct Strata type; held as text; reverses_txn_id: reference to ledger_transactions is in another product (F-cross-product-refs); held as text; ref_kind: nullable enum; constraint not generated
     // {
     // "id": "plinth_points__ledger_transactions",
     // "label": "Ledger transactions",
@@ -159,13 +152,6 @@
     // "ty": "Str",
     // "required": true,
     // "unique": true
-    // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
     // },
     // "txn_no": {
     // "id": "txn_no",
@@ -298,13 +284,6 @@
     // "required": true,
     // "unique": false
     // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
     // "txn_id": {
     // "id": "txn_id",
     // "label": "Txn id",
@@ -351,13 +330,6 @@
     // "lot_id": {
     // "id": "lot_id",
     // "label": "Lot id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
     // "ty": "Str",
     // "required": true,
     // "unique": false
@@ -443,18 +415,11 @@
     // },
     // "constraints": {}
     // }
-    // PLANNED F-identifier-sequences (suite_counters): Gapless human-readable numbers. workspace_id: reference to workspaces is in another product (F-cross-product-refs); held as text
+    // PLANNED F-identifier-sequences (suite_counters): Gapless human-readable numbers
     // {
     // "id": "plinth_points__suite_counters",
     // "label": "Suite counters",
     // "fields": {
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
     // "name": {
     // "id": "name",
     // "label": "Name",
@@ -646,7 +611,14 @@
     // "required": true
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "category_values",
+    // "expr": "param.category in ['recognition', 'performance', 'milestone', 'service', 'other']",
+    // "error": "bad-category",
+    // "message": "category is one of recognition, performance, milestone, service, other."
+    // }
+    // ],
     // "steps": []
     // }
     // PLANNED F-separation-of-duties (points.adjust): Self-action refusal and separation of duties as platform rules. F-separation-of-duties: Plinth does not enforce self-adjustment refusal. Recorded as a separation-of-duties gap in invariant points.sod-adjust.; F-separation-of-duties: separation of duties: None enforced: the handler does not refuse an adjustment on the operator's own account, and the registry reasons list only INSUFFICIENT_POINTS.

@@ -356,7 +356,14 @@
     // "required": false
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "kind_values",
+    // "expr": "param.kind in ['module', 'home']",
+    // "error": "bad-kind",
+    // "message": "kind is one of module, home."
+    // }
+    // ],
     // "steps": []
     // }
     // PLANNED F-compositions (site.widget.add): Pages composed from placed widgets. F-compositions: inventory status; F-held-operations: approval: agent direct
@@ -417,7 +424,14 @@
     // "required": false
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "experience_values",
+    // "expr": "param.experience in ['classic', 'town']",
+    // "error": "bad-experience",
+    // "message": "experience is one of classic, town."
+    // }
+    // ],
     // "steps": []
     // }
     // MANUAL (site.appearance.get): effects need steps: none: read

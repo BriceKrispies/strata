@@ -130,13 +130,6 @@
           "required": true,
           "unique": false
         },
-        "workspace_id": {
-          "id": "workspace_id",
-          "label": "Workspace id",
-          "ty": "Str",
-          "required": true,
-          "unique": false
-        },
         "recipient_id": {
           "id": "recipient_id",
           "label": "Recipient id",
@@ -248,13 +241,6 @@
         "delivery_id": {
           "id": "delivery_id",
           "label": "Delivery id",
-          "ty": "Str",
-          "required": true,
-          "unique": false
-        },
-        "workspace_id": {
-          "id": "workspace_id",
-          "label": "Workspace id",
           "ty": "Str",
           "required": true,
           "unique": false
@@ -580,7 +566,14 @@
     // "required": true
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "type_values",
+    // "expr": "param.type in ['system', 'automation_alert', 'promotion_started']",
+    // "error": "bad-type",
+    // "message": "type is one of system, automation_alert, promotion_started."
+    // }
+    // ],
     // "steps": []
     // }
   ],

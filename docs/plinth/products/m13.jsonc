@@ -393,7 +393,14 @@
     // "required": false
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "status_values",
+    // "expr": "param.status in ['active', 'disabled']",
+    // "error": "bad-status",
+    // "message": "status is one of active, disabled."
+    // }
+    // ],
     // "steps": []
     // }
     // PLANNED F-account-suspension (admin.session_revoke): Local account suspension and administrator session revocation. F-account-suspension: inventory status

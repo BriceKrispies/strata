@@ -258,13 +258,6 @@
     // "required": true,
     // "unique": false
     // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
     // "first_viewed_at": {
     // "id": "first_viewed_at",
     // "label": "First viewed at",
@@ -601,7 +594,14 @@
     // "required": false
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "reaction_values",
+    // "expr": "param.reaction in ['like', 'celebrate', 'insightful']",
+    // "error": "bad-reaction",
+    // "message": "reaction is one of like, celebrate, insightful."
+    // }
+    // ],
     // "steps": []
     // }
     // PLANNED F-run-lifecycle-control (content.scheduled_publish): Run retry, cancel, start paused. F-run-lifecycle-control: One waiting run per scheduled item; the run-key gives one run per item.

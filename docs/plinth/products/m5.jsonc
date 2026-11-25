@@ -160,13 +160,6 @@
     // "required": true,
     // "unique": false
     // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
     // "badge_id": {
     // "id": "badge_id",
     // "label": "Badge id",
@@ -262,13 +255,6 @@
     // "badge_id": {
     // "id": "badge_id",
     // "label": "Badge id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
     // "ty": "Str",
     // "required": true,
     // "unique": false

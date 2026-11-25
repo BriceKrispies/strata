@@ -33,13 +33,6 @@
           "required": true,
           "unique": true
         },
-        "workspace_id": {
-          "id": "workspace_id",
-          "label": "Workspace id",
-          "ty": "Str",
-          "required": true,
-          "unique": false
-        },
         "handle": {
           "id": "handle",
           "label": "Handle",
@@ -132,7 +125,6 @@
       }
     }
     // MANUAL (members): member_id: reference to principals is in another product (F-cross-product-refs); held as text
-    // MANUAL (members): workspace_id: reference to workspaces is in another product (F-cross-product-refs); held as text
     // MANUAL (members): handle: Plinth type "text: lowercase letter then letters, digits and hyphens, 2 to 40 characters" has no direct Strata type; held as text
     // MANUAL (members): email: personal data; declare its personal kind and subject
     // MANUAL (members): location: personal data; declare its personal kind and subject

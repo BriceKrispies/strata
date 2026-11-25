@@ -166,11 +166,22 @@ function mapType(raw, moduleEntityIds, ns = '') {
 
 // ---------------------------------------------------------------- declarations
 
+// The composite key a table declares as a pseudo-field, "PRIMARY KEY: (a, b)". It is not a column:
+// it becomes a unique declaration over the named fields.
+function primaryKeyOf(entity) {
+  const pk = (entity.fields ?? []).find((f) => f.name === 'PRIMARY KEY');
+  if (!pk) return null;
+  return String(pk.type).replace(/[()]/g, '').split(',').map((s) => san(s)).filter(Boolean);
+}
+
 function fieldDecls(entity, moduleEntityIds, ns) {
   const fields = {};
   const notes = [];
   const enums = [];
   for (const f of entity.fields ?? []) {
+    // The pseudo-field of the key is handled by primaryKeyOf; the tenant is the workspace, so a
+    // workspace_id column is not declared (the tenant of the installed product is that workspace).
+    if (f.name === 'PRIMARY KEY' || san(f.name) === 'workspace_id') continue;
     const name = san(f.name);
     const mt = mapType(f.type, moduleEntityIds, ns);
     const ty = mt.ty;
@@ -279,6 +290,12 @@ function emitModule(id, ctx) {
     }
     const fd = fieldDecls(e, entityIds, P);
     const decl = { id: oid, label: titleCase(e.id), fields: fd.fields, constraints: {} };
+    const pk = primaryKeyOf(e);
+    if (pk && pk.length && pk.every((n) => fd.fields[n])) {
+      decl.unique = { key: { id: 'key', fields: pk, message: `${titleCase(e.id)} already has a row for this key.` } };
+    } else if (pk) {
+      fd.notes.push(`PRIMARY KEY (${pk.join(', ')}): a key field is not declared; declare the unique key by hand`);
+    }
     for (const en of fd.enums) {
       if (!en.required) { fd.notes.push(`${en.name}: nullable enum; constraint not generated`); continue; }
       decl.constraints[`${en.name}_values`] = {
@@ -327,7 +344,7 @@ function emitModule(id, ctx) {
     if (a.approval) planReasons.push({ f: canon('F-held-operations'), text: `approval: ${a.approval}` });
     if (a.separationOfDuties) planReasons.push({ f: canon('F-separation-of-duties'), text: `separation of duties: ${a.separationOfDuties}` });
     if (a.rowPredicate || a.ownerOnly) planReasons.push({ f: canon('F-visibility'), text: `row scope: ${a.rowPredicate ?? 'owner only'}` });
-    if ((op.preconditions ?? []).length) manualReasons.push(`${op.preconditions.length} precondition(s) are prose; write them as operation conditions: ${op.preconditions.map((p) => oneLine(p).slice(0, 90)).join(' | ')}`);
+    if (decl.condUnmapped.length) manualReasons.push(`${decl.condUnmapped.length} precondition(s) are prose; write them as operation conditions: ${decl.condUnmapped.map((p) => oneLine(p).slice(0, 90)).join(' | ')}`);
     if (decl.unmapped.length) manualReasons.push(`effects need steps: ${decl.unmapped.map((u) => oneLine(u).slice(0, 90)).join(' | ')}`);
     if (decl.invokersMissing) manualReasons.push(`no role in the AUTHZ matrix for ${a.permission ?? 'this operation'}`);
     if (a.stepUp) manualReasons.push('step-up required: declare it on the invoker or the intent');
@@ -463,7 +480,8 @@ function emitModule(id, ctx) {
   const checkLines = sections.checks.flatMap((e) => e.lines.map((l) => `  // ${oneLine(l)}`));
   const checkBlock = checkLines.length ? ['  // CHECKS: invariants and events are tests and notices, not declarations', ...checkLines] : [];
   const text = ['{', ...header.map((h) => `  ${h}`), parts.join(',\n'), ...checkBlock, '}', ''].join('\n');
-  return { text, counts, planned, slug, id, m };
+  const live = { objects: liveObjects.size, operations: liveOps.size, screens: sections.screens.filter((e) => e.kind === 'live').length };
+  return { text, counts, live, planned, slug, id, m };
 }
 
 function renderSection(name, entries) {
@@ -510,6 +528,65 @@ function findQueryObject(qy, m, entityIds, P) {
   return hits.length === 1 ? `${P}${san(hits[0].id)}` : null;
 }
 
+// The live entity a noun names: the entity whose id is the noun, or ends with it, in the singular or
+// the plural ("review" names product_reviews, "order" names store_orders). Null unless exactly one.
+function entityNamed(noun, m, entityIds) {
+  const n = san(noun);
+  const hits = (m.entities ?? []).filter((e) => {
+    const id = san(e.id);
+    return entityIds.has(id) && (id === n || id === `${n}s` || id.endsWith(`_${n}`) || id.endsWith(`_${n}s`));
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+
+// Effects that name an event ("review.created", "order.status_changed ..."): they are notices, which
+// the events section declares, so they are not steps.
+const EVENT_EFFECT = /^\s*[a-z_]+\.(created|updated|changed|status_changed|decided|requested|deleted)\b/;
+
+// "Update <record> <field>, <field>, ..." becomes an UpdateRecord on the record named by the operation's
+// reference input to that entity. A field is set from an input of the same name; a timestamp
+// (<name>_at) is set to now; a field that holds a person (<name>_by, or a reference to principals) is
+// set to the invoker. Any other field is returned as missing, and the effect stays unmapped.
+function updateTarget(effect, op, entity, declInputs, P) {
+  const head = /^\s*update\s+(?:the\s+|a\s+|an\s+|one\s+)?([a-z][a-z0-9_]*)\b([\s\S]*)$/i.exec(effect);
+  if (!head) return null;
+  const target = `${P}${san(entity.id)}`;
+  const record = declInputs.find((i) => i.ty?.Ref?.target === target);
+  if (!record) return { record: null, fields: {}, missing: ['no reference input to the record'] };
+  const tokens = head[2].split(/,|\band\b|;/).map((s) => s.trim()).filter(Boolean);
+  const fields = {};
+  const missing = [];
+  for (const tok of tokens) {
+    const f = san(tok);
+    if (!/^[a-z][a-z0-9_]*$/.test(tok) || f !== tok) { missing.push(tok); continue; }
+    const input = declInputs.find((i) => i.name === f);
+    const field = (entity.fields ?? []).find((x) => san(x.name) === f);
+    if (input && input !== record && f !== 'idempotency_key') fields[f] = `param.${f}`;
+    else if (field && /timestamp|timestamptz|time\b/i.test(field.type) && /_at$/.test(f)) fields[f] = 'now';
+    else if (field && (/_by$/.test(f) || /principals/.test(field.type))) fields[f] = 'principal';
+    else missing.push(tok);
+  }
+  return { record: record.name, fields, missing };
+}
+
+// A precondition written as "<input> <op> <input or number> (CODE)" becomes a condition over the
+// operation's parameters. The code in parentheses is the refusal's error code. Anything else stays prose.
+function simpleCondition(text, inputNames, n) {
+  const re = /^\s*([a-z][a-z0-9_]*)\s*(==|!=|<=|>=|<|>)\s*(-?\d+|[a-z][a-z0-9_]*)\s*(?:\(([A-Z][A-Z0-9_]*)\))?\s*$/.exec(text);
+  if (!re) return null;
+  const [, left, cmp, right, code] = re;
+  if (!inputNames.has(left)) return null;
+  if (!/^-?\d+$/.test(right) && !inputNames.has(right)) return null;
+  if (!code) return null;
+  const rhs = /^-?\d+$/.test(right) ? right : `param.${right}`;
+  return {
+    id: `cond_${n}_${code.toLowerCase().replace(/_/g, '-')}`,
+    expr: `param.${left} ${cmp} ${rhs}`,
+    error: code.toLowerCase().replace(/_/g, '-'),
+    message: oneLine(text),
+  };
+}
+
 function buildOperation(op, oid, m, P, entityIds) {
   const a = op.authz ?? {};
   const decl = { id: oid, label: oneLine(op.id).replace(/\./g, ' ') };
@@ -518,34 +595,76 @@ function buildOperation(op, oid, m, P, entityIds) {
     ? { 'signed-in': true, roles: [] }
     : { 'signed-in': false, roles: roles.map((r) => `${P}role__${san(r)}`) };
   decl.invokers = invokers;
+  // An id input (uuid, named <noun>_id) that names a live record is a reference to that record.
   decl.inputs = (op.inputs ?? []).map((i) => {
-    const mt = mapType(i.type, entityIds, P);
-    return { name: san(i.name), label: titleCase(i.name), ty: mt.ty, required: !!i.required };
+    const name = san(i.name);
+    const target = /^uuid$/i.test(oneLine(i.type)) && /_id$/.test(name)
+      ? entityNamed(name.replace(/_id$/, ''), m, entityIds)
+      : null;
+    const ty = target
+      ? { Ref: { target: `${P}${san(target.id)}`, 'on-delete': 'Restrict' } }
+      : mapType(i.type, entityIds, P).ty;
+    return { name, label: titleCase(i.name), ty, required: !!i.required };
   });
+  const inputNames = new Set(decl.inputs.map((i) => i.name));
   decl.conditions = [];
-  decl.steps = [];
+  // An enum input admits only its listed values: a condition over the parameter.
+  (op.inputs ?? []).forEach((i) => {
+    const en = /^\s*enum\s*\(([^)]*)\)/i.exec(oneLine(i.type));
+    if (!en) return;
+    const name = san(i.name);
+    const values = en[1].split(',').map((s) => s.trim()).filter(Boolean);
+    decl.conditions.push({
+      id: `${name}_values`,
+      expr: `param.${name} in [${values.map(q).join(', ')}]`,
+      error: `bad-${name.replace(/_/g, '-')}`,
+      message: `${name} is one of ${values.join(', ')}.`,
+    });
+  });
   const unmapped = [];
+  const condUnmapped = [];
+  (op.preconditions ?? []).forEach((p, k) => {
+    const c = simpleCondition(p, inputNames, k + 1);
+    if (c) decl.conditions.push(c);
+    else condUnmapped.push(p);
+  });
+  decl.steps = [];
   let stepN = 0;
   for (const e of op.effects ?? []) {
+    if (EVENT_EFFECT.test(e)) continue;
     const hit = createTarget(e, m, entityIds);
     if (hit) {
       stepN++;
       const entity = hit;
       const fields = {};
-      const inputNames = new Set((op.inputs ?? []).map((i) => san(i.name)));
       for (const f of entity.fields ?? []) {
         const name = san(f.name);
+        if (f.name === 'PRIMARY KEY' || name === 'workspace_id') continue;
         if (inputNames.has(name)) fields[name] = `param.${name}`;
       }
-      const missing = (entity.fields ?? []).filter((f) => f.required && !fields[san(f.name)]).map((f) => f.name);
+      const missing = (entity.fields ?? []).filter((f) => f.required && f.name !== 'PRIMARY KEY' && san(f.name) !== 'workspace_id' && !fields[san(f.name)]).map((f) => f.name);
       if (missing.length) unmapped.push(`${e} [create ${entity.id}: fields ${missing.join(', ')} need expressions]`);
       decl.steps.push({ CreateRecord: { id: `step_${stepN}`, object: `${P}${san(entity.id)}`, fields } });
-    } else {
-      unmapped.push(e);
+      continue;
     }
+    const updated = entityNamedFor(e, m, entityIds);
+    const upd = updated ? updateTarget(e, op, updated, decl.inputs, P) : null;
+    if (upd) {
+      stepN++;
+      if (upd.missing.length) unmapped.push(`${e} [update: ${upd.missing.join(', ')} need expressions]`);
+      else decl.steps.push({ UpdateRecord: { id: `step_${stepN}`, object: `${P}${san(updated.id)}`, record: `param.${upd.record}`, fields: upd.fields } });
+      continue;
+    }
+    unmapped.push(e);
   }
   const invokersMissing = !invokers['signed-in'] && invokers.roles.length === 0;
-  return { decl, unmapped, invokersMissing };
+  return { decl, unmapped, condUnmapped, invokersMissing };
+}
+
+// The entity an "Update <noun> ..." effect updates, or null.
+function entityNamedFor(effect, m, entityIds) {
+  const noun = /^\s*update\s+(?:the\s+|a\s+|an\s+|one\s+)?([a-z][a-z0-9_]*)/i.exec(effect)?.[1];
+  return noun ? entityNamed(noun, m, entityIds) : null;
 }
 
 // An effect that creates one record of a module entity, named as "insert <entity> ..." or
@@ -595,14 +714,18 @@ function main() {
       const r = writeModule(id);
       rows.push(r);
     }
-    rows.sort((a, b) => a.counts.planned - b.counts.planned || a.id.localeCompare(b.id));
-    console.log('| rank | module | title | live | planned | manual | out | blocked by (top) |');
-    console.log('|---:|---|---|---:|---:|---:|---:|---|');
+    // Score: live objects + live operations + live screens (what Strata can express and install),
+    // then fewest planned items, then module id. Planned items lower the rank; they are not a score.
+    const score = (r) => r.live.objects + r.live.operations + r.live.screens;
+    rows.sort((a, b) => score(b) - score(a) || a.counts.planned - b.counts.planned || a.id.localeCompare(b.id));
+    console.log('| rank | module | title | score | objects | operations | screens | other live | planned | manual | out | blocked by (top) |');
+    console.log('|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|');
     rows.forEach((r, i) => {
       const byF = new Map();
       for (const p of r.planned) byF.set(p.fundamental, (byF.get(p.fundamental) ?? 0) + 1);
       const top = [...byF].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([f, n]) => `${f} ${n}`).join(', ') || '-';
-      console.log(`| ${i + 1} | ${r.id} | ${r.m.title} | ${r.counts.live} | ${r.counts.planned} | ${r.counts.manual} | ${r.counts.out} | ${top} |`);
+      const other = r.counts.live - r.live.objects - r.live.operations - r.live.screens;
+      console.log(`| ${i + 1} | ${r.id} | ${r.m.title} | ${score(r)} | ${r.live.objects} | ${r.live.operations} | ${r.live.screens} | ${other} | ${r.counts.planned} | ${r.counts.manual} | ${r.counts.out} | ${top} |`);
     });
     const unknown = [...UNKNOWN_F];
     if (unknown.length) console.log(`unknown fundamentals referenced: ${unknown.join(', ')}`);

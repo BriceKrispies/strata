@@ -107,13 +107,6 @@
     // "required": true,
     // "unique": false
     // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
     // "task_no": {
     // "id": "task_no",
     // "label": "Task no",
@@ -324,18 +317,11 @@
     // },
     // "constraints": {}
     // }
-    // PLANNED F-identifier-sequences (suite_counters): Gapless human-readable numbers. workspace_id: reference to workspaces is in another product (F-cross-product-refs); held as text
+    // PLANNED F-identifier-sequences (suite_counters): Gapless human-readable numbers
     // {
     // "id": "plinth_tasks__suite_counters",
     // "label": "Suite counters",
     // "fields": {
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
     // "name": {
     // "id": "name",
     // "label": "Name",
@@ -423,7 +409,14 @@
     // "required": true
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "priority_values",
+    // "expr": "param.priority in ['low', 'normal', 'high', 'urgent']",
+    // "error": "bad-priority",
+    // "message": "priority is one of low, normal, high, urgent."
+    // }
+    // ],
     // "steps": []
     // }
     // PLANNED F-state-conditional-writes (tasks.update): Writes and decisions conditional on the state read (one decision when approvers race). F-state-conditional-writes: Version and terminal-state checks are conditions a named refusal must come back from; see F-state-conditional-writes.; F-held-operations: approval: Agent: preview then commit.; F-visibility: row scope: caller is assignee, creator, or acting-for either of them, or holds tasks:manage
@@ -491,7 +484,20 @@
     // "required": true
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "status_values",
+    // "expr": "param.status in ['open', 'in_progress', 'blocked', 'done', 'cancelled']",
+    // "error": "bad-status",
+    // "message": "status is one of open, in_progress, blocked, done, cancelled."
+    // },
+    // {
+    // "id": "priority_values",
+    // "expr": "param.priority in ['low', 'normal', 'high', 'urgent']",
+    // "error": "bad-priority",
+    // "message": "priority is one of low, normal, high, urgent."
+    // }
+    // ],
     // "steps": []
     // }
     // PLANNED F-human-tasks (tasks.comment): Human task primitive and inbox. F-human-tasks: inventory status; F-held-operations: approval: Agent: preview then commit.; F-visibility: row scope: caller can see the task (assignee, creator, acting-for, or tasks:manage)

@@ -171,13 +171,6 @@
     // "required": true,
     // "unique": false
     // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
     // "cost_points": {
     // "id": "cost_points",
     // "label": "Cost points",
@@ -211,13 +204,6 @@
         "redemption_id": {
           "id": "redemption_id",
           "label": "Redemption id",
-          "ty": "Str",
-          "required": true,
-          "unique": false
-        },
-        "workspace_id": {
-          "id": "workspace_id",
-          "label": "Workspace id",
           "ty": "Str",
           "required": true,
           "unique": false
@@ -337,13 +323,6 @@
           "required": true,
           "unique": false
         },
-        "workspace_id": {
-          "id": "workspace_id",
-          "label": "Workspace id",
-          "ty": "Str",
-          "required": true,
-          "unique": false
-        },
         "promotion_id": {
           "id": "promotion_id",
           "label": "Promotion id",
@@ -446,7 +425,14 @@
     // "required": true
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "to_values",
+    // "expr": "param.to in ['scheduled', 'active', 'paused', 'ended', 'draft']",
+    // "error": "bad-to",
+    // "message": "to is one of scheduled, active, paused, ended, draft."
+    // }
+    // ],
     // "steps": []
     // }
     // PLANNED F-scheduled-record-events (job.promotion-schedule): Timed events read from record fields. F-scheduled-record-events: inventory status
