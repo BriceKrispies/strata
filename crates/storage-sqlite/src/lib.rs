@@ -808,6 +808,8 @@ pub struct SqliteStore {
     /// Tenants an install announced ([`Store::begin_provisioning`]) whose creating commit has not
     /// happened yet: that commit writes their directory row as `provisioning`.
     announced: Mutex<BTreeSet<TenantId>>,
+    /// The decoded schema of each open tenant, reused while its stored text is unchanged.
+    schemas: SchemaCache,
 }
 
 fn db(error: rusqlite::Error) -> StoreError {
@@ -849,8 +851,54 @@ pub fn schema_decodes() -> u64 {
     SCHEMA_DECODES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The decoded schema of each tenant, kept while the tenant's file is open. A schema document is
+/// large (about 440 KB for the fourteen enterprise products) and changes rarely, while every load
+/// and every commit reads the tenant header, so decoding it each time dominated a commit. An entry
+/// is used only when the stored text is exactly the text it was decoded from, so a cached schema
+/// is never a stale one; the entry is dropped with the open file (see `SqliteStore::evict`), which
+/// bounds the memory the cache holds.
+#[derive(Default)]
+struct SchemaCache {
+    entries: Mutex<BTreeMap<TenantId, (String, Arc<TenantSchema>)>>,
+}
+
+impl SchemaCache {
+    /// The schema decoded from `text`, the stored schema document of `tenant`. The decode runs
+    /// outside the lock, so tenants do not wait on each other's decodes.
+    fn decoded(&self, tenant: &TenantId, text: &str) -> StoreResult<Arc<TenantSchema>> {
+        let poisoned = || StoreError::Unavailable("a writer panicked".into());
+        if let Some((held, schema)) = self.entries.lock().map_err(|_| poisoned())?.get(tenant) {
+            if held == text {
+                return Ok(schema.clone());
+            }
+        }
+        SCHEMA_DECODES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let schema = Arc::new(decode::<TenantSchema>(text, "tenant schema")?);
+        self.entries
+            .lock()
+            .map_err(|_| poisoned())?
+            .insert(tenant.clone(), (text.to_string(), schema.clone()));
+        Ok(schema)
+    }
+
+    fn forget(&self, tenant: &TenantId) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.remove(tenant);
+        }
+    }
+}
+
 /// The header of the tenant in an open tenant file, without records.
 fn header(tx: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantState>> {
+    header_with(tx, tenant, None)
+}
+
+/// [`header`], decoding the schema through `schemas` when it is given.
+fn header_with(
+    tx: &Connection,
+    tenant: &TenantId,
+    schemas: Option<&SchemaCache>,
+) -> StoreResult<Option<TenantState>> {
     let row = tx
         .query_row(
             "SELECT name, revision, next_record, event_seq, schema, members FROM tenant WHERE id = ?1",
@@ -871,8 +919,13 @@ fn header(tx: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantState>
     let Some((name, revision, next_record, event_seq, schema, members)) = row else {
         return Ok(None);
     };
-    SCHEMA_DECODES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let schema: TenantSchema = decode(&schema, "tenant schema")?;
+    let schema = match schemas {
+        Some(cache) => cache.decoded(tenant, &schema)?,
+        None => {
+            SCHEMA_DECODES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Arc::new(decode::<TenantSchema>(&schema, "tenant schema")?)
+        }
+    };
     let members: BTreeMap<PrincipalId, BTreeSet<RoleId>> = decode(&members, "tenant members")?;
     Ok(Some(TenantState {
         id: tenant.clone(),
@@ -880,7 +933,7 @@ fn header(tx: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantState>
         revision: StateRevision(revision as u64),
         next_record: next_record as u64,
         event_seq: event_seq as u64,
-        schema: Arc::new(schema),
+        schema,
         members,
         records: BTreeMap::new(),
         setting_values: setting_values(tx)?,
@@ -897,6 +950,7 @@ fn header_for_load(
     tenant: &TenantId,
     generation: Option<Generation>,
     held: Option<&HeldHeader>,
+    schemas: &SchemaCache,
 ) -> StoreResult<Option<(TenantState, bool)>> {
     if let (Some(held), Some(generation)) = (held, generation) {
         if held.generation == generation {
@@ -927,7 +981,7 @@ fn header_for_load(
             }));
         }
     }
-    Ok(header(tx, tenant)?.map(|state| (state, true)))
+    Ok(header_with(tx, tenant, Some(schemas))?.map(|state| (state, true)))
 }
 
 /// The setting overrides and the setting revisions of the tenant in an open tenant file, none
@@ -1717,6 +1771,7 @@ impl SqliteStore {
             max_open: DEFAULT_MAX_OPEN,
             opening: Mutex::new(BTreeMap::new()),
             announced: Mutex::new(BTreeSet::new()),
+            schemas: SchemaCache::default(),
             sweep: AtomicUsize::new(0),
             faults: Mutex::new(Vec::new()),
             opened_at: now,
@@ -1912,6 +1967,7 @@ impl SqliteStore {
             };
             open.remove(&oldest);
             recency.remove(&oldest);
+            self.schemas.forget(&oldest);
         }
     }
 
@@ -2224,6 +2280,7 @@ impl SqliteStore {
         tx: &Transaction<'_>,
         commit: &Commit,
         nonces: &dyn NonceSource,
+        schemas: &SchemaCache,
     ) -> StoreResult<Receipt> {
         let delta = &commit.delta;
         let tenant = delta.tenant.as_str();
@@ -2232,7 +2289,7 @@ impl SqliteStore {
                 "a commit with a base revision names the generation it was decided on".into(),
             ));
         }
-        let current = header(tx, &delta.tenant)?;
+        let current = header_with(tx, &delta.tenant, Some(schemas))?;
         let found = current.as_ref().map(|h| h.revision);
         // A tenant that does not exist has no generation, whatever a leftover row says.
         let held = match &current {
@@ -3000,7 +3057,7 @@ impl Store for SqliteStore {
             // The generation and the rows are read in this one read transaction.
             let generation = read_generation(tx)?;
             let Some((mut state, header_decoded)) =
-                header_for_load(tx, tenant, generation, held)?
+                header_for_load(tx, tenant, generation, held, &self.schemas)?
             else {
                 return Ok(HeldLoad {
                     loaded: Loaded {
@@ -3135,22 +3192,24 @@ impl Store for SqliteStore {
         };
         file.read(dbe, |tx| {
             let generation = read_generation(tx)?;
-            Ok(match header_for_load(tx, tenant, generation, held)? {
-                Some((state, header_decoded)) => HeldLoad {
-                    loaded: Loaded {
-                        state: State::complete(Arc::new(complete_from(tx, state)?)),
-                        generation,
+            Ok(
+                match header_for_load(tx, tenant, generation, held, &self.schemas)? {
+                    Some((state, header_decoded)) => HeldLoad {
+                        loaded: Loaded {
+                            state: State::complete(Arc::new(complete_from(tx, state)?)),
+                            generation,
+                        },
+                        header_decoded,
                     },
-                    header_decoded,
-                },
-                None => HeldLoad {
-                    loaded: Loaded {
-                        state: State::absent(tenant.clone()),
-                        generation: None,
+                    None => HeldLoad {
+                        loaded: Loaded {
+                            state: State::absent(tenant.clone()),
+                            generation: None,
+                        },
+                        header_decoded: false,
                     },
-                    header_decoded: false,
                 },
-            })
+            )
         })
     }
 
@@ -3195,14 +3254,18 @@ impl Store for SqliteStore {
             if let Some(due) = wake {
                 self.wake_at(&delta.tenant, due)?;
             }
-            let receipt = file.write(dbe, |tx| Self::apply(tx, commit, &*self.nonces))?;
+            let receipt = file.write(dbe, |tx| {
+                Self::apply(tx, commit, &*self.nonces, &self.schemas)
+            })?;
             if let Some(due) = wake {
                 let _ = self.wake_at(&delta.tenant, due);
             }
             return Ok(receipt);
         }
         let (file, created) = self.create_tenant_db(&delta.tenant, commit.journal.context.now)?;
-        let result = file.write(dbe, |tx| Self::apply(tx, commit, &*self.nonces));
+        let result = file.write(dbe, |tx| {
+            Self::apply(tx, commit, &*self.nonces, &self.schemas)
+        });
         if let (Ok(_), Some(due)) = (&result, commit.jobs.iter().map(|job| job.due_at.0).min()) {
             let _ = self.wake_at(&delta.tenant, due);
         }
@@ -3240,7 +3303,7 @@ impl Store for SqliteStore {
             self.wake_at(&commit.delta.tenant, due)?;
         }
         let receipt = file.write(dbe, |tx| {
-            let receipt = Self::apply(tx, commit, &*self.nonces)?;
+            let receipt = Self::apply(tx, commit, &*self.nonces, &self.schemas)?;
             apply_segments(tx, write)?;
             Ok(receipt)
         })?;

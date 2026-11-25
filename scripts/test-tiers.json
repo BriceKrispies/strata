@@ -70,7 +70,7 @@
       "package": "strata-corpus",
       "target": "corpus_slow",
       "tier": "full",
-      "seconds": 96.47,
+      "seconds": 12.68,
       "reason": "corpus: Compiles the 14 enterprise product files with specc, installs them into one tenant, and populates the small scale three times (twice on the memory store, once on SQLite, plus another seed) to check that a fixed seed gives a byte-identical tenant hash on both stores, and only plans the large scale"
     },
     {

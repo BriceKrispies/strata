@@ -17,6 +17,17 @@ fn products() -> &'static [CompiledProduct] {
         .get_or_init(|| compile_corpus(&CorpusPaths::default()).unwrap_or_else(|e| panic!("{e}")))
 }
 
+/// The memory store with the corpus installed, shared by the tests that only read the installed tenant.
+fn installed() -> &'static (MemoryStore, strata_corpus::LoadedCorpus) {
+    static INSTALLED: OnceLock<(MemoryStore, strata_corpus::LoadedCorpus)> = OnceLock::new();
+    INSTALLED.get_or_init(|| {
+        let store = MemoryStore::new();
+        let loaded = load_corpus(&store, &LoadOptions::default(), products())
+            .unwrap_or_else(|e| panic!("{e}"));
+        (store, loaded)
+    })
+}
+
 fn built(store: &dyn strata_storage_api::Store, seed: u64) -> strata_corpus::Built {
     build(
         store,
@@ -30,12 +41,10 @@ fn built(store: &dyn strata_storage_api::Store, seed: u64) -> strata_corpus::Bui
 #[test]
 fn the_loaded_tenant_holds_every_entity_of_the_14_products() {
     assert_eq!(products().len(), 14, "one bundle per product file");
-    let store = MemoryStore::new();
-    let loaded =
-        load_corpus(&store, &LoadOptions::default(), products()).unwrap_or_else(|e| panic!("{e}"));
+    let (store, loaded) = installed();
     assert_eq!(loaded.products.len(), 14);
     let verification =
-        verify_loaded(&store, &loaded.tenant, products()).unwrap_or_else(|e| panic!("{e}"));
+        verify_loaded(store, &loaded.tenant, products()).unwrap_or_else(|e| panic!("{e}"));
     assert!(
         verification.missing.is_empty(),
         "owned but absent: {:?}",
@@ -72,13 +81,11 @@ fn a_fixed_seed_gives_a_byte_identical_tenant_on_both_stores_and_another_seed_an
 
 #[test]
 fn every_object_type_has_planned_records_and_the_large_scale_plans_over_100000() {
-    let store = MemoryStore::new();
-    let loaded =
-        load_corpus(&store, &LoadOptions::default(), products()).unwrap_or_else(|e| panic!("{e}"));
-    let large = planned_counts(&store, &loaded.tenant, Scale::Large).unwrap();
+    let (store, loaded) = installed();
+    let large = planned_counts(store, &loaded.tenant, Scale::Large).unwrap();
     assert_eq!(large.len(), 73, "every object type of the corpus");
     assert!(large.values().all(|&n| n > 0));
     assert!(large.values().sum::<u64>() >= 100_000);
-    let small = planned_counts(&store, &loaded.tenant, Scale::Small).unwrap();
+    let small = planned_counts(store, &loaded.tenant, Scale::Small).unwrap();
     assert!(small.values().sum::<u64>() < large.values().sum::<u64>());
 }
