@@ -1,0 +1,27 @@
+{
+  // Refused: a write-setting step names a setting the product does not declare (layer.write-setting-not-owned,
+  // WG-5606). The setting is named as if another product owned it; a product writes only the settings it
+  // declares under "settings" (SET-001).
+  "product": { "id": "channel-prefs", "name": "Channel preferences", "version": "1.0.0", "platform": { "min": "0.2" }, "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "operations": [
+    {
+      "id": "channel_prefs__choose_home_channel",
+      "label": "Choose your home channel",
+      "inputs": [
+        { "name": "channel", "ty": "Str", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [
+        {
+          "WriteSetting": {
+            "id": "home",
+            "setting": "member_tiers__gold_threshold",
+            "level": "person",
+            "value": "param.channel"
+          }
+        }
+      ]
+    }
+  ]
+}

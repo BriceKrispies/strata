@@ -442,6 +442,16 @@ pub fn rewrite_schema(
                 }
             }
         }
+        for field in object.fields.values() {
+            if let Some(expr) = &field.computed {
+                let id = DependentId::Computed(oid.clone(), field.id.clone());
+                let new = sub.expr(Some(oid), expr).map_err(|e| fail(&id, e))?;
+                if &new != expr {
+                    target.fields.get_mut(&field.id).expect("field").computed = Some(new);
+                    changed.insert(id);
+                }
+            }
+        }
         for constraint in object.constraints.values() {
             let id = DependentId::Constraint(oid.clone(), constraint.id.clone());
             let new = sub

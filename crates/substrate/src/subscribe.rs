@@ -496,6 +496,98 @@ mod tests {
         (world, events)
     }
 
+    /// WG-5606: a person-level setting that a tenant operation writes is told to the person it is
+    /// written for, so a view whose arguments read it is read again for them; no other person hears
+    /// of it.
+    #[test]
+    fn a_setting_an_operation_writes_is_told_to_the_person_it_is_written_for() {
+        use std::collections::BTreeSet;
+        use strata_kernel::{
+            ExistingData, Expr, FieldType, OperationSettingLevel, SchemaChange, SettingDef,
+            SettingId, SettingType, TenantOperationDef, TenantOperationId, TenantOperationInput,
+            TenantOperationInvokers, TenantOperationStep, Value,
+        };
+        let setting = SettingDef {
+            id: SettingId::new("home_channel").expect("setting id"),
+            label: "Home channel".into(),
+            r#type: SettingType::new("string").expect("setting type"),
+            default: Value::Str("general".into()),
+            levels: BTreeSet::from([SettingLevel::Person]),
+            locked_by: None,
+            area: None,
+            description: None,
+            allowed: None,
+        };
+        let operation = TenantOperationDef {
+            id: TenantOperationId::new("choose_channel").expect("operation id"),
+            label: "Choose a channel".into(),
+            inputs: vec![TenantOperationInput {
+                name: "channel".into(),
+                ty: FieldType::Str,
+                required: true,
+                label: None,
+            }],
+            invokers: TenantOperationInvokers {
+                signed_in: true,
+                roles: BTreeSet::new(),
+            },
+            subject: None,
+            conditions: Vec::new(),
+            steps: vec![TenantOperationStep::WriteSetting {
+                id: "home".into(),
+                setting: SettingId::new("home_channel").expect("setting id"),
+                level: OperationSettingLevel::Person,
+                value: Expr::Param("channel".into()),
+            }],
+        };
+        let define = Intent::ChangeSchema {
+            changes: vec![
+                SchemaChange::DefineSetting(setting),
+                SchemaChange::DefineOperation(operation),
+            ],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        };
+        let world = notes_world()
+            .step(&define, &ctx("alpha", user("alpha:owner"), 5_000))
+            .expect("the schema is accepted")
+            .0;
+        let invoke = Intent::InvokeOperation {
+            operation: TenantOperationId::new("choose_channel").expect("operation id"),
+            inputs: [("channel".to_string(), Value::Str("random".into()))].into(),
+            idempotency_key: "k-1".into(),
+        };
+        let (world, outcome) = world
+            .step(&invoke, &ctx("alpha", user("alpha:writer1"), 6_000))
+            .expect("the invocation is accepted");
+        let tenant = &world.tenants[&tenant_id("alpha")];
+        let all = Selector::all();
+        let for_writer: Vec<_> = outcome
+            .events
+            .iter()
+            .map(|e| notice(tenant, &user("alpha:writer1"), &all, e))
+            .collect();
+        assert!(
+            for_writer.iter().any(|n| matches!(
+                n,
+                Some(Notice::Setting { setting, level: SettingLevel::Person })
+                    if setting.as_str() == "home_channel"
+            )),
+            "the person the value is written for hears of it: {for_writer:?}"
+        );
+        let for_editor: Vec<_> = outcome
+            .events
+            .iter()
+            .map(|e| notice(tenant, &user("alpha:editor"), &all, e))
+            .collect();
+        assert!(
+            for_editor
+                .iter()
+                .all(|n| !matches!(n, Some(Notice::Setting { .. }))),
+            "another person hears nothing of it: {for_editor:?}"
+        );
+    }
+
     #[test]
     fn the_public_hears_nothing_about_a_draft_and_sees_a_withdrawal_as_a_removal() {
         let (world, events) = published_then_withdrawn();

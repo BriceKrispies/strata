@@ -1249,6 +1249,8 @@ fn situation_26_aba_with_a_rename_keeps_the_old_binding() {
 #[test]
 fn situation_27_diamond_rewrite_order() {
     let section = |query: &str| ViewSection {
+        marks: None,
+        joins: None,
         query: QueryId::new(query).unwrap(),
         args: BTreeMap::new(),
         // `include` names reference fields only, so the diamond meets at the reference `a`.

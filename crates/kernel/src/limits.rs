@@ -95,6 +95,9 @@ pub const MAX_LEDGER_POOLS: usize = 64;
 pub const MAX_LEDGER_ACCOUNT_LIMITS: usize = 10_000;
 /// The most accounts one ranked listing may examine (D-6552, LDG-1543).
 pub const MAX_LEDGER_RANK_SCAN: u32 = 10_000;
+/// The most referring records one write may recompute through computed fields (D-8307). A write that
+/// would recompute more is refused with limit-exceeded.
+pub const MAX_COMPUTED_FANOUT: usize = 1_000;
 
 /// The first limit a value breaks, as a description, or `None`.
 pub fn value_problem(value: &Value) -> Option<String> {

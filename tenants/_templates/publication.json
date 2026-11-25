@@ -188,6 +188,17 @@
     { "id": "authors", "object": "author", "order": ["name"] },
     { "id": "author_by_slug", "object": "author", "where": "record.slug == param.slug", "params": ["slug"], "limit": 1 }
   ],
+  "settings": [
+    {
+      "id": "reading_width",
+      "label": "Reading width",
+      "description": "How wide the text of an essay is drawn for you: narrow, standard or wide.",
+      "type": "string",
+      "default": {"Str": "standard"},
+      "levels": ["tenant", "person"],
+      "allowed": {"closed": {"values": [{"Str": "narrow"}, {"Str": "standard"}, {"Str": "wide"}]}}
+    }
+  ],
   "views": [
     {
       "id": "home",
@@ -314,6 +325,12 @@
       "id": "lab",
       "route": "/lab",
       "title": "Impact Lab",
+      "sections": { "site": { "query": "publication", "single": true } }
+    },
+    {
+      "id": "settings",
+      "route": "/settings",
+      "title": "Settings",
       "sections": { "site": { "query": "publication", "single": true } }
     }
   ]

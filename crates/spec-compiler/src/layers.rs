@@ -46,6 +46,9 @@
 //! - `layer.retention-missing`: an object type with a personal field and no retention (D-6584);
 //! - `layer.balance-outside-ledger`: a step or transition that writes a record field from its own
 //!   current value, a mutable balance outside the ledger (WG-4998);
+//! - `layer.computed-default`, `layer.computed-declaration`, `layer.computed-written`: a computed
+//!   field that declares a default, that is unique or required, or that an operation, workflow or
+//!   automation writes (D-8307, KRN-2924);
 //! - `layer.configuration-outside-setting`: an expression that names a record by a literal id,
 //!   `ref(3)`, the singleton record of a configuration kept outside a declared setting (WG-5000);
 //! - `layer.reference-unknown`, `layer.cross-product-reference`: a name in a typed section, or a
@@ -169,6 +172,12 @@ pub const PLATFORM_REFERENCES_PRODUCT: &str = "layer.platform-references-product
 /// An entity that keeps a mutable balance outside the ledger: a step or transition that writes a
 /// field of a record from that field's own value (WG-4998, LDG-001).
 pub const BALANCE_OUTSIDE_LEDGER: &str = "layer.balance-outside-ledger";
+/// A computed field that declares a default (D-8307, KRN-2924).
+pub const COMPUTED_DEFAULT: &str = "layer.computed-default";
+/// A computed field that is unique or required (D-8307, KRN-2924).
+pub const COMPUTED_DECLARATION: &str = "layer.computed-declaration";
+/// An operation, workflow or automation that writes a computed field (D-8307, KRN-2924).
+pub const COMPUTED_WRITTEN: &str = "layer.computed-written";
 /// An expression of a product that names a record by a literal id: the singleton record of a
 /// configuration kept outside a declared setting (WG-5000, SET-001).
 pub const CONFIGURATION_OUTSIDE_SETTING: &str = "layer.configuration-outside-setting";
@@ -178,6 +187,12 @@ pub const SETTING_AREA_OTHER_PRODUCT: &str = "layer.setting-area-other-product";
 /// A query whose tree form (WG-5510) does not name a single reference of its own object type as its parent
 /// field, whose root is not a parameter of the query, or whose max-depth is outside 1 to 32.
 pub const TREE_INVALID: &str = "layer.tree-invalid";
+
+/// A write-setting step of an operation that names a setting the product does not own, that is, one it
+/// does not declare under its own "settings" (WG-5606, SET-001).
+pub const WRITE_SETTING_NOT_OWNED: &str = "layer.write-setting-not-owned";
+/// A write-setting step of an operation at a level the setting's definition does not allow (WG-5606).
+pub const WRITE_SETTING_LEVEL_NOT_ALLOWED: &str = "layer.write-setting-level-not-allowed";
 
 /// Stands for "any section": a key listing it accepts any platform entity.
 const ANY: &[&str] = &[];
@@ -587,6 +602,7 @@ fn check_product(
         }
     };
     let parsed = header.and_then(|h| check_header(&file, h, product, platform_file, out));
+    check_computed(&file, top, out);
     let imports: Vec<String> = parsed
         .as_ref()
         .map(|(_, _, imports)| imports.clone())
@@ -640,6 +656,7 @@ fn check_product(
     // What the expressions of the typed sections may name: the object types and roles of the file and
     // the platform's roles.
     let context = ProductContext::of(platform_ids, top);
+    let own_settings = setting_levels_of(top, header_product_id(&parsed));
     let own: BTreeSet<String> = sections
         .iter()
         .filter_map(|(s, _)| top.get(*s).and_then(Value::as_array))
@@ -747,6 +764,7 @@ fn check_product(
                         }
                         if *section == "operations" {
                             check_operation_bindings(&file, id, item, out);
+                            check_write_settings(&file, id, item, &own_settings, out);
                         }
                         if *section == "eventKinds" {
                             check_event_kind(&file, id, item, out);
@@ -1248,6 +1266,119 @@ fn check_retention(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic>
     ));
 }
 
+/// The computed fields of a product's record types, and what may write them (D-8307, KRN-2924). A
+/// computed field declares no default, is neither unique nor required, and no operation, workflow or
+/// automation of the product writes it. The kernel refuses the same declarations of a tenant schema.
+fn check_computed(file: &str, top: &Map<String, Value>, out: &mut Vec<Diagnostic>) {
+    let mut computed: BTreeSet<(String, String)> = BTreeSet::new();
+    for item in top
+        .get("objects")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        for (name, field) in item
+            .get("fields")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if field.get("computed").is_none_or(Value::is_null) {
+                continue;
+            }
+            computed.insert((id.to_string(), name.clone()));
+            if field.get("default").is_some_and(|d| !d.is_null()) {
+                out.push(Diagnostic::new(
+                    COMPUTED_DEFAULT,
+                    id,
+                    format!("The computed field \"{name}\" of \"{id}\" in {file} declares a default. A computed field is derived by the kernel from its record and the record it refers to, so a default could hold a value the derivation would never give (D-8307). Remove the default."),
+                ));
+            }
+            let flag = |key: &str| field.get(key).and_then(Value::as_bool) == Some(true);
+            if flag("unique") || flag("required") {
+                out.push(Diagnostic::new(
+                    COMPUTED_DECLARATION,
+                    id,
+                    format!("The computed field \"{name}\" of \"{id}\" in {file} is unique or required. A computed value changes when its inputs change, so no commit can check it as a unique key or a required value (D-8307). Remove \"unique\" and \"required\"."),
+                ));
+            }
+        }
+    }
+    if computed.is_empty() {
+        return;
+    }
+    for section in ["operations", "automations", "workflows"] {
+        for item in top
+            .get(section)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(id) = item.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let item_object = item.get("object").and_then(Value::as_str);
+            let mut writes = Vec::new();
+            collect_record_writes(item, item_object, &mut writes);
+            for (object, field) in writes {
+                if computed.contains(&(object.clone(), field.clone())) {
+                    out.push(Diagnostic::new(
+                        COMPUTED_WRITTEN,
+                        id,
+                        format!("\"{id}\" in {file} writes the computed field \"{field}\" of \"{object}\". The kernel computes that field from the record and the record it refers to, so a step may not write it (D-8307). Remove the write, and derive the value in the field's expression instead."),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// The (object, field) pairs a step or transition of a product writes: the fields of a create or
+/// update step, and the fields a workflow transition sets on its own object.
+fn collect_record_writes(
+    value: &Value,
+    item_object: Option<&str>,
+    out: &mut Vec<(String, String)>,
+) {
+    match value {
+        Value::Object(map) => {
+            for (key, inner) in map {
+                match key.as_str() {
+                    "CreateRecord" | "UpdateRecord" => {
+                        if let Some(object) = inner.get("object").and_then(Value::as_str) {
+                            for field in inner
+                                .get("fields")
+                                .and_then(Value::as_object)
+                                .into_iter()
+                                .flatten()
+                                .map(|(f, _)| f)
+                            {
+                                out.push((object.to_string(), field.clone()));
+                            }
+                        }
+                    }
+                    "set" => {
+                        if let (Some(object), Value::Object(fields)) = (item_object, inner) {
+                            for field in fields.keys() {
+                                out.push((object.to_string(), field.clone()));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                collect_record_writes(inner, item_object, out);
+            }
+        }
+        Value::Array(items) => items
+            .iter()
+            .for_each(|i| collect_record_writes(i, item_object, out)),
+        _ => {}
+    }
+}
+
 /// The step of an operation or automation, or the transition of a workflow, that writes a field of a
 /// record from the same field's current value (`points = record.points + 1`) keeps a balance in the
 /// record: it can be overwritten, it loses a concurrent write, and it has no journal. A balance is a
@@ -1481,6 +1612,105 @@ fn check_event_kind(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic
             id,
             format!("The event kind \"{kind}\" of \"{id}\" in {file} has {fields} fields, and a declared kind has at most {MOST_FIELDS} (SCH-1576). Remove some, or carry them in a record the event names."),
         ));
+    }
+}
+
+/// The settings a product owns, each with the levels its definition allows: the entries of its
+/// "settings" section whose area is the product's own id or is left out (WG-5606).
+fn setting_levels_of(
+    top: &serde_json::Map<String, Value>,
+    product_id: &str,
+) -> BTreeMap<String, Vec<String>> {
+    let mut out = BTreeMap::new();
+    for item in top
+        .get("settings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if item
+            .get("area")
+            .and_then(Value::as_str)
+            .is_some_and(|area| area != product_id)
+        {
+            continue;
+        }
+        let levels = item
+            .get("levels")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        out.insert(id.to_string(), levels);
+    }
+    out
+}
+
+/// The write-setting steps of an operation (WG-5606): the setting is one the product owns, and the
+/// level is one the setting's definition allows. The steps a branch holds are checked too.
+fn check_write_settings(
+    file: &str,
+    id: &str,
+    item: &Value,
+    own: &BTreeMap<String, Vec<String>>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let Some(steps) = item.get("steps").and_then(Value::as_array) else {
+        return;
+    };
+    walk_write_settings(file, id, steps, own, out);
+}
+
+fn walk_write_settings(
+    file: &str,
+    id: &str,
+    steps: &[Value],
+    own: &BTreeMap<String, Vec<String>>,
+    out: &mut Vec<Diagnostic>,
+) {
+    for step in steps {
+        for (kind, body) in step.as_object().into_iter().flatten() {
+            match kind.as_str() {
+                "WriteSetting" => {
+                    let step_id = body.get("id").and_then(Value::as_str).unwrap_or("");
+                    let setting = body.get("setting").and_then(Value::as_str).unwrap_or("");
+                    let level = body.get("level").and_then(Value::as_str).unwrap_or("");
+                    match own.get(setting) {
+                        None => out.push(Diagnostic::new(
+                            WRITE_SETTING_NOT_OWNED,
+                            id,
+                            format!("\"{id}\" in {file}: the step \"{step_id}\" writes the setting \"{setting}\", which the product does not declare under \"settings\". A product writes only the settings it owns (SET-001): declare \"{setting}\" in this file, or remove the step."),
+                        )),
+                        Some(levels) if !levels.iter().any(|allowed| allowed == level) => {
+                            out.push(Diagnostic::new(
+                                WRITE_SETTING_LEVEL_NOT_ALLOWED,
+                                id,
+                                format!("\"{id}\" in {file}: the step \"{step_id}\" writes the setting \"{setting}\" at the level \"{level}\", which its definition does not allow ({}). Write at a level the definition lists under \"levels\".", levels.join(", ")),
+                            ));
+                        }
+                        Some(_) => {}
+                    }
+                }
+                "Branch" => {
+                    for side in ["matched", "unmatched"] {
+                        let list = body.get(side).and_then(Value::as_array);
+                        walk_write_settings(
+                            file,
+                            id,
+                            list.map_or(&[][..], Vec::as_slice),
+                            own,
+                            out,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 

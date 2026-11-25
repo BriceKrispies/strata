@@ -24,9 +24,11 @@ use strata_storage_api::{execute_admitting, execute_at, ExecuteError, Executed, 
 use strata_substrate::affordance::{row_affordances, SESSION_BUDGET};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
-    aggregate_request_with, decode_cursor, encode_cursor, included_refs, match_route,
-    name_for_reader, resolved_settings, section_order, section_request_with, select_fields,
-    title_of, with_page, PersonInfo, RefTargets, SectionData, ViewData, MEMBER_NAMES_SETTING,
+    aggregate_request_with, argument_values, decode_cursor, encode_cursor, groups_by_row,
+    included_refs, lookup_by_rows, match_route, name_for_reader, principal_value,
+    resolved_settings, section_order, section_request_with, select_fields, title_of,
+    view_reads_reader, with_page, PersonInfo, RefTargets, SectionData, ViewData,
+    MEMBER_NAMES_SETTING,
 };
 
 /// The tenant's schema, members and counters, without records.
@@ -642,6 +644,18 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             continue;
         };
         depends_on.insert(query.object.clone());
+        // A row mark or join reads the records of its own query, which can change the view too.
+        for lookup in section
+            .marks
+            .iter()
+            .flatten()
+            .map(|(_, m)| &m.query)
+            .chain(section.joins.iter().flatten().map(|(_, j)| &j.query))
+        {
+            if let Some(other) = schema.queries.get(lookup) {
+                depends_on.insert(other.object.clone());
+            }
+        }
         if let Some(object) = schema.objects.get(&query.object) {
             for field in &section.include {
                 if let Some((target, _, _)) =
@@ -670,10 +684,12 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
     };
     // The arguments that come from a setting, resolved for this reader (SET-1540).
     let settings = resolved_settings(&tenant, &identity.principal, def);
+    // The reader's own principal, for an argument that names the reader (WG-5599).
+    let reader = principal_value(&identity.principal);
     let request_of = |section: &ViewSection, done: &BTreeMap<String, Option<Arc<Record>>>| {
         let (size, cursor) = page_of(section);
         with_page(
-            section_request_with(section, &route, &request.request, done, &settings),
+            section_request_with(section, &route, &request.request, done, &settings, &reader),
             size,
             cursor,
         )
@@ -708,6 +724,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                 &request.request,
                 &done,
                 &settings,
+                &reader,
             );
             let result = aggregate_loaded(
                 app,
@@ -731,6 +748,8 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                     next: None,
                     aggregate: Some(result),
                     depths: None,
+                    marks: BTreeMap::new(),
+                    joins: BTreeMap::new(),
                 },
             );
             continue;
@@ -837,11 +856,83 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                 },
             );
         }
+        // The row marks and joins of the section (WG-5599): each is one aggregate per batch of the
+        // section's rows, answered for this reader like any other read of the snapshot. A name the
+        // section declares is always present, even when no row holds it.
+        let row_ids: Vec<RecordId> = result.rows.iter().map(|row| row.id).collect();
+        let no_args = BTreeMap::new();
+        let mut marks = BTreeMap::new();
+        for (mark, lookup) in section.marks.iter().flatten() {
+            let params = argument_values(
+                lookup.args.as_ref().unwrap_or(&no_args),
+                &route,
+                &request.request,
+                &done,
+                &settings,
+                &reader,
+            );
+            let found = lookup_by_rows(
+                &lookup.query,
+                &lookup.aggregate,
+                &lookup.key,
+                &params,
+                &row_ids,
+                |ask| {
+                    aggregate_loaded(
+                        app,
+                        &identity.tenant,
+                        schema,
+                        &mut state,
+                        &mut needs,
+                        ask,
+                        &ctx,
+                        anonymous,
+                    )
+                },
+            )?;
+            marks.insert(
+                mark.clone(),
+                found.into_iter().map(|(id, _)| id).collect::<BTreeSet<_>>(),
+            );
+        }
+        let mut joins = BTreeMap::new();
+        for (join, lookup) in section.joins.iter().flatten() {
+            let params = argument_values(
+                lookup.args.as_ref().unwrap_or(&no_args),
+                &route,
+                &request.request,
+                &done,
+                &settings,
+                &reader,
+            );
+            let found = lookup_by_rows(
+                &lookup.query,
+                &lookup.aggregate,
+                &lookup.key,
+                &params,
+                &row_ids,
+                |ask| {
+                    aggregate_loaded(
+                        app,
+                        &identity.tenant,
+                        schema,
+                        &mut state,
+                        &mut needs,
+                        ask,
+                        &ctx,
+                        anonymous,
+                    )
+                },
+            )?;
+            joins.insert(join.clone(), groups_by_row(found));
+        }
         sections.insert(
             name.clone(),
             SectionData {
                 single: section.single,
                 rows,
+                marks,
+                joins,
                 included,
                 markdown: section
                     .markdown
@@ -934,7 +1025,8 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         tenant_theme: strata_substrate::theme::tenant_theme(&tenant).map(str::to_string),
         person_fields,
         affordances,
-        individual,
+        // A view that reads the reader (an argument or a mark or join for them) is never shared.
+        individual: individual || view_reads_reader(def),
     })
 }
 

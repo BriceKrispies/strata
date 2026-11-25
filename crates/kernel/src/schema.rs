@@ -360,6 +360,7 @@ impl TenantSchemaExt for TenantSchema {
                     }
                 }
             }
+            crate::computed::problems(self, object, &roles, &mut problems);
             for constraint in object.constraints.values() {
                 match expr::check(&constraint.expr, &env) {
                     Ok(expr::Shape::Bool | expr::Shape::Any) => {}
@@ -529,6 +530,8 @@ impl TenantSchemaExt for TenantSchema {
             }
         }
 
+        crate::computed::writer_problems(self, &mut problems);
+
         for query in self.queries.values() {
             let at = format!("query {}", query.id);
             let Some(object) = self.objects.get(&query.object) else {
@@ -597,6 +600,38 @@ impl TenantSchemaExt for TenantSchema {
                             None => problems.push(format!("{at}.{name}: unknown section {other}")),
                         }
                     }
+                }
+                for (name_of, lookup) in section.marks.iter().flatten() {
+                    let at = format!("{at}.{name}.mark {name_of}");
+                    crate::aggregates::row_lookup_problems(
+                        self,
+                        &at,
+                        &query.object,
+                        (
+                            &lookup.query,
+                            &lookup.aggregate,
+                            &lookup.key,
+                            lookup.args.as_ref(),
+                        ),
+                        true,
+                        &mut problems,
+                    );
+                }
+                for (name_of, lookup) in section.joins.iter().flatten() {
+                    let at = format!("{at}.{name}.join {name_of}");
+                    crate::aggregates::row_lookup_problems(
+                        self,
+                        &at,
+                        &query.object,
+                        (
+                            &lookup.query,
+                            &lookup.aggregate,
+                            &lookup.key,
+                            lookup.args.as_ref(),
+                        ),
+                        false,
+                        &mut problems,
+                    );
                 }
                 if let Some(object) = self.objects.get(&query.object) {
                     for field in &section.include {

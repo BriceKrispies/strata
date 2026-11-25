@@ -159,6 +159,7 @@ fn a_view_section_delivers_each_reply_with_its_depth_to_the_client_and_the_scree
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &Value::Null,
     );
     let thread = read(&state, &first, &context).expect("the thread reads");
     let done = BTreeMap::from([("thread".to_string(), thread.rows.first().cloned())]);
@@ -168,6 +169,7 @@ fn a_view_section_delivers_each_reply_with_its_depth_to_the_client_and_the_scree
         &BTreeMap::new(),
         &done,
         &BTreeMap::new(),
+        &Value::Null,
     );
     let replies = read(&state, &request, &context).expect("the replies read");
     assert_eq!(replies.depths, Some(vec![1, 1, 2, 3]));
@@ -181,6 +183,8 @@ fn a_view_section_delivers_each_reply_with_its_depth_to_the_client_and_the_scree
         next: None,
         aggregate: None,
         depths,
+        marks: BTreeMap::new(),
+        joins: BTreeMap::new(),
     };
     let data = ViewData {
         view: view.id.clone(),

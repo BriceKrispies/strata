@@ -15,9 +15,9 @@ pub use strata_model_core::types::{
     FieldType, Grant, Intent, InvitationDef, InvitationId, Need, ObjectAction, ObjectTypeDef,
     ObjectTypeId, OnDelete, OrderKey, Output, PageCursor, Permission, PolicyDef, PolicyId,
     Principal, PrincipalId, QueryDef, QueryId, ReadRequest, ReadResult, Record, RecordId, Resource,
-    RoleDef, RoleId, SchemaChange, SchemaVersion, Scope, SessionId, State, StateDelta,
-    StateRevision, TeamDef, TeamId, TenantId, TenantSchema, TenantState, Value, ViewDef, ViewId,
-    ViewSection, WorkflowDef, WorkflowId, WorkflowTransition,
+    RoleDef, RoleId, RowJoin, RowMark, SchemaChange, SchemaVersion, Scope, SessionId, State,
+    StateDelta, StateRevision, TeamDef, TeamId, TenantId, TenantSchema, TenantState, Value,
+    ViewDef, ViewId, ViewSection, WorkflowDef, WorkflowId, WorkflowTransition,
 };
 
 /// What a field declares of its personal data and what a record type declares of its retention
@@ -36,10 +36,11 @@ pub use strata_model_core::types::{ArithOp, DurationUnit};
 /// The definitions of [`crate::definitions`]: triggers, automations, tenant operations and
 /// composite unique constraints, held in the tenant schema.
 pub use strata_model_core::types::{
-    AutomationDef, AutomationState, AutomationStep, AutomationStepDef, BranchTest, RunAs, StepName,
-    StepRetry, TenantOperationCondition, TenantOperationDef, TenantOperationId,
-    TenantOperationInput, TenantOperationInvokers, TenantOperationPostingOwner,
-    TenantOperationStep, TenantOperationSubject, TriggerDef, TriggerEvent, TriggerId, UniqueDef,
+    AutomationDef, AutomationState, AutomationStep, AutomationStepDef, BranchTest,
+    OperationSettingLevel, RunAs, StepName, StepRetry, TenantOperationCondition,
+    TenantOperationDef, TenantOperationId, TenantOperationInput, TenantOperationInvokers,
+    TenantOperationPostingOwner, TenantOperationStep, TenantOperationSubject, TriggerDef,
+    TriggerEvent, TriggerId, UniqueDef,
 };
 
 /// The aggregates of named queries of [`crate::aggregates`] (D-5060).

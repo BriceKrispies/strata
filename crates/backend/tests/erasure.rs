@@ -87,6 +87,7 @@ fn declared(
                 searchable: false,
             }),
             normalise: None,
+            computed: None,
         },
     )
 }

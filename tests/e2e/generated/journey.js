@@ -27,6 +27,7 @@ const SCREENS = [
   { id: "screen-desk-new", route: /^\/desk\/new$/, literal: 2, catchAll: false },
   { id: "screen-desk-edit", route: /^\/desk\/edit\/[^\/]+$/, literal: 2, catchAll: false },
   { id: "screen-desk-settings", route: /^\/desk\/settings$/, literal: 2, catchAll: false },
+  { id: "screen-settings", route: /^\/settings$/, literal: 1, catchAll: false },
   { id: "screen-lab", route: /^\/lab$/, literal: 1, catchAll: false },
 ];
 

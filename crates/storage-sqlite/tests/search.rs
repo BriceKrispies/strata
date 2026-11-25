@@ -92,6 +92,7 @@ fn doc_schema(searchable: &[&str]) -> Vec<SchemaChange> {
                 searchable: false,
             }),
             normalise: None,
+            computed: None,
             ..field_def("email", FieldType::Str, false)
         }),
         SchemaChange::SetRetention {

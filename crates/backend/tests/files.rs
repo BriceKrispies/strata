@@ -130,6 +130,7 @@ fn field(id: &str, ty: FieldType, read: Option<Expr>, personal: Option<DataSubje
             searchable: false,
         }),
         normalise: None,
+        computed: None,
     }
 }
 

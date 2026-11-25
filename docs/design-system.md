@@ -605,7 +605,7 @@ static tree with a closed set of node kinds and no expressions.**
   `types.rs:4895-4912`; `default` is evaluated once at creation). A condition over computed state
   ("overdue", "over budget") is therefore a stored field that the product's operations or an automation
   keep up to date, and a composite tests that field with `equals`; the body language never computes.
-  A kernel-computed field, recomputed on every write and on the clock, is proposed as WG-5513.
+  A kernel-computed field holds a value the kernel derives from the record and the record it refers to, recomputed in the commit of each write that changes an input and on the clock when it reads now (D-8307, WG-5513). A value that differs by reader, such as a reply count that excludes replies the reader may not see, is not one: one stored value serves every reader, so that count is a per-reader mechanism (WG-5599).
 - **Lanes are the host's.** In a `board`, the host iterates lanes and the composite is the card; a
   composite's `each` cannot iterate lanes, so nested iteration over a grouped binding is lane-then-card
   by construction.
@@ -643,8 +643,32 @@ A binding names what a widget shows. The kinds, each with its server contract:
 | `action` | an action of the screen | the operation | |
 | `source` | `inbox`, `navigation` | the platform | |
 | `source` (reserved) | `tasks`: the viewer's human tasks (WG-5496) | the platform | the contract's own page bound |
+| `setting` | a setting, by its id, and the level the viewer writes: `tenant` or `person` (WG-5601) | the definitions route (CT-307) for the value, its source and what may be written; a save through CT-306 (person) or CT-304 (tenant), and the page reads the setting again on every notice of its change | the control follows the setting's type and allowed values: a select for a closed list (or a reference, by its id in a text field until the list of records is served), a number field for a range, a switch for a bool, a text field otherwise; read only where the viewer may not write |
 | `static` | nothing | | |
 | `placeholder` | nothing yet; a sample shape | | drafts only |
+
+**Settings.** A setting is declared by its tenant or the platform (`settings` in the schema, with its
+`area`, `description`, type and `allowed` values) and has an effective value the viewer reads: the
+default, or the override of the platform, the tenant, a team or the person. The words of where a value
+comes from are fixed: "The default", "Set by the platform", "Set by your organisation", "Set for your
+team", "Your choice". A locked setting is read only and says why in words. No pill or badge marks any of
+them (D-DS-31): the source is a sentence, and a control is a control.
+
+**The Settings screen.** Every tenant has `/settings`, a platform screen for a signed-in person (its
+view is the tenant's `settings` view, which draws the publication's theme). It is sectioned by product
+area, with the area's name from its id until a product states its own name; a setting with no area
+goes under "General", last. Each setting shows its value and its source, and one control per level the
+viewer may write: "Your choice" for the person, and "Organisation" for a tenant administrator. A save
+names the revision the page read, and a refusal is said in words, with the page read again so it shows
+the value the site holds. A setting notice reads the page again, so an open page follows a change made
+elsewhere.
+
+**Placing a setting elsewhere (specified, not yet built).** A `setting` binding is meant to sit on any
+screen next to what it affects, writing the same value through the same contract and updating live
+with it. The screen part of a tenant has no place for a binding yet (its widgets and regions are
+described in "Screens as compositions" and are not in the checkout), so the placement is not built: a
+product screen gets the binding when that layer lands, with one field for the setting, its level and
+the control it takes from the rules above.
 
 - **Plane images** are bound to a `file` field (the `media` display type) of a single section, or to a
   file of the tenant's file store named in props; never a URL.

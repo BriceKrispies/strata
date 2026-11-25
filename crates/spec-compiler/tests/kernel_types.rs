@@ -179,6 +179,7 @@ fn field_def(id: &str, ty: FieldType, default: Option<Expr>) -> FieldDef {
         read: None,
         personal: None,
         normalise: None,
+        computed: None,
     }
 }
 
@@ -229,6 +230,8 @@ fn schema_changes() -> Vec<SchemaChange> {
         sections: [(
             "notes".to_string(),
             ViewSection {
+                marks: None,
+                joins: None,
                 query: QueryId::new("recent").unwrap(),
                 args: [
                     ("a".to_string(), ArgSource::Route("slug".into())),
@@ -388,6 +391,7 @@ fn schema_changes() -> Vec<SchemaChange> {
             period_cap: Some(10),
             period: Some(LedgerPeriod::Day),
             scope: Some(LedgerScope::new("42").unwrap()),
+            additions_only: None,
         }),
         SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Limit {
             unit: points(),

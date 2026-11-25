@@ -136,6 +136,7 @@ fn def(id: &str, ty: FieldType, required: bool) -> FieldDef {
         read: None,
         personal: None,
         normalise: None,
+        computed: None,
     }
 }
 

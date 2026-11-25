@@ -21,6 +21,7 @@ import { oidcEnter, oidcInit, oidcLand, oidcOpened, oidcUpdate } from './oidc.js
 import { passkeysEnter, passkeysInit, passkeysUpdate } from './passkeys.js';
 import { checkRecord, disagreement, draftOf } from './record-rules.js';
 import { sessionsEnter, sessionsInit, sessionsUpdate } from './sessions.js';
+import { settingsEnter, settingsInit, settingsSubmit, settingsUpdate } from './settings.js';
 import {
   acceptManifest,
   acceptPart,
@@ -65,7 +66,7 @@ const EDITOR_OBJECT = 'post';
 
 // Reads whose reply is applied only when it answers the latest request of its kind, as `view`
 // is: an older reply that arrives late must not overwrite a newer one (or a newer sign-in).
-const LATEST_ONLY = ['session', 'sessions.list', 'passkeys.list', 'factors.summary', 'lab.overview', 'ui.manifest'];
+const LATEST_ONLY = ['session', 'sessions.list', 'passkeys.list', 'factors.summary', 'lab.overview', 'ui.manifest', 'settings.definitions'];
 // Requests made on behalf of the person signed in. A reply to one that was made before the
 // user-scoped state was cleared (sign-out, session end, account switch) belongs to someone else.
 /** How long a request may go unanswered, in milliseconds. */
@@ -108,6 +109,7 @@ export function initialState() {
     // The forms of the tenant screen on show, by id, and the action whose confirmation is armed.
     tenant: { forms: /** @type {Record<string, import('./tenant-ui.js').TenantForm>} */ ({}), confirm: /** @type {string | null} */ (null) },
     lab: labInit(),
+    settings: settingsInit(),
     sessions: sessionsInit(),
     passkeys: passkeysInit(),
     factors: factorsInit(),
@@ -355,6 +357,7 @@ function clearUserState(state) {
     passkeys: { ...passkeysInit(), supported: state.passkeys.supported },
     factors: factorsInit(),
     lab: { ...labInit(), timer: state.lab.timer + 1 },
+    settings: settingsInit(),
     forms: { ...state.forms, login: { ...login, values: { ...login.values, password: '' } }, editor: null, settings: null },
     optimistic: {},
     confirmDelete: null,
@@ -667,20 +670,21 @@ function onSocket(state, frame, msg) {
 /**
  * The hooks a screen's `onEnter` names: what each section asks for when its screen is shown.
  * `afterSession` hooks also run when the session reply arrives after the page.
- * @type {Map<string, { enter: (state: any, msg: any, io: { request: typeof request }) => Result, afterSession: boolean }>}
+ * @type {Map<string, { enter: (state: any, msg: any, io: { request: typeof request, call: typeof call }) => Result, afterSession: boolean }>}
  */
 const ENTER_HOOKS = new Map([
   ['sessions', { enter: sessionsEnter, afterSession: false }],
   ['passkeys', { enter: passkeysEnter, afterSession: false }],
   ['factors', { enter: factorsEnter, afterSession: false }],
   ['lab', { enter: labEnter, afterSession: true }],
+  ['settings', { enter: settingsEnter, afterSession: false }],
 ]);
 
 /**
  * Register the hook of a section name a screen's `onEnter` may use, so a product asks for what its
  * screen shows without editing this file.
  * @param {string} name
- * @param {(state: any, msg: any, io: { request: typeof request }) => Result} enter
+ * @param {(state: any, msg: any, io: { request: typeof request, call: typeof call }) => Result} enter
  * @param {{ afterSession?: boolean }} [options]
  */
 export function registerEnterHook(name, enter, options = {}) {
@@ -706,7 +710,7 @@ function enterScreen(state, msg, view, options = {}) {
   for (const name of enterSections(view)) {
     const hook = ENTER_HOOKS.get(name);
     if (!hook || (options.afterSession && !hook.afterSession)) continue;
-    const entered = hook.enter(next, msg, { request });
+    const entered = hook.enter(next, msg, { request, call });
     next = entered.state;
     effects.push(...entered.effects);
   }
@@ -788,6 +792,9 @@ function onHttp(state, msg) {
     return factorsUpdate(state, { ...msg, pending, error }, { request, toast, signedIn: passkeySignedIn, redispatch }) ?? { state, effects: [] };
   }
 
+  if (pending.kind.startsWith('settings.')) {
+    return settingsUpdate(state, { ...msg, pending, error, outputs }, { call, toast }) ?? { state, effects: [] };
+  }
   if (pending.kind.startsWith('lab.')) {
     return labUpdate(state, { ...msg, pending, error }, { request, toast }) ?? { state, effects: [] };
   }
@@ -1276,6 +1283,7 @@ function onSubmit(state, msg) {
     }
     default:
       if (msg.form.startsWith('tenant:')) return submitTenantForm(state, msg);
+      if (msg.form.startsWith('settings:')) return settingsSubmit(state, msg, { call });
       if (msg.form.startsWith('lab')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
       return { state, effects: [] };
   }

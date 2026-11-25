@@ -152,6 +152,98 @@ pub struct SectionData {
     /// carries it as `depth`. Absent for every other query.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depths: Option<Vec<u32>>,
+
+    /// The row marks of the section, by name (WG-5599): the rows each one holds for. A name the
+    /// section declares is here even when no row holds it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub marks: BTreeMap<String, BTreeSet<RecordId>>,
+    /// The row joins of the section, by name, then by row (WG-5599): the groups of the join's
+    /// aggregate that the row holds, as the reader may read them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub joins: BTreeMap<String, BTreeMap<RecordId, Vec<RowGroup>>>,
+}
+
+/// One group of a row join (WG-5599): the value of its second field (null when the join's
+/// aggregate has none) and the value of the aggregate, as the reader may read them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RowGroup {
+    pub key: Option<Value>,
+    pub value: Option<Value>,
+}
+
+/// How many row ids one row mark or row join lookup gives its query at once: the bound of an `in`
+/// filter that the record index answers (the kernel's `MAX_IN_VALUES`), so each lookup reads only
+/// the records of its rows and a page of rows costs one aggregate per batch, not one per row.
+pub const LOOKUP_BATCH: usize = 16;
+
+/// The request of a row mark or a row join for one batch of row ids: the query's arguments (`params`)
+/// and the list of row ids under the parameter `key` (WG-5599).
+pub fn lookup_request(
+    query: &strata_kernel::types::QueryId,
+    aggregate: &AggregateId,
+    key: &str,
+    mut params: BTreeMap<String, Value>,
+    batch: &[RecordId],
+) -> AggregateRequest {
+    params.insert(
+        key.to_string(),
+        Value::List(batch.iter().map(|id| Value::Ref(*id)).collect()),
+    );
+    AggregateRequest {
+        query: query.clone(),
+        aggregate: aggregate.clone(),
+        params,
+        filter: BTreeMap::new(),
+    }
+}
+
+/// The rows an aggregate of a row lookup holds, each with the group it holds it in (WG-5599): the
+/// groups keyed by a reference, in the order the aggregate gives them. A group keyed by no row
+/// holds none.
+pub fn lookup_groups(result: &AggregateResult) -> Vec<(RecordId, RowGroup)> {
+    result
+        .groups
+        .iter()
+        .filter_map(|group| match &group.key {
+            Some(Value::Ref(id)) => Some((
+                *id,
+                RowGroup {
+                    key: group.key_second.clone(),
+                    value: group.value.clone(),
+                },
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The groups a row mark or a row join holds, for the rows given, one aggregate per batch of
+/// [`LOOKUP_BATCH`] ids (WG-5599). `ask` answers one aggregate request for the reader, as the shell's
+/// aggregate read does; the shell and the substrate's tests share this function, so a page of rows
+/// costs one aggregate per batch and never one per row.
+pub fn lookup_by_rows<E>(
+    query: &strata_kernel::types::QueryId,
+    aggregate: &AggregateId,
+    key: &str,
+    params: &BTreeMap<String, Value>,
+    ids: &[RecordId],
+    mut ask: impl FnMut(&AggregateRequest) -> Result<AggregateResult, E>,
+) -> Result<Vec<(RecordId, RowGroup)>, E> {
+    let mut found = Vec::new();
+    for batch in ids.chunks(LOOKUP_BATCH) {
+        let request = lookup_request(query, aggregate, key, params.clone(), batch);
+        found.extend(lookup_groups(&ask(&request)?));
+    }
+    Ok(found)
+}
+
+/// The groups of a row join by the row they belong to, in the order the aggregate gave them.
+pub fn groups_by_row(found: Vec<(RecordId, RowGroup)>) -> BTreeMap<RecordId, Vec<RowGroup>> {
+    let mut by_row: BTreeMap<RecordId, Vec<RowGroup>> = BTreeMap::new();
+    for (id, group) in found {
+        by_row.entry(id).or_default().push(group);
+    }
+    by_row
 }
 
 /// The raw result of a view: what the backend hands the BFF.
@@ -214,6 +306,51 @@ pub fn section_order(view: &ViewDef) -> Vec<&String> {
         .collect()
 }
 
+/// The value a view argument from the reader (`principal`) takes: the reader's principal string,
+/// or null for the system and anonymous readers, who have none (WG-5599).
+pub fn principal_value(principal: &Principal) -> Value {
+    match principal {
+        Principal::User(id) => Value::Str(id.as_str().to_string()),
+        Principal::System | Principal::Anonymous => Value::Null,
+    }
+}
+
+/// The values of a set of view arguments for one reader: a route or request string (null when
+/// absent), a constant, the single row of a section already evaluated, a setting as the reader
+/// resolves it, or the reader's principal (WG-5599). Named in the order of the arguments.
+pub fn argument_values(
+    args: &BTreeMap<String, ArgSource>,
+    route: &BTreeMap<String, String>,
+    request: &BTreeMap<String, String>,
+    done: &BTreeMap<String, Option<Arc<Record>>>,
+    settings: &BTreeMap<SettingId, Value>,
+    reader: &Value,
+) -> BTreeMap<String, Value> {
+    let text = |value: Option<&String>| value.map_or(Value::Null, |s| Value::Str(s.clone()));
+    args.iter()
+        .map(|(name, source)| {
+            let value = match source {
+                ArgSource::Route(key) => text(route.get(key)),
+                ArgSource::Request(key) => text(request.get(key)),
+                ArgSource::Const(value) => value.clone(),
+                ArgSource::Setting(setting) => {
+                    settings.get(setting).cloned().unwrap_or(Value::Null)
+                }
+                ArgSource::Principal => reader.clone(),
+                ArgSource::Section {
+                    section,
+                    attribute: name,
+                } => done
+                    .get(section)
+                    .and_then(|row| row.as_deref())
+                    .and_then(|row| attribute(Some(row), name).ok())
+                    .unwrap_or(Value::Null),
+            };
+            (name.clone(), value)
+        })
+        .collect()
+}
+
 /// The read request for one section, given the route and request parameters and the single rows
 /// of the sections already evaluated. An argument that comes from a setting is null here: see
 /// [`section_request_with`].
@@ -223,7 +360,14 @@ pub fn section_request(
     request: &BTreeMap<String, String>,
     done: &BTreeMap<String, Option<Arc<Record>>>,
 ) -> ReadRequest {
-    section_request_with(section, route, request, done, &BTreeMap::new())
+    section_request_with(
+        section,
+        route,
+        request,
+        done,
+        &BTreeMap::new(),
+        &Value::Null,
+    )
 }
 
 /// The settings a view reads: the setting of each section argument that comes from one (SET-1540).
@@ -236,6 +380,19 @@ pub fn view_settings(view: &ViewDef) -> BTreeSet<SettingId> {
             _ => None,
         })
         .collect()
+}
+
+/// Whether a view's reply is individual to its reader (WG-5599): one of its section arguments is
+/// the reader's principal, or it has a mark or a join, which count for the reader alone.
+pub fn view_reads_reader(view: &ViewDef) -> bool {
+    view.sections.values().any(|section| {
+        section
+            .args
+            .values()
+            .any(|source| matches!(source, ArgSource::Principal))
+            || section.marks.as_ref().is_some_and(|m| !m.is_empty())
+            || section.joins.as_ref().is_some_and(|j| !j.is_empty())
+    })
 }
 
 /// The value of each setting a view reads, resolved for the reader (SET-1540): what an argument
@@ -255,41 +412,19 @@ pub fn resolved_settings(
         .collect()
 }
 
-/// [`section_request`] with the settings the reader resolves, as [`resolved_settings`] gives them.
+/// [`section_request`] with the settings the reader resolves, as [`resolved_settings`] gives them,
+/// and the reader's value for a `principal` argument ([`principal_value`]).
 pub fn section_request_with(
     section: &ViewSection,
     route: &BTreeMap<String, String>,
     request: &BTreeMap<String, String>,
     done: &BTreeMap<String, Option<Arc<Record>>>,
     settings: &BTreeMap<SettingId, Value>,
+    reader: &Value,
 ) -> ReadRequest {
-    let text = |value: Option<&String>| value.map_or(Value::Null, |s| Value::Str(s.clone()));
-    let params = section
-        .args
-        .iter()
-        .map(|(name, source)| {
-            let value = match source {
-                ArgSource::Route(key) => text(route.get(key)),
-                ArgSource::Request(key) => text(request.get(key)),
-                ArgSource::Const(value) => value.clone(),
-                ArgSource::Setting(setting) => {
-                    settings.get(setting).cloned().unwrap_or(Value::Null)
-                }
-                ArgSource::Section {
-                    section,
-                    attribute: name,
-                } => done
-                    .get(section)
-                    .and_then(|row| row.as_deref())
-                    .and_then(|row| attribute(Some(row), name).ok())
-                    .unwrap_or(Value::Null),
-            };
-            (name.clone(), value)
-        })
-        .collect();
     ReadRequest::Named {
         query: section.query.clone(),
-        params,
+        params: argument_values(&section.args, route, request, done, settings, reader),
         page_size: None,
         cursor: None,
     }
@@ -386,10 +521,19 @@ pub fn aggregate_request(
     request: &BTreeMap<String, String>,
     done: &BTreeMap<String, Option<Arc<Record>>>,
 ) -> AggregateRequest {
-    aggregate_request_with(section, aggregate, route, request, done, &BTreeMap::new())
+    aggregate_request_with(
+        section,
+        aggregate,
+        route,
+        request,
+        done,
+        &BTreeMap::new(),
+        &Value::Null,
+    )
 }
 
-/// [`aggregate_request`] with the settings the reader resolves ([`resolved_settings`]).
+/// [`aggregate_request`] with the settings and the reader's value the reader resolves
+/// ([`resolved_settings`], [`principal_value`]).
 pub fn aggregate_request_with(
     section: &ViewSection,
     aggregate: &AggregateId,
@@ -397,8 +541,9 @@ pub fn aggregate_request_with(
     request: &BTreeMap<String, String>,
     done: &BTreeMap<String, Option<Arc<Record>>>,
     settings: &BTreeMap<SettingId, Value>,
+    reader: &Value,
 ) -> AggregateRequest {
-    let params = match section_request_with(section, route, request, done, settings) {
+    let params = match section_request_with(section, route, request, done, settings, reader) {
         ReadRequest::Named { params, .. } => params,
         ReadRequest::Records { .. } => BTreeMap::new(),
     };
@@ -600,6 +745,36 @@ fn project_row(
         refs.insert(field.as_str().to_string(), projected);
     }
     out.insert("refs".into(), Json::Object(refs));
+    // Every declared mark and join of the section is on every row: a mark is a boolean, a join the
+    // list of its groups, empty when the row holds none (WG-5599).
+    if !section.marks.is_empty() {
+        let marks: Map<String, Json> = section
+            .marks
+            .iter()
+            .map(|(name, rows)| (name.clone(), json!(rows.contains(&record.id))))
+            .collect();
+        out.insert("marks".into(), Json::Object(marks));
+    }
+    if !section.joins.is_empty() {
+        let joins: Map<String, Json> = section
+            .joins
+            .iter()
+            .map(|(name, by_row)| {
+                let groups = by_row.get(&record.id).map_or(&[][..], Vec::as_slice);
+                let listed = groups
+                    .iter()
+                    .map(|group| {
+                        json!({
+                            "key": group.key.as_ref().map(to_plain),
+                            "value": group.value.as_ref().map(to_plain),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                (name.clone(), Json::Array(listed))
+            })
+            .collect();
+        out.insert("joins".into(), Json::Object(joins));
+    }
     let mut blocks = Map::new();
     let mut words = 0;
     for field in &section.markdown {
@@ -726,6 +901,9 @@ mod people_and_refs {
             next: None,
             aggregate: None,
             depths: None,
+
+            marks: BTreeMap::new(),
+            joins: BTreeMap::new(),
         };
         ViewData {
             view: ViewId::new("home").unwrap(),
@@ -897,5 +1075,111 @@ mod people_and_refs {
             name_for_reader("everyone", true, false, Some(" ".into())),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod row_lookups {
+    use super::*;
+    use strata_kernel::testkit::{field, object, principal_id};
+    use strata_kernel::Timestamp;
+
+    fn message(id: u64) -> Arc<Record> {
+        Arc::new(Record {
+            id: RecordId(id),
+            object: object("message"),
+            version: 1,
+            created_by: Some(principal_id("user:ada")),
+            created_at: Timestamp(0),
+            updated_at: Timestamp(0),
+            fields: BTreeMap::from([(field("title"), Value::Str(format!("m{id}")))]),
+        })
+    }
+
+    /// Each row carries every declared mark and join, by name: the mark as a boolean, the join as
+    /// its groups, an empty list for a row that holds none (WG-5599).
+    #[test]
+    fn a_row_carries_its_marks_and_its_joined_groups_by_name() {
+        let section = SectionData {
+            single: false,
+            rows: vec![message(1), message(2)],
+            included: BTreeMap::new(),
+            markdown: Vec::new(),
+            ref_targets: BTreeMap::new(),
+            next: None,
+            aggregate: None,
+            depths: None,
+            marks: BTreeMap::from([("mine".to_string(), BTreeSet::from([RecordId(2)]))]),
+            joins: BTreeMap::from([(
+                "reactions".to_string(),
+                BTreeMap::from([(
+                    RecordId(2),
+                    vec![RowGroup {
+                        key: Some(Value::Str("👍".into())),
+                        value: Some(Value::Int(3)),
+                    }],
+                )]),
+            )]),
+        };
+        let data = ViewData {
+            view: ViewId::new("board").unwrap(),
+            title: "Board".into(),
+            params: BTreeMap::new(),
+            sections: BTreeMap::from([("messages".to_string(), section)]),
+            depends_on: BTreeSet::new(),
+            settings: BTreeSet::new(),
+            revision: StateRevision(1),
+            schema_version: SchemaVersion(1),
+            record_rules: BTreeMap::new(),
+            tenant_theme: None,
+            person_fields: BTreeMap::new(),
+            affordances: BTreeMap::new(),
+            individual: false,
+            people: BTreeMap::new(),
+        };
+        let model = project(&data);
+        let rows = &model["data"]["messages"];
+        assert_eq!(rows[0]["marks"], json!({ "mine": false }));
+        assert_eq!(rows[0]["joins"], json!({ "reactions": [] }));
+        assert_eq!(rows[1]["marks"], json!({ "mine": true }));
+        assert_eq!(
+            rows[1]["joins"],
+            json!({ "reactions": [ { "key": "👍", "value": 3 } ] })
+        );
+    }
+
+    /// A section that declares no mark or join sends no marks or joins on its rows.
+    #[test]
+    fn a_section_that_declares_no_mark_or_join_sends_none() {
+        let section = SectionData {
+            single: false,
+            rows: vec![message(1)],
+            included: BTreeMap::new(),
+            markdown: Vec::new(),
+            ref_targets: BTreeMap::new(),
+            next: None,
+            aggregate: None,
+            depths: None,
+            marks: BTreeMap::new(),
+            joins: BTreeMap::new(),
+        };
+        let data = ViewData {
+            view: ViewId::new("board").unwrap(),
+            title: "Board".into(),
+            params: BTreeMap::new(),
+            sections: BTreeMap::from([("messages".to_string(), section)]),
+            depends_on: BTreeSet::new(),
+            settings: BTreeSet::new(),
+            revision: StateRevision(1),
+            schema_version: SchemaVersion(1),
+            record_rules: BTreeMap::new(),
+            tenant_theme: None,
+            person_fields: BTreeMap::new(),
+            affordances: BTreeMap::new(),
+            individual: false,
+            people: BTreeMap::new(),
+        };
+        let row = project(&data)["data"]["messages"][0].clone();
+        assert!(row.get("marks").is_none() && row.get("joins").is_none());
     }
 }

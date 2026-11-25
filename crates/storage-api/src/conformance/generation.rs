@@ -151,6 +151,7 @@ fn populated(store: &dyn Store) -> (Pair<'_>, u64) {
                     period_cap: None,
                     period: None,
                     scope: None,
+                    additions_only: None,
                 }),
             ],
             expected_version: None,

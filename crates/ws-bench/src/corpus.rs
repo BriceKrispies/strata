@@ -267,6 +267,7 @@ impl CorpusLoader for NotesLoader {
                                 searchable: true,
                             }),
                             normalise: None,
+                            computed: None,
                             ..testkit::field_def("nick", FieldType::Str, false)
                         },
                     },

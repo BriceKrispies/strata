@@ -240,6 +240,16 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
         ],
     ),
     (
+        "computed-default",
+        layers::COMPUTED_DEFAULT,
+        &["\"tier\"", "declares a default"],
+    ),
+    (
+        "computed-written",
+        layers::COMPUTED_WRITTEN,
+        &["\"member_tiers__set_tier\"", "the computed field \"tier\""],
+    ),
+    (
         "step-outside-catalogue",
         layers::OUTSIDE_CATALOGUE,
         &[
@@ -276,6 +286,19 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
         ],
     ),
     (
+        "operation-write-setting-not-owned",
+        layers::WRITE_SETTING_NOT_OWNED,
+        &[
+            "\"member_tiers__gold_threshold\"",
+            "does not declare under \"settings\"",
+        ],
+    ),
+    (
+        "operation-write-setting-level",
+        layers::WRITE_SETTING_LEVEL_NOT_ALLOWED,
+        &["\"tenant\"", "does not allow", "(tenant)"],
+    ),
+    (
         "reference-unknown-object",
         layers::REFERENCE_UNKNOWN,
         &["\"member_tiers__ghost\"", "no product file declares"],
@@ -304,6 +327,22 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
         ],
     ),
 ];
+
+/// A product whose operations write its own settings, one at the person level and one at the tenant
+/// level, is accepted (WG-5606).
+#[test]
+fn an_operation_that_writes_a_setting_the_product_owns_is_accepted() {
+    if let Err(diagnostics) = load_with(&[product("operation-write-setting.jsonc")]) {
+        panic!(
+            "operation-write-setting.jsonc was refused:\n{}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+}
 
 /// A toggle: a find-record step and a branch on what it found, in one operation (WG-5596).
 #[test]

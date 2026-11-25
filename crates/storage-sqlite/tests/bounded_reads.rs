@@ -266,6 +266,8 @@ fn a_view_loads_the_pages_its_sections_read_not_the_type() {
             sections: BTreeMap::from([(
                 "owned".to_string(),
                 ViewSection {
+                    marks: None,
+                    joins: None,
                     query: QueryId::new("by_owner").unwrap(),
                     args: BTreeMap::from([("who".to_string(), ArgSource::Const(text("x")))]),
                     include: vec![],

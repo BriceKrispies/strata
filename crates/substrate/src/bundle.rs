@@ -153,6 +153,10 @@ pub struct FieldSpec {
     /// Left out, everyone who can read the record reads the field.
     #[serde(default)]
     pub read: Option<String>,
+    /// The computed expression of the field, the kernel's value derived from the record (D-8307).
+    /// Left out, the field is stored as written.
+    #[serde(default)]
+    pub computed: Option<String>,
     /// For references: `restrict` (the default) or `set_null`.
     #[serde(default)]
     pub on_delete: Option<String>,
@@ -298,7 +302,7 @@ pub struct ViewSpec {
 #[serde(deny_unknown_fields)]
 pub struct SectionSpec {
     pub query: QueryId,
-    /// `route:<name>`, `request:<name>`, `section:<section>.<attribute>` or a literal in the
+    /// `route:<name>`, `request:<name>`, `section:<section>.<attribute>`, `principal` (the reader, WG-5599) or a literal in the
     /// expression syntax.
     #[serde(default)]
     pub args: BTreeMap<String, String>,
@@ -311,6 +315,28 @@ pub struct SectionSpec {
     /// The aggregate of the query that the section shows in place of its rows (AGG-041).
     #[serde(default)]
     pub aggregate: Option<AggregateId>,
+    /// The reader-relative booleans of the section's rows, by name (WG-5599): see [`RowLookupSpec`].
+    #[serde(default)]
+    pub marks: BTreeMap<String, RowLookupSpec>,
+    /// The grouped aggregates of other records keyed by the section's rows, by name (WG-5599).
+    #[serde(default)]
+    pub joins: BTreeMap<String, RowLookupSpec>,
+}
+
+/// A row mark or a row join of a view section (WG-5599). `query` and `aggregate` name the query
+/// and its aggregate; `key` is the query's list parameter that receives the section's row ids, in
+/// batches of at most sixteen; `args` gives the query's other parameters, each as an argument
+/// source (`route:<name>`, `request:<name>`, `setting:<id>`, `principal`, or a literal). A mark
+/// needs a count grouped by a reference to the rows; a join groups by that reference and a second
+/// field.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RowLookupSpec {
+    pub query: QueryId,
+    pub aggregate: AggregateId,
+    pub key: String,
+    #[serde(default)]
+    pub args: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -394,7 +420,9 @@ fn optional(expr: &Option<String>) -> Result<Option<Expr>, String> {
 }
 
 fn parse_arg(text: &str) -> Result<ArgSource, String> {
-    if let Some(name) = text.strip_prefix("route:") {
+    if text == "principal" {
+        Ok(ArgSource::Principal)
+    } else if let Some(name) = text.strip_prefix("route:") {
         Ok(ArgSource::Route(name.to_string()))
     } else if let Some(name) = text.strip_prefix("request:") {
         Ok(ArgSource::Request(name.to_string()))
@@ -471,6 +499,7 @@ impl Bundle {
                         unique: field.unique,
                         default: optional(&field.default).map_err(|e| format!("{at}: {e}"))?,
                         read: optional(&field.read).map_err(|e| format!("{at}: {e}"))?,
+                        computed: optional(&field.computed).map_err(|e| format!("{at}: {e}"))?,
                         personal: field.personal.clone(),
                         normalise: match field.normalise.as_deref() {
                             None => None,
@@ -638,6 +667,33 @@ impl Bundle {
                         parse_arg(source).map_err(|e| format!("view {}.{name}: {e}", view.id))?,
                     );
                 }
+                // A row lookup's arguments, as the kernel holds them (WG-5599).
+                let lookups = |specs: &BTreeMap<String, RowLookupSpec>| {
+                    specs
+                        .iter()
+                        .map(|(lookup, spec)| {
+                            let mut params = BTreeMap::new();
+                            for (param, source) in &spec.args {
+                                let parsed = parse_arg(source).map_err(|e| {
+                                    format!("view {}.{name}.{lookup}: {e}", view.id)
+                                })?;
+                                params.insert(param.clone(), parsed);
+                            }
+                            let args = (!params.is_empty()).then_some(params);
+                            Ok((
+                                lookup.clone(),
+                                (
+                                    spec.query.clone(),
+                                    spec.aggregate.clone(),
+                                    spec.key.clone(),
+                                    args,
+                                ),
+                            ))
+                        })
+                        .collect::<Result<BTreeMap<_, _>, String>>()
+                };
+                let marks = lookups(&section.marks)?;
+                let joins = lookups(&section.joins)?;
                 sections.insert(
                     name.clone(),
                     ViewSection {
@@ -647,6 +703,38 @@ impl Bundle {
                         markdown: section.markdown.clone(),
                         single: section.single,
                         aggregate: section.aggregate.clone(),
+                        marks: (!marks.is_empty()).then(|| {
+                            marks
+                                .into_iter()
+                                .map(|(name, (query, aggregate, key, args))| {
+                                    (
+                                        name,
+                                        strata_kernel::RowMark {
+                                            query,
+                                            aggregate,
+                                            key,
+                                            args,
+                                        },
+                                    )
+                                })
+                                .collect()
+                        }),
+                        joins: (!joins.is_empty()).then(|| {
+                            joins
+                                .into_iter()
+                                .map(|(name, (query, aggregate, key, args))| {
+                                    (
+                                        name,
+                                        strata_kernel::RowJoin {
+                                            query,
+                                            aggregate,
+                                            key,
+                                            args,
+                                        },
+                                    )
+                                })
+                                .collect()
+                        }),
                     },
                 );
             }

@@ -237,6 +237,23 @@ pub fn override_of<'a>(
         .get(&override_key(setting, level, subject))
 }
 
+/// The revision a write of a setting at a level must name now: the revision of the override the
+/// caller would change, or zero for an override that does not exist (WG-5606). A tenant operation
+/// step writes the value the state holds when it runs, so it names this revision itself.
+pub fn held_revision(
+    tenant: &TenantState,
+    setting: &SettingId,
+    level: SettingLevel,
+    caller: &PrincipalId,
+) -> u64 {
+    let subject = match level {
+        SettingLevel::Tenant => tenant.id.as_str().to_string(),
+        SettingLevel::Person => caller.as_str().to_string(),
+        SettingLevel::Platform | SettingLevel::Team => return 0,
+    };
+    override_of(tenant, setting, level, &subject).map_or(0, |held| held.revision)
+}
+
 /// The revision of a setting at the tenant (SET-051): zero until its first change.
 pub fn tenant_revision(tenant: &TenantState, setting: &SettingId) -> u64 {
     tenant
@@ -401,12 +418,16 @@ pub fn may_read(tenant: &TenantState, principal: &Principal) -> bool {
 }
 
 /// A setting as one principal may see it (WG-5600): its definition, the value the principal reads
-/// and the level it comes from, and the levels the principal may write.
+/// and the level it comes from, and the levels the principal may write. The two revisions are the
+/// ones a write names as its expected revision at the tenant level and at the principal's own
+/// person level (SET-051), zero where no override is held.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettingView {
     pub definition: SettingDef,
     pub resolution: SettingResolution,
     pub writable: BTreeSet<SettingLevel>,
+    pub tenant_revision: u64,
+    pub person_revision: u64,
 }
 
 /// Every setting the principal may see, with what the principal reads and may write (WG-5600).
@@ -441,10 +462,22 @@ pub fn views_for(
                     }
                 })
                 .collect();
+            let tenant_revision =
+                override_of(tenant, &def.id, SettingLevel::Tenant, tenant.id.as_str())
+                    .map_or(0, |held| held.revision);
+            let person_revision = match principal {
+                Principal::User(caller) => {
+                    override_of(tenant, &def.id, SettingLevel::Person, caller.as_str())
+                        .map_or(0, |held| held.revision)
+                }
+                _ => 0,
+            };
             SettingView {
                 resolution: resolve_definition(tenant, &def, principal, platform),
                 definition: def,
                 writable,
+                tenant_revision,
+                person_revision,
             }
         })
         .collect()

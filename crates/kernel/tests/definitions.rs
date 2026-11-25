@@ -187,6 +187,7 @@ fn posting(id: &str) -> TenantOperationStep {
         scope: None,
         amount: int(1),
         reason: "redemption".into(),
+        reference: None,
     }
 }
 

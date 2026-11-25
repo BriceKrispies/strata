@@ -99,6 +99,7 @@ fn declared(
                 searchable: true,
             }),
             normalise: None,
+            computed: None,
         },
     )
 }
@@ -223,6 +224,8 @@ fn found(store: &dyn Store, name: &str) -> TenantId {
             sections: [(
                 "list".to_string(),
                 ViewSection {
+                    marks: None,
+                    joins: None,
                     query: QueryId::new("all_profiles").expect("query id"),
                     args: Default::default(),
                     include: vec![],

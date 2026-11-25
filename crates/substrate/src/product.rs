@@ -493,11 +493,41 @@ fn expressions_of_action(action: &mut Json, at: &str, operation: bool) -> Result
         let Json::Object(fields) = body else {
             continue;
         };
+        // The steps of a tenant operation that find a record and branch on it (WG-5596): the
+        // predicate of a find, the condition of a branch test, and the steps of each side, which
+        // are steps of the same kind and are converted in turn.
+        if operation {
+            match tag.as_str() {
+                "FindRecord" => {
+                    expr_at(fields, "predicate", at)?;
+                    continue;
+                }
+                "Branch" => {
+                    if let Some(Json::Object(test)) = fields.get_mut("test") {
+                        if let Some(Json::Object(condition)) = test.get_mut("Condition") {
+                            expr_at(condition, "expr", &format!("{at}.test"))?;
+                        }
+                    }
+                    for side in ["matched", "unmatched"] {
+                        if let Some(Json::Array(steps)) = fields.get_mut(side) {
+                            for (index, step) in steps.iter_mut().enumerate() {
+                                expressions_of_action(step, &format!("{at}.{side} {index}"), true)?;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+        }
         let (scalars, maps): (&[&str], &[&str]) = match tag.as_str() {
             "CreateRecord" => (&[], &["fields"]),
             "UpdateRecord" => (&["record"], &["fields"]),
             "DeleteRecord" => (&["record"], &[]),
-            "PostLedger" => (&["owner", "scope", "amount"], &[]),
+            "PostLedger" => (&["owner", "scope", "amount", "reference"], &[]),
+            "ReverseLedger" => (&["reference"], &[]),
+            // The value a setting takes; its setting and level are names, not expressions (WG-5606).
+            "WriteSetting" => (&["value"], &[]),
             "SendMail" => (&["to", "address"], &[]),
             "CreateNotice" => (&["to", "record"], &[]),
             "CallWebhook" => (&[], &["body"]),

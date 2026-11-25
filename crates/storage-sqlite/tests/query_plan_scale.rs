@@ -690,6 +690,8 @@ fn reads_and_views_over_a_hundred_thousand_records_load_a_bounded_number() {
 
         // A view of two sections loads their pages, not the type.
         let section = |query: &str, args: BTreeMap<String, ArgSource>, single: bool| ViewSection {
+            marks: None,
+            joins: None,
             query: QueryId::new(query).unwrap(),
             args,
             include: vec![],

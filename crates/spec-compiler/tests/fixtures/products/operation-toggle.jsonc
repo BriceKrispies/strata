@@ -1,14 +1,20 @@
 {
-  // A toggle as a product (WG-5596): a person's reaction of one kind to a message is removed when it is
+  // A toggle as a product (WG-5596, WG-5598): a person's reaction of one kind to a message is removed when it is
   // there and created when it is not, in one tenant operation. A find-record step reads the caller's
-  // reaction for the message and kind, and a branch on found deletes it or creates it. The file declares
+  // reaction for the message and kind, and a branch on found deletes it or creates it. The add posts one
+  // point given to the caller and one received by the author of the message; the remove reverses both
+  // postings, so a toggle cannot leave a balance behind. The daily cap counts additions only (WG-5598): the
+  // reversal of an add neither counts toward the cap nor frees capacity under it. The file declares
   // everything it names in its own namespace toggle__ (D-6582).
-  "product": { "id": "toggle", "name": "Toggle", "imports": { "spec": "../../../../../specifications/spec.jsonc", "entities": [] } },
+  "product": { "id": "toggle", "name": "Toggle", "version": "1.0.0", "platform": { "min": "0.2" }, "imports": { "spec": "../../../../../specifications/spec.jsonc", "entities": [] } },
   "objects": [
     {
       "id": "toggle__message",
       "label": "Message",
-      "fields": { "body": { "id": "body", "label": "Body", "ty": "Str", "required": true, "unique": false } },
+      "fields": {
+        "body": { "id": "body", "label": "Body", "ty": "Str", "required": true, "unique": false },
+        "author": { "id": "author", "label": "Author", "ty": "Str", "required": true, "unique": false }
+      },
       "constraints": {}
     },
     {
@@ -23,6 +29,20 @@
       "unique": { "one_of_a_kind": { "id": "one_of_a_kind", "fields": ["message", "reactor", "kind"], "message": "You have already reacted to this message that way." } }
     }
   ],
+  "ledgerUnits": [
+    { "id": "toggle__reactions_given", "description": "Reactions a person has given to messages: one point for each reaction added, reversed when it is taken back." },
+    { "id": "toggle__reactions_received", "description": "Reactions a person's messages have received: one point for each reaction added, reversed when it is taken back." }
+  ],
+  "ledgerLimits": [
+    {
+      // Sixty reactions given a day, counting additions only: taking a reaction back frees no capacity.
+      "id": "toggle__reactions_daily_cap",
+      "unit": "toggle__reactions_given",
+      "period-cap": 60,
+      "period": "day",
+      "additions-only": true
+    }
+  ],
   "operations": [
     {
       "id": "toggle__react",
@@ -31,6 +51,7 @@
         { "name": "message", "ty": { "Ref": { "target": "toggle__message", "on-delete": "Restrict" } }, "required": true },
         { "name": "kind", "ty": "Str", "required": true }
       ],
+      "subject": { "object": "toggle__message", "input": "message" },
       "invokers": { "signed-in": true, "roles": [] },
       "conditions": [],
       "steps": [
@@ -46,8 +67,16 @@
           "Branch": {
             "id": "toggle",
             "test": { "Found": { "binding": "mine" } },
-            "matched": [ { "DeleteRecord": { "id": "removed", "object": "toggle__reaction", "record": "param.mine" } } ],
-            "unmatched": [ { "CreateRecord": { "id": "added", "object": "toggle__reaction", "fields": { "message": "param.message", "reactor": "principal", "kind": "param.kind" } } } ]
+            "matched": [
+              { "DeleteRecord": { "id": "removed", "object": "toggle__reaction", "record": "param.mine" } },
+              { "ReverseLedger": { "id": "given_back", "posting": "given", "reference": "param.mine", "reason": "reaction-taken-back" } },
+              { "ReverseLedger": { "id": "received_back", "posting": "received", "reference": "param.mine", "reason": "reaction-taken-back" } }
+            ],
+            "unmatched": [
+              { "CreateRecord": { "id": "added", "object": "toggle__reaction", "fields": { "message": "param.message", "reactor": "principal", "kind": "param.kind" } } },
+              { "PostLedger": { "id": "given", "owner": "Invoker", "unit": "toggle__reactions_given", "amount": "1", "reason": "reaction-given", "reference": "param.added" } },
+              { "PostLedger": { "id": "received", "owner": { "Principal": { "principal": "record.author" } }, "unit": "toggle__reactions_received", "amount": "1", "reason": "reaction-received", "reference": "param.added" } }
+            ]
           }
         }
       ]

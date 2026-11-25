@@ -165,6 +165,8 @@ fn query(
 
 fn section(aggregate: &str) -> ViewSection {
     ViewSection {
+        marks: None,
+        joins: None,
         query: QueryId::new("post_stats").unwrap(),
         args: Default::default(),
         include: vec![],

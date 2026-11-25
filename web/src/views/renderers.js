@@ -7,6 +7,7 @@
 import * as pages from './pages.js';
 import * as desk from './desk.js';
 import { lab } from './lab.js';
+import { preferences } from './settings.js';
 import * as tenant from './tenant.js';
 
 /**
@@ -56,6 +57,8 @@ registerRenderer('desk', (page) => desk.desk(page));
 registerRenderer('editor', (page) => desk.editor(page));
 registerRenderer('settings', (page) => desk.settings(page));
 registerRenderer('lab', (page) => lab(page), { wide: true });
+// The platform's Settings page: the person's settings by product area (WG-5601).
+registerRenderer('preferences', (page) => preferences(page));
 // Every screen of the tenant's interface definition, drawn by the one interpreter (D-8250).
 registerRenderer('tenant', (page) => tenant.screen(page));
 // The states the frame shows itself, which no screen has.
