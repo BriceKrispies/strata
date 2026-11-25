@@ -21,6 +21,7 @@ use strata_protocol::api::{
     ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest, MAX_VIEW_LIMIT,
 };
 use strata_storage_api::{execute_admitting, execute_at, ExecuteError, Executed, StoreError};
+use strata_substrate::affordance::{row_affordances, session_budget, spend_session_budget};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
     aggregate_request_with, decode_cursor, encode_cursor, included_refs, match_route,
@@ -861,6 +862,22 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             }
         }
     }
+    // The row actions' answers (WG-5466): what preflight says of each row for this reader, drawn
+    // from the session's budget of answers.
+    let (affordances, individual) = match state.tenant.as_deref() {
+        Some(held) => {
+            let session = identity
+                .session
+                .as_ref()
+                .map_or_else(|| "no-session".to_string(), |s| s.id.0.clone());
+            let mut budget = session_budget(&session);
+            let answered =
+                row_affordances(held, &state.coverage, &ctx, &def.id, &sections, &mut budget);
+            spend_session_budget(&session, &budget);
+            answered
+        }
+        None => (Default::default(), false),
+    };
     let person_fields = strata_kernel::ui::person_fields(schema);
     let people = people_of(app, identity, &tenant, &sections, &person_fields);
     Ok(ViewData {
@@ -875,6 +892,8 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         people,
         tenant_theme: strata_substrate::theme::tenant_theme(&tenant).map(str::to_string),
         person_fields,
+        affordances,
+        individual,
     })
 }
 

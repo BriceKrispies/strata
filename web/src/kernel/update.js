@@ -25,6 +25,7 @@ import {
   acceptManifest,
   acceptPart,
   actionInputs,
+  rowValue,
   errorsPart,
   explainRefusal,
   formInit,
@@ -1004,6 +1005,9 @@ function tenantReply(state, msg, pending, error) {
   }
   const form = pending.kind === 'tenant.submit' ? element : null;
   const said = explainRefusal(errorsPart(state.ui), pending.owner, form, error ?? {});
+  // A refused row action says why, and the view is read again so that the row's affordance shows
+  // what the kernel now says of it (WG-5466).
+  if (pending.kind === 'tenant.action' && element?.row) return fetchView(toast(state, 'warn', said.message), msg, true);
   if (element?.on_error === 'toast' || !held) {
     const released = held ? { ...state, tenant: { ...state.tenant, forms: { ...state.tenant.forms, [pending.owner]: { ...held, busy: false } } } } : state;
     return { state: toast(released, 'warn', said.message), effects: [] };
@@ -1034,16 +1038,54 @@ function submitTenantForm(state, msg) {
   return { state: { ...next, tenant: { ...next.tenant, forms: { ...next.tenant.forms, [id]: { ...held, values, busy: true, error: '', errors: {} } } } }, effects: [effect] };
 }
 
-/** Press an action of the tenant screen on show: one with a confirmation takes two presses. @returns {Result} */
+/**
+ * The row of a section of the view on show with this id, as the view model holds it (WG-5466).
+ * @param {any} state @param {string} section @param {unknown} id
+ */
+function rowOnShow(state, section, id) {
+  const rows = state.view?.model?.data?.[section];
+  return Array.isArray(rows) ? rows.find((row) => String(row?.id) === String(id)) ?? null : null;
+}
+
+/**
+ * Prefill a form from the row a row action sits on: each field the form maps to row.<field> takes the
+ * row's value, unless the person has typed in it already (typed text wins, D-FE-13). WG-5466.
+ * @param {any} state @param {string} formId @param {any} row
+ */
+function prefillForm(state, formId, row) {
+  const form = tenantOnShow(state).part?.forms?.[formId];
+  if (!form || !row) return state;
+  const held = state.tenant.forms[formId] ?? formInit(form);
+  const values = { ...held.values };
+  for (const [field, source] of Object.entries(form.prefill ?? {})) {
+    const [scope, name] = String(source).split('.', 2);
+    if (scope !== 'row' || !(field in values) || values[field]) continue;
+    values[field] = String(rowValue(row, name) ?? '');
+  }
+  return { ...state, tenant: { ...state.tenant, forms: { ...state.tenant.forms, [formId]: { ...held, values } } } };
+}
+
+/**
+ * Press an action of the tenant screen on show: one with a confirmation takes two presses. A row
+ * action takes the row it sits on (`arg` names the section and the row id); a row action that names
+ * a form opens that form, prefilled from the row, for the person to finish. WG-5466.
+ * @returns {Result}
+ */
 function tenantAction(state, msg) {
-  const id = String(msg.arg ?? '');
+  const arg = msg.arg !== null && typeof msg.arg === 'object' ? msg.arg : { action: msg.arg };
+  const id = String(arg.action ?? '');
   const action = tenantOnShow(state).part?.actions?.[id];
   if (!action) return { state, effects: [] };
-  if (action.confirm && state.tenant.confirm !== id) return { state: { ...state, announce: action.confirm, tenant: { ...state.tenant, confirm: id } }, effects: [] };
+  const row = action.row ? rowOnShow(state, String(arg.section ?? action.row), arg.row) : null;
+  if (action.row && !row) return { state, effects: [] };
+  if (action.row && action.form) return { state: { ...prefillForm(state, action.form, row), announce: 'The form is filled in from this record.' }, effects: [] };
+  // A row action's confirmation is armed for the row it was pressed on.
+  const key = action.row ? `${id}#${String(arg.row)}` : id;
+  if (action.confirm && state.tenant.confirm !== key) return { state: { ...state, announce: action.confirm, tenant: { ...state.tenant, confirm: key } }, effects: [] };
   const values = action.form ? state.tenant.forms[action.form]?.values ?? {} : {};
   const screen = screenOf(state);
   const route = { ...(screen?.params ?? {}), ...(screen?.query ?? {}), ...(state.view.model?.params ?? {}) };
-  const [next, effect] = invokeOperation({ ...state, tenant: { ...state.tenant, confirm: null } }, 'tenant.action', id, action.operation, actionInputs(action, values, route), msg);
+  const [next, effect] = invokeOperation({ ...state, tenant: { ...state.tenant, confirm: null } }, 'tenant.action', id, action.operation, actionInputs(action, values, route, row), msg);
   return { state: next, effects: [effect] };
 }
 

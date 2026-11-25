@@ -72,6 +72,13 @@ pub fn coerce(
         (FieldType::Ref { .. }, Json::Number(n)) => {
             Value::Ref(RecordId(n.as_u64().ok_or_else(mismatch)?))
         }
+        // A form's text control sends a record's number as a string (the record's `number` field
+        // every record shows, showcase gap 6): digits are that id, `@key` a symbolic key.
+        (FieldType::Ref { .. }, Json::String(s))
+            if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            Value::Ref(RecordId(s.parse().map_err(|_| mismatch())?))
+        }
         (FieldType::Ref { .. }, Json::String(s)) => {
             let key = s.strip_prefix('@').ok_or_else(mismatch)?;
             Value::Ref(resolve(key).ok_or_else(|| format!("unknown record key @{key}"))?)
@@ -156,6 +163,32 @@ mod tests {
         assert_eq!(
             coerce(&FieldType::Bool, &Json::Null, &none),
             Ok(Value::Null)
+        );
+    }
+
+    #[test]
+    fn a_reference_is_a_record_id_or_a_symbolic_key() {
+        let none = |_: &str| None;
+        let reference = FieldType::Ref {
+            target: strata_kernel::ObjectTypeId::new("note").unwrap(),
+            on_delete: strata_kernel::OnDelete::Restrict,
+        };
+        // A number, and the same id sent as text by a form's control.
+        assert_eq!(
+            coerce(&reference, &json!(12), &none),
+            Ok(Value::Ref(RecordId(12)))
+        );
+        assert_eq!(
+            coerce(&reference, &json!("12"), &none),
+            Ok(Value::Ref(RecordId(12)))
+        );
+        assert!(coerce(&reference, &json!("1x"), &none).is_err());
+        assert!(coerce(&reference, &json!(""), &none).is_err());
+        // A symbolic key still resolves through the resolver.
+        let resolve = |key: &str| (key == "ines").then_some(RecordId(7));
+        assert_eq!(
+            coerce(&reference, &json!("@ines"), &resolve),
+            Ok(Value::Ref(RecordId(7)))
         );
     }
 }

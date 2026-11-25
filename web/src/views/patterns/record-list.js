@@ -3,7 +3,7 @@
 // @ts-check
 
 import { h } from '../../components/dom.js';
-import { avatar, bodyText, stateLine, displayValue, emptyState, loadingWords, moreButton, notice, personChip, sectionFrame, skeletonLine } from '../../components/ds.js';
+import { avatar, bodyText, button, stateLine, displayValue, emptyState, loadingWords, moreButton, notice, personChip, sectionFrame, skeletonLine } from '../../components/ds.js';
 
 /**
  * One record as a card: title (a link to its screen when it has one), the state line when its state
@@ -55,6 +55,39 @@ export function recordCard(record, { compact, clamp }) {
               meta.map((/** @type {any} */ m) => h('div', { class: 'ds-meta', key: m.id }, h('dt', { class: 'ds-meta__label' }, m.label), h('dd', { class: 'ds-meta__value' }, displayValue(m.value)))),
             )
         : null,
+      rowActions(record.actions),
+    ),
+  );
+}
+
+/**
+ * The row actions of a card: a button each, its label as the action says (or its confirmation
+ * when armed). A refused one is disabled and says why beside it, in words (D-DS-31); an enabled one
+ * carries the row it sits on, so a press names both.
+ * @param {any[] | undefined} actions
+ */
+function rowActions(actions) {
+  if (!actions || !actions.length) return null;
+  return h(
+    'div',
+    { class: 'ds-record__actions' },
+    actions.map((/** @type {any} */ action) =>
+      h(
+        'div',
+        { class: 'ds-record__action', key: `${action.id}:${action.row}` },
+        button(
+          {
+            variant: action.armed ? 'danger' : 'secondary',
+            small: true,
+            disabled: action.disabled ? true : null,
+            'data-action': 'tenant.action',
+            'data-arg': JSON.stringify({ action: action.id, section: action.section, row: action.row }),
+            'aria-describedby': action.note ? `note-${action.id}-${action.row}` : null,
+          },
+          action.label,
+        ),
+        action.note ? h('p', { class: 'ds-record__note', id: `note-${action.id}-${action.row}` }, action.note) : null,
+      ),
     ),
   );
 }

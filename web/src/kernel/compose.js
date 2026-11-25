@@ -56,7 +56,7 @@ const CHOICE_WORD = /^[a-z][a-z0-9]*(?:[ _-][a-z0-9]+){0,3}$/;
 
 /**
  * @typedef {import('./display.js').DisplayNode} DisplayNode
- * @typedef {{ lang?: string, timeZone?: string, now?: number, people?: Record<string, any>, screens?: { id: string, route?: string }[], route?: string, forms?: Record<string, any>, moreLoading?: string | null }} ComposeContext
+ * @typedef {{ lang?: string, timeZone?: string, now?: number, people?: Record<string, any>, screens?: { id: string, route?: string }[], route?: string, forms?: Record<string, any>, moreLoading?: string | null, rowActions?: any[], affordances?: Record<string, any>, confirm?: string | null }} ComposeContext
  * @typedef {{ id: string, type: string, target: string | null, displayType: string | null, props: Record<string, any> | null, required: boolean, label: string }} Field
  * @typedef {{ name: string, label: string, single: boolean, aggregate: boolean, object: string | null, title: string | null, fields: Field[] }} Section
  * @typedef {{ id: string, label: string, value: DisplayNode }} Fact
@@ -479,6 +479,35 @@ function noticeNode(section, rows, ctx) {
   return { ...base(section, 'ready', 'notification-list'), unread, count: unread > 0 ? `${unread} unread` : null, items };
 }
 
+/**
+ * The row actions a section's row shows (WG-5466, D-DS-32): each action of the screen whose row is
+ * this section, with the answer preflight gave this row. A refused action is removed or disabled as
+ * its when-refused says, and says why in words; an unknown or allowed one is drawn enabled. An
+ * action with a confirmation is armed on the row it was first pressed on.
+ * @param {ComposeContext} ctx @param {string} section @param {any} row
+ */
+export function rowActionsOf(ctx, section, row) {
+  const rowKey = String(row?.id ?? '');
+  const answers = ctx.affordances?.[section]?.[rowKey] ?? {};
+  return (ctx.rowActions ?? [])
+    .filter((/** @type {any} */ action) => action.row === section)
+    .flatMap((/** @type {any} */ action) => {
+      const answer = answers[action.id] ?? null;
+      const refused = answer?.state === 'refused';
+      if (refused && action.when_refused === 'hide') return [];
+      const armed = ctx.confirm === `${action.id}#${rowKey}`;
+      return [{
+        id: action.id,
+        label: armed && action.confirm ? action.confirm : action.label,
+        section,
+        row: rowKey,
+        disabled: refused,
+        note: refused ? (answer.detail || 'Not available for this record.') : null,
+        armed,
+      }];
+    });
+}
+
 /** @param {Section} section @param {any[]} rows @param {ComposeContext} ctx @param {'main' | 'aside'} region @param {string | null} more */
 function listNode(section, rows, ctx, region, more) {
   const roles = rolesOf(section, rows);
@@ -487,7 +516,7 @@ function listNode(section, rows, ctx, region, more) {
   const pattern = table ? 'data-table' : 'record-list';
   const moreNode = more ? { section: section.name, busy: ctx.moreLoading === section.name } : null;
   if (!rows.length) return { ...base(section, 'empty', pattern), count: 0, more: null };
-  const records = rows.map((row) => recordOf(section, roles, row, ctx));
+  const records = rows.map((row) => ({ ...recordOf(section, roles, row, ctx), actions: rowActionsOf(ctx, section.name, row) }));
   const count = `${rows.length}${more ? '+' : ''}`;
   if (table) {
     /** @type {{ id: string, label: string, numeric: boolean }[]} */
@@ -595,7 +624,16 @@ export function compose(part, model, ctx) {
   const layout = ctx.layout ?? part?.screen?.kind ?? 'list';
   const loading = !model;
   const data = isRecord(model?.data) ? model.data : {};
-  const context = { ...ctx, people: isRecord(model?.people) ? model.people : ctx.people ?? {} };
+  // The row actions of the screen and the answers preflight gave its rows (WG-5466).
+  const rowActions = Object.entries(isRecord(part?.actions) ? part.actions : {})
+    .filter(([, action]) => isRecord(action) && typeof action.row === 'string')
+    .map(([id, action]) => ({ id, ...action }));
+  const context = {
+    ...ctx,
+    people: isRecord(model?.people) ? model.people : ctx.people ?? {},
+    rowActions,
+    affordances: isRecord(model?.affordances) ? model.affordances : {},
+  };
   const declared = Object.keys(isRecord(part?.sections) ? part.sections : {});
   const names = declared.length ? [...declared, ...Object.keys(data).filter((n) => !declared.includes(n))] : Object.keys(data).sort();
   const sections = names.map((name) => sectionOf(part, name, data[name]));

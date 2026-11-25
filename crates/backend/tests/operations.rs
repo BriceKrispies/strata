@@ -148,9 +148,38 @@ fn tally(id: &str, fail: bool) -> TenantOperationDef {
     }
 }
 
+/// Count a tally the reference input names: a reference input of an operation, with no subject.
+fn recount() -> TenantOperationDef {
+    TenantOperationDef {
+        id: TenantOperationId::new("recount").unwrap(),
+        label: "Recount".into(),
+        inputs: vec![TenantOperationInput {
+            name: "of".into(),
+            ty: FieldType::Ref {
+                target: ObjectTypeId::new("tally").unwrap(),
+                on_delete: OnDelete::Restrict,
+            },
+            required: true,
+            label: None,
+        }],
+        invokers: TenantOperationInvokers {
+            signed_in: true,
+            roles: BTreeSet::new(),
+        },
+        subject: None,
+        conditions: vec![],
+        steps: vec![TenantOperationStep::UpdateRecord {
+            id: "bump".into(),
+            object: ObjectTypeId::new("tally").unwrap(),
+            record: Expr::Param("of".into()),
+            fields: BTreeMap::from([(FieldId::new("count").unwrap(), Expr::Lit(Value::Int(3)))]),
+        }],
+    }
+}
+
 impl Backend {
     /// The owner of fieldnotes defines the object type `tally`, on which no member holds any
-    /// power, and the two operations.
+    /// power, and the operations.
     fn define(&self) {
         let object = ObjectTypeId::new("tally").unwrap();
         let intent = Intent::ChangeSchema {
@@ -169,6 +198,7 @@ impl Backend {
                 },
                 SchemaChange::DefineOperation(tally("tally_up", false)),
                 SchemaChange::DefineOperation(tally("tally_fail", true)),
+                SchemaChange::DefineOperation(recount()),
             ],
             expected_version: None,
             existing: ExistingData::Reject,
@@ -354,4 +384,41 @@ async fn a_dry_run_answers_and_commits_nothing() {
     assert_eq!(reply["dry_run"], true);
     assert_eq!(reply["result"]["created"].as_array().unwrap().len(), 1);
     assert!(backend.tallies().is_empty());
+}
+
+// A reference input is a record id on the wire, and a form's text control sends the same id as a
+// string (showcase gap 6): both are accepted, and the second is not refused as a type mismatch.
+#[tokio::test]
+async fn a_reference_input_sent_as_a_record_id_is_accepted() {
+    let backend = start().await;
+    backend.define();
+    let tomasz = backend.sign_in("tomasz", "strata-dev-tomasz").await;
+    let (status, reply) = backend
+        .invoke(
+            Some(&tomasz),
+            Some("k-20"),
+            json!({ "operation": "tally_up", "inputs": { "label": "linked" } }),
+        )
+        .await;
+    assert_eq!(status, 200, "{reply}");
+    let id = reply["result"]["created"][0]
+        .as_u64()
+        .expect("the created record id");
+    let (status, reply) = backend
+        .invoke(
+            Some(&tomasz),
+            Some("k-21"),
+            json!({ "operation": "recount", "inputs": { "of": id.to_string() } }),
+        )
+        .await;
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["result"]["changed"], json!([id]));
+    let (status, reply) = backend
+        .invoke(
+            Some(&tomasz),
+            Some("k-22"),
+            json!({ "operation": "recount", "inputs": { "of": id } }),
+        )
+        .await;
+    assert_eq!(status, 200, "{reply}");
 }

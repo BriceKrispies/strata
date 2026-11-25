@@ -1640,7 +1640,7 @@ async fn view(
     State(bff): State<Shared>,
     headers: HeaderMap,
     Query(mut query): Query<BTreeMap<String, String>>,
-) -> Result<Json<Json_>, Failure> {
+) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
     let path = query
         .remove("path")
@@ -1684,9 +1684,17 @@ async fn view(
         cursor,
         limit,
     };
-    view_model(&bff, &visit, &path, query, paging)
-        .await
-        .map(Json)
+    let model = view_model(&bff, &visit, &path, query, paging).await?;
+    // A reply whose row affordances read the principal or the clock is this reader's alone: no
+    // shared cache keeps it (WG-5466).
+    let individual = model.get("individual") == Some(&json!(true));
+    let mut response = Json(model).into_response();
+    if individual {
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    }
+    Ok(response)
 }
 
 /// Run one aggregate of a named query: `GET /api/aggregate?query=&aggregate=&filter=`, the filter
