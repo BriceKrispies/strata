@@ -33,3 +33,7 @@ import Strata.Browser.Page
 
 import Strata.System.Spec
 import Strata.System.Protocol
+
+import Strata.Reduction.Transactions
+import Strata.Reduction.Distributed
+import Strata.Reduction.Backend

@@ -830,6 +830,107 @@ is the spec's reply to its request, and every frame packet is a frame of the spe
   that argument.
 - Crash recovery of the outbox, and the model of tenant creation.
 
+## 9. Reduction (C4, WG-5660)
+
+IronFleet's reduction argument (section 3.6 of the paper) is machine-checked in `lean/Strata/Reduction/`:
+`Transactions.lean` (part (a), one tenant's optimistic transactions), `Distributed.lean` (part (b), the
+generic reduction) and `Backend.lean` (part (b) instantiated for the protocol of section 8). All three
+are imported from `lean/Strata.lean`, and every theorem in them is listed in `lean/Audit.lean`. Each
+depends only on `propext`, `Classical.choice` and `Quot.sound`.
+There is no `sorry`, no `admit`, no added axiom and no new dependency.
+
+### (a) Concurrent optimistic transactions of one tenant
+
+The model (`TState`, `TNext`) is at the level the backend runs a tenant's requests. A transaction
+loads the current revision (`load`), computes the kernel's verdict on its snapshot (`compute`), and
+commits with the revision guard: `decideOk` and `decideErr` apply when the revision is still the one
+loaded, and `conflict` sends the transaction back to loading when it is not. Any interleaving of these
+steps across transactions is a behaviour (`TReachable`).
+
+| Theorem | States |
+|---|---|
+| `serial_equivalence` | in every reachable state each revision is the serial execution of the committed transactions before it; each decision's result is the kernel's verdict on the state at its revision, which is the state after the previous commit; a committed result is the tenant at the next revision; a transaction is decided at most once |
+| `conflict_no_effect` | a conflicting attempt leaves the tenant, its history and the decisions unchanged |
+| `refusal_no_effect` | a refused decision leaves the tenant's history and revision unchanged, and the accepted decisions unchanged |
+| `decideOk_refines_store`, `decideErr_refines_store` | a decision is the protocol's `PNext.storeAccept` or `PNext.storeRefuse` on the store |
+| `conflict_refines_store` | a conflict is the protocol's `PNext.storeConflict`, which changes no store state |
+| `step_refines_store` | every step is one of those protocol store steps, or no store step (a load or a compute) |
+
+Relation to `Protocol.lean`: the protocol already decides a commit atomically (`storeAccept`,
+`storeRefuse`, `storeConflict`), and its backend reads the tenant at a revision and sends a commit
+guarded by that revision. The model here is the finer picture: a transaction's load and compute are
+separate steps, so other transactions' commits can land between them. `step_refines_store` shows that
+this finer picture refines the atomic store step, so each interleaving of the transaction steps is a
+protocol run.
+
+### (b) The distributed reduction, generic
+
+`Distributed.lean` splits every host step into I/O events. An event `Ev` names its host, the number of
+that host's step it belongs to, and its I/O: a packet received (`recv`), a time-dependent input
+(`tick`), or a packet sent (`send`). A fine-grained execution is a list of events, with the events of
+different hosts interleaved arbitrarily.
+
+- **The obligation** (`Obl`): within each host step the events are receives, then at most one
+  time-dependent event, then sends.
+- **Well-formedness**: each host's events are in step order (`HostOrd`); no packet is received before
+  it is sent (`NetOk`, the packets available from the start plus those sent by earlier events).
+- **Fine-grained execution** (`FineExec`) of a host step relation `HStep`: each event belongs to a step
+  that exists, the obligation holds for every step, the network rule holds, and each host's steps are
+  run by `HStep` from its initial state with the inputs and outputs the events record.
+
+| Theorem | States |
+|---|---|
+| `reduction` | every fine-grained execution is equivalent to a contiguous one: a permutation of the same events; the same events for each host in the same order (so each host receives the same packets in the same order, sends the same packets in the same order); each host step's events form one block; the result is a fine-grained execution |
+| `reorder_core` | the reordering as an explicit list of blocks, in an order in which each host's steps increase |
+| `run_congr` | a run of a fine-grained execution is a run of any execution with the same events for each step, so each host's local state sequence is the same |
+
+The proof is by induction on the length of the trace. Take the first event at which some step is
+complete: a send, or the last event of its step. Its step has no receive from another step: the events
+before it send nothing, so their receives are of packets available from the start, and the step's events
+can be moved in front of them without breaking any receive or any per-host order. The rest of the trace
+is reordered by the induction hypothesis. The move is one block move per step, justified by the two
+facts above (no send precedes the candidate, and each receive of the step is of a packet available
+before it), not by a sequence of single swaps.
+
+### The backend instance
+
+`Backend.lean` instantiates `reduction` for the protocol of section 8:
+
+- `Role`: the client, the BFF, the backend, the store and the publisher. `Own` is the state a host owns:
+  the backend its transactions and its answers without a session, the store the tenant's history and
+  decisions, the others nothing.
+- `RStep`: one constructor per protocol step (`PNext`), with the owning host's state before and after,
+  the packets it receives (at most one) and the packets it sends, and `idle`, a host step that does
+  nothing.
+- `bridge_backend`, `bridge_store`, `bridge_other`: each `RStep` is one protocol step (or none, for
+  `idle`) that changes only the owning host's state and reads only that state, the packets received and
+  the static configuration.
+- `bridge_run`: the blocks of a reordered fine-grained execution, taken in order, are protocol steps from
+  the initial state.
+
+| Theorem | States |
+|---|---|
+| `backend_fine_refines` | every fine-grained execution of the backend, with `RStep` as the host step relation and the initial owned states, refines a protocol behaviour (`ProtoReachable`) and so a behaviour of the system spec (`SpecReachable`) |
+
+Modelling decisions the instance makes:
+
+1. The backend's hosts take no time-dependent input: `RStep` has no `tick` constructor, so a fine
+   execution with a time-dependent event in a step that runs has no run. The protocol has no clock; the
+   implementation must keep it so, which is C3's to show.
+2. A host step that does nothing (`idle`) is a fine step of no protocol step. It changes no state, so it
+   is invisible to the protocol.
+3. The fine-grained execution is required to satisfy the obligation (`FineExec.obl`), which is the
+   IronFleet requirement on the implementation's steps. Nothing else about the implementation is assumed.
+
+### What is left
+
+- **Liveness** (C2): the reduction says nothing about progress.
+- **The implementation** (C3): this section reduces the fine-grained interleavings of the protocol's
+  hosts to the protocol's steps. The Rust backend's own steps are not shown to satisfy the obligation or
+  the `RStep` shape; that is the C3 shell's job, and its check is the obligation on each host step.
+- **Part (a) and the instance**: the instance covers the protocol with any number of tenants (its steps are
+  per request). Part (a) models one tenant and is not yet a lemma about the instance's backend steps; the
+  link is `step_refines_store`, which says each of its store steps is a protocol store step.
 ## Sources
 
 - C. Hawblitzel et al., *IronFleet: Proving Practical Distributed Systems Correct*, SOSP 2015:
