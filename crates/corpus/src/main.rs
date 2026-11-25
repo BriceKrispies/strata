@@ -1,7 +1,7 @@
 //! `strata-corpus`: load the enterprise corpus into a tenant, populate it, and hash it.
 //!
 //! ```text
-//! strata-corpus load  [--store <store>] [--tenant <id>] [--replace]
+//! strata-corpus load  [--store <store>] [--tenant <id>] [--replace] [--product <file stem>]
 //! strata-corpus build --scale small|medium|large [--seed <n>] [--store <store>] [--tenant <id>]
 //!                     [--replace] [--lenient] [--batch <n>] [--catalogue <file>]
 //! strata-corpus hash  [--store <store>] [--tenant <id>]
@@ -15,7 +15,8 @@
 //!
 //! `check` installs each product on a fresh in-memory tenant of its own, then all of them into one
 //! tenant, and prints every problem the kernel reports for each, not only the first.
-//! `load` installs the 14 products and checks that the tenant holds every entity they own.
+//! `load` installs the 14 products and checks that the tenant holds every entity they own; with
+//! `--product <file stem>` it installs that one product of the directory (a single-module proof).
 //! `build` does that and then fills the tenant with records from the seed. `hash` prints the hash
 //! of an existing tenant, for comparing two runs on a store that outlives the process.
 
@@ -24,7 +25,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 use strata_corpus::load::resolve;
 use strata_corpus::{
-    build_with, compile_corpus, load_corpus, tenant_hash, verify_loaded, CorpusError, CorpusPaths,
+    build_with, compile_corpus, compile_product, load_corpus, tenant_hash, verify_loaded, CorpusError, CorpusPaths,
     LoadOptions, PopulateOptions, Scale,
 };
 use strata_kernel::{TenantId, Timestamp};
@@ -32,7 +33,7 @@ use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::Store;
 
 const USAGE: &str = "usage:
-  strata-corpus load  [--store <store>] [--tenant <id>] [--replace]
+  strata-corpus load  [--store <store>] [--tenant <id>] [--replace] [--product <file stem>]
   strata-corpus build --scale small|medium|large [--seed <n>] [--store <store>] [--tenant <id>]
                       [--replace] [--lenient] [--batch <n>] [--catalogue <file>]
   strata-corpus hash  [--store <store>] [--tenant <id>]
@@ -198,7 +199,11 @@ fn run(args: Args) -> Result<(), CorpusError> {
     }
 
     let started = Instant::now();
-    let products = compile_corpus(&paths)?;
+    // `load --product <file stem>` installs one product of the directory, for a single-module proof.
+    let products = match (&args.product, args.command.as_str()) {
+        (Some(id), "load") => vec![compile_product(&paths, id)?],
+        _ => compile_corpus(&paths)?,
+    };
     println!(
         "compiled {} products with specc in {:.1}s",
         products.len(),
