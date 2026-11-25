@@ -261,3 +261,6 @@ import Strata
 #print axioms Strata.Browser.held_only_when_known
 #print axioms Strata.Browser.cold_answer_changes_no_model
 #print axioms Strata.Browser.cold_start_awaits_session
+#print axioms Strata.Browser.login_sent_only_complete
+#print axioms Strata.Browser.failure_keeps_session
+#print axioms Strata.Browser.input_login_sends_nothing

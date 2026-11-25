@@ -307,16 +307,16 @@ what the B2 implementation will be proved against.
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `submit` login, complete form | the sign-in request; the form is busy | partly | 1 (request, for values the catalogue accepts); 3 (form flow) |
-| `submit` login, incomplete form | field messages; no request | not covered | 3 |
+| `submit` login, complete form | the sign-in request; the form is busy and keeps the values | covered | 1 (request); 3 (values kept, error cleared) |
+| `submit` login, incomplete form | the values are kept and the form says so; no request | covered | 3 (`signInIncomplete`) |
 | `http_result` login, accepted | signed in: session, the person's state cleared, the address moved to the reply's target | partly | 1; 5 (live socket reset) |
 | `http_result` login, second factor waiting | the code prompt, no session yet | not covered | 7 |
-| `http_result` login, refused | the request ends; the refusal's words on the form; focus on the password | partly | 1 (request ends); 3 (words, focus) |
+| `http_result` login, refused | the request ends; the form shows the refusal and drops the password (`loginRefused`) | covered | 3 (the refusal's words are wording, and focus is presentation, slice 4) |
 | `action logout` | the sign-out request, when the screen offers sign-out | covered | 1 |
 | `http_result` logout, accepted | no session; the person's state cleared; the address replaced | partly | 1; 5 (live socket reset) |
 | `http_result` logout, refused | the request ends (the warning is presentation) | covered | 1 |
-| `submit` search | navigates to the search address with the query | not covered | 3 |
-| `input` login | the typed value; clears the field's error | not covered | 3 |
+| `submit` search | navigates to the address the catalogue names for the values, and asks for its view | covered | 3 (`searchSubmit`) |
+| `input` login | the typed value (`setField`); sends nothing | covered | 3 (`inputLogin`) |
 
 #### Live connection
 
@@ -415,7 +415,7 @@ what the B2 implementation will be proved against.
 
 | Effect | Emitted by | Status | Slice |
 |---|---|---|---|
-| `http` (method, path, body, csrf, idempotency key, correlation) | every request | partly | 1 (id and kind); 3 (body, csrf token, key, correlation) |
+| `http` (method, path, body, csrf, idempotency key, correlation) | every request | partly | 1 (id and kind); 3 (csrf token, idempotency key, correlation still open; the sign-in and search bodies are the form's values) |
 | `timer` request | every request (30 000 ms) | covered | 1 |
 | `timer` toast | every toast (5 s, or 9 s for a warning) | not covered | 4 |
 | `timer` lab.poll | the Lab's run poll | not covered | 12 |
@@ -459,6 +459,9 @@ changed by its owner.
   (`held_only_when_known`), and reads the view again once the session answers (`learnSession`).
 - **F5: `navigate_away` is undeclared.** `oidc.js` emits it; `types.js` does not declare it; the worker
   forwards it to the main thread through its default branch. Slice 6 declares it.
+- **F6 (minor): the sign-in form after a change of person.** The spec clears the whole sign-in form
+  on a change of person (`switched`). `clearUserState` clears only the password and keeps the login
+  name. Both are safe; the spec is the stricter, and B2 must choose one.
 
 ### 7.4 What the spec leaves out, by design
 
@@ -545,7 +548,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 |---|---|---|
 | 1 (done) | Routing and session: `init` with a bootstrapped session, `navigate`, `popstate`, `reload`, the view's answers, the session's answers and changes, sign-in and sign-out (their requests and answers), the session ending, a request's deadline; the held model and its theorems | |
 | 2 (done) | Cold start: the session read at start, a view that answers before the session (dropped and read again), the session answer that makes the session known (`learnSession`); the bootstrapped view remains partly, see row `init` | 1 |
-| 3 | Forms: the form flow (busy, accepted, refused), validation, the refusal's words and focus, the idempotency key and csrf token of a request, the search form's navigation, the typed draft (`Drafts.lean`) | 1 |
+| 3 (partly done) | Forms, for the sign-in and the search: the typed values, the complete and incomplete submissions, the refusal, the search's navigation (`inputLogin`, `signInIncomplete`, `loginRefused`, `searchSubmit`). Still open in this slice: the csrf token and idempotency key of a request (with the `http` effect), the words of a refusal, focus, and the typed draft (`Drafts.lean`) | 1 |
 | 4 | Presentation: theme and its store effect, the system theme, the menu, toasts and their timers, dev expire | 1 |
 | 5 | Live connection: the socket machine, the welcome, notices, resync, pong, the session frame when active, refused upgrades, the socket effects and timers | 1, 2 |
 | 6 | Sign-in methods: passkey sign-in, emailed links, invitations, identity providers (OIDC and SAML), `navigate_away` | 3, 5 |
@@ -560,8 +563,8 @@ How the existing theorems meet this one (no existing theorem is changed):
 
 ### 7.7 Counts
 
-The messages table has 76 rows (a row is one message, or one family of messages with the same handling):
-11 covered, 9 partly, 56 not covered. The effects table has 14 rows: 3 covered, 1 partly, 10 not
+The messages table has 78 rows (a row is one message, or one family of messages with the same handling):
+19 covered, 7 partly, 52 not covered (after slice 3). The effects table has 14 rows: 3 covered, 1 partly, 10 not
 covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.

@@ -41,6 +41,8 @@ structure Catalogue where
   needsSession : Screen → Bool
   signOutOn : Route → Bool
   validSignIn : List (String × String) → Bool
+  /-- The address a search with these values goes to (the search form's success navigation). -/
+  searchTarget : List (String × String) → Route
 
 /-- The kind of a request the kernel has in flight. `session`, `view`, `signIn` and `signOut` are the
 kinds slice 1 names. `personal` stands for every request whose reply belongs to the person signed in
@@ -98,6 +100,10 @@ structure State where
   /-- Whether the session is known. A page that starts cold does not know it until the session read
   answers; a page that starts with a bootstrapped session knows it from the start. -/
   sessionKnown : Bool := true
+  /-- The sign-in form's values, as they were submitted or typed. -/
+  loginValues : List (String × String) := []
+  /-- Whether the sign-in form shows a refusal or an incomplete-form message. -/
+  loginError : Bool := false
 
 /-- Effects out of the kernel. `http` and `timer "request"` are the request and its deadline; the
 other effects are the page's own (URL, scroll), the live connection, storage, the browser's passkey

@@ -27,7 +27,7 @@ liveness of a reply: a request that never answers stays awaited until its deadli
 decodes into a `failure`.
 
 Slice 2 adds the cold start (`initCold`, `dropColdView`, `learnSession`). Not yet: the bootstrapped view (`init` takes the session only),
-forms beyond the sign-in's validity, the live connection's frames and socket effects, toasts and
+forms beyond the sign-in and the search, the live connection's frames and socket effects, toasts and
 focus, the page builders and every message of a later slice. No unfinished proof and no added axiom.
 -/
 
@@ -54,6 +54,10 @@ def dropId (ps : List Pending) (id : Nat) : List Pending :=
 /-- Drop every view request from the pending list: a new view request supersedes them. -/
 def dropViews (ps : List Pending) : List Pending :=
   ps.filter (fun p => p.kind != ReqKind.view)
+
+/-- A typed value of a form field: the field takes the value, the other fields keep theirs. -/
+def setField (vs : List (String × String)) (name value : String) : List (String × String) :=
+  vs.filter (fun p => p.1 != name) ++ [(name, value)]
 
 /-- The request `id` is in flight, of kind `k`, in the current generation. -/
 def pendingOf (s : State) (id : Nat) (k : ReqKind) : Prop :=
@@ -170,7 +174,8 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   /-- A request other than the view was refused or failed (or passed its deadline): it is no longer
   in flight. Its own screen's consequence, if any, is a later slice's. -/
   | failure {s : State} {id : Nat} :
-      (∃ p ∈ s.pending, p.id = id ∧ p.kind ≠ ReqKind.view ∧ p.gen = s.generation) →
+      (∃ p ∈ s.pending, p.id = id ∧ p.kind ≠ ReqKind.view ∧ p.kind ≠ ReqKind.signIn ∧
+        p.gen = s.generation) →
       Allowed cat s (.failure id) { s with pending := dropId s.pending id } []
   /-- A reply to a request that is not in flight in this generation changes nothing. -/
   | dropFailure {s : State} {id : Nat} :
@@ -199,8 +204,31 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
       Allowed cat s (.submit "login" values)
         { s with
           nextId := s.nextId + 1
-          pending := ⟨s.nextId, .signIn, s.generation⟩ :: s.pending }
+          pending := ⟨s.nextId, .signIn, s.generation⟩ :: s.pending
+          loginValues := values, loginError := false }
         (fetch s.nextId .signIn)
+  /-- A typed value of the sign-in form: the field takes it; nothing is sent. -/
+  | inputLogin {s : State} {name value : String} :
+      Allowed cat s (.input "login" name value)
+        { s with loginValues := setField s.loginValues name value } []
+  /-- A sign-in form that is not complete: the values are kept and the form says so; nothing is sent. -/
+  | signInIncomplete {s : State} {values : List (String × String)} :
+      cat.validSignIn values = false →
+      Allowed cat s (.submit "login" values) { s with loginValues := values, loginError := true } []
+  /-- A sign-in the server refused: the form shows the refusal, and the password is cleared. -/
+  | loginRefused {s : State} {id : Nat} :
+      pendingOf s id .signIn →
+      Allowed cat s (.failure id)
+        { s with
+          pending := dropId s.pending id
+          loginError := true
+          loginValues := s.loginValues.filter (fun p => p.1 != "password") } []
+  /-- The search form is submitted: the page goes to the address the catalogue names for its values, and
+  that address's view is asked for. -/
+  | searchSubmit {s : State} {values : List (String × String)} :
+      Allowed cat s (.submit "search" values)
+        (askView s (cat.searchTarget values))
+        (navEffects s.route (cat.searchTarget values) false ++ fetch s.nextId .view)
   /-- A sign-in is accepted: the person signed in, and the page goes where the reply names. -/
   | signInAnswer {s : State} {id : Nat} {who : Principal} {target : Route} :
       pendingOf s id .signIn →
@@ -334,6 +362,27 @@ theorem cold_start_awaits_session (cat : Catalogue) {s s' : State} {r : Route} {
   cases ha
   exact ⟨rfl, _, List.mem_cons_self, rfl⟩
 
+/-! ### Forms: the sign-in and the search (slice 3) -/
+
+/-- **A sign-in request is sent only for a complete form.** Any step that sends an effect from a
+submitted sign-in form has values the catalogue accepts. -/
+theorem login_sent_only_complete (cat : Catalogue) {s s' : State} {m : Msg}
+    {values : List (String × String)} {es : List Effect}
+    (hm : m = .submit "login" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
+    cat.validSignIn values = true := by
+  cases ha <;> simp_all
+
+/-- **A refused sign-in does not change the session.** Whatever the refusal of a request does to the
+form, it leaves the person signed in, or not, as they were. -/
+theorem failure_keeps_session (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}
+    (ha : Allowed cat s (.failure id) s' es) : s'.session = s.session := by
+  cases ha <;> rfl
+
+/-- **A typed value is kept in the form and sends nothing.** -/
+theorem input_login_sends_nothing (cat : Catalogue) {s s' : State} {m : Msg} {name value : String}
+    {es : List Effect} (hm : m = .input "login" name value) (ha : Allowed cat s m s' es) : es = [] := by
+  cases ha <;> simp_all
+
 /-! ## Non-vacuity -/
 
 /-- A catalogue with one screen, which needs a signed-in person, for the witness below. -/
@@ -341,7 +390,8 @@ def sampleCatalogue : Catalogue :=
   { screenOf := fun _ => some 0
     needsSession := fun scr => scr == 0
     signOutOn := fun _ => true
-    validSignIn := fun _ => true }
+    validSignIn := fun _ => true
+    searchTarget := fun _ => root }
 
 /-- The relation is not empty where the theorems look: a page that starts for a person, reads the
 view of its screen and holds it is a reachable state, holding a model read for that person. -/
