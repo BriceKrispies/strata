@@ -294,7 +294,9 @@ fn an_audit_line_with_a_placeholder_is_not_clean() {
 
 /// The default is sized to run in a few seconds of the Lean process; a larger run:
 /// `STRATA_LEAN_DIFF_CASES=20000` (and `STRATA_LEAN_DIFF_SEED=<n>` to vary or reproduce).
-const DEFAULT_DIFF_CASES: usize = 3000;
+/// At 200 cases the batch is below the outcome-coverage floor of `lean_diff::run`, so the
+/// intent kinds are checked here instead.
+const DEFAULT_DIFF_CASES: usize = 200;
 const DEFAULT_DIFF_SEED: u64 = 20_261_121;
 
 fn env_number<T: std::str::FromStr>(name: &str, default: T) -> T {
@@ -310,6 +312,16 @@ fn random_sequences_run_the_same_on_the_lean_model_and_the_kernel() {
     let _lake = require_lake();
     let cases = env_number("STRATA_LEAN_DIFF_CASES", DEFAULT_DIFF_CASES);
     let seed = env_number("STRATA_LEAN_DIFF_SEED", DEFAULT_DIFF_SEED);
+    // The batch the run compares must exercise every intent kind the model executes.
+    let batch: String = (0..cases)
+        .map(|i| lean_diff::render("r", &[lean_diff::generate(lean_diff::case_seed(seed, i))]))
+        .collect();
+    for kind in lean_diff::GENERATED_INTENTS {
+        assert!(
+            batch.lines().any(|l| l.split(' ').nth(3) == Some(kind)),
+            "the {cases} sequences of seed {seed} never produce `{kind}`"
+        );
+    }
     if let Err(report) = lean_diff::run(&lean_dir(), seed, cases) {
         panic!("{report}");
     }
