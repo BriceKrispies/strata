@@ -24,7 +24,8 @@
 //      The test phase is timed by step and by test binary, from the run it makes. "The test suite fits
 //      its budget" fails when the phase passes fullBudgetSeconds or a binary passes binaryCapSeconds
 //      (scripts/test-tiers.json). No flag waives it; --no-test judges the recorded measurement.
-//   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata): validate the
+//   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata), reading this checkout's
+//      specification (spec-hash.mjs: the gate fails when Exegra reads another one): validate the
 //      specification, evaluate its claims.
 //   3. Evidence (scripts/gate-evidence.mjs): every requirement of a started milestone (gate.json) has a
 //      passing proof: a Rust test or Lean theorem with a `Verifies: <REF>` line that the recorded results show
@@ -65,12 +66,14 @@ import { readWorkspace } from './test-select.mjs';
 import { measuredRecord, parseCargoLog, readTiers, routineSeconds, suiteVerdict, tierProblems } from './test-tiers.mjs';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
 import { readSpecValue, specSha256 } from './spec-parts.mjs';
-import { envelopeProblems, productArgs, savedTraces, semanticHashDetail, traceFreshness } from './spec-hash.mjs';
+import { checkoutHash, checkoutSpecs, envelopeProblems, productArgs, savedTraces, traceFreshness } from './spec-hash.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const exegraHome = resolve(root, process.env.EXEGRA_HOME ?? '../exegra');
-// The Exegra project that links this checkout's specification (a worktree links its own).
+// The Exegra project of this checkout's specification, read from the specs directory the checkout
+// links itself into (spec-hash.mjs), so every Exegra call here reads this checkout and no other.
 const exegraProject = process.env.EXEGRA_PROJECT ?? 'strata';
+const exegraSpecs = checkoutSpecs(root, exegraProject);
 const resultsDir = resolve(root, 'var/test-results');
 const recordPath = join(resultsDir, 'gate-record.json');
 const specPath = resolve(root, 'specifications/spec.jsonc');
@@ -129,7 +132,7 @@ const exegraRuns = new Map();
 function runExegra(command) {
   if (!exegraRuns.has(command)) {
     const cli = resolve(exegraHome, 'cli/exegra.js');
-    exegraRuns.set(command, run(process.execPath, [cli, command, '--project', exegraProject, ...(process.env.EXEGRA_SPECS ? ['--specs', process.env.EXEGRA_SPECS] : [])], { cwd: exegraHome }));
+    exegraRuns.set(command, run(process.execPath, [cli, command, '--project', exegraProject, '--specs', exegraSpecs], { cwd: exegraHome }));
   }
   return exegraRuns.get(command);
 }
@@ -274,12 +277,19 @@ if (started.size === 0) check('gate.json names started milestones', false, 'star
 // ---------------------------------------------------------------------------------------------
 {
   // The semantic hash the generated files must name: the specification as Exegra reads it now.
-  const found = existsSync(resolve(exegraHome, 'cli/exegra.js'))
-    ? semanticHashDetail(exegraHome, exegraProject)
-    : { hash: null, reason: `no cli/exegra.js under ${exegraHome} (set EXEGRA_HOME and EXEGRA_PROJECT)` };
+  const exegraHere = existsSync(resolve(exegraHome, 'cli/exegra.js'));
+  const found = exegraHere
+    ? checkoutHash(exegraHome, root, exegraProject)
+    : { hash: null, reason: `no cli/exegra.js under ${exegraHome} (set EXEGRA_HOME and EXEGRA_PROJECT)`, mismatch: null };
   const hash = found.hash;
   check('exegra reports the specification semantic hash (generated files and saved traces name it)', hash !== null,
     hash ?? found.reason);
+  // Exegra must have read this checkout's specification, not another one: a hash of another file
+  // would stamp the generated headers and let the comparison below pass against it.
+  if (exegraHere) {
+    check(`exegra reads this checkout's specification (project ${exegraProject} in ${found.specs})`, found.mismatch === null,
+      found.mismatch === null ? `${found.read}` : `${found.mismatch}; this checkout is ${found.given}`);
+  }
   const hashArgs = hash ? ['--spec-hash', hash] : [];
   const products = productArgs(root);
   const specc = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',

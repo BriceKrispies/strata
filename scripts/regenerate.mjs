@@ -38,16 +38,22 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { productArgs, semanticHashDetail } from './spec-hash.mjs';
+import { checkoutHash, productArgs } from './spec-hash.mjs';
 import { writeTokens } from './ui-tokens.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const libs = [join(root, 'crates', 'model', 'src', 'lib.rs'), join(root, 'crates', 'model-core', 'src', 'lib.rs')];
-// The specification's semantic hash from Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT,
-// default strata). Every generated file's header records it, so a file made from another version
-// of the specification is visibly stale and the gate fails on it.
+// The semantic hash of this checkout's specification, from Exegra (EXEGRA_HOME, default ../exegra;
+// EXEGRA_PROJECT, default strata). Every generated file's header records it, so a file made from
+// another version of the specification is visibly stale and the gate fails on it. The hash is taken
+// from this checkout's own specification (spec-hash.mjs, checkoutHash), never from the project
+// Exegra registers under the name, which may point at another checkout.
 const exegraHome = resolve(root, process.env.EXEGRA_HOME ?? '../exegra');
-const { hash: specHash, reason } = semanticHashDetail(exegraHome, process.env.EXEGRA_PROJECT ?? 'strata');
+const { hash: specHash, reason, mismatch } = checkoutHash(exegraHome, root, process.env.EXEGRA_PROJECT ?? 'strata');
+if (mismatch) {
+  console.error(`regenerate: ${mismatch}. The headers would name another specification's hash; unset EXEGRA_SPECS or point it at this checkout's specs directory.`);
+  process.exit(1);
+}
 if (!specHash) {
   console.error(`regenerate: Exegra gave no semantic hash, and the headers need it: ${reason}`);
   process.exit(1);

@@ -6,9 +6,14 @@
 //
 //   node scripts/record-trace.mjs <scenario> --project <id> --specs <dir> --out <file>
 //
-// writes a saved trace. This module is shared by that script, `regenerate.mjs` and the gate.
+// writes a saved trace. This module is shared by that script, `regenerate.mjs`, `test-changed.mjs`,
+// `test-module.mjs` and the gate.
+//
+// The checkout's own hash comes from checkoutHash: Exegra's project file for the name may point at
+// another checkout's specification (specs/strata/project.jsonc names the main checkout), so the
+// checkout links itself into var/exegra-specs and asks Exegra with --specs for that directory.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 /**
@@ -73,16 +78,95 @@ export function envelopeProblems(envelope) {
   return lines;
 }
 
+/** The checkout's own specification file. */
+export function checkoutSpecPath(root) {
+  return resolve(root, 'specifications', 'spec.jsonc');
+}
+
 /**
- * The semantic hash `exegra validate` reports for a project, and when there is none, why not:
- * the validation errors Exegra printed, or what went wrong running it.
+ * The specs directory Exegra reads the checkout's project from. var/exegra-specs/<project>/project.jsonc
+ * names this checkout's specification by a path relative to that project directory (Exegra refuses an
+ * absolute one), so every Exegra call for the checkout reads its own specification whatever
+ * Exegra's registered project for the name points at. EXEGRA_SPECS, when set, names the directory
+ * instead; checkoutHash then reports when that directory names another specification.
+ * @returns {string} the specs directory
+ */
+export function checkoutSpecs(root, project) {
+  if (process.env.EXEGRA_SPECS) return resolve(process.env.EXEGRA_SPECS);
+  const specs = resolve(root, 'var', 'exegra-specs');
+  const projectDir = join(specs, project);
+  const spec = relative(projectDir, checkoutSpecPath(root)).split(sep).join('/');
+  const body = `${JSON.stringify({ spec }, null, 2)}\n`;
+  let current = null;
+  try {
+    current = readFileSync(join(projectDir, 'project.jsonc'), 'utf8');
+  } catch {
+    current = null;
+  }
+  if (current !== body) {
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, 'project.jsonc'), body);
+  }
+  return specs;
+}
+
+/**
+ * The specification file Exegra says it read for `project` in `specs`, or null when it names none.
+ * `project list` reports each project's specification as Exegra resolves it (relative to the
+ * directory holding the specs directory, forward slashes).
+ */
+export function exegraSpecPath(exegraHome, specs, project) {
+  const envelope = exegraJson(exegraHome, ['project', 'list', '--specs', specs]);
+  const entry = Array.isArray(envelope?.result) ? envelope.result.find((p) => p?.name === project) : undefined;
+  if (typeof entry?.spec !== 'string') return null;
+  return resolve(dirname(specs), entry.spec);
+}
+
+/** The specification path a project file in `specs` names, resolved as Exegra resolves it, or null. */
+function specNamedByProjectFile(specs, project) {
+  try {
+    const value = JSON.parse(readFileSync(join(specs, project, 'project.jsonc'), 'utf8'));
+    return typeof value?.spec === 'string' ? resolve(specs, project, value.spec) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Why the specification `read` is not the checkout's own `given` file, naming both paths; null when
+ * they are the same file. `read` null means Exegra named no specification for the project.
+ * @returns {string | null}
+ */
+export function specMismatch(given, read) {
+  if (read === null || read === undefined) return 'Exegra named no specification for this project in the specs directory';
+  const same = process.platform === 'win32' ? resolve(given).toLowerCase() === resolve(read).toLowerCase() : resolve(given) === resolve(read);
+  if (same) return null;
+  return `Exegra read the specification at ${read}, but this checkout's specification is at ${resolve(given)}`;
+}
+
+/**
+ * The semantic hash of this checkout's specification as Exegra reads it, with the directory it was
+ * asked about and the specification it says it read. `mismatch` is set when that is not this
+ * checkout's own specification (the gate and regenerate refuse it).
+ * @returns {{ hash: string | null, reason: string | null, specs: string, given: string, read: string | null, mismatch: string | null }}
+ */
+export function checkoutHash(exegraHome, root, project) {
+  const specs = checkoutSpecs(root, project);
+  const { hash, reason } = semanticHashDetail(exegraHome, project, specs);
+  const given = checkoutSpecPath(root);
+  const read = exegraSpecPath(exegraHome, specs, project) ?? specNamedByProjectFile(specs, project);
+  return { hash, reason, specs, given, read, mismatch: specMismatch(given, read) };
+}
+
+/**
+ * The semantic hash `exegra validate` reports for a project in a specs directory, and when there is
+ * none, why not: the validation errors Exegra printed, or what went wrong running it. Callers of a
+ * checkout use checkoutHash, which names the directory.
  * @returns {{ hash: string | null, reason: string | null }}
  */
 export function semanticHashDetail(exegraHome, project, specs) {
-  // EXEGRA_SPECS names a specs directory outside the Exegra checkout (a project there needs no
-  // registration in Exegra itself).
-  specs ??= process.env.EXEGRA_SPECS || undefined;
-  const args = ['validate', '--project', project, ...(specs ? ['--specs', specs] : [])];
+  if (!specs) throw new TypeError('semanticHashDetail needs a specs directory (checkoutSpecs names one for a checkout)');
+  const args = ['validate', '--project', project, '--specs', specs];
   const { envelope, problem } = exegraRun(exegraHome, args);
   const hash = envelope?.semanticHash;
   if (typeof hash === 'string' && hash.length > 0) return { hash, reason: null };
