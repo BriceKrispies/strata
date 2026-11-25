@@ -47,8 +47,15 @@ fn emoji_form(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len() + 4);
     for (i, &c) in chars.iter().enumerate() {
+        let next = chars.get(i + 1).copied();
+        // UTS #51: a skin tone modifier sequence is fully qualified without VS16, so a VS16 before
+        // a skin tone is dropped and none is added before one.
+        let before_modifier = next.is_some_and(is_skin_tone);
+        if c == VS16 && before_modifier {
+            continue;
+        }
         out.push(c);
-        if text_default_emoji(c) && chars.get(i + 1) != Some(&VS16) {
+        if text_default_emoji(c) && next != Some(VS16) && !before_modifier {
             out.push(VS16);
         }
     }
@@ -57,6 +64,11 @@ fn emoji_form(text: &str) -> String {
     } else {
         text.to_string()
     }
+}
+
+/// Emoji_Modifier=Yes: the skin tones U+1F3FB to U+1F3FF, the only scalars with that property.
+fn is_skin_tone(c: char) -> bool {
+    ('\u{1F3FB}'..='\u{1F3FF}').contains(&c)
 }
 
 /// Emoji=Yes without Emoji_Presentation: an emoji only with VS16 (or a skin tone modifier) after it.
