@@ -137,6 +137,8 @@ impl Reads {
             | Expr::Len(a)
             | Expr::Lower(a)
             | Expr::IsSlug(a)
+            | Expr::Graphemes(a)
+            | Expr::IsEmoji(a)
             | Expr::Duration(_, a)
             | Expr::Text(a) => self.expr(schema, base, a),
             Expr::And(items) | Expr::Or(items) => {

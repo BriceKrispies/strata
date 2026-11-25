@@ -2,7 +2,7 @@
 // @ts-check
 // Tenant rule language (`tenant-rule-language`): its parser, printer, static checker and evaluator, generated from the language entity and specc's primitive catalogue. This is the JavaScript twin of the Rust module `tenant_rule_language`: the same operators, the same null handling, the same evaluation order and the same error words.
 //
-// The expression language tenants write constraints, policy conditions, workflow guards, defaults and query filters in. Parsed, printed and checked as crates/model-core/src/tenant_rule_language.rs; evaluated as crates/kernel/src/expr.rs.
+// The expression language tenants write constraints, policy conditions, workflow guards, defaults and query filters in. Parsed, printed and checked as crates/model-core/src/tenant_rule_language.rs; evaluated as crates/kernel/src/expr.rs. Two length functions differ on purpose. len(x) counts Unicode scalar values (code points) of a text and the elements of a list; it is the storage size a text is held to and keeps that meaning. graphemes(x) counts extended grapheme clusters (UAX #29), the characters a reader sees: a combining sequence, a ZWJ emoji sequence, a flag or a keycap counts as one, so graphemes('👨‍👩‍👧') is 1 where len is 5. is_emoji(x) is true when x is exactly one emoji grapheme, a single emoji presentation of an emoji character, a ZWJ sequence, a flag, a keycap or a tag sequence (WG-5597).
 //
 // Representation. An expression and a value are the JSON of the declared union types `expr` and `value`, externally tagged as serde writes the Rust types: a variant without fields is its name as a string ('Null', 'Now'), a variant with one unnamed field is { Name: payload }, a variant with named fields is { Name: { field: ... } }. A scope or a case field is the name of its enum value. An expression the server sends is evaluated as it stands. Values and expressions are never changed.
 //
@@ -43,6 +43,8 @@
 // - `contains`: call `contains(...)`; primitive `contains`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Contains`.
 // - `starts-with`: call `starts_with(...)`; primitive `starts-with`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::StartsWith`.
 // - `is-slug`: call `is_slug(...)`; primitive `is-slug`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::IsSlug -> is_slug`.
+// - `graphemes`: call `graphemes(...)`; primitive `graphemes`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Graphemes -> graphemes`.
+// - `is-emoji`: call `is_emoji(...)`; primitive `is-emoji`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::IsEmoji -> is_emoji`.
 // - `if`: call `if(...)`; primitive `if`, nulls `null-is-false`; pinned to `crates/kernel/src/expr.rs: eval, Expr::If`.
 // - `add`: infix `+`, precedence 5, left; primitive `add-checked`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Add) -> checked`.
 // - `sub`: infix `-`, precedence 5, left; primitive `sub-checked`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Sub) -> checked`.
@@ -541,6 +543,14 @@ class Parser {
           const [a0] = this.args(1);
           return { IsSlug: a0 };
         }
+        case 'graphemes': {
+          const [a0] = this.args(1);
+          return { Graphemes: a0 };
+        }
+        case 'is_emoji': {
+          const [a0] = this.args(1);
+          return { IsEmoji: a0 };
+        }
         case 'if': {
           const [a0, a1, a2] = this.args(3);
           return { If: [a0, a1, a2] };
@@ -742,6 +752,14 @@ export function print(expr) {
     case 'IsSlug': {
       const v0 = p;
       return `is_slug(${print(v0)})`;
+    }
+    case 'Graphemes': {
+      const v0 = p;
+      return `graphemes(${print(v0)})`;
+    }
+    case 'IsEmoji': {
+      const v0 = p;
+      return `is_emoji(${print(v0)})`;
     }
     case 'If': {
       const [v0, v1, v2] = p;
@@ -969,6 +987,52 @@ export function isSlug(s) {
   return s !== '' && s.split('-').every((part) => /^[a-z0-9]+$/.test(part));
 }
 
+/**
+ * The number of extended grapheme clusters of a string (UAX #29): the characters a reader sees.
+ * @param {string} s
+ * @returns {number}
+ */
+function graphemeCount(s) {
+  let count = 0;
+  for (const _ of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)) count += 1;
+  return count;
+}
+
+/**
+ * Whether a string is exactly one emoji grapheme (WG-5597), by the same rule as the Rust crate.
+ * @param {string} s
+ * @returns {boolean}
+ */
+export function isEmoji(s) {
+  const graphemes = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)].map((g) => g.segment);
+  return graphemes.length === 1 && isEmojiGrapheme(graphemes[0]);
+}
+
+/** Whether one grapheme is an emoji: a keycap, a flag, a subdivision tag sequence, or ZWJ-joined parts. */
+function isEmojiGrapheme(g) {
+  const s = Array.from(g);
+  const inRange = (c, lo, hi) => c.codePointAt(0) >= lo && c.codePointAt(0) <= hi;
+  const regional = (c) => inRange(c, 0x1f1e6, 0x1f1ff);
+  const keycapBase = (c) => /^[0-9#*]$/.test(c);
+  const isEmojiChar = (c) => /^\p{Emoji}$/u.test(c);
+  const isPresentation = (c) => /^\p{Emoji_Presentation}$/u.test(c);
+  const isModifier = (c) => /^\p{Emoji_Modifier}$/u.test(c);
+  const isModifierBase = (c) => /^\p{Emoji_Modifier_Base}$/u.test(c);
+  const keycap = (s.length === 2 || (s.length === 3 && s[1] === '\ufe0f')) && s[s.length - 1] === '\u20e3' && keycapBase(s[0]);
+  if (keycap || (s.length === 2 && regional(s[0]) && regional(s[1]))) return true;
+  if (s.length >= 3 && s[0] === '\u{1f3f4}' && s[s.length - 1] === '\u{e007f}' && s.slice(1, -1).every((c) => inRange(c, 0xe0020, 0xe007e))) return true;
+  return g.split('\u200d').every((part) => {
+    const p = Array.from(part);
+    if (p.length === 0) return false;
+    const [base, ...rest] = p;
+    if (!isEmojiChar(base) || regional(base) || keycapBase(base)) return false;
+    const modifier = rest.length > 0 && isModifier(rest[0]) && isModifierBase(base);
+    const tail = modifier ? rest.slice(1) : rest;
+    const vs16 = tail.length === 1 && tail[0] === '\ufe0f';
+    return (tail.length === 0 || vs16) && (isPresentation(base) || modifier || vs16);
+  });
+}
+
 /** The largest magnitude of an integer of checked arithmetic, 2^53-1: what Rust and JavaScript both hold exactly. */
 const SAFE_INT = 9007199254740991;
 
@@ -1166,6 +1230,22 @@ export function evaluate(expr, env) {
       if (t === 'Null') return 'Null';
       if (t === 'Str') return { Bool: isSlug(x) };
       throw typeError('is_slug', a);
+    }
+    case 'Graphemes': {
+      const v0 = p;
+      const a = evaluate(v0, env);
+      const [t, x] = parts(a);
+      if (t === 'Null') return 'Null';
+      if (t === 'Str') return { Int: graphemeCount(x) };
+      throw typeError('graphemes', a);
+    }
+    case 'IsEmoji': {
+      const v0 = p;
+      const a = evaluate(v0, env);
+      const [t, x] = parts(a);
+      if (t === 'Null') return 'Null';
+      if (t === 'Str') return { Bool: isEmoji(x) };
+      throw typeError('is_emoji', a);
     }
     case 'If': {
       const [v0, v1, v2] = p;
@@ -1535,6 +1615,16 @@ export function check(expr, env) {
     case 'IsSlug': {
       const v0 = p;
       expectShape(check(v0, env), ['str'], 'is_slug');
+      return 'bool';
+    }
+    case 'Graphemes': {
+      const v0 = p;
+      expectShape(check(v0, env), ['str'], 'graphemes');
+      return 'int';
+    }
+    case 'IsEmoji': {
+      const v0 = p;
+      expectShape(check(v0, env), ['str'], 'is_emoji');
       return 'bool';
     }
     case 'If': {

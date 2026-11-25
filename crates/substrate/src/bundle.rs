@@ -160,6 +160,10 @@ pub struct FieldSpec {
     /// (D-6584); a type with such a field declares its retention.
     #[serde(default)]
     pub personal: Option<PersonalDeclaration>,
+    /// How a text value is stored (WG-5597): `nfc`, or `emoji` for the VS16 form of an emoji. Left out,
+    /// the value is stored as written.
+    #[serde(default)]
+    pub normalise: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -455,6 +459,14 @@ impl Bundle {
                         default: optional(&field.default).map_err(|e| format!("{at}: {e}"))?,
                         read: optional(&field.read).map_err(|e| format!("{at}: {e}"))?,
                         personal: field.personal.clone(),
+                        normalise: match field.normalise.as_deref() {
+                            None => None,
+                            Some("nfc") => Some(Normalisation::Nfc),
+                            Some("emoji") => Some(Normalisation::Emoji),
+                            Some(other) => {
+                                return Err(format!("{at}: unknown normalise {other:?}"))
+                            }
+                        },
                     },
                 });
             }

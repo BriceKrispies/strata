@@ -769,6 +769,7 @@ impl CorpusTenant for EnterpriseTenant {
             default: None,
             read: None,
             personal: None,
+            normalise: None,
         };
         // Later than any version the file declares, and rising with every upgrade of the run.
         let version = format!("99.0.{n}");
@@ -803,6 +804,7 @@ impl CorpusTenant for EnterpriseTenant {
                 default: None,
                 read: None,
                 personal: None,
+                normalise: None,
             },
         }])
     }

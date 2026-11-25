@@ -282,6 +282,8 @@ impl Sub<'_> {
             Expr::Len(a) => Expr::Len(Box::new(self.expr(base, a)?)),
             Expr::Lower(a) => Expr::Lower(Box::new(self.expr(base, a)?)),
             Expr::IsSlug(a) => Expr::IsSlug(Box::new(self.expr(base, a)?)),
+            Expr::Graphemes(a) => Expr::Graphemes(Box::new(self.expr(base, a)?)),
+            Expr::IsEmoji(a) => Expr::IsEmoji(Box::new(self.expr(base, a)?)),
             Expr::Text(a) => Expr::Text(Box::new(self.expr(base, a)?)),
             Expr::Duration(unit, a) => Expr::Duration(*unit, Box::new(self.expr(base, a)?)),
             Expr::And(items) => Expr::And(self.exprs(base, items)?),

@@ -1267,6 +1267,8 @@ fn followed(expr: &Expr, out: &mut BTreeSet<String>) {
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => followed(a, out),
         Expr::And(items) | Expr::Or(items) => {

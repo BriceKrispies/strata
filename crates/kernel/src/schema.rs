@@ -616,6 +616,8 @@ fn mentions_field(expr: &Expr) -> bool {
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => mentions_field(a),
         Expr::And(items) | Expr::Or(items) => items.iter().any(mentions_field),

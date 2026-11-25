@@ -86,6 +86,7 @@ fn declared(
                 subject,
                 searchable: false,
             }),
+            normalise: None,
         },
     )
 }

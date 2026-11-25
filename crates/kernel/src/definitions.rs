@@ -304,6 +304,8 @@ pub fn expr_nodes(expr: &Expr) -> usize {
         | Expr::Len(a)
         | Expr::Lower(a)
         | Expr::IsSlug(a)
+        | Expr::Graphemes(a)
+        | Expr::IsEmoji(a)
         | Expr::Duration(_, a)
         | Expr::Text(a) => expr_nodes(a),
         Expr::And(items) | Expr::Or(items) => items.iter().map(expr_nodes).sum(),

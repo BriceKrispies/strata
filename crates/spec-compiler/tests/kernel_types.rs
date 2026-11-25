@@ -178,6 +178,7 @@ fn field_def(id: &str, ty: FieldType, default: Option<Expr>) -> FieldDef {
         default,
         read: None,
         personal: None,
+        normalise: None,
     }
 }
 

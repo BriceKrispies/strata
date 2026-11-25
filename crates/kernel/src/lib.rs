@@ -37,6 +37,7 @@ pub mod ledger;
 pub mod ledger_expiry;
 pub mod ledger_policy;
 pub mod limits;
+pub mod normalise;
 pub mod object_meta;
 pub mod operations;
 pub mod products;

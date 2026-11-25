@@ -19,6 +19,9 @@ sha2.workspace = true
 # The kernel's data types, generated from the specification. Pure: serde, serde_json, regex and
 # uuid with its serde feature only (KRN-012).
 strata-model-core.workspace = true
+# Normalisation on write (WG-5597): Unicode NFC, and the emoji properties of the VS16 form. Pure data.
+unicode-normalization.workspace = true
+unicode-properties.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

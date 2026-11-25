@@ -285,6 +285,10 @@ pub enum Prim {
     StartsWith,
     /// `is-slug`
     IsSlug,
+    /// `graphemes`
+    Graphemes,
+    /// `is-emoji`
+    IsEmoji,
     /// `if`
     If,
     /// `has-role`
@@ -350,6 +354,8 @@ impl Prim {
                 | Prim::Lower
                 | Prim::StartsWith
                 | Prim::IsSlug
+                | Prim::Graphemes
+                | Prim::IsEmoji
                 | Prim::AddChecked
                 | Prim::SubChecked
                 | Prim::MulChecked
@@ -439,6 +445,8 @@ pub const PRIMITIVES: &[PrimitiveInfo] = &[
     prim("contains", Prim::Contains, Arity::Fixed(2), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::Contains"),
     prim("starts-with", Prim::StartsWith, Arity::Fixed(2), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::StartsWith"),
     prim("is-slug", Prim::IsSlug, Arity::Fixed(1), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::IsSlug -> is_slug"),
+    prim("graphemes", Prim::Graphemes, Arity::Fixed(1), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::Graphemes -> graphemes"),
+    prim("is-emoji", Prim::IsEmoji, Arity::Fixed(1), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::IsEmoji -> is_emoji"),
     prim("if", Prim::If, Arity::Fixed(3), &["call"], "null-is-false", None, "crates/kernel/src/expr.rs: eval, Expr::If"),
     prim("has-role", Prim::HasRole, Arity::Fixed(0), &["scope"], "total", Some("role-test"), "crates/kernel/src/expr.rs: eval, Expr::HasRole; crates/substrate/src/syntax.rs: primary, \"has_role\""),
     prim("now", Prim::Now, Arity::Fixed(0), &["scope"], "total", Some("constant"), "crates/kernel/src/expr.rs: eval, Expr::Now"),
@@ -1626,6 +1634,7 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
             | Prim::Not3
             | Prim::IsNull
             | Prim::IsSlug
+            | Prim::IsEmoji
             | Prim::If
             | Prim::HasRole
             | Prim::Eq
@@ -1634,6 +1643,7 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
             Prim::InList => &["null", "bool", "list"],
             Prim::Len => &["null", "int", "string", "list"],
             Prim::Lower => &["null", "string"],
+            Prim::Graphemes => &["null", "int", "string"],
             Prim::Contains => &["null", "bool", "string", "list"],
             Prim::StartsWith => &["null", "bool", "string"],
             Prim::Now => &["time"],
@@ -3725,6 +3735,97 @@ impl<'a> Plan<'a> {
                 }
             });
         }
+        if self.uses(Prim::Graphemes) {
+            helpers.push(quote! {
+                /// The number of extended grapheme clusters of a string (UAX #29): the characters a reader sees.
+                pub fn graphemes(s: &str) -> i64 {
+                    use unicode_segmentation::UnicodeSegmentation;
+                    s.graphemes(true).count() as i64
+                }
+            });
+        }
+        if self.uses(Prim::IsEmoji) {
+            helpers.push(quote! {
+                /// Whether a string is exactly one emoji grapheme (WG-5597).
+                pub fn is_emoji(s: &str) -> bool {
+                    use unicode_segmentation::UnicodeSegmentation;
+                    let mut graphemes = s.graphemes(true);
+                    match (graphemes.next(), graphemes.next()) {
+                        (Some(grapheme), None) => is_emoji_grapheme(grapheme),
+                        _ => false,
+                    }
+                }
+
+                /// Whether one grapheme is an emoji (WG-5597): a keycap, a flag, a subdivision tag sequence, or
+                /// ZWJ-joined parts. A part is a base with an emoji presentation (Emoji_Presentation, or a
+                /// text-default Emoji followed by VS16 or a skin tone modifier), and no other scalar.
+                fn is_emoji_grapheme(grapheme: &str) -> bool {
+                    let s: Vec<char> = grapheme.chars().collect();
+                    let regional = |c: char| ('\u{1F1E6}'..='\u{1F1FF}').contains(&c);
+                    let keycap_base = |c: char| matches!(c, '0'..='9' | '#' | '*');
+                    let keycap = match s.as_slice() {
+                        [k, '\u{20E3}'] | [k, '\u{FE0F}', '\u{20E3}'] => keycap_base(*k),
+                        _ => false,
+                    };
+                    if keycap || (s.len() == 2 && regional(s[0]) && regional(s[1])) {
+                        return true;
+                    }
+                    if s.len() >= 3
+                        && s[0] == '\u{1F3F4}'
+                        && s[s.len() - 1] == '\u{E007F}'
+                        && s[1..s.len() - 1].iter().all(|c| ('\u{E0020}'..='\u{E007E}').contains(c))
+                    {
+                        return true;
+                    }
+                    grapheme.split('\u{200D}').all(|part| {
+                        let p: Vec<char> = part.chars().collect();
+                        let Some((&base, rest)) = p.split_first() else {
+                            return false;
+                        };
+                        if !emoji_char(base) || regional(base) || keycap_base(base) {
+                            return false;
+                        }
+                        let modifier = matches!(rest.first(), Some(&m) if emoji_modifier(m) && emoji_modifier_base(base));
+                        let tail = if modifier { &rest[1..] } else { rest };
+                        let vs16 = matches!(tail, ['\u{FE0F}']);
+                        (tail.is_empty() || vs16) && (emoji_presentation(base) || modifier || vs16)
+                    })
+                }
+
+                /// Whether a scalar has Emoji=Yes.
+                fn emoji_char(c: char) -> bool {
+                    use unicode_properties::emoji::{EmojiStatus, UnicodeEmoji};
+                    !matches!(c.emoji_status(), EmojiStatus::NonEmoji | EmojiStatus::NonEmojiButEmojiComponent)
+                }
+
+                /// Whether a scalar has Emoji_Presentation=Yes.
+                fn emoji_presentation(c: char) -> bool {
+                    use unicode_properties::emoji::{EmojiStatus, UnicodeEmoji};
+                    matches!(
+                        c.emoji_status(),
+                        EmojiStatus::EmojiPresentation
+                            | EmojiStatus::EmojiPresentationAndModifierBase
+                            | EmojiStatus::EmojiPresentationAndEmojiComponent
+                            | EmojiStatus::EmojiPresentationAndModifierAndEmojiComponent
+                    )
+                }
+
+                /// Whether a scalar has Emoji_Modifier=Yes (the skin tones).
+                fn emoji_modifier(c: char) -> bool {
+                    use unicode_properties::emoji::{EmojiStatus, UnicodeEmoji};
+                    matches!(c.emoji_status(), EmojiStatus::EmojiPresentationAndModifierAndEmojiComponent)
+                }
+
+                /// Whether a scalar has Emoji_Modifier_Base=Yes.
+                fn emoji_modifier_base(c: char) -> bool {
+                    use unicode_properties::emoji::{EmojiStatus, UnicodeEmoji};
+                    matches!(
+                        c.emoji_status(),
+                        EmojiStatus::EmojiModifierBase | EmojiStatus::EmojiPresentationAndModifierBase
+                    )
+                }
+            });
+        }
         if self.ops.iter().any(|o| o.info.prim.checked_int()) {
             let safe_int = Literal::i64_unsuffixed(SAFE_INT);
             let overflow = lit_str(INTEGER_OVERFLOW);
@@ -3927,6 +4028,29 @@ impl<'a> Plan<'a> {
                         (#null, _) | (_, #null) => #null,
                         (#s(t), #s(p)) => #b(t.starts_with(p.as_str())),
                         (other, _) => return Err(type_error(#label, &other)),
+                    }
+                }
+            }
+            Prim::Graphemes => {
+                let x = e(0);
+                let (s, i) = (self.value("string"), self.value("int"));
+                quote! {
+                    match eval(#x, env)? {
+                        #null => #null,
+                        #s(s) => #i(graphemes(&s)),
+                        other => return Err(type_error(#label, &other)),
+                    }
+                }
+            }
+            Prim::IsEmoji => {
+                let x = e(0);
+                let s = self.value("string");
+                let b = b();
+                quote! {
+                    match eval(#x, env)? {
+                        #null => #null,
+                        #s(s) => #b(is_emoji(&s)),
+                        other => return Err(type_error(#label, &other)),
                     }
                 }
             }
@@ -4235,6 +4359,26 @@ impl<'a> Plan<'a> {
                 l.push(format!(
                     "if (ta === {str_} && tb === {str_}) return {};",
                     self.jval("bool", "pa.startsWith(pb)")
+                ));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::Graphemes => {
+                let mut l = one(e(0));
+                l.push(format!("if (t === {null}) return {null};"));
+                l.push(format!(
+                    "if (t === {str_}) return {};",
+                    self.jval("int", "graphemeCount(x)")
+                ));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::IsEmoji => {
+                let mut l = one(e(0));
+                l.push(format!("if (t === {null}) return {null};"));
+                l.push(format!(
+                    "if (t === {str_}) return {};",
+                    self.jval("bool", "isEmoji(x)")
                 ));
                 l.push(format!("throw typeError({label}, a);"));
                 l
@@ -5328,6 +5472,12 @@ impl<'a> Plan<'a> {
         }
         if self.uses(Prim::IsSlug) {
             b.push(jt::J_IS_SLUG.to_string());
+        }
+        if self.uses(Prim::Graphemes) || self.uses(Prim::IsEmoji) {
+            b.push(jt::J_GRAPHEMES.to_string());
+        }
+        if self.uses(Prim::IsEmoji) {
+            b.push(jt::J_IS_EMOJI.to_string());
         }
         if self.ops.iter().any(|o| o.info.prim.checked_int()) {
             b.push(jt::J_SAFE.to_string());

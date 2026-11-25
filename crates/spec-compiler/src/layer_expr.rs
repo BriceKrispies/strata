@@ -506,6 +506,8 @@ const CALLS: &[(&str, usize)] = &[
     ("contains", 2),
     ("starts_with", 2),
     ("is_slug", 1),
+    ("graphemes", 1),
+    ("is_emoji", 1),
     ("if", 3),
     ("ms_between", 2),
     ("days", 1),
@@ -1272,6 +1274,24 @@ fn call_shape(pos: usize, name: &str, args: &[Node], env: &Env<'_>) -> Result<Sh
                 shape_of(&args[0], env)?,
                 &[Shape::Str],
                 "is_slug",
+                args[0].pos,
+            )?;
+            Ok(Shape::Bool)
+        }
+        "graphemes" => {
+            expect_shape(
+                shape_of(&args[0], env)?,
+                &[Shape::Str],
+                "graphemes",
+                args[0].pos,
+            )?;
+            Ok(Shape::Int)
+        }
+        "is_emoji" => {
+            expect_shape(
+                shape_of(&args[0], env)?,
+                &[Shape::Str],
+                "is_emoji",
                 args[0].pos,
             )?;
             Ok(Shape::Bool)

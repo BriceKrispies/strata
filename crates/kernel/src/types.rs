@@ -26,6 +26,9 @@ pub use strata_model_core::types::{
     DataSubject, PersonalDeclaration, PersonalKind, RetentionRule, RetentionStart,
 };
 
+/// How a field stores a text value written to it (WG-5597): see [`crate::normalise`].
+pub use strata_model_core::types::Normalisation;
+
 /// The operator of checked arithmetic and the unit of a duration in the rule language (D-6540,
 /// D-6541).
 pub use strata_model_core::types::{ArithOp, DurationUnit};
