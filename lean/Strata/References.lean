@@ -19,6 +19,7 @@ No `sorry`, no added axioms. `Audit.lean` prints the axioms each theorem depends
 -/
 
 import Strata.Model
+import Strata.StepParts
 
 namespace Strata
 
@@ -871,37 +872,29 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : PrincipalId) (i : Intent)
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h
     | some o =>
-      simp only [stepTenant, hT] at h
-      split at h
-      · cases h
-      · cases hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId
-            (newRecord o.schema p fs) with
-        | some e => simp [hP] at h
-        | none =>
-          simp only [hP] at h
-          have ht := Except.ok.inj h
-          subst ht
-          have hinc : ∀ k x, Records.has (t.env k) x = true →
-              Records.has ((t.putType ty { o with records := (t.nextId, newRecord o.schema p fs) ::
-                o.records }).env k) x = true := by
-            intro k x hx
-            rw [env_putType t ty o _ hT k]
-            by_cases hk : k == ty
-            · rw [if_pos hk]
-              have hk' : k = ty := by simpa using hk
-              subst hk'
-              have hr : t.env k = o.records := by
-                unfold Tenant.env; rw [hT]; simp
-              rw [hr] at hx
-              exact has_cons_of _ hx
-            · rw [if_neg hk]; exact hx
-          have hnew : ∀ q ∈ ({ o with records := (t.nextId, newRecord o.schema p fs) ::
-              o.records } : ObjType).records, q ∈ o.records ∨ refsOk t.env o.schema q.2 = true := by
-            intro q hq
-            rcases List.mem_cons.mp hq with rfl | hq'
-            · right; exact (problem_none hP).2
-            · left; exact hq'
-          exact refsOk_putType hT rfl hrefs hinc hnew
+      obtain ⟨r, -, hP, -, ht⟩ := create_ok_parts hT h
+      subst ht
+      have hinc : ∀ k x, Records.has (t.env k) x = true →
+          Records.has ((t.putType ty { o with records := (t.nextId, r) ::
+            o.records }).env k) x = true := by
+        intro k x hx
+        rw [env_putType t ty o _ hT k]
+        by_cases hk : k == ty
+        · rw [if_pos hk]
+          have hk' : k = ty := by simpa using hk
+          subst hk'
+          have hr : t.env k = o.records := by
+            unfold Tenant.env; rw [hT]; simp
+          rw [hr] at hx
+          exact has_cons_of _ hx
+        · rw [if_neg hk]; exact hx
+      have hnew : ∀ q ∈ ({ o with records := (t.nextId, r) ::
+          o.records } : ObjType).records, q ∈ o.records ∨ refsOk t.env o.schema q.2 = true := by
+        intro q hq
+        rcases List.mem_cons.mp hq with rfl | hq'
+        · right; exact (problem_none hP).2
+        · left; exact hq'
+      exact refsOk_putType hT rfl hrefs hinc hnew
   | update ty id fs ev =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h
@@ -909,48 +902,38 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : PrincipalId) (i : Intent)
       cases hL : o.records.lookup id with
       | none => simp [stepTenant, hT, hL, missingRecord] at h
       | some old =>
-        simp only [stepTenant, hT, hL] at h
-        split at h
-        · cases h
-        · split at h
-          · cases h
-          · cases hP : problem t.limits o.schema o.uniques true t.env o.records id
-                (patched old fs) with
-            | some e => simp [hP] at h
-            | none =>
-              simp only [hP] at h
-              have ht := Except.ok.inj h
-              subst ht
-              have hinc : ∀ k x, Records.has (t.env k) x = true →
-                  Records.has ((t.putType ty { o with records := o.records.map (fun q =>
-                    if q.1 == id then (q.1, patched old fs) else q) }).env k) x = true := by
-                intro k x hx
-                rw [env_putType t ty o _ hT k]
-                by_cases hk : k == ty
-                · rw [if_pos hk]
-                  have hk' : k = ty := by simpa using hk
-                  subst hk'
-                  have hr : t.env k = o.records := by
-                    unfold Tenant.env; rw [hT]; simp
-                  rw [hr] at hx
-                  rw [has_replace]
-                  exact hx
-                · rw [if_neg hk]; exact hx
-              have hnew : ∀ q ∈ ({ o with records := o.records.map (fun q =>
-                  if q.1 == id then (q.1, patched old fs) else q) } : ObjType).records,
-                  q ∈ o.records ∨ refsOk t.env o.schema q.2 = true := by
-                intro q hq
-                obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
-                by_cases hid : (q₀.1 == id) = true
-                · simp only [hid, if_true] at hmap
-                  right
-                  rw [← hmap]
-                  exact (problem_none hP).2
-                · simp only [hid, if_false] at hmap
-                  left
-                  rw [← hmap]
-                  exact hq₀
-              exact refsOk_putType hT rfl hrefs hinc hnew
+        obtain ⟨hP, -, ht⟩ := update_ok_parts hT hL h
+        subst ht
+        have hinc : ∀ k x, Records.has (t.env k) x = true →
+            Records.has ((t.putType ty { o with records := o.records.map (fun q =>
+              if q.1 == id then (q.1, patched old fs) else q) }).env k) x = true := by
+          intro k x hx
+          rw [env_putType t ty o _ hT k]
+          by_cases hk : k == ty
+          · rw [if_pos hk]
+            have hk' : k = ty := by simpa using hk
+            subst hk'
+            have hr : t.env k = o.records := by
+              unfold Tenant.env; rw [hT]; simp
+            rw [hr] at hx
+            rw [has_replace]
+            exact hx
+          · rw [if_neg hk]; exact hx
+        have hnew : ∀ q ∈ ({ o with records := o.records.map (fun q =>
+            if q.1 == id then (q.1, patched old fs) else q) } : ObjType).records,
+            q ∈ o.records ∨ refsOk t.env o.schema q.2 = true := by
+          intro q hq
+          obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+          by_cases hid : (q₀.1 == id) = true
+          · simp only [hid, if_true] at hmap
+            right
+            rw [← hmap]
+            exact (problem_none hP).2
+          · simp only [hid, if_false] at hmap
+            left
+            rw [← hmap]
+            exact hq₀
+        exact refsOk_putType hT rfl hrefs hinc hnew
   | delete ty id ev =>
     have ht := stepTenant_delete_eq h
     subst ht

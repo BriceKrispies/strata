@@ -5,9 +5,10 @@ use strata_lean_kernel_ffi::codec::{
     decode_ctx, decode_field_def, decode_intent, decode_record, decode_refusal, decode_step_result,
     decode_tenant, decode_ty, decode_val, encode_ctx, encode_field_def, encode_intent,
     encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val, Ctx,
-    Elem, FieldDef, Intent, Limits, ObjType, OnDelete, Record, Refusal, StepResult, Tenant, Ty,
+    CmpOp, Elem, Expr, FieldDef, Intent, Limits, ObjType, OnDelete, Record, Refusal, Scope, StepResult,
+    Tenant, Ty,
     Val,
-    MAX_TY_DEPTH,
+    MAX_EXPR_DEPTH, MAX_TY_DEPTH,
 };
 use strata_lean_kernel_ffi::{step, step_reference};
 
@@ -60,11 +61,12 @@ fn fixture_tenant() -> Tenant {
                         ty: Ty::Str,
                         required: true,
                         unique: false,
-                        default: Val::Null,
+                        default: Expr::Lit(Val::Null),
                     },
                 )],
                 uniques: vec![],
                 records: vec![],
+                constraints: vec![],
             },
         )],
         owner: 7,
@@ -76,7 +78,7 @@ fn fixture_tenant() -> Tenant {
 }
 
 const FIXTURE_TENANT: &[u8] = &[
-    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 7, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 7, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
 ];
 
 #[test]
@@ -98,9 +100,9 @@ fn codec_fixtures_match_the_lean_encoder() {
         ty: Ty::Int,
         required: false,
         unique: true,
-        default: Val::Int(-2),
+        default: Expr::Lit(Val::Int(-2)),
     };
-    assert_eq!(encode_field_def(&field), vec![0, 0, 1, 1, 1, 1]);
+    assert_eq!(encode_field_def(&field), vec![0, 0, 1, 0, 1, 1, 1]);
     let record = Record {
         owner: 4,
         version: 1,
@@ -139,6 +141,8 @@ fn codec_fixtures_match_the_lean_encoder() {
     );
     assert_eq!(encode_refusal(&Refusal::LimitExceeded), vec![8]);
     assert_eq!(encode_refusal(&Refusal::UnknownObject), vec![11]);
+    assert_eq!(encode_refusal(&Refusal::ConstraintViolated), vec![12]);
+    assert_eq!(encode_refusal(&Refusal::Evaluation), vec![13]);
     assert_eq!(
         encode_step_result(&StepResult::Refused(Refusal::Unauthorized)),
         vec![0, 1]
@@ -278,11 +282,58 @@ fn gen_ty(rng: &mut Rng, depth: u32) -> Ty {
     }
 }
 
+fn gen_scope(rng: &mut Rng) -> Scope {
+    match rng.below(3) {
+        0 => Scope::Record,
+        1 => Scope::Old,
+        _ => Scope::New,
+    }
+}
+
+fn gen_cmp_op(rng: &mut Rng) -> CmpOp {
+    match rng.below(6) {
+        0 => CmpOp::Eq,
+        1 => CmpOp::Ne,
+        2 => CmpOp::Lt,
+        3 => CmpOp::Le,
+        4 => CmpOp::Gt,
+        _ => CmpOp::Ge,
+    }
+}
+
+/// An expression of bounded nesting: literals, reads, the principal, comparisons, the connectives.
+fn gen_expr(rng: &mut Rng, depth: usize) -> Expr {
+    if depth >= 3 {
+        return Expr::Lit(gen_val(rng));
+    }
+    match rng.below(9) {
+        0 => Expr::Lit(gen_val(rng)),
+        1 => Expr::Field(gen_scope(rng), gen_nat(rng)),
+        2 => Expr::Principal,
+        3 => Expr::Cmp(
+            gen_cmp_op(rng),
+            Box::new(gen_expr(rng, depth + 1)),
+            Box::new(gen_expr(rng, depth + 1)),
+        ),
+        4 => Expr::And(
+            Box::new(gen_expr(rng, depth + 1)),
+            Box::new(gen_expr(rng, depth + 1)),
+        ),
+        5 => Expr::Or(
+            Box::new(gen_expr(rng, depth + 1)),
+            Box::new(gen_expr(rng, depth + 1)),
+        ),
+        6 => Expr::Not(Box::new(gen_expr(rng, depth + 1))),
+        7 => Expr::IsNull(Box::new(gen_expr(rng, depth + 1))),
+        _ => Expr::Lit(Val::Null),
+    }
+}
+
 fn gen_field_def(rng: &mut Rng) -> FieldDef {
     let ty = gen_ty(rng, 0);
     let required = rng.coin();
     let unique = rng.coin();
-    let default = gen_val(rng);
+    let default = gen_expr(rng, 0);
     FieldDef {
         ty,
         required,
@@ -339,10 +390,15 @@ fn gen_obj_type(rng: &mut Rng) -> ObjType {
         let rec = gen_record(rng);
         records.push((id, rec));
     }
+    let mut constraints = Vec::new();
+    for _ in 0..rng.below(3) {
+        constraints.push(gen_expr(rng, 0));
+    }
     ObjType {
         schema,
         uniques,
         records,
+        constraints,
     }
 }
 
@@ -428,7 +484,7 @@ fn gen_intent(rng: &mut Rng) -> Intent {
 }
 
 fn gen_refusal(rng: &mut Rng) -> Refusal {
-    match rng.below(12) {
+    match rng.below(14) {
         0 => Refusal::NoTenant,
         1 => Refusal::Unauthorized,
         2 => Refusal::NotFound,
@@ -440,7 +496,9 @@ fn gen_refusal(rng: &mut Rng) -> Refusal {
         8 => Refusal::LimitExceeded,
         9 => Refusal::UniqueViolated,
         10 => Refusal::InvalidSchema,
-        _ => Refusal::UnknownObject,
+        11 => Refusal::UnknownObject,
+        12 => Refusal::ConstraintViolated,
+        _ => Refusal::Evaluation,
     }
 }
 
@@ -562,4 +620,34 @@ fn non_canonical_and_out_of_range_bytes_are_refused() {
     too_deep.push(0);
     assert_eq!(decode_ty(&too_deep), None);
     assert_eq!(MAX_TY_DEPTH, 64);
+}
+
+/// An expression is a tag and its parts, in prefix order: `not` (tag `6`) nested `MAX_EXPR_DEPTH`
+/// levels, around the literal `null`, decodes; one level more does not (the codec's bound).
+#[test]
+fn codec_expression_nesting_is_bounded() {
+    let mut deep = vec![6u8; MAX_EXPR_DEPTH];
+    deep.extend([0, 0]);
+    let decoded = decode_expr_bytes(&deep);
+    assert!(decoded.is_some());
+    let mut too_deep = vec![6u8; MAX_EXPR_DEPTH + 1];
+    too_deep.extend([0, 0]);
+    assert_eq!(decode_expr_bytes(&too_deep), None);
+    assert_eq!(
+        encode_field_def(&FieldDef {
+            ty: Ty::Bool,
+            required: false,
+            unique: false,
+            default: Expr::Principal,
+        }),
+        vec![2, 0, 0, 2]
+    );
+}
+
+/// Decodes an expression by decoding a field definition whose default is it, after the type `bool`
+/// (tag `2`) and two flags.
+fn decode_expr_bytes(expr: &[u8]) -> Option<FieldDef> {
+    let mut bytes = vec![2u8, 0, 0];
+    bytes.extend_from_slice(expr);
+    decode_field_def(&bytes)
 }

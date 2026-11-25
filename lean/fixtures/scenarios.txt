@@ -1590,3 +1590,41 @@ op 1 100 require 4 lax
 op 1 100 type 2 require 1 strict
 op 1 100 type 2 require 2 strict
 end
+scenario h-constraint-refuses-a-negative-value
+op 1 100 create 1=s:oak 2=i:-1
+op 1 100 create 1=s:oak 2=i:0
+op 1 100 patch 1 2=i:-3
+op 1 100 patch 1 2=i:7
+op 1 100 patch 1 2=n
+op 1 100 patch 1 2=i:-9
+end
+scenario h-constraint-refuses-a-forbidden-name
+op 1 100 create 1=s:forbidden
+op 1 100 create 1=s:oak
+op 1 100 patch 1 1=s:forbidden
+op 1 100 create 1=s:forbidden 2=i:-1
+op 1 100 patch 1 1=s:ash
+end
+scenario h-a-null-constraint-passes
+op 1 100 create 1=s:oak
+op 1 100 patch 1 3=n
+end
+scenario h-constraints-come-after-the-other-checks
+op 1 100 create 1=s:oak 10=s:a
+op 1 100 create 1=s:ash 2=i:-1 10=s:a
+op 1 100 create 2=i:-1 3=b:1
+op 1 100 create 1=s:elm 2=i:-1 4=r:99
+op 1 100 create 1=s:forbidden 10=s:a
+end
+scenario h-expression-default-is-the-caller
+op 1 101 create 1=s:oak
+op 1 102 create 1=s:ash 9=s:x
+op 1 101 patch 1 9=n
+op 1 101 create 1=s:elm
+end
+scenario h-expression-default-decides-the-field
+op 1 100 type 2 create 4=i:1
+op 1 101 type 2 create 4=i:1
+op 1 101 type 2 create 4=i:1 5=b:1
+op 1 999 type 2 create 4=i:1
+end

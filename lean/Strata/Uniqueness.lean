@@ -380,40 +380,69 @@ theorem normalise_keys_sub : ∀ (ps acc : Fields) (x : FieldId),
 theorem normalise_nodup (fs : Fields) : ((normalise fs).map Prod.fst).Nodup :=
   patch_nodup fs [] List.nodup_nil
 
-/-- The fields of a new record name each field once, when the schema names each field once. -/
-theorem newRecord_nodup (schema : Schema) (p : PrincipalId) (fs : Fields)
-    (hs : (schema.map Prod.fst).Nodup) :
-    ((newRecord schema p fs).fields.map Prod.fst).Nodup := by
-  unfold newRecord withDefaults
-  rw [List.map_append, List.nodup_append]
-  refine ⟨normalise_nodup fs,
-    nodup_filterMap_fst (fun fd => if fs.any (fun fv => fv.1 == fd.1) || fd.2.default == .null
-      then none else some (fd.1, fd.2.default)) (fun x y hxy => ?_) schema hs,
-    fun a ha b hb hab => ?_⟩
-  · split at hxy
-    · cases hxy
-    · cases hxy; rfl
-  · rw [List.mem_map] at ha hb
-    obtain ⟨c, hc, hca⟩ := ha
-    obtain ⟨d, hd, hdb⟩ := hb
-    obtain ⟨fd, -, hg⟩ := List.mem_filterMap.mp hd
-    split at hg
-    · cases hg
-    · rename_i hcond
-      cases hg
-      have hbfd : b = fd.1 := by simpa using hdb.symm
-      have hfsnone : fs.any (fun fv => fv.1 == fd.1) = false := by
-        revert hcond
-        cases fs.any (fun fv => fv.1 == fd.1) <;> simp
-      rcases normalise_keys_sub fs [] a (List.mem_map.mpr ⟨c, hc, hca⟩) with h0 | h0
-      · simp at h0
-      · obtain ⟨fv, hfv, hfva⟩ := List.mem_map.mp h0
-        have hmatch : fs.any (fun fv' => fv'.1 == fd.1) = true := by
-          rw [List.any_eq_true]
-          exact ⟨fv, hfv, by simp [hfva, hab, hbfd]⟩
-        rw [hfsnone] at hmatch
-        cases hmatch
+/-- The defaults a create adds have distinct names, all in the schema and none of them named by the
+    intent. -/
+theorem defaultsOf_nodup (env : ExprEnv) (fs : Fields) : ∀ (schema : Schema) (ds : Fields),
+    defaultsOf env schema fs = .ok ds → (schema.map Prod.fst).Nodup →
+    (ds.map Prod.fst).Nodup ∧
+      ∀ x ∈ ds.map Prod.fst, x ∈ schema.map Prod.fst ∧ x ∉ fs.map Prod.fst
+  | [], ds, h, _ => by
+    simp only [defaultsOf, Except.ok.injEq] at h
+    subst h
+    simp
+  | (g, e) :: ss, ds, h, hs => by
+    have hnd := List.nodup_cons.mp hs
+    unfold defaultsOf at h
+    cases hr : defaultsOf env ss fs with
+    | error x => simp [hr] at h
+    | ok rest =>
+      simp only [hr] at h
+      obtain ⟨ihn, ihs⟩ := defaultsOf_nodup env fs ss rest hr hnd.2
+      by_cases hg : fs.any (fun fv => fv.1 == g) = true
+      · simp only [hg, if_true] at h
+        have hds : rest = ds := Except.ok.inj h
+        subst hds
+        refine ⟨ihn, fun x hx => ?_⟩
+        obtain ⟨a, b⟩ := ihs x hx
+        exact ⟨List.mem_cons_of_mem _ a, b⟩
+      · have hg' : fs.any (fun fv => fv.1 == g) = false := Bool.eq_false_iff.mpr hg
+        have hgn : g ∉ fs.map Prod.fst := by
+          intro hmem
+          obtain ⟨fv, hfv, hfg⟩ := List.mem_map.mp hmem
+          have : fs.any (fun fv => fv.1 == g) = true := by
+            rw [List.any_eq_true]; exact ⟨fv, hfv, by simp [hfg]⟩
+          rw [hg'] at this; cases this
+        simp only [hg', Bool.false_eq_true, if_false] at h
+        split at h
+        · cases h
+        · have hds := Except.ok.inj h
+          subst hds
+          refine ⟨ihn, fun x hx => ?_⟩
+          obtain ⟨a, b⟩ := ihs x hx
+          exact ⟨List.mem_cons_of_mem _ a, b⟩
+        · have hds := Except.ok.inj h
+          subst hds
+          refine ⟨List.nodup_cons.mpr ⟨fun hmem => ?_, ihn⟩, fun x hx => ?_⟩
+          · obtain ⟨a, _⟩ := ihs g hmem
+            exact hnd.1 a
+          · rcases List.mem_cons.mp hx with rfl | hx'
+            · exact ⟨List.mem_cons_self, hgn⟩
+            · obtain ⟨a, b⟩ := ihs x hx'
+              exact ⟨List.mem_cons_of_mem _ a, b⟩
 
+/-- The fields of a new record name each field once, when the schema names each field once. -/
+theorem newRecord_nodup (schema : Schema) (p : PrincipalId) (fs : Fields) (r : Record)
+    (hN : newRecord schema p fs = .ok r) (hs : (schema.map Prod.fst).Nodup) :
+    (r.fields.map Prod.fst).Nodup := by
+  obtain ⟨ds, hD, rfl⟩ := newRecord_parts hN
+  simp only [List.map_append]
+  rw [List.nodup_append]
+  refine ⟨normalise_nodup fs, (defaultsOf_nodup _ fs schema ds hD hs).1, fun a ha b hb hab => ?_⟩
+  have hbfs := ((defaultsOf_nodup _ fs schema ds hD hs).2 b hb).2
+  rw [hab] at ha
+  rcases normalise_keys_sub fs [] b ha with h0 | h0
+  · simp at h0
+  · exact hbfs h0
 
 theorem fieldRefers_null (schema : Schema) (T : TypeId) (id : RecordId) (f : FieldId) :
     fieldRefers schema T id (f, .null) = false := by
@@ -617,8 +646,8 @@ theorem tableViolated_false {L : Limits} {o : ObjType} (h : tableViolated L o = 
     (∀ u ∈ o.uniques, ∀ q₁ ∈ o.records, ∀ q₂ ∈ o.records, q₁.1 ≠ q₂.1 →
         agreeOn u q₁.2.fields q₂.2.fields = false) := by
   unfold tableViolated at h
-  rw [Bool.or_eq_false_iff, Bool.or_eq_false_iff] at h
-  obtain ⟨⟨hA, hB⟩, hC⟩ := h
+  rw [Bool.or_eq_false_iff, Bool.or_eq_false_iff, Bool.or_eq_false_iff] at h
+  obtain ⟨⟨⟨hA, hB⟩, hC⟩, hD⟩ := h
   refine ⟨?_, ?_, ?_⟩
   · intro q hq
     have hA' : (o.records.all (fun q => conforms o.schema q.2)) = true := by
@@ -833,29 +862,21 @@ theorem stepTenant_preserves_distinct (t t' : Tenant) (p : PrincipalId) (i : Int
     cases hty : t.typ? ty with
     | none => simp [stepTenant, hty] at h
     | some o =>
-      simp only [stepTenant, hty] at h
-      split at h
-      · cases h
-      · cases hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId
-            (newRecord o.schema p fs) with
-        | some e => simp [hP] at h
-        | none =>
-          simp only [hP] at h
-          have ht := Except.ok.inj h
-          subst ht
-          refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
-          change (t.putType ty { o with records := (t.nextId, newRecord o.schema p fs) :: o.records }).typ? T = some o' at hT'
-          by_cases hTy : T = ty
-          · subst hTy
-            rw [typ?_putType_self t T o _ hty] at hT'
-            cases hT'
-            obtain ⟨hs, hr⟩ := hD T o hty
-            refine ⟨hs, fun q hq => ?_⟩
-            rcases List.mem_cons.mp hq with rfl | hq'
-            · exact newRecord_nodup o.schema p fs hs
-            · exact hr q hq'
-          · rw [typ?_putType_other t ty T _ hTy] at hT'
-            exact hD T o' hT'
+      obtain ⟨r, hN, hP, -, ht⟩ := create_ok_parts hty h
+      subst ht
+      refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
+      change (t.putType ty { o with records := (t.nextId, r) :: o.records }).typ? T = some o' at hT'
+      by_cases hTy : T = ty
+      · subst hTy
+        rw [typ?_putType_self t T o _ hty] at hT'
+        cases hT'
+        obtain ⟨hs, hr⟩ := hD T o hty
+        refine ⟨hs, fun q hq => ?_⟩
+        rcases List.mem_cons.mp hq with rfl | hq'
+        · exact newRecord_nodup o.schema p fs r hN hs
+        · exact hr q hq'
+      · rw [typ?_putType_other t ty T _ hTy] at hT'
+        exact hD T o' hT'
   | update ty id fs ev =>
     cases hty : t.typ? ty with
     | none => simp [stepTenant, hty] at h
@@ -863,38 +884,28 @@ theorem stepTenant_preserves_distinct (t t' : Tenant) (p : PrincipalId) (i : Int
       cases hL : o.records.lookup id with
       | none => simp [stepTenant, hty, hL, missingRecord] at h
       | some old =>
-        simp only [stepTenant, hty, hL] at h
-        split at h
-        · cases h
-        · split at h
-          · cases h
-          · cases hP : problem t.limits o.schema o.uniques true t.env o.records id
-                (patched old fs) with
-            | some e => simp [hP] at h
-            | none =>
-              simp only [hP] at h
-              have ht := Except.ok.inj h
-              subst ht
-              refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
-              by_cases hTy : T = ty
-              · subst hTy
-                rw [typ?_putType_self t T o _ hty] at hT'
-                cases hT'
-                obtain ⟨hs, hr⟩ := hD T o hty
-                refine ⟨hs, fun q hq => ?_⟩
-                obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
-                by_cases hid : (q₀.1 == id) = true
-                · simp only [hid, if_true] at hmap
-                  rw [← hmap]
-                  have hold : (old.fields.map Prod.fst).Nodup := by
-                    have hm : (id, old) ∈ o.records := lookup_mem hL
-                    exact hr (id, old) hm
-                  exact patch_nodup fs old.fields hold
-                · simp only [hid, if_false] at hmap
-                  rw [← hmap]
-                  exact hr q₀ hq₀
-              · rw [typ?_putType_other t ty T _ hTy] at hT'
-                exact hD T o' hT'
+        obtain ⟨-, -, ht⟩ := update_ok_parts hty hL h
+        subst ht
+        refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
+        by_cases hTy : T = ty
+        · subst hTy
+          rw [typ?_putType_self t T o _ hty] at hT'
+          cases hT'
+          obtain ⟨hs, hr⟩ := hD T o hty
+          refine ⟨hs, fun q hq => ?_⟩
+          obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+          by_cases hid : (q₀.1 == id) = true
+          · simp only [hid, if_true] at hmap
+            rw [← hmap]
+            have hold : (old.fields.map Prod.fst).Nodup := by
+              have hm : (id, old) ∈ o.records := lookup_mem hL
+              exact hr (id, old) hm
+            exact patch_nodup fs old.fields hold
+          · simp only [hid, if_false] at hmap
+            rw [← hmap]
+            exact hr q₀ hq₀
+        · rw [typ?_putType_other t ty T _ hTy] at hT'
+          exact hD T o' hT'
   | delete ty id ev =>
     have ht := stepTenant_delete_eq h
     subst ht
@@ -1062,29 +1073,19 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : PrincipalId) (i : Inten
     cases hty : t.typ? ty with
     | none => simp [stepTenant, hty] at h
     | some o =>
-      simp only [stepTenant, hty] at h
-      split at h
-      · cases h
-      · cases hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId
-            (newRecord o.schema p fs) with
-        | some e => simp [hP] at h
-        | none =>
-          simp only [hP] at h
-          have ht := Except.ok.inj h
-          subst ht
-          intro T o' hT' q₁ hq₁ q₂ hq₂ hne
-          by_cases hTy : T = ty
-          · subst hTy
-            change (t.putType T { o with records := (t.nextId, newRecord o.schema p fs) ::
-              o.records }).typ? T = some o' at hT'
-            rw [typ?_putType_self t T o _ hty] at hT'
-            cases hT'
-            exact (uniqOn_cons_fresh (L := t.limits) (env := t.env) (hu T o hty) hP
-              (fun q hq => Nat.ne_of_lt (hids T o hty q hq))) q₁ hq₁ q₂ hq₂ hne
-          · change (t.putType ty { o with records := (t.nextId, newRecord o.schema p fs) ::
-              o.records }).typ? T = some o' at hT'
-            rw [typ?_putType_other t ty T _ hTy] at hT'
-            exact hu T o' hT' q₁ hq₁ q₂ hq₂ hne
+      obtain ⟨r, -, hP, -, ht⟩ := create_ok_parts hty h
+      subst ht
+      intro T o' hT' q₁ hq₁ q₂ hq₂ hne
+      by_cases hTy : T = ty
+      · subst hTy
+        change (t.putType T { o with records := (t.nextId, r) :: o.records }).typ? T = some o' at hT'
+        rw [typ?_putType_self t T o _ hty] at hT'
+        cases hT'
+        exact (uniqOn_cons_fresh (L := t.limits) (env := t.env) (hu T o hty) hP
+          (fun q hq => Nat.ne_of_lt (hids T o hty q hq))) q₁ hq₁ q₂ hq₂ hne
+      · change (t.putType ty { o with records := (t.nextId, r) :: o.records }).typ? T = some o' at hT'
+        rw [typ?_putType_other t ty T _ hTy] at hT'
+        exact hu T o' hT' q₁ hq₁ q₂ hq₂ hne
   | update ty id fs ev =>
     cases hty : t.typ? ty with
     | none => simp [stepTenant, hty] at h
@@ -1092,26 +1093,16 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : PrincipalId) (i : Inten
       cases hL : o.records.lookup id with
       | none => simp [stepTenant, hty, hL, missingRecord] at h
       | some old =>
-        simp only [stepTenant, hty, hL] at h
-        split at h
-        · cases h
-        · split at h
-          · cases h
-          · cases hP : problem t.limits o.schema o.uniques true t.env o.records id
-                (patched old fs) with
-            | some e => simp [hP] at h
-            | none =>
-              simp only [hP] at h
-              have ht := Except.ok.inj h
-              subst ht
-              intro T o' hT' q₁ hq₁ q₂ hq₂ hne
-              by_cases hTy : T = ty
-              · subst hTy
-                rw [typ?_putType_self t T o _ hty] at hT'
-                cases hT'
-                exact (uniqOn_replace (L := t.limits) (env := t.env) (hu T o hty) hP) q₁ hq₁ q₂ hq₂ hne
-              · rw [typ?_putType_other t ty T _ hTy] at hT'
-                exact hu T o' hT' q₁ hq₁ q₂ hq₂ hne
+        obtain ⟨hP, -, ht⟩ := update_ok_parts hty hL h
+        subst ht
+        intro T o' hT' q₁ hq₁ q₂ hq₂ hne
+        by_cases hTy : T = ty
+        · subst hTy
+          rw [typ?_putType_self t T o _ hty] at hT'
+          cases hT'
+          exact (uniqOn_replace (L := t.limits) (env := t.env) (hu T o hty) hP) q₁ hq₁ q₂ hq₂ hne
+        · rw [typ?_putType_other t ty T _ hTy] at hT'
+          exact hu T o' hT' q₁ hq₁ q₂ hq₂ hne
   | delete ty id ev =>
     have ht := stepTenant_delete_eq h
     subst ht
@@ -1142,17 +1133,18 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : PrincipalId) (i : Inten
 
 theorem create_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId) (o : ObjType)
     (fs : Fields) (ht : w c.tenant = some t) (ho : t.typ? ty = some o)
-    (hc : canCreate t c.principal = true)
+    (hc : canCreate t c.principal = true) (r : Record)
+    (hN : newRecord o.schema c.principal fs = .ok r)
     (hfree : problem t.limits o.schema o.uniques false t.env o.records t.nextId
-      (newRecord o.schema c.principal fs) = none)
+      r = none)
     (hclash : (∃ fd ∈ o.schema, fd.2.unique = true ∧ ∃ q ∈ o.records, q.1 ≠ t.nextId ∧
-        agreeOn [fd.1] (newRecord o.schema c.principal fs).fields q.2.fields = true) ∨
+        agreeOn [fd.1] r.fields q.2.fields = true) ∨
       (∃ u ∈ o.uniques, ∃ q ∈ o.records, q.1 ≠ t.nextId ∧
-        agreeOn u (newRecord o.schema c.principal fs).fields q.2.fields = true)) :
+        agreeOn u r.fields q.2.fields = true)) :
     step w (.create ty fs) c = .error .uniqueViolated ∧
       ∀ w', step w (.create ty fs) c ≠ .ok w' := by
   have hs : step w (.create ty fs) c = .error .uniqueViolated := by
-    simp [step, ht, stepTenant, ho, hc, problem_uniq_refusal hfree hclash]
+    simp [step, ht, stepTenant, ho, hN, hc, problem_uniq_refusal hfree hclash]
   exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
 
 theorem update_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId) (o : ObjType)
@@ -1197,7 +1189,7 @@ theorem set_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (t
   have hviol : tableViolated t.limits { o with schema := makeUnique o.schema f } = true := by
     unfold tableViolated
     simp only [Bool.or_eq_true, List.any_eq_true]
-    left; right
+    left; left; right
     exact ⟨(f, { d with unique := true }), hfu, by simp [hdup]⟩
   have hv : schemaChangeRefused t.limits
       (scopedTypes (t.putType ty { o with schema := makeUnique o.schema f }).types

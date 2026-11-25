@@ -53,8 +53,8 @@
 //! The differential harness is `crate::lean_diff`.
 //!
 //! Agreement on these scenarios is evidence of correspondence on the modelled fragment. It is
-//! not a proof, and it says nothing about what the model leaves out: constraints, workflows,
-//! references, uniqueness, queries, events.
+//! not a proof, and it says nothing about what the model leaves out: workflows, queries, events,
+//! roles and policies, the clock, and the expression functions beyond the slice 5 fragment.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -110,7 +110,7 @@ fn field_tokens(rng: &mut Lcg) -> String {
         }
     }
     if rng.below(25) == 0 {
-        tokens.push("9=i:1".to_string());
+        tokens.push("9=s:oak".to_string());
     }
     tokens.join(" ")
 }
@@ -259,9 +259,9 @@ fn object_of(ty: u64) -> ObjectTypeId {
 /// The fields an `update` line names for an object type, as the model's `fieldsOf` lists them.
 fn fixture_fields(object: &ObjectTypeId) -> Vec<u64> {
     if *object == item() {
-        vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]
+        vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     } else if *object == part() {
-        vec![1, 2, 3, 4]
+        vec![1, 2, 3, 4, 5]
     } else {
         Vec::new()
     }
@@ -304,9 +304,50 @@ fn field_type(n: u64) -> FieldType {
         7 => FieldType::List(Box::new(FieldType::Str)),
         // Field 8 loses an element when that element's record is deleted.
         8 => FieldType::List(Box::new(reference(OnDelete::SetNull))),
+        // Field 9 is the caller's principal, as a string (the kernel names a principal `p<n>`).
+        9 => FieldType::Str,
         10 => FieldType::Str,
         _ => FieldType::Bool,
     }
+}
+
+/// The default of a field of an item, as the model's `Main.lean` gives it: field `6` the constant
+/// `7`, field `9` the principal (an expression).
+fn item_default(n: u64) -> Option<Expr> {
+    match n {
+        6 => Some(Expr::Lit(Value::Int(7))),
+        9 => Some(Expr::Principal),
+        _ => None,
+    }
+}
+
+/// The constraints of the item type, in id order (the model's `itemConstraints`): field `2` is absent
+/// or not negative, and field `1` is not the name `forbidden`.
+fn item_constraints() -> Vec<SchemaChange> {
+    let field = |n: u64| Box::new(Expr::Var(Scope::Record, format!("f{n:02}")));
+    let absent_or_not_negative = Expr::Or(vec![
+        Expr::IsNull(field(2)),
+        Expr::Cmp(CmpOp::Ge, field(2), Box::new(Expr::Lit(Value::Int(0)))),
+    ]);
+    let not_forbidden = Expr::Cmp(
+        CmpOp::Ne,
+        field(1),
+        Box::new(Expr::Lit(Value::Str("forbidden".into()))),
+    );
+    [
+        ("c1", absent_or_not_negative, "a value is negative"),
+        ("c2", not_forbidden, "the name is forbidden"),
+    ]
+    .into_iter()
+    .map(|(name, expr, message)| SchemaChange::DefineConstraint {
+        object: item(),
+        constraint: ConstraintDef {
+            id: id(name.to_string()),
+            expr,
+            message: message.to_string(),
+        },
+    })
+    .collect()
 }
 
 fn field_def(n: u64, required: bool) -> FieldDef {
@@ -317,8 +358,7 @@ fn field_def(n: u64, required: bool) -> FieldDef {
         required,
         // Field 10 is unique: no two records hold the same value in it.
         unique: n == 10,
-        // Field 6 has the constant default 7.
-        default: (n == 6).then_some(Expr::Lit(Value::Int(7))),
+        default: item_default(n),
         read: None,
         personal: None,
         normalise: None,
@@ -337,8 +377,21 @@ fn part_field_type(n: u64) -> FieldType {
         1 => item_reference(OnDelete::Restrict),
         2 => item_reference(OnDelete::SetNull),
         3 => FieldType::List(Box::new(item_reference(OnDelete::SetNull))),
+        5 => FieldType::Bool,
         _ => FieldType::Int,
     }
+}
+
+/// The default of a part's field: field `5` is whether the caller is `p100` (the model's
+/// `partSchema`).
+fn part_default(n: u64) -> Option<Expr> {
+    (n == 5).then(|| {
+        Expr::Cmp(
+            CmpOp::Eq,
+            Box::new(Expr::Principal),
+            Box::new(Expr::Lit(Value::Str("p100".into()))),
+        )
+    })
 }
 
 fn part_field_def(n: u64) -> FieldDef {
@@ -348,7 +401,7 @@ fn part_field_def(n: u64) -> FieldDef {
         ty: part_field_type(n),
         required: false,
         unique: false,
-        default: None,
+        default: part_default(n),
         read: None,
         personal: None,
         normalise: None,
@@ -439,7 +492,7 @@ fn initial_world() -> World {
             },
         ];
         changes.extend(
-            [0u64, 2, 3, 4, 5, 6, 7, 8, 10].map(|n| SchemaChange::DefineField {
+            [0u64, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(|n| SchemaChange::DefineField {
                 object: item(),
                 field: field_def(n, false),
             }),
@@ -449,10 +502,12 @@ fn initial_world() -> World {
             id: part(),
             label: "Part".into(),
         });
-        changes.extend([1u64, 2, 3, 4].map(|n| SchemaChange::DefineField {
+        changes.extend([1u64, 2, 3, 4, 5].map(|n| SchemaChange::DefineField {
             object: part(),
             field: part_field_def(n),
         }));
+        // The item's constraints read its fields, so they follow the fields of both types.
+        changes.extend(item_constraints());
         changes.extend([
             policy(
                 item(),
@@ -644,6 +699,8 @@ fn show_error(kind: ErrorKind) -> &'static str {
         ErrorKind::UniqueViolated => "unique_violated",
         ErrorKind::InvalidSchema => "invalid_schema",
         ErrorKind::UnknownObject => "unknown_object",
+        ErrorKind::ConstraintViolated => "constraint_violated",
+        ErrorKind::Evaluation => "evaluation",
         _ => "unmodelled",
     }
 }

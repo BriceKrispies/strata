@@ -219,23 +219,21 @@ theorem version_conflict_on_delete (w : World) (c : Ctx) (t : Tenant) (ty : Type
 /-! ## Defaults -/
 
 /-- An accepted create writes, under the next id and at version 1, the default of every field of
-    the schema of its type the intent does not name. -/
+    the schema of its type the intent does not name, when the default is the constant `v`. -/
 theorem create_fills_default (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
-    (o : ObjType) (f : FieldId) (d : FieldDef)
-    (ho : t.typ? ty = some o) (hd : (f, d) ∈ o.schema) (hdef : d.default ≠ .null)
+    (o : ObjType) (f : FieldId) (d : FieldDef) (v : Val)
+    (ho : t.typ? ty = some o) (hd : (f, d) ∈ o.schema) (hdef : d.default = .lit v) (hv : v ≠ .null)
     (hn : fs.any (fun fv => fv.1 == f) = false) (h : stepTenant t p (.create ty fs) = .ok t') :
     ∃ o', t'.typ? ty = some o' ∧ ∃ r, o'.records.lookup t.nextId = some r ∧ r.version = 1 ∧
-      (f, d.default) ∈ r.fields := by
-  simp only [stepTenant, ho] at h
-  repeat' split at h
-  all_goals try cases h
-  refine ⟨_, typ?_putType_self t ty o _ ho, newRecord o.schema p fs, ?_, rfl, ?_⟩
-  · simp
-  · simp only [newRecord, withDefaults, List.mem_append]
-    right
-    refine List.mem_filterMap.mpr ⟨(f, d), hd, ?_⟩
-    have hdef' : (d.default == Val.null) = false := by simpa using hdef
-    simp [hn, hdef']
+      (f, v) ∈ r.fields := by
+  obtain ⟨r, hN, -, -, ht⟩ := create_ok_parts ho h
+  obtain ⟨ds, hD, hr⟩ := newRecord_parts hN
+  subst ht
+  refine ⟨_, typ?_putType_self t ty o _ ho, r, by simp, ?_, ?_⟩
+  · rw [hr]
+  · rw [hr]
+    apply List.mem_append_right
+    exact defaultsOf_mem _ fs o.schema ds f d v hD hd hn (by rw [hdef]; rfl) hv
 
 /-! ## Lists -/
 
@@ -259,24 +257,19 @@ theorem problem_none_within {L : Limits} {schema : Schema} {us : List (List Fiel
 /-- A create whose record is over the record bound is refused with `limitExceeded`, before its
     fields are checked. -/
 theorem create_refused_over_record_bound (t : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
-    (o : ObjType) (ho : t.typ? ty = some o) (hc : canCreate t p = true)
-    (hs : t.limits.maxRecord < (newRecord o.schema p fs).size) :
+    (o : ObjType) (ho : t.typ? ty = some o) (hc : canCreate t p = true) (r : Record)
+    (hN : newRecord o.schema p fs = .ok r) (hs : t.limits.maxRecord < r.size) :
     stepTenant t p (.create ty fs) = .error .limitExceeded := by
-  simp [stepTenant, ho, hc, problem, hs]
+  simp [stepTenant, ho, hN, hc, problem, hs]
 
 /-- Every record an accepted create writes is within the record bound and holds no value over the
     string or list bound. -/
 theorem create_within_limits (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
     (o : ObjType) (ho : t.typ? ty = some o) (h : stepTenant t p (.create ty fs) = .ok t') :
-    (newRecord o.schema p fs).size ≤ t.limits.maxRecord ∧
-      ∀ fv ∈ (newRecord o.schema p fs).fields, fv.2.overLimit t.limits = false := by
-  simp only [stepTenant, ho] at h
-  split at h
-  · cases h
-  · cases hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId
-        (newRecord o.schema p fs) with
-    | some e => simp [hP] at h
-    | none => exact problem_none_within hP
+    ∃ r, newRecord o.schema p fs = .ok r ∧ r.size ≤ t.limits.maxRecord ∧
+      ∀ fv ∈ r.fields, fv.2.overLimit t.limits = false := by
+  obtain ⟨r, hN, hP, -, -⟩ := create_ok_parts ho h
+  exact ⟨r, hN, problem_none_within hP⟩
 
 theorem update_within_limits (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (id : RecordId)
     (ps : Fields) (ev : Option Nat) (o : ObjType) (old : Record) (ho : t.typ? ty = some o)
@@ -284,13 +277,7 @@ theorem update_within_limits (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (id
     (h : stepTenant t p (.update ty id ps ev) = .ok t') :
     (patched old ps).size ≤ t.limits.maxRecord ∧
       ∀ fv ∈ (patched old ps).fields, fv.2.overLimit t.limits = false := by
-  simp only [stepTenant, ho, hl] at h
-  split at h
-  · cases h
-  · split at h
-    · cases h
-    · cases hP : problem t.limits o.schema o.uniques true t.env o.records id (patched old ps) with
-      | some e => simp [hP] at h
-      | none => exact problem_none_within hP
+  obtain ⟨hP, -, -⟩ := update_ok_parts ho hl h
+  exact problem_none_within hP
 
 end Strata
