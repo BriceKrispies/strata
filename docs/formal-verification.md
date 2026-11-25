@@ -709,6 +709,127 @@ The messages table has 80 rows (a row is one message, or one family of messages 
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
 
+## 8. System spec and protocol (C1, WG-5655)
+
+Layer C1 is written in `lean/Strata/System/`: `Spec.lean` (the trusted system specification) and
+`Protocol.lean` (the host state machines, the invariant and the refinement). Both are imported from
+`lean/Strata.lean`, and every theorem in them is listed in `lean/Audit.lean`. Each theorem depends
+only on `propext` and `Quot.sound`. There is no `sorry`, no `admit`, no added axiom and no new
+dependency.
+
+### The system spec
+
+`Spec.lean`, the trusted part, is 85 lines with its comments and docstrings (66 without). It is
+parametrised by a `Kernel` (`step`: one intent by one principal on one tenant state, and
+`readable`: whether the principal may read the tenant), so it does not depend on which kernel slices
+exist. The instance used for the witness is the kernel's own `stepTenant`.
+
+- `SysState`: the tenants (`World`), the committed events in order, the reply each request has
+  received (`replies`), and the frames sent to each subscriber (`frames`). Clients observe only the
+  replies and the frames.
+- `SpecNext`, three steps. `serve`: a request with a session is answered with the kernel's verdict
+  on its intent, applied to the tenant at its turn; an accepted verdict becomes the new tenant state
+  and an event. `noSession`: a request without a session is answered and no tenant changes. `frame`:
+  a subscriber observes a committed event of its tenant only if its principal may read the tenant
+  after the change.
+- `SpecReachable`: the states reached from `SysInit` by `Steps` (the reflexive, transitive closure
+  of `SpecNext`).
+
+Theorems about the spec: `spec_frames_readable` (every observed frame is a committed event of its
+subscription, readable by its principal), and `spec_log_unique` (every committed event answers a
+request, and a request commits at most one event).
+
+### The hosts and the network
+
+The network is the set of packets sent so far. A host receives a packet by naming it, so delay,
+drop, duplication and reordering are all allowed, and nothing is tampered with. There are 11 kinds
+of packet: `req`, `fwd`, `reply`, `clientReply`, `load`, `snap`, `commit`, `done`, `conflict`,
+`committed` and `frame`.
+
+- **BFF** (stateless): `req` becomes `fwd` with the session token; `reply` becomes `clientReply`.
+- **Backend**: one transaction per request id, in phases `loading`, `ready v base`,
+  `committing v base` and `finished o`. A transaction loads its tenant, computes the kernel's verdict
+  on the snapshot it received, and sends a commit naming the revision it was based on. A `conflict`
+  sends it back to `loading`. Transactions run concurrently; a repeated `fwd` changes nothing. A
+  request without a session is answered with `noSession`.
+- **Store**: holds each tenant's state by revision (`hist t k`, `rev t`), the committed events
+  (`evs`), and the decision made for each request id (`decided`). A commit for an undecided request
+  is decided when its base revision is still current, and answered with `conflict` otherwise. A
+  commit for a decided request is answered with the decision again and changes nothing. The store
+  applies an accepted verdict (new revision, new event) or records a refusal (no change).
+- **Publisher**: a committed event goes to each subscriber whose principal may read the tenant after
+  the change, as a `frame`.
+
+Each protocol step is one host acting on at most one packet (or none, for a client request) and
+sending its packets. There is no clock, so the time-dependent part of IronFleet's reduction
+obligation is empty. That the general obligation suffices is C4.
+
+### The refinement
+
+`absState` maps a protocol state to a system state: the world is the store's current state of each
+tenant, the log is the store's events, a request's reply is its store decision (or `noSession`), and
+the frames are the `frame` packets sent. A protocol step maps to zero spec steps, or to exactly one
+spec step at its linearisation point: a store decision (`serve`, or the refusal), a `noSession`
+answer, or a publication (`frame`).
+
+- `Good` is the invariant, ten fields over the sent packets and the host states. Its key fields: a
+  snapshot is the store's state at the revision it names (`snapHist`); a commit's result is the
+  kernel's verdict on that snapshot (`commitCorrect`); a commit belongs to a transaction with the same
+  token, tenant, principal and intent (`commitTxn`); a done packet is the store's decision
+  (`doneDecided`); a reply is a decision or a `noSession` answer (`replyDecided`).
+- `good_step`: `Good` holds after every protocol step. `good_init`: it holds initially.
+- `refine_star`: every protocol step maps to a `Star` of spec steps, as above.
+- `protocol_refines`: every reachable protocol state satisfies `Good`, its abstraction is spec
+  reachable, and every relayed reply was sent by the backend.
+
+The `SpecRelation` of this layer is `observed_matches_spec`: the reply packet every client receives
+is the spec's reply to its request, and every frame packet is a frame of the spec.
+
+### Theorems
+
+| Theorem | States |
+|---|---|
+| `refine_star` | every protocol step is zero spec steps, or the one spec step it linearises |
+| `protocol_refines` | every reachable state is `Good`, spec reachable, and relays only sent replies |
+| `observed_matches_spec` | each reply a client receives is the spec's reply; each frame is a spec frame |
+| `observed_reply_is_decision` | a reply is the store's decision for its request, or a `noSession` answer |
+| `frames_readable` | a subscriber receives a frame only for a committed event its principal may read |
+| `commit_once` | a request has at most one committed event, however many times a commit is delivered |
+| `commit_is_verdict` | a commit's result is the kernel's verdict on the tenant at the revision it was based on, which is no later than the current one |
+| `rev_step` | one protocol step moves a tenant's revision by nothing or by one |
+| `duplicate_commit_inert` | a repeated commit for a decided request changes nothing in the store |
+| `refusal_reachable` | non-vacuity: a request from a stranger is refused, and the refusal reaches the client in nine protocol steps |
+
+### Modelling decisions the code must meet
+
+1. A refusal is also checked against the current revision (the store decides it only at the base
+   revision). The Rust refusal path must do the same, or show that its refusal does not depend on
+   the revision. Checked in C3.
+2. The store keeps a decision record per request id. That is the idempotency record SQLite must
+   provide, and it belongs to the trusted SQLite specification (C3).
+3. The outbox is modelled as the store's messages to the publisher. Crash and restart, with replay of
+   unpublished rows, are not modelled (IronFleet's lesson 4).
+4. Sessions and subscriptions are static configuration. Tenant creation is not modelled: every tenant
+   exists from the start.
+5. The protocol has no fairness or liveness. Retries are unbounded, and nothing says they succeed.
+   That is C2.
+6. The protocol's host steps are atomic, and the refinement covers every interleaving of them. C4
+   must show that finer implementation steps, interleaved within a host, reduce to these.
+
+### What is left
+
+- **C2** (liveness): a leads-to statement for requests, commits and publication, on the `Temporal`
+  library, under the fairness the backend's loops provide.
+- **C3** (implementation): one step function per host in Lean, the trusted shells (sockets, HTTP,
+  SQLite calls), the SQLite specification of the decision record and the revision guard, and the
+  refusal check of modelling decision 1.
+- **C4** (reduction): the implementation's fine-grained interleavings, with receive-before-send and
+  at most one time-dependent input per step, reduce to the atomic host steps of this layer. The
+  concurrency of one tenant's transactions is already a linearisation in this layer (each commit or
+  refusal is a spec step at the store's decision). C4 makes the implementation's own steps part of
+  that argument.
+- Crash recovery of the outbox, and the model of tenant creation.
+
 ## Sources
 
 - C. Hawblitzel et al., *IronFleet: Proving Practical Distributed Systems Correct*, SOSP 2015:
