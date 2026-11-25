@@ -264,3 +264,8 @@ import Strata
 #print axioms Strata.Browser.login_sent_only_complete
 #print axioms Strata.Browser.failure_keeps_session
 #print axioms Strata.Browser.input_login_sends_nothing
+#print axioms Strata.Browser.theme_cycle_returns
+#print axioms Strata.Browser.theme_choice_stored
+#print axioms Strata.Browser.session_change_keeps_theme
+#print axioms Strata.Browser.dismissed_toast_gone
+#print axioms Strata.Browser.toast_expiry_removes

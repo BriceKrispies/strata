@@ -80,12 +80,16 @@ def askView (s : State) (r : Route) : State :=
 another person): the generation moves on, every request of the old generation is forgotten, the held
 model is dropped, the address is `r`, and a view of `r` is asked for. -/
 def switched (s : State) (who : Option Principal) (r : Route) : State :=
-  { route := r
+  { s with
+    route := r
     session := who
     generation := s.generation + 1
     pending := [⟨s.nextId, .view, s.generation + 1⟩]
     nextId := s.nextId + 1
-    view := { status := .loading, model := none, request := some s.nextId } }
+    view := { status := .loading, model := none, request := some s.nextId }
+    sessionKnown := true
+    loginValues := []
+    loginError := false }
 
 /-- The kernel's transitions for the routing and session slice. -/
 inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect → Prop
@@ -94,19 +98,30 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   | init {s : State} {r : Route} {who : Option Principal} :
       s.nextId = 1 →
       Allowed cat s (.init r who)
-        { route := r, session := who, generation := s.generation
-          pending := [⟨s.nextId, .view, s.generation⟩], nextId := s.nextId + 1
-          view := { status := .loading, model := none, request := some s.nextId } }
+        { s with
+          route := r
+          session := who
+          pending := [⟨s.nextId, .view, s.generation⟩]
+          nextId := s.nextId + 1
+          view := { status := .loading, model := none, request := some s.nextId }
+          sessionKnown := true
+          loginValues := []
+          loginError := false }
         (fetch s.nextId .view)
   /-- The first message of a page that starts without a bootstrapped session: the session is read and
   the view of the route is asked for, both in flight; the session is not yet known. -/
   | initCold {s : State} {r : Route} :
       s.nextId = 1 →
       Allowed cat s (.initCold r)
-        { route := r, session := none, generation := s.generation
+        { s with
+          route := r
+          session := none
           pending := [⟨s.nextId, .session, s.generation⟩, ⟨s.nextId + 1, .view, s.generation⟩]
-          nextId := s.nextId + 2, sessionKnown := false
-          view := { status := .loading, model := none, request := some (s.nextId + 1) } }
+          nextId := s.nextId + 2
+          sessionKnown := false
+          view := { status := .loading, model := none, request := some (s.nextId + 1) }
+          loginValues := []
+          loginError := false }
         (fetch s.nextId .session ++ fetch (s.nextId + 1) .view)
   /-- A view answer that arrives while the session is not known is not held: the person it was read
   for is not known to be the person signed in, so the view is dropped and read again once the session
@@ -125,8 +140,11 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
       s.sessionKnown = false →
       pendingOf s id .session →
       Allowed cat s (.sessionAnswer id who)
-        { route := s.route, session := who, generation := s.generation
-          pending := [⟨s.nextId, .view, s.generation⟩], nextId := s.nextId + 1
+        { s with
+          session := who
+          sessionKnown := true
+          pending := [⟨s.nextId, .view, s.generation⟩]
+          nextId := s.nextId + 1
           view := { status := .loading, model := none, request := some s.nextId } }
         (fetch s.nextId .view)
   /-- A navigation: the address moves; the page refreshes (the held model stays until the new view
@@ -259,6 +277,31 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   | sessionEndedWhileSigningOut {s : State} :
       (∃ p ∈ s.pending, p.kind = ReqKind.signOut) →
       Allowed cat s .sessionEnded s []
+  /-- The theme button is pressed: the mode moves on, and the choice is stored. -/
+  | themeCycle {s : State} {arg : String} :
+      Allowed cat s (.action "theme" arg) { s with themeMode := s.themeMode.next }
+        [.store "strata.theme" s.themeMode.next.key]
+  /-- The device's colour scheme changes: the page holds it. -/
+  | systemThemeSet {s : State} {dark : Bool} :
+      Allowed cat s (.systemTheme dark) { s with systemDark := dark } []
+  /-- The menu button is pressed: the menu opens or closes. -/
+  | menuToggle {s : State} {arg : String} :
+      Allowed cat s (.action "menu" arg) { s with menuOpen := !s.menuOpen } []
+  /-- A toast is dismissed by its own button. -/
+  | dismissToast {s : State} {id : Nat} :
+      Allowed cat s (.dismiss id) { s with toasts := s.toasts.filter (fun t => t != id) } []
+  /-- A toast's time is up: it goes. A timer of an earlier toast, already gone, changes nothing. -/
+  | toastExpires {s : State} {token : Nat} :
+      Allowed cat s (.timer "toast" token) { s with toasts := s.toasts.filter (fun t => t != token) } []
+  /-- The dev button asks the gateway to expire the session: a request that is not the person's. -/
+  | devExpire {s : State} {arg : String} :
+      Allowed cat s (.action "dev.expire" arg)
+        { s with nextId := s.nextId + 1, pending := ⟨s.nextId, .shared, s.generation⟩ :: s.pending }
+        (fetch s.nextId .shared)
+  /-- A shared request is answered: it is no longer in flight. -/
+  | sharedAnswer {s : State} {id : Nat} :
+      pendingOf s id .shared →
+      Allowed cat s (.sharedAnswer id) { s with pending := dropId s.pending id } []
 
 /-- The states the kernel can reach from the initial state by allowed steps. -/
 inductive Reachable (cat : Catalogue) : State → Prop
@@ -381,6 +424,34 @@ theorem failure_keeps_session (cat : Catalogue) {s s' : State} {id : Nat} {es : 
 /-- **A typed value is kept in the form and sends nothing.** -/
 theorem input_login_sends_nothing (cat : Catalogue) {s s' : State} {m : Msg} {name value : String}
     {es : List Effect} (hm : m = .input "login" name value) (ha : Allowed cat s m s' es) : es = [] := by
+  cases ha <;> simp_all
+
+/-! ### Presentation (slice 4) -/
+
+/-- The theme button cycles through the three modes and comes back where it started. -/
+theorem theme_cycle_returns (m : ThemeMode) : m.next.next.next = m := by
+  cases m <;> rfl
+
+/-- **The theme choice is stored, and only the choice moves.** A press of the theme button changes the
+mode to the next one and stores exactly that mode. -/
+theorem theme_choice_stored (cat : Catalogue) {s s' : State} {m : Msg} {arg : String} {es : List Effect}
+    (hm : m = .action "theme" arg) (ha : Allowed cat s m s' es) :
+    s'.themeMode = s.themeMode.next ∧ es = [.store "strata.theme" s.themeMode.next.key] := by
+  cases ha <;> simp_all
+
+/-- **A change of person keeps the colour scheme.** The scheme is the browser's, not the person's. -/
+theorem session_change_keeps_theme (cat : Catalogue) {s s' : State} {m : Msg} {es : List Effect}
+    (ha : Allowed cat s m s' es) (hch : s.session ≠ s'.session) : s'.themeMode = s.themeMode := by
+  cases ha <;> simp_all [switched, askView, dropViews]
+
+/-- **A dismissed toast is gone.** -/
+theorem dismissed_toast_gone (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}
+    (ha : Allowed cat s (.dismiss id) s' es) : id ∉ s'.toasts := by
+  cases ha; simp
+
+/-- **An expired toast is gone.** -/
+theorem toast_expiry_removes (cat : Catalogue) {s s' : State} {m : Msg} {token : Nat} {es : List Effect}
+    (hm : m = .timer "toast" token) (ha : Allowed cat s m s' es) : token ∉ s'.toasts := by
   cases ha <;> simp_all
 
 /-! ## Non-vacuity -/

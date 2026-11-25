@@ -335,12 +335,12 @@ what the B2 implementation will be proved against.
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `system_theme` | records the device's colour scheme | not covered | 4 |
-| `action theme` | cycles auto, light, dark; stores the choice | not covered | 4 |
-| `action menu` | toggles the menu | not covered | 4 |
-| `action dismiss` | removes a toast | not covered | 4 |
-| `timer toast` | removes a toast when its time passes | not covered | 4 |
-| `action dev.expire`, `http_result` dev | asks the gateway to expire the session; reports done or failed | not covered | 4 |
+| `system_theme` | records the device's colour scheme | covered | 4 (`systemThemeSet`) |
+| `action theme` | cycles auto, light, dark; stores the choice | covered | 4 (`themeCycle`; `theme_choice_stored`) |
+| `action menu` | toggles the menu | partly | 4 (`menuToggle`; the menu closing on a navigation is not yet in `askView`) |
+| `action dismiss` | removes a toast | covered | 4 (`dismissToast`) |
+| `timer toast` | removes a toast when its time passes | partly | 4 (`toastExpires`; raising a toast is not yet a constructor) |
+| `action dev.expire`, `http_result` dev | asks the gateway to expire the session; the reply is a shared request answered | partly | 4 (`devExpire`, `sharedAnswer`; the toast on the reply is not yet raised) |
 
 #### Passkeys, second factors and step-up
 
@@ -417,7 +417,7 @@ what the B2 implementation will be proved against.
 |---|---|---|---|
 | `http` (method, path, body, csrf, idempotency key, correlation) | every request | partly | 1 (id and kind); 3 (csrf token, idempotency key, correlation still open; the sign-in and search bodies are the form's values) |
 | `timer` request | every request (30 000 ms) | covered | 1 |
-| `timer` toast | every toast (5 s, or 9 s for a warning) | not covered | 4 |
+| `timer` toast | every toast (5 s, or 9 s for a warning) | partly | 4 (expiry is covered; raising a toast is not yet a constructor) |
 | `timer` lab.poll | the Lab's run poll | not covered | 12 |
 | `timer` heartbeat, reconnect, emit | the live connection and its delayed frames | not covered | 5 |
 | `push_url` | an address change, with the replace flag | covered | 1 |
@@ -425,7 +425,7 @@ what the B2 implementation will be proved against.
 | `ws_connect` | a socket open with the request token (at init with a session, and when a waiting socket connects) | not covered | 5 |
 | `ws_send` | subscribe, ack, ping, and the Lab's cancel | not covered | 5 (cancel: 12) |
 | `ws_close` | closing the socket | not covered | 5 |
-| `store` | the theme choice in storage | not covered | 4 |
+| `store` | the theme choice in storage | covered | 4 (`themeCycle` stores the mode's key) |
 | `passkey` (`create`, `get`) | the browser's passkey prompt | not covered | 6 (sign-in), 7 (second factor), 8 (registration) |
 | `log` | the record-rule disagreement, and the worker's diagnostics | not covered | 9 |
 | `navigate_away` | the redirect to an identity provider; emitted by `oidc.js` but absent from the `Effect` type in `types.js` (F5) | not covered | 6 |
@@ -549,7 +549,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 | 1 (done) | Routing and session: `init` with a bootstrapped session, `navigate`, `popstate`, `reload`, the view's answers, the session's answers and changes, sign-in and sign-out (their requests and answers), the session ending, a request's deadline; the held model and its theorems | |
 | 2 (done) | Cold start: the session read at start, a view that answers before the session (dropped and read again), the session answer that makes the session known (`learnSession`); the bootstrapped view remains partly, see row `init` | 1 |
 | 3 (partly done) | Forms, for the sign-in and the search: the typed values, the complete and incomplete submissions, the refusal, the search's navigation (`inputLogin`, `signInIncomplete`, `loginRefused`, `searchSubmit`). Still open in this slice: the csrf token and idempotency key of a request (with the `http` effect), the words of a refusal, focus, and the typed draft (`Drafts.lean`) | 1 |
-| 4 | Presentation: theme and its store effect, the system theme, the menu, toasts and their timers, dev expire | 1 |
+| 4 (partly done) | Presentation: the theme and its store effect, the system theme, the menu, dismissing and expiring toasts, the dev expire request (`themeCycle`, `systemThemeSet`, `menuToggle`, `dismissToast`, `toastExpires`, `devExpire`, `sharedAnswer`). Still open: raising a toast (every row's toast), the menu closing on a navigation, and focus and announcements | 1 |
 | 5 | Live connection: the socket machine, the welcome, notices, resync, pong, the session frame when active, refused upgrades, the socket effects and timers | 1, 2 |
 | 6 | Sign-in methods: passkey sign-in, emailed links, invitations, identity providers (OIDC and SAML), `navigate_away` | 3, 5 |
 | 7 | Second factors and step-up: the waiting sign-in, the factors section, recovery codes, the step-up prompt and its retry, the passkey as a second factor | 3, 6 |
@@ -564,7 +564,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 ### 7.7 Counts
 
 The messages table has 78 rows (a row is one message, or one family of messages with the same handling):
-19 covered, 7 partly, 52 not covered (after slice 3). The effects table has 14 rows: 3 covered, 1 partly, 10 not
+22 covered, 10 partly, 46 not covered (after slice 4). The effects table has 14 rows: 4 covered, 2 partly, 8 not
 covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.

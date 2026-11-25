@@ -85,6 +85,25 @@ structure Pending where
   kind : ReqKind
   gen : Nat
 
+/-- The colour scheme the person chose: follow the device, or light, or dark. -/
+inductive ThemeMode where
+  | auto
+  | light
+  | dark
+  deriving DecidableEq
+
+/-- The mode the theme button moves to (`auto`, `light`, `dark`, then `auto` again). -/
+def ThemeMode.next : ThemeMode → ThemeMode
+  | .auto => .light
+  | .light => .dark
+  | .dark => .auto
+
+/-- The value the choice is stored under (`strata.theme`). -/
+def ThemeMode.key : ThemeMode → String
+  | .auto => "auto"
+  | .light => "light"
+  | .dark => "dark"
+
 /-- The kernel's state, for the routing and session slice. Later slices add their fields here:
 forms, the live connection, the tenant interface, the Lab and the rest of the page state. -/
 structure State where
@@ -104,6 +123,14 @@ structure State where
   loginValues : List (String × String) := []
   /-- Whether the sign-in form shows a refusal or an incomplete-form message. -/
   loginError : Bool := false
+  /-- The colour scheme chosen, kept across a change of person (it is the browser's, not the person's). -/
+  themeMode : ThemeMode := .auto
+  /-- The device's colour scheme, as the page last heard it. -/
+  systemDark : Bool := false
+  /-- Whether the menu is open. -/
+  menuOpen : Bool := false
+  /-- The ids of the toasts on screen. -/
+  toasts : List Nat := []
 
 /-- Effects out of the kernel. `http` and `timer "request"` are the request and its deadline; the
 other effects are the page's own (URL, scroll), the live connection, storage, the browser's passkey
@@ -147,5 +174,7 @@ inductive Msg where
   | wsFrame (frame : String)
   | wsClosed (refused : Bool)
   | timer (name : String) (token : Nat)
+  | dismiss (id : Nat)
+  | sharedAnswer (id : Nat)
 
 end Strata.Browser
