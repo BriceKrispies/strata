@@ -246,6 +246,9 @@ pub fn run(
     }
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
+    // `lake exe` runs in `lean_dir`, so a relative batch path would be read from the wrong place.
+    let out_dir = &std::path::absolute(out_dir)
+        .map_err(|e| format!("cannot resolve {}: {e}", out_dir.display()))?;
     build_model(lean_dir)?;
     let scratch = out_dir.join("minimise-scratch.txt");
     let mut stream = ScenarioStream::new(seed);
