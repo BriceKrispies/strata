@@ -2,6 +2,7 @@
 
 use crate::definitions::{operation_powers, uniques, AUTOMATIONS_DEFINE};
 use crate::dependencies::{self, Assessment, ChangeClass, DependencyGraph};
+use crate::erasure::BATCH;
 use crate::evolution::{self, PinBook};
 use crate::expr::{self, Env};
 use crate::intent::{
@@ -165,6 +166,19 @@ pub fn transition_pinned(
             draft.evidence.extend(done.evidence);
             done.output
         }
+        Intent::RefreshComputed { object, after } => {
+            let done = crate::computed::decide_refresh(
+                lookup,
+                &draft.tenant.schema,
+                draft.ctx,
+                object,
+                *after,
+            )?;
+            draft.ops.extend(done.recomputed.ops);
+            draft.events.extend(done.recomputed.events);
+            draft.evidence.extend(done.recomputed.evidence);
+            done.output
+        }
         Intent::WriteSetting {
             setting,
             level,
@@ -303,6 +317,13 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
                 id: *id,
             });
             field_needs(schema, &mut out, object, fields);
+            for dependent in crate::computed::dependents(schema, object) {
+                out.insert(Need::ByField {
+                    object: dependent.object,
+                    field: dependent.reference,
+                    value: Value::Ref(*id),
+                });
+            }
         }
         Intent::DeleteRecord { object, id, .. } => {
             out.insert(Need::Record {
@@ -319,6 +340,13 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         }
         Intent::EraseSubject { .. } => out.extend(crate::erasure::needs(schema, intent)),
         Intent::ExpireRecords { .. } => out.extend(crate::retention::needs(schema, intent)),
+        Intent::RefreshComputed { object, after } => {
+            out.insert(Need::PageOf {
+                object: object.clone(),
+                after: *after,
+                limit: BATCH as u32,
+            });
+        }
         Intent::ChangeSchema { changes, .. } => {
             // Re-validation looks up every reference of every record of a touched type, in the
             // schema as it will be. Load each such type whole: one need per object type, however
@@ -702,6 +730,9 @@ fn create_record(
     fields: &BTreeMap<FieldId, Value>,
 ) -> Result<Output, DomainError> {
     let def = object_def(draft, object, Action::Create)?;
+    if let Some(problem) = crate::computed::written(def, fields) {
+        return Err(draft.reject(ErrorKind::InvalidIntent, problem));
+    }
     let ctx = draft.ctx;
     let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
@@ -743,7 +774,7 @@ fn create_record(
     }
 
     crate::normalise::normalise_fields(def, &mut values);
-    let candidate = Record {
+    let mut candidate = Record {
         id: RecordId(draft.next_record),
         object: object.clone(),
         version: 1,
@@ -755,6 +786,9 @@ fn create_record(
         updated_at: ctx.now,
         fields: values,
     };
+    let computed =
+        crate::computed::values(lookup, def, &candidate, &ctx.principal, &roles, ctx.now)?;
+    crate::computed::store(&mut candidate, computed);
 
     draft.require(
         Action::Create,
@@ -856,6 +890,10 @@ fn update_record(
     }
     candidate.version = old.version + 1;
     candidate.updated_at = ctx.now;
+    let roles = roles_of(draft.tenant, &ctx.principal);
+    let computed =
+        crate::computed::values(lookup, def, &candidate, &ctx.principal, &roles, ctx.now)?;
+    crate::computed::store(&mut candidate, computed);
 
     // Authorize before revealing anything else about the record.
     draft.require(
@@ -868,7 +906,6 @@ fn update_record(
     )?;
     check_version(draft, old, expected_version)?;
 
-    let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
     let before_workflows = candidate.fields.clone();
     // D-7203: the transition each workflow fired, named in the event.
@@ -951,6 +988,9 @@ fn update_record(
         fired_transitions.insert(workflow.id.clone(), step.name.clone());
     }
 
+    let computed =
+        crate::computed::values(lookup, def, &candidate, &ctx.principal, &roles, ctx.now)?;
+    crate::computed::store(&mut candidate, computed);
     if candidate.fields != before_workflows {
         // Workflow assignments changed the candidate after the first decision: the update must
         // also be allowed as the record it now is, so a step cannot write what the actor could
@@ -980,6 +1020,20 @@ fn update_record(
 
     let version = candidate.version;
     let after = Arc::new(candidate);
+    // The records that refer to this one through a computed field, recomputed in this commit.
+    let referring = crate::computed::refer(
+        &draft.tenant.schema,
+        lookup,
+        object,
+        old,
+        &after,
+        &ctx.principal,
+        &roles,
+        ctx.now,
+    )?;
+    draft.evidence.extend(referring.evidence);
+    draft.ops.extend(referring.ops);
+    draft.events.extend(referring.events);
     draft.ops.push(DeltaOp::PutRecord(after.clone()));
     draft.events.push(EventBody::RecordUpdated {
         before: old.clone(),
@@ -1659,6 +1713,7 @@ pub(crate) fn apply_change(
                 read: None,
                 personal: None,
                 normalise: None,
+                computed: None,
             };
             object(schema, id)?.fields.insert(field.clone(), def);
             format!("define relationship {id}.{field} -> {target}")
@@ -2049,6 +2104,7 @@ pub fn plan_migration(
                 .filter(|(field, _)| def.fields.contains_key(field))
                 .collect();
             crate::normalise::normalise_fields(def, &mut stripped);
+            let was_rewritten = stripped != record.fields;
             let candidate = if stripped == record.fields {
                 record.clone()
             } else {
@@ -2060,6 +2116,36 @@ pub fn plan_migration(
                 });
                 rewritten.push((record.clone(), rewritten_record.clone()));
                 rewritten_record
+            };
+            // A computed field of the new schema is derived for the record as it now stands: a
+            // record that already had a value gets it when the field is defined (D-8307).
+            let computed = crate::computed::values(
+                lookup,
+                def,
+                &candidate,
+                &Principal::System,
+                &BTreeSet::new(),
+                now,
+            )?;
+            let candidate = if computed
+                .iter()
+                .all(|(field, value)| candidate.get(field) == value)
+            {
+                candidate
+            } else {
+                let mut recomputed = Record::clone(&candidate);
+                crate::computed::store(&mut recomputed, computed);
+                recomputed.version = record.version + 1;
+                recomputed.updated_at = now;
+                let recomputed = Arc::new(recomputed);
+                if was_rewritten {
+                    if let Some(last) = rewritten.last_mut() {
+                        last.1 = recomputed.clone();
+                    }
+                } else {
+                    rewritten.push((record.clone(), recomputed.clone()));
+                }
+                recomputed
             };
             let outcome = validate_record(
                 lookup,

@@ -49,6 +49,7 @@ fn personal(id: &str) -> FieldDef {
             searchable: false,
         }),
         normalise: None,
+        computed: None,
         ..field_def(id, FieldType::Str, false)
     }
 }

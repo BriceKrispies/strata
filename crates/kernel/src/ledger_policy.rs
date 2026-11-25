@@ -58,6 +58,7 @@ pub fn fields() -> BTreeMap<FieldId, FieldDef> {
                     read: None,
                     personal: None,
                     normalise: None,
+                    computed: None,
                 },
             )
         };

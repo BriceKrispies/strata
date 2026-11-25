@@ -1,0 +1,36 @@
+{
+  // Refused: an operation that writes a computed field (layer.computed-written, D-8307, KRN-2924). The
+  // kernel computes "tier" from the record, so a step may not set it; the first step writes "name",
+  // which is stored, and is not refused.
+  "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "member_tiers__member",
+      "label": "Member",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false },
+        "points": { "id": "points", "label": "Points", "ty": "Int", "required": true, "unique": false },
+        "tier": { "id": "tier", "label": "Tier", "ty": "Bool", "required": false, "unique": false, "computed": "record.points > 10" }
+      },
+      "constraints": {}
+    }
+  ],
+  "operations": [
+    {
+      "id": "member_tiers__set_tier",
+      "label": "Set the tier",
+      "inputs": [
+        { "name": "member", "ty": { "Ref": { "target": "member_tiers__member", "on-delete": "Restrict" } }, "required": true },
+        { "name": "name", "ty": "Str", "required": true },
+        { "name": "flag", "ty": "Bool", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "subject": { "object": "member_tiers__member", "input": "member" },
+      "conditions": [],
+      "steps": [
+        { "UpdateRecord": { "id": "rename", "object": "member_tiers__member", "record": "param.member", "fields": { "name": "param.name" } } },
+        { "UpdateRecord": { "id": "tier", "object": "member_tiers__member", "record": "param.member", "fields": { "tier": "param.flag" } } }
+      ]
+    }
+  ]
+}

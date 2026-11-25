@@ -240,6 +240,16 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
         ],
     ),
     (
+        "computed-default",
+        layers::COMPUTED_DEFAULT,
+        &["\"tier\"", "declares a default"],
+    ),
+    (
+        "computed-written",
+        layers::COMPUTED_WRITTEN,
+        &["\"member_tiers__set_tier\"", "the computed field \"tier\""],
+    ),
+    (
         "step-outside-catalogue",
         layers::OUTSIDE_CATALOGUE,
         &[
