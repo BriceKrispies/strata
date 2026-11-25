@@ -16,6 +16,7 @@ pub mod dispatch;
 pub mod erasure;
 pub mod erasure_copies;
 pub mod files;
+pub mod holds;
 pub mod hosts;
 pub mod http;
 pub mod hub;

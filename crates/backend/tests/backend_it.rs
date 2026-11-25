@@ -10,6 +10,9 @@ mod erasure;
 #[path = "factors.rs"]
 mod factors;
 
+#[path = "holds.rs"]
+mod holds;
+
 #[path = "hosts_invite.rs"]
 mod hosts_invite;
 

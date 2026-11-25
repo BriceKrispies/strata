@@ -25,6 +25,8 @@
 //!   issued and nobody has redeemed or revoked (revoked, by the acting owner). The address of an
 //!   invitation the principal redeemed is cleared. The sessions of the principal end with the
 //!   commit.
+//! - **Held operations.** A hold the subject filed or that acts for the subject is removed, with the
+//!   change it froze, and the subject is cleared from a decision it made (D-8400).
 //! - **Legal holds.** A record of a type the intent names in `held-objects` is not changed: the
 //!   decision lists it in `not-erased` as held, so a hold on a record type suspends the erasure of
 //!   what it covers and the rest of the subject is erased (PRV-355). A hold on the subject itself
@@ -380,8 +382,29 @@ pub fn decide(
             touched_invitations.push(offer.id.clone());
         }
     }
-    let memberships_changed =
-        member_removed || !changed_teams.is_empty() || !touched_invitations.is_empty();
+    // A hold names its requester and holds the input of the change, which can be personal.
+    let holds_changed = match next_schema.holds.as_mut() {
+        Some(holds) => {
+            let before = holds.clone();
+            holds.retain(|_, held| {
+                held.requester != *subject && held.on_behalf_of.as_ref() != Some(subject)
+            });
+            for held in holds.values_mut() {
+                if held.decided_by.as_ref() == Some(subject) {
+                    held.decided_by = None;
+                }
+            }
+            if holds.is_empty() {
+                next_schema.holds = None;
+            }
+            before != next_schema.holds.clone().unwrap_or_default()
+        }
+        None => false,
+    };
+    let memberships_changed = member_removed
+        || !changed_teams.is_empty()
+        || !touched_invitations.is_empty()
+        || holds_changed;
     if memberships_changed {
         let before = owners(&tenant.members, schema).len();
         if before > 0 && owners(&members, &next_schema).is_empty() {
@@ -402,7 +425,7 @@ pub fn decide(
             roles: BTreeSet::new(),
         });
     }
-    if !changed_teams.is_empty() || !touched_invitations.is_empty() {
+    if !changed_teams.is_empty() || !touched_invitations.is_empty() || holds_changed {
         ops.push(DeltaOp::PutSchema(Arc::new(next_schema)));
     }
     if member_removed || !changed_teams.is_empty() {

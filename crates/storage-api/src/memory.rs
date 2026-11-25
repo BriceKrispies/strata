@@ -1962,6 +1962,14 @@ impl Store for MemoryStore {
         if !inner.tenants.contains_key(tenant) {
             return Err(StoreError::NotFound(format!("tenant {tenant}")));
         }
+        if let Some(guard) = &writes.only_if_awaiting {
+            let held = inner
+                .steps
+                .get(&(tenant.clone(), guard.run.clone(), guard.sequence));
+            if !held.is_some_and(crate::jobs::awaits_decision) {
+                return Err(crate::jobs::decision_conflict());
+            }
+        }
         inner.write(tenant, writes, now);
         Ok(())
     }

@@ -76,7 +76,13 @@ pub fn run_intent_at(
     at: Option<StateRevision>,
 ) -> Result<Executed, ApiError> {
     let prior = crate::change_audit::before(app, ctx, intent);
-    let done = run_intent_unaudited_at(app, ctx, intent, anonymous, at)?;
+    let done = match run_intent_unaudited_at(app, ctx, intent, anonymous, at) {
+        Ok(done) => done,
+        Err(error) => {
+            crate::change_audit::refused(app, ctx, intent, &error);
+            return Err(error);
+        }
+    };
     crate::change_audit::record(app, ctx, intent, prior, &done);
     Ok(done)
 }
@@ -400,6 +406,7 @@ pub fn members(
         revision: done.receipt.revision.0,
         event_seq: done.transition.delta.event_seq,
         checks_passed: done.transition.evidence.len(),
+        held: crate::holds::notice_of(&done.transition.output),
     })
 }
 

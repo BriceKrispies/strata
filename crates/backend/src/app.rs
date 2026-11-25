@@ -575,6 +575,11 @@ impl ApiError {
         let code = match error.kind {
             ErrorKind::Unauthorized if anonymous => ErrorCode::Unauthenticated,
             ErrorKind::Unauthorized => ErrorCode::Forbidden,
+            // A decision on a held operation by someone who may not decide it (ADM-1602).
+            ErrorKind::ApproverPermission | ErrorKind::SelfAction => ErrorCode::Forbidden,
+            // A hold that lapsed, or whose change no longer applies as it was read (ADM-1603,
+            // ADM-1604): the state of the hold, not the caller.
+            ErrorKind::HoldExpired | ErrorKind::StaleHold => ErrorCode::Conflict,
             ErrorKind::TenantNotFound
             | ErrorKind::UnknownObject
             | ErrorKind::UnknownRecord

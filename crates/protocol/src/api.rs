@@ -277,6 +277,18 @@ pub struct MembersReply {
     pub revision: u64,
     pub event_seq: u64,
     pub checks_passed: usize,
+    /// Set when a hold rule filed the change instead of applying it (D-8400): nothing changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<HeldNotice>,
+}
+
+/// The answer to a change that a hold rule held: the change waits as the held operation `hold`
+/// for a person who holds the capability `approver`, until `expires_at` (milliseconds).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldNotice {
+    pub hold: String,
+    pub approver: String,
+    pub expires_at: i64,
 }
 
 /// A request to invoke a tenant operation (contract invoke-tenant-operation, CT-805), with plain
@@ -302,6 +314,10 @@ pub struct OperationReply {
     pub event_seq: u64,
     pub checks_passed: usize,
     pub dry_run: bool,
+    /// Set when a hold rule filed the invocation instead of running it (D-8400): the result is
+    /// then empty, since nothing was created, changed or deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<HeldNotice>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

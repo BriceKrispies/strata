@@ -1201,6 +1201,8 @@ pub fn router(app: Shared) -> Router {
             "/internal/operations/invoke",
             post(crate::operations::route),
         )
+        .route("/internal/holds/decide", post(crate::holds::decide_route))
+        .route("/internal/holds/list", post(crate::holds::list_route))
         .route("/internal/ledger/:op", post(crate::ledger::route))
         .route(
             "/internal/platform/quota",

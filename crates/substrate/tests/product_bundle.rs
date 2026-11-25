@@ -543,3 +543,63 @@ and a [bad one](javascript:alert(1)).\n\n> quoted\n> text\n\n- one\n- two\n\n1. 
         assert_eq!(kept, strata_kernel::blocks::allowed_href(href), "{href}");
     }
 }
+
+// ---- the holds of a product (D-8400) ----------------------------------------------------------
+
+fn shop() -> Json {
+    json!({
+        "name": "Shop",
+        "version": "1.0.0",
+        "product": "shop",
+        "platform": { "min": "0.2", "below": "0.4" },
+        "content": {
+            "roles": { "shop__clerk": { "id": "shop__clerk", "label": "Clerk" } },
+            "holds": [{
+                "id": "shop__hold_clerk",
+                "label": "A clerk is approved before they work",
+                "target": { "Role": { "role": "shop__clerk" } },
+                "when": "param.action == 'assign'",
+                "approver": "change-approve"
+            }]
+        }
+    })
+}
+
+// Verifies: ADM-1601
+// Verifies: ADM-1640
+#[test]
+fn a_product_declares_a_hold_rule_that_holds_the_change_it_names_and_leaves_with_the_product() {
+    let mut world = world();
+    let record = installed(&mut world, &shop());
+    assert!(owned(&record).contains(&("hold-rule".to_string(), "shop__hold_clerk".to_string())));
+    let schema = schema_of(&world);
+    let rule = &schema.hold_rules.as_ref().expect("the rule is installed")
+        [&HoldRuleId::new("shop__hold_clerk").unwrap()];
+    assert!(
+        rule.when.is_some(),
+        "the condition was read as an expression"
+    );
+
+    // The rule holds an assignment of its role: the owner files it and nobody gets the role.
+    let alice = PrincipalId::new("user:alice").unwrap();
+    let clerk = RoleId::new("shop__clerk").unwrap();
+    let (after, outcome) = world
+        .step(
+            &Intent::AssignRole {
+                principal: alice.clone(),
+                role: clerk.clone(),
+            },
+            &context_at(1_800_000_000_001, "assign"),
+        )
+        .expect("a held change is accepted as a filing");
+    assert!(matches!(outcome.output, Output::Held { .. }));
+    assert!(!after.tenants[&tenant()].members.contains_key(&alice));
+
+    // A product that is removed takes its rule with it.
+    let (result, calls) = with_target(&mut world, "0.2", |t, e| {
+        remove_product("shop", false, t, e)
+    });
+    result.unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(calls, 1);
+    assert!(schema_of(&world).hold_rules.is_none());
+}

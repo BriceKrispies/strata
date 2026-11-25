@@ -63,6 +63,7 @@ const BUILT_SECTIONS: &[&str] = &[
     "triggers",
     "automations",
     "operations",
+    "holds",
     "capabilities",
     "settings",
     "ledger-units",
@@ -192,6 +193,9 @@ pub struct ProductBundle {
     pub triggers: BTreeMap<TriggerId, TriggerDef>,
     pub automations: BTreeMap<WorkflowId, AutomationDef>,
     pub operations: BTreeMap<TenantOperationId, TenantOperationDef>,
+    /// The rules that hold a change for approval (`holds`, D-8400), installed after the
+    /// operations, roles and settings they name.
+    pub holds: BTreeMap<HoldRuleId, HoldRule>,
     pub capabilities: BTreeMap<CapabilityName, CapabilityDef>,
     pub settings: BTreeMap<SettingId, SettingDef>,
     pub ledger_units: BTreeMap<LedgerUnit, LedgerUnitDecl>,
@@ -590,6 +594,14 @@ fn expressions_of_operation(def: &mut Json, at: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The condition of a hold rule, in the authoring syntax.
+fn expressions_of_hold(def: &mut Json, at: &str) -> Result<(), String> {
+    if let Some(slot) = def.get_mut("when") {
+        text_to_ast(slot, &format!("{at}.when"))?;
+    }
+    Ok(())
+}
+
 /// A section that is a map from id to definition: each definition has its expression texts read
 /// as ASTs by `convert`, must name itself with its key when it names itself at all, and is then
 /// read as a `V`. A section that is left out or null is empty.
@@ -936,6 +948,13 @@ impl ProductBundle {
             &|t: &TokenDecl| t.name.clone(),
         )?;
         let (triggers, automations, operations) = read_definitions(&mut content)?;
+        let holds: BTreeMap<HoldRuleId, HoldRule> = parse_list(
+            &mut content,
+            "holds",
+            "id",
+            &expressions_of_hold,
+            &|rule: &HoldRule| rule.id.clone(),
+        )?;
         for role in role_permissions.keys() {
             if !roles.contains_key(role) {
                 return Err(bad(format!(
@@ -984,6 +1003,7 @@ impl ProductBundle {
             triggers,
             automations,
             operations,
+            holds,
             capabilities,
             settings,
             ledger_units,
@@ -1007,8 +1027,8 @@ impl ProductBundle {
     /// Every entity the bundle installs, in install order: capabilities, settings, ledger units,
     /// pools and limits (which roles, triggers and steps name), roles, object types, policies,
     /// workflows, queries, views, mail templates, notice templates, tokens, triggers, automations,
-    /// operations, segments and interface elements (which name views, operations and each other),
-    /// each by id.
+    /// operations, hold rules (which name operations, roles and settings), segments and interface
+    /// elements (which name views, operations and each other), each by id.
     pub fn entities(&self) -> Vec<OwnedEntity> {
         let mut out = Vec::new();
         out.extend(
@@ -1072,6 +1092,7 @@ impl ProductBundle {
                 .keys()
                 .map(|id| OwnedEntity::of("operation", id)),
         );
+        out.extend(self.holds.keys().map(|id| OwnedEntity::of("hold-rule", id)));
         out.extend(
             self.segments
                 .keys()
@@ -1218,6 +1239,12 @@ impl ProductBundle {
                     .iter()
                     .filter(|(k, _)| k.to_string() == id)
                     .map(|(_, v)| SchemaChange::DefineOperation(v.clone())),
+            ),
+            "hold-rule" => changes.extend(
+                self.holds
+                    .iter()
+                    .filter(|(k, _)| k.to_string() == id)
+                    .map(|(_, v)| SchemaChange::DefineHoldRule(v.clone())),
             ),
             "capability" => changes.extend(
                 self.capabilities
@@ -1375,6 +1402,13 @@ impl ProductBundle {
                 .find(|(k, _)| k.to_string() == id)
                 .and_then(|(key, def)| {
                     same(schema.operations.as_ref().and_then(|t| t.get(key)), def)
+                }),
+            "hold-rule" => self
+                .holds
+                .iter()
+                .find(|(k, _)| k.to_string() == id)
+                .and_then(|(key, def)| {
+                    same(schema.hold_rules.as_ref().and_then(|t| t.get(key)), def)
                 }),
             "capability" => self
                 .capabilities
@@ -1889,6 +1923,8 @@ fn removal_rank(kind: &str) -> u8 {
         // An interface element names views, operations and other elements, and nothing names it
         // but another element (D-8250).
         "ui-element" => 0,
+        // A hold rule names operations, roles and settings, and nothing names it.
+        "hold-rule" => 0,
         "trigger" => 0,
         "automation" => 1,
         "operation" => 2,
@@ -1923,6 +1959,7 @@ fn removal_change(entity: &OwnedEntity, delete_records: bool) -> Result<SchemaCh
         "trigger" => SchemaChange::RemoveTrigger(TriggerId::new(id).map_err(at)?),
         "automation" => SchemaChange::RemoveAutomation(WorkflowId::new(id).map_err(at)?),
         "operation" => SchemaChange::RemoveOperation(TenantOperationId::new(id).map_err(at)?),
+        "hold-rule" => SchemaChange::RemoveHoldRule(HoldRuleId::new(id).map_err(at)?),
         "mail-template" => SchemaChange::RemoveMailTemplate(TemplateId(id.to_string())),
         "notice-template" => SchemaChange::RemoveNoticeTemplate(TemplateId(id.to_string())),
         "token" => SchemaChange::RemoveToken(id.to_string()),

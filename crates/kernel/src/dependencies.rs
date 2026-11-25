@@ -498,6 +498,8 @@ pub fn classify(change: &SchemaChange, schema: &TenantSchema) -> ChangeClass {
         | RemoveToken(_)
         | RemoveUiElement(_)
         | RemoveProduct(_) => ChangeClass::Breaking,
+        // A hold rule has no dependent: nothing reads it but the decision of a change it names.
+        DefineHoldRule(_) | RemoveHoldRule(_) => ChangeClass::Compatible,
         DefineObject { .. }
         | DefineConstraint { .. }
         | DefineRole(_)

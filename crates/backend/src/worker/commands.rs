@@ -375,9 +375,31 @@ pub fn approve_step_at(
         at: now,
         timed_out: false,
     };
-    let writes = resolve(def, run.clone(), record, decision, now)
+    let mut writes = resolve(def, run.clone(), record, decision, now)
         .map_err(|why| ApiError::new(ErrorCode::Conflict, why))?;
-    app.store.automation_write(&identity.tenant, &writes, now)?;
+    // The decision is written only while the step is still waiting, as it was read: of two
+    // approvers that race, one decision is written and the other is a conflict (D-8406, WG-5488).
+    writes.only_if_awaiting = Some(strata_storage_api::jobs::StepGuard {
+        run: run_id.to_string(),
+        sequence,
+    });
+    app.store
+        .automation_write(&identity.tenant, &writes, now)
+        .map_err(|error| match error {
+            strata_storage_api::StoreError::Conflict { .. } => {
+                app.audit(
+                    "automation.approval_refused",
+                    &identity.correlation,
+                    json!({
+                        "tenant": identity.tenant.as_str(),
+                        "run": run_id,
+                        "why": "the approval was decided by another person first",
+                    }),
+                );
+                decided()
+            }
+            other => other.into(),
+        })?;
     // The deadline no longer applies; a job that is due anyway finds the step decided.
     let deadline = jobs::job_id(&identity.tenant, &timeout_key(run_id, sequence));
     let _ = app

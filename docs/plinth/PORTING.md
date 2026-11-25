@@ -70,6 +70,15 @@ Terms used below:
      Other widgets stay MANUAL; create the query, or drop the widget.
    - **Lifecycle**: check the `status` field the generator added, if it added one (the MANUAL
      note says so), and check the transition names.
+   - **Approvals** (F-held-operations): a change that needs a second person's decision is a hold
+     rule in the section `holds`: `{ "id": "<product>__hold_x", "label": "...", "target":
+     { "Operation": { "operation": "<product>__x" } }, "when": "param.amount > 100", "approver":
+     "<capability>" }`. The target is an operation, `{ "Role": { "role": ... } }` (every way to
+     confer the role) or `{ "Setting": { "setting": ... } }`; `when` is optional and reads the
+     inputs as `param.<name>` (`principal`, `team`, `role` and `action` for a role, `setting`,
+     `level`, `team` and `value` for a setting); the approver is a capability a role of the product
+     grants. The held change is decided through `decide-hold` (`/internal/holds/decide`), never by
+     a policy. See `crates/spec-compiler/tests/fixtures/products/hold-rule.jsonc`.
 
 7. **Roles and policies.** Roles come from the AUTHZ matrix (agent roles are left out). Check the
    `holders` and `capabilities`. Each product declares its own roles: a product may not name another

@@ -127,20 +127,35 @@ pub fn invoke(
             event_seq: transition.delta.event_seq,
             checks_passed: transition.evidence.len(),
             dry_run: true,
+            held: None,
         });
     }
     let done = run_intent(app, &ctx, &intent, false).map_err(explain)?;
-    let result = result_of(
-        &done.transition.output,
-        done.receipt.revision,
-        done.replayed,
-    )
-    .ok_or_else(unexpected)?;
+    // A hold rule filed the invocation: nothing was created, changed or deleted.
+    let held = crate::holds::notice_of(&done.transition.output);
+    let result = match &held {
+        Some(_) => strata_kernel::operations::TenantOperationResult {
+            operation: operation.clone(),
+            replayed: done.replayed,
+            created: Vec::new(),
+            changed: Vec::new(),
+            deleted: Vec::new(),
+            entries: Vec::new(),
+            revision: done.receipt.revision,
+        },
+        None => result_of(
+            &done.transition.output,
+            done.receipt.revision,
+            done.replayed,
+        )
+        .ok_or_else(unexpected)?,
+    };
     Ok(OperationReply {
         result,
         event_seq: done.transition.delta.event_seq,
         checks_passed: done.transition.evidence.len(),
         dry_run: false,
+        held,
     })
 }
 

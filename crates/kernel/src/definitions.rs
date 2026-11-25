@@ -391,7 +391,7 @@ fn is_param_name(name: &str) -> bool {
 
 /// Check one expression of a definition at `at`, naming it `what`; with `truth`, it must also be
 /// a truth value.
-fn check_expr(
+pub(crate) fn check_expr(
     problems: &mut Vec<String>,
     at: &str,
     what: &str,

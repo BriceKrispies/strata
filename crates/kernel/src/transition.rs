@@ -52,6 +52,28 @@ pub fn transition_pinned(
     ctx: &Context,
     pins: &PinBook,
 ) -> Result<(Transition, PinBook), DomainError> {
+    decide_intent(state, intent, ctx, pins, true)
+}
+
+/// [`transition`] of a change as it is made once a hold has let it through: the hold rules are not
+/// asked, so the change a hold applies is decided by the same code as the direct change, once
+/// (D-8400). Only [`crate::holds`] calls it, for the dry run of a filing and for an approval.
+pub(crate) fn transition_unheld(
+    state: &State,
+    intent: &Intent,
+    ctx: &Context,
+    pins: &PinBook,
+) -> Result<Transition, DomainError> {
+    decide_intent(state, intent, ctx, pins, false).map(|(transition, _)| transition)
+}
+
+fn decide_intent(
+    state: &State,
+    intent: &Intent,
+    ctx: &Context,
+    pins: &PinBook,
+    holding: bool,
+) -> Result<(Transition, PinBook), DomainError> {
     if state.tenant_id != ctx.tenant {
         return Err(refuse(
             ErrorKind::TenantMismatch,
@@ -89,6 +111,25 @@ pub fn transition_pinned(
             "tenant:snapshot_matches_context",
             "snapshot holds another tenant",
         ));
+    }
+    // A change that a hold rule names is filed, not applied (D-8400, ADM-1601).
+    if holding {
+        if let Some(change) = crate::holds::change_of(intent) {
+            if let Some(rule) = crate::holds::rule_holding(tenant, ctx, &change) {
+                let (rule_id, approver) = (rule.id.clone(), rule.approver.clone());
+                return crate::holds::file(
+                    state,
+                    tenant,
+                    ctx,
+                    pins,
+                    change,
+                    approver,
+                    Some(rule_id),
+                    None,
+                )
+                .map(|t| (t, pins.clone()));
+            }
+        }
     }
     let lookup = Lookup {
         tenant,
@@ -215,6 +256,41 @@ pub fn transition_pinned(
                 idempotency_key,
             )
             .and_then(|result| crate::triggers::after_decision(lookup, ctx, result))
+            .map(|t| (t, pins.clone()));
+        }
+        Intent::FileHold {
+            change,
+            approver,
+            on_behalf_of,
+        } => {
+            return crate::holds::file(
+                state,
+                tenant,
+                ctx,
+                pins,
+                change.clone(),
+                approver.clone(),
+                None,
+                on_behalf_of.clone(),
+            )
+            .map(|t| (t, pins.clone()));
+        }
+        Intent::DecideHold {
+            hold,
+            decision,
+            read_revision,
+            reason,
+        } => {
+            return crate::holds::decide(
+                state,
+                tenant,
+                ctx,
+                pins,
+                hold,
+                *decision,
+                *read_revision,
+                reason.as_ref(),
+            )
             .map(|t| (t, pins.clone()));
         }
         Intent::PostLedger { postings } => {
@@ -374,6 +450,16 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         Intent::InvokeOperation {
             operation, inputs, ..
         } => crate::operations::needs(schema, operation, inputs, &mut out),
+        // What a hold needs is what its change needs: the dry run of a filing and the application
+        // of an approval decide that change.
+        Intent::FileHold { change, .. } => {
+            out.extend(needs(Some(schema), &crate::holds::intent_of(change)));
+        }
+        Intent::DecideHold { hold, .. } => {
+            if let Some(held) = crate::holds::needs_of(schema, hold) {
+                out.extend(needs(Some(schema), &held));
+            }
+        }
     }
     out.into_iter().collect()
 }
@@ -439,6 +525,15 @@ pub fn refine_needs(state: &State, intent: &Intent) -> Vec<Need> {
     let Some(tenant) = state.tenant.as_deref() else {
         return Vec::new();
     };
+    // A hold plans what its change plans.
+    if let Intent::FileHold { change, .. } = intent {
+        return refine_needs(state, &crate::holds::intent_of(change));
+    }
+    if let Intent::DecideHold { hold, .. } = intent {
+        return crate::holds::needs_of(&tenant.schema, hold)
+            .map(|held| refine_needs(state, &held))
+            .unwrap_or_default();
+    }
     if let Intent::InvokeOperation {
         operation, inputs, ..
     } = intent
@@ -1947,6 +2042,9 @@ pub(crate) fn apply_change(
         | SchemaChange::RemoveNoticeTemplate(_)
         | SchemaChange::DefineToken(_)
         | SchemaChange::RemoveToken(_) => crate::templates::apply(schema, change)?,
+        SchemaChange::DefineHoldRule(_) | SchemaChange::RemoveHoldRule(_) => {
+            crate::holds::apply(schema, change)?
+        }
         SchemaChange::RecordProduct(_) | SchemaChange::RemoveProduct(_) => {
             crate::products::apply(schema, change)?
         }
@@ -2534,6 +2632,9 @@ fn require_definition_authority(
     }
     if changes.iter().any(crate::settings::is_setting_change) {
         require_capability(draft, crate::settings::SETTING_DEFINE)?;
+    }
+    if changes.iter().any(crate::holds::is_hold_change) {
+        require_capability(draft, crate::holds::HOLDS_DEFINE)?;
     }
     if changes.iter().any(crate::ledger::is_ledger_change) {
         require_capability(draft, crate::ledger::LEDGER_CONFIGURE)?;
