@@ -59,6 +59,9 @@
 // changed after it, when a result file differs from the hash recorded for it, or when re-reading
 // the result files does not show passing tests. A successful full run writes
 // var/test-results/gate-record.json.
+//
+// Every run, pass or fail, also writes its run record to var/runs/gate (and the test run to var/runs/tests):
+// scripts/run-history.mjs, read with `node scripts/runs.mjs`.
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
@@ -71,6 +74,7 @@ import { readGateConfig, reportLines, runEvidence } from './gate-evidence.mjs';
 import { readWorkspace } from './test-select.mjs';
 import { gateWallVerdict, measuredRecord, parseCargoLog, readTiers, routineSeconds, suiteVerdict, tierProblems } from './test-tiers.mjs';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
+import { gitState, record, testsReport } from './run-history.mjs';
 import { readSpecValue, specSha256 } from './spec-parts.mjs';
 import { checkoutHash, checkoutSpecs, envelopeProblems, productArgs, savedTraces, traceFreshness } from './spec-hash.mjs';
 
@@ -97,6 +101,10 @@ const checks = [];
 const failures = [];
 const notes = [];
 const notRun = [];
+// The run's record (scripts/run-history.mjs): each command as a step, with the check lines printed after it.
+const gateSteps = [];
+const gateStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
+let gateVerdict = null;
 
 // A check that did not run: shown on its own line and counted, never counted as a pass.
 function skipCheck(name, reason) {
@@ -107,8 +115,37 @@ function skipCheck(name, reason) {
 function check(name, ok, detail = '') {
   checks.push({ name, ok });
   if (!ok) failures.push(name);
+  if (gateSteps.length === 0) gateSteps.push({ name: '(checks before any command)', command: null, seconds: 0, ok: null, checks: [] });
+  gateSteps[gateSteps.length - 1].checks.push({ name, ok });
   console.log(`${ok ? 'pass' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`);
 }
+
+// Writes the run's record once, whatever way the process ends (a verdict, a stop part way, an error).
+// A record that cannot be written is reported and does not change the gate's exit code.
+let runRecorded = false;
+function recordGateRun(exitCode) {
+  if (runRecorded) return;
+  runRecorded = true;
+  try {
+    const git = gitState(root);
+    const path = record('gate', {
+      startedAt: gateStartedAt,
+      totalSeconds: Number(process.uptime().toFixed(3)),
+      commit: git.commit,
+      dirty: git.dirty,
+      flags: process.argv.slice(2),
+      verdict: gateVerdict ?? 'stopped',
+      exitCode,
+      failures: [...failures],
+      notRun: [...notRun],
+      steps: gateSteps,
+    }, { root });
+    console.log(`run recorded: ${path}`);
+  } catch (error) {
+    console.error(`run not recorded: ${error.message}`);
+  }
+}
+process.on('exit', (code) => recordGateRun(code));
 
 function detail(lines) {
   for (const line of lines) console.log(`      ${line}`);
@@ -128,7 +165,10 @@ function run(command, commandArgs, options = {}) {
     shell: options.shell === true,
     interleaved: options.interleaved === true,
   });
-  timings.push({ what: [command, ...commandArgs].join(' ').slice(0, 110), seconds: (Date.now() - started) / 1000 });
+  const seconds = (Date.now() - started) / 1000;
+  const text = [command, ...commandArgs].join(' ');
+  timings.push({ what: text.slice(0, 110), seconds });
+  gateSteps.push({ name: text.slice(0, 80), command: text, seconds: Number(seconds.toFixed(3)), ok: result.ok, checks: [] });
   return result;
 }
 
@@ -408,12 +448,20 @@ let suiteMeasured = null;
 const exegraPending = [];
 if (existsSync(resolve(exegraHome, 'cli/exegra.js'))) {
   for (const command of ['claims', 'validate']) {
+    const began = Date.now();
+    const args = [resolve(exegraHome, 'cli/exegra.js'), command, '--project', exegraProject, '--specs', exegraSpecs];
+    // The step's place in the record is taken now, when it starts; its time and result are filled in when it ends.
+    const step = { name: `exegra ${command}`, command: [process.execPath, ...args].join(' '), seconds: null, ok: null, checks: [] };
+    gateSteps.push(step);
     exegraPending.push(
-      startCommand(process.execPath, [resolve(exegraHome, 'cli/exegra.js'), command, '--project', exegraProject, '--specs', exegraSpecs], {
+      startCommand(process.execPath, args, {
         cwd: exegraHome,
         env: { ...process.env },
         timeoutMs: DEFAULT_TIMEOUT_MS,
-      }).then((result) => exegraRuns.set(command, result)),
+      }).then((result) => {
+        exegraRuns.set(command, result);
+        Object.assign(step, { seconds: Number(((Date.now() - began) / 1000).toFixed(3)), ok: result.ok });
+      }),
     );
   }
 }
@@ -432,6 +480,20 @@ if (!noTest) {
   const cargoRead = readCargo(cargo.out, cargo.ok);
   const cargoOk = cargoRead.ok;
   check('cargo test --workspace', cargoOk, cargoOk ? `${cargoRead.passed} passed, 0 failed` : `${exitText(cargo)}, ${cargoRead.passed} passed, ${cargoRead.failed} failed, ${cargoRead.binaries} test binaries reported`);
+  // The run's history (scripts/run-history.mjs): every binary, and each test where the run reported its time.
+  try {
+    const git = gitState(root);
+    const path = record('tests', testsReport(cargo.out, readWorkspace(root), {
+      commit: git.commit,
+      dirty: git.dirty,
+      flags: process.argv.slice(2),
+      ok: cargoOk,
+      steps: testSteps.map((s) => ({ name: s.name, seconds: Number(s.seconds.toFixed(3)) })),
+    }), { root });
+    console.log(`test run recorded: ${path}`);
+  } catch (error) {
+    console.error(`test run not recorded: ${error.message}`);
+  }
 
   const lake = timedStep('lake build', () => run('lake', ['build', '-v'], { cwd: resolve(root, 'lean'), timeoutMs: LONG_TIMEOUT_MS }));
   writeFileSync(join(resultsDir, 'lake-build.txt'), lake.out);
@@ -745,4 +807,5 @@ if (passed && !noTest) {
   writeFileSync(recordPath, JSON.stringify({ ...previous, counts }, null, 2) + '\n');
 }
 
+gateVerdict = passed ? 'passed' : 'failed';
 process.exit(passed ? 0 : 1);
