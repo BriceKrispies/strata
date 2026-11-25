@@ -171,9 +171,7 @@ pub fn anchors<'a>(
             ) else {
                 continue;
             };
-            let newer = found
-                .get(account)
-                .map_or(true, |(held, _)| sequence >= *held);
+            let newer = found.get(account).is_none_or(|(held, _)| sequence >= *held);
             if newer {
                 found.insert(account.to_string(), (sequence, hash.to_string()));
             }

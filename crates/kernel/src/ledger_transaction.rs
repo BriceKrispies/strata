@@ -28,8 +28,8 @@ use crate::limits;
 use crate::settings;
 use crate::state::{Need, Principal, State, TenantState};
 use crate::types::{
-    LedgerOwner, LedgerPostingRequest, LedgerPostingResult, LedgerTransaction, LedgerUnit,
-    SettingId, TenantId, Value,
+    LedgerPostingRequest, LedgerPostingResult, LedgerTransaction, LedgerUnit, SettingId, TenantId,
+    Value,
 };
 use std::collections::BTreeMap;
 

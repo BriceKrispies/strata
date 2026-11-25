@@ -1073,9 +1073,7 @@ fn transacted(world: &World, now: i64, tx: LedgerTransaction) -> World {
 }
 
 fn tx_refusal(world: &World, who: &str, now: i64, tx: LedgerTransaction) -> DomainError {
-    post_transaction_as(world, who, now, tx)
-        .err()
-        .expect("the transaction was accepted")
+    post_transaction_as(world, who, now, tx).expect_err("the transaction was accepted")
 }
 
 fn ledger_of(world: &World) -> LedgerState {
@@ -1254,7 +1252,7 @@ fn a_transaction_without_a_complete_header_is_refused() {
     };
     let mut uncorrelated = ctx("alpha", user("alpha:owner"), T0);
     uncorrelated.correlation = String::new();
-    let refusal = world.step(&intent, &uncorrelated).err().expect("refused");
+    let refusal = world.step(&intent, &uncorrelated).expect_err("refused");
     assert_eq!(failed_rule(&refusal), "ledger:header-incomplete");
 }
 

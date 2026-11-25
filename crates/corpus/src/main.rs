@@ -25,8 +25,8 @@ use std::process::ExitCode;
 use std::time::Instant;
 use strata_corpus::load::resolve;
 use strata_corpus::{
-    build_with, compile_corpus, compile_product, load_corpus, tenant_hash, verify_loaded, CorpusError, CorpusPaths,
-    LoadOptions, PopulateOptions, Scale,
+    build_with, compile_corpus, compile_product, load_corpus, tenant_hash, verify_loaded,
+    CorpusError, CorpusPaths, LoadOptions, PopulateOptions, Scale,
 };
 use strata_kernel::{TenantId, Timestamp};
 use strata_storage_api::memory::MemoryStore;

@@ -658,7 +658,7 @@ fn anchor_break(
 ) -> Option<ledger_chain::Break> {
     let (sequence, hash) = anchors.get(&ledger::account_key(account))?;
     let held = entries.iter().find(|e| e.sequence == *sequence);
-    (held.and_then(|e| e.hash.as_deref()) != Some(hash.as_str())).then(|| ledger_chain::Break {
+    (held.and_then(|e| e.hash.as_deref()) != Some(hash.as_str())).then_some(ledger_chain::Break {
         account: *account,
         sequence: *sequence,
         code: ledger_chain::CHAIN_BROKEN,
