@@ -57,6 +57,10 @@ structure Catalogue where
   recordOk : List (String × String) → Bool
   /-- The setting's value, as the form sends it, is one the setting takes. -/
   validSetting : List (String × String) → Bool
+  /-- The tenant action needs no confirmation or row prefill: it is sent as it is. -/
+  tenantActionOk : String → Bool
+  /-- The tenant form's values are complete. -/
+  validTenantForm : List (String × String) → Bool
 
 /-- The kind of a request the kernel has in flight. `session`, `view`, `signIn` and `signOut` are the
 kinds slice 1 names. `personal` stands for every request whose reply belongs to the person signed in
@@ -195,6 +199,8 @@ structure State where
   editorValues : List (String × String) := []
   /-- The editor shows that its article was refused (by the page's check or the server). -/
   editorError : Bool := false
+  /-- The schema version of the interface definition the page holds (0 before the first manifest). -/
+  manifestVersion : Nat := 0
 
 /-- Effects out of the kernel. `http` and `timer "request"` are the request and its deadline; the
 other effects are the page's own (URL, scroll), the live connection, storage, the browser's passkey
@@ -269,6 +275,12 @@ inductive Msg where
   | personalChallenge (id : Nat)
   /-- An article save was answered: the view is read again. -/
   | editorAnswer (id : Nat)
+  /-- The tenant's interface definition is asked for (on a schema notice, or when an address needs it). -/
+  | manifestAsk
+  /-- The manifest arrived, with its schema version. -/
+  | manifestAnswer (id version : Nat)
+  /-- A tenant operation (a form or an action of a tenant screen) was answered: the view is read again. -/
+  | tenantAnswer (id : Nat)
 
 /-- The desk's actions that make a request for the person signed in: the revocation of a session or of the
 others, and the removal of a passkey (`sessions.js`, `passkeys.js`). -/

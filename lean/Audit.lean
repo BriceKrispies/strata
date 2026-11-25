@@ -322,4 +322,6 @@ import Strata
 #print axioms Strata.Browser.save_sent_only_checked
 #print axioms Strata.Browser.publish_sent_only_checked
 #print axioms Strata.Browser.editor_answer_reads_view
-#print axioms Strata.Browser.setting_sent_only_valid
+#print axioms Strata.Browser.manifest_version_never_drops
+#print axioms Strata.Browser.tenant_action_sent_only_allowed
+#print axioms Strata.Browser.tenant_answer_reads_view

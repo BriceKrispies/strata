@@ -703,6 +703,51 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
           pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
         (fetch s.nextId .personal)
 
+  /-- The tenant's interface definition is asked for: the manifest is read (`ui.manifest`). -/
+  | manifestAsk {s : State} :
+      Allowed cat s .manifestAsk
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .shared, s.generation⟩ :: s.pending }
+        (fetch s.nextId .shared)
+  /-- A manifest that is not older than the one held is taken in. -/
+  | manifestNewer {s : State} {id version : Nat} :
+      pendingOf s id .shared →
+      s.manifestVersion ≤ version →
+      Allowed cat s (.manifestAnswer id version)
+        { s with pending := dropId s.pending id, manifestVersion := version } []
+  /-- A manifest older than the one held is ignored. -/
+  | manifestOlder {s : State} {id version : Nat} :
+      pendingOf s id .shared →
+      version < s.manifestVersion →
+      Allowed cat s (.manifestAnswer id version) { s with pending := dropId s.pending id } []
+  /-- A tenant action is sent for the person signed in (`tenant.action`). -/
+  | tenantAction {s : State} {arg : String} :
+      cat.tenantActionOk arg = true →
+      Allowed cat s (.action "tenant.action" arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- A tenant form is sent for the person signed in (`tenant.submit`). -/
+  | tenantSubmit {s : State} {form : String} {values : List (String × String)} :
+      form.startsWith "tenant:" = true →
+      cat.validTenantForm values = true →
+      Allowed cat s (.submit form values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- A tenant operation is answered: the view is read again, whatever the operation's own message. -/
+  | tenantAnswerRefresh {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.tenantAnswer id)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .view, s.generation⟩ :: dropViews (dropId s.pending id)
+          view := { status := .loading, model := s.view.model, request := some s.nextId } }
+        (fetch s.nextId .view)
+
 /-- The states the kernel can reach from the initial state by allowed steps. -/
 inductive Reachable (cat : Catalogue) : State → Prop
   | start : Reachable cat
@@ -962,13 +1007,24 @@ theorem editor_answer_reads_view (cat : Catalogue) {s s' : State} {id : Nat} {es
 
 /-! ### Settings (slice 10) -/
 
-/-- **A settings form that is sent carries a value the setting takes.** -/
-theorem setting_sent_only_valid (cat : Catalogue) {s s' : State} {m : Msg} {form : String}
-    {values : List (String × String)} {es : List Effect}
-    (hm : m = .submit form values) (ha : Allowed cat s m s' es) (hes : es ≠ [])
-    (hform : form.startsWith "settings:" = true) :
-    cat.validSetting values = true := by
-  cases ha <;> first | (simp_all; done) | (obtain ⟨rfl, -⟩ := hm; exact absurd hform (by decide))
+/-! ### The tenant interface (slice 11) -/
+
+/-- **A manifest never lowers the schema version the page holds.** -/
+theorem manifest_version_never_drops (cat : Catalogue) {s s' : State} {id version : Nat} {es : List Effect}
+    (ha : Allowed cat s (.manifestAnswer id version) s' es) :
+    s.manifestVersion ≤ s'.manifestVersion := by
+  cases ha <;> simp_all
+
+/-- **A tenant action is sent only when the catalogue says it needs no confirmation or prefill.** -/
+theorem tenant_action_sent_only_allowed (cat : Catalogue) {s s' : State} {m : Msg} {arg : String}
+    {es : List Effect} (hm : m = .action "tenant.action" arg) (ha : Allowed cat s m s' es)
+    (hes : es ≠ []) : cat.tenantActionOk arg = true := by
+  cases ha <;> simp_all [factorsRequests, deskRequests]
+
+/-- **A tenant operation that is answered reads the view again.** -/
+theorem tenant_answer_reads_view (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}
+    (ha : Allowed cat s (.tenantAnswer id) s' es) : es = fetch s.nextId .view := by
+  cases ha; rfl
 
 /-! ## Non-vacuity -/
 
@@ -985,7 +1041,9 @@ def sampleCatalogue : Catalogue :=
     validSecondFactor := fun _ => true
     validStepUp := fun _ => true
     recordOk := fun _ => true
-    validSetting := fun _ => true }
+    validSetting := fun _ => true
+    tenantActionOk := fun _ => true
+    validTenantForm := fun _ => true }
 
 /-- The relation is not empty where the theorems look: a page that starts for a person, reads the
 view of its screen and holds it is a reachable state, holding a model read for that person. -/

@@ -528,12 +528,12 @@ what the B2 implementation will be proved against.
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `http_result` ui.manifest | a manifest not older than the held one is accepted; its parts are asked for | not covered | 11 |
+| `http_result` ui.manifest | a manifest not older than the held one is taken in; an older one is ignored (`manifestNewer`, `manifestOlder`); the parts it names are not asked for yet | partly | 11 (the parts: `ui.part`, not yet) |
 | `http_result` ui.part | the part is held; a form whose field was removed names what was lost | not covered | 11 |
-| schema notice (`ws_message` event) | the manifest is read again | not covered | 11 (with 5) |
-| `action tenant.action` | a tenant action: confirmation, row prefill, opening a form | not covered | 11 |
-| `submit` tenant:id, `input` tenant:id | a tenant form's values and submission | not covered | 11 |
-| `http_result` tenant.submit, tenant.action | the operation's answer: toast, navigation, or the refusal's words | not covered | 11 |
+| schema notice (`ws_message` event) | the manifest is read again (`manifestAsk`; the notice itself is a live frame, slice 5) | partly | 11 |
+| `action tenant.action` | a tenant action is sent when the catalogue says it needs no confirmation or prefill (`tenantAction`); the two-press confirmation and the row prefill are not yet | partly | 11 |
+| `submit` tenant:id | a tenant form is sent for complete values (`tenantSubmit`); the typed values, `input` tenant:id, are not yet | partly | 11 |
+| `http_result` tenant.submit, tenant.action | the answer reads the view again (`tenantAnswerRefresh`); the toast, the navigation and the refusal's words are not yet | partly | 11 |
 
 #### Impact Lab
 
@@ -696,7 +696,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 | 8 (partly done) | The person's sessions and passkeys on the desk: the revocations and the passkey removal (`deskAsk`), the registration (`passkeyAddAsk`, `personalCeremony`, `passkeyCompleted`, `passkeyDeclined`), and their answers (`personalAnswerReload`, `personalAnswerQuiet`). Still open: the list reads, the support check of passkeys, and the toasts | 3, 7 |
 | 9 (partly done) | Records: the editor's save and publish with the page's check (`editorSave`, `editorSaveRefused`, `editorPublish`, `editorPublishRefused`, `inputEditor`), and the answer that reads the view again (`editorAnswerRefresh`). Still open: unpublish, preview, row actions, paging, the two-step save of a new record, and the drift log | 3, 5 |
 | 10 (partly done) | Settings: a save at one level for a value the setting takes (`settingsWrite`), its success reading the list again (`personalAnswerReload`), the list reply (`personalAnswerQuiet`). Still open: the typed values, the refusal's words, entering the page, and the setting notice's binding | 3, 5 |
-| 11 | Tenant interface: manifest, parts, tenant screens by address, tenant forms and actions, lost drafts, the held part (`Loop`) | 3, 5 |
+| 11 (partly done) | Tenant interface: the manifest and its version (`manifestAsk`, `manifestNewer`, `manifestOlder`), tenant actions and forms sent for the person (`tenantAction`, `tenantSubmit`), and their answers (`tenantAnswerRefresh`). Still open: the parts, the tenant screens by address, the confirmations and row prefill, the typed values, the navigation of a tenant answer, and the lost drafts | 3, 5 |
 | 12 | Impact Lab: overview, runs and their frames, polling, apply, replay, verify, diagnostics | 3, 5, 7 |
 | 13 | View derivation: the page builders per screen kind, the title and navigation, the tenant's composition and display; `render_sound` over the page | 1, 9, 10, 11, 12 |
 | 14 | Browser storage: the view cache with stamps, the offline queue, the leader tab, drafts at rest (`docs/frontend.md`, follow-ups 4 to 9) | 3, 5 |
@@ -704,7 +704,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 ### 7.7 Counts
 
 The messages table has 80 rows (a row is one message, or one family of messages with the same handling):
-34 covered, 25 partly, 21 not covered (after slice 10). The effects table has
+34 covered, 30 partly, 16 not covered (after slice 11). The effects table has
 15 rows: 8 covered, 5 partly, 2 not covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
