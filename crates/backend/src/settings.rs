@@ -311,6 +311,8 @@ fn entry_json(view: &kernel::SettingView) -> Json_ {
         "team": resolution.team.as_ref().map(TeamId::as_str),
         "locked": def.locked_by.is_some(),
         "writable_levels": view.writable.iter().map(|level| level.as_str()).collect::<Vec<_>>(),
+        "tenant_revision": view.tenant_revision,
+        "person_revision": view.person_revision,
     })
 }
 

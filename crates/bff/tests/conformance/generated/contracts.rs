@@ -2882,6 +2882,16 @@ pub const TYPES: &[TypeDecl] = &[
                 ty: Ty::List(&Ty::Named("setting-level")),
                 optional: false,
             },
+            Field {
+                wire: "tenant_revision",
+                ty: Ty::Int(0, 18446744073709551615),
+                optional: false,
+            },
+            Field {
+                wire: "person_revision",
+                ty: Ty::Int(0, 18446744073709551615),
+                optional: false,
+            },
         ]),
     },
     TypeDecl {
@@ -3224,6 +3234,7 @@ pub const COVERED: &[&str] = &[
     "read-new-article-view",
     "read-edit-article-view",
     "read-settings-view",
+    "read-settings-page",
     "read-lab-view",
     "sign-in-at-site",
     "sign-out-of-site",
@@ -6140,6 +6151,92 @@ pub const READ_SETTINGS_VIEW: Contract = Contract {
 #[tokio::test]
 async fn read_settings_view() {
     conform(&SPEC, &READ_SETTINGS_VIEW).await;
+}
+
+/// Contract `read-settings-page` (CT-1856): GET /api/view view.
+pub const READ_SETTINGS_PAGE: Contract = Contract {
+    id: "read-settings-page",
+    method: "GET",
+    shape: Shape::View,
+    scheme: Scheme::Session,
+    requires: &["setting-read"],
+    roles: &[],
+    origin: false,
+    csrf: false,
+    step_up: false,
+    read_only: true,
+    tenant_input: None,
+    probe: Request {
+        path: "/api/view",
+        query: &[("path", "/settings")],
+        body: None,
+    },
+    success: Some(Request {
+        path: "/api/view",
+        query: &[("path", "/settings")],
+        body: None,
+    }),
+    setup: &[],
+    reply: Reply::Members(&[
+        Field {
+            wire: "view",
+            ty: Ty::Text,
+            optional: false,
+        },
+        Field {
+            wire: "title",
+            ty: Ty::Text,
+            optional: false,
+        },
+        Field {
+            wire: "path",
+            ty: Ty::Text,
+            optional: false,
+        },
+        Field {
+            wire: "params",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "data",
+            ty: Ty::Named("site-page-data"),
+            optional: false,
+        },
+        Field {
+            wire: "depends_on",
+            ty: Ty::List(&Ty::Text),
+            optional: false,
+        },
+        Field {
+            wire: "people",
+            ty: Ty::Map(&Ty::Named("person-entry")),
+            optional: true,
+        },
+        Field {
+            wire: "revision",
+            ty: Ty::Named("state-revision"),
+            optional: false,
+        },
+        Field {
+            wire: "schema_version",
+            ty: Ty::Named("schema-version"),
+            optional: false,
+        },
+        Field {
+            wire: "theme",
+            ty: Ty::Named("view-theme"),
+            optional: false,
+        },
+    ]),
+    errors: &["unauthenticated", "forbidden", "unavailable"],
+    step_up_error: None,
+    quota: None,
+};
+
+#[tokio::test]
+async fn read_settings_page() {
+    conform(&SPEC, &READ_SETTINGS_PAGE).await;
 }
 
 /// Contract `read-lab-view` (CT-253): GET /api/view view.
