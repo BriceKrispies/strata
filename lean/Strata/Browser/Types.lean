@@ -55,6 +55,8 @@ structure Catalogue where
   validStepUp : List (String × String) → Bool
   /-- The page's check of an article (the record rules the server sent for the editor) passes it. -/
   recordOk : List (String × String) → Bool
+  /-- The setting's value, as the form sends it, is one the setting takes. -/
+  validSetting : List (String × String) → Bool
 
 /-- The kind of a request the kernel has in flight. `session`, `view`, `signIn` and `signOut` are the
 kinds slice 1 names. `personal` stands for every request whose reply belongs to the person signed in

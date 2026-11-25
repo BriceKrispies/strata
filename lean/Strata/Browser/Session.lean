@@ -692,6 +692,17 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
           editorError := false }
         (fetch s.nextId .view)
 
+  /-- A setting is saved at one level (the form is `settings:<level>:<id>`), with a value the setting takes:
+  the write is sent for the person signed in (`settings.write`). -/
+  | settingsWrite {s : State} {form : String} {values : List (String × String)} :
+      form.startsWith "settings:" = true →
+      cat.validSetting values = true →
+      Allowed cat s (.submit form values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+
 /-- The states the kernel can reach from the initial state by allowed steps. -/
 inductive Reachable (cat : Catalogue) : State → Prop
   | start : Reachable cat
@@ -949,6 +960,16 @@ theorem editor_answer_reads_view (cat : Catalogue) {s s' : State} {id : Nat} {es
     (ha : Allowed cat s (.editorAnswer id) s' es) : es = fetch s.nextId .view := by
   cases ha; rfl
 
+/-! ### Settings (slice 10) -/
+
+/-- **A settings form that is sent carries a value the setting takes.** -/
+theorem setting_sent_only_valid (cat : Catalogue) {s s' : State} {m : Msg} {form : String}
+    {values : List (String × String)} {es : List Effect}
+    (hm : m = .submit form values) (ha : Allowed cat s m s' es) (hes : es ≠ [])
+    (hform : form.startsWith "settings:" = true) :
+    cat.validSetting values = true := by
+  cases ha <;> first | (simp_all; done) | (obtain ⟨rfl, -⟩ := hm; exact absurd hform (by decide))
+
 /-! ## Non-vacuity -/
 
 /-- A catalogue with one screen, which needs a signed-in person, for the witness below. -/
@@ -963,7 +984,8 @@ def sampleCatalogue : Catalogue :=
     validProvider := fun _ => true
     validSecondFactor := fun _ => true
     validStepUp := fun _ => true
-    recordOk := fun _ => true }
+    recordOk := fun _ => true
+    validSetting := fun _ => true }
 
 /-- The relation is not empty where the theorems look: a page that starts for a person, reads the
 view of its screen and holds it is a reachable state, holding a model read for that person. -/

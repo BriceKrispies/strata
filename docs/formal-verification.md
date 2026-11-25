@@ -520,9 +520,9 @@ what the B2 implementation will be proved against.
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `http_result` settings.definitions (entered with the page) | the settings list | not covered | 10 |
-| `submit` settings, `submit` settings:level:id, `input` settings; `http_result` settings.write | a save of one setting at one level, at the revision read; read again after the answer | not covered | 10 |
-| setting notice (`ws_message` event, kind setting) | the view is read again when the view reads the setting | not covered | 10 (with 5) |
+| `http_result` settings.definitions (entered with the page) | the settings list is held (`personalAnswerQuiet`); the page's entry that asks for it is a screen hook, not yet in the relation | partly | 10 |
+| `submit` settings, `submit` settings:level:id; `http_result` settings.write | a save at one level is sent for a value the setting takes (`settingsWrite`); success reads the definitions again (`personalAnswerReload`); the typed values (`input` settings) and the refusal's words are not yet | partly | 10 |
+| setting notice (`ws_message` event, kind setting) | the view is read again when the view reads the setting | partly | 10 (with 5: the view is read again when the live bindings say so, and the setting notice is one of them) |
 
 #### Tenant interface
 
@@ -695,7 +695,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 | 7 (partly done) | Second factors and step-up: the waiting sign-in and the second-factor code (`signInWaiting`, `secondSubmit`, `secondRefused`), the step-up (`stepUpRequired`, `stepUpSubmit`, `stepUpAnswer`, `stepUpCancel`), the factor requests and their answers (`factorsAsk`, `factorsAnswer`). Still open: the passkey as a second factor, the enrolment and recovery-code details, and the redispatch of a refused action once confirmed | 3, 6 |
 | 8 (partly done) | The person's sessions and passkeys on the desk: the revocations and the passkey removal (`deskAsk`), the registration (`passkeyAddAsk`, `personalCeremony`, `passkeyCompleted`, `passkeyDeclined`), and their answers (`personalAnswerReload`, `personalAnswerQuiet`). Still open: the list reads, the support check of passkeys, and the toasts | 3, 7 |
 | 9 (partly done) | Records: the editor's save and publish with the page's check (`editorSave`, `editorSaveRefused`, `editorPublish`, `editorPublishRefused`, `inputEditor`), and the answer that reads the view again (`editorAnswerRefresh`). Still open: unpublish, preview, row actions, paging, the two-step save of a new record, and the drift log | 3, 5 |
-| 10 | Settings: the definitions, saves by level, setting notices | 3, 5 |
+| 10 (partly done) | Settings: a save at one level for a value the setting takes (`settingsWrite`), its success reading the list again (`personalAnswerReload`), the list reply (`personalAnswerQuiet`). Still open: the typed values, the refusal's words, entering the page, and the setting notice's binding | 3, 5 |
 | 11 | Tenant interface: manifest, parts, tenant screens by address, tenant forms and actions, lost drafts, the held part (`Loop`) | 3, 5 |
 | 12 | Impact Lab: overview, runs and their frames, polling, apply, replay, verify, diagnostics | 3, 5, 7 |
 | 13 | View derivation: the page builders per screen kind, the title and navigation, the tenant's composition and display; `render_sound` over the page | 1, 9, 10, 11, 12 |
@@ -704,7 +704,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 ### 7.7 Counts
 
 The messages table has 80 rows (a row is one message, or one family of messages with the same handling):
-34 covered, 22 partly, 24 not covered (after slice 9). The effects table has
+34 covered, 25 partly, 21 not covered (after slice 10). The effects table has
 15 rows: 8 covered, 5 partly, 2 not covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
