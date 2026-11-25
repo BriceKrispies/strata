@@ -461,9 +461,16 @@ fn the_toggle_product_installs_and_its_operation_adds_then_removes_a_reaction() 
             .count()
     };
 
+    // The add posts a point received by the message's author (WG-5598), and the author must be a
+    // member of the tenant. The owner is the only member this bundle installs, so the owner writes the
+    // message: the given and the received point then sit on one person's account, in two units.
+    let author = "user:admin";
     let message = Intent::CreateRecord {
         object: object("toggle__message"),
-        fields: std::collections::BTreeMap::from([(field("body"), text("Hello"))]),
+        fields: std::collections::BTreeMap::from([
+            (field("body"), text("Hello")),
+            (field("author"), text(author)),
+        ]),
     };
     let world = run(&world, message);
     let toggle = |key: &str| Intent::InvokeOperation {
@@ -474,10 +481,41 @@ fn the_toggle_product_installs_and_its_operation_adds_then_removes_a_reaction() 
         ]),
         idempotency_key: key.to_string(),
     };
+    // The balance of a person's account in a unit of the product (no scope).
+    let balance = |world: &World, owner: &str, unit: &str| -> i64 {
+        use strata_kernel::ledger::{account_id, account_key};
+        use strata_kernel::{LedgerOwner, LedgerUnit};
+        let state = &world.tenants[&TenantId::new("acme").expect("tenant id")];
+        let owner = LedgerOwner::Principal {
+            principal: PrincipalId::new(owner).expect("principal id"),
+        };
+        let unit = LedgerUnit::new(unit).expect("ledger unit");
+        let id = account_id(&state.id, &owner, &unit, "");
+        state
+            .ledger
+            .as_ref()
+            .and_then(|ledger| ledger.accounts.get(&account_key(&id)))
+            .map_or(0, |account| account.balance.0)
+    };
+    let given = |world: &World| balance(world, "user:admin", "toggle__reactions_given");
+    let received = |world: &World| balance(world, author, "toggle__reactions_received");
+
     let added = run(&world, toggle("k-add"));
     assert_eq!(reactions(&added), 1, "the first toggle adds the reaction");
+    assert_eq!(given(&added), 1, "the reactor gives one point");
+    assert_eq!(received(&added), 1, "the author receives one point");
     let removed = run(&added, toggle("k-remove"));
     assert_eq!(reactions(&removed), 0, "the second toggle removes it");
+    assert_eq!(
+        given(&removed),
+        0,
+        "taking the reaction back reverses the given point"
+    );
+    assert_eq!(
+        received(&removed),
+        0,
+        "taking the reaction back reverses the received point"
+    );
 }
 
 /// WG-5606: a product whose operations write its own settings compiles into a bundle that installs

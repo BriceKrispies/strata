@@ -34,6 +34,8 @@ mod limits;
 #[path = "object_meta.rs"]
 mod object_meta;
 
+#[path = "operation_settings.rs"]
+mod operation_settings;
 #[path = "operations.rs"]
 mod operations;
 
