@@ -37661,7 +37661,7 @@
         },
         {
           "name": "schema",
-          "expr": "tenant-schema{version: current.version + 1, triggers: applied.schema.triggers, automations: applied.schema.automations, operations: applied.schema.operations, objects: applied.schema.objects, roles: applied.schema.roles, role-permissions: applied.schema.role-permissions, teams: applied.schema.teams, invitations: applied.schema.invitations, policies: applied.schema.policies, workflows: applied.schema.workflows, queries: applied.schema.queries, views: applied.schema.views, settings: applied.schema.settings, capabilities: applied.schema.capabilities, ledger: applied.schema.ledger, mail-templates: applied.schema.mail-templates, notice-templates: applied.schema.notice-templates, tokens: applied.schema.tokens, products: applied.schema.products, hold-rules: applied.schema.hold-rules, holds: applied.schema.holds, ui: applied.schema.ui, scoped-roles: applied.schema.scoped-roles}"        }
+          "expr": "tenant-schema{version: current.version + 1, triggers: applied.schema.triggers, automations: applied.schema.automations, operations: applied.schema.operations, objects: applied.schema.objects, roles: applied.schema.roles, role-permissions: applied.schema.role-permissions, teams: applied.schema.teams, invitations: applied.schema.invitations, policies: applied.schema.policies, workflows: applied.schema.workflows, queries: applied.schema.queries, views: applied.schema.views, settings: applied.schema.settings, capabilities: applied.schema.capabilities, ledger: applied.schema.ledger, mail-templates: applied.schema.mail-templates, notice-templates: applied.schema.notice-templates, tokens: applied.schema.tokens, products: applied.schema.products, hold-rules: applied.schema.hold-rules, holds: applied.schema.holds, ui: applied.schema.ui, scoped-roles: applied.schema.scoped-roles, separations: applied.schema.separations}"        }
       ],
       "body": "match get(problems, 0) { Some(first) => fail(rejection.rejected(domain-error{kind: error-kind.invalid-schema, message: first, evidence: concat(applied.evidence, map(p in problems, check{rule: 'schema:consistency', passed: false, detail: p}))})), None => match get(try call unique-duplicates(tenant, coverage, current, schema, changes), 0) { Some(c) => fail(rejection.rejected(domain-error{kind: error-kind.unique-violated, message: format('{}: {}', c.rule, c.detail), evidence: concat(applied.evidence, [c])})), None => fold(o in call touched-objects(changes), acc = migration-plan{schema, summary: applied.summary, rewritten: [], violations: []}, match get(schema.objects, o) { None => acc, Some(def) => if get(current.objects, o) == null then acc else fold(r in try call lookup-all(tenant, coverage, o), a = acc, let stripped = fold(k in keys(r.fields), m = {}, if get(def.fields, k) == null then m else match get(r.fields, k) { Some(x) => insert(m, k, x), None => m }) in let same = keys(stripped) == keys(r.fields) in let candidate = if same then r else record{id: r.id, object: r.object, version: r.version + 1, created-by: r.created-by, created-at: r.created-at, updated-at: now, fields: stripped} in let outcome = try call validate-record(tenant, coverage, schema, def, candidate, null, principal.system, now) in migration-plan{schema: a.schema, summary: a.summary, rewritten: if same then a.rewritten else concat(a.rewritten, [candidate]), violations: concat(a.violations, map(f in outcome.failed, violation{object: o, id: r.id, check: f.check, kind: f.kind}))}) }) } }",
       "examples": [
@@ -69054,7 +69054,7 @@
     },
     {
       "id": "require-definition-authority",
-      "description": "transition.rs require_definition_authority: beyond Manage on Schema, a change of a trigger or an automation needs the capability automations-define (WFL-1520), checked once and first; then, in the order of the changes, every run-as role of a defined automation is one the principal may confer (require-conferrable, ADM-152, WFL-1528) and the definer of a tenant operation holds every power its steps use (require-operation-powers). A change of a setting definition needs the capability setting-define, checked after the capability of automations (settings.rs SETTING_DEFINE). A change of the ledger declarations needs the capability ledger-configure, checked after setting-define (ledger.rs LEDGER_CONFIGURE). Last, each change in order is checked by require-widening: a change that adds a power to a role needs the principal to hold every power it adds (ADM-1088).",
+      "description": "transition.rs require_definition_authority: beyond Manage on Schema, a change of a trigger or an automation needs the capability automations-define (WFL-1520), checked once and first; then, in the order of the changes, every run-as role of a defined automation is one the principal may confer (require-conferrable, ADM-152, WFL-1528) and the definer of a tenant operation holds every power its steps use (require-operation-powers). A change of a setting definition needs the capability setting-define, checked after the capability of automations (settings.rs SETTING_DEFINE). A change of the separations of duties needs the capability separations-define, checked after setting-define (duties.rs SEPARATIONS_DEFINE, ADM-1642). A change of the ledger declarations needs the capability ledger-configure, checked after separations-define (ledger.rs LEDGER_CONFIGURE). Last, each change in order is checked by require-widening: a change that adds a power to a role needs the principal to hold every power it adds (ADM-1088).",
       "params": [
         {
           "name": "d",
@@ -69085,12 +69085,20 @@
           "expr": "if setting then try call require-capability(d1, 'setting-define') else d1"
         },
         {
+          "name": "separation",
+          "expr": "any(c in changes, match c { define-separation => true, remove-separation => true, _ => false })"
+        },
+        {
+          "name": "d1bs",
+          "expr": "if separation then try call require-capability(d1b, 'separations-define') else d1b"
+        },
+        {
           "name": "ledger",
           "expr": "any(c in changes, match c { declare-ledger-unit => true, declare-ledger-pool => true, set-ledger-limit => true, remove-ledger-definition => true, _ => false })"
         },
         {
           "name": "d1c",
-          "expr": "if ledger then try call require-capability(d1b, 'ledger-configure') else d1b"
+          "expr": "if ledger then try call require-capability(d1bs, 'ledger-configure') else d1bs"
         },
         {
           "name": "d2",
