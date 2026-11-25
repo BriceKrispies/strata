@@ -3,7 +3,7 @@
   // there and created when it is not, in one tenant operation. A find-record step reads the caller's
   // reaction for the message and kind, and a branch on found deletes it or creates it. The file declares
   // everything it names in its own namespace toggle__ (D-6582).
-  "product": { "id": "toggle", "name": "Toggle", "imports": { "spec": "../../../../../specifications/spec.jsonc", "entities": [] } },
+  "product": { "id": "toggle", "name": "Toggle", "version": "1.0.0", "platform": { "min": "0.2" }, "imports": { "spec": "../../../../../specifications/spec.jsonc", "entities": [] } },
   "objects": [
     {
       "id": "toggle__message",
