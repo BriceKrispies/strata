@@ -189,6 +189,13 @@ fn row(rank: Option<i64>, published: bool, team: Option<&'static str>, score: Op
     }
 }
 
+/// A slug no note of any world built in this process has: notes are added to worlds that already
+/// hold notes, so the slugs of one call cannot be numbered from zero.
+fn next_slug() -> usize {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Add the notes, one intent each: created as the owner and, when published, published by the
 /// editor, as the workflow of the notes requires. Returns the ids in order.
 fn populate(world: &World, rows: &[Row]) -> (World, Vec<RecordId>) {
@@ -198,7 +205,7 @@ fn populate(world: &World, rows: &[Row]) -> (World, Vec<RecordId>) {
         let now = 4_000 + 2 * i as i64;
         let mut fields = BTreeMap::from([
             (field("title"), text(&format!("N{i}"))),
-            (field("slug"), text(&format!("s{i}"))),
+            (field("slug"), text(&format!("s{}", next_slug()))),
         ]);
         if let Some(rank) = row.rank {
             fields.insert(field("rank"), int(rank));
@@ -700,6 +707,10 @@ fn ask(query: &str, aggregate_name: &str, params: &[(&str, Value)]) -> Aggregate
     }
 }
 
+fn run_on(state: &State, who: &Principal, request: &AggregateRequest) -> Result<AggregateResult, DomainError> {
+    aggregates::run(state, request, &ctx("alpha", who.clone(), 90_000))
+}
+
 fn run_request(
     world: &World,
     who: &Principal,
@@ -737,6 +748,7 @@ fn crowded_with_team(world: &World, n: u64, red: u64) -> State {
 }
 
 // Verifies: AGG-2326
+// Verifies: AGG-2329
 // Verifies: AGG-2324
 #[test]
 fn an_index_answerable_aggregate_reads_only_its_matches_past_the_window_and_a_scanned_one_is_refused(
@@ -766,12 +778,12 @@ fn an_index_answerable_aggregate_reads_only_its_matches_past_the_window_and_a_sc
             .count(),
         30
     );
-    let result = run_request(&world, &Principal::Anonymous, &red).unwrap();
+    let result = run_on(&state, &Principal::Anonymous, &red).unwrap();
     assert_eq!(single(&result), Some(int(30)));
     assert_eq!(result.scanned, 30);
     let by_status = ask("by_team", "count_by_status", &[("team", text("red"))]);
     assert_eq!(
-        pairs(&run_request(&world, &Principal::Anonymous, &by_status).unwrap()),
+        pairs(&run_on(&state, &Principal::Anonymous, &by_status).unwrap()),
         vec![(Some(text("published")), Some(int(30)))]
     );
     // A team with no notes is answered from no records at all.
@@ -788,7 +800,7 @@ fn an_index_answerable_aggregate_reads_only_its_matches_past_the_window_and_a_sc
         0
     );
     assert_eq!(
-        single(&run_request(&world, &Principal::Anonymous, &blue).unwrap()),
+        single(&run_on(&state, &Principal::Anonymous, &blue).unwrap()),
         Some(int(0))
     );
 
@@ -803,12 +815,13 @@ fn an_index_answerable_aggregate_reads_only_its_matches_past_the_window_and_a_sc
             limit: limits::MAX_SCAN_RECORDS + 1,
         }]
     );
-    let error = run_request(&world, &Principal::Anonymous, &scored).unwrap_err();
+    let error = run_on(&full, &Principal::Anonymous, &scored).unwrap_err();
     assert_eq!(error.kind, ErrorKind::LimitExceeded);
     assert_eq!(failed_rule(&error), aggregates::SCAN_BOUND_EXCEEDED);
 }
 
 // Verifies: AGG-2326
+// Verifies: AGG-2329
 // Verifies: AGG-015
 // Verifies: AGG-017
 #[test]
@@ -844,7 +857,8 @@ fn an_index_answerable_aggregate_counts_only_the_matches_the_reader_may_read() {
 }
 
 // Verifies: AGG-010
-// Verifies: AGG-011
+// Verifies: AGG-2327
+// Verifies: AGG-2328
 // Verifies: AGG-016
 // Verifies: AGG-001
 #[test]
@@ -885,6 +899,7 @@ fn an_average_is_the_integer_part_of_the_mean_and_null_without_a_value() {
 }
 
 // Verifies: AGG-016
+// Verifies: AGG-2327
 #[test]
 fn an_average_rounds_toward_zero() {
     let (world, _) = populate(
