@@ -1,0 +1,1842 @@
+{
+  "generatedBy": "docs/plinth/merge-fundamentals.mjs",
+  "fundamentals": [
+    {
+      "id": "F-role-definition-authority",
+      "theme": "Authorization and admin",
+      "title": "A change to a role, policy or invoker list cannot grant its maker powers they lack",
+      "task": "WG-5616",
+      "security": true,
+      "namedAs": [
+        "F-role-definition-authority"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-scoped-role-assignment",
+      "theme": "Authorization and admin",
+      "title": "Role assignments and grants narrowed by a scope predicate over the target",
+      "task": "WG-5499",
+      "security": true,
+      "namedAs": [
+        "F-row-scoped-grants",
+        "F-scoped-role-assignment"
+      ],
+      "sources": [
+        "g2-rewards",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.points.award",
+        "g2-rewards:M4.orders.list",
+        "g2-rewards:M4.orders.transition/approve",
+        "g2-rewards:M4.orders.transition/cancel",
+        "g2-rewards:M4.orders.transition/deliver",
+        "g2-rewards:M4.orders.transition/fulfil",
+        "g2-rewards:M4.orders.transition/ship",
+        "g2-rewards:M4.store.orders",
+        "g2-rewards:M4.store.orders (manage)",
+        "g4-governance:AUTHZ.A-DEFAULT-GRANTS-STAY",
+        "g4-governance:AUTHZ.A-ROLE-SCOPE-AND",
+        "g4-governance:AUTHZ.audit:view",
+        "g4-governance:AUTHZ.grant",
+        "g4-governance:AUTHZ.points:view-all",
+        "g4-governance:AUTHZ.query:run",
+        "g4-governance:AUTHZ.role.manager",
+        "g4-governance:AUTHZ.store:approve",
+        "g4-governance:AUTHZ.tasks:manage",
+        "g4-governance:KERNEL.K2",
+        "g4-governance:KERNEL.K9",
+        "g4-governance:M12.M12-I4",
+        "g4-governance:M12.audit.timeline",
+        "g4-governance:REPORTING.REP-I1",
+        "g4-governance:REPORTING.REP-I4",
+        "g4-governance:REPORTING.REP-I9"
+      ]
+    },
+    {
+      "id": "F-time-bound-grants",
+      "theme": "Authorization and admin",
+      "title": "Grants and assignments with expiry and status",
+      "task": "WG-5499",
+      "security": true,
+      "namedAs": [
+        "F-time-bound-access",
+        "F-time-bound-grants"
+      ],
+      "sources": [
+        "baseline",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:AUTHZ.A-GRANT-LIVE",
+        "g4-governance:AUTHZ.grant",
+        "g4-governance:KERNEL.K2",
+        "g4-governance:M13.admin.grant_propose"
+      ]
+    },
+    {
+      "id": "F-principal-attributes",
+      "theme": "Authorization and admin",
+      "title": "Principal attributes (region, department) usable in predicates",
+      "task": "WG-5500",
+      "security": true,
+      "namedAs": [
+        "F-principal-attributes"
+      ],
+      "sources": [
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:AUTHZ.A-ROLE-SCOPE-AND",
+        "g4-governance:AUTHZ.points:view-all",
+        "g4-governance:COND.member-facts"
+      ]
+    },
+    {
+      "id": "F-role-composition",
+      "theme": "Authorization and admin",
+      "title": "Role implication and conflicting-role declarations",
+      "task": "WG-5500",
+      "security": true,
+      "namedAs": [
+        "F-role-composition"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-explicit-deny-grants",
+      "theme": "Authorization and admin",
+      "title": "Deny grants that override allows",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-explicit-deny-grants"
+      ],
+      "sources": [
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:AUTHZ.A-EXPLICIT-DENY",
+        "g4-governance:AUTHZ.grant"
+      ]
+    },
+    {
+      "id": "F-column-masks",
+      "theme": "Authorization and admin",
+      "title": "Field masks on grants",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-column-masks"
+      ],
+      "sources": [
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:AUTHZ.people:view-private",
+        "g4-governance:M13.M13-I9",
+        "g4-governance:REPORTING.REP-I5",
+        "g4-governance:REPORTING.source.suite.members"
+      ]
+    },
+    {
+      "id": "F-separation-of-duties",
+      "theme": "Authorization and admin",
+      "title": "Self-action refusal and separation of duties as platform rules",
+      "task": "WG-5499",
+      "security": true,
+      "namedAs": [
+        "F-self-action-refusal",
+        "F-separation-of-duties",
+        "F-separation-of-duties-policy"
+      ],
+      "sources": [
+        "baseline",
+        "g2-rewards",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.ledger.reverse",
+        "g2-rewards:M3.points.accounts",
+        "g2-rewards:M3.points.adjust",
+        "g2-rewards:M3.points.sod-adjust",
+        "g2-rewards:M3.points.sod-held-approval",
+        "g2-rewards:M4.orders.transition/approve",
+        "g2-rewards:M4.store.approver-not-requester",
+        "g2-rewards:M5.badges.revoke",
+        "g2-rewards:M6.promo.activation-held",
+        "g2-rewards:M6.promotions.transition",
+        "g4-governance:AUTHZ.A-R-PROMO-ACTIVATE",
+        "g4-governance:AUTHZ.A-SELF-ACTION",
+        "g4-governance:AUTHZ.role.admin",
+        "g4-governance:M13.M13-I2",
+        "g4-governance:M13.M13-I4",
+        "g4-governance:M13.admin.member_status",
+        "g4-governance:M13.admin.role_members"
+      ]
+    },
+    {
+      "id": "F-last-owner-guard",
+      "theme": "Authorization and admin",
+      "title": "No change on any path leaves a tenant without an administrator",
+      "task": "WG-5486",
+      "security": true,
+      "namedAs": [
+        "F-last-owner-guard",
+        "F-last-owner-on-every-path"
+      ],
+      "sources": [
+        "baseline",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:AUTHZ.A-LAST-ADMIN",
+        "g4-governance:M13.M13-I12"
+      ]
+    },
+    {
+      "id": "F-account-suspension",
+      "theme": "Authorization and admin",
+      "title": "Local account suspension and administrator session revocation",
+      "task": "WG-5490",
+      "security": true,
+      "namedAs": [
+        "F-account-suspension",
+        "F-local-account-suspension"
+      ],
+      "sources": [
+        "baseline",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:AUTHZ.A-DISABLED-PRINCIPAL",
+        "g4-governance:AUTHZ.principals",
+        "g4-governance:M13.M13-I3",
+        "g4-governance:M13.admin.member_status",
+        "g4-governance:M13.admin.session_revoke"
+      ]
+    },
+    {
+      "id": "F-session-self-management",
+      "theme": "Authorization and admin",
+      "title": "A person lists and revokes their own sessions and agent connections",
+      "task": "WG-5490",
+      "security": true,
+      "namedAs": [
+        "F-session-self-management"
+      ],
+      "sources": [
+        "g1-personal"
+      ],
+      "neededBy": [
+        "g1-personal:M0.M0-INV-REVOKE-CLOSES-SOCKETS",
+        "g1-personal:M0.M0-INV-SESSION-CHECK",
+        "g1-personal:M0.me.sessions",
+        "g1-personal:M0.me.sessions.revoke",
+        "g1-personal:M0.member_sessions",
+        "g1-personal:M0.session.revoked",
+        "g1-personal:M0.shell.session-revoked"
+      ]
+    },
+    {
+      "id": "F-delegated-acting-principal",
+      "theme": "Authorization and admin",
+      "title": "Acting for another principal, recorded on every write, with SoD across the pair",
+      "task": "WG-5499",
+      "security": true,
+      "namedAs": [
+        "F-delegated-acting-principal"
+      ],
+      "sources": [
+        "g1-personal"
+      ],
+      "neededBy": [
+        "g1-personal:M1.messages.reply",
+        "g1-personal:M1.messages.send",
+        "g1-personal:M10.M10-INV-ASSIGN-RIGHTS",
+        "g1-personal:M10.M10-INV-AUTOMATION-TASKS",
+        "g1-personal:M10.tasks.create",
+        "g1-personal:M10.tasks.update",
+        "g1-personal:M11.M11-INV-APPROVE-AS-REQUESTER",
+        "g1-personal:M11.M11-INV-CONTENT-REVIEW",
+        "g1-personal:M11.M11-INV-SOD",
+        "g1-personal:M11.approval.requested",
+        "g1-personal:M11.approvals.decide",
+        "g1-personal:M2.M2-INV-APPROVER-AUDIENCE"
+      ]
+    },
+    {
+      "id": "F-identity-admin-capabilities",
+      "theme": "Authorization and admin",
+      "title": "Identity administration (service accounts, tokens, SCIM, keys) gated by capabilities with bounds",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-capability-scoped-tokens",
+        "F-identity-admin-capabilities",
+        "F-service-account-role-bounds"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-platform-admin-role",
+      "theme": "Authorization and admin",
+      "title": "A platform admin role products may name",
+      "task": "WG-5474",
+      "security": true,
+      "namedAs": [
+        "F-platform-admin-role"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-held-operations",
+      "theme": "Authorization and admin",
+      "title": "Held operations and changes: approver rules, named approvers, replay as the requester, expiry",
+      "task": "WG-5496",
+      "security": true,
+      "namedAs": [
+        "F-conditional-approval-decision",
+        "F-declared-sensitive-operations",
+        "F-held-changes",
+        "F-held-operation-replay",
+        "F-held-operations",
+        "F-operation-approval-hold",
+        "F-proposal-gated-changes",
+        "F-record-named-approvers"
+      ],
+      "sources": [
+        "baseline",
+        "g1-personal",
+        "g2-rewards",
+        "g3-engage",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g1-personal:M11.M11-INV-APPROVE-AS-REQUESTER",
+        "g1-personal:M11.M11-INV-APPROVER-PERMISSION",
+        "g1-personal:M11.M11-INV-EXPIRY",
+        "g1-personal:M11.action_approvals",
+        "g1-personal:M11.approvals.decide",
+        "g1-personal:M11.approvals.inbox",
+        "g1-personal:M11.approvals.withdraw",
+        "g1-personal:M11.change_approvals",
+        "g1-personal:M2.notification.approval-request",
+        "g2-rewards:M3.points.award",
+        "g2-rewards:M3.points.award-limits",
+        "g2-rewards:M3.points.sod-held-approval",
+        "g2-rewards:M3.points.transfer",
+        "g2-rewards:M4.approval.decided (order)",
+        "g2-rewards:M4.approval.requested (order)",
+        "g2-rewards:M4.checkout.place",
+        "g2-rewards:M4.orders.transition/refund",
+        "g2-rewards:M4.store.approver-not-requester",
+        "g2-rewards:M4.store.cart",
+        "g2-rewards:M4.store.orders (manage)",
+        "g2-rewards:M4.store.refund-scope",
+        "g2-rewards:M4.store_orders",
+        "g2-rewards:M5.badges.award",
+        "g2-rewards:M6.Promotion",
+        "g2-rewards:M6.promo.activation-held",
+        "g2-rewards:M6.promotions.builder",
+        "g2-rewards:M6.promotions.transition",
+        "g3-engage:M8.approval.decided (content_review)",
+        "g3-engage:M8.approval.requested (content_review)",
+        "g3-engage:M8.content.approve",
+        "g3-engage:M8.content.request_changes",
+        "g3-engage:M8.content.review-queue",
+        "g3-engage:M8.content.submit",
+        "g3-engage:M8.inv-approver-is-listed-reviewer",
+        "g4-governance:AUTHZ.A-APPROVER-PERMISSION",
+        "g4-governance:AUTHZ.A-GRANT-UNDO-AUTO",
+        "g4-governance:AUTHZ.A-R-PROGRAM",
+        "g4-governance:AUTHZ.A-R-PROMO-ACTIVATE",
+        "g4-governance:AUTHZ.A-R-SITE",
+        "g4-governance:AUTHZ.A-SOD-REQUESTER",
+        "g4-governance:AUTHZ.action_approvals",
+        "g4-governance:AUTHZ.automation:manage",
+        "g4-governance:AUTHZ.change_approvals",
+        "g4-governance:AUTHZ.grant:write",
+        "g4-governance:AUTHZ.node:write:Program",
+        "g4-governance:AUTHZ.node:write:Role",
+        "g4-governance:AUTHZ.promotions:approve",
+        "g4-governance:AUTHZ.promotions:manage",
+        "g4-governance:AUTHZ.role.admin",
+        "g4-governance:AUTHZ.role.finance",
+        "g4-governance:AUTHZ.role.marketing-manager",
+        "g4-governance:KERNEL.K4",
+        "g4-governance:KERNEL.K5",
+        "g4-governance:M13.M13-I4",
+        "g4-governance:M13.M13-I6",
+        "g4-governance:M13.M13-I7",
+        "g4-governance:M13.M13-I8",
+        "g4-governance:M13.admin.program",
+        "g4-governance:M13.admin.role_members",
+        "g4-governance:M18.M18-I1",
+        "g4-governance:M18.M18-I2",
+        "g4-governance:M18.site.appearance.set",
+        "g4-governance:MCP.action.invoke",
+        "g4-governance:MCP.node.commit (agent)",
+        "g4-governance:REPORTING.filter.changed"
+      ]
+    },
+    {
+      "id": "F-state-conditional-writes",
+      "theme": "Authorization and admin",
+      "title": "Writes and decisions conditional on the state read (one decision when approvers race)",
+      "task": "WG-5488",
+      "security": true,
+      "namedAs": [
+        "F-concurrent-decision-guard",
+        "F-state-conditional-writes"
+      ],
+      "sources": [
+        "g1-personal",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g1-personal:M0.M0-INV-PREFERENCE-REVISION",
+        "g1-personal:M10.M10-INV-TERMINAL",
+        "g1-personal:M10.M10-INV-VERSION",
+        "g1-personal:M10.tasks",
+        "g1-personal:M10.tasks.board",
+        "g1-personal:M10.tasks.update",
+        "g1-personal:M11.M11-INV-PENDING-ONLY",
+        "g1-personal:M11.approvals.decide",
+        "g1-personal:M11.approvals.withdraw",
+        "g4-governance:AUTHZ.A-CONCURRENT-DECISION",
+        "g4-governance:AUTHZ.change_approvals",
+        "g4-governance:M13.approval.decided",
+        "g4-governance:MCP.approval.decide (human only)"
+      ]
+    },
+    {
+      "id": "F-agent-governance",
+      "theme": "Authorization and admin",
+      "title": "Agent ceiling intersected with the delegator, per-operation agent policy, agent changes held",
+      "task": "WG-5483",
+      "security": true,
+      "namedAs": [
+        "F-agent-action-policy",
+        "F-agent-ceiling",
+        "F-agent-change-holds",
+        "F-agent-governance"
+      ],
+      "sources": [
+        "g3-engage",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g3-engage:M7.Automation",
+        "g3-engage:M7.automation.set_enabled",
+        "g3-engage:M7.automation.step.webhook",
+        "g3-engage:M7.inv-agent-enable-held",
+        "g3-engage:M7.inv-webhook-enable-held",
+        "g4-governance:AUTHZ.A-AGENT-ACTIONS-DIRECT-PREVIEW-HELD-DENY",
+        "g4-governance:AUTHZ.A-AGENT-CEILING",
+        "g4-governance:AUTHZ.A-AGENT-DENY-LIST",
+        "g4-governance:AUTHZ.A-AGENT-SOURCE-REGISTRY",
+        "g4-governance:AUTHZ.admin:settings",
+        "g4-governance:AUTHZ.agent.claude-code",
+        "g4-governance:AUTHZ.badges:award",
+        "g4-governance:AUTHZ.node:write:Page",
+        "g4-governance:AUTHZ.node:write:Widget",
+        "g4-governance:AUTHZ.notifications:send",
+        "g4-governance:AUTHZ.points:award",
+        "g4-governance:AUTHZ.points:transfer",
+        "g4-governance:AUTHZ.query:run",
+        "g4-governance:AUTHZ.store:orders",
+        "g4-governance:AUTHZ.store:shop",
+        "g4-governance:AUTHZ.suite:use",
+        "g4-governance:KERNEL.K10",
+        "g4-governance:M13.M13-I1",
+        "g4-governance:M13.M13-I10",
+        "g4-governance:M13.admin.permissions",
+        "g4-governance:M18.M18-I10",
+        "g4-governance:M18.M18-I2",
+        "g4-governance:M18.site.appearance.set",
+        "g4-governance:M18.site.clear",
+        "g4-governance:M18.site.page.put",
+        "g4-governance:M18.site.restore",
+        "g4-governance:M18.site.widget.add",
+        "g4-governance:M18.site.widget.remove",
+        "g4-governance:MCP.MCP-I10",
+        "g4-governance:MCP.MCP-I14",
+        "g4-governance:MCP.MCP-I5",
+        "g4-governance:MCP.MCP-I6",
+        "g4-governance:MCP.MCP-I9",
+        "g4-governance:MCP.action.invoke",
+        "g4-governance:MCP.action.list"
+      ]
+    },
+    {
+      "id": "F-untrusted-text-marking",
+      "theme": "Authorization and admin",
+      "title": "Free text in agent-facing results marked untrusted",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-untrusted-text-marking"
+      ],
+      "sources": [
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:KERNEL.K10",
+        "g4-governance:M12.M12-I8",
+        "g4-governance:M13.admin.member_status",
+        "g4-governance:MCP.MCP-I7",
+        "g4-governance:MCP.action.invoke"
+      ]
+    },
+    {
+      "id": "F-visibility",
+      "theme": "Authorization and admin",
+      "title": "Server-decided visibility per role, row, field and event audience",
+      "task": "WG-5465",
+      "security": true,
+      "namedAs": [
+        "F-audience-scoped-events",
+        "F-record-scoped-event-readers",
+        "F-visibility",
+        "F-visibility-per-role"
+      ],
+      "sources": [
+        "g2-rewards",
+        "g3-engage",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.points.balance",
+        "g2-rewards:M3.points.posted",
+        "g2-rewards:M4.cart.updated",
+        "g2-rewards:M4.order.placed",
+        "g2-rewards:M4.order.status_changed",
+        "g2-rewards:M4.wishlist.changed",
+        "g2-rewards:M5.badge.revoked",
+        "g2-rewards:M6.promotion.redeemed",
+        "g3-engage:M8.content.engage",
+        "g3-engage:M8.content.engaged",
+        "g3-engage:M8.content.list",
+        "g3-engage:M8.content.state_changed",
+        "g3-engage:M8.content_engagement",
+        "g3-engage:M8.inv-engaged-audience",
+        "g3-engage:M8.inv-engagement-upsert",
+        "g3-engage:M9.inv-activity-public-types",
+        "g3-engage:M9.inv-private-fields",
+        "g3-engage:M9.members",
+        "g3-engage:M9.people.activity",
+        "g3-engage:M9.people.profile",
+        "g4-governance:M12.M12-I11",
+        "g4-governance:M13.M13-I11",
+        "g4-governance:M17.M17-I2",
+        "g4-governance:M18.M18-I6",
+        "g4-governance:M18.M18-I9",
+        "g4-governance:M18.page-defined",
+        "g4-governance:M18.pages.resolve"
+      ]
+    },
+    {
+      "id": "F-curated-view-sources",
+      "theme": "Authorization and admin",
+      "title": "Curated read-only sources (views) with grants applied",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-curated-view-sources"
+      ],
+      "sources": [
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:AUTHZ.query:run",
+        "g4-governance:COND.member-facts",
+        "g4-governance:KERNEL.K9",
+        "g4-governance:REPORTING.REP-I1",
+        "g4-governance:REPORTING.REP-I4",
+        "g4-governance:REPORTING.REP-I6",
+        "g4-governance:REPORTING.audit.changes (metadata source)",
+        "g4-governance:REPORTING.query.run",
+        "g4-governance:REPORTING.rpt_automation_runs",
+        "g4-governance:REPORTING.rpt_badge_awards",
+        "g4-governance:REPORTING.rpt_content_engagement",
+        "g4-governance:REPORTING.rpt_events",
+        "g4-governance:REPORTING.rpt_ledger",
+        "g4-governance:REPORTING.rpt_members",
+        "g4-governance:REPORTING.rpt_messages",
+        "g4-governance:REPORTING.rpt_notifications",
+        "g4-governance:REPORTING.rpt_order_items",
+        "g4-governance:REPORTING.rpt_promotion_redemptions",
+        "g4-governance:REPORTING.rpt_store_orders",
+        "g4-governance:REPORTING.rpt_tasks"
+      ]
+    },
+    {
+      "id": "F-authorization-audit",
+      "theme": "Audit and integrity",
+      "title": "Every authorization-relevant event audited and attributed (tokens, delegations, sessions, providers)",
+      "task": "WG-5506",
+      "security": true,
+      "namedAs": [
+        "F-audit-actor-chain",
+        "F-authorization-audit",
+        "F-provider-change-attribution",
+        "F-session-end-audit"
+      ],
+      "sources": [
+        "baseline",
+        "g2-rewards",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.ledger_transactions",
+        "g2-rewards:M3.points.audit-provenance",
+        "g2-rewards:M3.points.observed",
+        "g2-rewards:M4.store_order_events",
+        "g4-governance:AUTHZ.member_sessions",
+        "g4-governance:AUTHZ.role.admin",
+        "g4-governance:M12.M12-I5",
+        "g4-governance:M12.M12-I6",
+        "g4-governance:M12.audit.events",
+        "g4-governance:M12.audit.timeline",
+        "g4-governance:M12.domain_events",
+        "g4-governance:REPORTING.REP-I5",
+        "g4-governance:REPORTING.audit.changes (metadata source)",
+        "g4-governance:REPORTING.source.suite.events"
+      ]
+    },
+    {
+      "id": "F-audit-tamper-evidence",
+      "theme": "Audit and integrity",
+      "title": "Anchored audit chain head so truncation is detected",
+      "task": "WG-5506",
+      "security": true,
+      "namedAs": [
+        "F-audit-chain-head-anchor",
+        "F-audit-tamper-evidence"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-append-only-records",
+      "theme": "Audit and integrity",
+      "title": "Records declared append-only: no update or delete by any path",
+      "task": "WG-5503",
+      "security": true,
+      "namedAs": [
+        "F-append-only-records"
+      ],
+      "sources": [
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.points.audit-provenance",
+        "g2-rewards:M4.inventory_movements",
+        "g2-rewards:M4.store.events-append-only",
+        "g2-rewards:M4.store_order_events",
+        "g2-rewards:M5.badge_awards"
+      ]
+    },
+    {
+      "id": "F-record-history",
+      "theme": "Audit and integrity",
+      "title": "Record revisions, diffs, published revision and audited undo",
+      "task": "WG-5503",
+      "security": true,
+      "namedAs": [
+        "F-record-history"
+      ],
+      "sources": [
+        "g3-engage",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g3-engage:M8.Content",
+        "g3-engage:M8.content.diff",
+        "g3-engage:M8.content.feed",
+        "g3-engage:M8.content.preview",
+        "g3-engage:M8.content.publish",
+        "g3-engage:M8.content.published",
+        "g3-engage:M8.content.revise",
+        "g3-engage:M8.content.versions",
+        "g3-engage:M8.inv-feed-only-published",
+        "g3-engage:M8.inv-publish-sets-revision",
+        "g4-governance:M12.AuditEntry",
+        "g4-governance:M12.M12-I10",
+        "g4-governance:M12.M12-I9",
+        "g4-governance:M12.audit.node-history",
+        "g4-governance:M12.audit.timeline",
+        "g4-governance:M12.change.undo"
+      ]
+    },
+    {
+      "id": "F-double-entry-journal",
+      "theme": "Ledger",
+      "title": "Balanced multi-leg transactions with a header, and an account hierarchy",
+      "task": "WG-5504",
+      "security": true,
+      "namedAs": [
+        "F-account-hierarchy",
+        "F-balanced-journal-entries",
+        "F-double-entry-journal"
+      ],
+      "sources": [
+        "baseline",
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.L1",
+        "g2-rewards:M3.L4",
+        "g2-rewards:M3.ledger_accounts",
+        "g2-rewards:M3.ledger_entries",
+        "g2-rewards:M3.ledger_transactions",
+        "g2-rewards:M3.points.adjust",
+        "g2-rewards:M3.points.award",
+        "g2-rewards:M3.points.ledger",
+        "g2-rewards:M3.points.statement",
+        "g2-rewards:M3.points.transaction",
+        "g2-rewards:M3.points.transfer",
+        "g2-rewards:M3.points.transfer-limits",
+        "g2-rewards:M4.checkout.place",
+        "g2-rewards:M4.orders.transition/deliver",
+        "g2-rewards:M4.store.checkout-atomic",
+        "g2-rewards:M4.store_orders",
+        "g2-rewards:M5.badge_awards",
+        "g2-rewards:M5.badges.award"
+      ]
+    },
+    {
+      "id": "F-ledger-tamper-evidence",
+      "theme": "Ledger",
+      "title": "Chained, anchored ledger journal; postings audited; restore cannot drop entries",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-ledger-posting-audit",
+        "F-ledger-read-access-audit",
+        "F-ledger-tamper-evidence"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-ledger-proofs",
+      "theme": "Ledger",
+      "title": "Machine-checked ledger invariants (conservation, append-only, idempotency)",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-ledger-machine-checked-invariants",
+        "F-ledger-proofs"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-ledger-lot-expiry",
+      "theme": "Ledger",
+      "title": "Per-grant expiry lots consumed earliest first",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-ledger-lot-expiry"
+      ],
+      "sources": [
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.L5",
+        "g2-rewards:M3.Program",
+        "g2-rewards:M3.job.points-expiry",
+        "g2-rewards:M3.ledger.reverse",
+        "g2-rewards:M3.lot_consumptions",
+        "g2-rewards:M3.point_lots",
+        "g2-rewards:M3.points.adjust",
+        "g2-rewards:M3.points.expiry",
+        "g2-rewards:M3.points.fifo-expiry",
+        "g2-rewards:M3.points.transaction",
+        "g2-rewards:M3.points.transfer",
+        "g2-rewards:M4.orders.transition/cancel"
+      ]
+    },
+    {
+      "id": "F-ledger-facts-in-rules",
+      "theme": "Ledger",
+      "title": "Balance, lifetime total and tier readable by rules, segments and computed fields",
+      "task": "WG-5513",
+      "security": true,
+      "namedAs": [
+        "F-ledger-balance-in-rules",
+        "F-ledger-derived-facts",
+        "F-ledger-facts-in-rules"
+      ],
+      "sources": [
+        "g2-rewards",
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.L9",
+        "g2-rewards:M3.ledger_accounts",
+        "g2-rewards:M3.ledger_entries",
+        "g2-rewards:M3.notification.tier_changed",
+        "g2-rewards:M3.points.balance",
+        "g2-rewards:M3.points.summary",
+        "g2-rewards:M3.points.tiers",
+        "g2-rewards:M3.tier.changed",
+        "g2-rewards:M4.cart.get",
+        "g2-rewards:M4.checkout.place",
+        "g2-rewards:M4.orders.transition/refund",
+        "g2-rewards:M4.promotions.active",
+        "g2-rewards:M4.store.catalog",
+        "g2-rewards:M4.store.refund-scope",
+        "g2-rewards:M4.store.tier-gate",
+        "g2-rewards:M4.store.wishlist",
+        "g2-rewards:M4.wishlist.list",
+        "g2-rewards:M5.Badge",
+        "g2-rewards:M5.badges.points-threshold-lifetime",
+        "g2-rewards:M5.badges.revoke",
+        "g2-rewards:M5.badges.revoke-reward-only-if-held",
+        "g2-rewards:M5.job.badge-engine",
+        "g2-rewards:M6.promo.budget-cap",
+        "g2-rewards:M6.promotion.budget_alert",
+        "g2-rewards:M6.promotion_usage",
+        "g2-rewards:M6.promotions.active",
+        "g3-engage:M7.automation.step.award_points",
+        "g3-engage:M7.trigger.tier.changed",
+        "g3-engage:M9.Segment",
+        "g3-engage:M9.inv-balance-scope",
+        "g3-engage:M9.member_facts",
+        "g3-engage:M9.people.directory",
+        "g3-engage:M9.people.facts",
+        "g3-engage:M9.people.profile",
+        "g3-engage:M9.segment.node_write",
+        "g3-engage:M9.segments.preview",
+        "g3-engage:M9.tier.changed (consumed by people and segments widgets)"
+      ]
+    },
+    {
+      "id": "F-ledger-queries",
+      "theme": "Ledger",
+      "title": "Queries and aggregates over ledger entries and accounts",
+      "task": "WG-5507",
+      "security": true,
+      "namedAs": [
+        "F-ledger-queries"
+      ],
+      "sources": [
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.job.points-expiry-warn",
+        "g2-rewards:M3.ledger.accounts",
+        "g2-rewards:M3.points.accounts",
+        "g2-rewards:M3.points.expiring",
+        "g2-rewards:M3.points.expiry",
+        "g2-rewards:M3.points.ledger",
+        "g2-rewards:M3.points.statement",
+        "g2-rewards:M3.points.summary"
+      ]
+    },
+    {
+      "id": "F-ledger-reconciliation",
+      "theme": "Ledger",
+      "title": "Scheduled whole-ledger trial balance and drift report",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-external-reconciliation",
+        "F-ledger-reconciliation",
+        "F-scheduled-reconciliation"
+      ],
+      "sources": [
+        "baseline",
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.L4",
+        "g2-rewards:M3.L5",
+        "g2-rewards:M3.ledger.trial_balance",
+        "g2-rewards:M3.points.trial-balance",
+        "g2-rewards:M3.points.trial-balance-reconciles"
+      ]
+    },
+    {
+      "id": "F-reversal-idempotent-replay",
+      "theme": "Ledger",
+      "title": "A retried reversal replays its first entry",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-reversal-idempotent-replay"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-cross-type-query",
+      "theme": "Data and query",
+      "title": "One ordered, paged read over several record types",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-cross-type-query",
+        "F-union-query"
+      ],
+      "sources": [
+        "g1-personal",
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g1-personal:M0.me.activity",
+        "g1-personal:M0.me.get",
+        "g1-personal:M0.shell.command-palette",
+        "g1-personal:M11.approvals.inbox",
+        "g1-personal:M11.approvals.list",
+        "g1-personal:M11.content_review_approval_view",
+        "g1-personal:M11.order_approval_view",
+        "g1-personal:M14.home.summary",
+        "g1-personal:M15.search.global",
+        "g3-engage:M16.CalendarEntry",
+        "g3-engage:M16.calendar.agenda (7 days)",
+        "g3-engage:M16.calendar.month",
+        "g3-engage:M16.calendar.range"
+      ]
+    },
+    {
+      "id": "F-ranked-text-search",
+      "theme": "Data and query",
+      "title": "Ranked text search with per-type totals",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-ranked-text-search"
+      ],
+      "sources": [
+        "g1-personal"
+      ],
+      "neededBy": [
+        "g1-personal:M0.shell.command-palette",
+        "g1-personal:M1.M1-INV-SEARCH-OWN-THREADS",
+        "g1-personal:M1.messages",
+        "g1-personal:M1.messages.list",
+        "g1-personal:M1.messages.recipients",
+        "g1-personal:M1.messaging.compose",
+        "g1-personal:M15.M15-INV-RANKING",
+        "g1-personal:M15.M15-INV-RIGHTS-PER-TYPE",
+        "g1-personal:M15.M15-INV-THREAD-SUBJECT-ONLY",
+        "g1-personal:M15.search.global",
+        "g1-personal:M15.search.results"
+      ]
+    },
+    {
+      "id": "F-faceted-listing",
+      "theme": "Data and query",
+      "title": "Facet counts and per-viewer state in listings",
+      "task": "WG-5507",
+      "security": false,
+      "namedAs": [
+        "F-faceted-listing"
+      ],
+      "sources": [
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g2-rewards:M4.store.catalog",
+        "g2-rewards:M4.store.featured"
+      ]
+    },
+    {
+      "id": "F-report-scale",
+      "theme": "Data and query",
+      "title": "Reporting over large sources",
+      "task": "WG-5507",
+      "security": false,
+      "namedAs": [
+        "F-report-scale"
+      ],
+      "sources": [
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:REPORTING.REP-I7",
+        "g4-governance:REPORTING.query.run",
+        "g4-governance:REPORTING.source.suite.ledger"
+      ]
+    },
+    {
+      "id": "F-windowed-aggregates",
+      "theme": "Data and query",
+      "title": "Counts, sums and streaks over time windows",
+      "task": "WG-5503",
+      "security": false,
+      "namedAs": [
+        "F-activity-windows",
+        "F-windowed-aggregates"
+      ],
+      "sources": [
+        "g2-rewards",
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g2-rewards:M4.inventory.list",
+        "g2-rewards:M5.Badge",
+        "g2-rewards:M5.badge.progress",
+        "g2-rewards:M5.badge_progress",
+        "g2-rewards:M5.badges.catalog",
+        "g2-rewards:M5.badges.progress",
+        "g2-rewards:M5.badges.streak-reset",
+        "g2-rewards:M5.job.badge-engine",
+        "g2-rewards:M6.promotions.analytics",
+        "g2-rewards:M6.promotions.performance",
+        "g2-rewards:M6.promotions.performance (one)",
+        "g3-engage:M7.automation.list",
+        "g3-engage:M9.Segment",
+        "g3-engage:M9.member_facts",
+        "g3-engage:M9.segment.node_write"
+      ]
+    },
+    {
+      "id": "F-computed-fields",
+      "theme": "Data and query",
+      "title": "Derived fields",
+      "task": "WG-5513",
+      "security": false,
+      "namedAs": [
+        "F-computed-fields"
+      ],
+      "sources": [
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g2-rewards:M4.cart.get",
+        "g2-rewards:M4.inventory.list",
+        "g2-rewards:M4.orders.get",
+        "g2-rewards:M4.review.created",
+        "g2-rewards:M4.store.inventory",
+        "g2-rewards:M4.store.order",
+        "g2-rewards:M4.store.product",
+        "g2-rewards:M5.badges.catalog",
+        "g2-rewards:M5.badges.get",
+        "g2-rewards:M6.promotions.analytics",
+        "g2-rewards:M6.promotions.list"
+      ]
+    },
+    {
+      "id": "F-conditional-uniqueness",
+      "theme": "Data and query",
+      "title": "Uniqueness over matching rows only",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-conditional-uniqueness"
+      ],
+      "sources": [
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g2-rewards:M5.badge_awards",
+        "g2-rewards:M5.badges.award",
+        "g2-rewards:M5.badges.one-live-award",
+        "g2-rewards:M5.job.badge-engine"
+      ]
+    },
+    {
+      "id": "F-per-owner-limits",
+      "theme": "Data and query",
+      "title": "Per-owner, per-object quantity limits",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-per-owner-limits"
+      ],
+      "sources": [
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g2-rewards:M4.store.limit-per-member",
+        "g2-rewards:M6.promo.per-member-limit"
+      ]
+    },
+    {
+      "id": "F-identifier-sequences",
+      "theme": "Data and query",
+      "title": "Gapless human-readable numbers",
+      "task": "WG-5505",
+      "security": false,
+      "namedAs": [
+        "F-identifier-sequences"
+      ],
+      "sources": [
+        "g1-personal",
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g1-personal:M10.M10-INV-TASK-NO",
+        "g1-personal:M10.suite_counters",
+        "g1-personal:M10.tasks",
+        "g1-personal:M10.tasks.create",
+        "g2-rewards:M3.suite_counters"
+      ]
+    },
+    {
+      "id": "F-text-derived-references",
+      "theme": "Data and query",
+      "title": "References derived from text at write time (mentions)",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-text-derived-references"
+      ],
+      "sources": [
+        "g1-personal"
+      ],
+      "neededBy": [
+        "g1-personal:M1.M1-INV-MENTIONS-NOTIFY",
+        "g1-personal:M1.messages",
+        "g1-personal:M1.messages.reply",
+        "g1-personal:M1.messages.send",
+        "g1-personal:M10.M10-INV-MENTION-NOTICE",
+        "g1-personal:M10.task.commented",
+        "g1-personal:M10.task_comments",
+        "g1-personal:M10.tasks.comment",
+        "g1-personal:M2.notification.message-received",
+        "g1-personal:M2.notification.task-assigned"
+      ]
+    },
+    {
+      "id": "F-cross-product-refs",
+      "theme": "Data and query",
+      "title": "Records naming records of other products",
+      "task": "WG-5493",
+      "security": false,
+      "namedAs": [
+        "F-cross-product-refs"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M7.automation.step.apply_promotion",
+        "g3-engage:M8.Content",
+        "g3-engage:M8.inv-block-refs-resolve"
+      ]
+    },
+    {
+      "id": "F-organisation-structure",
+      "theme": "Data and query",
+      "title": "Groups as organisation units, membership readable by rules",
+      "task": "WG-5500",
+      "security": true,
+      "namedAs": [
+        "F-organisation-structure"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M7.automation.step.notify",
+        "g3-engage:M8.Content",
+        "g3-engage:M8.content.feed",
+        "g3-engage:M8.content.publish",
+        "g3-engage:M8.content.published",
+        "g3-engage:M8.inv-audience-check",
+        "g3-engage:M8.notification.created (content_published)",
+        "g3-engage:M9.Group",
+        "g3-engage:M9.Segment",
+        "g3-engage:M9.group.node_write",
+        "g3-engage:M9.groups.get",
+        "g3-engage:M9.groups.list",
+        "g3-engage:M9.inv-group-members-human",
+        "g3-engage:M9.member_facts",
+        "g3-engage:M9.people.directory",
+        "g3-engage:M9.people.group",
+        "g3-engage:M9.people.profile"
+      ]
+    },
+    {
+      "id": "F-segment-membership-in-rules",
+      "theme": "Data and query",
+      "title": "in_segment in expressions and policies",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-segment-membership-in-rules"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M7.automation.step.award_points",
+        "g3-engage:M8.Content",
+        "g3-engage:M8.content.engage",
+        "g3-engage:M8.content.feed",
+        "g3-engage:M8.content.published",
+        "g3-engage:M8.inv-audience-check",
+        "g3-engage:M8.inv-feed-only-published"
+      ]
+    },
+    {
+      "id": "F-recurrence-occurrences",
+      "theme": "Data and query",
+      "title": "Occurrences of a recurrence within a range",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-recurrence-occurrences"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M16.calendar.range",
+        "g3-engage:M16.inv-automation-fire-cap",
+        "g3-engage:M7.automation.dry_run"
+      ]
+    },
+    {
+      "id": "F-named-assets",
+      "theme": "Data and query",
+      "title": "Named assets and file domains",
+      "task": "WG-5517",
+      "security": false,
+      "namedAs": [
+        "F-named-assets"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M8.Content",
+        "g3-engage:M9.Group"
+      ]
+    },
+    {
+      "id": "F-priced-quote",
+      "theme": "Data and query",
+      "title": "Ranked, stackable, budgeted rule evaluation with a quote fingerprint",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-priced-quote"
+      ],
+      "sources": [
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.points.award",
+        "g2-rewards:M4.checkout.place",
+        "g2-rewards:M4.checkout.quote",
+        "g2-rewards:M4.promotions.active",
+        "g2-rewards:M4.store.cart",
+        "g2-rewards:M4.store.checkout-atomic",
+        "g2-rewards:M4.store.product",
+        "g2-rewards:M4.store.quote-hash-match",
+        "g2-rewards:M4.store_orders",
+        "g2-rewards:M6.Promotion",
+        "g2-rewards:M6.promo.budget-cap",
+        "g2-rewards:M6.promo.budget-no-status-change",
+        "g2-rewards:M6.promo.evaluation-pure-deterministic",
+        "g2-rewards:M6.promotion_usage",
+        "g2-rewards:M6.promotions.active",
+        "g2-rewards:M6.promotions.builder (new)",
+        "g2-rewards:M6.promotions.simulate",
+        "g2-rewards:M6.promotions.simulator"
+      ]
+    },
+    {
+      "id": "F-tenant-export-archive",
+      "theme": "Data and query",
+      "title": "Tenant export archive",
+      "task": "WG-5502",
+      "security": false,
+      "namedAs": [
+        "F-tenant-export-archive"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-human-tasks",
+      "theme": "Process and automation",
+      "title": "Human task primitive and inbox",
+      "task": "WG-5496",
+      "security": false,
+      "namedAs": [
+        "F-human-task-primitive",
+        "F-human-tasks"
+      ],
+      "sources": [
+        "g1-personal",
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g1-personal:M10.M10-INV-HISTORY",
+        "g1-personal:M10.M10-INV-OVERDUE",
+        "g1-personal:M10.M10-INV-TERMINAL",
+        "g1-personal:M10.task.assigned",
+        "g1-personal:M10.task_comments",
+        "g1-personal:M10.task_history",
+        "g1-personal:M10.tasks",
+        "g1-personal:M10.tasks.comment",
+        "g1-personal:M10.tasks.create",
+        "g1-personal:M10.tasks.get",
+        "g1-personal:M10.tasks.list",
+        "g1-personal:M10.tasks.quick-add",
+        "g1-personal:M10.tasks.update",
+        "g3-engage:M16.calendar.range",
+        "g3-engage:M16.inv-tasks-own-open",
+        "g3-engage:M16.task.updated (calendar refresh)",
+        "g3-engage:M7.automation.step.create_task",
+        "g3-engage:M7.trigger.task.assigned",
+        "g3-engage:M7.trigger.task.updated"
+      ]
+    },
+    {
+      "id": "F-bounded-fan-out",
+      "theme": "Process and automation",
+      "title": "A step repeated over a list or a computed set, bounded",
+      "task": "WG-5495",
+      "security": false,
+      "namedAs": [
+        "F-bounded-fan-out",
+        "F-operation-fan-out"
+      ],
+      "sources": [
+        "g1-personal",
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g1-personal:M1.M1-INV-BROADCAST-LIMIT",
+        "g1-personal:M1.M1-INV-RECEIPTS",
+        "g1-personal:M1.M1-INV-RECIPIENT-EXPANSION",
+        "g1-personal:M1.M1-INV-THREAD-KIND",
+        "g1-personal:M1.M1-INV-UNARCHIVE-ON-MESSAGE",
+        "g1-personal:M1.messages.bulk_state",
+        "g1-personal:M1.messages.reply",
+        "g1-personal:M1.messages.send",
+        "g1-personal:M1.messages.state",
+        "g1-personal:M1.messaging.compose",
+        "g1-personal:M10.M10-INV-ASSIGNMENT-NOTICE",
+        "g1-personal:M10.M10-INV-MENTION-NOTICE",
+        "g1-personal:M10.tasks.comment",
+        "g1-personal:M11.approval.decided",
+        "g1-personal:M11.approval.requested",
+        "g1-personal:M2.M2-INV-APPROVER-AUDIENCE",
+        "g1-personal:M2.M2-INV-CHANNELS-OFF-NO-ROW",
+        "g1-personal:M2.M2-INV-DISABLED-SKIPPED",
+        "g1-personal:M2.M2-INV-IN-TRANSACTION",
+        "g1-personal:M2.M2-INV-SEND-PERMISSION",
+        "g1-personal:M2.notification.approval-request",
+        "g1-personal:M2.notification.automation-alert",
+        "g1-personal:M2.notification.content-review",
+        "g1-personal:M2.notification.message-received",
+        "g1-personal:M2.notification.promotion-started",
+        "g1-personal:M2.notification.send",
+        "g1-personal:M2.notifications.feed",
+        "g1-personal:M2.notifications.read_all",
+        "g1-personal:M2.notifications.send",
+        "g2-rewards:M3.points.award",
+        "g2-rewards:M3.points.award-limits",
+        "g2-rewards:M4.cart.clear",
+        "g2-rewards:M4.checkout.place",
+        "g2-rewards:M4.orders.transition/cancel"
+      ]
+    },
+    {
+      "id": "F-run-lifecycle-control",
+      "theme": "Process and automation",
+      "title": "Run retry, cancel, start paused",
+      "task": "WG-5497",
+      "security": false,
+      "namedAs": [
+        "F-run-lifecycle-control"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M7.automation.cancel",
+        "g3-engage:M7.automation.retry",
+        "g3-engage:M7.automation.trigger",
+        "g3-engage:M7.automation_runs",
+        "g3-engage:M7.inv-cancel-states",
+        "g3-engage:M7.inv-retry-failed-only",
+        "g3-engage:M8.content.schedule",
+        "g3-engage:M8.content.scheduled_publish",
+        "g3-engage:M8.content.unschedule",
+        "g3-engage:M8.inv-scheduled-once"
+      ]
+    },
+    {
+      "id": "F-run-limits-per-subject",
+      "theme": "Process and automation",
+      "title": "Per-subject run caps and cooldowns",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-run-limits-per-subject"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M7.Automation",
+        "g3-engage:M7.automation_runs",
+        "g3-engage:M7.inv-run-limits"
+      ]
+    },
+    {
+      "id": "F-step-error-continuation",
+      "theme": "Process and automation",
+      "title": "Continue a run after a failed step",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-step-error-continuation"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M7.inv-on-error-policy"
+      ]
+    },
+    {
+      "id": "F-event-loop-guard",
+      "theme": "Process and automation",
+      "title": "Refuse triggers caused by the automation's own writes",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-event-loop-guard"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M7.engine.match_events",
+        "g3-engage:M7.inv-loop-guard",
+        "g3-engage:M7.trigger.automation.run_updated"
+      ]
+    },
+    {
+      "id": "F-definition-dry-run",
+      "theme": "Process and automation",
+      "title": "Dry run of a whole definition with no writes",
+      "task": "",
+      "security": true,
+      "namedAs": [
+        "F-definition-dry-run"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M7.automation.dry_run",
+        "g3-engage:M7.inv-dry-run-no-writes"
+      ]
+    },
+    {
+      "id": "F-threshold-triggers",
+      "theme": "Process and automation",
+      "title": "Triggers on a query crossing a threshold",
+      "task": "WG-5607",
+      "security": false,
+      "namedAs": [
+        "F-threshold-triggers"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M7.Automation",
+        "g3-engage:M7.automation_metric_state",
+        "g3-engage:M7.engine.evaluate_metrics",
+        "g3-engage:M7.inv-metric-rising-edge",
+        "g3-engage:M7.trigger.promotion.budget_alert"
+      ]
+    },
+    {
+      "id": "F-scheduled-record-events",
+      "theme": "Process and automation",
+      "title": "Timed events read from record fields",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-scheduled-record-events"
+      ],
+      "sources": [
+        "g2-rewards"
+      ],
+      "neededBy": [
+        "g2-rewards:M3.job.points-expiry",
+        "g2-rewards:M3.job.points-expiry-warn",
+        "g2-rewards:M3.points.expiring",
+        "g2-rewards:M6.Promotion",
+        "g2-rewards:M6.job.promotion-schedule"
+      ]
+    },
+    {
+      "id": "F-webhook-outcome-to-run",
+      "theme": "Process and automation",
+      "title": "Webhook delivery outcome recorded on the run",
+      "task": "WG-5489",
+      "security": false,
+      "namedAs": [
+        "F-webhook-outcome-to-run"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M7.automation.step.webhook",
+        "g3-engage:M7.inv-webhook-stub",
+        "g3-engage:M7.webhook_deliveries"
+      ]
+    },
+    {
+      "id": "F-threaded-messages",
+      "theme": "Process and automation",
+      "title": "Message threads an automation can write to",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-threaded-messages"
+      ],
+      "sources": [
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g3-engage:M7.automation.step.send_message"
+      ]
+    },
+    {
+      "id": "F-sandbox-tenant-lifecycle",
+      "theme": "Process and automation",
+      "title": "Sandbox tenants: create, reset, discard",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-sandbox-tenant-lifecycle"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-live-aggregate-counts",
+      "theme": "Realtime and UI",
+      "title": "Per-principal counts pushed after changes",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-live-aggregate-counts"
+      ],
+      "sources": [
+        "g1-personal"
+      ],
+      "neededBy": [
+        "g1-personal:M0.counts-frame",
+        "g1-personal:M0.me.counts",
+        "g1-personal:M0.shell.bell",
+        "g1-personal:M0.shell.inbox-count",
+        "g1-personal:M0.shell.side-nav",
+        "g1-personal:M1.messaging.unread",
+        "g1-personal:M11.M11-INV-COUNT-PENDING",
+        "g1-personal:M14.M14-INV-COUNTS-MATCH-NAV"
+      ]
+    },
+    {
+      "id": "F-compositions",
+      "theme": "Realtime and UI",
+      "title": "Pages composed from placed widgets",
+      "task": "WG-5464",
+      "security": false,
+      "namedAs": [
+        "F-compositions",
+        "F-screen-composition"
+      ],
+      "sources": [
+        "g1-personal",
+        "g3-engage",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g1-personal:M0.my-profile.page",
+        "g1-personal:M0.shell.balance-chip",
+        "g1-personal:M0.shell.side-nav",
+        "g1-personal:M14.M14-INV-HOME-IS-A-PAGE",
+        "g1-personal:M14.M14-INV-SUB-READS-FALL-BACK",
+        "g1-personal:M14.approvals.inbox (home)",
+        "g1-personal:M14.badges.progress",
+        "g1-personal:M14.content.feed",
+        "g1-personal:M14.messaging.unread",
+        "g1-personal:M14.notifications.feed (home)",
+        "g1-personal:M14.points.balance",
+        "g1-personal:M14.promotions.active",
+        "g1-personal:M14.reporting.suite-kpis",
+        "g1-personal:M14.tasks.list (home)",
+        "g3-engage:M7.automation.builder",
+        "g3-engage:M7.automation.list",
+        "g3-engage:M8.content.editor (new)",
+        "g3-engage:M8.content.feed",
+        "g3-engage:M9.people.directory",
+        "g3-engage:M9.segments.list",
+        "g4-governance:AUTHZ.node:write:Page",
+        "g4-governance:AUTHZ.node:write:Widget",
+        "g4-governance:M18.M18-I5",
+        "g4-governance:M18.Page",
+        "g4-governance:M18.Widget",
+        "g4-governance:M18.page-defined",
+        "g4-governance:M18.page.changed",
+        "g4-governance:M18.page.write",
+        "g4-governance:M18.pages.editor",
+        "g4-governance:M18.pages.personalize",
+        "g4-governance:M18.pages.resolve",
+        "g4-governance:M18.site.page.put",
+        "g4-governance:M18.site.widget.add",
+        "g4-governance:REPORTING.reporting.panel"
+      ]
+    },
+    {
+      "id": "F-composite-patterns",
+      "theme": "Realtime and UI",
+      "title": "Composite patterns and a widget event bus",
+      "task": "WG-5479",
+      "security": false,
+      "namedAs": [
+        "F-composite-patterns",
+        "F-composite-widget-patterns",
+        "F-widget-event-bus"
+      ],
+      "sources": [
+        "g1-personal",
+        "g3-engage",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g1-personal:M1.messaging.inbox",
+        "g1-personal:M1.messaging.inbox (thread route)",
+        "g1-personal:M1.messaging.thread",
+        "g1-personal:M1.messaging.thread (thread route)",
+        "g1-personal:M10.tasks.board",
+        "g1-personal:M10.tasks.list",
+        "g1-personal:M11.approvals.inbox",
+        "g1-personal:M2.notifications.deliveries",
+        "g1-personal:M2.notifications.preferences",
+        "g3-engage:M7.automation.builder",
+        "g3-engage:M8.content.editor (new)",
+        "g3-engage:M9.segments.builder",
+        "g4-governance:M18.page-defined",
+        "g4-governance:M18.pages.editor",
+        "g4-governance:REPORTING.date.selected",
+        "g4-governance:REPORTING.filter.changed",
+        "g4-governance:REPORTING.reporting.line",
+        "g4-governance:REPORTING.reporting.panel",
+        "g4-governance:REPORTING.reporting.table"
+      ]
+    },
+    {
+      "id": "F-charts-and-boards",
+      "theme": "Realtime and UI",
+      "title": "Charts, boards, KPIs and time grids",
+      "task": "WG-5480",
+      "security": false,
+      "namedAs": [
+        "F-charts-and-boards",
+        "F-time-grid-view"
+      ],
+      "sources": [
+        "g3-engage",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g3-engage:M16.calendar.month",
+        "g4-governance:REPORTING.REP-I10",
+        "g4-governance:REPORTING.REP-I11",
+        "g4-governance:REPORTING.reporting.area",
+        "g4-governance:REPORTING.reporting.bar",
+        "g4-governance:REPORTING.reporting.board",
+        "g4-governance:REPORTING.reporting.heatmap",
+        "g4-governance:REPORTING.reporting.kpi",
+        "g4-governance:REPORTING.reporting.line",
+        "g4-governance:REPORTING.reporting.panel",
+        "g4-governance:REPORTING.reporting.scatter",
+        "g4-governance:REPORTING.reporting.suite-kpis",
+        "g4-governance:REPORTING.reporting.table"
+      ]
+    },
+    {
+      "id": "F-keyboard-gestures",
+      "theme": "Realtime and UI",
+      "title": "Keyboard paths for every gesture",
+      "task": "WG-5481",
+      "security": false,
+      "namedAs": [
+        "F-gesture-keyboard-paths",
+        "F-keyboard-gestures"
+      ],
+      "sources": [
+        "g1-personal",
+        "g3-engage"
+      ],
+      "neededBy": [
+        "g1-personal:M1.messaging.inbox",
+        "g1-personal:M10.tasks.board",
+        "g1-personal:M15.M15-INV-COMMAND-PALETTE-OPEN",
+        "g1-personal:M15.search.results",
+        "g3-engage:M16.calendar.month",
+        "g3-engage:M7.automation.list",
+        "g3-engage:M7.automation.runs",
+        "g3-engage:M8.content.editor (new)",
+        "g3-engage:M8.content.list",
+        "g3-engage:M8.content.review-queue",
+        "g3-engage:M9.segments.builder",
+        "g3-engage:M9.segments.members"
+      ]
+    },
+    {
+      "id": "F-app-shell-navigation",
+      "theme": "Realtime and UI",
+      "title": "Permission-filtered app shell and navigation",
+      "task": "WG-5468",
+      "security": true,
+      "namedAs": [
+        "F-app-shell-navigation"
+      ],
+      "sources": [
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:M18.M18-I7",
+        "g4-governance:M18.Page",
+        "g4-governance:M18.pages.list"
+      ]
+    },
+    {
+      "id": "F-rendering-contract-versions",
+      "theme": "Realtime and UI",
+      "title": "Versioned rendering contract",
+      "task": "WG-5478",
+      "security": false,
+      "namedAs": [
+        "F-rendering-contract-versions"
+      ],
+      "sources": [
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:M18.Widget",
+        "g4-governance:M18.widgets.catalog"
+      ]
+    },
+    {
+      "id": "F-conversational-interface",
+      "theme": "Realtime and UI",
+      "title": "A conversational interface over the agent surface",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-conversational-interface"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-accessibility-contract",
+      "theme": "Accessibility",
+      "title": "Accessible by construction: decided rule, definition-time checks, accessible primitives, alt text, live announcements",
+      "task": "WG-5473",
+      "security": false,
+      "namedAs": [
+        "F-accessibility-contract",
+        "F-accessible-by-construction",
+        "F-accessible-primitive-library",
+        "F-definition-time-a11y-checks",
+        "F-image-text-alternative",
+        "F-live-status-announcements"
+      ],
+      "sources": [
+        "baseline",
+        "g4-governance"
+      ],
+      "neededBy": [
+        "g4-governance:M12.audit.node-history",
+        "g4-governance:M12.audit.timeline",
+        "g4-governance:M13.admin.grants",
+        "g4-governance:M13.admin.matrix",
+        "g4-governance:M13.admin.members",
+        "g4-governance:M13.admin.program",
+        "g4-governance:M13.admin.roles",
+        "g4-governance:M18.pages.editor",
+        "g4-governance:REPORTING.REP-I10",
+        "g4-governance:REPORTING.REP-I11",
+        "g4-governance:REPORTING.reporting.bar",
+        "g4-governance:REPORTING.reporting.board",
+        "g4-governance:REPORTING.reporting.heatmap",
+        "g4-governance:REPORTING.reporting.kpi",
+        "g4-governance:REPORTING.reporting.line",
+        "g4-governance:REPORTING.reporting.scatter",
+        "g4-governance:REPORTING.reporting.suite-kpis",
+        "g4-governance:REPORTING.reporting.table"
+      ]
+    },
+    {
+      "id": "F-accessibility-gate",
+      "theme": "Accessibility",
+      "title": "Axe, keyboard and contrast checks in the gate",
+      "task": "WG-5473",
+      "security": false,
+      "namedAs": [
+        "F-accessibility-gate",
+        "F-browser-accessibility-gate",
+        "F-contrast-verification-in-gate"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    },
+    {
+      "id": "F-request-language-and-direction",
+      "theme": "Accessibility",
+      "title": "Request language and text direction",
+      "task": "",
+      "security": false,
+      "namedAs": [
+        "F-request-language-and-direction"
+      ],
+      "sources": [
+        "baseline"
+      ],
+      "neededBy": []
+    }
+  ]
+}
