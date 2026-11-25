@@ -123,6 +123,7 @@ fn place(section: &str) -> Option<Place> {
         "triggers" => ("triggers", "trigger"),
         "automations" => ("automations", "workflow"),
         "operations" => ("operations", "operation"),
+        "holds" => ("holds", "hold-rule"),
         "eventKinds" => ("event-kinds", "event-kind"),
         // The interface entities are one kind of tenant entity, the interface element (D-8250).
         "screens" | "forms" | "actions" | "liveBindings" | "errorMessages" | "presentations" => {

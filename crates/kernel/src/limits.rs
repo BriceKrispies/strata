@@ -70,6 +70,9 @@ pub const MAX_AGGREGATE_GROUPS: usize = 1_000;
 pub const MAX_SETTINGS: usize = 500;
 /// The most capabilities a schema may declare (D-6590).
 pub const MAX_CAPABILITIES: usize = 200;
+
+/// The most hold rules a tenant declares (D-8400).
+pub const MAX_HOLD_RULES: usize = 200;
 /// The most setting overrides a tenant may hold at every level together. The overrides travel
 /// with the tenant's state, so the number is bounded.
 pub const MAX_SETTING_OVERRIDES: usize = 100_000;

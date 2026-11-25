@@ -612,3 +612,110 @@ fn the_write_setting_product_installs_and_its_operations_write_its_settings() {
         "the tenant operation writes the tenant's digest hour"
     );
 }
+
+/// D-8400, ADM-1601: a product declares a hold rule in its section `holds`, the bundle carries it with
+/// its condition, and installed it holds the invocation it names until the owner approves it.
+// Verifies: ADM-1601
+// Verifies: ADM-1604
+#[test]
+fn a_product_hold_rule_holds_an_invocation_until_its_approver_decides() {
+    use std::collections::BTreeMap;
+    use strata_kernel::testkit::{ctx, object, text};
+    use strata_kernel::{
+        DomainError, HeldOperationId, HoldDecision, Intent, Output, Principal, PrincipalId,
+        TenantId, TenantOperationId, TenantStateExt, World,
+    };
+    use strata_substrate::bundle::{
+        install_into, install_product, Bundle, ProductBundle, ProductInstall, ProductTarget,
+    };
+
+    let output = bundle_of(&product("hold-rule.jsonc"));
+    let written: Value = serde_json::from_str(&output.files[0].contents).unwrap();
+    assert_eq!(
+        written["content"]["holds"][0]["when"], "param.slug != 'routine'",
+        "the condition stays in the authoring syntax"
+    );
+    let bundle = ProductBundle::from_json(&output.files[0].contents)
+        .unwrap_or_else(|e| panic!("the bundle is refused: {e}"));
+
+    let tenant = TenantId::new("acme").expect("tenant id");
+    let admin = Principal::User(PrincipalId::new("user:admin").expect("principal id"));
+    let maker = Principal::User(PrincipalId::new("user:maker").expect("principal id"));
+    let doc = json!({ "id": "acme", "name": "Acme", "owner": "user:admin", "created_at": "2026-01-01T00:00:00Z" });
+    let mut world = install_into(
+        &World::default(),
+        &Bundle::from_json(&doc.to_string()).expect("tenant bundle"),
+    )
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    let schema = world.tenants[&tenant].schema.clone();
+    let target = ProductTarget {
+        tenant: &tenant,
+        principal: admin.clone(),
+        now: 1_800_000_000_000,
+        release: "0.2",
+        schema: &schema,
+        installed: None,
+        expected_version: None,
+        idempotency_key: None,
+    };
+    let answer = install_product(&bundle, &target, &mut |ctx: strata_kernel::Context,
+                                                         intent: Intent|
+     -> Result<Output, DomainError> {
+        let (next, outcome) = world.step(&intent, &ctx)?;
+        world = next;
+        Ok(outcome.output)
+    });
+    match answer {
+        Ok(ProductInstall::Applied { .. }) => {}
+        other => panic!("the product was not installed: {other:?}"),
+    }
+
+    let file = |slug: &str, key: &str| Intent::InvokeOperation {
+        operation: TenantOperationId::new("approvals__file_note").expect("operation id"),
+        inputs: BTreeMap::from([("slug".to_string(), text(slug))]),
+        idempotency_key: key.to_string(),
+    };
+    let notes = |world: &World| {
+        world.tenants[&tenant]
+            .records_of(&object("approvals__note"))
+            .count()
+    };
+    // A routine note is not held; any other is filed and changes no record.
+    let (routine, outcome) = world
+        .step(
+            &file("routine", "k-1"),
+            &ctx("acme", maker.clone(), 1_800_000_000_100),
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(matches!(outcome.output, Output::Operation { .. }));
+    assert_eq!(notes(&routine), 1);
+    let (held, outcome) = world
+        .step(
+            &file("special", "k-2"),
+            &ctx("acme", maker.clone(), 1_800_000_000_100),
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(matches!(outcome.output, Output::Held { .. }));
+    assert_eq!(notes(&held), 0);
+    // The owner approves it, and it is applied as the person who filed it.
+    let (applied, _) = held
+        .step(
+            &Intent::DecideHold {
+                hold: HeldOperationId::new("h-1").expect("hold id"),
+                decision: HoldDecision::Approve,
+                read_revision: 1,
+                reason: None,
+            },
+            &ctx("acme", admin, 1_800_000_000_200),
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(notes(&applied), 1);
+    let note = applied.tenants[&tenant]
+        .records_of(&object("approvals__note"))
+        .next()
+        .expect("the note");
+    assert_eq!(
+        note.created_by,
+        Some(PrincipalId::new("user:maker").expect("principal id"))
+    );
+}

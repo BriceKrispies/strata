@@ -370,6 +370,13 @@ fn write(
         expected_revision: expected_of(body, "expected_version")?,
     };
     let done = run_intent(app, &identity.context(app), &intent, identity.anonymous())?;
+    if let Some(held) = crate::holds::notice_of(&done.transition.output) {
+        // A hold rule filed the write: the setting is as it was.
+        return Ok(json!({
+            "held": held,
+            "event_seq": done.transition.delta.event_seq,
+        }));
+    }
     match done.transition.output {
         Output::Setting { revision, .. } => Ok(json!({
             "revision": revision,

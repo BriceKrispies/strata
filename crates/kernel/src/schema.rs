@@ -165,6 +165,8 @@ impl TenantSchemaExt for TenantSchema {
             products: None,
             ui: None,
             scoped_roles: None,
+            hold_rules: None,
+            holds: None,
         }
     }
 
@@ -668,6 +670,7 @@ impl TenantSchemaExt for TenantSchema {
         crate::aggregates::problems(self, &mut problems);
         crate::settings::definition_problems(self, &mut problems);
         crate::capabilities::declaration_problems(self, &mut problems);
+        crate::holds::problems(self, &mut problems);
         crate::ledger::declaration_problems(self, &mut problems);
         crate::object_meta::problems(self, &mut problems);
         crate::search::problems(self, &mut problems);

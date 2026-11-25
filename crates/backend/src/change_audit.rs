@@ -24,6 +24,15 @@
 //!   role_permissions }`, the permissions of each role the change defines, and `changes`, the
 //!   summary the kernel wrote.
 //!
+//! - **A held operation** (D-8400): `hold.filed` when a hold rule or `file-hold` files a change
+//!   (the change itself leaves no entry, since nothing changed), with `hold`, `requester`,
+//!   `on_behalf_of`, `approver`, `rule`, `input_hash`, `expires_at` and `change` (the name of the
+//!   intent it freezes); `hold.decided` when `decide-hold` approves or rejects one, with `hold`,
+//!   `state`, `revision`, `requester` and `decided_by`, and, for an approval, the entry of the change
+//!   it applied, written with the requester as `actor` and the approver as `approved_by`;
+//!   `hold.refused` for a decision that was refused ([`refused`]), with the `kind` and the failed
+//!   checks.
+//!
 //! Every entry has `tenant`, `intent`, `revision` and the actor as `actor` (a person) or
 //! `actor_kind` (`system`, `anonymous`); the correlation identifier is the entry's own. The
 //! members that name a person, and `previous` and `value` with them, are sealed under that
@@ -41,8 +50,8 @@ use std::sync::Arc;
 use strata_kernel::ext::IntentExt;
 use strata_kernel::settings::override_of;
 use strata_kernel::{
-    Context, EventBody, Intent, Principal, PrincipalId, RoleId, SchemaChange, SettingLevel,
-    TenantSchemaExt, TenantState,
+    Context, EventBody, HeldOperation, HeldOperationId, HoldState, Intent, Output, Principal,
+    PrincipalId, RoleId, SchemaChange, SettingLevel, TenantSchemaExt, TenantState,
 };
 use strata_storage_api::Executed;
 use strata_substrate::plain::to_plain;
@@ -188,23 +197,50 @@ fn value_in(intent: &Intent, ctx: &Context, state: &TenantState) -> Json {
 /// Note the tenant as it is before `intent` is committed. `None` for an intent that is not a
 /// change of configuration or roles, or when the tenant cannot be read.
 pub fn before(app: &App, ctx: &Context, intent: &Intent) -> Option<Prior> {
-    event_of(intent)?;
+    if event_of(intent).is_none() && !matches!(intent, Intent::DecideHold { .. }) {
+        return None;
+    }
     header(app, ctx).map(|state| Prior { state })
 }
 
 /// Append the audit entry of a committed `intent`.
 pub fn record(app: &App, ctx: &Context, intent: &Intent, prior: Option<Prior>, done: &Executed) {
-    let (Some(event), Some(prior)) = (event_of(intent), prior) else {
-        return;
-    };
     if done.replayed {
         return;
     }
+    match &done.transition.output {
+        Output::Held { hold, .. } => {
+            return record_filed(app, ctx, intent, hold, done);
+        }
+        Output::HoldDecided { hold, .. } => {
+            return record_decided(app, ctx, hold, prior, done);
+        }
+        _ => {}
+    }
+    let (Some(event), Some(prior)) = (event_of(intent), prior) else {
+        return;
+    };
     let Some(after) = header(app, ctx) else {
         return;
     };
+    write_entry(app, ctx, event, intent, &prior, &after, done, None);
+}
+
+/// The entry of an accepted change of configuration or roles, with the principal of `ctx` as its
+/// actor and `extra` members added.
+#[allow(clippy::too_many_arguments)]
+fn write_entry(
+    app: &App,
+    ctx: &Context,
+    event: &str,
+    intent: &Intent,
+    prior: &Prior,
+    after: &Arc<TenantState>,
+    done: &Executed,
+    extra: Option<Map<String, Json>>,
+) {
     let previous = value_in(intent, ctx, &prior.state);
-    let now = value_in(intent, ctx, &after);
+    let now = value_in(intent, ctx, after);
     let mut fields = Map::new();
     fields.insert("tenant".into(), json!(ctx.tenant.as_str()));
     fields.insert("intent".into(), json!(intent.name()));
@@ -241,5 +277,155 @@ pub fn record(app: &App, ctx: &Context, intent: &Intent, prior: Option<Prior>, d
             .unwrap_or_default();
         fields.insert("changes".into(), json!(summary));
     }
+    if let Some(extra) = extra {
+        fields.extend(extra);
+    }
     app.audit(event, &ctx.correlation, Json::Object(fields));
+}
+
+/// The hold `id` as the tenant holds it after the commit.
+fn held_in(state: &TenantState, id: &HeldOperationId) -> Option<HeldOperation> {
+    state.schema.holds.as_ref()?.get(id).cloned()
+}
+
+/// `hold.filed`: a change a rule held, or that `file-hold` filed (D-8400, ADM-1601).
+fn record_filed(app: &App, ctx: &Context, intent: &Intent, id: &HeldOperationId, done: &Executed) {
+    let Some(after) = header(app, ctx) else {
+        return;
+    };
+    let Some(held) = held_in(&after, id) else {
+        return;
+    };
+    let mut fields = Map::new();
+    fields.insert("tenant".into(), json!(ctx.tenant.as_str()));
+    fields.insert("intent".into(), json!(intent.name()));
+    fields.insert("revision".into(), json!(done.receipt.revision.0));
+    fields.insert("hold".into(), json!(held.id.as_str()));
+    fields.insert("requester".into(), json!(held.requester.as_str()));
+    fields.insert(
+        "on_behalf_of".into(),
+        json!(held.on_behalf_of.as_ref().map(PrincipalId::as_str)),
+    );
+    fields.insert("approver".into(), json!(held.approver.to_string()));
+    fields.insert(
+        "rule".into(),
+        json!(held.rule.as_ref().map(|rule| rule.as_str())),
+    );
+    fields.insert("input_hash".into(), json!(held.input_hash));
+    fields.insert("expires_at".into(), json!(held.expires_at.0));
+    fields.insert(
+        "change".into(),
+        json!(strata_kernel::holds::intent_of(&held.change).name()),
+    );
+    app.audit("hold.filed", &ctx.correlation, Json::Object(fields));
+}
+
+/// `hold.decided`, and for an approval the entry of the change it applied (D-8400, ADM-1604).
+fn record_decided(
+    app: &App,
+    ctx: &Context,
+    id: &HeldOperationId,
+    prior: Option<Prior>,
+    done: &Executed,
+) {
+    let Some(after) = header(app, ctx) else {
+        return;
+    };
+    let Some(held) = held_in(&after, id) else {
+        return;
+    };
+    let mut fields = Map::new();
+    fields.insert("tenant".into(), json!(ctx.tenant.as_str()));
+    fields.insert("intent".into(), json!("decide_hold"));
+    fields.insert("revision".into(), json!(done.receipt.revision.0));
+    fields.insert("hold".into(), json!(held.id.as_str()));
+    fields.insert(
+        "state".into(),
+        json!(format!("{:?}", held.state).to_lowercase()),
+    );
+    fields.insert("hold_revision".into(), json!(held.revision));
+    fields.insert("requester".into(), json!(held.requester.as_str()));
+    fields.insert(
+        "decided_by".into(),
+        json!(held.decided_by.as_ref().map(PrincipalId::as_str)),
+    );
+    fields.insert("approver".into(), json!(held.approver.to_string()));
+    fields.insert("input_hash".into(), json!(held.input_hash));
+    if let Principal::User(decider) = &ctx.principal {
+        fields.insert("actor".into(), json!(decider.as_str()));
+    }
+    app.audit("hold.decided", &ctx.correlation, Json::Object(fields));
+
+    // The change an approval applied is a change like any other: it leaves its entry, made by the
+    // requester and approved by the person who decided.
+    if held.state != HoldState::Applied {
+        return;
+    }
+    let Some(prior) = prior else {
+        return;
+    };
+    let applied = strata_kernel::holds::intent_of(&held.change);
+    let Some(event) = event_of(&applied) else {
+        return;
+    };
+    let as_requester = Context {
+        principal: Principal::User(held.requester.clone()),
+        ..ctx.clone()
+    };
+    let extra = Map::from_iter([
+        ("hold".to_string(), json!(held.id.as_str())),
+        (
+            "approved_by".to_string(),
+            json!(held.decided_by.as_ref().map(PrincipalId::as_str)),
+        ),
+    ]);
+    write_entry(
+        app,
+        &as_requester,
+        event,
+        &applied,
+        &prior,
+        &after,
+        done,
+        Some(extra),
+    );
+}
+
+/// `hold.refused`: a decision on a held operation that was refused, with the kind of the refusal
+/// and the checks that failed (ADM-1602 to ADM-1604, ADM-1614). Any other intent leaves nothing.
+pub fn refused(app: &App, ctx: &Context, intent: &Intent, error: &crate::app::ApiError) {
+    let Intent::DecideHold {
+        hold,
+        decision,
+        read_revision,
+        ..
+    } = intent
+    else {
+        return;
+    };
+    let mut fields = Map::new();
+    fields.insert("tenant".into(), json!(ctx.tenant.as_str()));
+    fields.insert("intent".into(), json!("decide_hold"));
+    fields.insert("hold".into(), json!(hold.as_str()));
+    fields.insert(
+        "decision".into(),
+        json!(format!("{decision:?}").to_lowercase()),
+    );
+    fields.insert("read_revision".into(), json!(read_revision));
+    fields.insert("kind".into(), json!(error.0.kind));
+    fields.insert(
+        "failed".into(),
+        json!(error
+            .0
+            .failed
+            .iter()
+            .map(|check| check.rule.as_str())
+            .collect::<Vec<_>>()),
+    );
+    match &ctx.principal {
+        Principal::User(actor) => fields.insert("actor".into(), json!(actor.as_str())),
+        Principal::System => fields.insert("actor_kind".into(), json!("system")),
+        Principal::Anonymous => fields.insert("actor_kind".into(), json!("anonymous")),
+    };
+    app.audit("hold.refused", &ctx.correlation, Json::Object(fields));
 }

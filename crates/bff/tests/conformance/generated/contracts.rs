@@ -174,6 +174,7 @@ pub const ROLES: &[(&str, &[&str])] = &[
             "segments-read-own",
             "automations-define",
             "automations-read",
+            "holds-define",
         ],
     ),
     (
@@ -1428,6 +1429,7 @@ pub const TYPES: &[TypeDecl] = &[
             "automation",
             "operation",
             "ui-element",
+            "hold-rule",
         ]),
     },
     TypeDecl {

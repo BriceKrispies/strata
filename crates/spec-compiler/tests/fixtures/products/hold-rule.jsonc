@@ -1,0 +1,43 @@
+{
+  // A hold rule as a product (D-8400, ADM-1601): filing a note is a tenant operation, and the rule
+  // below holds every invocation of it whose slug is not "routine". A held invocation changes no
+  // record when it is submitted; a person who holds the capability change-approve, and who did not
+  // file it, approves it, and it is applied then, as the person who filed it. The rule names its
+  // target, an optional condition over the inputs of the operation (the authoring syntax of the
+  // tenant rule language, param.<input>), and the capability its approver needs. A product declares
+  // the rule in its own namespace approvals__ like every other entity (D-6582).
+  "product": { "id": "approvals", "name": "Approvals", "version": "1.0.0", "platform": { "min": "0.2" }, "imports": { "spec": "../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "approvals__note",
+      "label": "Note",
+      "fields": {
+        "slug": { "id": "slug", "label": "Slug", "ty": "Str", "required": true, "unique": false }
+      },
+      "constraints": {}
+    }
+  ],
+  "operations": [
+    {
+      "id": "approvals__file_note",
+      "label": "File a note",
+      "inputs": [
+        { "name": "slug", "ty": "Str", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [
+        { "CreateRecord": { "id": "made", "object": "approvals__note", "fields": { "slug": "param.slug" } } }
+      ]
+    }
+  ],
+  "holds": [
+    {
+      "id": "approvals__hold_file_note",
+      "label": "Filing a note needs approval unless it is routine",
+      "target": { "Operation": { "operation": "approvals__file_note" } },
+      "when": "param.slug != 'routine'",
+      "approver": "change-approve"
+    }
+  ]
+}

@@ -34,6 +34,7 @@ pub mod editor_rules;
 pub mod erasure;
 pub mod evolution;
 pub mod expr;
+pub mod holds;
 pub mod intent;
 pub mod ledger;
 pub mod ledger_expiry;

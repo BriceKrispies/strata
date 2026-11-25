@@ -378,6 +378,9 @@ fn some_policy_could_authorise(
         // A setting write is authorised by the setting's write rule, not a policy; the generator
         // draws none.
         Intent::WriteSetting { .. } => return false,
+        // A hold is filed by any signed-in person and decided by a holder of its approver
+        // capability, not by a policy; the generator draws none.
+        Intent::FileHold { .. } | Intent::DecideHold { .. } => return false,
     };
     let roles = roles_held(state, principal);
     roles.contains(&role("owner"))

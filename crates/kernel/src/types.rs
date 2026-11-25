@@ -63,6 +63,12 @@ pub use strata_model_core::types::{
     EntityKind, EntityRef, InstalledProduct, MailTemplateDecl, NoticeTemplateDecl, PlatformCompat,
     ProductId, PublicationDef, StructuredBlocks, TemplateId, TokenDecl,
 };
+/// The hold rules and held operations of [`crate::holds`]: rules in the tenant schema, and the
+/// changes filed instead of applied, kept in it like invitations.
+pub use strata_model_core::types::{
+    HeldChange, HeldOperation, HeldOperationId, HoldDecision, HoldRule, HoldRuleId, HoldState,
+    HoldTarget,
+};
 /// The tenant ledger of [`crate::ledger`]: declarations in the tenant schema, accounts and
 /// entries in the tenant state, its needs, delta operations, requests and answers.
 pub use strata_model_core::types::{

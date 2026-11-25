@@ -39,6 +39,8 @@ impl IntentExt for Intent {
             Intent::InvokeOperation { .. } => "invoke_operation",
             Intent::PostLedger { .. } => "post_ledger",
             Intent::ExpireLedger { .. } => "expire_ledger",
+            Intent::FileHold { .. } => "file_hold",
+            Intent::DecideHold { .. } => "decide_hold",
         }
     }
 }

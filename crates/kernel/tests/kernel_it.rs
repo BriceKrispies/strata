@@ -25,6 +25,9 @@ mod evolution;
 #[path = "generated_differential.rs"]
 mod generated_differential;
 
+#[path = "holds.rs"]
+mod holds;
+
 #[path = "ledger.rs"]
 mod ledger;
 

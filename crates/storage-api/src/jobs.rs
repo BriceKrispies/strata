@@ -611,6 +611,12 @@ pub struct ExceptionRecord {
 /// of a wait). A job of `jobs` whose key exists already is not created again.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerWrites {
+    /// The writes are made only while this step is still waiting for an approval that nobody
+    /// decided (D-8406, WG-5488): a decision reads the step and writes it conditional on what it
+    /// read, so of two approvers that race one decision is written and the other is refused with
+    /// a store conflict, in the transaction that writes, not before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only_if_awaiting: Option<StepGuard>,
     #[serde(default)]
     pub runs: Vec<RunRecord>,
     #[serde(default)]
@@ -630,6 +636,31 @@ pub struct WorkerWrites {
     /// paused, is created in the same transaction (SCH-003, SCH-005).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_advance: Option<crate::schedules::ScheduleAdvance>,
+}
+
+/// A step that a write is conditional on (`WorkerWrites::only_if_awaiting`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepGuard {
+    pub run: String,
+    pub sequence: u64,
+}
+
+/// Whether `step` still waits for an approval that nobody decided: the state a decision reads.
+pub fn awaits_decision(step: &StepRecord) -> bool {
+    step.state == StepState::Waiting
+        && step
+            .approval
+            .as_ref()
+            .is_some_and(|approval| approval.decision.is_none())
+}
+
+/// The refusal of a write whose guard no longer holds.
+pub fn decision_conflict() -> crate::StoreError {
+    crate::StoreError::Conflict {
+        expected: None,
+        found: None,
+        found_generation: None,
+    }
 }
 
 /// The claim of a run key by the run that started for it (rec-automation-run-key, D-6534).

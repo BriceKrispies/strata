@@ -716,13 +716,15 @@ const SEALING_MIGRATION: Migration = Migration {
     ",
 };
 
-/// The form of a schema the history keeps: without its teams and invitations, which name people
-/// (team members, invitation addresses) and change without a new version. The current schema in
-/// the tenant row keeps them; an erasure removes the person there (WG-5111).
+/// The form of a schema the history keeps: without its teams, invitations and held operations,
+/// which name people (team members, invitation addresses, the requester and the input of a hold)
+/// and change without a new version. The current schema in the tenant row keeps them; an erasure
+/// removes the person there (WG-5111, D-8400).
 fn history_form(schema: &TenantSchema) -> TenantSchema {
     TenantSchema {
         teams: None,
         invitations: None,
+        holds: None,
         ..schema.clone()
     }
 }
@@ -1543,6 +1545,22 @@ fn write_automation(
     writes: &WorkerWrites,
     now: Timestamp,
 ) -> StoreResult<()> {
+    if let Some(guard) = &writes.only_if_awaiting {
+        let held: Option<String> = tx
+            .query_row(
+                "SELECT data FROM automation_steps WHERE run = ?1 AND sequence = ?2",
+                params![guard.run, guard.sequence as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db)?;
+        let awaiting = held
+            .and_then(|data| serde_json::from_str::<StepRecord>(&data).ok())
+            .is_some_and(|step| strata_storage_api::jobs::awaits_decision(&step));
+        if !awaiting {
+            return Err(strata_storage_api::jobs::decision_conflict());
+        }
+    }
     for run in &writes.runs {
         tx.execute(
             "INSERT INTO automation_runs (run, automation, state, data) VALUES (?1, ?2, ?3, ?4)

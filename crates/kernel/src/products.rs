@@ -112,6 +112,11 @@ pub fn exists(schema: &TenantSchema, entity: &EntityRef) -> Option<bool> {
             .flatten()
             .any(|(k, _)| k.to_string() == id),
         EntityKind::Token => schema.tokens.as_ref().is_some_and(|t| t.contains_key(id)),
+        EntityKind::HoldRule => schema
+            .hold_rules
+            .iter()
+            .flatten()
+            .any(|(k, _)| k.to_string() == id),
         EntityKind::UiElement => crate::ui::element(schema, id).is_some(),
         EntityKind::Capability => schema
             .capabilities
@@ -324,6 +329,8 @@ pub fn touched(change: &SchemaChange) -> Vec<EntityRef> {
         C::DefineToken(decl) => entity(EntityKind::Token, &decl.name),
         C::RemoveToken(name) => entity(EntityKind::Token, name),
         C::DefineUiElement { id, .. } | C::RemoveUiElement(id) => entity(EntityKind::UiElement, id),
+        C::DefineHoldRule(rule) => entity(EntityKind::HoldRule, &rule.id),
+        C::RemoveHoldRule(id) => entity(EntityKind::HoldRule, id),
         C::RecordProduct(_) | C::RemoveProduct(_) => Vec::new(),
     }
 }

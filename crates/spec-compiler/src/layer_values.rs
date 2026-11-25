@@ -145,6 +145,12 @@ pub const TYPED_SECTIONS: &[TypedSection] = &[
         purpose: "composite operations (values of the platform type tenant-operation-def)",
     },
     TypedSection {
+        section: "holds",
+        ty: "hold-rule",
+        id_field: Some("id"),
+        purpose: "rules that hold a change for approval (values of the platform type hold-rule, D-8400)",
+    },
+    TypedSection {
         section: "eventKinds",
         ty: "event-kind-decl",
         id_field: None,

@@ -669,6 +669,71 @@ fn a_second_decision_is_refused_and_changes_nothing() {
     assert_eq!(run_of(&app, &run).state, RunState::Completed);
 }
 
+// Verifies: ADM-1614
+#[test]
+fn the_store_writes_a_decision_only_while_the_step_still_waits_as_it_was_read() {
+    use strata_storage_api::jobs::{StepGuard, WorkerWrites};
+    let app = app();
+    install(&app, "alpha");
+    let note = write_note(&app, "writer1", "Review me", "review-me", 200);
+    let run = submit(&app, "writer1", note, "k-1", T0);
+    let guarded = || WorkerWrites {
+        only_if_awaiting: Some(StepGuard {
+            run: run.clone(),
+            sequence: 1,
+        }),
+        ..WorkerWrites::default()
+    };
+    let tenant = tenant_id("alpha");
+    // While the step waits, a write that read it so is made.
+    app.store
+        .automation_write(&tenant, &guarded(), Timestamp(T0 + 1))
+        .expect("the step waits");
+    decide(&app, "editor", &run, true, T0 + 10).expect("approved");
+    // Once it is decided, the same write is a conflict, whoever reads and writes.
+    let error = app
+        .store
+        .automation_write(&tenant, &guarded(), Timestamp(T0 + 11))
+        .expect_err("the step was decided");
+    assert!(
+        matches!(error, strata_storage_api::StoreError::Conflict { .. }),
+        "{error:?}"
+    );
+}
+
+// Verifies: ADM-1614
+#[test]
+fn two_approvers_that_race_decide_a_waiting_step_once() {
+    let app = app();
+    install(&app, "alpha");
+    let note = write_note(&app, "writer1", "Review me", "review-me", 200);
+    let run = submit(&app, "writer1", note, "k-1", T0);
+    let results: Vec<Result<serde_json::Value, ApiError>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = [("editor", true), ("editor2", false)]
+            .into_iter()
+            .map(|(who, approved)| {
+                let (app, run) = (&app, &run);
+                scope.spawn(move || decide(app, who, run, approved, T0 + 10))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("the decision ran"))
+            .collect()
+    });
+    let decided = results.iter().filter(|result| result.is_ok()).count();
+    assert_eq!(decided, 1, "{results:?}");
+    let refused = results.iter().find_map(|result| result.as_ref().err());
+    assert_eq!(
+        refused.map(code_of),
+        Some(ErrorCode::Conflict),
+        "{results:?}"
+    );
+    // One decision is on the step, and it is the one that was written.
+    let approval = steps_of(&app, &run)[0].approval.clone().expect("approval");
+    assert!(approval.decision.is_some());
+}
+
 // ---------------------------------------------------------------------------------------------
 // Starting a run and activating an automation.
 // ---------------------------------------------------------------------------------------------

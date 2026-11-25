@@ -579,11 +579,13 @@ fn raise_object_revision(t: &mut Transaction<'_>, object: &str) -> StoreResult<(
     Ok(())
 }
 
-/// The form of a schema the history keeps: without its teams and invitations (WG-5111).
+/// The form of a schema the history keeps: without its teams, invitations and held operations
+/// (WG-5111, D-8400).
 fn history_form(schema: &TenantSchema) -> TenantSchema {
     TenantSchema {
         teams: None,
         invitations: None,
+        holds: None,
         ..schema.clone()
     }
 }
@@ -851,6 +853,24 @@ fn write_automation(
     writes: &WorkerWrites,
     now: Timestamp,
 ) -> StoreResult<()> {
+    if let Some(guard) = &writes.only_if_awaiting {
+        // The row is locked until the transaction ends, so a second decision waits here and then
+        // finds the step decided.
+        let sequence: i64 = guard.sequence as i64;
+        let held: Option<String> = t
+            .query_opt(
+                "SELECT data::text FROM automation_steps WHERE run = $1 AND sequence = $2 FOR UPDATE",
+                &[&guard.run, &sequence],
+            )
+            .map_err(db)?
+            .map(|row| row.get(0));
+        let awaiting = held
+            .and_then(|data| serde_json::from_str::<StepRecord>(&data).ok())
+            .is_some_and(|step| strata_storage_api::jobs::awaits_decision(&step));
+        if !awaiting {
+            return Err(strata_storage_api::jobs::decision_conflict());
+        }
+    }
     for run in &writes.runs {
         t.execute(
             "INSERT INTO automation_runs (run, automation, state, data) VALUES ($1, $2, $3, $4::text::jsonb)
