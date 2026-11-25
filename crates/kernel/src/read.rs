@@ -252,6 +252,17 @@ pub fn audience_needs(schema: &TenantSchema, record: &Record) -> Vec<Need> {
             });
         }
     }
+    // D-8403: the scope of a role assigned to some person on this object type decides whether
+    // that person reads the record, so what it follows is needed too.
+    for scoped in schema.scoped_roles.iter().flatten() {
+        if scoped.object == record.object {
+            crate::aggregates::walk(&scoped.scope, &mut |expr| {
+                if let crate::expr::Expr::Through(_, field, _) = expr {
+                    followed.insert(field.clone());
+                }
+            });
+        }
+    }
     let mut needs = Vec::new();
     for name in followed {
         let Ok(id) = FieldId::new(name) else {

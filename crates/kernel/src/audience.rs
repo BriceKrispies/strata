@@ -20,7 +20,9 @@
 //! 3. the read rule of every field the result can carry: for a named query or a view every field of
 //!    every object type it carries, for an aggregate the field it reads, the field it groups by
 //!    and every field its query declares (a request filter can name no other);
-//! 4. the filter of the query, which is evaluated for the reader.
+//! 4. the filter of the query, which is evaluated for the reader;
+//! 5. the roles the reader holds through a scope on a carried object type (D-8403), which each
+//!    decide on the records where their predicate holds.
 //!
 //! The class of a reader is then:
 //!
@@ -30,7 +32,8 @@
 //!   permission on a carried object type, the roles of a Read policy of one, the roles a condition
 //!   tests with `has_role`, and the owner. A reader's other roles are left out, because nothing in
 //!   the result depends on them, so two readers who differ only in such a role share one class;
-//! - [`AudienceClass::Individual`], the reader alone, in every other case: a condition that applies
+//! - [`AudienceClass::Individual`], the reader alone, in every other case: the reader holds a role
+//!   through a scope on a carried object type; a condition that applies
 //!   to the reader (a policy of a role the reader holds, a field read rule, the query filter)
 //!   mentions `principal`, which includes comparing a record's author with the reader, or `now`,
 //!   which makes the answer depend on the moment; and anything the derivation cannot resolve (a
@@ -262,6 +265,14 @@ pub fn audience_class(
     }
     if footprint.unresolved {
         return individual();
+    }
+    // D-8403: a role held through a scope decides on each record where its predicate holds, and
+    // the predicate may name the reader, so a reader who holds one on a carried object type is
+    // judged alone: their copy is neither shared nor taken from another reader's.
+    if let Principal::User(id) = principal {
+        if crate::scoped::of(schema, id).any(|held| footprint.objects.contains(&held.object)) {
+            return individual();
+        }
     }
 
     // Roles that matter: those a Read policy of a carried object type names, and those a condition

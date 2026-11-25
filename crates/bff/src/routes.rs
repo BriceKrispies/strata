@@ -1831,7 +1831,7 @@ async fn records(
 }
 
 /// Change who holds which role: `POST /api/members/<operation>` with the operation's inputs as
-/// the JSON body (`assign-role`, `revoke-role`, `add-team-member`, `remove-team-member`, `invite`
+/// the JSON body (`assign-role`, `revoke-role`, `assign-scoped-role`, `revoke-scoped-role`, `add-team-member`, `remove-team-member`, `invite`
 /// and `redeem`, the contracts of the gateway). The request must come from one of our pages with
 /// the session's request token. The backend's kernel decides; this route adds nothing, and the
 /// body has no field for the address an invitation is redeemed with.
@@ -1863,7 +1863,11 @@ async fn members(
             roles: &[],
             step_up: matches!(
                 op.as_str(),
-                "assign_role" | "add_team_member" | "invite" | "revoke_invitation"
+                "assign_role"
+                    | "assign_scoped_role"
+                    | "add_team_member"
+                    | "invite"
+                    | "revoke_invitation"
             ),
         }
         .admit(&bff, &visit)

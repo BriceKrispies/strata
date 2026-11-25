@@ -2,8 +2,8 @@
 //!
 //! A scoped assignment gives a principal a role on the records of one object type where a
 //! predicate holds, such as "the region of the record is the region of its member". It is held in
-//! [`TenantSchema::scoped_roles`], changes through the intents `AssignScopedRole` and
-//! `RevokeRole`, and does not raise the schema version.
+//! [`TenantSchema::scoped_roles`], changes through the intents `AssignScopedRole`,
+//! `RevokeScopedRole` and `RevokeRole`, and does not raise the schema version.
 //!
 //! **A narrower scope never confers more.** A scoped assignment is not a direct assignment: it
 //! adds nothing to [`crate::rules::roles_of`], so every place that reads the roles of a principal
@@ -116,6 +116,28 @@ pub fn problems(schema: &TenantSchema, problems: &mut Vec<String>) {
             ));
         }
     }
+}
+
+/// The schema after `principal` loses the one assignment of `role` on `object`, or `None` when
+/// there is no such assignment.
+pub fn without_one(
+    schema: &TenantSchema,
+    principal: &PrincipalId,
+    role: &RoleId,
+    object: &ObjectTypeId,
+) -> Option<TenantSchema> {
+    let held = schema.scoped_roles.as_ref()?;
+    let kept: Vec<ScopedRole> = held
+        .iter()
+        .filter(|a| !(a.principal == *principal && a.role == *role && a.object == *object))
+        .cloned()
+        .collect();
+    if kept.len() == held.len() {
+        return None;
+    }
+    let mut next = schema.clone();
+    next.scoped_roles = (!kept.is_empty()).then_some(kept);
+    Some(next)
 }
 
 /// The assignments left after `principal` loses `role` (every object type), and whether any went.

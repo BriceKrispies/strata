@@ -357,6 +357,7 @@ fn some_policy_could_authorise(
         Intent::ChangeSchema { .. } => (Action::Manage, Resource::Schema),
         Intent::AssignRole { .. }
         | Intent::AssignScopedRole { .. }
+        | Intent::RevokeScopedRole { .. }
         | Intent::RevokeRole { .. }
         | Intent::DefineTeam { .. }
         | Intent::AssignTeamRole { .. }

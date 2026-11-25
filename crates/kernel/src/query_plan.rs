@@ -1324,6 +1324,7 @@ impl Collector {
     fn new(
         schema: &TenantSchema,
         object: &ObjectTypeId,
+        principal: &Principal,
         roles: &BTreeSet<RoleId>,
         filter: Option<&Expr>,
     ) -> Self {
@@ -1340,6 +1341,28 @@ impl Collector {
             if reaches && roles.contains(&policy.role) && policy.actions.contains(&Action::Read) {
                 if let Some(condition) = &policy.condition {
                     followed(condition, &mut fields);
+                }
+            }
+        }
+        // D-8403: a role held through a scope decides a read on the records where its scope holds,
+        // so the references its scope and its Read policies follow are needed too.
+        if let Principal::User(id) = principal {
+            for scoped in crate::scoped::of(schema, id).filter(|s| s.object == *object) {
+                followed(&scoped.scope, &mut fields);
+                for policy in schema.policies.values() {
+                    let reaches = match &policy.resource {
+                        Resource::AnyObject => true,
+                        Resource::Object(target) => target == object,
+                        _ => false,
+                    };
+                    if reaches
+                        && policy.role == scoped.role
+                        && policy.actions.contains(&Action::Read)
+                    {
+                        if let Some(condition) = &policy.condition {
+                            followed(condition, &mut fields);
+                        }
+                    }
                 }
             }
         }
@@ -1990,8 +2013,13 @@ pub fn read_missing(state: &State, request: &ReadRequest, ctx: &Context) -> Vec<
             let Some(def) = tenant.schema.queries.get(query) else {
                 return Vec::new();
             };
-            let mut collector =
-                Collector::new(&tenant.schema, &def.object, &roles, def.filter.as_ref());
+            let mut collector = Collector::new(
+                &tenant.schema,
+                &def.object,
+                &ctx.principal,
+                &roles,
+                def.filter.as_ref(),
+            );
             let outcome = read_named_with(
                 lookup,
                 query,
@@ -2012,7 +2040,8 @@ pub fn read_missing(state: &State, request: &ReadRequest, ctx: &Context) -> Vec<
             found.extend(collector.found);
         }
         ReadRequest::Records { object, ids } => {
-            let mut collector = Collector::new(&tenant.schema, object, &roles, None);
+            let mut collector =
+                Collector::new(&tenant.schema, object, &ctx.principal, &roles, None);
             for id in ids.iter().take(limits::MAX_READ_IDS) {
                 match lookup.record(object, *id) {
                     Err(error) => found.extend(error.missing),

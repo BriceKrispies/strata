@@ -604,3 +604,85 @@ fn a_product_declares_a_hold_rule_that_holds_the_change_it_names_and_leaves_with
     assert_eq!(calls, 1);
     assert!(schema_of(&world).hold_rules.is_none());
 }
+
+// ---- the separations of a product (D-8482) ----------------------------------------------------
+
+fn pay_and_approve() -> Json {
+    json!({
+        "name": "Pay",
+        "version": "1.0.0",
+        "product": "pay",
+        "platform": { "min": "0.2", "below": "0.4" },
+        "content": {
+            "capabilities": [
+                { "id": "pay__release", "name": "Release a payment", "description": "Pays out." },
+                { "id": "pay__approve", "name": "Approve a payment", "description": "Approves." }
+            ],
+            "roles": {
+                "pay__payer": { "id": "pay__payer", "label": "Payer" },
+                "pay__approver": { "id": "pay__approver", "label": "Approver" }
+            },
+            "role-permissions": {
+                "pay__payer": ["pay__release"],
+                "pay__approver": ["pay__approve"]
+            },
+            "separations": [{
+                "id": "pay__release_and_approve",
+                "left": "pay__release",
+                "left-duty": "releases payments",
+                "right": "pay__approve",
+                "right-duty": "approves payments"
+            }]
+        }
+    })
+}
+
+// Verifies: ADM-1645
+// Verifies: ADM-1646
+#[test]
+fn a_product_declares_a_separation_that_is_held_to_and_leaves_with_the_product() {
+    let mut world = world();
+    let record = installed(&mut world, &pay_and_approve());
+    assert!(owned(&record).contains(&(
+        "separation".to_string(),
+        "pay__release_and_approve".to_string()
+    )));
+    let schema = schema_of(&world);
+    let declared = schema
+        .separations
+        .as_ref()
+        .expect("the separation is installed");
+    assert_eq!(declared.len(), 1);
+
+    // The one rule of the platform's own separations holds the product's: no one holds both.
+    let alice = PrincipalId::new("user:alice").unwrap();
+    let assign = |role: &str| Intent::AssignRole {
+        principal: alice.clone(),
+        role: RoleId::new(role).unwrap(),
+    };
+    let (world_with_payer, _) = world
+        .step(
+            &assign("pay__payer"),
+            &context_at(1_800_000_000_001, "payer"),
+        )
+        .expect("the payer is assigned");
+    let refusal = world_with_payer
+        .step(
+            &assign("pay__approver"),
+            &context_at(1_800_000_000_002, "approver"),
+        )
+        .expect_err("the approver would be the payer");
+    assert_eq!(refusal.kind, ErrorKind::ConflictingRoles);
+    assert!(
+        refusal.message.contains("releases payments")
+            && refusal.message.contains("approves payments"),
+        "{}",
+        refusal.message
+    );
+
+    // A product that is removed takes its separation with it.
+    let (result, calls) = with_target(&mut world, "0.2", |t, e| remove_product("pay", false, t, e));
+    result.unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(calls, 1);
+    assert!(schema_of(&world).separations.is_none());
+}

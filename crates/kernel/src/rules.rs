@@ -724,6 +724,39 @@ pub fn may_attempt(
                     (a, b) => a == b,
                 }
         })
+        || may_attempt_through_a_scope(tenant, principal, action, resource)
+}
+
+/// D-8403: whether a role the principal holds only through a scope on this object type could grant
+/// the action on some record of it, the scope and the conditions aside. A reader who holds a role
+/// through a scope is admitted to what the role reads, and the real decision on each record is
+/// still [`authorize`].
+fn may_attempt_through_a_scope(
+    tenant: &TenantState,
+    principal: &Principal,
+    action: Action,
+    resource: &Resource,
+) -> bool {
+    let (Principal::User(id), Resource::Object(object)) = (principal, resource) else {
+        return false;
+    };
+    crate::scoped::of(&tenant.schema, id)
+        .filter(|scoped| scoped.object == *object)
+        .any(|scoped| {
+            ObjectAction::of(action).is_some_and(|verb| {
+                tenant
+                    .schema
+                    .grants_of(&scoped.role)
+                    .contains(&Grant::Object(object.clone(), verb))
+            }) || tenant.schema.policies.values().any(|policy| {
+                policy.role == scoped.role
+                    && policy.actions.contains(&action)
+                    && match &policy.resource {
+                        Resource::AnyObject => true,
+                        other => other == resource,
+                    }
+            })
+        })
 }
 
 /// A failed check together with the error it maps to.

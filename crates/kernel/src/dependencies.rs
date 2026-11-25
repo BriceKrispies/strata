@@ -500,6 +500,8 @@ pub fn classify(change: &SchemaChange, schema: &TenantSchema) -> ChangeClass {
         | RemoveProduct(_) => ChangeClass::Breaking,
         // A hold rule has no dependent: nothing reads it but the decision of a change it names.
         DefineHoldRule(_) | RemoveHoldRule(_) => ChangeClass::Compatible,
+        // A separation has no dependent: it is read only by the check of who holds which duties.
+        DefineSeparation(_) | RemoveSeparation(_) => ChangeClass::Compatible,
         DefineObject { .. }
         | DefineConstraint { .. }
         | DefineRole(_)

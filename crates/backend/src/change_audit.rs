@@ -73,6 +73,7 @@ fn event_of(intent: &Intent) -> Option<&'static str> {
     match intent {
         Intent::AssignRole { .. }
         | Intent::AssignScopedRole { .. }
+        | Intent::RevokeScopedRole { .. }
         | Intent::RevokeRole { .. }
         | Intent::RedeemInvitation { .. } => Some("member.roles_changed"),
         Intent::AddTeamMember { .. } | Intent::RemoveTeamMember { .. } => {
@@ -102,6 +103,7 @@ fn person_of(intent: &Intent, ctx: &Context) -> Option<PrincipalId> {
     match intent {
         Intent::AssignRole { principal, .. }
         | Intent::AssignScopedRole { principal, .. }
+        | Intent::RevokeScopedRole { principal, .. }
         | Intent::RevokeRole { principal, .. }
         | Intent::AddTeamMember { principal, .. }
         | Intent::RemoveTeamMember { principal, .. } => Some(principal.clone()),
@@ -130,7 +132,7 @@ fn value_in(intent: &Intent, ctx: &Context, state: &TenantState) -> Json {
         }
         // A scoped assignment adds nothing to the roles of a person (D-8403): what the entry
         // records is their scoped roles, each with the object type it is narrowed to.
-        Intent::AssignScopedRole { principal, .. } => {
+        Intent::AssignScopedRole { principal, .. } | Intent::RevokeScopedRole { principal, .. } => {
             json!(strata_kernel::scoped::of(&state.schema, principal)
                 .map(|held| json!({ "role": held.role.as_str(), "object": held.object.as_str() }))
                 .collect::<Vec<_>>())

@@ -241,6 +241,21 @@ pub enum MembersRequest {
     AssignRole { principal: String, role: String },
     /// Take a role from a person.
     RevokeRole { principal: String, role: String },
+    /// Give a person a role on the records of one object type where `scope` holds (D-8403,
+    /// ADM-1643). `scope` is the predicate as the kernel's expression, or as text of the tenant
+    /// rule language.
+    AssignScopedRole {
+        principal: String,
+        role: String,
+        object: String,
+        scope: Json,
+    },
+    /// Take the one scoped assignment of a role that a person holds on an object type.
+    RevokeScopedRole {
+        principal: String,
+        role: String,
+        object: String,
+    },
     /// Put a person in a team, which gives them the team's roles.
     AddTeamMember { team: String, principal: String },
     /// Take a person out of a team.
@@ -259,9 +274,11 @@ pub enum MembersRequest {
 
 impl MembersRequest {
     /// The operations, as the names the browser-facing route and the request's `op` use.
-    pub const OPS: [&'static str; 7] = [
+    pub const OPS: [&'static str; 9] = [
         "assign_role",
         "revoke_role",
+        "assign_scoped_role",
+        "revoke_scoped_role",
         "add_team_member",
         "remove_team_member",
         "invite",

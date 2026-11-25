@@ -73,7 +73,11 @@
 //!      `crates/kernel/src/operations.rs`, WG-5100). The generated `intent-decision` refuses it
 //!      with `operation:decided_by_the_kernel` and the generated `needs` plans nothing for it,
 //!      because the function language does not state the decision yet. The operation generator
-//!      draws no invocation, and `compare_transition` fails on one.
+//!      draws no invocation, and `compare_transition` fails on one. That includes the refusal of
+//!      an invocation by the person its subject record names (`SelfAction`, D-8405, ADM-1613):
+//!      the generated `self-action-refused` states the comparison and `self-action-problem` the
+//!      definition of the field, which `operation-def-problems` checks, but the invocation that
+//!      applies them is the kernel's.
 //!  11. Not mirrored: the posting of the tenant ledger from the reading of an account on
 //!      (`strata_kernel::ledger::post`, the `PostLedger` intent, a transfer as two postings
 //!      committed together; WG-5083) and everything that reads an account. Mirrored, and compared
@@ -103,7 +107,9 @@
 //!      `intent-decision` refuses with `ledger:decided_by_the_ledger_module`. Guarded:
 //!      `assert_no_input_of_a_known_difference` fails on a snapshot whose state holds a ledger
 //!      account or entry and on a policy that names the ledger, and `compare_transition`
-//!      on an expiry and on a posting that the kernel decides after reading its account.
+//!      on an expiry and on a posting that the kernel decides after reading its account. The
+//!      refusal of an adjustment or a reversal posted to the account of its own actor
+//!      (`SelfAction`, ADM-1629) is one of those decisions.
 //!      Mirrored, and compared on the schema changes the generator draws: the limits of single
 //!      accounts, which live in the ledger's state and not in the schema (WG-5172, LDG-1550,
 //!      D-6554): the checks of a change (`ledger-limit-checks`: the need, the ceiling, the
@@ -169,18 +175,6 @@
 //!      fails to evaluate where the kernel follows it. A read has one record as old and new and
 //!      cannot reach this. Guarded: an update of the corpus never changes a reference, and
 //!      `compare_attributed` fails on an intent that does.
-//!  17. Not exercised, and not mirrored: scoped role assignments, the self-action of an operation,
-//!      the duties the platform keeps apart and the last-owner guard on the paths the generator
-//!      does not draw (D-8403, D-8405, D-8415, D-8426). The generated `intent-decision` refuses
-//!      `AssignScopedRole` with `scoped_role:decided_by_the_kernel`, and its `authorize-needing`,
-//!      `schema-problems`, `operation-problems` and `change-schema` state no scope, no
-//!      `self-action`, no separation (`strata_kernel::duties`, `ConflictingRoles`), no refusal of a
-//!      change to the owner role (`LastOwner`) and no ledger refusal of a correction by the owner
-//!      of the account (`SelfAction`); the generated `tenant-schema` carries `scoped-roles` through
-//!      each change. Mirrored: the kind `LastOwner` of a revocation or a team change that leaves no
-//!      owner (`change-member`, `team-role`, `team-member`). The generator draws no scoped
-//!      assignment, no operation with a self-action, no role that grants `ledger-post` with
-//!      `ledger-read`, no owner-role change and no posting by the owner of the account.
 //!
 //! Every difference that is not compared through an adjustment is guarded, so that a corpus that
 //! grows into one is told to mirror the rule or to count the difference here:
@@ -191,7 +185,30 @@
 //! fails on an update that changes a reference (difference 16). Difference 1 is compared through
 //! an adjustment (the detail's prefix) and the run key of difference 9 through another
 //! (`hash_run_keys`). Differences 3 and 4 are guarded by the operation generator drawing nothing
-//! that reaches them. (Numbers 2, 5 and 6 are free: their differences are mirrored now.)
+//! that reaches them. (Numbers 2, 5, 6 and 17 are free: their differences are mirrored now.)
+//!
+//! Mirrored, so no longer differences: the roles held through a scope and the duties kept apart
+//! (D-8403, D-8405, D-8426, D-8482, ADM-1611, ADM-1630, ADM-1642). The scoped assignment
+//! (`decide-assign-scoped-role`, `decide-revoke-scoped-role`, `scope-predicate-problem`,
+//! `scoped-role-problems`; the refusals `ScopeUnknownField`, `LimitExceeded` and the scope's
+//! `InvalidIntent`), its decision on a record after the policies (`authorize-needing` with
+//! `scoped-step` and `scoped-policy-step`, the checks `scope:<role>`, `permission:scoped:<role>`
+//! and `policy:<id>:scoped:<role>`), the scoped assignments a revocation of the role takes with
+//! it (`change-member`), the separations of duties, the platform's table and those a tenant
+//! declares (`separations-in-force`, `separation-problems`, `define-separation`,
+//! `remove-separation`, the capability `separations-define`), the rule that compares the pairs
+//! held before a change with the pairs held after it on every path that gives a role
+//! (`duty-made-by`, `require-duties-apart`: `change-member`, `team-role`, `team-member`,
+//! `redeem-invitation-intent`, `change-schema`, `decide-assign-scoped-role`) and the guard of the
+//! owner role of a schema change (`require-owner-role-kept`, `owner-lost` in `change-schema`).
+//! They are compared on `OpKind::AssignScoped`, `RevokeScoped`, `TeamRole`, `Assign` and `Revoke`
+//! and on `SchemaOp::RolePermissions` and `Separation`, and on every read and decision of the
+//! actors that then hold a scoped role. Not stated: a reference hop in a scope predicate is
+//! checked as the `any` shape (`expr-check-env` has no objects, so a hop to a field the target
+//! does not declare is not found), and the generator draws none; the staging role of a product's
+//! staged upgrade (`is_staging_role`) is refused by the kernel on a grant, scoped or not, and the
+//! generator draws none; the invitation redeemed by a person with a verified address is not
+//! drawn, so `redeem-invitation-intent` states the check and the corpus does not reach it.
 //!
 //! Mirrored, so no longer differences: the reads, query filters, field read conditions and
 //! workflow guards that follow a reference, through the snapshot's lookup, with the
@@ -318,6 +335,25 @@ enum OpKind {
         who: usize,
         role: usize,
     },
+    /// A role narrowed by a scope predicate on one object type (D-8403): `scope` is 0 a slug, 1 a
+    /// status, 2 a field the note does not declare, 3 a value that is not a truth value, 4 the
+    /// creator of the record, 5 a field of a person, 6 an object type that does not exist.
+    AssignScoped {
+        who: usize,
+        role: usize,
+        scope: u8,
+    },
+    /// One scoped assignment taken away: on the notes (0), on the people (1).
+    RevokeScoped {
+        who: usize,
+        role: usize,
+        object: u8,
+    },
+    /// A role given to, or taken from, the team `desk`.
+    TeamRole {
+        role: usize,
+        grant: bool,
+    },
     /// The write of an override of a setting (or its removal), at a level, with a revision the
     /// caller claims to have read.
     WriteSetting {
@@ -424,6 +460,16 @@ enum SchemaOp {
     /// posting of the unit `credits`.
     Ledger(u8),
     DefineLedgerTrigger,
+    /// What a role grants (ADM-1630): 0 the writer posts to the ledger, 1 the editor reads it,
+    /// 2 the editor does both, 3 the writer manages members, 4 the editor manages members and
+    /// reads the ledger, 5 the writer grants nothing.
+    RolePermissions(u8),
+    /// A separation of duties of the tenant (D-8482): 0 `duty_a` keeps the poster from the
+    /// member manager, 1 `duty_b` keeps the reader from the member manager, 2 redeclares the
+    /// platform's, 3 removes `duty_a`, 4 removes the platform's, 5 names one capability twice,
+    /// 6 names a capability of the product form that nobody declared, 7 says no duty, 8 removes
+    /// one that is not there.
+    Separation(u8),
     /// A policy on every object (WG-5133): 0 whose condition reads only `$created_by`, 1 that
     /// reads a field in a branch that never runs, 2 that reads no field and names a role the
     /// tenant does not define, 3 that follows a reference.
@@ -467,6 +513,8 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         5 => (0u8..13).prop_map(SchemaOp::Ledger),
         1 => Just(SchemaOp::DefineLedgerTrigger),
         2 => (0u8..4).prop_map(SchemaOp::AnyObjectPolicy),
+        3 => (0u8..6).prop_map(SchemaOp::RolePermissions),
+        3 => (0u8..9).prop_map(SchemaOp::Separation),
     ];
     let big = prop_oneof![
         Just(BigShape::LongTitle),
@@ -491,8 +539,14 @@ fn op_strategy() -> impl Strategy<Value = Op> {
             .prop_map(|(id, title, status, rank)| OpKind::Update { id, title, status, rank }),
         2 => (prop_oneof![Just("note"), Just("person")], 1u64..8).prop_map(|(object, id)| OpKind::Delete { object, id }),
         2 => (schema_op, any::<bool>()).prop_map(|(change, grandfather)| OpKind::ChangeSchema { change, grandfather }),
+        6 => (prop_oneof![(0u8..6).prop_map(SchemaOp::RolePermissions), (0u8..9).prop_map(SchemaOp::Separation)], any::<bool>())
+            .prop_map(|(change, grandfather)| OpKind::ChangeSchema { change, grandfather }),
         2 => (0usize..5, 0usize..5).prop_map(|(who, role)| OpKind::Assign { who, role }),
         2 => (0usize..5, 0usize..5).prop_map(|(who, role)| OpKind::Revoke { who, role }),
+        10 => (0usize..5, prop_oneof![9 => 1usize..3, 1 => 0usize..5], prop_oneof![9 => 0u8..2, 3 => 4u8..6, 1 => Just(2u8), 1 => Just(3u8), 1 => Just(6u8)])
+            .prop_map(|(who, role, scope)| OpKind::AssignScoped { who, role, scope }),
+        1 => (0usize..5, 0usize..5, 0u8..2).prop_map(|(who, role, object)| OpKind::RevokeScoped { who, role, object }),
+        1 => (0usize..5, any::<bool>()).prop_map(|(role, grant)| OpKind::TeamRole { role, grant }),
         4 => (0u8..3, 0u8..4, 0u8..3, 0u8..6, 0u64..4).prop_map(|(setting, level, team, value, expected)| {
             OpKind::WriteSetting { setting, level, team, value, expected }
         }),
@@ -778,6 +832,56 @@ fn intent_of(op: &Op) -> Intent {
                     )],
                 },
                 SchemaOp::Ledger(kind) => ledger_change(*kind),
+                SchemaOp::RolePermissions(kind) => {
+                    let capability = |name: &str| Permission::Capability(name.into());
+                    let (who, permissions) = match kind {
+                        0 => ("writer", vec![capability("ledger-post")]),
+                        1 => ("editor", vec![capability("ledger-read")]),
+                        2 => (
+                            "editor",
+                            vec![capability("ledger-post"), capability("ledger-read")],
+                        ),
+                        3 => ("writer", vec![capability("members-manage")]),
+                        4 => (
+                            "editor",
+                            vec![capability("members-manage"), capability("ledger-read")],
+                        ),
+                        _ => ("writer", Vec::new()),
+                    };
+                    SchemaChange::DefineRolePermissions {
+                        role: role(who),
+                        permissions,
+                    }
+                }
+                SchemaOp::Separation(kind) => {
+                    let declared = |id: &str, left: &str, right: &str, duty: &str| {
+                        SchemaChange::DefineSeparation(SeparationDef {
+                            id: SeparationId::new(id).unwrap(),
+                            left: CapabilityName(left.into()),
+                            left_duty: duty.into(),
+                            right: CapabilityName(right.into()),
+                            right_duty: "manages members".into(),
+                        })
+                    };
+                    match kind {
+                        0 => declared("duty_a", "ledger-post", "members-manage", "posts"),
+                        1 => declared("duty_b", "ledger-read", "members-manage", "reads"),
+                        2 => declared(
+                            "ledger-adjust-and-review",
+                            "ledger-post",
+                            "members-manage",
+                            "posts",
+                        ),
+                        3 => SchemaChange::RemoveSeparation(SeparationId::new("duty_a").unwrap()),
+                        4 => SchemaChange::RemoveSeparation(
+                            SeparationId::new("ledger-adjust-and-review").unwrap(),
+                        ),
+                        5 => declared("duty_c", "ledger-post", "ledger-post", "posts"),
+                        6 => declared("duty_d", "ledger-post", "shop__approve", "posts"),
+                        7 => declared("duty_e", "ledger-post", "members-manage", " "),
+                        _ => SchemaChange::RemoveSeparation(SeparationId::new("duty_zz").unwrap()),
+                    }
+                }
                 SchemaOp::AnyObjectPolicy(kind) => {
                     SchemaChange::DefinePolicy(any_object_policy(*kind))
                 }
@@ -826,6 +930,54 @@ fn intent_of(op: &Op) -> Intent {
             principal: principal_id(&format!("{}:{}", WORLD_TENANTS[op.tenant], MEMBERS[*who])),
             role: role(ROLES[*r]),
         },
+        OpKind::AssignScoped {
+            who,
+            role: r,
+            scope,
+        } => {
+            let slug = eq(var(Scope::Record, "slug"), lit("s1"));
+            let (object_name, predicate) = match scope {
+                0 => ("note", slug),
+                1 => ("note", eq(var(Scope::Record, "status"), lit("published"))),
+                2 => ("note", eq(var(Scope::Record, "region"), lit("north"))),
+                3 => ("note", Expr::Lit(Value::Int(3))),
+                4 => (
+                    "note",
+                    eq(var(Scope::Record, "$created_by"), Expr::Principal),
+                ),
+                5 => ("person", eq(var(Scope::Record, "name"), lit("ann"))),
+                _ => ("nothing", slug),
+            };
+            Intent::AssignScopedRole {
+                principal: principal_id(&format!("{}:{}", WORLD_TENANTS[op.tenant], MEMBERS[*who])),
+                role: role(ROLES[*r]),
+                object: object(object_name),
+                scope: predicate,
+            }
+        }
+        OpKind::RevokeScoped {
+            who,
+            role: r,
+            object: o,
+        } => Intent::RevokeScopedRole {
+            principal: principal_id(&format!("{}:{}", WORLD_TENANTS[op.tenant], MEMBERS[*who])),
+            role: role(ROLES[*r]),
+            object: object(["note", "person"][*o as usize]),
+        },
+        OpKind::TeamRole { role: r, grant } => {
+            let team = TeamId::new("desk").unwrap();
+            if *grant {
+                Intent::AssignTeamRole {
+                    team,
+                    role: role(ROLES[*r]),
+                }
+            } else {
+                Intent::RevokeTeamRole {
+                    team,
+                    role: role(ROLES[*r]),
+                }
+            }
+        }
         OpKind::WriteSetting {
             setting,
             level,
@@ -1582,6 +1734,14 @@ struct Tally {
     following: usize,
     /// Of those on a partial snapshot, the ones the kernel answered with `InsufficientState`.
     following_insufficient: usize,
+    /// Scoped role assignments the kernel accepted (`OpKind::AssignScoped`).
+    scoped_assigned: usize,
+    /// Decisions whose checks name a role held through a scope.
+    scoped_decisions: usize,
+    /// Changes the kernel refused with `ConflictingRoles`.
+    duties_refused: usize,
+    /// Changes of a separation of duties of the tenant the kernel accepted.
+    separations_changed: usize,
 }
 
 /// The policies on every object of `SchemaOp::AnyObjectPolicy` (WG-5133): only the first is
@@ -1772,6 +1932,39 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         );
     }
     assert_no_scan_warning(state, intent, &hand);
+    let names_a_scope = |evidence: &[Check]| {
+        evidence
+            .iter()
+            .any(|check| check.rule.starts_with("scope:") || check.rule.contains("scoped:"))
+    };
+    match &hand {
+        Ok(done) => {
+            if matches!(intent, Intent::AssignScopedRole { .. }) {
+                tally.scoped_assigned += 1;
+            }
+            if names_a_scope(&done.evidence) {
+                tally.scoped_decisions += 1;
+            }
+            if matches!(
+                intent,
+                Intent::ChangeSchema { changes, .. }
+                    if changes.iter().any(|c| matches!(
+                        c,
+                        SchemaChange::DefineSeparation(_) | SchemaChange::RemoveSeparation(_)
+                    ))
+            ) {
+                tally.separations_changed += 1;
+            }
+        }
+        Err(error) => {
+            if error.kind == ErrorKind::ConflictingRoles {
+                tally.duties_refused += 1;
+            }
+            if names_a_scope(&error.evidence) {
+                tally.scoped_decisions += 1;
+            }
+        }
+    }
     drop_evolution_evidence(&label, &mut hand);
     let mut generated = match spec::kernel_transition(state, intent, context) {
         Ok(result) => Ok(result),
@@ -2141,11 +2334,32 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
         "only {} setting resolutions",
         tally.settings
     );
+    // The roles held through a scope and the duties kept apart are decided, not only drawn.
+    assert!(
+        tally.scoped_assigned > 20,
+        "only {} scoped assignments accepted",
+        tally.scoped_assigned
+    );
+    assert!(
+        tally.scoped_decisions > 20,
+        "only {} decisions that name a scope",
+        tally.scoped_decisions
+    );
+    assert!(
+        tally.duties_refused > 2,
+        "only {} changes refused for two duties kept apart",
+        tally.duties_refused
+    );
+    assert!(
+        tally.separations_changed > 5,
+        "only {} changes of a separation accepted",
+        tally.separations_changed
+    );
     eprintln!(
         "compared {} decisions ({} accepted, {} rejected), {} reads, {} visibility checks, {} plans; \
          {} policy-condition details matched under difference 1; {} updates under a policy that \
          follows a reference, {} of them InsufficientState on a partial snapshot; {} reads under \
-         rules that follow a reference, {} of them InsufficientState",
+         rules that follow a reference, {} of them InsufficientState; {} scoped assignments, {}          decisions that name a scope, {} changes refused for two duties kept apart, {} changes of          a separation",
         tally.compared,
         tally.accepted,
         tally.rejected,
@@ -2156,7 +2370,11 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
         tally.attributed,
         tally.attributed_insufficient,
         tally.following,
-        tally.following_insufficient
+        tally.following_insufficient,
+        tally.scoped_assigned,
+        tally.scoped_decisions,
+        tally.duties_refused,
+        tally.separations_changed
     );
 }
 
@@ -2292,4 +2510,264 @@ fn the_comparison_notices_a_difference() {
     assert_eq!(hand, other);
     other.evidence.pop();
     assert_ne!(hand, other, "dropping a check must make the results differ");
+}
+
+/// The roles held through a scope and the duties kept apart, decided by both kernels on one
+/// sequence that reaches every path that gives a role (D-8403, D-8405, D-8482, ADM-1611,
+/// ADM-1630, ADM-1642): a direct, a scoped and a team assignment, a person added to a team, and a
+/// change of what a role grants, each refused when it makes a pair of duties and accepted when it
+/// does not; the scoped assignments that go with a revocation; a record decided for a holder of a
+/// scoped role; the owner role of a schema change.
+#[test]
+fn the_duties_and_the_scoped_roles_agree_with_the_generated_functions() {
+    let capability = |name: &str| Permission::Capability(name.into());
+    let permissions = |who: &str, list: Vec<Permission>| SchemaChange::DefineRolePermissions {
+        role: role(who),
+        permissions: list,
+    };
+    let separation = |id: &str, left: &str, right: &str| {
+        SchemaChange::DefineSeparation(SeparationDef {
+            id: SeparationId::new(id).unwrap(),
+            left: CapabilityName(left.into()),
+            left_duty: "does the first duty".into(),
+            right: CapabilityName(right.into()),
+            right_duty: "does the second duty".into(),
+        })
+    };
+    let schema = |changes: Vec<SchemaChange>| Intent::ChangeSchema {
+        changes,
+        expected_version: None,
+        existing: ExistingData::Reject,
+    };
+    let assign = |who: &str, name: &str| Intent::AssignRole {
+        principal: principal_id(&format!("alpha:{who}")),
+        role: role(name),
+    };
+    let scoped = |who: &str, name: &str, predicate: Expr| Intent::AssignScopedRole {
+        principal: principal_id(&format!("alpha:{who}")),
+        role: role(name),
+        object: object("note"),
+        scope: predicate,
+    };
+    let slug = |value: &str| eq(var(Scope::Record, "slug"), lit(value));
+    let team = TeamId::new("desk").unwrap();
+    let rename = |id: u64, title: &str| Intent::UpdateRecord {
+        object: object("note"),
+        id: RecordId(id),
+        fields: BTreeMap::from([(field("title"), text(title))]),
+        expected_version: None,
+    };
+    let revoke_scoped = |who: &str, name: &str, on: &str| Intent::RevokeScopedRole {
+        principal: principal_id(&format!("alpha:{who}")),
+        role: role(name),
+        object: object(on),
+    };
+
+    // (actor, intent, whether the kernel accepts it)
+    let script: Vec<(&str, Intent, bool)> = vec![
+        ("owner", new_note("North", "north"), true),
+        ("owner", new_note("South", "south"), true),
+        // The holder of a scoped role is decided on a record where its scope holds and not elsewhere.
+        ("owner", scoped("stranger", "editor", slug("north")), true),
+        ("stranger", rename(1, "Nord"), true),
+        ("stranger", rename(2, "Sud"), false),
+        (
+            "owner",
+            scoped(
+                "writer2",
+                "writer",
+                eq(var(Scope::Record, "status"), lit("draft")),
+            ),
+            true,
+        ),
+        ("writer2", new_note("Mine", "mine"), true),
+        ("writer2", rename(3, "Mienne"), true),
+        ("writer2", rename(1, "Nord 2"), false),
+        ("owner", scoped("writer2", "ghost", slug("north")), false),
+        ("owner", scoped("writer2", "owner", slug("north")), false),
+        ("owner", scoped("writer2", "public", slug("north")), false),
+        (
+            "owner",
+            scoped(
+                "writer2",
+                "editor",
+                eq(var(Scope::Record, "region"), lit("north")),
+            ),
+            false,
+        ),
+        (
+            "owner",
+            scoped("writer2", "editor", Expr::Lit(Value::Int(3))),
+            false,
+        ),
+        ("writer1", scoped("writer2", "editor", slug("north")), false),
+        // What a role grants is changed: the poster is the writer, the reader is the editor.
+        (
+            "owner",
+            schema(vec![
+                permissions("writer", vec![capability("ledger-post")]),
+                permissions("editor", vec![capability("ledger-read")]),
+            ]),
+            true,
+        ),
+        // A direct assignment that makes a pair (the editor is held through a scope), and one that
+        // does not.
+        ("owner", assign("stranger", "writer"), false),
+        ("owner", assign("stranger", "editor"), true),
+        ("owner", scoped("writer2", "editor", slug("north")), false),
+        // A team's role and a person added to a team.
+        (
+            "owner",
+            Intent::DefineTeam {
+                team: team.clone(),
+                label: "Desk".into(),
+            },
+            true,
+        ),
+        (
+            "owner",
+            Intent::AddTeamMember {
+                team: team.clone(),
+                principal: principal_id("alpha:stranger"),
+            },
+            true,
+        ),
+        (
+            "owner",
+            Intent::AssignTeamRole {
+                team: team.clone(),
+                role: role("writer"),
+            },
+            false,
+        ),
+        (
+            "owner",
+            Intent::AssignTeamRole {
+                team: team.clone(),
+                role: role("editor"),
+            },
+            true,
+        ),
+        (
+            "owner",
+            Intent::AddTeamMember {
+                team: team.clone(),
+                principal: principal_id("alpha:writer1"),
+            },
+            false,
+        ),
+        // A change of what a role grants, with the platform's separation and a declared one.
+        (
+            "owner",
+            schema(vec![permissions(
+                "writer",
+                vec![capability("ledger-post"), capability("ledger-read")],
+            )]),
+            false,
+        ),
+        (
+            "owner",
+            schema(vec![permissions(
+                "editor",
+                vec![capability("members-manage")],
+            )]),
+            true,
+        ),
+        (
+            "owner",
+            schema(vec![separation("duty_a", "ledger-post", "members-manage")]),
+            true,
+        ),
+        // A separation that someone already breaks is refused; the platform's own stay in force.
+        (
+            "owner",
+            schema(vec![separation("duty_b", "members-manage", "ledger-read")]),
+            true,
+        ),
+        ("owner", assign("editor", "writer"), false),
+        (
+            "owner",
+            schema(vec![separation(
+                "ledger-adjust-and-review",
+                "ledger-post",
+                "members-manage",
+            )]),
+            false,
+        ),
+        (
+            "owner",
+            schema(vec![SchemaChange::RemoveSeparation(
+                SeparationId::new("ledger-adjust-and-review").unwrap(),
+            )]),
+            false,
+        ),
+        (
+            "owner",
+            schema(vec![SchemaChange::RemoveSeparation(
+                SeparationId::new("duty_a").unwrap(),
+            )]),
+            true,
+        ),
+        (
+            "editor",
+            schema(vec![separation("duty_c", "ledger-post", "ledger-read")]),
+            false,
+        ),
+        // A scoped assignment is taken away alone, or with the role.
+        ("owner", revoke_scoped("writer2", "writer", "person"), false),
+        ("owner", revoke_scoped("writer2", "writer", "note"), true),
+        ("writer2", rename(3, "Mienne 2"), true),
+        ("owner", scoped("writer1", "editor", slug("south")), true),
+        (
+            "owner",
+            Intent::RevokeRole {
+                principal: principal_id("alpha:writer1"),
+                role: role("editor"),
+            },
+            true,
+        ),
+        // The owner role is kept while the tenant has an owner.
+        (
+            "owner",
+            schema(vec![SchemaChange::RemoveRole(role("owner"))]),
+            false,
+        ),
+    ];
+
+    let mut tally = Tally::default();
+    let mut world = notes_world();
+    for (step, (who, intent, accepted)) in script.into_iter().enumerate() {
+        let context = ctx("alpha", user(&format!("alpha:{who}")), 20_000 + step as i64);
+        let state = world.state(&context.tenant);
+        compare_transition(&state, &intent, &context, &mut tally);
+        match world.step(&intent, &context) {
+            Ok((next, _)) => {
+                assert!(accepted, "step {step} ({}) was accepted", intent.name());
+                world = next;
+            }
+            Err(error) => assert!(
+                !accepted,
+                "step {step} ({}) was refused: {error:?}",
+                intent.name()
+            ),
+        }
+        // What the actors read and may do after each step.
+        compare_visibility(&world, 21_000 + step as i64, &mut tally);
+        compare_reads_of(&world, 21_000 + step as i64, &mut tally);
+    }
+    assert!(
+        tally.duties_refused >= 5,
+        "only {} refusals for two duties kept apart",
+        tally.duties_refused
+    );
+    assert!(
+        tally.scoped_assigned >= 2,
+        "{} scoped assignments",
+        tally.scoped_assigned
+    );
+    assert!(
+        tally.scoped_decisions >= 1,
+        "{} decisions that name a scope",
+        tally.scoped_decisions
+    );
 }
