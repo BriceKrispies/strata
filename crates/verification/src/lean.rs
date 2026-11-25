@@ -237,8 +237,18 @@ fn item() -> ObjectTypeId {
     id("item".to_string())
 }
 
+/// Field `n` of the fixture. The kernel checks a record's fields in the order of their ids, which
+/// are strings; the model checks them by number. Two-digit ids (`f04`, `f10`) make the two orders
+/// the same, so the fixture does not invent a check-order difference the kernel does not have.
 fn field_id(n: u64) -> FieldId {
-    id(format!("f{n}"))
+    id(format!("f{n:02}"))
+}
+
+/// The number of a fixture field (`f10` is 10).
+fn field_number(field: &FieldId) -> u64 {
+    field.as_str()[1..]
+        .parse()
+        .expect("fixture fields are f<number>")
 }
 
 fn field_type(n: u64) -> FieldType {
@@ -516,12 +526,15 @@ fn show_world(world: &World) -> Vec<String> {
             out.push(format!("tenant {n} absent"));
             continue;
         };
-        let required: Vec<String> = tenant.schema.objects[&item()]
+        // Fields print in the model's order, by number (`f10` after `f6`), not by name.
+        let mut required: Vec<u64> = tenant.schema.objects[&item()]
             .fields
             .values()
             .filter(|f| f.required)
-            .map(|f| f.id.as_str()[1..].to_string())
+            .map(|f| field_number(&f.id))
             .collect();
+        required.sort_unstable();
+        let required: Vec<String> = required.iter().map(u64::to_string).collect();
         out.push(format!(
             "tenant {n} next={} required={}",
             tenant.next_record,
@@ -533,10 +546,15 @@ fn show_world(world: &World) -> Vec<String> {
                 .as_ref()
                 .map_or("0", |p| &p.as_str()[1..])
                 .to_string();
-            let fields: Vec<String> = record
+            let mut numbered: Vec<(u64, &Value)> = record
                 .fields
                 .iter()
-                .map(|(field, value)| format!("{}={}", &field.as_str()[1..], show_value(value)))
+                .map(|(field, value)| (field_number(field), value))
+                .collect();
+            numbered.sort_by_key(|(n, _)| *n);
+            let fields: Vec<String> = numbered
+                .iter()
+                .map(|(n, value)| format!("{n}={}", show_value(value)))
                 .collect();
             out.push(
                 format!(
@@ -557,7 +575,13 @@ fn show_world(world: &World) -> Vec<String> {
 /// replaces the whole definition, so a change to one attribute starts from this one.
 fn current_field(world: &World, tenant: &TenantId, n: u64) -> Option<FieldDef> {
     let state = world.tenants.get(tenant)?;
-    state.schema.objects.get(&item())?.fields.get(&field_id(n)).cloned()
+    state
+        .schema
+        .objects
+        .get(&item())?
+        .fields
+        .get(&field_id(n))
+        .cloned()
 }
 
 /// Run a scenario file through the Rust kernel and print what the Lean program prints.
@@ -602,11 +626,10 @@ pub fn kernel_output(scenarios: &str) -> String {
                     ["update", record, after_id @ ..] => {
                         // The model replaces a record; a patch that names every field does too.
                         let (expected_version, fields) = split_expected_version(after_id);
-                        let mut all: BTreeMap<FieldId, Value> =
-                            [0u64, 1, 2, 3, 4, 5, 6, 7, 8, 10]
-                                .into_iter()
-                                .map(|n| (field_id(n), Value::Null))
-                                .collect();
+                        let mut all: BTreeMap<FieldId, Value> = [0u64, 1, 2, 3, 4, 5, 6, 7, 8, 10]
+                            .into_iter()
+                            .map(|n| (field_id(n), Value::Null))
+                            .collect();
                         all.extend(parse_fields(fields));
                         Intent::UpdateRecord {
                             object: item(),
@@ -638,10 +661,10 @@ pub fn kernel_output(scenarios: &str) -> String {
                     }
                     ["require", field, mode] => {
                         let n: u64 = field.parse().expect("field");
-                        let Some(mut def) = current_field(&world, &ctx.tenant, n) else {
-                            out.push(format!("unparsed {line}"));
-                            continue;
-                        };
+                        // A field the tenant does not have (or a tenant that does not exist) is
+                        // defined afresh, as before uniqueness; the kernel decides what follows.
+                        let mut def = current_field(&world, &ctx.tenant, n)
+                            .unwrap_or_else(|| field_def(n, false));
                         def.required = true;
                         Intent::ChangeSchema {
                             changes: vec![SchemaChange::DefineField {
@@ -658,10 +681,10 @@ pub fn kernel_output(scenarios: &str) -> String {
                     }
                     ["unique", field, mode] => {
                         let n: u64 = field.parse().expect("field");
-                        let Some(mut def) = current_field(&world, &ctx.tenant, n) else {
-                            out.push(format!("unparsed {line}"));
-                            continue;
-                        };
+                        // A field the tenant does not have (or a tenant that does not exist) is
+                        // defined afresh, as before uniqueness; the kernel decides what follows.
+                        let mut def = current_field(&world, &ctx.tenant, n)
+                            .unwrap_or_else(|| field_def(n, false));
                         def.unique = true;
                         Intent::ChangeSchema {
                             changes: vec![SchemaChange::DefineField {
