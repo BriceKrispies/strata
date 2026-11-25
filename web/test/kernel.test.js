@@ -399,3 +399,27 @@ test('a change of person clears the sign-in form, the typed name too', () => {
   assert.deepEqual(ended.forms.login.values, forms.initialValues('form-sign-in', {}), 'the sign-in form is cleared');
   assert.equal(ended.forms.login.error, '');
 });
+
+// F7: a refused socket upgrade was counted when the session read answered; the spec counts it when the socket
+// closes (wsRefusedKeep, wsRefusedStop), and the fifth refusal stops live updates at that close.
+test('a refused upgrade is counted when the socket closes, and the fifth stops live updates', () => {
+  let state = boot({ path: '/', session: { session: anonymous }, view: homeModel() }).state;
+  const counts = [];
+  for (let i = 0; i < 5; i += 1) {
+    const closed = update(state, { type: 'ws_closed', refused: true, ...stamp });
+    counts.push(closed.state.wsRefusals);
+    if (i === 0) {
+      const read = closed.effects.find((e) => e.type === 'http' && e.path === '/api/session');
+      const replied = update(closed.state, { type: 'http_result', id: read.id, ok: true, status: 200, body: { session: anonymous }, ...stamp }).state;
+      assert.equal(replied.wsRefusals, 1, 'the session read does not count the refusal again');
+    }
+    state = closed.state;
+    if (i < 4) {
+      // The reconnect timer runs out and the socket connects again, to be refused again.
+      const timer = closed.effects.find((e) => e.type === 'timer' && e.name === 'reconnect');
+      state = update(state, { type: 'timer', name: 'reconnect', token: timer.token, ...stamp }).state;
+    }
+  }
+  assert.deepEqual(counts, [1, 2, 3, 4, 5]);
+  assert.equal(state.wsStopped, true, 'the fifth refusal stops live updates');
+});

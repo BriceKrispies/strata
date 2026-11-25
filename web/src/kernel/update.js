@@ -837,12 +837,6 @@ function onHttp(state, msg) {
         reread.push(...fetched.effects);
       }
       known = { ...known, sessionKnown: true };
-      // The session was read because the socket upgrade was refused and the server answered: that
-      // is a refusal, not an outage. After enough of them live updates stop, visibly.
-      if (pending.refusal) {
-        const refusals = (known.wsRefusals ?? 0) + 1;
-        known = { ...known, wsRefusals: refusals, wsStopped: refusals >= WS_REFUSAL_LIMIT };
-      }
       // A cold start could not open the socket before it knew the request token the gateway
       // issued, so it opens it now.
       /** @type {Effect[]} */
@@ -1424,15 +1418,20 @@ function step(state, msg) {
       return onSocket(state, msg.message, msg);
     case 'ws_closed': {
       // The socket never opened although the network is up: the upgrade was refused, most likely
-      // for an expired request token. Read the session again, so the next attempt carries the
-      // current token; the reply counts the refusal (`wsRefusals`).
+      // for an expired request token. The refusal is counted now, at the close, and the refusals
+      // that reach the limit stop live updates, visibly (the specification's wsRefusedKeep and
+      // wsRefusedStop). The session is read again, so the next attempt carries the current token.
       /** @type {Effect[]} */
       const lead = [];
       let base = state;
-      if (msg.refused && !Object.values(state.pending).some((p) => p.kind === 'session')) {
-        const [withRequest, effect] = readSession(state, msg, { refusal: true });
-        base = withRequest;
-        lead.push(effect);
+      if (msg.refused) {
+        const refusals = (state.wsRefusals ?? 0) + 1;
+        base = { ...state, wsRefusals: refusals, wsStopped: refusals >= WS_REFUSAL_LIMIT };
+        if (!Object.values(state.pending).some((p) => p.kind === 'session')) {
+          const [withRequest, effect] = readSession(base, msg);
+          base = withRequest;
+          lead.push(effect);
+        }
       }
       // A close while waiting to reconnect is an attempt that failed: it counts as one.
       const waiting = base.ws.status === 'waiting' ? liveStep(base, 'ui-live-reconnect-due', {}, msg) : null;
