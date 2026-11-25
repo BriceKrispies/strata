@@ -95,7 +95,7 @@
     }
   ],
   "objects": [
-    // PLANNED F-session-self-management (member_sessions): A person lists and revokes their own sessions and agent connections. workspace_id: reference to workspaces is in another product (F-cross-product-refs); held as text; principal_id: reference to principals is in another product (F-cross-product-refs); held as text; revoked_by: reference to principals is in another product (F-cross-product-refs); held as text; status: field added for the lifecycle; check the stored values
+    // PLANNED F-session-self-management (member_sessions): A person lists and revokes their own sessions and agent connections. principal_id: reference to principals is in another product (F-cross-product-refs); held as text; revoked_by: reference to principals is in another product (F-cross-product-refs); held as text; status: field added for the lifecycle; check the stored values
     // {
     // "id": "plinth_shell__member_sessions",
     // "label": "Member sessions",
@@ -106,13 +106,6 @@
     // "ty": "Str",
     // "required": true,
     // "unique": true
-    // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
     // },
     // "principal_id": {
     // "id": "principal_id",
@@ -184,13 +177,6 @@
     // "id": "plinth_shell__domain_events",
     // "label": "Domain events",
     // "fields": {
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
     // "seq": {
     // "id": "seq",
     // "label": "Seq",
@@ -330,13 +316,6 @@
       "id": "plinth_shell__action_idempotency",
       "label": "Action idempotency",
       "fields": {
-        "workspace_id": {
-          "id": "workspace_id",
-          "label": "Workspace id",
-          "ty": "Str",
-          "required": true,
-          "unique": false
-        },
         "principal_id": {
           "id": "principal_id",
           "label": "Principal id",

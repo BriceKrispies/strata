@@ -22,7 +22,7 @@
   },
   "roles": [],
   "objects": [
-    // PLANNED F-held-operations (change_approvals): Held operations and changes: approver rules, named approvers, replay as the requester, expiry. workspace_id: reference to workspaces is in another product (F-cross-product-refs); held as text; requester_id: reference to principals is in another product (F-cross-product-refs); held as text; on_behalf_of: reference to principals is in another product (F-cross-product-refs); held as text; rule_id: Plinth type "text[] (commit rules, e.g. R-PROMO-ACTIVATE)" has no direct Strata type; held as text; change_hash: Plinth type "bytea" has no direct Strata type; held as text; payload: Plinth type "jsonb { changes: NodeChange[], undo_of? }" has no direct Strata type; held as text; decided_by: reference to principals is in another product (F-cross-product-refs); held as text
+    // PLANNED F-held-operations (change_approvals): Held operations and changes: approver rules, named approvers, replay as the requester, expiry. requester_id: reference to principals is in another product (F-cross-product-refs); held as text; on_behalf_of: reference to principals is in another product (F-cross-product-refs); held as text; rule_id: Plinth type "text[] (commit rules, e.g. R-PROMO-ACTIVATE)" has no direct Strata type; held as text; change_hash: Plinth type "bytea" has no direct Strata type; held as text; payload: Plinth type "jsonb { changes: NodeChange[], undo_of? }" has no direct Strata type; held as text; decided_by: reference to principals is in another product (F-cross-product-refs); held as text
     // {
     // "id": "plinth_approvals__change_approvals",
     // "label": "Change approvals",
@@ -30,13 +30,6 @@
     // "approval_id": {
     // "id": "approval_id",
     // "label": "Approval id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
     // "ty": "Str",
     // "required": true,
     // "unique": false
@@ -162,7 +155,7 @@
     // }
     // }
     // }
-    // PLANNED F-held-operations (action_approvals): Held operations and changes: approver rules, named approvers, replay as the requester, expiry. workspace_id: reference to workspaces is in another product (F-cross-product-refs); held as text; input: Plinth type "jsonb (stored action input, replayed on approve)" has no direct Strata type; held as text; input_hash: Plinth type "bytea" has no direct Strata type; held as text; requester_id: reference to principals is in another product (F-cross-product-refs); held as text; on_behalf_of: reference to principals is in another product (F-cross-product-refs); held as text; decided_by: reference to principals is in another product (F-cross-product-refs); held as text; result: Plinth type "jsonb (result of the replayed action)" has no direct Strata type; held as text; error: Plinth type "jsonb (error of the replayed action when failed)" has no direct Strata type; held as text
+    // PLANNED F-held-operations (action_approvals): Held operations and changes: approver rules, named approvers, replay as the requester, expiry. input: Plinth type "jsonb (stored action input, replayed on approve)" has no direct Strata type; held as text; input_hash: Plinth type "bytea" has no direct Strata type; held as text; requester_id: reference to principals is in another product (F-cross-product-refs); held as text; on_behalf_of: reference to principals is in another product (F-cross-product-refs); held as text; decided_by: reference to principals is in another product (F-cross-product-refs); held as text; result: Plinth type "jsonb (result of the replayed action)" has no direct Strata type; held as text; error: Plinth type "jsonb (error of the replayed action when failed)" has no direct Strata type; held as text
     // {
     // "id": "plinth_approvals__action_approvals",
     // "label": "Action approvals",
@@ -170,13 +163,6 @@
     // "approval_id": {
     // "id": "approval_id",
     // "label": "Approval id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
     // "ty": "Str",
     // "required": true,
     // "unique": false
@@ -350,7 +336,20 @@
     // "required": false
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "type_values",
+    // "expr": "param.type in ['change', 'action', 'order', 'content_review']",
+    // "error": "bad-type",
+    // "message": "type is one of change, action, order, content_review."
+    // },
+    // {
+    // "id": "decision_values",
+    // "expr": "param.decision in ['approve', 'reject']",
+    // "error": "bad-decision",
+    // "message": "decision is one of approve, reject."
+    // }
+    // ],
     // "steps": []
     // }
     // PLANNED F-held-operations (approvals.withdraw): Held operations and changes: approver rules, named approvers, replay as the requester, expiry. F-held-operations: inventory status; F-held-operations: approval: Agent: preview then commit.; F-visibility: row scope: requester_id = caller (or on_behalf_of)
@@ -381,7 +380,14 @@
     // "required": false
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "type_values",
+    // "expr": "param.type in ['change', 'action']",
+    // "error": "bad-type",
+    // "message": "type is one of change, action."
+    // }
+    // ],
     // "steps": []
     // }
   ],

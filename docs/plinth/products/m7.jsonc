@@ -118,13 +118,6 @@
     // "required": true,
     // "unique": true
     // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
     // "automation_id": {
     // "id": "automation_id",
     // "label": "Automation id",
@@ -357,13 +350,6 @@
     // "required": true,
     // "unique": true
     // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
-    // },
     // "holding_since": {
     // "id": "holding_since",
     // "label": "Holding since",
@@ -406,13 +392,6 @@
     // "ty": "Str",
     // "required": true,
     // "unique": true
-    // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
-    // "required": true,
-    // "unique": false
     // },
     // "run_id": {
     // "id": "run_id",
@@ -469,13 +448,6 @@
       "id": "plinth_automation__engine_cursors",
       "label": "Engine cursors",
       "fields": {
-        "workspace_id": {
-          "id": "workspace_id",
-          "label": "Workspace id",
-          "ty": "Str",
-          "required": true,
-          "unique": false
-        },
         "consumer": {
           "id": "consumer",
           "label": "Consumer",
@@ -510,13 +482,6 @@
       "id": "plinth_automation__scheduler_ticks",
       "label": "Scheduler ticks",
       "fields": {
-        "workspace_id": {
-          "id": "workspace_id",
-          "label": "Workspace id",
-          "ty": "Str",
-          "required": true,
-          "unique": false
-        },
         "job": {
           "id": "job",
           "label": "Job",
@@ -874,7 +839,14 @@
     // "required": false
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "priority_values",
+    // "expr": "param.priority in ['low', 'normal', 'high', 'urgent']",
+    // "error": "bad-priority",
+    // "message": "priority is one of low, normal, high, urgent."
+    // }
+    // ],
     // "steps": []
     // }
     // PLANNED F-webhook-outcome-to-run (automation.step.webhook): Webhook delivery outcome recorded on the run. F-webhook-outcome-to-run: Plinth's webhook never leaves the platform; Strata's does. The approval routing for enabling it is the gap. Security-relevant (authorisation, ledger, audit or personal data).; F-held-operations: approval: Enabling an automation with this step is held for admin:settings (R-AUTOMATION-EXTERNAL).

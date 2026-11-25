@@ -287,13 +287,6 @@
       "id": "plinth_audit__domain_chain",
       "label": "Domain chain",
       "fields": {
-        "workspace_id": {
-          "id": "workspace_id",
-          "label": "Workspace id",
-          "ty": "Str",
-          "required": false,
-          "unique": false
-        },
         "head_seq": {
           "id": "head_seq",
           "label": "Head seq",

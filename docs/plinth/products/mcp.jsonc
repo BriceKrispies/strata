@@ -312,7 +312,14 @@
     // "required": false
     // }
     // ],
-    // "conditions": [],
+    // "conditions": [
+    // {
+    // "id": "decision_values",
+    // "expr": "param.decision in ['approve', 'reject']",
+    // "error": "bad-decision",
+    // "message": "decision is one of approve, reject."
+    // }
+    // ],
     // "steps": []
     // }
   ],

@@ -118,13 +118,6 @@
           "required": true,
           "unique": false
         },
-        "workspace_id": {
-          "id": "workspace_id",
-          "label": "Workspace id",
-          "ty": "Str",
-          "required": true,
-          "unique": false
-        },
         "subject": {
           "id": "subject",
           "label": "Subject",
@@ -176,7 +169,6 @@
         }
       }
     },
-    // MANUAL (message_threads): workspace_id: reference to workspaces is in another product (F-cross-product-refs); held as text
     // MANUAL (message_threads): created_by: reference to principals is in another product (F-cross-product-refs); held as text
     // PLANNED F-text-derived-references (messages): References derived from text at write time (mentions). sender_id: reference to principals is in another product (F-cross-product-refs); held as text; on_behalf_of: reference to principals is in another product (F-cross-product-refs); held as text; mentions: Plinth type "uuid[] (default empty)" has no direct Strata type; held as text; reply_to: reference to messages is in another product (F-cross-product-refs); held as text; search: Plinth type "tsvector (generated from body, simple config)" has no direct Strata type; held as text
     // {
@@ -199,13 +191,6 @@
     // "on-delete": "Restrict"
     // }
     // },
-    // "required": true,
-    // "unique": false
-    // },
-    // "workspace_id": {
-    // "id": "workspace_id",
-    // "label": "Workspace id",
-    // "ty": "Str",
     // "required": true,
     // "unique": false
     // },
@@ -555,7 +540,12 @@
     // {
     // "name": "thread_id",
     // "label": "Thread id",
-    // "ty": "Str",
+    // "ty": {
+    // "Ref": {
+    // "target": "plinth_messages__message_threads",
+    // "on-delete": "Restrict"
+    // }
+    // },
     // "required": true
     // },
     // {
@@ -615,7 +605,12 @@
     // {
     // "name": "thread_id",
     // "label": "Thread id",
-    // "ty": "Str",
+    // "ty": {
+    // "Ref": {
+    // "target": "plinth_messages__message_threads",
+    // "on-delete": "Restrict"
+    // }
+    // },
     // "required": true
     // },
     // {
