@@ -101,3 +101,126 @@ fn parsing_and_rendering_a_scenario_file_is_the_identity() {
     assert!(cases.iter().all(|c| c.ops.len() >= 10));
     assert_eq!(render_cases(&cases), text);
 }
+
+#[test]
+fn full_batches_of_one_stream_are_the_full_generator_output() {
+    let mut stream = ScenarioStream::full(9);
+    let joined = format!("{}{}", stream.batch(4), stream.batch(3));
+    assert_eq!(joined, ScenarioStream::full(9).batch(7));
+}
+
+/// The `i`th token of an operation line, or `""`.
+fn at<'a>(tokens: &[&'a str], i: usize) -> &'a str {
+    tokens.get(i).copied().unwrap_or("")
+}
+
+/// Every operation form the full generator must emit at least once, as predicates on the tokens of
+/// an `op` line: `op <tenant> <principal> <intent> [...]`.
+fn operation_forms() -> Vec<(&'static str, fn(&[&str]) -> bool)> {
+    vec![
+        ("create", |t: &[&str]| at(t, 3) == "create"),
+        ("create with no field named", |t: &[&str]| {
+            at(t, 3) == "create" && t.len() == 4
+        }),
+        ("update with a version", |t: &[&str]| {
+            at(t, 3) == "update" && at(t, 5).starts_with("v=")
+        }),
+        ("update without a version", |t: &[&str]| {
+            at(t, 3) == "update" && !at(t, 5).starts_with("v=")
+        }),
+        ("patch with a version", |t: &[&str]| {
+            at(t, 3) == "patch" && at(t, 5).starts_with("v=")
+        }),
+        ("patch without a version", |t: &[&str]| {
+            at(t, 3) == "patch" && !at(t, 5).starts_with("v=")
+        }),
+        ("patch that removes a field", |t: &[&str]| {
+            at(t, 3) == "patch" && t.iter().any(|x| x.ends_with("=n"))
+        }),
+        ("delete with a version", |t: &[&str]| {
+            at(t, 3) == "delete" && at(t, 5).starts_with("v=")
+        }),
+        ("delete without a version", |t: &[&str]| {
+            at(t, 3) == "delete" && !at(t, 5).starts_with("v=")
+        }),
+        ("require strict", |t: &[&str]| {
+            at(t, 3) == "require" && at(t, 5) == "strict"
+        }),
+        ("require lax", |t: &[&str]| {
+            at(t, 3) == "require" && at(t, 5) == "lax"
+        }),
+        ("require of a reference field", |t: &[&str]| {
+            at(t, 3) == "require" && matches!(at(t, 4), "4" | "5")
+        }),
+        ("require of a list field", |t: &[&str]| {
+            at(t, 3) == "require" && matches!(at(t, 4), "0" | "7" | "8")
+        }),
+        ("reference in field 4", |t: &[&str]| {
+            t.iter().any(|x| x.starts_with("4=r:"))
+        }),
+        ("reference in field 5", |t: &[&str]| {
+            t.iter().any(|x| x.starts_with("5=r:"))
+        }),
+        ("list of references in field 0", |t: &[&str]| {
+            t.iter().any(|x| x.starts_with("0=l:r:"))
+        }),
+        ("list of references in field 8", |t: &[&str]| {
+            t.iter().any(|x| x.starts_with("8=l:r:"))
+        }),
+        ("list of scalars in field 7", |t: &[&str]| {
+            t.iter().any(|x| x.starts_with("7=l:s:"))
+        }),
+        ("empty list", |t: &[&str]| {
+            t.iter().any(|x| matches!(*x, "0=l:" | "7=l:" | "8=l:"))
+        }),
+        ("list at the length limit", |t: &[&str]| {
+            t.iter().any(|x| x.contains("l*1000:"))
+        }),
+        ("list over the length limit", |t: &[&str]| {
+            t.iter().any(|x| x.contains("l*1001:"))
+        }),
+        ("string at the length limit", |t: &[&str]| {
+            t.iter().any(|x| x.contains("s*65536:"))
+        }),
+        ("string over the length limit", |t: &[&str]| {
+            t.iter().any(|x| x.contains("s*65537:"))
+        }),
+        ("reference to a never-issued id", |t: &[&str]| {
+            t.iter().any(|x| x.contains("r:9"))
+        }),
+        ("unknown field", |t: &[&str]| {
+            t.iter().any(|x| x.starts_with("9="))
+        }),
+        ("null field value", |t: &[&str]| {
+            t.iter().any(|x| x.ends_with("=n"))
+        }),
+        ("tenant with no data", |t: &[&str]| at(t, 1) == "3"),
+        ("stranger principal", |t: &[&str]| at(t, 2) == "999"),
+        ("member of the other tenant", |t: &[&str]| {
+            let (tenant, principal) = (at(t, 1), at(t, 2));
+            (tenant == "1" && principal.starts_with("20"))
+                || (tenant == "2" && principal.starts_with("10"))
+        }),
+    ]
+}
+
+#[test]
+fn the_full_generator_emits_every_operation_form() {
+    let text = ScenarioStream::full(20_261_125).batch(300);
+    let ops: Vec<String> = parse_cases(&text).into_iter().flat_map(|c| c.ops).collect();
+    assert!(ops.len() > 300 * 10, "only {} operations", ops.len());
+    let missing: Vec<&str> = operation_forms()
+        .into_iter()
+        .filter(|(_, form)| {
+            !ops.iter().any(|line| {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                form(&tokens[..])
+            })
+        })
+        .map(|(name, _)| name)
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the full generator never emits: {missing:?}"
+    );
+}

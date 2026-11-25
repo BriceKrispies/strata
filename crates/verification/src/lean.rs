@@ -157,13 +157,39 @@ fn write_scenario(rng: &mut Lcg, n: usize, out: &mut String) {
 pub struct ScenarioStream {
     rng: Lcg,
     next: usize,
+    seed: u64,
+    generator: Generator,
+}
+
+/// Which generator a [`ScenarioStream`] draws from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Generator {
+    /// The generator of the committed fixtures ([`scenarios`]). It covers the create, full
+    /// replacement, delete and schema-change intents, the first slice of the model only.
+    Fixture,
+    /// The generator of `lean_diff`: every intent of `Main.lean` (patch and expected versions
+    /// included), references, lists, and the string, list and record bounds, one below, at and
+    /// above. Scenario `n` is `lean_diff::generate` of the case seed `n` of the base seed.
+    Full,
 }
 
 impl ScenarioStream {
+    /// The stream [`scenarios`] draws from.
     pub fn new(seed: u64) -> Self {
+        Self::with_generator(seed, Generator::Fixture)
+    }
+
+    /// A stream of the full generator (see [`Generator::Full`]).
+    pub fn full(seed: u64) -> Self {
+        Self::with_generator(seed, Generator::Full)
+    }
+
+    fn with_generator(seed: u64, generator: Generator) -> Self {
         Self {
             rng: Lcg(seed),
             next: 0,
+            seed,
+            generator,
         }
     }
 
@@ -171,11 +197,24 @@ impl ScenarioStream {
     pub fn batch(&mut self, count: usize) -> String {
         let mut out = String::new();
         for n in self.next..self.next + count {
-            write_scenario(&mut self.rng, n, &mut out);
+            match self.generator {
+                Generator::Fixture => write_scenario(&mut self.rng, n, &mut out),
+                Generator::Full => write_full_scenario(self.seed, n, &mut out),
+            }
         }
         self.next += count;
         out
     }
+}
+
+/// One scenario of the full generator, named `f<n>`.
+fn write_full_scenario(seed: u64, n: usize, out: &mut String) {
+    out.push_str(&format!("scenario f{n}\n"));
+    for op in crate::lean_diff::generate(crate::lean_diff::case_seed(seed, n)) {
+        out.push_str(&op.render());
+        out.push('\n');
+    }
+    out.push_str("end\n");
 }
 
 /// The scenario file both sides run. Deterministic in `seed`.

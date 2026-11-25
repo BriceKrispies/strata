@@ -245,23 +245,48 @@ WG-5655, C2 WG-5656, C3 WG-5661, C4 WG-5660.
 
 The fixture scenarios (87 committed, about 1,400 operations) are a floor. A0 runs the same
 comparison on many more random scenarios, in the way Cedar tests its Rust implementation against
-its Lean model: the generator of `crates/verification/src/lean.rs` (`ScenarioStream`) writes the
-scenarios in batches, each batch goes to `lake exe strata_model` in one process and through the
-Rust kernel in process, and the outputs are compared scenario by scenario.
+its Lean model: a generator writes the scenarios in batches, each batch goes to
+`lake exe strata_model` in one process and through the Rust kernel in process, and the outputs are
+compared scenario by scenario.
 
 ```sh
-cargo run -p strata-verification --example drt -- --seed <S> --count <N> [--batch 1000] [--out target/drt]
+cargo run -p strata-verification --example drt -- --seed <S> --count <N> [--batch 1000] \
+    [--out target/drt] [--generator full|fixture] [--require-coverage]
 ```
 
-The run prints the scenario, operation, batch and disagreement counts and the elapsed time. Exit
-status 1 means a disagreement. The first one is minimised by delta debugging (whole scenarios,
-then the operations of each, while the model and the kernel still disagree) and written to
-`<out>/h-drt-<seed>-<n>.txt` as a hand-written scenario. Appending that scenario to
+Two generators are available, both deterministic in the seed (`crates/verification/src/lean.rs`,
+`ScenarioStream`):
+
+- `full` (the default) emits every intent of `lean/Main.lean` and every value form of the scenario
+  format: patch with and without `v=`, update and delete with right and wrong versions, references
+  in fields 4, 5 and the lists 0 and 8 to existing, deleted and never-issued records, lists of
+  scalars and of references, strings and lists one below, at and above their bounds, records near
+  the record bound, required-field changes, strangers, members of the other tenant and a tenant
+  that does not exist. It is `lean_diff::generate`, one scenario per case seed.
+- `fixture` is the generator of the committed fixtures (`scenarios`). It covers the create,
+  full-replacement update, delete and schema-change intents, and only the first slice of the
+  model: no patches, no expected versions, no lists, no bound tests. A run with it cannot find a
+  divergence in the later slices, which is why `full` is the default. The committed fixtures are
+  unchanged by the full generator.
+
+The run prints the counts of scenarios, operations, batches and disagreements, and the elapsed
+time. Exit status 1 means a disagreement. The first one is minimised by delta debugging (whole
+scenarios, then the operations of each, while the model and the kernel still disagree) and written
+to `<out>/h-drt-<seed>-<n>.txt` as a hand-written scenario. Appending that scenario to
 `lean/fixtures/scenarios.txt` and running `bless_fixtures` turns it into a committed regression
 case. A disagreement is a bug in the model or in the kernel until shown otherwise.
 
 Each scenario starts from the model's initial world, so the minimiser's candidates are scenarios
 of their own. Their Lean runs happen only when there is a disagreement to shrink.
+
+**Coverage.** The run also prints how often the model's output showed each outcome kind: one row
+per error the model can print (`err <kind>`, read from `showErr` in `Main.lean`) and one per
+accepted intent kind (`create ok`, `update ok`, `patch ok`, `delete ok`, `require-strict ok`,
+`require-lax ok`). A kind that never occurred is marked `<- MISSING` and reported as a coverage
+gap. `--require-coverage` makes a gap fail the run, so a generator that stops reaching a rule
+cannot pass quietly. A line the model could not read is counted as `unparsed`. Coverage says which
+outcomes occurred, not whether each was reached through the rule it names; the unit test
+`the_full_generator_emits_every_operation_form` checks the forms of the generator itself.
 
 ## Sources
 

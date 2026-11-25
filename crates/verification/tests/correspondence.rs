@@ -11,7 +11,7 @@ use std::sync::{Mutex, MutexGuard};
 use strata_verification::drt;
 use strata_verification::lean::{
     compare_outputs, hand_written, kernel_output, model_output, parse_audit, scenarios, verify,
-    FIXTURE_COUNT, FIXTURE_SEED,
+    Generator, FIXTURE_COUNT, FIXTURE_SEED,
 };
 use strata_verification::lean_diff;
 use strata_verification::obligations;
@@ -383,7 +383,8 @@ fn words(code: &str) -> impl Iterator<Item = (&str, &str)> {
 fn the_differential_harness_runs_through_the_model() {
     let _lake = require_lake();
     let out = std::env::temp_dir().join(format!("strata-drt-smoke-{}", std::process::id()));
-    let totals = drt::run(&lean_dir(), &out, DEFAULT_DIFF_SEED, 20, 8).expect("the harness runs");
+    let totals = drt::run(&lean_dir(), &out, DEFAULT_DIFF_SEED, 20, 8, Generator::Full)
+        .expect("the harness runs");
     let _ = std::fs::remove_dir_all(&out);
     assert_eq!(totals.scenarios, 20);
     assert_eq!(totals.batches, 3);

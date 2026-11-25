@@ -1,8 +1,9 @@
 //! Differential random testing at scale, in the pattern Cedar uses between its Lean model and its
 //! Rust implementation.
 //!
-//! [`run`] draws scenarios from [`ScenarioStream`], the generator behind the committed fixtures,
-//! and writes them a batch at a time. Each batch goes to the Lean model in one `lake exe` process
+//! [`run`] draws scenarios from [`ScenarioStream`] (by default the full generator, which emits every
+//! intent and value form of the scenario format; the fixture generator is the other choice) and
+//! writes them a batch at a time. Each batch goes to the Lean model in one `lake exe` process
 //! and through the Rust kernel in process, and the two are compared scenario by scenario. A
 //! scenario starts from the model's initial world, so a disagreement belongs to one scenario.
 //!
@@ -11,7 +12,11 @@
 //! ready to append to `lean/fixtures/scenarios.txt`. Each candidate the minimiser tries is one more
 //! Lean process, and that happens only once there is a disagreement to shrink.
 
-use crate::lean::{build_model, compare_outputs, kernel_output, run_model, ScenarioStream};
+use crate::lean::{
+    build_model, compare_outputs, kernel_output, run_model, Generator, ScenarioStream,
+};
+use crate::lean_diff::lean_error_names;
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -218,6 +223,17 @@ fn minimise_disagreement(
     })
 }
 
+/// The accepted outcome kinds, one per intent kind of the scenario format: the intent's name
+/// followed by `ok`. `require` is split by its mode, as the model's two schema outcomes differ.
+pub const ACCEPTED_KINDS: [&str; 6] = [
+    "create ok",
+    "update ok",
+    "patch ok",
+    "delete ok",
+    "require-strict ok",
+    "require-lax ok",
+];
+
 /// What a run found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Totals {
@@ -228,22 +244,85 @@ pub struct Totals {
     pub disagreements: usize,
     /// The first disagreement, minimised; `None` when every scenario agreed.
     pub minimised: Option<Minimised>,
+    /// How often the model's output showed each outcome kind: `err <kind>` for each error
+    /// constructor, `<intent> ok` for each accepted kind (see [`ACCEPTED_KINDS`]), and
+    /// `unparsed` for a line the model could not read.
+    pub coverage: BTreeMap<String, usize>,
+    /// The outcome kinds a run must reach: every error the model can print, then
+    /// [`ACCEPTED_KINDS`].
+    pub required: Vec<String>,
 }
 
-/// Generate `count` scenarios from `seed` in batches of `batch` scenarios, and compare the Lean
-/// model with the Rust kernel on each. Every batch is written to `out_dir` as `batch-<k>.txt`
-/// and run through one `lake exe strata_model` process. Scenarios are compared one at a time,
-/// and the first disagreement is minimised (see [`minimise`]); later ones are only counted.
+impl Totals {
+    /// The required outcome kinds the run never showed.
+    pub fn uncovered(&self) -> Vec<String> {
+        self.required
+            .iter()
+            .filter(|kind| self.coverage.get(kind.as_str()).copied().unwrap_or(0) == 0)
+            .cloned()
+            .collect()
+    }
+}
+
+/// The intent of an `op` line, as the coverage names it: `create`, `update`, `patch`, `delete`,
+/// `require-strict` or `require-lax`.
+fn intent_of(op: &str) -> &'static str {
+    let tokens: Vec<&str> = op.split_whitespace().collect();
+    match tokens.get(3).copied() {
+        Some("create") => "create",
+        Some("update") => "update",
+        Some("patch") => "patch",
+        Some("delete") => "delete",
+        Some("require") if tokens.get(5).copied() == Some("strict") => "require-strict",
+        Some("require") => "require-lax",
+        _ => "unknown",
+    }
+}
+
+/// Count the model's outcome of each operation of each scenario into `coverage`.
+fn count_outcomes(
+    coverage: &mut BTreeMap<String, usize>,
+    cases: &[Case],
+    lean_parts: &[Vec<&str>],
+) {
+    for (case, part) in cases.iter().zip(lean_parts) {
+        // Line 0 is `scenario <name>`; then one line per operation.
+        for (op, line) in case.ops.iter().zip(part.iter().skip(1)) {
+            let kind = if *line == "ok" {
+                format!("{} ok", intent_of(op))
+            } else if let Some(error) = line.strip_prefix("err ") {
+                format!("err {error}")
+            } else {
+                "unparsed".to_string()
+            };
+            *coverage.entry(kind).or_insert(0) += 1;
+        }
+    }
+}
+
+/// Generate `count` scenarios from `seed` with `generator` in batches of `batch` scenarios, and
+/// compare the Lean model with the Rust kernel on each. Every batch is written to `out_dir` as
+/// `batch-<k>.txt` and run through one `lake exe strata_model` process. Scenarios are compared one
+/// at a time, and the first disagreement is minimised (see [`minimise`]); later ones are only
+/// counted. The model's outcomes are counted into [`Totals::coverage`].
 pub fn run(
     lean_dir: &Path,
     out_dir: &Path,
     seed: u64,
     count: usize,
     batch: usize,
+    generator: Generator,
 ) -> Result<Totals, String> {
     if batch == 0 {
         return Err("the batch size must be at least 1".into());
     }
+    let main = std::fs::read_to_string(lean_dir.join("Main.lean"))
+        .map_err(|e| format!("cannot read Main.lean: {e}"))?;
+    let mut required: Vec<String> = lean_error_names(&main)?
+        .into_iter()
+        .map(|name| format!("err {name}"))
+        .collect();
+    required.extend(ACCEPTED_KINDS.iter().map(|kind| kind.to_string()));
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
     // `lake exe` runs in `lean_dir`, so a relative batch path would be read from the wrong place.
@@ -251,8 +330,14 @@ pub fn run(
         .map_err(|e| format!("cannot resolve {}: {e}", out_dir.display()))?;
     build_model(lean_dir)?;
     let scratch = out_dir.join("minimise-scratch.txt");
-    let mut stream = ScenarioStream::new(seed);
-    let mut totals = Totals::default();
+    let mut stream = match generator {
+        Generator::Fixture => ScenarioStream::new(seed),
+        Generator::Full => ScenarioStream::full(seed),
+    };
+    let mut totals = Totals {
+        required,
+        ..Totals::default()
+    };
     while totals.scenarios < count {
         let size = batch.min(count - totals.scenarios);
         let first = totals.scenarios;
@@ -276,6 +361,7 @@ pub fn run(
         totals.batches += 1;
         totals.scenarios += cases.len();
         totals.operations += operations(&cases);
+        count_outcomes(&mut totals.coverage, &cases, &lean_parts);
         for (k, case) in cases.iter().enumerate() {
             if lean_parts[k] == kernel_parts[k] {
                 continue;
