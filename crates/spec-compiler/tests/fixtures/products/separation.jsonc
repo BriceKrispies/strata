@@ -1,0 +1,21 @@
+{
+  // A separation of duties as a product (D-8482, ADM-1642, ADM-1645): two capabilities of the
+  // product that no one holds together, whichever roles carry them. The rule that keeps the
+  // platform's own separations (the poster of the ledger is not its reviewer) keeps this one too,
+  // on every path that gives a person a role. The ids are in the namespace of the product like
+  // every other entity (D-6582).
+  "product": { "id": "pay", "name": "Pay", "version": "1.0.0", "platform": { "min": "0.2" }, "imports": { "spec": "../../../../../specifications/spec.jsonc", "entities": [] } },
+  "capabilities": [
+    { "id": "pay__release", "name": "Release a payment", "description": "Pays a payment out." },
+    { "id": "pay__approve", "name": "Approve a payment", "description": "Approves a payment before it is paid." }
+  ],
+  "separations": [
+    {
+      "id": "pay__release_and_approve",
+      "left": "pay__release",
+      "left-duty": "releases payments",
+      "right": "pay__approve",
+      "right-duty": "approves payments"
+    }
+  ]
+}

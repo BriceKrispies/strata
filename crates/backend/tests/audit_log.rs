@@ -266,3 +266,127 @@ fn the_route_reports_a_removed_entry() {
     assert_eq!(cut["intact"], false, "{cut}");
     assert_eq!(cut["first_break"], 2, "{cut}");
 }
+
+// Verifies: ADM-1643
+// Verifies: ADM-1648
+#[test]
+fn a_scoped_role_is_assigned_and_taken_away_by_the_route_and_every_refusal_is_an_entry() {
+    use strata_kernel::testkit::{eq, field_def, lit, object, var};
+    use strata_kernel::{FieldType, Scope};
+
+    let (app, _memory, site) = started();
+    let owner = identity(&app, &site, "alpha:owner", "t-note");
+    ops::run_intent(
+        &app,
+        &owner.context(&app),
+        &Intent::ChangeSchema {
+            changes: vec![
+                SchemaChange::DefineObject {
+                    id: object("note"),
+                    label: "Note".into(),
+                },
+                SchemaChange::DefineField {
+                    object: object("note"),
+                    field: field_def("slug", FieldType::Str, false),
+                },
+            ],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+        false,
+    )
+    .expect("the object type is defined");
+    let scope = |field: &str| {
+        serde_json::to_value(eq(var(Scope::Record, field), lit("north"))).expect("an expression")
+    };
+    let assign = |role: &str, scope: Json| MembersRequest::AssignScopedRole {
+        principal: "alpha:ada".into(),
+        role: role.into(),
+        object: "note".into(),
+        scope,
+    };
+
+    // Accepted: the entry names the person and what they hold, narrowed to the object type.
+    members(&app, &site, "t-scoped-1", assign("editor", scope("slug")))
+        .expect("the scoped role is assigned");
+    let changed = entries(&app, &site, "member.roles_changed");
+    let (correlation, entry) = changed.last().expect("an entry");
+    assert_eq!(correlation, "t-scoped-1");
+    assert_eq!(entry["intent"], "assign_scoped_role");
+    assert_eq!(entry["principal"], "alpha:ada");
+    assert_eq!(entry["value"][0]["role"], "editor", "{entry}");
+    assert_eq!(entry["value"][0]["object"], "note", "{entry}");
+
+    // Text of the tenant rule language is a scope too.
+    members(
+        &app,
+        &site,
+        "t-scoped-text",
+        assign("viewer", json!("record.slug == 'north'")),
+    )
+    .expect("a scope written as text is accepted");
+
+    // Refused, and every refusal is an entry: a role the tenant lacks, a scope that is no
+    // expression, a scope that names a field the object type does not declare, and an assignment
+    // that is not there.
+    let refusals = [
+        ("t-no-role", assign("ghost", scope("slug"))),
+        ("t-no-text", assign("editor", json!("this is not ("))),
+        ("t-no-json", assign("editor", json!({ "nonsense": 1 }))),
+        ("t-no-field", assign("editor", scope("region"))),
+        (
+            "t-no-assignment",
+            MembersRequest::RevokeScopedRole {
+                principal: "alpha:bob".into(),
+                role: "editor".into(),
+                object: "note".into(),
+            },
+        ),
+    ];
+    for (correlation, request) in refusals {
+        assert!(
+            members(&app, &site, correlation, request).is_err(),
+            "{correlation} is refused"
+        );
+    }
+    let mut refused: Vec<String> = entries(&app, &site, "refused.scoped_role")
+        .into_iter()
+        .chain(entries(&app, &site, "refused.scope_unknown_field"))
+        .map(|(correlation, _)| correlation)
+        .collect();
+    refused.sort();
+    assert_eq!(
+        refused,
+        [
+            "t-no-assignment",
+            "t-no-field",
+            "t-no-json",
+            "t-no-role",
+            "t-no-text"
+        ],
+        "each refusal is an entry"
+    );
+
+    // Taking it away alone: the other assignment stays, and the entry says what is left.
+    members(
+        &app,
+        &site,
+        "t-scoped-revoke",
+        MembersRequest::RevokeScopedRole {
+            principal: "alpha:ada".into(),
+            role: "editor".into(),
+            object: "note".into(),
+        },
+    )
+    .expect("the scoped role is taken away");
+    let changed = entries(&app, &site, "member.roles_changed");
+    let (correlation, entry) = changed.last().expect("an entry");
+    assert_eq!(correlation, "t-scoped-revoke");
+    assert_eq!(entry["intent"], "revoke_scoped_role");
+    assert_eq!(
+        entry["previous"].as_array().map(Vec::len),
+        Some(2),
+        "{entry}"
+    );
+    assert_eq!(entry["value"][0]["role"], "viewer", "{entry}");
+}

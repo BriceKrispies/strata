@@ -719,3 +719,28 @@ fn a_product_hold_rule_holds_an_invocation_until_its_approver_decides() {
         Some(PrincipalId::new("user:maker").expect("principal id"))
     );
 }
+
+/// D-8482, ADM-1645: a product declares a separation of duties in its section `separations`, the
+/// bundle carries it as a section of its own, and the bundle owns it like every other entity.
+// Verifies: ADM-1645
+#[test]
+fn a_product_declares_a_separation_of_duties_in_its_section_separations() {
+    use strata_substrate::bundle::ProductBundle;
+
+    let output = bundle_of(&product("separation.jsonc"));
+    let written: Value = serde_json::from_str(&output.files[0].contents).unwrap();
+    assert_eq!(
+        written["content"]["separations"][0]["id"],
+        "pay__release_and_approve"
+    );
+    assert_eq!(
+        written["content"]["separations"][0]["left-duty"],
+        "releases payments"
+    );
+    let bundle = ProductBundle::from_json(&output.files[0].contents)
+        .unwrap_or_else(|e| panic!("the bundle is refused: {e}"));
+    assert!(bundle
+        .entities()
+        .iter()
+        .any(|entity| { entity.kind == "separation" && entity.id == "pay__release_and_approve" }));
+}

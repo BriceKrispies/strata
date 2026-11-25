@@ -6979,7 +6979,7 @@ pub const REVOKE_SCOPED_ROLE: Contract = Contract {
         },
     ]),
     errors: &["unauthenticated", "forbidden", "invalid", "unavailable"],
-    step_up_error: Some("step_up_required"),
+    step_up_error: None,
     quota: None,
 };
 

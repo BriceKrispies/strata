@@ -1387,6 +1387,23 @@ fn assign_scoped_role(
             format!("the role {role} is reserved for a staged upgrade and is not assigned"),
         ));
     }
+    // D-8400: a hold rule that names a role holds the change of who holds it for approval. A
+    // scoped assignment is no change a hold can freeze, so it is not a way around the rule.
+    if draft
+        .tenant
+        .schema
+        .hold_rules
+        .iter()
+        .flatten()
+        .any(|(_, rule)| matches!(&rule.target, crate::types::HoldTarget::Role { role: named } if named == role))
+    {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            format!(
+                "the role {role} is named by a hold rule, which a scoped assignment does not go through"
+            ),
+        ));
+    }
     if let Some((kind, message)) =
         crate::scoped::predicate_problem(&draft.tenant.schema, object, scope)
     {

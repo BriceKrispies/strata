@@ -1128,7 +1128,7 @@ fn tally_query() -> SchemaChange {
     })
 }
 
-/// Verifies: ADM-1611
+/// Verifies: ADM-1644
 ///
 /// A role held through a scope decides a list, a query and an aggregate on each record the way it
 /// decides a single record: a reviewer scoped to the north note reads that note and no other in
@@ -1185,7 +1185,7 @@ fn a_scoped_role_decides_lists_queries_and_aggregates_like_a_single_record() {
     assert!(row_ids(&world, "stranger", &list).is_empty());
 }
 
-/// Verifies: ADM-1611
+/// Verifies: ADM-1644
 ///
 /// A reader who holds a role through a scope on a carried object type is judged alone: their
 /// audience class is the individual, never the class of the readers who hold the same direct
@@ -1228,7 +1228,7 @@ fn a_reader_with_a_scoped_role_is_an_individual_audience() {
     }
 }
 
-/// Verifies: ADM-1611
+/// Verifies: ADM-1644
 ///
 /// A scope that follows a reference needs the record it reaches like a Read policy does: a list
 /// read for the scoped reader names the person a note's author refers to, and the delivery of an
@@ -1293,4 +1293,374 @@ fn a_scope_that_follows_a_reference_names_the_record_it_needs() {
         .unwrap()
         .clone();
     assert_eq!(audience_needs(&tenant(&world).schema, &record).len(), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Declared separations of duties and the taking away of a scoped assignment (WG-5642).
+// ---------------------------------------------------------------------------------------------
+
+fn separation(id: &str, left: &str, right: &str) -> SchemaChange {
+    SchemaChange::DefineSeparation(SeparationDef {
+        id: SeparationId::new(id).unwrap(),
+        left: CapabilityName(left.into()),
+        left_duty: "pays out".into(),
+        right: CapabilityName(right.into()),
+        right_duty: "approves payments".into(),
+    })
+}
+
+/// The notes world with a role that pays (the capability `tenant-configure`), a role that approves
+/// (`segments-define`) and the separation `pay_approve` that keeps them apart.
+fn separated() -> World {
+    change(
+        &base(),
+        "owner",
+        NOW + 10,
+        vec![
+            define_role("payer"),
+            define_role("approver"),
+            permissions("payer", vec![capability("tenant-configure")]),
+            permissions("approver", vec![capability("segments-define")]),
+            separation("pay_approve", "tenant-configure", "segments-define"),
+        ],
+    )
+    .expect("the roles and the separation are defined")
+}
+
+/// Verifies: ADM-1642
+/// Verifies: ADM-1646
+///
+/// A separation a tenant declares is held to by the rule of the platform's own, on every path that
+/// gives a person a role: a direct assignment, a scoped assignment, a team's role, a person added
+/// to a team and a change of what a role grants, each refused with `ConflictingRoles` and naming
+/// the two duties. The built-in owner holds both without being counted, and a person who holds
+/// only one duty is not refused.
+#[test]
+fn a_declared_separation_is_held_to_on_every_path() {
+    let world = must(&separated(), "owner", NOW + 11, assign("alice", "payer"));
+
+    let direct = refused(&world, "owner", NOW + 12, assign("alice", "approver"));
+    assert_eq!(direct.kind, ErrorKind::ConflictingRoles);
+    assert!(
+        direct.message.contains("pays out") && direct.message.contains("approves payments"),
+        "{}",
+        direct.message
+    );
+    assert_eq!(
+        refused(
+            &world,
+            "owner",
+            NOW + 13,
+            scoped("alice", "approver", slug_is("north"))
+        )
+        .kind,
+        ErrorKind::ConflictingRoles
+    );
+    // A person who holds only one duty is not refused, and neither is the owner.
+    let world = must(&world, "owner", NOW + 14, assign("bob", "approver"));
+    let world = must(&world, "owner", NOW + 15, assign("owner", "approver"));
+
+    // Through a team: the team's role reaches its members, and a member joining reaches its roles.
+    let world = must(
+        &world,
+        "owner",
+        NOW + 16,
+        Intent::DefineTeam {
+            team: team("desk"),
+            label: "Desk".into(),
+        },
+    );
+    let world = must(
+        &world,
+        "owner",
+        NOW + 17,
+        Intent::AddTeamMember {
+            team: team("desk"),
+            principal: principal_id("alpha:alice"),
+        },
+    );
+    assert_eq!(
+        refused(
+            &world,
+            "owner",
+            NOW + 18,
+            Intent::AssignTeamRole {
+                team: team("desk"),
+                role: role("approver"),
+            }
+        )
+        .kind,
+        ErrorKind::ConflictingRoles
+    );
+    // A person joining a team whose role gives the other duty.
+    let world = must(&separated(), "owner", NOW + 21, assign("bob", "approver"));
+    let world = must(
+        &world,
+        "owner",
+        NOW + 22,
+        Intent::DefineTeam {
+            team: team("desk"),
+            label: "Desk".into(),
+        },
+    );
+    let world = must(
+        &world,
+        "owner",
+        NOW + 23,
+        Intent::AssignTeamRole {
+            team: team("desk"),
+            role: role("payer"),
+        },
+    );
+    assert_eq!(
+        refused(
+            &world,
+            "owner",
+            NOW + 24,
+            Intent::AddTeamMember {
+                team: team("desk"),
+                principal: principal_id("alpha:bob"),
+            }
+        )
+        .kind,
+        ErrorKind::ConflictingRoles
+    );
+
+    // A change of what a role grants.
+    let world = must(&separated(), "owner", NOW + 25, assign("alice", "payer"));
+    let grants = change(
+        &world,
+        "owner",
+        NOW + 26,
+        vec![permissions(
+            "payer",
+            vec![
+                capability("tenant-configure"),
+                capability("segments-define"),
+            ],
+        )],
+    )
+    .expect_err("the payer would hold both duties");
+    assert_eq!(grants.kind, ErrorKind::ConflictingRoles);
+}
+
+/// Verifies: ADM-1642
+/// Verifies: ADM-1646
+///
+/// Defining a separation that a person already breaks makes a pair and is refused, and taking one
+/// away needs the capability `separations-define`, which a manager of the schema does not hold
+/// until a role grants it.
+#[test]
+fn a_separation_is_defined_and_removed_by_one_who_may_and_not_over_a_pair_already_held() {
+    // A schema manager without the capability is refused to define or remove one.
+    let world = change(
+        &separated(),
+        "owner",
+        NOW + 30,
+        vec![permissions("schema_admin", Vec::new())],
+    )
+    .expect("the role is defined");
+    let world = must(&world, "owner", NOW + 31, assign("sam", "schema_admin"));
+    let define = vec![separation("other", "tenant-configure", "ledger-read")];
+    assert_eq!(
+        change(&world, "sam", NOW + 32, define.clone())
+            .expect_err("sam lacks separations-define")
+            .kind,
+        ErrorKind::Unauthorized
+    );
+    let remove = vec![SchemaChange::RemoveSeparation(
+        SeparationId::new("pay_approve").unwrap(),
+    )];
+    assert_eq!(
+        change(&world, "sam", NOW + 33, remove.clone())
+            .expect_err("sam lacks separations-define")
+            .kind,
+        ErrorKind::Unauthorized
+    );
+    // The role grants it, and the owner conferred it.
+    let world = change(
+        &world,
+        "owner",
+        NOW + 34,
+        vec![permissions(
+            "schema_admin",
+            vec![capability("separations-define")],
+        )],
+    )
+    .expect("the owner confers the capability");
+    let world = change(&world, "sam", NOW + 35, define).expect("sam defines one");
+    assert!(tenant(&world)
+        .schema
+        .separations
+        .as_ref()
+        .is_some_and(|held| held.contains_key(&SeparationId::new("other").unwrap())));
+    let world = change(&world, "sam", NOW + 36, remove).expect("sam removes one");
+
+    // With the separation gone a person holds both duties; declaring it again is a pair made.
+    let world = must(&world, "owner", NOW + 37, assign("alice", "payer"));
+    let world = must(&world, "owner", NOW + 38, assign("alice", "approver"));
+    let again = change(
+        &world,
+        "owner",
+        NOW + 39,
+        vec![separation(
+            "pay_approve",
+            "tenant-configure",
+            "segments-define",
+        )],
+    )
+    .expect_err("alice already holds both duties");
+    assert_eq!(again.kind, ErrorKind::ConflictingRoles);
+    // A separation that names a capability of the product form that nobody declared, or the
+    // same capability twice, is not a separation.
+    for bad in [
+        separation("bad_a", "shop__approve", "tenant-configure"),
+        separation("bad_b", "tenant-configure", "tenant-configure"),
+    ] {
+        assert_eq!(
+            change(&world, "owner", NOW + 40, vec![bad])
+                .expect_err("not a separation")
+                .kind,
+            ErrorKind::InvalidSchema
+        );
+    }
+}
+
+/// Verifies: ADM-1647
+///
+/// The platform's own separation stays in force whatever a tenant declares: its id is not declared
+/// again or removed, and declaring others leaves the poster and the reviewer of the ledger apart.
+#[test]
+fn the_platforms_separation_stays_whatever_is_declared() {
+    let world = separated();
+    for change_of in [
+        separation(
+            "ledger-adjust-and-review",
+            "tenant-configure",
+            "segments-define",
+        ),
+        SchemaChange::RemoveSeparation(SeparationId::new("ledger-adjust-and-review").unwrap()),
+    ] {
+        assert_eq!(
+            change(&world, "owner", NOW + 41, vec![change_of])
+                .expect_err("the platform's separation is not changed")
+                .kind,
+            ErrorKind::InvalidSchema
+        );
+    }
+    let world = change(
+        &world,
+        "owner",
+        NOW + 42,
+        vec![
+            define_role("poster"),
+            define_role("auditor"),
+            permissions("poster", vec![capability("ledger-post")]),
+            permissions("auditor", vec![capability("ledger-read")]),
+        ],
+    )
+    .expect("the ledger roles are defined");
+    let world = must(&world, "owner", NOW + 43, assign("alice", "poster"));
+    assert_eq!(
+        refused(&world, "owner", NOW + 44, assign("alice", "auditor")).kind,
+        ErrorKind::ConflictingRoles
+    );
+}
+
+/// Verifies: ADM-1643
+///
+/// One scoped assignment is taken away alone: the same role scoped to another object type, and the
+/// role held directly, stay; an assignment that is not there is `InvalidIntent`, a role that does
+/// not exist is `UnknownRole`, and the act is a manager of members's.
+#[test]
+fn one_scoped_assignment_is_taken_away_alone() {
+    let on_people = Intent::AssignScopedRole {
+        principal: principal_id("alpha:stranger"),
+        role: role("reviewer"),
+        object: object("person"),
+        scope: eq(var(Scope::Record, "name"), lit("ann")),
+    };
+    let revoke = |on: &str| Intent::RevokeScopedRole {
+        principal: principal_id("alpha:stranger"),
+        role: role("reviewer"),
+        object: object(on),
+    };
+    let world = must(
+        &base(),
+        "owner",
+        NOW + 50,
+        scoped("stranger", "reviewer", slug_is("north")),
+    );
+    let world = must(&world, "owner", NOW + 51, on_people);
+    let list = named_read("notes_by_rank");
+    assert_eq!(row_ids(&world, "stranger", &list), vec![1]);
+
+    // Someone who may not manage members cannot take it away.
+    assert_eq!(
+        refused(&world, "writer1", NOW + 52, revoke("note")).kind,
+        ErrorKind::Unauthorized
+    );
+    let world = must(&world, "owner", NOW + 53, revoke("note"));
+    assert!(row_ids(&world, "stranger", &list).is_empty());
+    let held = tenant(&world)
+        .schema
+        .scoped_roles
+        .clone()
+        .unwrap_or_default();
+    assert_eq!(held.len(), 1, "the assignment on the people stays");
+    assert_eq!(held[0].object, object("person"));
+    assert_eq!(
+        refused(&world, "owner", NOW + 54, revoke("note")).kind,
+        ErrorKind::InvalidIntent
+    );
+    let nosuch = Intent::RevokeScopedRole {
+        principal: principal_id("alpha:stranger"),
+        role: role("nosuch"),
+        object: object("note"),
+    };
+    assert_eq!(
+        refused(&world, "owner", NOW + 55, nosuch).kind,
+        ErrorKind::UnknownRole
+    );
+    let world = must(&world, "owner", NOW + 56, revoke("person"));
+    assert!(tenant(&world).schema.scoped_roles.is_none());
+}
+
+/// Verifies: ADM-1611
+///
+/// A role that a hold rule names is not given through a scope, which no hold can freeze: the
+/// scoped assignment would go around the approval the rule asks for.
+#[test]
+fn a_scoped_assignment_is_not_a_way_around_a_hold_rule() {
+    let world = change(
+        &base(),
+        "owner",
+        NOW + 60,
+        vec![SchemaChange::DefineHoldRule(HoldRule {
+            id: HoldRuleId::new("hold_reviewer").unwrap(),
+            label: "Reviewers are approved".into(),
+            target: HoldTarget::Role {
+                role: role("reviewer"),
+            },
+            when: None,
+            approver: CapabilityName("change-approve".into()),
+        })],
+    )
+    .expect("the hold rule is defined");
+    assert_eq!(
+        refused(
+            &world,
+            "owner",
+            NOW + 61,
+            scoped("stranger", "reviewer", slug_is("north"))
+        )
+        .kind,
+        ErrorKind::InvalidIntent
+    );
+    must(
+        &world,
+        "owner",
+        NOW + 62,
+        scoped("stranger", "regional_edit", slug_is("north")),
+    );
 }
