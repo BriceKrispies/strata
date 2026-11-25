@@ -9,6 +9,8 @@
 //! thread is registered on its first call and unregistered when it exits (a thread-local guard), so
 //! callers on tokio worker threads need do nothing.
 
+pub mod codec;
+
 use std::sync::OnceLock;
 
 mod sys {
