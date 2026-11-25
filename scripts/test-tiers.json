@@ -70,9 +70,8 @@
       "package": "strata-corpus",
       "target": "corpus_slow",
       "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "corpus: Compiles the 14 enterprise product files with specc, installs them into one tenant, and populates the small scale three times (twice on the memory store, once on SQLite, plus another seed) to check that a fixed seed gives a byte-identical tenant hash on both stores, and only plans the large scale; not yet measured"
+      "seconds": 96.47,
+      "reason": "corpus: Compiles the 14 enterprise product files with specc, installs them into one tenant, and populates the small scale three times (twice on the memory store, once on SQLite, plus another seed) to check that a fixed seed gives a byte-identical tenant hash on both stores, and only plans the large scale"
     },
     {
       "package": "strata-kernel",
@@ -215,9 +214,8 @@
       "package": "strata-verification",
       "target": "verification_slow",
       "tier": "full",
-      "seconds": 24.12,
-      "unmeasured": true,
-      "reason": "correspondence: Runs the Lean build and compares it with the kernel, including 400 seeded random sequences through one Lean process (needs lake); the gate also runs lake build"
+      "seconds": 7.97,
+      "reason": "correspondence: Runs the Lean build and compares it with the kernel, including 200 seeded random sequences through one Lean process (needs lake); the gate also runs lake build"
     },
     {
       "package": "strata-spec-compiler-language-fixture",
