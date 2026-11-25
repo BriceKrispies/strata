@@ -137,6 +137,7 @@ fn config() -> Result<Config, String> {
 
 #[tokio::main]
 async fn main() {
+    strata_protocol::log::use_stdout();
     let result = async {
         let cfg = config()?;
         let listener = server::bind(cfg.addr).await?;

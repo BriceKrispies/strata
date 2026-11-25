@@ -10,7 +10,6 @@
 //! counts and durations, never event payloads or record contents.
 
 use serde_json::{json, Map, Value as Json};
-use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -162,8 +161,7 @@ impl JsonLines {
         for (key, value) in fields {
             line.insert((*key).to_string(), value.to_json());
         }
-        let mut out = std::io::stdout().lock();
-        let _ = writeln!(out, "{}", Json::Object(line));
+        strata_protocol::log::emit_line(&Json::Object(line).to_string());
     }
 }
 
