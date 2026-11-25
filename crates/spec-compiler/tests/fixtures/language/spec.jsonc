@@ -51,7 +51,8 @@
       { "name": "MsBetween", "fields": [{ "name": "from", "type": "expr" }, { "name": "to", "type": "expr" }] },
       { "name": "Duration", "fields": [{ "name": "unit", "type": "duration-unit" }, { "name": "amount", "type": "expr" }] },
       { "name": "Concat", "fields": [{ "name": "left", "type": "expr" }, { "name": "right", "type": "expr" }] },
-      { "name": "Text", "newtype": true, "fields": [{ "name": "inner", "type": "expr" }] }
+      { "name": "Text", "newtype": true, "fields": [{ "name": "inner", "type": "expr" }] },
+      { "name": "AncestorOf", "fields": [{ "name": "x", "type": "expr" }, { "name": "y", "type": "expr" }, { "name": "object", "type": "expr" }, { "name": "via", "type": "expr" }] }
     ] }
   ],
   "languages": [
@@ -107,6 +108,7 @@
         { "name": "contains", "variant": "Contains", "syntax": { "form": "call", "token": "contains" }, "operands": [["str", "list"], "any"], "result": "bool", "nulls": "propagate", "primitive": "contains" },
         { "name": "starts-with", "variant": "StartsWith", "syntax": { "form": "call", "token": "starts_with" }, "operands": ["str", "str"], "result": "bool", "nulls": "propagate", "primitive": "starts-with" },
         { "name": "is-slug", "variant": "IsSlug", "syntax": { "form": "call", "token": "is_slug" }, "operands": ["str"], "result": "bool", "nulls": "propagate", "primitive": "is-slug" },
+        { "name": "ancestor-of", "variant": "AncestorOf", "syntax": { "form": "call", "token": "ancestor_of" }, "operands": ["ref", "ref", "str", "str"], "result": "bool", "nulls": "propagate", "primitive": "ancestor-of" },
         { "name": "if", "variant": "If", "syntax": { "form": "call", "token": "if" }, "operands": ["bool", "any", "any"], "result": "operand:2", "nulls": "null-is-false", "primitive": "if" },
         { "name": "add", "variant": "Arith", "case": { "field": "op", "value": "Add" }, "syntax": { "form": "infix", "token": "+", "precedence": 5, "assoc": "left" }, "operands": [["int", "time"], "int"], "result": "operand:1", "nulls": "propagate", "primitive": "add-checked" },
         { "name": "sub", "variant": "Arith", "case": { "field": "op", "value": "Sub" }, "syntax": { "form": "infix", "token": "-", "precedence": 5, "assoc": "left" }, "operands": [["int", "time"], "int"], "result": "operand:1", "nulls": "propagate", "primitive": "sub-checked" },

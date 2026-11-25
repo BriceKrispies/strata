@@ -263,4 +263,15 @@ pub enum Expr {
     },
     /// The variant `Text`.
     Text(Box<Expr>),
+    /// The variant `AncestorOf`.
+    AncestorOf {
+        /// Field `x`.
+        x: Box<Expr>,
+        /// Field `y`.
+        y: Box<Expr>,
+        /// Field `object`.
+        object: Box<Expr>,
+        /// Field `via`.
+        via: Box<Expr>,
+    },
 }

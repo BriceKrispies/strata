@@ -116,6 +116,23 @@ impl Env for World {
         Err(EvalError(format!("{field} cannot be followed here")))
     }
 
+    /// There is no lookup, so a walk reads no record: a record is its own ancestor, and any other walk is
+    /// refused for the record it starts from (the text the other evaluator gives too, WG-5510).
+    fn ancestor_of(
+        &self,
+        object: &str,
+        _field: &str,
+        target: &u64,
+        from: &u64,
+    ) -> Result<bool, EvalError> {
+        if target == from {
+            return Ok(true);
+        }
+        Err(EvalError(format!(
+            "the lookup does not cover {object} {from}"
+        )))
+    }
+
     fn param(&self, name: &str) -> Option<Value> {
         self.params.get(name).cloned()
     }
@@ -179,6 +196,18 @@ impl TypeEnv for Site {
     fn follow(&self, field: &str) -> Result<(), String> {
         if self.shape_of(field)? != Shape::Ref {
             return Err(format!("{field} is not a single reference"));
+        }
+        Ok(())
+    }
+
+    /// The checker knows no object type of the fixture, so it checks what the kernel checks of a name:
+    /// the field is a field id, and the object type is named.
+    fn ancestor_of(&self, object: &str, field: &str) -> Result<(), String> {
+        if !is_name(field) {
+            return Err(field_id_error(field));
+        }
+        if object.is_empty() {
+            return Err("ancestor_of names an empty object type".to_string());
         }
         Ok(())
     }

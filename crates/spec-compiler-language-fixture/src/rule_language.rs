@@ -34,6 +34,7 @@
 //! - `contains`: call `contains(...)`; primitive `contains`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Contains`.
 //! - `starts-with`: call `starts_with(...)`; primitive `starts-with`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::StartsWith`.
 //! - `is-slug`: call `is_slug(...)`; primitive `is-slug`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::IsSlug -> is_slug`.
+//! - `ancestor-of`: call `ancestor_of(...)`; primitive `ancestor-of`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::AncestorOf`.
 //! - `if`: call `if(...)`; primitive `if`, nulls `null-is-false`; pinned to `crates/kernel/src/expr.rs: eval, Expr::If`.
 //! - `add`: infix `+`, precedence 5, left; primitive `add-checked`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Add) -> checked`.
 //! - `sub`: infix `-`, precedence 5, left; primitive `sub-checked`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Sub) -> checked`.
@@ -101,6 +102,15 @@ pub trait Env {
         target: &u64,
     ) -> Result<Option<Box<dyn Record + '_>>, EvalError>;
 
+    /// Whether `target` is `from` or one of its ancestors: the walk from `from` through `field` of the object type `object`, bounded (WG-5510). An error when the walk is longer than the limit, returns to a record it visited, or meets a record the snapshot does not cover.
+    fn ancestor_of(
+        &self,
+        object: &str,
+        field: &str,
+        target: &u64,
+        from: &u64,
+    ) -> Result<bool, EvalError>;
+
     /// A named parameter, `None` when it is not supplied.
     fn param(&self, name: &str) -> Option<types::Value>;
 
@@ -121,6 +131,9 @@ pub trait TypeEnv {
 
     /// Checks that a field of the definition site's record is a single reference to an existing object type.
     fn follow(&self, field: &str) -> Result<(), String>;
+
+    /// Checks that `field` of the object type `object` is a single reference to `object`, so that the walk can follow it.
+    fn ancestor_of(&self, object: &str, field: &str) -> Result<(), String>;
 
     /// Whether the definition site declares the parameter.
     fn has_param(&self, name: &str) -> bool;
@@ -513,6 +526,15 @@ impl Parser {
                     let [a0] = self.args::<1>()?;
                     Ok(types::Expr::IsSlug(Box::new(a0)))
                 }
+                "ancestor_of" => {
+                    let [a0, a1, a2, a3] = self.args::<4>()?;
+                    Ok(types::Expr::AncestorOf {
+                        x: Box::new(a0),
+                        y: Box::new(a1),
+                        object: Box::new(a2),
+                        via: Box::new(a3),
+                    })
+                }
                 "if" => {
                     let [a0, a1, a2] = self.args::<3>()?;
                     Ok(types::Expr::If {
@@ -729,6 +751,14 @@ impl fmt::Display for types::Expr {
                 write!(f, "concat({v0}, {v1})")
             }
             types::Expr::Text(v0) => write!(f, "text({v0})"),
+            types::Expr::AncestorOf {
+                x: v0,
+                y: v1,
+                object: v2,
+                via: v3,
+            } => {
+                write!(f, "ancestor_of({v0}, {v1}, {v2}, {v3})")
+            }
         }
     }
 }
@@ -843,6 +873,14 @@ pub fn is_slug(s: &str) -> bool {
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
         })
+}
+
+/// The text of a string literal operand of ancestor_of: the object type or the field it names (WG-5510). Any other operand is an error.
+pub fn literal_text(expr: &types::Expr) -> Result<String, String> {
+    match expr {
+        types::Expr::Lit(types::Value::Str(text)) => Ok(text.clone()),
+        _ => Err("ancestor_of takes a string literal here".to_string()),
+    }
 }
 
 /// The largest magnitude of an integer of checked arithmetic, 2^53-1: what Rust and JavaScript both hold exactly.
@@ -1069,6 +1107,23 @@ pub fn eval(expr: &types::Expr, env: &dyn Env) -> Result<types::Value, EvalError
             types::Value::Ref(x) => types::Value::Str(x.to_string()),
             other => return Err(type_error("text", &other)),
         },
+        types::Expr::AncestorOf {
+            x: v0,
+            y: v1,
+            object: v2,
+            via: v3,
+        } => {
+            let (x, y) = (eval(v0, env)?, eval(v1, env)?);
+            let object = literal_text(v2).map_err(EvalError)?;
+            let via = literal_text(v3).map_err(EvalError)?;
+            match (x, y) {
+                (types::Value::Null, _) | (_, types::Value::Null) => types::Value::Null,
+                (types::Value::Ref(x), types::Value::Ref(y)) => {
+                    types::Value::Bool(env.ancestor_of(&object, &via, &x, &y)?)
+                }
+                (other, _) => return Err(type_error("ancestor_of", &other)),
+            }
+        }
     })
 }
 
@@ -1349,6 +1404,19 @@ pub fn check(expr: &types::Expr, env: &dyn TypeEnv) -> Result<Shape, String> {
                 "text",
             )?;
             Shape::Str
+        }
+        types::Expr::AncestorOf {
+            x: v0,
+            y: v1,
+            object: v2,
+            via: v3,
+        } => {
+            expect(check(v0, env)?, &[Shape::Ref], "ancestor_of")?;
+            expect(check(v1, env)?, &[Shape::Ref], "ancestor_of")?;
+            let object = literal_text(v2)?;
+            let via = literal_text(v3)?;
+            env.ancestor_of(&object, &via)?;
+            Shape::Bool
         }
     })
 }

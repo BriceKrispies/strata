@@ -41,6 +41,7 @@
 // - `contains`: call `contains(...)`; primitive `contains`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Contains`.
 // - `starts-with`: call `starts_with(...)`; primitive `starts-with`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::StartsWith`.
 // - `is-slug`: call `is_slug(...)`; primitive `is-slug`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::IsSlug -> is_slug`.
+// - `ancestor-of`: call `ancestor_of(...)`; primitive `ancestor-of`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::AncestorOf`.
 // - `if`: call `if(...)`; primitive `if`, nulls `null-is-false`; pinned to `crates/kernel/src/expr.rs: eval, Expr::If`.
 // - `add`: infix `+`, precedence 5, left; primitive `add-checked`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Add) -> checked`.
 // - `sub`: infix `-`, precedence 5, left; primitive `sub-checked`, nulls `propagate`; pinned to `crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Sub) -> checked`.
@@ -106,6 +107,7 @@ const SHAPE_NAMES = { 'bool': 'Bool', 'int': 'Int', 'str': 'Str', 'time': 'Time'
  * @typedef {object} Env
  * @property {(scope: string) => RuleRecord | null | undefined} record The record a record scope reads, or nothing when the scope has none (such as the old record on a create).
  * @property {(scope: string, field: string, target: number) => RuleRecord | null | undefined} follow The record a reference field of the scope's record points at: nothing when it does not exist; throws EvalError when the field is not a single reference, or the reference cannot be followed here.
+ * @property {(object: string, field: string, target: number, from: number) => boolean} ancestorOf Whether target is from or one of its ancestors: the walk from from through field of the object type, bounded (WG-5510). Throws EvalError when the walk is longer than the limit, returns to a record it visited, or meets a record the snapshot does not cover.
  * @property {(name: string) => any} param A named parameter, undefined when it is not supplied.
  * @property {() => number} now The context timestamp.
  * @property {() => string | null} principal The acting principal's id for a user, null for an anonymous or system principal.
@@ -117,6 +119,7 @@ const SHAPE_NAMES = { 'bool': 'Bool', 'int': 'Int', 'str': 'Str', 'time': 'Time'
  * @typedef {object} TypeEnv
  * @property {(through: string | null, name: string) => string} fieldShape The shape of a field that is not a system attribute: of the definition site's record, or, with `through`, of the record that reference field points at. Throws CheckError when the name is not a field id or names no field.
  * @property {(field: string) => void} follow Checks that a field of the definition site's record is a single reference to an existing object type; throws CheckError when it is not.
+ * @property {(object: string, field: string) => void} ancestorOf Checks that field of the object type object is a single reference to object, so that the walk can follow it; throws CheckError when it is not.
  * @property {(name: string) => boolean} hasParam Whether the definition site declares the parameter.
  * @property {(role: string) => boolean} hasRole Whether the role is declared at the definition site.
  */
@@ -537,6 +540,10 @@ class Parser {
           const [a0] = this.args(1);
           return { IsSlug: a0 };
         }
+        case 'ancestor_of': {
+          const [a0, a1, a2, a3] = this.args(4);
+          return { AncestorOf: { x: a0, y: a1, object: a2, via: a3 } };
+        }
         case 'if': {
           const [a0, a1, a2] = this.args(3);
           return { If: { cond: a0, then: a1, otherwise: a2 } };
@@ -781,6 +788,10 @@ export function print(expr) {
       const v0 = p;
       return `text(${print(v0)})`;
     }
+    case 'AncestorOf': {
+      const v0 = p.x, v1 = p.y, v2 = p.object, v3 = p.via;
+      return `ancestor_of(${print(v0)}, ${print(v1)}, ${print(v2)}, ${print(v3)})`;
+    }
     default:
       throw new TypeError(`not an expression of the language: ${tag}`);
   }
@@ -963,6 +974,20 @@ function order(left, right, test) {
  */
 export function isSlug(s) {
   return s !== '' && s.split('-').every((part) => /^[a-z0-9]+$/.test(part));
+}
+
+/**
+ * The text of a string literal operand of ancestorOf: the object type or the field it names (WG-5510).
+ * @param {any} node
+ * @returns {string}
+ */
+function literalText(node, Failure) {
+  const [tag, p] = parts(node);
+  if (tag === 'Lit') {
+    const [kind, value] = parts(p);
+    if (kind === 'Str') return value;
+  }
+  throw new Failure('ancestor_of takes a string literal here');
 }
 
 /** The largest magnitude of an integer of checked arithmetic, 2^53-1: what Rust and JavaScript both hold exactly. */
@@ -1275,6 +1300,19 @@ export function evaluate(expr, env) {
       if (t === 'Time') return { Str: String(x) };
       if (t === 'Ref') return { Str: String(x) };
       throw typeError('text', a);
+    }
+    case 'AncestorOf': {
+      const v0 = p.x, v1 = p.y, v2 = p.object, v3 = p.via;
+      const a = evaluate(v0, env);
+      const b = evaluate(v1, env);
+      const object = literalText(v2, EvalError);
+      const via = literalText(v3, EvalError);
+      const [ta, xa] = parts(a);
+      const [tb, xb] = parts(b);
+      if (ta === 'Null' || tb === 'Null') return 'Null';
+      if (ta !== 'Ref') throw typeError('ancestor_of', a);
+      if (tb !== 'Ref') throw typeError('ancestor_of', b);
+      return { Bool: env.ancestorOf(object, via, xa, xb) };
     }
     default:
       throw new TypeError(`not an expression of the language: ${tag}`);
@@ -1602,6 +1640,17 @@ export function check(expr, env) {
       const v0 = p;
       expectShape(check(v0, env), ['int', 'time', 'ref', 'bool', 'str'], 'text');
       return 'str';
+    }
+    case 'AncestorOf': {
+      const v0 = p.x, v1 = p.y, v2 = p.object, v3 = p.via;
+      const first = check(v0, env);
+      const second = check(v1, env);
+      expectShape(first, ['ref'], 'ancestor_of');
+      expectShape(second, ['ref'], 'ancestor_of');
+      const object = literalText(v2, CheckError);
+      const via = literalText(v3, CheckError);
+      env.ancestorOf(object, via);
+      return 'bool';
     }
     default:
       throw new TypeError(`not an expression of the language: ${tag}`);

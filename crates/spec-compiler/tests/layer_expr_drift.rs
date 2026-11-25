@@ -91,6 +91,14 @@ impl lang::TypeEnv for World {
         World::reference(field)
     }
 
+    fn ancestor_of(&self, object: &str, field: &str) -> Result<(), String> {
+        World::reference(field)?;
+        if object.is_empty() {
+            return Err("ancestor_of names an empty object type".to_string());
+        }
+        Ok(())
+    }
+
     fn has_param(&self, name: &str) -> bool {
         ["a", "b"].contains(&name)
     }

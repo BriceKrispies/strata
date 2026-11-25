@@ -53,6 +53,11 @@ function world(env) {
     follow(_scope, field) {
       throw new lang.EvalError(`${field} cannot be followed here`);
     },
+    // No lookup: a record is its own ancestor, and any other walk reads a record it cannot (WG-5510).
+    ancestorOf(object, _field, target, from) {
+      if (target === from) return true;
+      throw new lang.EvalError(`the lookup does not cover ${object} ${from}`);
+    },
     param: (name) => (env.param ?? {})[name],
     now: () => now,
     principal: () => principal,
@@ -79,6 +84,10 @@ function site(env) {
     },
     follow(field) {
       if (shapeOf(field) !== 'ref') throw new lang.CheckError(`${field} is not a single reference`);
+    },
+    ancestorOf(object, field) {
+      if (!isName(field)) throw new lang.CheckError(fieldIdError(field));
+      if (object === '') throw new lang.CheckError('ancestor_of names an empty object type');
     },
     hasParam: (name) => params.has(name),
     hasRole: (role) => roles.has(role),

@@ -4452,8 +4452,8 @@ impl<'a> Plan<'a> {
                 let mut l = vec![
                     format!("const a = evaluate({x}, env);"),
                     format!("const b = evaluate({y}, env);"),
-                    format!("const object = literalText({object});"),
-                    format!("const via = literalText({via});"),
+                    format!("const object = literalText({object}, EvalError);"),
+                    format!("const via = literalText({via}, EvalError);"),
                     t("const [ta, xa] = parts(a);"),
                     t("const [tb, xb] = parts(b);"),
                     format!("if (ta === {null} || tb === {null}) return {null};"),
@@ -5008,8 +5008,8 @@ impl<'a> Plan<'a> {
                 ];
                 l.extend(self.expect_js("first", &operands[0], &token, false));
                 l.extend(self.expect_js("second", &operands[1], &token, false));
-                l.push(format!("const object = literalText({});", e(2)));
-                l.push(format!("const via = literalText({});", e(3)));
+                l.push(format!("const object = literalText({}, CheckError);", e(2)));
+                l.push(format!("const via = literalText({}, CheckError);", e(3)));
                 l.push("env.ancestorOf(object, via);".to_string());
                 l.push(format!("return {};", result()));
                 l
@@ -5751,7 +5751,7 @@ impl<'a> Plan<'a> {
             .unwrap_or_default();
         let text = self.jt("string");
         format!(
-            "/**\n * The text of a string literal operand of ancestorOf: the object type or the field it names (WG-5510).\n * @param {{any}} node\n * @returns {{string}}\n */\nfunction literalText(node) {{\n  const [tag, p] = parts(node);\n  if (tag === {lit}) {{\n    const [kind, value] = parts(p);\n    if (kind === {text}) return value;\n  }}\n  throw new Error('ancestor_of takes a string literal here');\n}}"
+            "/**\n * The text of a string literal operand of ancestorOf: the object type or the field it names (WG-5510).\n * @param {{any}} node\n * @returns {{string}}\n */\nfunction literalText(node, Failure) {{\n  const [tag, p] = parts(node);\n  if (tag === {lit}) {{\n    const [kind, value] = parts(p);\n    if (kind === {text}) return value;\n  }}\n  throw new Failure('ancestor_of takes a string literal here');\n}}"
         )
     }
 

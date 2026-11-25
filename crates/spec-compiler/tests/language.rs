@@ -235,6 +235,22 @@ impl lang::Env for World<'_> {
         Err(lang::EvalError(format!("{field} cannot be followed here")))
     }
 
+    fn ancestor_of(
+        &self,
+        object: &str,
+        _field: &str,
+        target: &u64,
+        from: &u64,
+    ) -> Result<bool, lang::EvalError> {
+        // No lookup here: a record is its own ancestor, and any other walk reads a record it cannot.
+        if target == from {
+            return Ok(true);
+        }
+        Err(lang::EvalError(format!(
+            "the lookup does not cover {object} {from}"
+        )))
+    }
+
     fn param(&self, name: &str) -> Option<Value> {
         self.params.get(name).map(to_generated)
     }
