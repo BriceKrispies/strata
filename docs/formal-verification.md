@@ -442,7 +442,7 @@ what the B2 implementation will be proved against.
 | `submit` login, complete form | the sign-in request; the form is busy and keeps the values | covered | 1 (request); 3 (values kept, error cleared) |
 | `submit` login, incomplete form | the values are kept and the form says so; no request | covered | 3 (`signInIncomplete`) |
 | `http_result` login, accepted | signed in: session, the person's state cleared, the address moved to the reply's target | partly | 1; 5 (live socket reset) |
-| `http_result` login, second factor waiting | the code prompt, no session yet | not covered | 7 |
+| `http_result` login, second factor waiting | the code prompt; no session yet | covered | 7 (`signInWaiting`) |
 | `http_result` login, refused | the request ends; the form shows the refusal and drops the password (`loginRefused`) | covered | 3 (the refusal's words are wording, and focus is presentation, slice 4) |
 | `action logout` | the sign-out request, when the screen offers sign-out | covered | 1 |
 | `http_result` logout, accepted | no session; the person's state cleared; the address replaced | partly | 1; 5 (live socket reset) |
@@ -455,14 +455,14 @@ what the B2 implementation will be proved against.
 | Message | What update does | Status | Slice |
 |---|---|---|---|
 | `ws_open` | resets the refusal count and the stop flag | covered | 5 (`socketOpened`) |
-| `ws_message` welcome | a first connection subscribes from the head and reads the view again; a resumed one subscribes on; the heartbeat starts | partly | 5 (`welcomeFirst`, `welcomeResume`; the generated machine's welcome transition was not read, so the head as the acknowledged number is the spec's reading) |
-| `ws_message` event (a notice or a heartbeat) | acknowledges the next notice; reads the view again when the live bindings say so; a gap closes the socket and reads the view again | partly | 5 (`eventRefresh`, `eventQuiet`, `eventGap`; the live bindings' decision is an input of the message; the manifest on a schema notice: 11; the session on a membership notice: not yet) |
+| `ws_message` welcome | a first connection subscribes from the beginning, takes the head as the acknowledged number, resets the counts and starts the heartbeat at the interval the welcome announces, and reads the view again; a resumed one subscribes on | covered | 5 (`welcomeFirst`, `welcomeResume`; read from `client-live-flow-impl.js`) |
+| `ws_message` event (a notice or a heartbeat) | acknowledges a notice in the count, moves the acknowledged number on when it is newer, and reads the view again when the live bindings say so; a notice out of the count closes the socket, resets the acknowledged number and reads the view again | partly | 5 (`frameAdvanceRefresh`, `frameAdvanceQuiet`, `frameSameRefresh`, `frameSameQuiet`, `frameGap`; the live bindings decide the flag, an input of the message; the session on a membership notice: not yet) |
 | `ws_message` resync | carries on from the head; the view is read again | covered | 5 (`resyncRefresh`; the manifest read again: 11) |
 | `ws_message` pong | a head beyond the connection's own notices reads the view again | covered | 5 (`pongBehind`, `pongCurrent`) |
 | `ws_closed`, not refused | the live state waits; a reconnect timer | covered | 5 (`wsClosedLater`) |
 | `ws_closed`, refused | the refusal is counted; the session is read again; after five, live updates stop (F7) | covered | 5 (`wsRefusedKeep`, `wsRefusedStop`; the count is taken at the close, see F7) |
 | `timer` heartbeat, reconnect | a ping and the next heartbeat; a reconnect attempt unless stopped | covered | 5 (`heartbeatDue`, `reconnectFires`, and the stale cases) |
-| `timer` emit (a delayed frame) | the delayed frame is performed | not covered | 5 |
+| `timer` emit (a delayed frame) | none of this machine's emits is delayed (`afterMs` is never set in `client-live-flow-impl.js`) | covered | 5 (nothing to add) |
 
 #### Presentation
 
@@ -480,19 +480,19 @@ what the B2 implementation will be proved against.
 | Message | What update does | Status | Slice |
 |---|---|---|---|
 | `action passkeys.sign_in`; `http_result` passkeys.challenge, passkeys.sign_in; `passkey_result` (sign-in) | passkey sign-in: challenge, browser prompt, answer; signs in as a login does | not covered | 6 |
-| `action passkeys.add`, `passkeys.remove`; `http_result` passkeys.list, passkeys.register_start, passkeys.register_finish, passkeys.remove; `passkey_result` (registration) | the person's passkeys | not covered | 8 |
-| `action factors.enrol_start`, `factors.enrol_cancel`, `factors.remove_totp`, `factors.new_codes`, `factors.dismiss_codes`, `factors.use`, `factors.use_passkey`, `factors.stepup_cancel` | the authenticator, recovery codes, the factor choice, the step-up prompt | not covered | 7 |
-| `submit` second, totpconfirm, stepup; `input` second, totpconfirm, stepup | the second-factor code, the enrolment confirmation, the re-authentication | not covered | 7 |
-| `http_result` factors.summary (entered with the desk), enrol_start, enrol_finish, remove_totp, new_codes | the factors section's state | not covered | 7 |
+| `action passkeys.add`, `passkeys.remove`; `http_result` passkeys.list, passkeys.register_start, passkeys.register_finish, passkeys.remove; `passkey_result` (registration) | the person's passkeys | partly | 8 (`passkeyAddAsk`, `personalCeremony`, `passkeyCompleted`, `passkeyDeclined`, `deskAsk` for the removal, the answers `personalAnswerReload` and `personalAnswerQuiet`; the list reply and the support check are not yet) |
+| `action factors.enrol_start`, `factors.enrol_cancel`, `factors.remove_totp`, `factors.new_codes`, `factors.dismiss_codes`, `factors.use`, `factors.use_passkey`, `factors.stepup_cancel` | the authenticator, recovery codes, the factor choice, the step-up prompt | partly | 7 (`factorsAsk`, `factorsAnswer` for enrol_start, remove_totp and new_codes; the other factor actions and the stepup cancel are not yet, except `factors.stepup_cancel` which is covered by `stepUpCancel`) |
+| `submit` second, totpconfirm, stepup; `input` second, totpconfirm, stepup | the second-factor code, the enrolment confirmation, the re-authentication | partly | 7 (`secondSubmit`, `stepUpSubmit`; the totpconfirm form and the typed values are not yet) |
+| `http_result` factors.summary (entered with the desk), enrol_start, enrol_finish, remove_totp, new_codes | the factors section's state | partly | 7 (`factorsAnswer` for enrol_start, remove_totp and new_codes; the summary and enrol_finish are not yet) |
 | `http_result` factors.pk_challenge; `passkey_result` (second factor) | a passkey as the second factor | not covered | 7 |
-| `http_result` factors.second | the second factor completes a sign-in | not covered | 7 |
-| `http_result` factors.stepup; any refusal `step_up_required` | the refused action is asked again once confirmed; the step-up prompt is shown | not covered | 7 |
+| `http_result` factors.second | the second factor completes a sign-in | covered | 7 (the success is `signInAnswer`; `secondRefused` for a refusal) |
+| `http_result` factors.stepup; any refusal `step_up_required` | the refused action is asked again once confirmed; the step-up prompt is shown | partly | 7 (`stepUpRequired`, `stepUpAnswer`; the redispatch of the refused action is not yet) |
 
 #### Sessions list
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `action sessions.revoke`, `sessions.revoke_others`; `http_result` sessions.list (entered with the desk), sessions.revoke, sessions.revoke_others | the person's own sessions: list, end one, end the others | not covered | 8 |
+| `action sessions.revoke`, `sessions.revoke_others`; `http_result` sessions.list (entered with the desk), sessions.revoke, sessions.revoke_others | the person's own sessions: list, end one, end the others | partly | 8 (`deskAsk` for both revocations and `personalAnswerReload`/`personalAnswerQuiet` for their answers; the list reply, `sessions.list`, is not yet) |
 
 #### Sign-in methods: links, invitations, identity providers
 
@@ -508,41 +508,41 @@ what the B2 implementation will be proved against.
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `submit` editor; `input` editor | save in a status; the two-step saves of a new record | not covered | 9 |
-| `action editor.tab`, `editor.publish`, `editor.unpublish`, `editor.reload` | tabs, status changes, reload | not covered | 9 |
-| `http_result` editor.save | saved (the ids and version taken) or refused (the wording, focus); an unknown outcome keeps the key | not covered | 9 |
+| `submit` editor; `input` editor | save of an article the page's check passes (`editorSave`); a refused article sends nothing and the editor says so (`editorSaveRefused`); typed values (`inputEditor`); the two-step save of a new record is not yet | partly | 9 |
+| `action editor.publish`; `editor.unpublish`, `editor.tab`, `editor.reload` | publish sends the article when the check passes (`editorPublish`, `editorPublishRefused`); unpublish, tabs and reload are not yet | partly | 9 |
+| `http_result` editor.save | the answer reads the view again (`editorAnswerRefresh`); a refusal from the server ends the request, and its words and focus are not yet | partly | 9 |
 | `http_result` editor.preview; the preview tab | the preview of the body | not covered | 9 |
 | `action` row action (generated row buttons) and its confirmation | the row's action; the two-press confirmation | not covered | 9 |
 | `http_result` post.action | the row action done or refused | not covered | 9 |
-| The client's record-rule check before a save (`record-rules.js`) | a refusal before any request, in the kernel's words | not covered | 9 |
+| The client's record-rule check before a save (`record-rules.js`) | a refusal before any request, in the kernel's words | covered | 9 (the check is `recordOk`, a catalogue input; the drift log of `record-rules.js` is a later effect) |
 
 #### Settings
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `http_result` settings.definitions (entered with the page) | the settings list | not covered | 10 |
-| `submit` settings, `submit` settings:level:id, `input` settings; `http_result` settings.write | a save of one setting at one level, at the revision read; read again after the answer | not covered | 10 |
-| setting notice (`ws_message` event, kind setting) | the view is read again when the view reads the setting | not covered | 10 (with 5) |
+| `http_result` settings.definitions (entered with the page) | the settings list is held (`personalAnswerQuiet`); the page's entry that asks for it is a screen hook, not yet in the relation | partly | 10 |
+| `submit` settings, `submit` settings:level:id; `http_result` settings.write | a save at one level is sent for a value the setting takes (`settingsWrite`); success reads the definitions again (`personalAnswerReload`); the typed values (`input` settings) and the refusal's words are not yet | partly | 10 |
+| setting notice (`ws_message` event, kind setting) | the view is read again when the view reads the setting | partly | 10 (with 5: the view is read again when the live bindings say so, and the setting notice is one of them) |
 
 #### Tenant interface
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `http_result` ui.manifest | a manifest not older than the held one is accepted; its parts are asked for | not covered | 11 |
+| `http_result` ui.manifest | a manifest not older than the held one is taken in; an older one is ignored (`manifestNewer`, `manifestOlder`); the parts it names are not asked for yet | partly | 11 (the parts: `ui.part`, not yet) |
 | `http_result` ui.part | the part is held; a form whose field was removed names what was lost | not covered | 11 |
-| schema notice (`ws_message` event) | the manifest is read again | not covered | 11 (with 5) |
-| `action tenant.action` | a tenant action: confirmation, row prefill, opening a form | not covered | 11 |
-| `submit` tenant:id, `input` tenant:id | a tenant form's values and submission | not covered | 11 |
-| `http_result` tenant.submit, tenant.action | the operation's answer: toast, navigation, or the refusal's words | not covered | 11 |
+| schema notice (`ws_message` event) | the manifest is read again (`manifestAsk`; the notice itself is a live frame, slice 5) | partly | 11 |
+| `action tenant.action` | a tenant action is sent when the catalogue says it needs no confirmation or prefill (`tenantAction`); the two-press confirmation and the row prefill are not yet | partly | 11 |
+| `submit` tenant:id | a tenant form is sent for complete values (`tenantSubmit`); the typed values, `input` tenant:id, are not yet | partly | 11 |
+| `http_result` tenant.submit, tenant.action | the answer reads the view again (`tenantAnswerRefresh`); the toast, the navigation and the refusal's words are not yet | partly | 11 |
 
 #### Impact Lab
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `action lab.tab`, `lab.preset`, `lab.cancel`, `lab.apply`, `lab.replay`, `lab.verify`, `lab.diagnostics` | the Lab's controls; apply only when the projection is current | not covered | 12 |
-| `submit` lab, `input` lab | the projection's form | not covered | 12 |
-| `http_result` lab.overview (entered with the page), lab.run, lab.result, lab.apply, lab.replay, lab.verify, lab.diagnostics | the Lab's answers; polling the run | not covered | 12 |
-| `timer` lab.poll | polls the run | not covered | 12 |
+| `action lab.apply` | a finished projection that is held is applied (`labApply`); tabs, preset, cancel, replay, verify and diagnostics are not yet | partly | 12 |
+| `submit` lab; `input` lab | a projection is started with a complete form when none runs (`labRun`); the typed values (`input` lab) are not yet | partly | 12 |
+| `http_result` lab.run, lab.result, lab.apply | the start arms the poll (`labRunStarted`); a finished result is held (`labFinished`), a running one arms the next poll (`labStillRunning`); the apply is answered (`labApplyDone`); the overview, replay, verify and diagnostics are not yet | partly | 12 |
+| `timer` lab.poll | polls the run while it runs; a poll that is not the running one changes nothing (`labPollFires`, `labPollStale`) | covered | 12 |
 | `ws_message` run (verification, progress, cancelled, finished) | the run's frames | not covered | 12 |
 
 ### 7.2 Effects
@@ -552,16 +552,16 @@ what the B2 implementation will be proved against.
 | `http` (method, path, body, csrf, idempotency key, correlation) | every request | partly | 1 (id and kind); 3 (csrf token, idempotency key, correlation still open; the sign-in and search bodies are the form's values) |
 | `timer` request | every request (30 000 ms) | covered | 1 |
 | `timer` toast | every toast (5 s, or 9 s for a warning) | partly | 4 (expiry is covered; raising a toast is not yet a constructor) |
-| `timer` lab.poll | the Lab's run poll | not covered | 12 |
+| `timer` lab.poll | the Lab's run poll (see the message row above) | covered | 12 |
 | `timer` heartbeat, reconnect | the live connection's heartbeat and reconnect timers | covered | 5 |
-| `timer` emit | the delayed frames of the live connection | not covered | 5 |
+| `timer` emit | the delayed frames of the live connection (none for this machine) | covered | 5 |
 | `push_url` | an address change, with the replace flag | covered | 1 |
 | `scroll_top` | navigation | covered | 1 |
 | `ws_connect` | a socket open with the request token (at init with a session, and when a waiting socket connects) | partly | 5 (`reconnectFires` emits it with no token; the request token, and the socket at init, are not yet in the relation) |
 | `ws_send` | subscribe, ack, ping, and the Lab's cancel | partly | 5 (subscribe, ack and ping: covered; cancel: 12) |
 | `ws_close` | closing the socket, after a gap in the notices | covered | 5 (`eventGap`) |
 | `store` | the theme choice in storage | covered | 4 (`themeCycle` stores the mode's key) |
-| `passkey` (`create`, `get`) | the browser's passkey prompt | not covered | 6 (sign-in), 7 (second factor), 8 (registration) |
+| `passkey` (`create`, `get`) | the browser's passkey prompt | partly | 8 (`create` for the registration is covered by `personalCeremony`); 6 (sign-in, `get`), 7 (second factor, `get`) |
 | `log` | the record-rule disagreement, and the worker's diagnostics | not covered | 9 |
 | `navigate_away` | the redirect to an identity provider; emitted by `oidc.js` but absent from the `Effect` type in `types.js` (F5) | covered | 6 (`oidcRedirect`; `types.js` still needs the declaration, F5) |
 
@@ -690,22 +690,22 @@ How the existing theorems meet this one (no existing theorem is changed):
 | 2 (done) | Cold start: the session read at start, a view that answers before the session (dropped and read again), the session answer that makes the session known (`learnSession`); the bootstrapped view remains partly, see row `init` | 1 |
 | 3 (partly done) | Forms, for the sign-in and the search: the typed values, the complete and incomplete submissions, the refusal, the search's navigation (`inputLogin`, `signInIncomplete`, `loginRefused`, `searchSubmit`). Still open in this slice: the csrf token and idempotency key of a request (with the `http` effect), the words of a refusal, focus, and the typed draft (`Drafts.lean`) | 1 |
 | 4 (partly done) | Presentation: the theme and its store effect, the system theme, the menu, dismissing and expiring toasts, the dev expire request (`themeCycle`, `systemThemeSet`, `menuToggle`, `dismissToast`, `toastExpires`, `devExpire`, `sharedAnswer`). Still open: raising a toast (every row's toast), the menu closing on a navigation, and focus and announcements | 1 |
-| 5 (partly done) | Live connection (`welcomeFirst`, `welcomeResume`, `eventRefresh`, `eventQuiet`, `eventGap`, `resyncRefresh`, `pongBehind`, `pongCurrent`, `wsClosedLater`, `wsRefusedKeep`, `wsRefusedStop`, `reconnectFires`, `heartbeatDue`, `socketOpened`). Still open: the session frame when active, the delayed frames (emit), the request token on connect, the session frame of a membership notice, and the schema notice's manifest (11) | 1, 2 |
+| 5 (partly done) | Live connection, read from `client-live-flow-impl.js` (`welcomeFirst`, `welcomeResume`, `eventRefresh`, `eventQuiet`, `eventGap`, `resyncRefresh`, `pongBehind`, `pongCurrent`, `wsClosedLater`, `wsRefusedKeep`, `wsRefusedStop`, `reconnectFires`, `heartbeatDue`, `socketOpened`). Still open: the session frame when active, the request token on connect, the session read on a membership notice, the resync and reset outside the open state, and the schema notice's manifest (11) | 1, 2 |
 | 6 (partly done) | Sign-in methods: emailed links (request and answer), invitations (request and acceptance), the identity provider's start and redirect (`linkAsk`, `linkAnswer`, `inviteAsk`, `inviteAccepted`, `oidcStart`, `oidcRedirect`). Still open: the opened link's sign-in, passkey sign-in, the providers list, the provider's answer (`oidc.sign_in`), SAML, and the typed values of the invitation form | 3, 5 |
-| 7 | Second factors and step-up: the waiting sign-in, the factors section, recovery codes, the step-up prompt and its retry, the passkey as a second factor | 3, 6 |
-| 8 | The person's sessions and passkeys on the desk | 3, 7 |
-| 9 | Records: the editor's saves, publish and unpublish, preview, row actions, paging, the client's record-rule check and its log | 3, 5 |
-| 10 | Settings: the definitions, saves by level, setting notices | 3, 5 |
-| 11 | Tenant interface: manifest, parts, tenant screens by address, tenant forms and actions, lost drafts, the held part (`Loop`) | 3, 5 |
-| 12 | Impact Lab: overview, runs and their frames, polling, apply, replay, verify, diagnostics | 3, 5, 7 |
-| 13 | View derivation: the page builders per screen kind, the title and navigation, the tenant's composition and display; `render_sound` over the page | 1, 9, 10, 11, 12 |
+| 7 (partly done) | Second factors and step-up: the waiting sign-in and the second-factor code (`signInWaiting`, `secondSubmit`, `secondRefused`), the step-up (`stepUpRequired`, `stepUpSubmit`, `stepUpAnswer`, `stepUpCancel`), the factor requests and their answers (`factorsAsk`, `factorsAnswer`). Still open: the passkey as a second factor, the enrolment and recovery-code details, and the redispatch of a refused action once confirmed | 3, 6 |
+| 8 (partly done) | The person's sessions and passkeys on the desk: the revocations and the passkey removal (`deskAsk`), the registration (`passkeyAddAsk`, `personalCeremony`, `passkeyCompleted`, `passkeyDeclined`), and their answers (`personalAnswerReload`, `personalAnswerQuiet`). Still open: the list reads, the support check of passkeys, and the toasts | 3, 7 |
+| 9 (partly done) | Records: the editor's save and publish with the page's check (`editorSave`, `editorSaveRefused`, `editorPublish`, `editorPublishRefused`, `inputEditor`), and the answer that reads the view again (`editorAnswerRefresh`). Still open: unpublish, preview, row actions, paging, the two-step save of a new record, and the drift log | 3, 5 |
+| 10 (partly done) | Settings: a save at one level for a value the setting takes (`settingsWrite`), its success reading the list again (`personalAnswerReload`), the list reply (`personalAnswerQuiet`). Still open: the typed values, the refusal's words, entering the page, and the setting notice's binding | 3, 5 |
+| 11 (partly done) | Tenant interface: the manifest and its version (`manifestAsk`, `manifestNewer`, `manifestOlder`), tenant actions and forms sent for the person (`tenantAction`, `tenantSubmit`), and their answers (`tenantAnswerRefresh`). Still open: the parts, the tenant screens by address, the confirmations and row prefill, the typed values, the navigation of a tenant answer, and the lost drafts | 3, 5 |
+| 12 (partly done) | Impact Lab: the start of a projection and its poll, the held result, the apply and its answer (`labRun`, `labRunStarted`, `labPollFires`, `labPollStale`, `labFinished`, `labStillRunning`, `labApply`, `labApplyDone`). Still open: the overview, the typed values, the tabs, presets, cancel, replay, verify, diagnostics, and the run's frames | 3, 5, 7 |
+| 13 (partly done) | View derivation: the kind of page the view shows (`pageOf` in `Page.lean`: loading, missing, error, the sign-in page, a screen's data), with `page_data_is_own`, `visitor_sees_no_guarded_data` and `person_change_shows_loading`. Still open: the page builders per screen kind, the title and navigation, the composition and display of tenant pages, and `render_sound` over the page | 1, 9, 10, 11, 12 |
 | 14 | Browser storage: the view cache with stamps, the offline queue, the leader tab, drafts at rest (`docs/frontend.md`, follow-ups 4 to 9) | 3, 5 |
 
 ### 7.7 Counts
 
 The messages table has 80 rows (a row is one message, or one family of messages with the same handling):
-29 covered, 14 partly, 37 not covered (after slice 6). The effects table has 15 rows: 7 covered, 4 partly, 4 not
-covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
+35 covered, 33 partly, 12 not covered (after slice 12). The effects table has
+15 rows: 9 covered, 5 partly, 1 not covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
 

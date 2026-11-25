@@ -41,6 +41,9 @@ def requestDeadlineMs : Nat := 30000
 /-- The refused upgrades after which live updates stop (`WS_REFUSAL_LIMIT`). -/
 def refusalLimit : Nat := 5
 
+/-- The interval between polls of a projection that runs, in milliseconds (`POLL_MS`). -/
+def labPollMs : Nat := 1500
+
 /-- The effects of asking for `k` under request `id`: the request and its deadline. -/
 def fetch (id : Nat) (k : ReqKind) : List Effect :=
   [.http id k, .timer "request" id requestDeadlineMs]
@@ -92,7 +95,16 @@ def switched (s : State) (who : Option Principal) (r : Route) : State :=
     view := { status := .loading, model := none, request := some s.nextId }
     sessionKnown := true
     loginValues := []
-    loginError := false }
+    loginError := false
+    factorPrompt := false
+    stepUp := false
+    ceremony := none
+    editorValues := []
+    editorError := false
+    labRunning := false
+    labPoll := none
+    labReady := false
+    labApplied := false }
 
 /-- The kernel's transitions for the routing and session slice. -/
 inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect → Prop
@@ -239,6 +251,7 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   /-- A sign-in the server refused: the form shows the refusal, and the password is cleared. -/
   | loginRefused {s : State} {id : Nat} :
       pendingOf s id .signIn →
+      s.factorPrompt = false →
       Allowed cat s (.failure id)
         { s with
           pending := dropId s.pending id
@@ -308,65 +321,118 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   /-- The socket opened: the refusals are forgotten, and live updates may run again. -/
   | socketOpened {s : State} :
       Allowed cat s .wsOpen { s with wsRefusals := 0, wsStopped := false } []
-  /-- The welcome of a first connection: the subscription starts at the server's head, the view is
-  read again (what changed before it is not replayed), and the heartbeat starts. -/
-  | welcomeFirst {s : State} {head : Nat} :
+  /-- The welcome of a first connection (`lv-first-welcome-i`): the subscription starts from the beginning,
+  the head becomes the acknowledged number, the counts start again, the heartbeat is the one the welcome
+  announces, and the view is read again, since what changed before it is not replayed. -/
+  | welcomeFirst {s : State} {head hb : Nat} :
+      s.wsState = .connecting →
       s.wsLast = 0 →
-      Allowed cat s (.welcome head)
+      Allowed cat s (.welcome head hb)
         { askView s s.route with
           wsState := .opened
           wsLast := head
+          wsAttempts := 0
+          wsLastN := 0
+          wsMissed := 0
+          wsHeartbeatMs := hb
           nextId := s.nextId + 2
           wsHeartbeat := some (s.nextId + 1) }
-        ([.wsSend "subscribe"] ++ fetch s.nextId .view ++ [.timer "heartbeat" (s.nextId + 1) cat.heartbeatMs])
-  /-- The welcome of a resumed connection: the subscription goes on from the last notice; nothing is read
-  again. -/
-  | welcomeResume {s : State} {head : Nat} :
+        ([.wsSend "subscribe"] ++ fetch s.nextId .view ++ [.timer "heartbeat" (s.nextId + 1) hb])
+  /-- The welcome of a resumed connection (`lv-resume-welcome-i`): the subscription goes on from the last
+  notice, and nothing is read again. -/
+  | welcomeResume {s : State} {head hb : Nat} :
+      s.wsState = .connecting →
       s.wsLast ≠ 0 →
-      Allowed cat s (.welcome head)
+      Allowed cat s (.welcome head hb)
         { s with
           wsState := .opened
+          wsAttempts := 0
+          wsLastN := 0
+          wsMissed := 0
+          wsHeartbeatMs := hb
           nextId := s.nextId + 1
           wsHeartbeat := some s.nextId }
-        [.wsSend "subscribe", .timer "heartbeat" s.nextId cat.heartbeatMs]
-  /-- The next notice: it is acknowledged, and the page's live bindings read the view again for it. -/
-  | eventRefresh {s : State} {seq : Nat} :
-      seq = s.wsLast + 1 →
-      Allowed cat s (.frameEvent seq true) { askView s s.route with wsLast := seq }
+        [.wsSend "subscribe", .timer "heartbeat" s.nextId hb]
+  /-- A notice that is the next in the count and newer than the last acknowledged one, with the page's
+  live bindings reading the view again for it (`lv-frame-advance-i`). -/
+  | frameAdvanceRefresh {s : State} {n seq : Nat} :
+      s.wsState = .opened →
+      n = s.wsLastN + 1 →
+      s.wsLast < seq →
+      Allowed cat s (.frameEvent n seq true)
+        { askView s s.route with wsLastN := n, wsLast := seq }
         ([.wsSend "ack"] ++ fetch s.nextId .view)
-  /-- The next notice, and no live binding reads the view again for it: acknowledged. -/
-  | eventQuiet {s : State} {seq : Nat} :
-      seq = s.wsLast + 1 →
-      Allowed cat s (.frameEvent seq false) { s with wsLast := seq } [.wsSend "ack"]
-  /-- A notice that is not the next one: a frame went missing, so the socket is closed and the view is
-  read again. -/
-  | eventGap {s : State} {seq : Nat} {refresh : Bool} :
-      seq ≠ s.wsLast + 1 →
-      Allowed cat s (.frameEvent seq refresh) (askView s s.route) ([.wsClose] ++ fetch s.nextId .view)
-  /-- A resync: the page is too far behind to replay, so it carries on from the head, reading the view
-  again. -/
+  /-- The same notice, and no live binding reads the view again for it: acknowledged, and the count and the
+  acknowledged number move on. -/
+  | frameAdvanceQuiet {s : State} {n seq : Nat} :
+      s.wsState = .opened →
+      n = s.wsLastN + 1 →
+      s.wsLast < seq →
+      Allowed cat s (.frameEvent n seq false) { s with wsLastN := n, wsLast := seq } [.wsSend "ack"]
+  /-- A notice in the count but not newer than the last acknowledged one, with the view read again
+  (`lv-frame-same-i`): acknowledged, and the count moves on. -/
+  | frameSameRefresh {s : State} {n seq : Nat} :
+      s.wsState = .opened →
+      n = s.wsLastN + 1 →
+      seq ≤ s.wsLast →
+      Allowed cat s (.frameEvent n seq true) { askView s s.route with wsLastN := n }
+        ([.wsSend "ack"] ++ fetch s.nextId .view)
+  /-- The same, with no live binding reading the view again. -/
+  | frameSameQuiet {s : State} {n seq : Nat} :
+      s.wsState = .opened →
+      n = s.wsLastN + 1 →
+      seq ≤ s.wsLast →
+      Allowed cat s (.frameEvent n seq false) { s with wsLastN := n } [.wsSend "ack"]
+  /-- A notice out of the count (`lv-frame-gap-i`): a frame went missing, so the acknowledged number starts
+  again from 0, the socket is closed, and the view is read again. -/
+  | frameGap {s : State} {n seq : Nat} {refresh : Bool} :
+      s.wsState = .opened →
+      n ≠ s.wsLastN + 1 →
+      Allowed cat s (.frameEvent n seq refresh)
+        { askView s s.route with wsLast := 0 }
+        ([.wsClose] ++ fetch s.nextId .view)
+  /-- A resync (`lv-resync-i`): the acknowledged number moves to the head, and the view is read again. -/
   | resyncRefresh {s : State} {head : Nat} :
+      s.wsState = .opened →
       Allowed cat s (.resync head) { askView s s.route with wsLast := head } (fetch s.nextId .view)
-  /-- A pong that names a head ahead of the notices the page has: the view is read again. -/
+  /-- A pong ahead of the page's notices (`lv-pong-advance-i`): the acknowledged number moves to the head,
+  the missed pings start again, and the view is read again. -/
   | pongBehind {s : State} {head : Nat} :
+      s.wsState = .opened →
       s.wsLast < head →
-      Allowed cat s (.pong head) (askView s s.route) (fetch s.nextId .view)
-  /-- A pong that is not ahead of the page's notices changes nothing. -/
+      Allowed cat s (.pong head) { askView s s.route with wsLast := head, wsMissed := 0 }
+        (fetch s.nextId .view)
+  /-- A pong that is not ahead (`lv-pong-same-i`): the missed pings start again. -/
   | pongCurrent {s : State} {head : Nat} :
+      s.wsState = .opened →
       head ≤ s.wsLast →
-      Allowed cat s (.pong head) s []
-  /-- The socket closed after it had opened: the page waits and tries again after the reconnect delay. -/
-  | wsClosedLater {s : State} :
+      Allowed cat s (.pong head) { s with wsMissed := 0 } []
+  /-- The socket closed after it had opened (`lv-closed-open-1-i`): the page waits half a second, and the
+  heartbeat is cancelled. -/
+  | closedOpen {s : State} :
       s.wsState = .opened →
       Allowed cat s (.wsClosed false)
         { s with
           wsState := .waiting
+          wsAttempts := s.wsAttempts + 1
           wsHeartbeat := none
           wsReconnect := some s.nextId
           nextId := s.nextId + 1 }
-        [.timer "reconnect" s.nextId cat.reconnectMs]
-  /-- An upgrade was refused, and that is not the limit yet: the session is read again (the refusal may be
-  an expired request token), and the page waits to try again. -/
+        [.timer "reconnect" s.nextId 500]
+  /-- The socket closed before it opened, not refused (`lv-closed-connecting-*-i`): the page waits the
+  back-off for the closes so far. -/
+  | closedConnecting {s : State} :
+      s.wsState = .connecting →
+      Allowed cat s (.wsClosed false)
+        { s with
+          wsState := .waiting
+          wsAttempts := s.wsAttempts + 1
+          wsHeartbeat := none
+          wsReconnect := some s.nextId
+          nextId := s.nextId + 1 }
+        [.timer "reconnect" s.nextId (backoffMs s.wsAttempts)]
+  /-- An upgrade was refused, and that is not the limit yet: the refusal is counted, the session is read
+  again (the refusal may be an expired request token), and the page waits the back-off. -/
   | wsRefusedKeep {s : State} :
       s.wsState = .connecting →
       s.wsRefusals + 1 < refusalLimit →
@@ -374,12 +440,14 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
         { s with
           wsState := .waiting
           wsRefusals := s.wsRefusals + 1
+          wsAttempts := s.wsAttempts + 1
           wsHeartbeat := none
           wsReconnect := some (s.nextId + 1)
           nextId := s.nextId + 2
           pending := ⟨s.nextId, .session, s.generation⟩ :: s.pending }
-        (fetch s.nextId .session ++ [.timer "reconnect" (s.nextId + 1) cat.reconnectMs])
-  /-- The refusal that reaches the limit: live updates stop, and no attempt is made again. -/
+        (fetch s.nextId .session ++ [.timer "reconnect" (s.nextId + 1) (backoffMs s.wsAttempts)])
+  /-- The refusal that reaches the limit: live updates stop, and the session is read. The reconnect timer
+  still runs, as the machine's does, but its attempt is ignored once live updates have stopped. -/
   | wsRefusedStop {s : State} :
       s.wsState = .connecting →
       refusalLimit ≤ s.wsRefusals + 1 →
@@ -387,13 +455,14 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
         { s with
           wsState := .waiting
           wsRefusals := s.wsRefusals + 1
+          wsAttempts := s.wsAttempts + 1
           wsStopped := true
           wsHeartbeat := none
-          wsReconnect := none
-          nextId := s.nextId + 1
+          wsReconnect := some (s.nextId + 1)
+          nextId := s.nextId + 2
           pending := ⟨s.nextId, .session, s.generation⟩ :: s.pending }
-        (fetch s.nextId .session)
-  /-- The reconnect timer runs out while live updates have not stopped: the socket connects again. -/
+        (fetch s.nextId .session ++ [.timer "reconnect" (s.nextId + 1) (backoffMs s.wsAttempts)])
+  /-- The reconnect timer runs out while live updates have not stopped: the socket is opened again. -/
   | reconnectFires {s : State} {token : Nat} :
       s.wsReconnect = some token →
       s.wsStopped = false →
@@ -404,19 +473,36 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   | reconnectStale {s : State} {token : Nat} :
       (s.wsReconnect ≠ some token ∨ s.wsStopped = true) →
       Allowed cat s (.timer "reconnect" token) s []
-  /-- The heartbeat is due on an open connection: a ping goes, and the next heartbeat is armed. -/
+  /-- The heartbeat is due and the last two pings went unanswered: the socket is closed (`lv-give-up-i`). -/
+  | heartbeatGiveUp {s : State} {token : Nat} :
+      s.wsHeartbeat = some token →
+      s.wsState = .opened →
+      2 ≤ s.wsMissed →
+      Allowed cat s (.timer "heartbeat" token) s [.wsClose]
+  /-- The heartbeat is due: a ping goes, and the next heartbeat is armed (`lv-ping-i`). -/
   | heartbeatDue {s : State} {token : Nat} :
       s.wsHeartbeat = some token →
       s.wsState = .opened →
+      s.wsMissed < 2 →
       Allowed cat s (.timer "heartbeat" token)
         { s with
+          wsMissed := s.wsMissed + 1
           wsHeartbeat := some s.nextId
           nextId := s.nextId + 1 }
-        [.wsSend "ping", .timer "heartbeat" s.nextId cat.heartbeatMs]
+        [.wsSend "ping", .timer "heartbeat" s.nextId s.wsHeartbeatMs]
   /-- A heartbeat timer that is not the running one, or whose connection is not open, changes nothing. -/
   | heartbeatStale {s : State} {token : Nat} :
       (s.wsHeartbeat ≠ some token ∨ s.wsState ≠ .opened) →
       Allowed cat s (.timer "heartbeat" token) s []
+  /-- The page resets the connection while it is opening or open: the acknowledged number starts again, and
+  the socket is closed (`lv-reset-connecting-i`, `lv-reset-open-i`). -/
+  | resetLive {s : State} :
+      (s.wsState = .connecting ∨ s.wsState = .opened) →
+      Allowed cat s .liveReset { s with wsLast := 0 } [.wsClose]
+  /-- The page resets the connection while it waits to reconnect (`lv-reset-waiting-i`). -/
+  | resetWaiting {s : State} :
+      s.wsState = .waiting →
+      Allowed cat s .liveReset { s with wsLast := 0 } []
   /-- The emailed-link form is complete: the request is sent; it is the same answer whether or not the
   address has an account. -/
   | linkAsk {s : State} {values : List (String × String)} :
@@ -464,6 +550,281 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
       pendingOf s id .shared →
       Allowed cat s (.oidcRedirect id href) { s with pending := dropId s.pending id }
         [.navigateAway href]
+
+  /-- The first factor was right and a second is needed (`second_factor` in the reply): the sign-in form
+  waits for the code, and no session is set. -/
+  | signInWaiting {s : State} {id : Nat} :
+      pendingOf s id .signIn →
+      s.factorPrompt = false →
+      Allowed cat s (.signInWaiting id) { s with pending := dropId s.pending id, factorPrompt := true } []
+  /-- The second-factor code is sent, for a sign-in that waits for it. -/
+  | secondSubmit {s : State} {values : List (String × String)} :
+      s.factorPrompt = true →
+      cat.validSecondFactor values = true →
+      Allowed cat s (.submit "second" values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .signIn, s.generation⟩ :: s.pending }
+        (fetch s.nextId .signIn)
+  /-- The second factor was refused: the prompt says so, and it waits again. -/
+  | secondRefused {s : State} {id : Nat} :
+      s.factorPrompt = true →
+      pendingOf s id .signIn →
+      Allowed cat s (.failure id) { s with pending := dropId s.pending id, loginError := true } []
+  /-- A request was refused for want of a fresh authentication: the request is no longer in flight, and the
+  step-up prompt is shown. The refused action is asked again by the page once confirmed (not yet in the
+  relation). -/
+  | stepUpRequired {s : State} {id : Nat} :
+      (∃ p ∈ s.pending, p.id = id ∧ p.kind ≠ ReqKind.view ∧ p.gen = s.generation) →
+      Allowed cat s (.stepUpRequired id) { s with pending := dropId s.pending id, stepUp := true } []
+  /-- The step-up form is sent. -/
+  | stepUpSubmit {s : State} {values : List (String × String)} :
+      s.stepUp = true →
+      cat.validStepUp values = true →
+      Allowed cat s (.submit "stepup" values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .shared, s.generation⟩ :: s.pending }
+        (fetch s.nextId .shared)
+  /-- The step-up is confirmed: the prompt goes. -/
+  | stepUpAnswer {s : State} {id : Nat} :
+      pendingOf s id .shared →
+      Allowed cat s (.stepUpAnswer id) { s with pending := dropId s.pending id, stepUp := false } []
+  /-- The step-up prompt is cancelled. -/
+  | stepUpCancel {s : State} {arg : String} :
+      Allowed cat s (.action "factors.stepup_cancel" arg) { s with stepUp := false } []
+  /-- An enrolment, a removal of the authenticator, or new recovery codes is asked for the person signed in. -/
+  | factorsAsk {s : State} {name arg : String} :
+      name ∈ factorsRequests →
+      Allowed cat s (.action name arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- A factor request is answered. -/
+  | factorsAnswer {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.factorsAnswer id) { s with pending := dropId s.pending id } []
+
+  /-- A session or passkey action of the desk is asked for the person signed in: the revocation of a session
+  or of the others, or the removal of a passkey. -/
+  | deskAsk {s : State} {name arg : String} :
+      name ∈ deskRequests →
+      Allowed cat s (.action name arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- Adding a passkey starts its registration: the challenge is asked for. -/
+  | passkeyAddAsk {s : State} {arg : String} :
+      Allowed cat s (.action "passkeys.add" arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- A request for the person's lists is answered, and the answer changed a list: the list is read again. -/
+  | personalAnswerReload {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.personalAnswer id true)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: dropId s.pending id }
+        (fetch s.nextId .personal)
+  /-- A request for the person's lists is answered, and nothing changed. -/
+  | personalAnswerQuiet {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.personalAnswer id false) { s with pending := dropId s.pending id } []
+  /-- The registration's challenge came back: the browser's passkey prompt is asked for, under the next id. -/
+  | personalCeremony {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.personalChallenge id)
+        { s with
+          pending := dropId s.pending id
+          ceremony := some s.nextId
+          nextId := s.nextId + 1 }
+        [.passkey "create" s.nextId]
+  /-- The browser's prompt completed: the passkey is registered (`register_finish`). -/
+  | passkeyCompleted {s : State} {id : Nat} :
+      s.ceremony = some id →
+      Allowed cat s (.passkeyResult id true)
+        { s with
+          ceremony := none
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- The browser's prompt was cancelled or did not complete: the ceremony ends. -/
+  | passkeyDeclined {s : State} {id : Nat} :
+      s.ceremony = some id →
+      Allowed cat s (.passkeyResult id false) { s with ceremony := none } []
+
+  /-- A typed value of the article editor: the field takes it; nothing is sent. -/
+  | inputEditor {s : State} {name value : String} :
+      Allowed cat s (.input "editor" name value)
+        { s with editorValues := setField s.editorValues name value } []
+  /-- The article is saved, and the page's check passes it: the save is sent (`editor.save`). -/
+  | editorSave {s : State} {values : List (String × String)} :
+      cat.recordOk values = true →
+      Allowed cat s (.submit "editor" values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending
+          editorError := false }
+        (fetch s.nextId .personal)
+  /-- The page's check refuses the article: nothing is sent, and the editor says so before any request. -/
+  | editorSaveRefused {s : State} {values : List (String × String)} :
+      cat.recordOk values = false →
+      Allowed cat s (.submit "editor" values) { s with editorError := true } []
+  /-- Publishing sends the editor's article, when the page's check passes it. -/
+  | editorPublish {s : State} {arg : String} :
+      cat.recordOk s.editorValues = true →
+      Allowed cat s (.action "editor.publish" arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending
+          editorError := false }
+        (fetch s.nextId .personal)
+  /-- Publishing a refused article sends nothing. -/
+  | editorPublishRefused {s : State} {arg : String} :
+      cat.recordOk s.editorValues = false →
+      Allowed cat s (.action "editor.publish" arg) { s with editorError := true } []
+  /-- The save is answered: the view of the article is read again. -/
+  | editorAnswerRefresh {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.editorAnswer id)
+        { s with
+          route := s.route
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .view, s.generation⟩ :: dropViews (dropId s.pending id)
+          view := { status := .loading, model := s.view.model, request := some s.nextId }
+          editorError := false }
+        (fetch s.nextId .view)
+
+  /-- A setting is saved at one level (the form is `settings:<level>:<id>`), with a value the setting takes:
+  the write is sent for the person signed in (`settings.write`). -/
+  | settingsWrite {s : State} {form : String} {values : List (String × String)} :
+      form.startsWith "settings:" = true →
+      cat.validSetting values = true →
+      Allowed cat s (.submit form values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+
+  /-- The tenant's interface definition is asked for: the manifest is read (`ui.manifest`). -/
+  | manifestAsk {s : State} :
+      Allowed cat s .manifestAsk
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .shared, s.generation⟩ :: s.pending }
+        (fetch s.nextId .shared)
+  /-- A manifest that is not older than the one held is taken in. -/
+  | manifestNewer {s : State} {id version : Nat} :
+      pendingOf s id .shared →
+      s.manifestVersion ≤ version →
+      Allowed cat s (.manifestAnswer id version)
+        { s with pending := dropId s.pending id, manifestVersion := version } []
+  /-- A manifest older than the one held is ignored. -/
+  | manifestOlder {s : State} {id version : Nat} :
+      pendingOf s id .shared →
+      version < s.manifestVersion →
+      Allowed cat s (.manifestAnswer id version) { s with pending := dropId s.pending id } []
+  /-- A tenant action is sent for the person signed in (`tenant.action`). -/
+  | tenantAction {s : State} {arg : String} :
+      cat.tenantActionOk arg = true →
+      Allowed cat s (.action "tenant.action" arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- A tenant form is sent for the person signed in (`tenant.submit`). -/
+  | tenantSubmit {s : State} {form : String} {values : List (String × String)} :
+      form.startsWith "tenant:" = true →
+      cat.validTenantForm values = true →
+      Allowed cat s (.submit form values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- A tenant operation is answered: the view is read again, whatever the operation's own message. -/
+  | tenantAnswerRefresh {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.tenantAnswer id)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .view, s.generation⟩ :: dropViews (dropId s.pending id)
+          view := { status := .loading, model := s.view.model, request := some s.nextId } }
+        (fetch s.nextId .view)
+
+  /-- A projection is started with a complete form (`lab.run`), when none is running. -/
+  | labRun {s : State} {values : List (String × String)} :
+      s.labRunning = false →
+      cat.validLabRun values = true →
+      Allowed cat s (.submit "lab" values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending
+          labApplied := false }
+        (fetch s.nextId .personal)
+  /-- The start is answered: the run is in progress, and its first poll is armed. -/
+  | labRunStarted {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.labRunAnswer id)
+        { s with
+          pending := dropId s.pending id
+          labRunning := true
+          labPoll := some s.nextId
+          nextId := s.nextId + 1 }
+        [.timer "lab.poll" s.nextId labPollMs]
+  /-- A poll fires while the run is in progress: the result is asked for. -/
+  | labPollFires {s : State} {token : Nat} :
+      s.labPoll = some token →
+      s.labRunning = true →
+      Allowed cat s (.timer "lab.poll" token)
+        { s with
+          labPoll := none
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- A poll that is not the running one changes nothing. -/
+  | labPollStale {s : State} {token : Nat} :
+      s.labPoll ≠ some token →
+      Allowed cat s (.timer "lab.poll" token) s []
+  /-- The result is answered finished: the projection is held and may be applied. -/
+  | labFinished {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.labResultAnswer id true)
+        { s with
+          pending := dropId s.pending id
+          labRunning := false
+          labReady := true }
+        []
+  /-- The result is answered still running: the next poll is armed. -/
+  | labStillRunning {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.labResultAnswer id false)
+        { s with
+          pending := dropId s.pending id
+          labPoll := some s.nextId
+          nextId := s.nextId + 1 }
+        [.timer "lab.poll" s.nextId labPollMs]
+  /-- A finished projection that is held is applied (`lab.apply`). -/
+  | labApply {s : State} {arg : String} :
+      s.labReady = true →
+      s.labRunning = false →
+      Allowed cat s (.action "lab.apply" arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending }
+        (fetch s.nextId .personal)
+  /-- The apply is answered: the projection was applied. -/
+  | labApplyDone {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.labApplyAnswer id)
+        { s with
+          pending := dropId s.pending id
+          labApplied := true
+          labReady := false }
+        []
 
 /-- The states the kernel can reach from the initial state by allowed steps. -/
 inductive Reachable (cat : Catalogue) : State → Prop
@@ -557,7 +918,7 @@ not hold the view; it keeps what it holds and reads the view again once the sess
 theorem cold_answer_changes_no_model (cat : Catalogue) {s s' : State} {id : Nat} {who : Option Principal}
     {scr : Screen} {es : List Effect} (ha : Allowed cat s (.viewAnswer id who scr) s' es)
     (hk : s.sessionKnown = false) : s'.view.model = s.view.model := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-- **A cold start awaits the session.** The state it leads to does not know the session, and a session
 read is in flight. -/
@@ -575,7 +936,7 @@ theorem login_sent_only_complete (cat : Catalogue) {s s' : State} {m : Msg}
     {values : List (String × String)} {es : List Effect}
     (hm : m = .submit "login" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
     cat.validSignIn values = true := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-- **A refused sign-in does not change the session.** Whatever the refusal of a request does to the
 form, it leaves the person signed in, or not, as they were. -/
@@ -586,7 +947,7 @@ theorem failure_keeps_session (cat : Catalogue) {s s' : State} {id : Nat} {es : 
 /-- **A typed value is kept in the form and sends nothing.** -/
 theorem input_login_sends_nothing (cat : Catalogue) {s s' : State} {m : Msg} {name value : String}
     {es : List Effect} (hm : m = .input "login" name value) (ha : Allowed cat s m s' es) : es = [] := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-! ### Presentation (slice 4) -/
 
@@ -599,7 +960,7 @@ mode to the next one and stores exactly that mode. -/
 theorem theme_choice_stored (cat : Catalogue) {s s' : State} {m : Msg} {arg : String} {es : List Effect}
     (hm : m = .action "theme" arg) (ha : Allowed cat s m s' es) :
     s'.themeMode = s.themeMode.next ∧ es = [.store "strata.theme" s.themeMode.next.key] := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all [factorsRequests, deskRequests]
 
 /-- **A change of person keeps the colour scheme.** The scheme is the browser's, not the person's. -/
 theorem session_change_keeps_theme (cat : Catalogue) {s s' : State} {m : Msg} {es : List Effect}
@@ -614,22 +975,23 @@ theorem dismissed_toast_gone (cat : Catalogue) {s s' : State} {id : Nat} {es : L
 /-- **An expired toast is gone.** -/
 theorem toast_expiry_removes (cat : Catalogue) {s s' : State} {m : Msg} {token : Nat} {es : List Effect}
     (hm : m = .timer "toast" token) (ha : Allowed cat s m s' es) : token ∉ s'.toasts := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-! ### The live connection (slice 5) -/
 
-/-- **An in-order notice is acknowledged, and only an in-order one moves the acknowledged number.** -/
-theorem in_order_notice_acked (cat : Catalogue) {s s' : State} {m : Msg} {seq : Nat} {refresh : Bool}
-    {es : List Effect} (hm : m = .frameEvent seq refresh) (ha : Allowed cat s m s' es)
-    (hin : seq = s.wsLast + 1) : s'.wsLast = seq := by
-  cases ha <;> simp_all
+/-- **An advancing notice is acknowledged, and it moves the count and the acknowledged number together.** -/
+theorem notice_advance_moves_both (cat : Catalogue) {s s' : State} {m : Msg} {n seq : Nat}
+    {refresh : Bool} {es : List Effect} (hm : m = .frameEvent n seq refresh) (ha : Allowed cat s m s' es)
+    (hopen : s.wsState = .opened) (hn : n = s.wsLastN + 1) (hs : s.wsLast < seq) :
+    s'.wsLastN = n ∧ s'.wsLast = seq ∧ Effect.wsSend "ack" ∈ es := by
+  cases ha <;> simp_all <;> omega
 
-/-- **A page that has stopped live updates never tries to reconnect.** A reconnect timer that leads to a
+/-- **A page whose live updates have stopped never tries to reconnect.** A reconnect timer that leads to a
 connection attempt runs only while live updates have not stopped. -/
 theorem stopped_never_reconnects (cat : Catalogue) {s s' : State} {m : Msg} {token : Nat}
     {es : List Effect} (hm : m = .timer "reconnect" token) (ha : Allowed cat s m s' es)
     (hes : es ≠ []) : s.wsStopped = false := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all <;> omega
 
 /-- **A refused upgrade is counted, and the count reaching the limit stops live updates.** -/
 theorem refusal_counts_and_stops (cat : Catalogue) {s s' : State} {m : Msg} {es : List Effect}
@@ -637,6 +999,12 @@ theorem refusal_counts_and_stops (cat : Catalogue) {s s' : State} {m : Msg} {es 
     (hnot : s.wsStopped = false) :
     s'.wsRefusals = s.wsRefusals + 1 ∧ (s'.wsStopped = true ↔ refusalLimit ≤ s'.wsRefusals) := by
   cases ha <;> simp_all [refusalLimit] <;> omega
+
+/-- **A close before the socket opened waits the back-off of the closes so far.** -/
+theorem reconnect_waits_backoff (cat : Catalogue) {s s' : State} {m : Msg} {es : List Effect}
+    (hm : m = .wsClosed false) (ha : Allowed cat s m s' es) (hconn : s.wsState = .connecting) :
+    es = [.timer "reconnect" s.nextId (backoffMs s.wsAttempts)] := by
+  cases ha <;> simp_all <;> omega
 
 /-! ### The sign-in methods (slice 6) -/
 
@@ -657,7 +1025,105 @@ theorem link_sent_only_complete (cat : Catalogue) {s s' : State} {m : Msg}
     {values : List (String × String)} {es : List Effect}
     (hm : m = .submit "link" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
     cat.validLink values = true := by
+  cases ha <;> simp_all <;> omega
+
+/-! ### Second factors and step-up (slice 7) -/
+
+/-- **A second-factor code is sent only for a sign-in that is waiting for it, with a complete form.** -/
+theorem second_factor_sent_only_when_waiting (cat : Catalogue) {s s' : State} {m : Msg}
+    {values : List (String × String)} {es : List Effect}
+    (hm : m = .submit "second" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
+    s.factorPrompt = true ∧ cat.validSecondFactor values = true := by
+  cases ha <;> simp_all [factorsRequests, deskRequests]
+
+/-- **A sign-in that is accepted ends the second-factor prompt.** -/
+theorem sign_in_ends_prompt (cat : Catalogue) {s s' : State} {id : Nat} {who : Principal} {target : Route}
+    {es : List Effect} (ha : Allowed cat s (.signInAnswer id who target) s' es) :
+    s'.factorPrompt = false := by
+  cases ha; rfl
+
+/-- **A refused second factor keeps the person's session as it was and the prompt waiting.** -/
+theorem refused_second_keeps_prompt (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}
+    (ha : Allowed cat s (.failure id) s' es) (hp : s.factorPrompt = true) :
+    s'.session = s.session ∧ s'.factorPrompt = true := by
   cases ha <;> simp_all
+
+/-! ### The desk's sessions and passkeys (slice 8) -/
+
+/-- **A passkey prompt is asked for only while a ceremony is in flight, and its answer is for that ceremony.**
+-/
+theorem passkey_answer_for_ceremony (cat : Catalogue) {s s' : State} {id : Nat} {ok : Bool}
+    {es : List Effect} (ha : Allowed cat s (.passkeyResult id ok) s' es) (hes : es ≠ []) :
+    s.ceremony = some id := by
+  cases ha <;> simp_all
+
+/-- **A change to the person's list is read again, and only that.** -/
+theorem changed_list_is_read_again (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}
+    (ha : Allowed cat s (.personalAnswer id true) s' es) :
+    es = fetch s.nextId .personal := by
+  cases ha <;> rfl
+
+/-! ### Records: the editor (slice 9) -/
+
+/-- **An article is saved only when the page's check passes it.** Refused on the page, it sends nothing. -/
+theorem save_sent_only_checked (cat : Catalogue) {s s' : State} {m : Msg}
+    {values : List (String × String)} {es : List Effect}
+    (hm : m = .submit "editor" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
+    cat.recordOk values = true := by
+  cases ha <;> simp_all [factorsRequests, deskRequests]
+
+/-- **An article is published only when the page's check passes the editor's article.** -/
+theorem publish_sent_only_checked (cat : Catalogue) {s s' : State} {m : Msg} {arg : String}
+    {es : List Effect} (hm : m = .action "editor.publish" arg) (ha : Allowed cat s m s' es)
+    (hes : es ≠ []) : cat.recordOk s.editorValues = true := by
+  cases ha <;> simp_all [factorsRequests, deskRequests]
+
+/-- **A save that is answered reads the article's view again.** -/
+theorem editor_answer_reads_view (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}
+    (ha : Allowed cat s (.editorAnswer id) s' es) : es = fetch s.nextId .view := by
+  cases ha; rfl
+
+/-! ### Settings (slice 10) -/
+
+/-! ### The tenant interface (slice 11) -/
+
+/-- **A manifest never lowers the schema version the page holds.** -/
+theorem manifest_version_never_drops (cat : Catalogue) {s s' : State} {id version : Nat} {es : List Effect}
+    (ha : Allowed cat s (.manifestAnswer id version) s' es) :
+    s.manifestVersion ≤ s'.manifestVersion := by
+  cases ha <;> simp_all
+
+/-- **A tenant action is sent only when the catalogue says it needs no confirmation or prefill.** -/
+theorem tenant_action_sent_only_allowed (cat : Catalogue) {s s' : State} {m : Msg} {arg : String}
+    {es : List Effect} (hm : m = .action "tenant.action" arg) (ha : Allowed cat s m s' es)
+    (hes : es ≠ []) : cat.tenantActionOk arg = true := by
+  cases ha <;> simp_all [factorsRequests, deskRequests]
+
+/-- **A tenant operation that is answered reads the view again.** -/
+theorem tenant_answer_reads_view (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}
+    (ha : Allowed cat s (.tenantAnswer id) s' es) : es = fetch s.nextId .view := by
+  cases ha; rfl
+
+/-! ### The Impact Lab (slice 12) -/
+
+/-- **A projection is started only with a complete form, and only when none is running.** -/
+theorem lab_run_sent_only_complete (cat : Catalogue) {s s' : State} {m : Msg}
+    {values : List (String × String)} {es : List Effect}
+    (hm : m = .submit "lab" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
+    s.labRunning = false ∧ cat.validLabRun values = true := by
+  cases ha <;> simp_all
+
+/-- **A projection is polled only while it runs.** -/
+theorem poll_only_while_running (cat : Catalogue) {s s' : State} {m : Msg} {token : Nat}
+    {es : List Effect} (hm : m = .timer "lab.poll" token) (ha : Allowed cat s m s' es)
+    (hes : es ≠ []) : s.labRunning = true := by
+  cases ha <;> simp_all
+
+/-- **A projection is applied only once it is finished and held.** -/
+theorem apply_only_when_ready (cat : Catalogue) {s s' : State} {m : Msg} {arg : String}
+    {es : List Effect} (hm : m = .action "lab.apply" arg) (ha : Allowed cat s m s' es)
+    (hes : es ≠ []) : s.labReady = true := by
+  cases ha <;> simp_all [factorsRequests, deskRequests]
 
 /-! ## Non-vacuity -/
 
@@ -668,11 +1134,16 @@ def sampleCatalogue : Catalogue :=
     signOutOn := fun _ => true
     validSignIn := fun _ => true
     searchTarget := fun _ => root
-    reconnectMs := 1000
-    heartbeatMs := 15000
     validLink := fun _ => true
     validInvite := fun _ => true
-    validProvider := fun _ => true }
+    validProvider := fun _ => true
+    validSecondFactor := fun _ => true
+    validStepUp := fun _ => true
+    recordOk := fun _ => true
+    validSetting := fun _ => true
+    tenantActionOk := fun _ => true
+    validTenantForm := fun _ => true
+    validLabRun := fun _ => true }
 
 /-- The relation is not empty where the theorems look: a page that starts for a person, reads the
 view of its screen and holds it is a reachable state, holding a model read for that person. -/

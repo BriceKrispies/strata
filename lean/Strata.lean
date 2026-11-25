@@ -29,3 +29,4 @@ import Strata.Temporal.LockService
 
 import Strata.Browser.Types
 import Strata.Browser.Session
+import Strata.Browser.Page

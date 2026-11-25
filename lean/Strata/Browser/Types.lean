@@ -43,16 +43,27 @@ structure Catalogue where
   validSignIn : List (String × String) → Bool
   /-- The address a search with these values goes to (the search form's success navigation). -/
   searchTarget : List (String × String) → Route
-  /-- The delay before a reconnect attempt, in milliseconds (the machine's wait, with no jitter). -/
-  reconnectMs : Nat
-  /-- The interval of the heartbeat, in milliseconds. -/
-  heartbeatMs : Nat
   /-- The emailed-link request form is complete. -/
   validLink : List (String × String) → Bool
   /-- The invitation form (the password) is complete. -/
   validInvite : List (String × String) → Bool
   /-- The identity provider named by an action is one the site offers. -/
   validProvider : String → Bool
+  /-- The second-factor form (a code) is complete. -/
+  validSecondFactor : List (String × String) → Bool
+  /-- The step-up form (a password or a code) is complete. -/
+  validStepUp : List (String × String) → Bool
+  /-- The page's check of an article (the record rules the server sent for the editor) passes it. -/
+  recordOk : List (String × String) → Bool
+  /-- The setting's value, as the form sends it, is one the setting takes. -/
+  validSetting : List (String × String) → Bool
+  /-- The tenant action needs no confirmation or row prefill: it is sent as it is. -/
+  tenantActionOk : String → Bool
+  /-- The tenant form's values are complete. -/
+  validTenantForm : List (String × String) → Bool
+  /-- The projection's form (the change, the existing records, the source, the steps, the seed, the faults)
+  is complete. -/
+  validLabRun : List (String × String) → Bool
 
 /-- The kind of a request the kernel has in flight. `session`, `view`, `signIn` and `signOut` are the
 kinds slice 1 names. `personal` stands for every request whose reply belongs to the person signed in
@@ -123,6 +134,15 @@ inductive WsState where
   | waiting
   deriving DecidableEq
 
+/-- The delay before a reconnect after a close, by the number of closes before it (the machine's
+back-off: 0.5, 1, 2, 4 seconds, then 8 seconds). -/
+def backoffMs : Nat → Nat
+  | 0 => 500
+  | 1 => 1000
+  | 2 => 2000
+  | 3 => 4000
+  | _ => 8000
+
 /-- The kernel's state, for the routing and session slice. Later slices add their fields here:
 forms, the live connection, the tenant interface, the Lab and the rest of the page state. -/
 structure State where
@@ -162,8 +182,36 @@ structure State where
   wsReconnect : Option Nat := none
   /-- The token of the running heartbeat timer, if any. -/
   wsHeartbeat : Option Nat := none
+  /-- The sequence number of the last notice the connection has taken in (its frame counter). -/
+  wsLastN : Nat := 0
+  /-- Closes since the last welcome: the back-off of the next reconnect. -/
+  wsAttempts : Nat := 0
+  /-- Heartbeats sent without a pong since the last pong. -/
+  wsMissed : Nat := 0
+  /-- The heartbeat interval the welcome announced (10 seconds until the first welcome). -/
+  wsHeartbeatMs : Nat := 10000
   /-- The emailed-link request was answered: the page says a link is on its way. -/
   linkSent : Bool := false
+  /-- The first factor was right and a second factor is needed: the sign-in waits for the code. -/
+  factorPrompt : Bool := false
+  /-- A request was refused for want of a fresh authentication: the step-up prompt is shown. -/
+  stepUp : Bool := false
+  /-- The passkey ceremony in flight: the request id the browser's prompt answers under. -/
+  ceremony : Option Nat := none
+  /-- The editor's typed values. -/
+  editorValues : List (String × String) := []
+  /-- The editor shows that its article was refused (by the page's check or the server). -/
+  editorError : Bool := false
+  /-- The schema version of the interface definition the page holds (0 before the first manifest). -/
+  manifestVersion : Nat := 0
+  /-- A projection is running (started, and not yet finished or cancelled). -/
+  labRunning : Bool := false
+  /-- The token of the running poll of the projection, if any. -/
+  labPoll : Option Nat := none
+  /-- A finished projection is held and may be applied. -/
+  labReady : Bool := false
+  /-- The projection shown was applied. -/
+  labApplied : Bool := false
 
 /-- Effects out of the kernel. `http` and `timer "request"` are the request and its deadline; the
 other effects are the page's own (URL, scroll), the live connection, storage, the browser's passkey
@@ -211,15 +259,53 @@ inductive Msg where
   | sharedAnswer (id : Nat)
   /-- The decoded frames of the live connection: the welcome (with the server's head), a notice (its
   sequence number, and whether the page's live bindings read the view again for it), a resync, a pong. -/
-  | welcome (head : Nat)
-  | frameEvent (seq : Nat) (refresh : Bool)
+  | welcome (head heartbeatMs : Nat)
+  | frameEvent (n seq : Nat) (refresh : Bool)
   | resync (head : Nat)
   | pong (head : Nat)
+  /-- The page resets the live connection (a sign-in or a sign-out, `ui-live-reset`). -/
+  | liveReset
   /-- The answers of the sign-in methods: a link was requested (sent, whether or not the address has an
   account); an invitation was accepted, and the page goes to the reply's address; an identity provider's
   start answered with the address to send the browser to. -/
   | linkAnswer (id : Nat)
   | inviteAccepted (id : Nat) (target : Route)
   | oidcRedirect (id : Nat) (href : String)
+  /-- The second factor is asked for: the first factor was right (`second_factor` in the sign-in's reply). -/
+  | signInWaiting (id : Nat)
+  /-- A request was refused for want of a fresh authentication (`step_up_required`). -/
+  | stepUpRequired (id : Nat)
+  /-- The step-up was confirmed (the reply to the step-up form). -/
+  | stepUpAnswer (id : Nat)
+  /-- A factor request (enrol, remove, new recovery codes) was answered. -/
+  | factorsAnswer (id : Nat)
+  /-- A request for the person's own lists (sessions, passkeys) was answered; `reload` says whether the
+  answer changed the list, so that it is read again. -/
+  | personalAnswer (id : Nat) (reload : Bool)
+  /-- The passkey registration started: its challenge came back, and the browser's prompt is asked for. -/
+  | personalChallenge (id : Nat)
+  /-- An article save was answered: the view is read again. -/
+  | editorAnswer (id : Nat)
+  /-- The tenant's interface definition is asked for (on a schema notice, or when an address needs it). -/
+  | manifestAsk
+  /-- The manifest arrived, with its schema version. -/
+  | manifestAnswer (id version : Nat)
+  /-- A tenant operation (a form or an action of a tenant screen) was answered: the view is read again. -/
+  | tenantAnswer (id : Nat)
+  /-- The projection's start was answered: the run is in progress, and it is polled. -/
+  | labRunAnswer (id : Nat)
+  /-- A poll of the projection was answered: finished (its result is held) or still running. -/
+  | labResultAnswer (id : Nat) (finished : Bool)
+  /-- The apply of the projection was answered. -/
+  | labApplyAnswer (id : Nat)
+
+/-- The desk's actions that make a request for the person signed in: the revocation of a session or of the
+others, and the removal of a passkey (`sessions.js`, `passkeys.js`). -/
+def deskRequests : List String :=
+  ["sessions.revoke", "sessions.revoke_others", "passkeys.remove"]
+
+/-- The factor actions that make a request for the signed-in person (`factors.*` in `factors.js`). -/
+def factorsRequests : List String :=
+  ["factors.enrol_start", "factors.remove_totp", "factors.new_codes"]
 
 end Strata.Browser
