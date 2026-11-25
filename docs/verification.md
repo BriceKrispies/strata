@@ -646,12 +646,24 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
   unique`), as the model's `isList` check; a composite constraint (`defineUnique`) is refused for
   fewer than two or more than four fields, a repeated field, an undeclared field, a list field, or
   an empty message, as `uniqueFieldsOk`; a strict change over records that do not conform or agree
-  is `MigrationRejected` in both (`schemaChangeRefused`, `Reject`). The kernel's other checks
+  is `MigrationRejected` in both, over the types the change touches (`schemaChangeRefused` on `scopedTypes`, `Reject`). The kernel's other checks
   (definition authority, last owner, products, ledger, pins) apply to change kinds the model does
   not have.
 - **The check order is kept.** Object type first, then the record, the permission, the version, then
   the referrer scan or the validation. The referrer scan considers every type; the validation
   resolves a reference in the type its field names.
+- **A strict schema change is checked over the types it touches.** The kernel re-validates the
+  records of the object type a change names and, through `touched_objects` in `transition.rs`, the
+  types a new reference field refers to (a `DefineField` or `DefineRelationship` naming a reference,
+  and a `MoveField` target). A composite constraint touches only its own type. The model's
+  `Intent.touched` gives that set (the named type, plus `fieldTargets` of a `setRequired` or
+  `setUnique` field), and `schemaChangeRefused` is applied to `scopedTypes` of it, not to the whole
+  tenant. A grandfathered record of an unrelated type therefore does not refuse a strict change, as
+  the random tests found (`h-strict-change-scoped-to-the-touched-type`). A reference into a type
+  with a grandfathered record does refuse it (`h-strict-change-revalidates-a-reference-target`).
+  `strict_schema_change_scoped` states the touched types' conformance and the others' records as
+  they were; `strict_schema_change_conforms` and `strict_schema_change_unique` derive the tenant's
+  conformance and uniqueness from it, given that the tenant held them before.
 - **Restated theorems.** Several slice-2 and slice-3 statements were stated over the one table.
   They are restated over the typed tables, with the same content: `setRequired_spec`,
   `setUnique_spec`, `defineUnique_spec` (the counter and the records of no type, and the one type's

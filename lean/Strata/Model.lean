@@ -557,10 +557,22 @@ def schemaViolated (L : Limits) (types : List (TypeId × ObjType)) : Bool :=
   types.any (fun e => tableViolated L e.2)
 
 /-- The one refusal every strict schema change makes: `Reject` refuses the change when the records
-    would violate the schema of some type of the resulting tenant (`schemaViolated`). A lax change
-    never refuses. -/
+    of the object types it re-validates would violate their schema (`schemaViolated`, over the
+    types given, which the caller scopes with `scopedTypes`). A lax change never refuses. -/
 def schemaChangeRefused (L : Limits) (types : List (TypeId × ObjType)) (strict : Bool) : Bool :=
   strict && schemaViolated L types
+
+/-- The object types a field refers to (`Ty.target?`, which the kernel's `ref_target` agrees with). -/
+def fieldTargets (schema : Schema) (f : FieldId) : List TypeId :=
+  match schema.lookup f with
+  | some d => d.ty.target?.toList
+  | none => []
+
+/-- The object types a schema change re-validates: the types whose ids are listed (the kernel's
+    `touched_objects`). A change to a field that refers to another type re-validates that type's
+    records too; a change to a composite constraint re-validates only its own type. -/
+def scopedTypes (types : List (TypeId × ObjType)) (ids : List TypeId) : List (TypeId × ObjType) :=
+  types.filter (fun e => ids.contains e.1)
 
 /-- A composite definition the schema can hold: two to four fields, none repeated, each one of the
     schema and not a list (the kernel's `unique_problems`). -/
@@ -649,7 +661,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
       | none => .error .invalidSchema
       | some o =>
         let t' := t.putType ty { o with schema := makeRequired o.schema f }
-        if schemaChangeRefused t.limits t'.types strict then .error .migrationRejected
+        if schemaChangeRefused t.limits (scopedTypes t'.types (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
         else .ok t'
   | .setUnique ty f strict =>
     if p != t.owner then .error .unauthorized
@@ -663,7 +675,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
           if d.ty.isList then .error .invalidSchema
           else
             let t' := t.putType ty { o with schema := makeUnique o.schema f }
-            if schemaChangeRefused t.limits t'.types strict then .error .migrationRejected
+            if schemaChangeRefused t.limits (scopedTypes t'.types (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
             else .ok t'
   | .defineUnique ty fs =>
     if p != t.owner then .error .unauthorized
@@ -675,7 +687,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
         else if dupFields o.records fs then .error .uniqueViolated
         else
           let t' := t.putType ty { o with uniques := o.uniques ++ [fs] }
-          if schemaChangeRefused t.limits t'.types true then .error .migrationRejected
+          if schemaChangeRefused t.limits (scopedTypes t'.types [ty]) true then .error .migrationRejected
           else .ok t'
 
 /-- The transition function of the model: one intent, in one context, against the world. -/
@@ -700,6 +712,18 @@ def authorized (t : Tenant) (p : PrincipalId) : Intent → Bool
   | .setRequired ty _ _ => p == t.owner && (t.typ? ty).isSome
   | .setUnique ty _ _ => p == t.owner && (t.typ? ty).isSome
   | .defineUnique ty _ => p == t.owner && (t.typ? ty).isSome
+
+/-- The object types a schema intent re-validates, as the kernel's `touched_objects` gives them: the
+    type it names, and, for a field, the types the field refers to. Other intents touch none. -/
+def Intent.touched (t : Tenant) : Intent → List TypeId
+  | .setRequired ty f _ => ty :: (match t.typ? ty with
+      | some o => fieldTargets o.schema f
+      | none => [])
+  | .setUnique ty f _ => ty :: (match t.typ? ty with
+      | some o => fieldTargets o.schema f
+      | none => [])
+  | .defineUnique ty _ => [ty]
+  | _ => []
 
 /-- A schema change that leaves existing records as they are is the one kind of intent that is
     allowed to break record conformance or uniqueness. Every other intent is strict. -/

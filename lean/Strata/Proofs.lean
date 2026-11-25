@@ -370,8 +370,8 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : PrincipalId) (i : Intent)
             exact hq₀
         exact hids T o ho q₀ hq₀'
   | setRequired ty f strict =>
-    have hcu := strict_schema_change_conforms t t' p (.setRequired ty f strict) rfl hstrict h
-    refine ⟨hcu.1, ?_⟩
+    have hcu := strict_schema_change_conforms t t' p (.setRequired ty f strict) rfl hstrict h hconf
+    refine ⟨hcu.2.2, ?_⟩
     cases hT : t.typ? ty with
     | none => simp only [stepTenant, hT] at h; split at h <;> cases h
     | some o =>
@@ -380,8 +380,8 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : PrincipalId) (i : Intent)
       all_goals try cases h
       exact idsBelow_of_putType_schema hT rfl hids
   | setUnique ty f strict =>
-    have hcu := strict_schema_change_conforms t t' p (.setUnique ty f strict) rfl hstrict h
-    refine ⟨hcu.1, ?_⟩
+    have hcu := strict_schema_change_conforms t t' p (.setUnique ty f strict) rfl hstrict h hconf
+    refine ⟨hcu.2.2, ?_⟩
     cases hT : t.typ? ty with
     | none => simp only [stepTenant, hT] at h; split at h <;> cases h
     | some o =>
@@ -390,8 +390,8 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : PrincipalId) (i : Intent)
       all_goals try cases h
       exact idsBelow_of_putType_schema hT rfl hids
   | defineUnique ty fs =>
-    have hcu := strict_schema_change_conforms t t' p (.defineUnique ty fs) rfl hstrict h
-    refine ⟨hcu.1, ?_⟩
+    have hcu := strict_schema_change_conforms t t' p (.defineUnique ty fs) rfl hstrict h hconf
+    refine ⟨hcu.2.2, ?_⟩
     cases hT : t.typ? ty with
     | none => simp only [stepTenant, hT] at h; split at h <;> cases h
     | some o =>

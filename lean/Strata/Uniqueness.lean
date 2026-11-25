@@ -668,10 +668,35 @@ theorem types_keys_afterDelete (t : Tenant) (ty id : TypeId) :
 
 /-! ## Lemmas: a schema change that is accepted leaves the tables conforming -/
 
-/-- A strict schema change that is accepted leaves every table passing the check. -/
+/-- An accepted schema change writes the entry of one object type, and that type is one it touches. -/
+theorem schema_step_putType (t t' : Tenant) (p : PrincipalId) (i : Intent)
+    (hi : i.isSchema = true) (h : stepTenant t p i = .ok t') :
+    ∃ ty o', t' = t.putType ty o' ∧ ty ∈ i.touched t := by
+  cases i with
+  | create ty fs => simp [Intent.isSchema] at hi
+  | update ty id fs ev => simp [Intent.isSchema] at hi
+  | delete ty id ev => simp [Intent.isSchema] at hi
+  | setRequired ty f strict =>
+    simp only [stepTenant] at h
+    repeat' split at h
+    all_goals (try cases h)
+    all_goals exact ⟨_, _, rfl, by simp [Intent.touched]⟩
+  | setUnique ty f strict =>
+    simp only [stepTenant] at h
+    repeat' split at h
+    all_goals (try cases h)
+    all_goals exact ⟨_, _, rfl, by simp [Intent.touched]⟩
+  | defineUnique ty fs =>
+    simp only [stepTenant] at h
+    repeat' split at h
+    all_goals (try cases h)
+    all_goals exact ⟨_, _, rfl, by simp [Intent.touched]⟩
+
+/-- A strict schema change that is accepted leaves every object type it touches (`Intent.touched`)
+    passing the check, where the check is over those types alone. -/
 theorem schemaViolated_of_strict (t t' : Tenant) (p : PrincipalId) (i : Intent)
     (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t') :
-    schemaViolated t.limits t'.types = false := by
+    schemaViolated t.limits (scopedTypes t'.types (i.touched t)) = false := by
   cases i with
   | create ty fs => simp [Intent.isSchema] at hi
   | update ty id fs ev => simp [Intent.isSchema] at hi
@@ -691,7 +716,7 @@ theorem schemaViolated_of_strict (t t' : Tenant) (p : PrincipalId) (i : Intent)
         · rename_i hc
           have ht := Except.ok.inj h
           subst ht
-          simpa [schemaChangeRefused] using hc
+          simpa [schemaChangeRefused, Intent.touched, hT] using hc
   | setUnique ty f strict =>
     simp only [Intent.strict] at hs
     subst hs
@@ -711,7 +736,7 @@ theorem schemaViolated_of_strict (t t' : Tenant) (p : PrincipalId) (i : Intent)
             · rename_i hc
               have ht := Except.ok.inj h
               subst ht
-              simpa [schemaChangeRefused] using hc
+              simpa [schemaChangeRefused, Intent.touched, hT] using hc
   | defineUnique ty fs =>
     simp only [stepTenant] at h
     split at h
@@ -729,28 +754,72 @@ theorem schemaViolated_of_strict (t t' : Tenant) (p : PrincipalId) (i : Intent)
             · rename_i hc
               have ht := Except.ok.inj h
               subst ht
-              simpa [schemaChangeRefused] using hc
+              simpa [schemaChangeRefused, Intent.touched] using hc
 
-/-- An accepted strict schema change leaves every record conforming and every table's unique
-    constraints holding. -/
-theorem strict_schema_change_conforms (t t' : Tenant) (p : PrincipalId) (i : Intent)
+/-- An accepted strict schema change, against the records as they were: each object type it touches
+    (`Intent.touched`) holds its records conforming and its constraints after it, and every other
+    type's records are as they were. The check is over the touched types only, so a grandfathered
+    record of an untouched type does not refuse the change. -/
+theorem strict_schema_change_scoped (t t' : Tenant) (p : PrincipalId) (i : Intent)
     (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t') :
-    t'.Conform ∧ t'.UniqueRecords := by
+    (∀ T o, t'.typ? T = some o → T ∈ i.touched t →
+      (∀ q ∈ o.records, conforms o.schema q.2 = true) ∧
+      (∀ fd ∈ o.schema, fd.2.unique = true → ∀ q₁ ∈ o.records, ∀ q₂ ∈ o.records, q₁.1 ≠ q₂.1 →
+        agreeOn [fd.1] q₁.2.fields q₂.2.fields = false) ∧
+      (∀ u ∈ o.uniques, ∀ q₁ ∈ o.records, ∀ q₂ ∈ o.records, q₁.1 ≠ q₂.1 →
+        agreeOn u q₁.2.fields q₂.2.fields = false)) ∧
+    (∀ T, T ∉ i.touched t → t'.typ? T = t.typ? T) := by
   have hv := schemaViolated_of_strict t t' p i hi hs h
-  have key : ∀ T o, t'.typ? T = some o →
+  obtain ⟨ty, o', rfl, hty⟩ := schema_step_putType t _ p i hi h
+  have touchedKey : ∀ T o, (t.putType ty o').typ? T = some o → T ∈ i.touched t →
       (∀ q ∈ o.records, conforms o.schema q.2 = true) ∧
       (∀ fd ∈ o.schema, fd.2.unique = true → ∀ q₁ ∈ o.records, ∀ q₂ ∈ o.records, q₁.1 ≠ q₂.1 →
         agreeOn [fd.1] q₁.2.fields q₂.2.fields = false) ∧
       (∀ u ∈ o.uniques, ∀ q₁ ∈ o.records, ∀ q₂ ∈ o.records, q₁.1 ≠ q₂.1 →
         agreeOn u q₁.2.fields q₂.2.fields = false) := by
-    intro T o ho
-    have hmem : (T, o) ∈ t'.types := lookup_mem ho
-    exact tableViolated_false (L := t.limits) (tableViolated_of_schemaViolated hv hmem)
-  refine ⟨fun T o ho q hq => (key T o ho).1 q hq, fun T o ho q₁ hq₁ q₂ hq₂ hne => ⟨?_, ?_⟩⟩
-  · intro fd hfd hu
-    exact (key T o ho).2.1 fd hfd hu q₁ hq₁ q₂ hq₂ hne
-  · intro u hu
-    exact (key T o ho).2.2 u hu q₁ hq₁ q₂ hq₂ hne
+    intro T o ho hT
+    have hmem : (T, o) ∈ (t.putType ty o').types := lookup_mem ho
+    have hsc : (T, o) ∈ scopedTypes (t.putType ty o').types (i.touched t) :=
+      List.mem_filter.mpr ⟨hmem, by simpa using hT⟩
+    exact tableViolated_false (L := t.limits) (tableViolated_of_schemaViolated hv hsc)
+  have untouchedNe : ∀ T, T ∉ i.touched t → T ≠ ty := fun T hT e => hT (by subst e; exact hty)
+  exact ⟨fun T o ho hT => touchedKey T o ho hT,
+    fun T hT => typ?_putType_other t ty T o' (untouchedNe T hT)⟩
+
+/-- An accepted strict schema change on a tenant whose records conform: the records of each touched
+    object type conform after it, the records of every other type are as they were (see
+    `strict_schema_change_scoped`), and the tenant conforms. -/
+theorem strict_schema_change_conforms (t t' : Tenant) (p : PrincipalId) (i : Intent)
+    (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t')
+    (hconf : t.Conform) :
+    (∀ T o, t'.typ? T = some o → T ∈ i.touched t →
+      (∀ q ∈ o.records, conforms o.schema q.2 = true) ∧
+      (∀ fd ∈ o.schema, fd.2.unique = true → ∀ q₁ ∈ o.records, ∀ q₂ ∈ o.records, q₁.1 ≠ q₂.1 →
+        agreeOn [fd.1] q₁.2.fields q₂.2.fields = false) ∧
+      (∀ u ∈ o.uniques, ∀ q₁ ∈ o.records, ∀ q₂ ∈ o.records, q₁.1 ≠ q₂.1 →
+        agreeOn u q₁.2.fields q₂.2.fields = false)) ∧
+    (∀ T, T ∉ i.touched t → t'.typ? T = t.typ? T) ∧
+    t'.Conform := by
+  obtain ⟨hT, hU⟩ := strict_schema_change_scoped t t' p i hi hs h
+  refine ⟨hT, hU, fun T o ho q hq => ?_⟩
+  by_cases hTouched : T ∈ i.touched t
+  · exact (hT T o ho hTouched).1 q hq
+  · rw [hU T hTouched] at ho
+    exact hconf T o ho q hq
+
+/-- An accepted strict schema change leaves the unique constraints of every table holding, on a
+    tenant whose constraints hold: the touched types are checked, the others are as they were. -/
+theorem strict_schema_change_unique (t t' : Tenant) (p : PrincipalId) (i : Intent)
+    (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t')
+    (hu : t.UniqueRecords) : t'.UniqueRecords := by
+  obtain ⟨hT, hU⟩ := strict_schema_change_scoped t t' p i hi hs h
+  intro T o ho q₁ hq₁ q₂ hq₂ hne
+  by_cases hTouched : T ∈ i.touched t
+  · have k := hT T o ho hTouched
+    exact ⟨fun fd hfd hu' => k.2.1 fd hfd hu' q₁ hq₁ q₂ hq₂ hne,
+      fun u hu' => k.2.2 u hu' q₁ hq₁ q₂ hq₂ hne⟩
+  · rw [hU T hTouched] at ho
+    exact hu T o ho q₁ hq₁ q₂ hq₂ hne
 
 /-! ## The invariant through accepted steps -/
 
@@ -1063,11 +1132,11 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : PrincipalId) (i : Inten
       exact uniqOn_delClear o.schema o.uniques ty id (hu T o ho) hsub
         (fun q hq => (hd.2 T o ho).2 q hq) q₁ hq₁ q₂ hq₂ hne
   | setRequired ty f strict =>
-    exact (strict_schema_change_conforms t t' p _ rfl hstrict h).2
+    exact strict_schema_change_unique t t' p _ rfl hstrict h hu
   | setUnique ty f strict =>
-    exact (strict_schema_change_conforms t t' p _ rfl hstrict h).2
+    exact strict_schema_change_unique t t' p _ rfl hstrict h hu
   | defineUnique ty fs =>
-    exact (strict_schema_change_conforms t t' p _ rfl hstrict h).2
+    exact strict_schema_change_unique t t' p _ rfl hstrict h hu
 
 /-! ## Duplicates refused -/
 
@@ -1131,10 +1200,11 @@ theorem set_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (t
     left; right
     exact ⟨(f, { d with unique := true }), hfu, by simp [hdup]⟩
   have hv : schemaChangeRefused t.limits
-      (t.putType ty { o with schema := makeUnique o.schema f }).types true = true := by
+      (scopedTypes (t.putType ty { o with schema := makeUnique o.schema f }).types
+        (ty :: fieldTargets o.schema f)) true = true := by
     unfold schemaChangeRefused schemaViolated
     simp only [Bool.true_and, List.any_eq_true]
-    exact ⟨_, hmem, hviol⟩
+    exact ⟨_, List.mem_filter.mpr ⟨hmem, by simp⟩, hviol⟩
   have hs : step w (.setUnique ty f true) c = .error .migrationRejected := by
     simp [step, ht, stepTenant, ho, hp, hd, hl, hv]
   exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩

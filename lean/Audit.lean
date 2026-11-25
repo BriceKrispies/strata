@@ -647,3 +647,10 @@ import Strata
 #print axioms Strata.write_refused_dangling_across_types
 #print axioms Strata.update_refused_dangling_across_types
 #print axioms Strata.unknown_type_schema_refused
+
+-- Slice 4 correction: a strict schema change is checked over the object types it touches
+#print axioms Strata.schemaViolated_of_strict
+#print axioms Strata.schema_step_putType
+#print axioms Strata.strict_schema_change_scoped
+#print axioms Strata.strict_schema_change_conforms
+#print axioms Strata.strict_schema_change_unique

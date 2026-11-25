@@ -1579,3 +1579,14 @@ op 1 100 type 9 composite 1 2
 op 1 100 type 9 unique 1 strict
 op 1 100 type 9 unique 1 lax
 end
+scenario h-strict-change-scoped-to-the-touched-type
+op 1 101 create 1=s:fir
+op 1 100 require 4 lax
+op 1 100 type 2 require 4 strict
+end
+scenario h-strict-change-revalidates-a-reference-target
+op 1 100 create 1=s:oak
+op 1 100 require 4 lax
+op 1 100 type 2 require 1 strict
+op 1 100 type 2 require 2 strict
+end

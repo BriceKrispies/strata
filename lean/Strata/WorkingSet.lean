@@ -372,7 +372,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
       | some o =>
         let types' := putTypeList (assembleTypes h all) ty
           { schema := makeRequired o.schema f, uniques := o.uniques, records := tableOf all ty }
-        if schemaChangeRefused h.limits types' strict then .error .migrationRejected
+        if schemaChangeRefused h.limits (scopedTypes types' (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
         else .ok (.schema ty { schema := makeRequired o.schema f, uniques := o.uniques })
   | .setUnique ty f strict =>
     if p != h.owner then .error .unauthorized
@@ -387,7 +387,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
           else
             let types' := putTypeList (assembleTypes h all) ty
               { schema := makeUnique o.schema f, uniques := o.uniques, records := tableOf all ty }
-            if schemaChangeRefused h.limits types' strict then .error .migrationRejected
+            if schemaChangeRefused h.limits (scopedTypes types' (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
             else .ok (.schema ty { schema := makeUnique o.schema f, uniques := o.uniques })
   | .defineUnique ty fs =>
     if p != h.owner then .error .unauthorized
@@ -400,7 +400,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
         else
           let types' := putTypeList (assembleTypes h all) ty
             { schema := o.schema, uniques := o.uniques ++ [fs], records := tableOf all ty }
-          if schemaChangeRefused h.limits types' true then .error .migrationRejected
+          if schemaChangeRefused h.limits (scopedTypes types' [ty]) true then .error .migrationRejected
           else .ok (.schema ty { schema := o.schema, uniques := o.uniques ++ [fs] })
 
 /-- A decision made through any source of key values. It reads keys of tenant `x` only. -/
@@ -621,8 +621,9 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
           · simp only [tables_lookup, hT, Option.map_some, Option.getD_some, header_owner,
               header_limits, Tenant.putType, ho, hl, hd, TypeHead.ofObj, bne_self_eq_false,
               Bool.false_eq_true, ite_false, if_false, Bool.not_true]
-            by_cases hs : schemaChangeRefused t.limits (putTypeList t.types ty
+            by_cases hs : schemaChangeRefused t.limits (scopedTypes (putTypeList t.types ty
                 { schema := makeUnique o.schema f, uniques := o.uniques, records := o.records })
+                (ty :: fieldTargets o.schema f))
                 strict = true
             · simp [hs, Except.map]
             · simp [hs, Except.map, Delta.apply, Tenant.modType, hT, Tenant.putType]
@@ -640,8 +641,8 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
           by_cases hd : dupFields o.records fs = true
           · simp [hd, Except.map]
           · simp only [hd, Bool.false_eq_true, ite_false, if_false]
-            by_cases hs : schemaChangeRefused t.limits (putTypeList t.types ty
-                { schema := o.schema, uniques := o.uniques ++ [fs], records := o.records }) true = true
+            by_cases hs : schemaChangeRefused t.limits (scopedTypes (putTypeList t.types ty
+                { schema := o.schema, uniques := o.uniques ++ [fs], records := o.records }) [ty]) true = true
             · split <;> split <;> simp_all [Except.map, Tenant.putType]
             · simp [hs, Except.map, Delta.apply, Tenant.modType, hT, Tenant.putType]
         · simp [ho, hT, hok, TypeHead.ofObj, Except.map]
