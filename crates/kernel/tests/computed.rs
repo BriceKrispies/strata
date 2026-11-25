@@ -130,7 +130,11 @@ fn record(world: &World, name: &str, id: RecordId) -> Arc<Record> {
         .expect("the record exists")
 }
 
-fn refresh(world: &World, now: i64, after: Option<RecordId>) -> Result<(World, Output), DomainError> {
+fn refresh(
+    world: &World,
+    now: i64,
+    after: Option<RecordId>,
+) -> Result<(World, Output), DomainError> {
     let intent = Intent::RefreshComputed {
         object: object("task"),
         after,
@@ -185,7 +189,11 @@ fn a_computed_field_with_a_default_or_a_writer_is_refused() {
         },
     )
     .expect_err("a unique computed field is refused");
-    assert!(error.message.contains("cannot be unique"), "{}", error.message);
+    assert!(
+        error.message.contains("cannot be unique"),
+        "{}",
+        error.message
+    );
 
     // A computed field is never written: a create that names one is refused.
     let error = step(
@@ -202,7 +210,11 @@ fn a_computed_field_with_a_default_or_a_writer_is_refused() {
     )
     .expect_err("a write of a computed field is refused");
     assert_eq!(error.kind, ErrorKind::InvalidIntent);
-    assert!(error.message.contains("computed by the kernel"), "{}", error.message);
+    assert!(
+        error.message.contains("computed by the kernel"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]
@@ -226,7 +238,11 @@ fn a_computed_field_reads_no_reader_and_no_other_computed_field() {
         },
     )
     .expect_err("a computed field that reads the principal is refused");
-    assert!(error.message.contains("principal or a role"), "{}", error.message);
+    assert!(
+        error.message.contains("principal or a role"),
+        "{}",
+        error.message
+    );
 
     let reads_computed = FieldDef {
         computed: Some(var(Scope::Record, "overdue")),
@@ -246,7 +262,11 @@ fn a_computed_field_reads_no_reader_and_no_other_computed_field() {
         },
     )
     .expect_err("a computed field that reads a computed field is refused");
-    assert!(error.message.contains("computed field overdue"), "{}", error.message);
+    assert!(
+        error.message.contains("computed field overdue"),
+        "{}",
+        error.message
+    );
 }
 
 // Verifies: KRN-2925
@@ -262,8 +282,8 @@ fn a_write_recomputes_the_referring_record_in_its_commit() {
     let before = record(&world, "ticket", referring).version;
 
     // The write to the referred record and the recomputation of its referrer are one commit.
-    let (world, transition) = step(&world, "owner", 9_102, retitle(first, "final"))
-        .expect("the title changes");
+    let (world, transition) =
+        step(&world, "owner", 9_102, retitle(first, "final")).expect("the title changes");
     assert_eq!(
         record(&world, "ticket", referring).get(&field("task_title")),
         &text("final")
@@ -274,7 +294,10 @@ fn a_write_recomputes_the_referring_record_in_its_commit() {
         .iter()
         .filter(|event| matches!(&event.body, EventBody::RecordUpdated { after, .. } if after.object == object("ticket")))
         .count();
-    assert_eq!(referrer_events, 1, "the referrer's change is an event of the same commit");
+    assert_eq!(
+        referrer_events, 1,
+        "the referrer's change is an event of the same commit"
+    );
 
     // A write to a field no computed field reads leaves the referrer alone.
     let (world, _) = step(
@@ -475,5 +498,9 @@ fn a_workflow_that_sets_a_computed_field_is_refused() {
     )
     .expect_err("a workflow that sets a computed field is refused");
     assert_eq!(error.kind, ErrorKind::InvalidSchema);
-    assert!(error.message.contains("computed field task.overdue"), "{}", error.message);
+    assert!(
+        error.message.contains("computed field task.overdue"),
+        "{}",
+        error.message
+    );
 }
