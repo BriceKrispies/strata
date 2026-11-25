@@ -605,7 +605,7 @@ static tree with a closed set of node kinds and no expressions.**
   `types.rs:4895-4912`; `default` is evaluated once at creation). A condition over computed state
   ("overdue", "over budget") is therefore a stored field that the product's operations or an automation
   keep up to date, and a composite tests that field with `equals`; the body language never computes.
-  A kernel-computed field, recomputed on every write and on the clock, is proposed as WG-5513.
+  A kernel-computed field holds a value the kernel derives from the record and the record it refers to, recomputed in the commit of each write that changes an input and on the clock when it reads now (D-8307, WG-5513). A value that differs by reader, such as a reply count that excludes replies the reader may not see, is not one: one stored value serves every reader, so that count is a per-reader mechanism (WG-5599).
 - **Lanes are the host's.** In a `board`, the host iterates lanes and the composite is the card; a
   composite's `each` cannot iterate lanes, so nested iteration over a grouped binding is lane-then-card
   by construction.
