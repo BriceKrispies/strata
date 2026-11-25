@@ -705,7 +705,7 @@ fn exegra_refuses_each_refused_product_with_the_same_rule() {
     }
 }
 
-// Verifies: WG-5510
+// Verifies: INT-5510
 #[test]
 fn a_descendants_query_whose_parent_is_not_its_own_object_type_is_refused() {
     let diagnostics = load_with(&[product("refused/tree-via-not-self.jsonc")]).unwrap_err();
@@ -716,7 +716,7 @@ fn a_descendants_query_whose_parent_is_not_its_own_object_type_is_refused() {
         .contains("is not a single reference to \"thread__comment\""));
 }
 
-// Verifies: WG-5510
+// Verifies: INT-5510
 #[test]
 fn a_descendants_query_deeper_than_32_levels_is_refused() {
     let diagnostics = load_with(&[product("refused/tree-depth-too-deep.jsonc")]).unwrap_err();

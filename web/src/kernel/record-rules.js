@@ -148,6 +148,12 @@ function envOf(scopes, who) {
     follow() {
       throw new Undecided('the rule follows a reference');
     },
+    // The page holds no lookup, so it reads no record: a record is its own ancestor, and any other walk is refused
+    // with the text the shared case table gives for a walk without a lookup (WG-5510).
+    ancestorOf: (object, _field, target, from) => {
+      if (target === from) return true;
+      throw new EvalError(`the lookup does not cover ${object} ${from}`);
+    },
     param: () => undefined,
     now: () => who.now,
     principal: () => who.principal,

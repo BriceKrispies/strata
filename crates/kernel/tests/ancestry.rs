@@ -334,6 +334,7 @@ fn manager_of(a: RecordId) -> PolicyDef {
 
 /// The comments under `root` and at which level, through the three shapes the tree read must answer:
 /// the levels of a four-level tree, a refusal past the declared depth, and a cycle.
+// Verifies: KRN-5510
 #[test]
 fn a_descendants_query_gives_each_row_its_level_below_the_root() {
     let world = comment_world();
@@ -349,6 +350,7 @@ fn a_descendants_query_gives_each_row_its_level_below_the_root() {
     assert_eq!(rows, expected, "level order, children in creation order");
 }
 
+// Verifies: KRN-5510
 #[test]
 fn a_tree_deeper_than_the_declared_depth_is_refused_not_cut_short() {
     let world = comment_world();
@@ -365,6 +367,7 @@ fn a_tree_deeper_than_the_declared_depth_is_refused_not_cut_short() {
     );
 }
 
+// Verifies: KRN-5510
 #[test]
 fn a_cycle_in_a_descendants_read_is_refused() {
     let world = comment_world();
@@ -392,6 +395,7 @@ fn a_cycle_in_a_descendants_read_is_refused() {
 
 /// The manager's descendants read does not pass through a comment the manager may not read: with the
 /// middle comment hidden, the comment below it is not returned either (WG-5510, the read rule).
+// Verifies: KRN-5510
 #[test]
 fn a_hidden_intermediate_comment_hides_what_is_below_it() {
     for (hide_middle, expected) in [(false, vec![(2, 1), (3, 2)]), (true, vec![])] {
