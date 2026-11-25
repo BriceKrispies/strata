@@ -260,8 +260,7 @@ fn world() -> World {
             changes: std::iter::once(SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
                 unit: LedgerUnit::new("points").unwrap(),
                 description: "Points".into(),
-                expiry: None,
-            }))
+                expiry: None, transfer: None,}))
             .chain(operations.into_iter().map(SchemaChange::DefineOperation))
             .collect(),
             expected_version: None,

@@ -1151,11 +1151,13 @@ fn ledger_change(kind: u8) -> SchemaChange {
                 expiry: None,
                 unit: LedgerUnit::new(unit).unwrap(),
                 description: format!("The unit {unit}"),
+                transfer: None,
             })
         }
         2 => SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
             pool: LedgerPoolName::new("promo").unwrap(),
             description: "A promotion budget".into(),
+            parent: None,
         }),
         3 => SchemaChange::SetLedgerLimit(ledger_limit(
             "credits",
@@ -2237,6 +2239,7 @@ fn the_ledger_periods_and_limits_agree_with_the_generated_functions() {
                         expiry: None,
                         unit: LedgerUnit::new("credits").unwrap(),
                         description: "Store credit".into(),
+                        transfer: None,
                     },
                 )]),
                 pools: BTreeMap::new(),

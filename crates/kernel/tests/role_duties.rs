@@ -778,6 +778,7 @@ fn ledger_world() -> World {
                 unit: LedgerUnit::new("points").unwrap(),
                 description: "Points".into(),
                 expiry: None,
+                transfer: None,
             }),
         ],
     )

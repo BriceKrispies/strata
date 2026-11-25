@@ -329,6 +329,13 @@ pub fn uniques(object: &ObjectTypeDef) -> impl Iterator<Item = &UniqueDef> {
     object.unique.iter().flat_map(BTreeMap::values)
 }
 
+/// Whether a tenant operation posts a ledger transaction, in any step.
+pub fn posts_ledger_transaction(op: &TenantOperationDef) -> bool {
+    all_steps(&op.steps)
+        .iter()
+        .any(|step| matches!(step, TenantOperationStep::PostLedgerTransaction { .. }))
+}
+
 /// What the definer of a tenant operation must hold (D-6547, OPR-1547): an action on an object
 /// type for each record step, and a capability for each posting step, each once, in step order.
 pub fn operation_powers(op: &TenantOperationDef) -> (Vec<(Action, Resource)>, BTreeSet<String>) {
@@ -345,7 +352,10 @@ pub fn operation_powers(op: &TenantOperationDef) -> (Vec<(Action, Resource)>, BT
             TenantOperationStep::DeleteRecord { object, .. } => {
                 Some((Action::Delete, Resource::Object(object.clone())))
             }
-            TenantOperationStep::PostLedger { .. } | TenantOperationStep::ReverseLedger { .. } => {
+            TenantOperationStep::PostLedger { .. }
+            | TenantOperationStep::ReverseLedger { .. }
+            | TenantOperationStep::PostLedgerTransaction { .. }
+            | TenantOperationStep::ReverseLedgerTransaction { .. } => {
                 capabilities.insert(LEDGER_POST.to_string());
                 None
             }
@@ -875,7 +885,13 @@ pub fn operation_problems(
         }
         let postings = all
             .iter()
-            .filter(|s| matches!(s, TenantOperationStep::PostLedger { .. }))
+            .filter(|s| {
+                matches!(
+                    s,
+                    TenantOperationStep::PostLedger { .. }
+                        | TenantOperationStep::PostLedgerTransaction { .. }
+                )
+            })
             .count();
         for step in &all {
             if let TenantOperationStep::ReverseLedger { id, posting, .. } = step {
@@ -885,6 +901,19 @@ pub fn operation_problems(
                 if !names_posting {
                     problems.push(format!(
                         "{at}.{id}: reverses {posting}, which is no posting step of the operation"
+                    ));
+                }
+            }
+            if let TenantOperationStep::ReverseLedgerTransaction {
+                id, transaction, ..
+            } = step
+            {
+                let names_transaction = all.iter().any(|other| {
+                    matches!(other, TenantOperationStep::PostLedgerTransaction { id: named, .. } if named == transaction)
+                });
+                if !names_transaction {
+                    problems.push(format!(
+                        "{at}.{id}: reverses {transaction}, which is no post-ledger-transaction step of the operation"
                     ));
                 }
             }
@@ -1065,6 +1094,8 @@ fn steps_problems(
             }
             TenantOperationStep::PostLedger { .. }
             | TenantOperationStep::ReverseLedger { .. }
+            | TenantOperationStep::PostLedgerTransaction { .. }
+            | TenantOperationStep::ReverseLedgerTransaction { .. }
             | TenantOperationStep::FindRecord { .. }
             | TenantOperationStep::Branch { .. }
             | TenantOperationStep::WriteSetting { .. } => {}
@@ -1104,6 +1135,33 @@ fn steps_problems(
                         limits::MAX_LEDGER_REASON_BYTES
                     ));
                 }
+            }
+            TenantOperationStep::PostLedgerTransaction {
+                legs, reference, ..
+            } => {
+                if legs.len() < 2 || legs.len() > limits::MAX_LEDGER_TRANSACTION_LEGS {
+                    problems.push(format!(
+                        "{sat}: a transaction has 2 to {} legs, not {}",
+                        limits::MAX_LEDGER_TRANSACTION_LEGS,
+                        legs.len()
+                    ));
+                }
+                for leg in legs {
+                    report(ledger_unit_reference(schema, &leg.unit), &sat, problems);
+                    if let TenantOperationPostingOwner::Principal { principal } = &leg.owner {
+                        check_expr(problems, &sat, "owner", principal, &env, false);
+                    }
+                    if let Some(scope) = &leg.scope {
+                        check_expr(problems, &sat, "scope", scope, &env, false);
+                    }
+                    check_expr(problems, &sat, "amount", &leg.amount, &env, false);
+                }
+                if let Some(reference) = reference {
+                    check_expr(problems, &sat, "reference", reference, &env, false);
+                }
+            }
+            TenantOperationStep::ReverseLedgerTransaction { reference, .. } => {
+                check_expr(problems, &sat, "reference", reference, &env, false);
             }
             TenantOperationStep::FindRecord {
                 object,
@@ -1241,6 +1299,8 @@ pub fn step_id(step: &TenantOperationStep) -> &str {
         | TenantOperationStep::DeleteRecord { id, .. }
         | TenantOperationStep::PostLedger { id, .. }
         | TenantOperationStep::ReverseLedger { id, .. }
+        | TenantOperationStep::PostLedgerTransaction { id, .. }
+        | TenantOperationStep::ReverseLedgerTransaction { id, .. }
         | TenantOperationStep::FindRecord { id, .. }
         | TenantOperationStep::Branch { id, .. }
         | TenantOperationStep::WriteSetting { id, .. } => id,

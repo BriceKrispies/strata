@@ -43,8 +43,8 @@ use strata_kernel::ledger_expiry;
 use strata_kernel::{
     Context, DomainError, ErrorKind, ExistingData, Intent, LedgerAccountId, LedgerDefinitionRef,
     LedgerExpiry, LedgerLimit, LedgerNeed, LedgerOrder, LedgerOwner, LedgerPoolDecl,
-    LedgerPoolName, LedgerPostingRequest, LedgerScope, LedgerUnit, LedgerUnitDecl, Need, Output,
-    Principal, SchemaChange, State as Snapshot, TenantId, Timestamp,
+    LedgerPoolName, LedgerPostingRequest, LedgerScope, LedgerTransferLimits, LedgerUnit,
+    LedgerUnitDecl, Need, Output, Principal, SchemaChange, State as Snapshot, TenantId, Timestamp,
 };
 use strata_protocol::api::ErrorCode;
 use strata_storage_api::jobs::{JobReport, JobWork, Lease, NewJob, RetryPolicy, WorkerWrites};
@@ -131,6 +131,8 @@ struct UnitRequest {
     description: String,
     #[serde(default)]
     expiry: Option<LedgerExpiry>,
+    #[serde(default)]
+    transfer: Option<LedgerTransferLimits>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,6 +177,8 @@ struct PoolRequest {
     tenant: Option<String>,
     pool: LedgerPoolName,
     description: String,
+    #[serde(default)]
+    parent: Option<LedgerPoolName>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -408,6 +412,7 @@ pub fn handle(app: &App, identity: &Identity, op: &str, body: Json_) -> Result<J
                     unit: r.unit,
                     description: r.description,
                     expiry: r.expiry,
+                    transfer: r.transfer,
                 }),
             )?;
             if expires {
@@ -427,6 +432,7 @@ pub fn handle(app: &App, identity: &Identity, op: &str, body: Json_) -> Result<J
                 SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
                     pool: r.pool,
                     description: r.description,
+                    parent: r.parent,
                 }),
             )?;
             reply["pool"] = json!(pool);

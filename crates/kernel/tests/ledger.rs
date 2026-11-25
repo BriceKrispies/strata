@@ -74,10 +74,12 @@ fn ledger_world(limits: Vec<LedgerLimit>) -> World {
             unit: points(),
             description: "Points".into(),
             expiry: None,
+            transfer: None,
         }),
         SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
             pool: budget(),
             description: "Promotion budget".into(),
+            parent: None,
         }),
     ];
     changes.extend(limits.into_iter().map(SchemaChange::SetLedgerLimit));
@@ -810,6 +812,7 @@ fn declarations_are_checked_and_a_unit_or_pool_in_use_is_not_removed() {
             unit: LedgerUnit::new("stamps").unwrap(),
             description: "Stamps".into(),
             expiry: None,
+            transfer: None,
         })],
     )
     .unwrap_err();
@@ -821,6 +824,7 @@ fn declarations_are_checked_and_a_unit_or_pool_in_use_is_not_removed() {
                 unit: LedgerUnit::new(format!("u{n}")).unwrap(),
                 description: String::new(),
                 expiry: None,
+                transfer: None,
             })
         })
         .collect();
@@ -1624,4 +1628,523 @@ fn a_transaction_leg_adjusting_the_posters_own_account_is_refused() {
             vec![leg(pool(), -5), leg(person("writer1"), 5)],
         ),
     );
+}
+
+// ------------------------------------------------------------------------------------------------
+// Operation steps that post and reverse a transaction (D-8430, D-8437), the account hierarchy
+// (LDG-2909, LDG-2910), the held posting (LDG-2907) and the transfer limits (LDG-2916)
+
+fn ledger_op_id(s: &str) -> TenantOperationId {
+    TenantOperationId::new(s).expect("operation id")
+}
+
+fn op_leg(owner: TenantOperationPostingOwner, amount: i64) -> TenantOperationLeg {
+    TenantOperationLeg {
+        owner,
+        unit: points(),
+        scope: None,
+        amount: Expr::Lit(Value::Int(amount)),
+    }
+}
+
+fn op_pool() -> TenantOperationPostingOwner {
+    TenantOperationPostingOwner::Pool { pool: budget() }
+}
+
+fn op_person(name: &str) -> TenantOperationPostingOwner {
+    TenantOperationPostingOwner::Principal {
+        principal: Expr::Lit(text(&format!("alpha:{name}"))),
+    }
+}
+
+fn anyone_signed_in() -> TenantOperationInvokers {
+    TenantOperationInvokers {
+        signed_in: true,
+        roles: std::collections::BTreeSet::new(),
+    }
+}
+
+/// An operation that awards ten points from the pool to writer1 in one transaction.
+fn award_op(id: &str, legs: Vec<TenantOperationLeg>) -> TenantOperationDef {
+    TenantOperationDef {
+        id: ledger_op_id(id),
+        label: "Award".into(),
+        inputs: vec![],
+        invokers: anyone_signed_in(),
+        subject: None,
+        conditions: vec![],
+        steps: vec![TenantOperationStep::PostLedgerTransaction {
+            id: "award".into(),
+            legs,
+            reason: "award".into(),
+            reference: None,
+        }],
+    }
+}
+
+fn ten_from_the_pool() -> Vec<TenantOperationLeg> {
+    vec![op_leg(op_pool(), -10), op_leg(op_person("writer1"), 10)]
+}
+
+/// An operation that charges an order (ten points from the pool to writer1) under the reference
+/// `order`, or, with `refund`, reverses the whole charge with the reason `refund_reason`.
+fn order_op(refund_reason: &str) -> TenantOperationDef {
+    TenantOperationDef {
+        id: ledger_op_id("order"),
+        label: "Charge or refund an order".into(),
+        inputs: vec![
+            TenantOperationInput {
+                name: "order".into(),
+                ty: FieldType::Str,
+                required: true,
+                label: None,
+            },
+            TenantOperationInput {
+                name: "refund".into(),
+                ty: FieldType::Bool,
+                required: true,
+                label: None,
+            },
+        ],
+        invokers: anyone_signed_in(),
+        subject: None,
+        conditions: vec![],
+        steps: vec![TenantOperationStep::Branch {
+            id: "which".into(),
+            test: BranchTest::Condition {
+                expr: Expr::Param("refund".into()),
+            },
+            matched: vec![TenantOperationStep::ReverseLedgerTransaction {
+                id: "refunded".into(),
+                transaction: "charge".into(),
+                reference: Expr::Param("order".into()),
+                reason: refund_reason.into(),
+            }],
+            unmatched: vec![TenantOperationStep::PostLedgerTransaction {
+                id: "charge".into(),
+                legs: ten_from_the_pool(),
+                reason: "purchase".into(),
+                reference: Some(Expr::Param("order".into())),
+            }],
+        }],
+    }
+}
+
+fn define_ops(world: &World, ops: Vec<TenantOperationDef>) -> World {
+    change_as(
+        world,
+        "owner",
+        T0 - 500,
+        ops.into_iter().map(SchemaChange::DefineOperation).collect(),
+    )
+    .unwrap_or_else(|e| panic!("the operations were refused: {}", e.describe()))
+}
+
+fn invoke_op(
+    world: &World,
+    who: &str,
+    now: i64,
+    operation: &str,
+    key: &str,
+    inputs: &[(&str, Value)],
+) -> Result<(World, Transition), DomainError> {
+    world.step(
+        &Intent::InvokeOperation {
+            operation: ledger_op_id(operation),
+            inputs: inputs
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.clone()))
+                .collect(),
+            idempotency_key: key.to_string(),
+        },
+        &ctx("alpha", user(&format!("alpha:{who}")), now),
+    )
+}
+
+fn order_inputs(order: &str, refund: bool) -> [(&'static str, Value); 2] {
+    [("order", text(order)), ("refund", Value::Bool(refund))]
+}
+
+/// Verifies: LDG-2903
+/// A post-ledger-transaction step posts its legs as one transaction in the commit of the
+/// operation: a balanced one writes an entry for each leg, each naming the transaction, and one
+/// whose legs do not net to zero is refused with the rule of the transaction and writes nothing.
+#[test]
+fn an_operation_step_posts_a_balanced_transaction_and_refuses_an_unbalanced_one() {
+    let world = ledger_world(vec![]);
+    let world = define_ops(
+        &world,
+        vec![
+            award_op("award", ten_from_the_pool()),
+            award_op(
+                "lopsided",
+                vec![op_leg(op_pool(), -10), op_leg(op_person("writer1"), 11)],
+            ),
+        ],
+    );
+    let (done, _) = invoke_op(&world, "writer2", T0, "award", "k-1", &[]).unwrap();
+    assert_eq!(balance(&done, &pool()), -10);
+    assert_eq!(balance(&done, &person("writer1")), 10);
+    let paid = entries(&done, &person("writer1"), "");
+    assert_eq!(paid.len(), 1);
+    let from_pool = entries(&done, &pool(), "");
+    assert!(paid[0].transaction.is_some() && paid[0].transaction == from_pool[0].transaction);
+    assert_eq!(paid[0].caused_by, Some(principal_id("alpha:writer2")));
+
+    let error = invoke_op(&world, "writer2", T0, "lopsided", "k-2", &[]).unwrap_err();
+    assert!(error
+        .evidence
+        .iter()
+        .any(|c| !c.passed && c.rule == "ledger:unbalanced-transaction"));
+    assert_eq!(ledger_of(&world), ledger::empty_state());
+}
+
+/// Verifies: LDG-2971, LDG-2972
+/// A reversal in a later invocation reverses the whole transaction once, whoever asks and whatever
+/// key they use; a reversal under another reason after it is refused as already reversed, and one
+/// that would take a balance below its floor is refused as an overdraft, changing nothing.
+#[test]
+fn a_whole_transaction_is_reversed_once_and_never_below_a_floor() {
+    let world = ledger_world(vec![unit_limit(Some(0), None, None)]);
+    let world = posted(&world, T0, pool(), 1_000, "fund");
+    let world = define_ops(&world, vec![order_op("refund")]);
+    let (charged, _) = invoke_op(
+        &world,
+        "writer2",
+        T0,
+        "order",
+        "c-1",
+        &order_inputs("o-1", false),
+    )
+    .unwrap();
+    assert_eq!(balance(&charged, &person("writer1")), 10);
+
+    // The reversal restores both accounts.
+    let (refunded, _) = invoke_op(
+        &charged,
+        "writer2",
+        T0 + 1,
+        "order",
+        "r-1",
+        &order_inputs("o-1", true),
+    )
+    .unwrap();
+    assert_eq!(balance(&refunded, &person("writer1")), 0);
+    assert_eq!(balance(&refunded, &pool()), 1_000);
+    let reversal = entries(&refunded, &person("writer1"), "");
+    assert_eq!(reversal.len(), 2);
+    assert_eq!(reversal[1].corrects, Some(reversal[0].sequence));
+
+    // The same transaction reversed for another reason is refused: it was reversed already.
+    let voiding = define_ops(&refunded, vec![order_op("void")]);
+    let again = invoke_op(
+        &voiding,
+        "writer1",
+        T0 + 2,
+        "order",
+        "r-3",
+        &order_inputs("o-1", true),
+    )
+    .unwrap_err();
+    assert!(
+        again
+            .evidence
+            .iter()
+            .any(|c| !c.passed && c.rule == "ledger:already-reversed"),
+        "{}",
+        again.describe()
+    );
+
+    // The person spent the points: reversing would take them below the floor.
+    let spent = posted(&charged, T0 + 1, person("writer1"), -6, "spend");
+    let overdraft = invoke_op(
+        &spent,
+        "writer2",
+        T0 + 2,
+        "order",
+        "r-4",
+        &order_inputs("o-1", true),
+    )
+    .unwrap_err();
+    assert!(
+        overdraft
+            .evidence
+            .iter()
+            .any(|c| !c.passed && c.rule == "ledger:overdraft"),
+        "{}",
+        overdraft.describe()
+    );
+    assert_eq!(balance(&spent, &person("writer1")), 4);
+    assert_eq!(balance(&spent, &pool()), 990);
+}
+
+fn pool_named(name: &str) -> LedgerPoolName {
+    LedgerPoolName::new(name).unwrap()
+}
+
+fn pool_with_parent(name: &str, parent: Option<&str>) -> SchemaChange {
+    SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
+        pool: pool_named(name),
+        description: name.into(),
+        parent: parent.map(pool_named),
+    })
+}
+
+/// Verifies: LDG-2909
+/// A declaration of a parent that would make a pool its own ancestor is refused as an account
+/// cycle, and so is a parent that is no declared pool; a chain of parents is accepted. A refusal
+/// changes nothing.
+#[test]
+fn a_parent_that_makes_a_pool_its_own_ancestor_is_refused() {
+    let world = ledger_world(vec![]);
+    let world = change_as(
+        &world,
+        "owner",
+        T0,
+        vec![
+            pool_with_parent("root", None),
+            pool_with_parent("mid", Some("root")),
+            pool_with_parent("leaf", Some("mid")),
+        ],
+    )
+    .expect("a chain of parents is accepted");
+    let cycle = |changes| {
+        change_as(&world, "owner", T0 + 1, changes)
+            .expect_err("a cycle was accepted")
+            .message
+    };
+    // The root under its own leaf, and a pool under itself.
+    assert!(cycle(vec![pool_with_parent("root", Some("leaf"))]).contains("account-cycle"));
+    assert!(cycle(vec![pool_with_parent("mid", Some("mid"))]).contains("account-cycle"));
+    assert!(cycle(vec![pool_with_parent("leaf", Some("nowhere"))]).contains("not a declared pool"));
+    // The world is as it was: the same declaration is still accepted.
+    change_as(
+        &world,
+        "owner",
+        T0 + 2,
+        vec![pool_with_parent("leaf", Some("root"))],
+    )
+    .expect("a parent that makes no cycle is accepted");
+}
+
+/// Verifies: LDG-2910
+/// The balance of a parent account is the sum of its own entries and of the balances of its
+/// children, each the same sum in turn; the balance of a child is its own and its children's.
+#[test]
+fn the_balance_of_a_parent_is_its_own_entries_plus_its_children() {
+    let world = ledger_world(vec![]);
+    let world = change_as(
+        &world,
+        "owner",
+        T0,
+        vec![
+            pool_with_parent("root", None),
+            pool_with_parent("mid", Some("root")),
+            pool_with_parent("leaf", Some("mid")),
+            pool_with_parent("other", None),
+        ],
+    )
+    .unwrap();
+    let in_pool = |name: &str| LedgerOwner::Pool {
+        pool: pool_named(name),
+    };
+    let world = posted(&world, T0 + 1, in_pool("root"), 1, "a");
+    let world = posted(&world, T0 + 2, in_pool("mid"), 20, "b");
+    let world = posted(&world, T0 + 3, in_pool("leaf"), 300, "c");
+    let world = posted(&world, T0 + 4, in_pool("other"), 4_000, "d");
+    let state = world.state(&tenant_id("alpha"));
+    let reader = ctx("alpha", user("alpha:owner"), T0 + 5);
+    let tree = |name: &str| {
+        ledger::read_tree_balance(&state, &pool_named(name), &points(), "", &reader)
+            .unwrap()
+            .balance
+            .0
+    };
+    assert_eq!(tree("root"), 321);
+    assert_eq!(tree("mid"), 320);
+    assert_eq!(tree("leaf"), 300);
+    assert_eq!(tree("other"), 4_000);
+    // A pool with no account of its own and none below it does not exist as an account.
+    let world = change_as(
+        &world,
+        "owner",
+        T0 + 6,
+        vec![pool_with_parent("empty", Some("other"))],
+    )
+    .unwrap();
+    let state = world.state(&tenant_id("alpha"));
+    let empty = ledger::read_tree_balance(&state, &pool_named("empty"), &points(), "", &reader);
+    assert_eq!(empty.unwrap_err().kind, ErrorKind::UnknownRecord);
+    assert_eq!(
+        ledger::read_tree_balance(&state, &pool_named("other"), &points(), "", &reader)
+            .unwrap()
+            .balance
+            .0,
+        4_000
+    );
+}
+
+fn hold_approver_world() -> World {
+    let world = ledger_world(vec![]);
+    let world = change_as(
+        &world,
+        "owner",
+        T0 - 600,
+        vec![
+            SchemaChange::DefineRole(RoleDef {
+                id: role("approver"),
+                label: "Approver".into(),
+            }),
+            SchemaChange::DefineRolePermissions {
+                role: role("approver"),
+                permissions: vec![Permission::Capability("ledger-approve".into())],
+            },
+        ],
+    )
+    .unwrap();
+    let world = define_ops(&world, vec![award_op("award", ten_from_the_pool())]);
+    // Two people may approve.
+    ["writer2", "editor"].iter().fold(world, |world, who| {
+        world
+            .step(
+                &Intent::AssignRole {
+                    principal: principal_id(&format!("alpha:{who}")),
+                    role: role("approver"),
+                },
+                &ctx("alpha", user("alpha:owner"), T0 - 400),
+            )
+            .unwrap()
+            .0
+    })
+}
+
+/// Verifies: LDG-2907
+/// A posting held for approval is not approved by the person who made it, or by the person it was
+/// made for, and the refusal is the ledger's, with the hold as it was; another approver releases
+/// it, and the transaction posts once, as the person who made it.
+#[test]
+fn a_held_posting_is_not_approved_by_its_actor_or_the_person_it_was_made_for() {
+    let world = hold_approver_world();
+    let file = |on_behalf_of: Option<&str>| Intent::FileHold {
+        change: HeldChange::InvokeOperation {
+            operation: ledger_op_id("award"),
+            inputs: Default::default(),
+            idempotency_key: "k-held".into(),
+        },
+        approver: CapabilityName("ledger-approve".into()),
+        on_behalf_of: on_behalf_of.map(|who| principal_id(&format!("alpha:{who}"))),
+    };
+    let by = |world: &World, who: &str, now: i64, intent: &Intent| {
+        world.step(intent, &ctx("alpha", user(&format!("alpha:{who}")), now))
+    };
+    let decide = |read_revision: u64, decision: HoldDecision| Intent::DecideHold {
+        hold: HeldOperationId::new("h-1").unwrap(),
+        decision,
+        read_revision,
+        reason: None,
+    };
+
+    // writer2 files the posting for editor; both hold the approver permission.
+    let (held, filed) = by(&world, "writer2", T0, &file(Some("editor"))).unwrap();
+    assert!(matches!(filed.output, Output::Held { .. }));
+    assert_eq!(balance(&held, &pool()), 0, "a held posting posts nothing");
+    for who in ["writer2", "editor"] {
+        let error = by(&held, who, T0 + 1, &decide(1, HoldDecision::Approve)).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Unauthorized, "{who}");
+        assert_eq!(failed_rule(&error), "ledger:self-approval", "{who}");
+    }
+    assert_eq!(ledger_of(&held), ledger::empty_state());
+
+    // A hold filed by writer2 for nobody is approved by editor, and posts as writer2.
+    let (held, _) = by(&world, "writer2", T0, &file(None)).unwrap();
+    let (done, _) = by(&held, "editor", T0 + 1, &decide(1, HoldDecision::Approve)).unwrap();
+    assert_eq!(balance(&done, &person("writer1")), 10);
+    let paid = entries(&done, &person("writer1"), "");
+    assert_eq!(paid.len(), 1);
+    assert_eq!(paid[0].caused_by, Some(principal_id("alpha:writer2")));
+}
+
+/// Verifies: LDG-2916
+/// A transfer is refused as not permitted, and posts nothing, when its recipient is not an active
+/// principal of the tenant, is the sender, or when its amount is below the minimum or above the
+/// maximum the programme declares for the unit; one within the limits is accepted.
+#[test]
+fn a_transfer_outside_the_declared_limits_or_to_no_one_is_refused() {
+    let world = ledger_world(vec![]);
+    let world = change_as(
+        &world,
+        "owner",
+        T0,
+        vec![SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+            unit: points(),
+            description: "Points".into(),
+            expiry: None,
+            transfer: Some(LedgerTransferLimits {
+                min: Some(LedgerAmount(5)),
+                max: Some(LedgerAmount(50)),
+            }),
+        })],
+    )
+    .unwrap();
+    let transfer = |to: LedgerOwner, amount: i64, key: &str| {
+        transaction(
+            key,
+            "transfer",
+            vec![leg(person("writer1"), -amount), leg(to, amount)],
+        )
+    };
+    let refusal = |tx| tx_refusal(&world, "owner", T0 + 1, tx);
+    for (to, amount) in [
+        (person("writer2"), 4),
+        (person("writer2"), 51),
+        (person("writer1"), 10),
+        (person("stranger"), 10),
+        (pool(), 10),
+    ] {
+        let error = refusal(transfer(to.clone(), amount, "t"));
+        assert_eq!(
+            failed_rule(&error),
+            "ledger:transfer-not-permitted",
+            "{to:?} {amount}"
+        );
+    }
+    assert_eq!(ledger_of(&world), ledger::empty_state());
+    // A transaction that is not a transfer meets no such limit.
+    transacted(
+        &world,
+        T0 + 2,
+        transaction(
+            "award",
+            "award",
+            vec![leg(person("writer1"), -100), leg(person("writer2"), 100)],
+        ),
+    );
+    let world = transacted(&world, T0 + 2, transfer(person("writer2"), 50, "t-ok"));
+    assert_eq!(balance(&world, &person("writer2")), 50);
+}
+
+/// Verifies: ADM-1629
+/// The refusal of a posting to one's own account applies to every leg of a transaction, whichever
+/// leg it is: the leg of the poster's own account in the middle of three is refused as well, and
+/// nothing is posted.
+#[test]
+fn a_leg_to_the_posters_own_account_is_refused_wherever_it_stands() {
+    let world = ledger_world(vec![]);
+    let error = tx_refusal(
+        &world,
+        "owner",
+        T0,
+        transaction(
+            "middle",
+            "adjust",
+            vec![
+                leg(pool(), -9),
+                leg(person("owner"), 4),
+                leg(person("writer1"), 5),
+            ],
+        ),
+    );
+    assert_eq!(error.kind, ErrorKind::SelfAction);
+    assert_eq!(failed_rule(&error), "ledger:self_action");
+    assert_eq!(ledger_of(&world), ledger::empty_state());
 }

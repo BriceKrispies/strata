@@ -513,6 +513,235 @@ fn the_toggle_product_installs_and_its_operation_adds_then_removes_a_reaction() 
     );
 }
 
+/// D-8430, D-8437, LDG-2909, LDG-2910, LDG-2916, LDG-2917: a product whose operations post ledger
+/// transactions compiles into a bundle that installs into a tenant. Its operations award points from a
+/// pool, transfer them within the declared limits, and charge an order and refund it as a whole
+/// transaction, and the pool it awards from rolls up into the pool above it.
+///
+/// Verifies: LDG-2916, LDG-2917, LDG-2969, LDG-2970, LDG-2971
+#[test]
+fn the_transaction_product_installs_and_its_operations_post_and_reverse_transactions() {
+    use strata_kernel::ledger::{self, account_id, account_key};
+    use strata_kernel::testkit::{ctx, text};
+    use strata_kernel::DomainErrorExt;
+    use strata_kernel::{
+        DomainError, Intent, LedgerAmount, LedgerOwner, LedgerPoolName, LedgerUnit, Output,
+        Principal, PrincipalId, TenantId, TenantOperationId, Value, World,
+    };
+    use strata_substrate::bundle::{
+        install_into, install_product, Bundle, ProductBundle, ProductInstall, ProductTarget,
+    };
+
+    let output = bundle_of(&product("operation-transaction.jsonc"));
+    let bundle = ProductBundle::from_json(&output.files[0].contents)
+        .unwrap_or_else(|e| panic!("the bundle is refused: {e}"));
+
+    let tenant = TenantId::new("acme").expect("tenant id");
+    let admin = Principal::User(PrincipalId::new("user:admin").expect("principal id"));
+    let doc = json!({
+        "id": "acme",
+        "name": "Acme",
+        "owner": "user:admin",
+        "created_at": "2026-01-01T00:00:00Z",
+        "members": [ { "principal": "user:ana", "roles": ["owner"] } ]
+    });
+    let mut world = install_into(
+        &World::default(),
+        &Bundle::from_json(&doc.to_string()).expect("tenant bundle"),
+    )
+    .unwrap_or_else(|e| panic!("{e:?}"));
+
+    let schema = world.tenants[&tenant].schema.clone();
+    let target = ProductTarget {
+        tenant: &tenant,
+        principal: admin.clone(),
+        now: 1_800_000_000_000,
+        release: "0.2",
+        schema: &schema,
+        installed: None,
+        expected_version: None,
+        idempotency_key: None,
+    };
+    let answer = install_product(&bundle, &target, &mut |ctx: strata_kernel::Context,
+                                                         intent: Intent|
+     -> Result<Output, DomainError> {
+        let (next, outcome) = world.step(&intent, &ctx)?;
+        world = next;
+        Ok(outcome.output)
+    });
+    match answer {
+        Ok(ProductInstall::Applied { .. }) => {}
+        other => panic!("the transaction product was not installed: {other:?}"),
+    }
+
+    let invoke = |world: &World,
+                  who: &str,
+                  now: i64,
+                  operation: &str,
+                  key: &str,
+                  inputs: &[(&str, Value)]| {
+        let intent = Intent::InvokeOperation {
+            operation: TenantOperationId::new(operation).expect("operation id"),
+            inputs: inputs
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.clone()))
+                .collect(),
+            idempotency_key: key.to_string(),
+        };
+        let who = Principal::User(PrincipalId::new(who).expect("principal id"));
+        world.step(&intent, &ctx("acme", who, now))
+    };
+    let unit = LedgerUnit::new("points__points").expect("ledger unit");
+    let balance_of = |world: &World, owner: LedgerOwner| -> i64 {
+        let state = &world.tenants[&tenant];
+        let id = account_id(&state.id, &owner, &unit, "");
+        state
+            .ledger
+            .as_ref()
+            .and_then(|ledger| ledger.accounts.get(&account_key(&id)))
+            .map_or(0, |account| account.balance.0)
+    };
+    let person = |name: &str| LedgerOwner::Principal {
+        principal: PrincipalId::new(name).expect("principal id"),
+    };
+    let pool = |name: &str| LedgerOwner::Pool {
+        pool: LedgerPoolName::new(name).expect("pool"),
+    };
+    let int = Value::Int;
+    let now = 1_800_000_000_100;
+
+    // An award is one transaction of two entries that name it, from the pool to the person.
+    let (world, awarded) = invoke(
+        &world,
+        "user:admin",
+        now,
+        "points__award",
+        "award-1",
+        &[("to", text("user:ana")), ("amount", int(40))],
+    )
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(balance_of(&world, person("user:ana")), 40);
+    assert_eq!(balance_of(&world, pool("points__budget")), -40);
+    let entries = match &awarded.output {
+        Output::Operation { entries, .. } => entries.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(entries.len(), 2, "one entry for each leg");
+    assert!(
+        entries[0].transaction.is_some() && entries[0].transaction == entries[1].transaction,
+        "both entries name the transaction"
+    );
+
+    // LDG-2910: the pool above the budget holds what its children do, and its own entries.
+    let state = world.state(&tenant);
+    let reader = ctx("acme", admin.clone(), now);
+    let treasury = LedgerPoolName::new("points__treasury").expect("pool");
+    let tree = ledger::read_tree_balance(&state, &treasury, &unit, "", &reader)
+        .unwrap_or_else(|e| panic!("{}", e.describe()));
+    assert_eq!(tree.balance, LedgerAmount(-40));
+
+    // LDG-2916: a transfer is within the declared limits, between two people.
+    let transfer = |world: &World, who: &str, key: &str, to: &str, amount: i64| {
+        invoke(
+            world,
+            who,
+            now + 1,
+            "points__transfer",
+            key,
+            &[("to", text(to)), ("amount", int(amount))],
+        )
+    };
+    for (amount, what) in [(4, "below the minimum"), (101, "above the maximum")] {
+        let refused = transfer(&world, "user:ana", "t-limit", "user:admin", amount)
+            .err()
+            .unwrap_or_else(|| panic!("a transfer {what} was accepted"));
+        assert!(
+            refused
+                .evidence
+                .iter()
+                .any(|c| !c.passed && c.rule == "ledger:transfer-not-permitted"),
+            "{what}: {}",
+            refused.describe()
+        );
+    }
+    let to_self = transfer(&world, "user:ana", "t-self", "user:ana", 10)
+        .err()
+        .expect("a transfer to oneself was accepted");
+    assert!(to_self
+        .evidence
+        .iter()
+        .any(|c| !c.passed && c.rule == "ledger:transfer-not-permitted"));
+    let (world, _) = transfer(&world, "user:ana", "t-ok", "user:admin", 10)
+        .unwrap_or_else(|e| panic!("{}", e.describe()));
+    assert_eq!(balance_of(&world, person("user:ana")), 30);
+    assert_eq!(balance_of(&world, person("user:admin")), 10);
+
+    // D-8437: an order is charged under a reference, and a refund reverses the whole transaction.
+    let order = |world: &World, key: &str, refund: bool| {
+        invoke(
+            world,
+            "user:admin",
+            now + 2,
+            "points__order",
+            key,
+            &[
+                ("order", text("o-1")),
+                ("to", text("user:ana")),
+                ("refund", Value::Bool(refund)),
+            ],
+        )
+    };
+    let (charged, _) =
+        order(&world, "charge", false).unwrap_or_else(|e| panic!("{}", e.describe()));
+    assert_eq!(balance_of(&charged, person("user:ana")), 20);
+    assert_eq!(balance_of(&charged, pool("points__budget")), -30);
+    let (refunded, _) =
+        order(&charged, "refund", true).unwrap_or_else(|e| panic!("{}", e.describe()));
+    assert_eq!(
+        balance_of(&refunded, person("user:ana")),
+        30,
+        "both legs are reversed"
+    );
+    assert_eq!(balance_of(&refunded, pool("points__budget")), -40);
+    // Another refund of the order, under another key, reverses nothing more: a transaction is
+    // reversed once whichever invocation asks (LDG-2971), and the same request replays the first
+    // reversal and writes no entry (LDG-2965).
+    let (again, transition) =
+        order(&refunded, "refund-again", true).unwrap_or_else(|e| panic!("{}", e.describe()));
+    assert_eq!(balance_of(&again, person("user:ana")), 30);
+    assert!(
+        transition
+            .delta
+            .ops
+            .iter()
+            .all(|op| !matches!(op, strata_kernel::DeltaOp::Ledger(_))),
+        "a replayed reversal commits no entry"
+    );
+    // A refund of an order that was never charged is refused (LDG-2970).
+    let missing = invoke(
+        &world,
+        "user:admin",
+        now + 2,
+        "points__order",
+        "refund-none",
+        &[
+            ("order", text("o-1")),
+            ("to", text("user:ana")),
+            ("refund", Value::Bool(true)),
+        ],
+    )
+    .err()
+    .expect("a refund of nothing was accepted");
+    assert!(
+        missing
+            .evidence
+            .iter()
+            .any(|c| !c.passed && c.rule == "ledger:transaction-not-found"),
+        "{}",
+        missing.describe()
+    );
+}
+
 /// WG-5606: a product whose operations write its own settings compiles into a bundle that installs
 /// into a tenant. Its person-level operation writes the invoker's own value of its setting, and its
 /// tenant-level operation, which the owner may invoke, writes the value the tenant holds for everyone.

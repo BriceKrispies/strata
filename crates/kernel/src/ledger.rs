@@ -354,6 +354,40 @@ pub fn intent_needs(tenant: &TenantId, postings: &[LedgerPostingRequest]) -> Vec
     out.into_iter().collect()
 }
 
+/// The entry of `account` under `key`, written by an operation of `earlier` or held by the snapshot,
+/// and `None` when the account has none. A snapshot that does not cover the entry is
+/// `InsufficientState` naming it.
+pub(crate) fn entry_by_key(
+    state: &State,
+    earlier: &[DeltaOp],
+    account: &LedgerAccountId,
+    key: &str,
+) -> Result<Option<LedgerEntry>, DomainError> {
+    if let Some(entry) = earlier.iter().find_map(|op| match op {
+        DeltaOp::Ledger(LedgerDelta::AppendEntry(e))
+            if &e.account == account && e.idempotency_key == key =>
+        {
+            Some(e.clone())
+        }
+        _ => None,
+    }) {
+        return Ok(Some(entry));
+    }
+    require(
+        state,
+        LedgerNeed::EntryByKey {
+            account: *account,
+            key: key.to_string(),
+        },
+    )?;
+    Ok(state.tenant.as_deref().and_then(|tenant| {
+        loaded_entries(tenant, account)
+            .iter()
+            .find(|e| e.idempotency_key == key)
+            .cloned()
+    }))
+}
+
 /// The reversal of a posting (WG-5598): a posting of the negated amount that names the entry it
 /// corrects (LDG-023). The posting to reverse is the entry of the account under `posting_key`,
 /// found in `earlier` or in the snapshot; `request` names the account, the unit, the scope, the
@@ -382,33 +416,8 @@ pub fn reverse_after(
         scope_text(&request.scope),
     );
     let mut evidence = Vec::new();
-    let written = |key: &str| {
-        earlier.iter().find_map(|op| match op {
-            DeltaOp::Ledger(LedgerDelta::AppendEntry(e))
-                if e.account == account && e.idempotency_key == key =>
-            {
-                Some(e.clone())
-            }
-            _ => None,
-        })
-    };
     // The posting, made in this change or in the snapshot.
-    let original = match written(posting_key) {
-        Some(entry) => Some(entry),
-        None => {
-            require(
-                state,
-                LedgerNeed::EntryByKey {
-                    account,
-                    key: posting_key.to_string(),
-                },
-            )?;
-            loaded_entries(tenant, &account)
-                .iter()
-                .find(|e| e.idempotency_key == posting_key)
-                .cloned()
-        }
-    };
+    let original = entry_by_key(state, earlier, &account, posting_key)?;
     let Some(original) = original else {
         return Err(refused(
             evidence,
@@ -418,21 +427,7 @@ pub fn reverse_after(
         ));
     };
     // The reversal, made before in this change or recorded in the snapshot, reverses it already.
-    let reversed = match written(&request.idempotency_key) {
-        Some(_) => true,
-        None => {
-            require(
-                state,
-                LedgerNeed::EntryByKey {
-                    account,
-                    key: request.idempotency_key.clone(),
-                },
-            )?;
-            loaded_entries(tenant, &account)
-                .iter()
-                .any(|e| e.idempotency_key == request.idempotency_key)
-        }
-    };
+    let reversed = entry_by_key(state, earlier, &account, &request.idempotency_key)?.is_some();
     if reversed {
         return Err(refused(
             evidence,
@@ -1454,10 +1449,167 @@ pub fn declaration_problems(schema: &TenantSchema, problems: &mut Vec<String>) {
         if &decl.pool != pool {
             problems.push(format!("ledger pool {pool}: declared under another name"));
         }
+        pool_parent_problems(ledger, pool, decl, problems);
     }
     for limit in &ledger.limits {
         limit_problems(schema, limit, problems);
     }
+}
+
+/// The most pools in one chain of parents, the pool itself included (LDG-2909).
+pub const MAX_POOL_DEPTH: usize = 8;
+
+/// The problems of the parent a pool declares (LDG-2909): a parent that is not a declared pool, a
+/// parent that makes the pool its own ancestor (`account-cycle`), and a chain of parents deeper
+/// than [`MAX_POOL_DEPTH`] (`account-depth`).
+fn pool_parent_problems(
+    ledger: &LedgerDeclarations,
+    pool: &crate::types::LedgerPoolName,
+    decl: &crate::types::LedgerPoolDecl,
+    problems: &mut Vec<String>,
+) {
+    let Some(parent) = &decl.parent else {
+        return;
+    };
+    if !ledger.pools.contains_key(parent) {
+        problems.push(format!(
+            "ledger pool {pool}: its parent {parent} is not a declared pool"
+        ));
+        return;
+    }
+    let mut chain = vec![pool];
+    let mut at = parent;
+    loop {
+        if at == pool {
+            problems.push(format!(
+                "ledger pool {pool}: account-cycle: the parent {parent} would make the pool its own ancestor"
+            ));
+            return;
+        }
+        if chain.contains(&at) {
+            // A cycle that does not pass through this pool is reported by the pools in it.
+            return;
+        }
+        chain.push(at);
+        match ledger.pools.get(at).and_then(|d| d.parent.as_ref()) {
+            Some(next) => at = next,
+            None => break,
+        }
+    }
+    if chain.len() > MAX_POOL_DEPTH {
+        problems.push(format!(
+            "ledger pool {pool}: account-depth: {} pools in a chain of parents is more than the maximum of {MAX_POOL_DEPTH}",
+            chain.len()
+        ));
+    }
+}
+
+/// The pool and the pools below it in the hierarchy (LDG-2910), the pool first, then each level in
+/// the order of the names; a pool is named once.
+pub fn pool_tree(
+    schema: &TenantSchema,
+    pool: &crate::types::LedgerPoolName,
+) -> Vec<crate::types::LedgerPoolName> {
+    let Some(ledger) = schema.ledger.as_ref() else {
+        return vec![pool.clone()];
+    };
+    let mut out = vec![pool.clone()];
+    let mut next = 0;
+    while next < out.len() {
+        let at = out[next].clone();
+        for (name, decl) in &ledger.pools {
+            if decl.parent.as_ref() == Some(&at) && !out.contains(name) {
+                out.push(name.clone());
+            }
+        }
+        next += 1;
+    }
+    out
+}
+
+/// The needs of [`read_tree_balance`]: the header of the account of each pool of the tree.
+pub fn tree_needs(
+    tenant: &TenantState,
+    pool: &crate::types::LedgerPoolName,
+    unit: &LedgerUnit,
+    scope: &str,
+) -> Vec<Need> {
+    pool_tree(&tenant.schema, pool)
+        .into_iter()
+        .map(|pool| {
+            Need::Ledger(LedgerNeed::Account {
+                account: account_id(&tenant.id, &LedgerOwner::Pool { pool }, unit, scope),
+            })
+        })
+        .collect()
+}
+
+/// The balance of the account of a pool as a parent (LDG-2910): the sum of its own entries and of
+/// the balances of its children, each the same sum in turn. The children of a pool are the pools
+/// that declare it as their parent, and the account of each is the one of the same unit and scope.
+/// Each account of the tree is read as [`read_balance`] reads it, so an account the reader may
+/// not read counts as one that does not exist; the answer is `ledger:unknown-account` only when
+/// no account of the tree exists. `last_sequence` is that of the pool's own account.
+pub fn read_tree_balance(
+    state: &State,
+    pool: &crate::types::LedgerPoolName,
+    unit: &LedgerUnit,
+    scope: &str,
+    ctx: &Context,
+) -> Result<LedgerBalance, DomainError> {
+    let tenant = tenant_of(state, ctx)?;
+    if !pool_declared(&tenant.schema, pool) {
+        return Err(refuse(
+            ErrorKind::UnknownRecord,
+            "ledger:unknown-owner",
+            format!("the tenant declares no ledger pool {pool}"),
+        ));
+    }
+    let mut total: i64 = 0;
+    let mut own = None;
+    let mut any = false;
+    for member in pool_tree(&tenant.schema, pool) {
+        let owner = LedgerOwner::Pool {
+            pool: member.clone(),
+        };
+        match read_balance(state, &owner, unit, scope, false, ctx) {
+            Ok(found) => {
+                any = true;
+                total = total.checked_add(found.balance.0).ok_or_else(|| {
+                    refuse(
+                        ErrorKind::InvalidIntent,
+                        "ledger:invalid-amount",
+                        "the balance of the tree is out of range",
+                    )
+                })?;
+                if &member == pool {
+                    own = Some(found);
+                }
+            }
+            Err(error)
+                if error
+                    .evidence
+                    .iter()
+                    .any(|c| c.rule == "ledger:unknown-account") => {}
+            Err(error) => return Err(error),
+        }
+    }
+    if !any {
+        return Err(no_account());
+    }
+    let account = account_id(
+        &tenant.id,
+        &LedgerOwner::Pool { pool: pool.clone() },
+        unit,
+        scope,
+    );
+    Ok(LedgerBalance {
+        account,
+        unit: unit.clone(),
+        balance: LedgerAmount(total),
+        last_sequence: own.map_or(0, |b| b.last_sequence),
+        scope: (!scope.is_empty()).then(|| scope_value(scope)),
+    })
 }
 
 /// The problems of one limit against the declarations of `schema`: a unit or a pool that is not

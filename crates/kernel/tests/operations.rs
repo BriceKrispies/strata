@@ -209,6 +209,7 @@ fn world() -> World {
                     unit: LedgerUnit::new("points").unwrap(),
                     description: "Points".into(),
                     expiry: None,
+                    transfer: None,
                 }),
                 SchemaChange::DefineOperation(count()),
             ],
@@ -799,11 +800,13 @@ fn reversal_world() -> World {
                     unit: given_unit(),
                     description: "Reactions given".into(),
                     expiry: None,
+                    transfer: None,
                 }),
                 SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
                     unit: received_unit(),
                     description: "Reactions received".into(),
                     expiry: None,
+                    transfer: None,
                 }),
                 SchemaChange::SetLedgerLimit(LedgerLimit {
                     unit: given_unit(),
