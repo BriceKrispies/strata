@@ -2,13 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
-use strata_kernel::rules::Lookup;
+use strata_kernel::rules::{may_attempt, Lookup};
 use strata_kernel::segment_flow;
 use strata_kernel::segments::{self as seg, Segment, SegmentDirection, SegmentEvent, SegmentId};
 use strata_kernel::{
-    owner_role, visible, DomainEvent, EventBody, LedgerAccountId, LedgerScope, LedgerUnit,
-    ObjectTypeId, Principal, PrincipalId, RecordId, SettingId, SettingLevel, State, TeamId,
-    TenantState,
+    owner_role, visible_in, Action, Coverage, DomainError, DomainErrorExt, DomainEvent, ErrorKind,
+    EventBody, LedgerAccountId, LedgerScope, LedgerUnit, ObjectTypeId, Principal, PrincipalId,
+    RecordId, Resource, SettingId, SettingLevel, State, TeamId, TenantState,
 };
 use strata_model_core::types::EventKind;
 
@@ -346,6 +346,40 @@ pub fn segment_notice(
         })
 }
 
+/// Whether a subscriber may subscribe to what the selector names (D-8402, ADM-1610, ADM-1632).
+///
+/// A selector that names object types is admitted only when the subscriber holds a Read grant on
+/// each of them: a role permission or a Read policy of a role the subscriber holds, whatever its
+/// condition ([`may_attempt`]). A Read policy whose condition holds for some records only admits
+/// the subscription, and [`notice`] then decides each event for each record; a subscriber who has
+/// no grant at all is refused with `AudienceNotPermitted` and nothing of the type's events is
+/// ever sent to them. A type the tenant does not have is refused the same way, so the refusal does
+/// not tell which types exist. A selector that names no object type is admitted: it asks for
+/// every event and each one is decided by [`notice`] for the subscriber.
+pub fn admit(
+    tenant: &TenantState,
+    principal: &Principal,
+    selector: &Selector,
+) -> Result<(), DomainError> {
+    for object in selector.objects.iter().flatten() {
+        let known = tenant.schema.objects.contains_key(object);
+        if !known
+            || !may_attempt(
+                tenant,
+                principal,
+                Action::Read,
+                &Resource::Object(object.clone()),
+            )
+        {
+            return Err(DomainError::new(
+                ErrorKind::AudienceNotPermitted,
+                format!("the events of {object} have no audience that includes the subscriber"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Decide what, if anything, a subscriber learns from an event.
 ///
 /// `tenant` is the state after the event's transition (records are not needed, only schema and
@@ -357,6 +391,49 @@ pub fn notice(
     selector: &Selector,
     event: &DomainEvent,
 ) -> Option<Notice> {
+    // No record is loaded: an audience that follows a reference decides nothing in favour of the
+    // subscriber, so a subscriber is never told for lack of the record it needs.
+    let none = Coverage::Partial(Default::default());
+    notice_with(
+        Lookup {
+            tenant,
+            coverage: &none,
+        },
+        principal,
+        selector,
+        event,
+    )
+}
+
+/// [`notice`] over a snapshot that holds the records the audience of the event follows
+/// ([`strata_kernel::audience_needs`]), so that a Read policy stated through a reference, such as
+/// "the author of the content this engagement is about", is decided on the record it reaches
+/// (D-8402, ADM-1632). A record the snapshot lacks denies, and nothing is told.
+pub fn notice_in(
+    state: &State,
+    principal: &Principal,
+    selector: &Selector,
+    event: &DomainEvent,
+) -> Option<Notice> {
+    let tenant = state.tenant.as_deref()?;
+    notice_with(
+        Lookup {
+            tenant,
+            coverage: &state.coverage,
+        },
+        principal,
+        selector,
+        event,
+    )
+}
+
+fn notice_with(
+    lookup: Lookup<'_>,
+    principal: &Principal,
+    selector: &Selector,
+    event: &DomainEvent,
+) -> Option<Notice> {
+    let tenant = lookup.tenant;
     if event.tenant != tenant.id {
         return None;
     }
@@ -369,7 +446,9 @@ pub fn notice(
             .as_ref()
             .is_none_or(|set| set.contains(object))
     };
-    let sees = |record| visible(tenant, principal, record, event.at);
+    let sees = |record: &strata_kernel::Record| {
+        visible_in(lookup, principal, record, event.at).unwrap_or(false)
+    };
     match &event.body {
         EventBody::TenantCreated { .. } => None,
         EventBody::SchemaChanged { version, .. } => Some(Notice::Schema { version: version.0 }),

@@ -3394,15 +3394,16 @@
             "packages/engine/src/suite/handlers/content.ts:271 engage (audience ['*'])"
           ],
           "strata": {
-            "status": "partly",
-            "how": "declared-event whose readers are the author (a record-scoped reader) and role content-editor.",
+            "status": "expressible",
+            "how": "The engagement is a record and its event is the record event. Its audience is its Read policies: role content-editor with no condition, and a role the authors hold with the condition through(record, content, $created_by) = principal. A member with neither role is refused the subscription with AudienceNotPermitted (D-8428, ADM-1632).",
             "fundamentals": [
-              "F-record-scoped-event-readers"
+              "F-visibility"
             ],
             "evidence": [
-              "specifications/boundary.jsonc types event-kind-decl (readers role list only)"
+              "crates/substrate/tests/visibility.rs (Verifies: ADM-1632)",
+              "crates/backend/tests/service.rs an_audience_through_a_reference_is_decided_live_and_a_subscription_without_one_is_refused"
             ],
-            "note": "Divergence: the code's '*' audience sends the viewer's handle and reaction to every member's domain stream. Likely a bug against the contract; to decide. Security-relevant (authorisation, ledger, audit or personal data)."
+            "note": "Owner decision 2026-11-25, rule 5: the code's '*' audience was a bug; the Strata port restricts the audience."
           }
         },
         {
@@ -3956,15 +3957,15 @@
             "packages/engine/src/suite/handlers/content.ts:271 (audience ['*'])"
           ],
           "strata": {
-            "status": "partly",
-            "how": "Readers of the event kind are roles; the author is a record-scoped reader.",
+            "status": "expressible",
+            "how": "Two Read policies on the engagement record: content-editor unconditionally, and the author role through the engagement's reference to its content (D-8428).",
             "fundamentals": [
-              "F-record-scoped-event-readers"
+              "F-visibility"
             ],
             "evidence": [
-              "specifications/boundary.jsonc types event-kind-decl"
+              "crates/substrate/tests/visibility.rs (Verifies: ADM-1632)"
             ],
-            "note": "The code does not match the contract today."
+            "note": "The code did not match the contract; the port does."
           }
         }
       ]

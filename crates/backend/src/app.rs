@@ -574,7 +574,9 @@ impl ApiError {
     pub fn domain(error: DomainError, anonymous: bool) -> Self {
         let code = match error.kind {
             ErrorKind::Unauthorized if anonymous => ErrorCode::Unauthenticated,
-            ErrorKind::Unauthorized => ErrorCode::Forbidden,
+            ErrorKind::Unauthorized | ErrorKind::ViewReadOnly | ErrorKind::AudienceNotPermitted => {
+                ErrorCode::Forbidden
+            }
             ErrorKind::TenantNotFound
             | ErrorKind::UnknownObject
             | ErrorKind::UnknownRecord

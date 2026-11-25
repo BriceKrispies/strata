@@ -8,8 +8,8 @@ use crate::rules::{
     authorize, authorize_needing, insufficient, missing_error, roles_of, Lookup, Subject,
 };
 use crate::schema::{Action, Resource, TenantSchema};
-use crate::state::{Need, Principal, Record, State, TenantState};
-use crate::types::{RoleId, Timestamp, Value};
+use crate::state::{Need, Principal, Record, RecordExt, State, TenantState};
+use crate::types::{FieldId, FieldTypeExt, RoleId, Timestamp, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -225,4 +225,47 @@ pub fn read(
         next,
         depths: None,
     })
+}
+
+/// The records a decision of who may read `record` can follow references into: for each reference
+/// field that a Read policy of the record's object type follows (`through`), the record the field
+/// refers to. A live delivery path loads these before it asks [`visible_in`] for every subscriber
+/// (D-8402), so that an audience stated through a reference, such as "the author of the content
+/// this engagement is about", is decided on the record it reaches and never for lack of it.
+pub fn audience_needs(schema: &TenantSchema, record: &Record) -> Vec<Need> {
+    let Some(def) = schema.objects.get(&record.object) else {
+        return Vec::new();
+    };
+    let mut followed = BTreeSet::new();
+    for policy in schema.policies.values() {
+        let reads_here = policy.actions.contains(&Action::Read)
+            && match &policy.resource {
+                Resource::AnyObject => true,
+                Resource::Object(object) => *object == record.object,
+                _ => false,
+            };
+        if let (true, Some(condition)) = (reads_here, &policy.condition) {
+            crate::aggregates::walk(condition, &mut |expr| {
+                if let crate::expr::Expr::Through(_, field, _) = expr {
+                    followed.insert(field.clone());
+                }
+            });
+        }
+    }
+    let mut needs = Vec::new();
+    for name in followed {
+        let Ok(id) = FieldId::new(name) else {
+            continue;
+        };
+        let (Some(field), Value::Ref(target)) = (def.fields.get(&id), record.get(&id)) else {
+            continue;
+        };
+        if let Some((object, _, _)) = field.ty.ref_target() {
+            needs.push(Need::Record {
+                object: object.clone(),
+                id: *target,
+            });
+        }
+    }
+    needs
 }

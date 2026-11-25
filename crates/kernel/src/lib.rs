@@ -66,7 +66,7 @@ pub mod world;
 
 pub use expr::{CmpOp, Expr, Scope};
 pub use intent::*;
-pub use read::{read, read_needs, visible, visible_in};
+pub use read::{audience_needs, read, read_needs, visible, visible_in};
 pub use schema::*;
 pub use state::*;
 pub use transition::{

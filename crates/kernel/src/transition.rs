@@ -22,7 +22,7 @@ use crate::state::{Need, Principal, Record, RecordExt, State, TenantState, Tenan
 use crate::types::{
     owner_role, public_role, refs_in, ConstraintId, FieldId, FieldType, FieldTypeExt, InvitationId,
     ObjectTypeId, OnDelete, PrincipalId, RecordId, RoleId, SchemaVersion, StateRevision, TeamId,
-    TenantOperationDef, Timestamp, UniqueDef, Value, ValueExt,
+    TenantOperationDef, Timestamp, UniqueDef, Value, ValueExt, ViewId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -696,6 +696,17 @@ fn object_def<'a>(
     match tenant.schema.objects.get(object) {
         Some(def) => Ok(def),
         None => {
+            // A view is a read-only source (D-8404, ADM-1612): a write that names one is refused
+            // as such for every caller, the owner included. The ids of views are published in
+            // the routes of the tenant, so naming one tells nothing the caller could not read.
+            if ViewId::new(object.as_str())
+                .is_ok_and(|view| tenant.schema.views.contains_key(&view))
+            {
+                return Err(draft.reject(
+                    ErrorKind::ViewReadOnly,
+                    format!("{object} is a view, which is read-only and cannot be written"),
+                ));
+            }
             draft.require(
                 action,
                 &Resource::Object(object.clone()),

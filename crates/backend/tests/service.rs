@@ -2075,3 +2075,189 @@ async fn a_view_reply_names_people_by_handle_and_titles_its_references() {
     let home = backend.view("fieldnotes", None, "/").await;
     assert!(home.get("people").is_none(), "{home}");
 }
+
+/// The events of the audit trail of `fieldnotes` that carry `event`, newest data last.
+fn audit_events(store: &MemoryStore, event: &str) -> Vec<Json> {
+    store
+        .audit_list(&TenantId::new("fieldnotes").unwrap(), Some("audit"), 1000)
+        .unwrap()
+        .iter()
+        .filter(|line| line.event == event)
+        .map(|line| serde_json::from_str(&line.data).unwrap())
+        .collect()
+}
+
+/// The titles of the rows of a section, leaving out a row that holds none.
+fn any_titles(view: &Json, section: &str) -> Vec<String> {
+    view["sections"][section]["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row["fields"]["title"]["Str"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// Verifies: ADM-1612
+#[tokio::test]
+async fn a_view_reads_under_the_invoker_and_a_write_to_it_is_refused_and_audited() {
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
+    // The same view serves each reader the posts their own policies let them read: the public
+    // reads published ones, the editor every one, and nothing the view declares widens that.
+    let draft = "Notes Toward a Workbench";
+    let editor = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let public = backend.view("fieldnotes", None, "/").await;
+    assert!(!titles(&public, "recent").contains(&draft.to_string()));
+    let (_, desk) = backend
+        .call(
+            "fieldnotes",
+            Some(&editor),
+            "/internal/view",
+            json!({ "path": "/desk" }),
+        )
+        .await;
+    let seen: Vec<String> = desk["sections"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .flat_map(|section| any_titles(&desk, section))
+        .collect();
+    assert!(
+        seen.contains(&draft.to_string()),
+        "the editor reads it: {seen:?}"
+    );
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/view",
+            json!({ "path": "/desk" }),
+        )
+        .await;
+    if status == 200 {
+        let (_, as_public) = backend
+            .call(
+                "fieldnotes",
+                None,
+                "/internal/view",
+                json!({ "path": "/desk" }),
+            )
+            .await;
+        let seen: Vec<String> = as_public["sections"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .flat_map(|section| any_titles(&as_public, section))
+            .collect();
+        assert!(!seen.contains(&draft.to_string()), "{seen:?}");
+    }
+
+    // A write that names a view is refused as such, for the editor and for the owner, and each
+    // refusal is in the audit trail.
+    let owner = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    for (who, token) in [("editor", &editor), ("owner", &owner)] {
+        for write in [
+            json!({ "op": "create", "object": "home", "fields": {} }),
+            json!({ "op": "update", "object": "home", "id": 1, "fields": {} }),
+            json!({ "op": "delete", "object": "home", "id": 1 }),
+        ] {
+            let (status, body) = backend
+                .call("fieldnotes", Some(token), "/internal/mutate", write)
+                .await;
+            assert_eq!(
+                (status, body["kind"].as_str()),
+                (403, Some("ViewReadOnly")),
+                "{who}: {body}"
+            );
+        }
+    }
+    assert_eq!(audit_events(&store, "view.write_refused").len(), 6);
+}
+
+/// Verifies: ADM-1632
+#[tokio::test]
+async fn an_audience_through_a_reference_is_decided_live_and_a_subscription_without_one_is_refused()
+{
+    use strata_kernel::{Action, PolicyDef, PolicyId, Resource, RoleId};
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
+    // A post is read by the author whose byline it carries, even when an editor created it: the
+    // audience of the post is stated through the reference it holds to its author.
+    owner_changes(
+        &store,
+        50_000,
+        vec![SchemaChange::DefinePolicy(PolicyDef {
+            id: PolicyId::new("bylines_read_their_posts").unwrap(),
+            role: RoleId::new("author").unwrap(),
+            resource: Resource::Object(ObjectTypeId::new("post").unwrap()),
+            actions: [Action::Read].into_iter().collect(),
+            condition: Some(Expr::Cmp(
+                CmpOp::Eq,
+                Box::new(Expr::Through(
+                    Scope::Record,
+                    "author".into(),
+                    "principal".into(),
+                )),
+                Box::new(Expr::Principal),
+            )),
+        })],
+    );
+    let authors = backend.view("fieldnotes", None, "/authors").await;
+    let mirela_id = authors["sections"]["authors"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["fields"]["name"]["Str"] == "Mirela Ashby")
+        .map(|row| row["id"].as_u64().unwrap())
+        .expect("Mirela's author record");
+
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let tomasz = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+    let editor = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let mut hers = backend.socket("fieldnotes", Some(&mirela)).await;
+    let mut his = backend.socket("fieldnotes", Some(&tomasz)).await;
+    for socket in [&mut hers, &mut his] {
+        next(socket).await;
+        say(
+            socket,
+            json!({ "type": "subscribe", "req": "r1", "sub": "posts", "objects": ["post"] }),
+        )
+        .await;
+        assert_eq!(next(socket).await["type"], "ok");
+    }
+
+    // The editor drafts a post under Mirela's byline: she hears of it, and the other author, who
+    // has no byline on it, does not.
+    let draft = json!({ "op": "create", "object": "post", "fields": { "title": "Byline", "slug": "byline", "body": "Text.", "author": mirela_id } });
+    let (status, created) = backend
+        .call("fieldnotes", Some(&editor), "/internal/mutate", draft)
+        .await;
+    assert_eq!(status, 200, "{created}");
+    let heard = next(&mut hers).await;
+    assert_eq!(heard["notice"]["kind"], "upsert", "{heard}");
+    assert_eq!(heard["notice"]["id"], created["id"]);
+    assert!(quiet(&mut his).await, "another author is not told of it");
+
+    // A subscription to what the subscriber has no audience for is refused and audited, and the
+    // refusal is the same for a type the tenant does not have.
+    let mut public = backend.socket("fieldnotes", None).await;
+    next(&mut public).await;
+    say(
+        &mut public,
+        json!({ "type": "subscribe", "req": "r9", "sub": "x", "objects": ["nothing"] }),
+    )
+    .await;
+    let refused = next(&mut public).await;
+    assert_eq!(
+        (refused["type"].as_str(), refused["code"].as_str()),
+        (Some("error"), Some("audience_not_permitted")),
+        "{refused}"
+    );
+    assert_eq!(audit_events(&store, "subscription.refused").len(), 1);
+}

@@ -10,18 +10,51 @@ use crate::outbox::Outbox;
 use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
-use strata_kernel::{
-    DomainEvent, EventBody, PrincipalId, SessionId, TenantId, TenantState, WorkflowId,
-};
+use strata_kernel::{DomainEvent, EventBody, PrincipalId, SessionId, State, TenantId, WorkflowId};
 use strata_model::telemetry;
 use strata_protocol::ws::SessionState;
 use tokio::sync::broadcast;
 
-/// A committed event together with the tenant's schema and members at publication time, which
-/// is what deciding visibility needs.
+/// A committed event together with the snapshot deciding who may be told of it needs: the
+/// tenant's schema and members at publication time, and the records that the audience of the
+/// event follows references into ([`audience_needs`], D-8402).
 pub struct Published {
     pub event: DomainEvent,
-    pub tenant: Arc<TenantState>,
+    pub state: Arc<State>,
+}
+
+/// The snapshot a delivery of `event` decides on: `header`, the tenant without records, and the
+/// records its audience follows when there are any. A record that cannot be loaded is left out,
+/// and an audience that needs it then tells nobody.
+pub fn published_state(
+    store: &dyn strata_storage_api::Store,
+    header: &Arc<State>,
+    event: &DomainEvent,
+) -> Arc<State> {
+    let Some(tenant) = header.tenant.as_deref() else {
+        return header.clone();
+    };
+    let records: Vec<&strata_kernel::Record> = match &event.body {
+        EventBody::RecordCreated { record } => vec![record],
+        EventBody::RecordUpdated { before, after, .. } => vec![before, after],
+        EventBody::RecordDeleted { before } => vec![before],
+        _ => Vec::new(),
+    };
+    let mut needs = Vec::new();
+    for record in records {
+        for need in strata_kernel::audience_needs(&tenant.schema, record) {
+            if !needs.contains(&need) {
+                needs.push(need);
+            }
+        }
+    }
+    if needs.is_empty() {
+        return header.clone();
+    }
+    match store.load(&event.tenant, &needs) {
+        Ok(state) => Arc::new(state),
+        Err(_) => header.clone(),
+    }
 }
 
 /// An entry or exit event of a segment, handed on by the job worker (D-7280), with what deciding
@@ -323,7 +356,7 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
     }
     let mut last: BTreeMap<TenantId, u64> = BTreeMap::new();
     // A tenant maps to its header, or to `None` when it could not be loaded this sweep.
-    let mut headers: BTreeMap<TenantId, Option<Arc<TenantState>>> = BTreeMap::new();
+    let mut headers: BTreeMap<TenantId, Option<Arc<State>>> = BTreeMap::new();
     let mut sent = 0;
     for entry in &pending {
         let tenant = entry.event.tenant.clone();
@@ -331,7 +364,7 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
             Some(header) => header.clone(),
             None => {
                 let header = match app.store.load(&tenant, &[]) {
-                    Ok(state) => state.tenant,
+                    Ok(state) => state.tenant.is_some().then(|| Arc::new(state)),
                     Err(error) => {
                         crate::app::LOG.warn(
                             "hub.publish_skipped",
@@ -355,8 +388,8 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
         app.hub.events.send(
             &entry.event.tenant,
             Arc::new(Published {
+                state: published_state(app.store.as_ref(), &header, &entry.event),
                 event: entry.event.clone(),
-                tenant: header,
             }),
         );
         sent += 1;
