@@ -562,6 +562,22 @@ function refreshAfter(stepped, msg) {
   return { state: refreshed.state, effects: [...stepped.effects, ...refreshed.effects] };
 }
 
+/**
+ * Whether a notice of a setting's change reads the view again (WG-5600): a view whose arguments read
+ * the setting names it in its model, and a screen whose live binding takes setting notices is read
+ * again whatever the setting. A tenant's own view is refreshed only by the first of these.
+ * @param {any} state
+ * @param {{ entry: any, part?: any }} shown
+ * @param {{ kind: string, setting?: string, level?: string }} notice
+ * @returns {boolean}
+ */
+function settingRefreshes(state, shown, notice) {
+  const reads = Array.isArray(state.view.model?.settings) && state.view.model.settings.includes(notice.setting);
+  if (reads) return true;
+  if (shown.entry) return false;
+  return live.refreshes(screenOf(state)?.screen ?? '', 'ui-setting-notice-received', { setting: notice.setting, level: notice.level }, state.view.model);
+}
+
 /** Handle one frame from the server. */
 /** @returns {Result} */
 function onSocket(state, frame, msg) {
@@ -586,9 +602,11 @@ function onSocket(state, frame, msg) {
       // of notice; a change of membership also changes what the session may do, so it is read too.
       const shown = tenantOnShow(state);
       const relevant = state.view.status === 'ready'
-        && (shown.entry
-          ? liveRefreshes(shown.part, 'notice', { kind: notice.kind, object: notice.object }, state.view.model)
-          : live.refreshes(screenOf(state)?.screen ?? '', 'ui-notice-received', { kind: notice.kind, object: notice.object }, state.view.model));
+        && (notice.kind === 'setting'
+          ? settingRefreshes(state, shown, notice)
+          : shown.entry
+            ? liveRefreshes(shown.part, 'notice', { kind: notice.kind, object: notice.object }, state.view.model)
+            : live.refreshes(screenOf(state)?.screen ?? '', 'ui-notice-received', { kind: notice.kind, object: notice.object }, state.view.model));
       let current = { state: stepped.state, effects: stepped.effects };
       // A change of the schema may change the tenant's interface: its manifest is read again (INT-3258).
       if (notice.kind === 'schema' && (current.state.ui.manifest || wantsManifest(current.state))) {

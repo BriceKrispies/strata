@@ -1238,6 +1238,9 @@ fn setting_def(kind: u8) -> SettingDef {
         default,
         levels: levels.into_iter().collect(),
         locked_by,
+        area: None,
+        description: None,
+        allowed: None,
     }
 }
 

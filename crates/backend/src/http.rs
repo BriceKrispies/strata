@@ -1174,6 +1174,10 @@ pub fn router(app: Shared) -> Router {
         )
         .route("/internal/settings/resolve", post(crate::settings::resolve))
         .route(
+            "/internal/settings/definitions",
+            post(crate::settings::definitions),
+        )
+        .route(
             "/internal/settings/resolve-all",
             post(crate::settings::resolve_all),
         )

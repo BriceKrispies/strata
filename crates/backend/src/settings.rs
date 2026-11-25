@@ -24,8 +24,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use strata_kernel::settings::{self as kernel, PlatformLevel, PlatformLevels};
 use strata_kernel::{
-    ExistingData, Intent, Output, PrincipalId, SchemaChange, SchemaVersion, SettingDef, SettingId,
-    SettingLevel, SettingResolution, TeamId, TenantId, Value,
+    ExistingData, Intent, Output, PrincipalId, SchemaChange, SchemaVersion, SettingAllowed,
+    SettingDef, SettingId, SettingLevel, SettingResolution, TeamId, TenantId, TenantState, Value,
 };
 use strata_protocol::api::{ErrorCode, HEADER_CORRELATION, HEADER_SESSION};
 use strata_storage_api::{PlatformWrite, Store, StoreResult};
@@ -111,6 +111,19 @@ fn signed_in(identity: &Identity) -> Result<(), ApiError> {
         ))
     } else {
         Ok(())
+    }
+}
+
+/// The caller may read settings at all (SET-010, WG-5600): the capability `setting-read`, which
+/// the kernel decides from the caller's roles in the tenant.
+fn settings_readable(tenant: &TenantState, identity: &Identity) -> Result<(), ApiError> {
+    if kernel::may_read(tenant, &identity.principal) {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            ErrorCode::Forbidden,
+            "Your role does not read settings.",
+        ))
     }
 }
 
@@ -220,6 +233,7 @@ pub async fn resolve(
         signed_in(identity)?;
         let setting = setting_of(&body)?;
         let tenant = header(app, identity)?;
+        settings_readable(&tenant, identity)?;
         let platform = app.platform_settings.levels(app.store.as_ref())?;
         let resolution = kernel::resolve_with(&tenant, &identity.principal, &setting, &platform)
             .map_err(|error| ApiError::domain(error, false))?;
@@ -238,12 +252,69 @@ pub async fn resolve_all(
     as_caller(&app, &headers, move |app, identity| {
         signed_in(identity)?;
         let tenant = header(app, identity)?;
+        settings_readable(&tenant, identity)?;
         let platform = app.platform_settings.levels(app.store.as_ref())?;
         let settings: Vec<Json_> =
             kernel::resolve_all_with(&tenant, &identity.principal, &platform)
                 .iter()
                 .map(resolution_json)
                 .collect();
+        Ok(json!({ "settings": settings }))
+    })
+    .await
+}
+
+/// The allowed values of a definition, as the settings route answers them (WG-5600).
+fn allowed_json(allowed: &SettingAllowed) -> Json_ {
+    match allowed {
+        SettingAllowed::Closed { values } => json!({
+            "closed": { "values": values.iter().map(json_of).collect::<Vec<_>>() }
+        }),
+        SettingAllowed::Range { min, max } => json!({ "range": { "min": min, "max": max } }),
+        SettingAllowed::Reference { object } => {
+            json!({ "reference": { "object": object.as_str() } })
+        }
+    }
+}
+
+/// One setting the caller may see (`setting-entry`, CT-307, WG-5600): its definition, the value
+/// the caller reads and where it comes from, whether a lock closes the levels below, and the levels
+/// the caller may write.
+fn entry_json(view: &kernel::SettingView) -> Json_ {
+    let def = &view.definition;
+    let resolution = &view.resolution;
+    json!({
+        "id": def.id.as_str(),
+        "label": def.label,
+        "description": def.description,
+        "area": def.area.as_ref().map(|area| area.as_str()),
+        "type": def.r#type.as_str(),
+        "allowed": def.allowed.as_ref().map(allowed_json),
+        "value": json_of(&resolution.value),
+        "source": resolution.source.as_str(),
+        "team": resolution.team.as_ref().map(TeamId::as_str),
+        "locked": def.locked_by.is_some(),
+        "writable_levels": view.writable.iter().map(|level| level.as_str()).collect::<Vec<_>>(),
+    })
+}
+
+/// The settings the caller may see, with what the caller reads and may write (CT-307, WG-5600):
+/// `GET /api/settings/definitions`.
+///
+/// Implements: CT-307
+pub async fn definitions(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        signed_in(identity)?;
+        let tenant = header(app, identity)?;
+        settings_readable(&tenant, identity)?;
+        let platform = app.platform_settings.levels(app.store.as_ref())?;
+        let settings: Vec<Json_> = kernel::views_for(&tenant, &identity.principal, &platform)
+            .iter()
+            .map(entry_json)
+            .collect();
         Ok(json!({ "settings": settings }))
     })
     .await

@@ -2786,8 +2786,111 @@ pub const TYPES: &[TypeDecl] = &[
         ]),
     },
     TypeDecl {
+        id: "setting-allowed",
+        decl: Decl::Union(
+            Tag::External,
+            &[
+                Variant {
+                    wire: "closed",
+                    content: Content::Fields(&[Field {
+                        wire: "values",
+                        ty: Ty::List(&Ty::Named("value")),
+                        optional: false,
+                    }]),
+                },
+                Variant {
+                    wire: "range",
+                    content: Content::Fields(&[
+                        Field {
+                            wire: "min",
+                            ty: Ty::Int(-9223372036854775808, 9223372036854775807),
+                            optional: false,
+                        },
+                        Field {
+                            wire: "max",
+                            ty: Ty::Int(-9223372036854775808, 9223372036854775807),
+                            optional: false,
+                        },
+                    ]),
+                },
+                Variant {
+                    wire: "reference",
+                    content: Content::Fields(&[Field {
+                        wire: "object",
+                        ty: Ty::Named("object-type-id"),
+                        optional: false,
+                    }]),
+                },
+            ],
+        ),
+    },
+    TypeDecl {
+        id: "setting-entry",
+        decl: Decl::Struct(&[
+            Field {
+                wire: "id",
+                ty: Ty::Named("setting-id"),
+                optional: false,
+            },
+            Field {
+                wire: "label",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "description",
+                ty: Ty::Text,
+                optional: true,
+            },
+            Field {
+                wire: "area",
+                ty: Ty::Named("product-id"),
+                optional: true,
+            },
+            Field {
+                wire: "type",
+                ty: Ty::Named("setting-type"),
+                optional: false,
+            },
+            Field {
+                wire: "allowed",
+                ty: Ty::Named("setting-allowed"),
+                optional: true,
+            },
+            Field {
+                wire: "value",
+                ty: Ty::Named("value"),
+                optional: false,
+            },
+            Field {
+                wire: "source",
+                ty: Ty::Named("setting-source"),
+                optional: false,
+            },
+            Field {
+                wire: "team",
+                ty: Ty::Named("team-id"),
+                optional: true,
+            },
+            Field {
+                wire: "locked",
+                ty: Ty::Bool,
+                optional: false,
+            },
+            Field {
+                wire: "writable_levels",
+                ty: Ty::List(&Ty::Named("setting-level")),
+                optional: false,
+            },
+        ]),
+    },
+    TypeDecl {
         id: "setting-id",
         decl: Decl::Alias(Ty::Text),
+    },
+    TypeDecl {
+        id: "setting-level",
+        decl: Decl::Enum(&["platform", "tenant", "team", "person"]),
     },
     TypeDecl {
         id: "setting-resolution",
@@ -2827,6 +2930,10 @@ pub const TYPES: &[TypeDecl] = &[
     TypeDecl {
         id: "setting-source",
         decl: Decl::Enum(&["default", "platform", "tenant", "team", "person"]),
+    },
+    TypeDecl {
+        id: "setting-type",
+        decl: Decl::Alias(Ty::Text),
     },
     TypeDecl {
         id: "site-page-data",
@@ -3147,6 +3254,7 @@ pub const COVERED: &[&str] = &[
     "setting-save-definition",
     "setting-resolve",
     "setting-resolve-all",
+    "setting-definitions",
     "setting-set-tenant",
     "setting-set-team",
     "setting-set-person",
@@ -7317,6 +7425,45 @@ pub const SETTING_RESOLVE_ALL: Contract = Contract {
 #[tokio::test]
 async fn setting_resolve_all() {
     conform(&SPEC, &SETTING_RESOLVE_ALL).await;
+}
+
+/// Contract `setting-definitions` (CT-307): GET /api/settings/definitions.
+pub const SETTING_DEFINITIONS: Contract = Contract {
+    id: "setting-definitions",
+    method: "GET",
+    shape: Shape::Json,
+    scheme: Scheme::Session,
+    requires: &["setting-read"],
+    roles: &[],
+    origin: false,
+    csrf: false,
+    step_up: false,
+    read_only: true,
+    tenant_input: None,
+    probe: Request {
+        path: "/api/settings/definitions",
+        query: &[],
+        body: None,
+    },
+    success: Some(Request {
+        path: "/api/settings/definitions",
+        query: &[],
+        body: None,
+    }),
+    setup: &[],
+    reply: Reply::Members(&[Field {
+        wire: "settings",
+        ty: Ty::List(&Ty::Named("setting-entry")),
+        optional: false,
+    }]),
+    errors: &["unauthenticated", "forbidden", "unavailable"],
+    step_up_error: None,
+    quota: None,
+};
+
+#[tokio::test]
+async fn setting_definitions() {
+    conform(&SPEC, &SETTING_DEFINITIONS).await;
 }
 
 /// Contract `setting-set-tenant` (CT-304): POST /api/settings/set-tenant.

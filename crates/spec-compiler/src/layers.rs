@@ -172,6 +172,9 @@ pub const BALANCE_OUTSIDE_LEDGER: &str = "layer.balance-outside-ledger";
 /// An expression of a product that names a record by a literal id: the singleton record of a
 /// configuration kept outside a declared setting (WG-5000, SET-001).
 pub const CONFIGURATION_OUTSIDE_SETTING: &str = "layer.configuration-outside-setting";
+/// A product's setting whose `area` names another product, or is not a product's id at all: a
+/// product owns the settings it declares (WG-5600, SET-001).
+pub const SETTING_AREA_OTHER_PRODUCT: &str = "layer.setting-area-other-product";
 
 /// Stands for "any section": a key listing it accepts any platform entity.
 const ANY: &[&str] = &[];
@@ -684,6 +687,9 @@ fn check_product(
                 }
             }
             check_power(&file, section, id, item, platform_ids, out);
+            if *section == "settings" {
+                check_setting_area(&file, id, item, header_product_id(&parsed), out);
+            }
             let mut ids = BTreeMap::new();
             collect_ids(section, item, &mut ids);
             for (declared, in_section) in &ids {
@@ -1404,6 +1410,30 @@ fn check_event_kind(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic
             format!("The event kind \"{kind}\" of \"{id}\" in {file} has {fields} fields, and a declared kind has at most {MOST_FIELDS} (SCH-1576). Remove some, or carry them in a record the event names."),
         ));
     }
+}
+
+/// A product's setting names an area that is not the product's own id (WG-5600). The area of a
+/// setting is the product that owns it, so a product declares only its own settings.
+fn check_setting_area(
+    file: &str,
+    id: &str,
+    item: &Value,
+    product_id: &str,
+    out: &mut Vec<Diagnostic>,
+) {
+    let Some(area) = item.get("area") else {
+        return;
+    };
+    if area.as_str() == Some(product_id) {
+        return;
+    }
+    out.push(Diagnostic::new(
+        SETTING_AREA_OTHER_PRODUCT,
+        id,
+        format!(
+            "\"{id}\" in \"settings\" of {file} names the area {area}, which is not the product's own id \"{product_id}\". A product's setting is owned by that product: set \"area\" to \"{product_id}\", or leave it out."
+        ),
+    ));
 }
 
 fn check_power(

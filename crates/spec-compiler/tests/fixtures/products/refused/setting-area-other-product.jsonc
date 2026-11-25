@@ -1,0 +1,15 @@
+{
+  // Refused: a product setting whose area names another product (layer.setting-area-other-product,
+  // WG-5600). A product owns the settings it declares; the area of the setting is the member tiers product.
+  "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "settings": [
+    {
+      "id": "member_tiers__gold_threshold",
+      "label": "Points for the gold tier",
+      "type": "i64",
+      "default": { "Int": 1000 },
+      "levels": ["tenant"],
+      "area": "analytics"
+    }
+  ]
+}

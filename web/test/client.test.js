@@ -74,6 +74,19 @@ test('a notice of a change of membership refreshes the view only where the live 
   assert.equal(httpPaths(both.effects).length, 2);
 });
 
+const settingNotice = (n, setting) => ({ type: 'ws_message', message: { type: 'event', sub: 'site', n, seq: 40 + n, correlation: '', notice: { kind: 'setting', setting, level: 'tenant' } }, ...stamp });
+
+test('a notice of a setting change reads again only the view whose arguments read that setting', () => {
+  const httpPaths = (effects) => effects.filter((e) => e.type === 'http').map((e) => e.path);
+  // A view that reads page_size in its arguments names it in its model, and is read again for it.
+  const reading = connected(boot('/nowhere', anonymous, { ...missingModel, settings: ['page_size'] }).state);
+  assert.equal(httpPaths(update(reading, settingNotice(1, 'page_size')).effects).some((p) => p.startsWith('/api/view')), true);
+  // Another setting leaves it alone, and so does a view that reads none.
+  assert.equal(httpPaths(update(reading, settingNotice(2, 'ui_theme')).effects).some((p) => p.startsWith('/api/view')), false);
+  const plain = connected(boot('/nowhere', anonymous, missingModel).state);
+  assert.equal(httpPaths(update(plain, settingNotice(3, 'page_size')).effects).some((p) => p.startsWith('/api/view')), false);
+});
+
 test('the desk names its buttons with the labels the specification generates', () => {
   const { page } = view(boot('/desk', editor, deskModel).state);
   const item = { article_id: 7, title: 'On Sharpening' };

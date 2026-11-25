@@ -1571,3 +1571,124 @@ async fn a_tenant_document_chooses_the_preset_of_every_page_of_the_tenant() {
         );
     }
 }
+
+/// The entry of one setting in the answer of the definitions route.
+fn setting_named<'a>(body: &'a Json, id: &str) -> &'a Json {
+    body["settings"]
+        .as_array()
+        .expect("the answer lists the settings")
+        .iter()
+        .find(|setting| setting["id"] == id)
+        .unwrap_or_else(|| panic!("no setting {id} in {body}"))
+}
+
+/// Verifies: CT-300
+/// Verifies: CT-301
+/// Verifies: CT-306
+/// Verifies: CT-307
+/// A signed-in person sees each setting with its definition, the value they read and the level it
+/// comes from, whether a lock closes it and the levels they may write. A person's value is written
+/// by the person route and read back by that person alone: a body that names another person does
+/// not write that person's value, and a visitor is refused.
+#[tokio::test]
+async fn a_person_sees_the_settings_and_writes_only_their_own_person_level() {
+    let edge = start().await;
+    let (admin, admin_csrf) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
+    let (ines, ines_csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+
+    let (status, body, _) = edge
+        .get("127.0.0.1", "/api/settings/definitions", None)
+        .await;
+    assert_ne!(status, 200, "a visitor reads no settings: {body}");
+
+    let (status, body, _) = edge
+        .get("127.0.0.1", "/api/settings/definitions", Some(&ines))
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let names = setting_named(&body, "member_names");
+    assert_eq!(names["value"], "members");
+    assert_eq!(names["source"], "default");
+    assert_eq!(names["locked"], false);
+    assert_eq!(
+        names["allowed"]["closed"]["values"],
+        json!(["members", "everyone", "nobody"])
+    );
+    let writable = names["writable_levels"]
+        .as_array()
+        .expect("a list of levels");
+    assert!(!writable.contains(&json!("platform")), "{writable:?}");
+
+    // A person-level setting, defined by the owner with a range of allowed values. The definition
+    // is refused at a stale schema version, which names the current one: the request is made again.
+    let definition = json!({
+        "id": "reading_size",
+        "label": "Reading size",
+        "type": "i64",
+        "default": { "Int": 1 },
+        "levels": ["person"],
+        "allowed": { "range": { "min": 1, "max": 5 } },
+        "description": "How large the text of the pages is, for this person."
+    });
+    let mut expected = 0_u64;
+    for _ in 0..3 {
+        let request = edge
+            .post(
+                "127.0.0.1",
+                "/api/settings/save-definition",
+                json!({ "definition": definition.clone(), "expected_version": expected }),
+            )
+            .header("x-csrf-token", admin_csrf.clone())
+            .header("cookie", format!("{SESSION_COOKIE}={admin}"));
+        let (status, body, _) = edge.send(request).await;
+        if status == 200 {
+            break;
+        }
+        let text = body.to_string();
+        expected = text
+            .split("schema is at version ")
+            .nth(1)
+            .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|digits| digits.parse().ok())
+            .unwrap_or_else(|| panic!("the definition was refused: {body}"));
+    }
+
+    let (status, body, _) = edge
+        .get("127.0.0.1", "/api/settings/definitions", Some(&ines))
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let size = setting_named(&body, "reading_size");
+    assert_eq!(size["allowed"]["range"], json!({ "min": 1, "max": 5 }));
+    assert_eq!(
+        size["description"],
+        "How large the text of the pages is, for this person."
+    );
+    assert_eq!(size["writable_levels"], json!(["person"]));
+
+    // Ines writes her own person level. The body also names the owner, which is not taken.
+    let request = edge
+        .post(
+            "127.0.0.1",
+            "/api/settings/set-person",
+            json!({ "setting": "reading_size", "value": 4, "expected_version": 0, "principal": "admin" }),
+        )
+        .header("x-csrf-token", ines_csrf.clone())
+        .header("cookie", format!("{SESSION_COOKIE}={ines}"));
+    let (status, body, _) = edge.send(request).await;
+    assert_eq!(status, 200, "{body}");
+
+    let (status, body, _) = edge
+        .get("127.0.0.1", "/api/settings/reading_size", Some(&ines))
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["value"], json!(4));
+    assert_eq!(body["source"], "person");
+
+    let (status, body, _) = edge
+        .get("127.0.0.1", "/api/settings/reading_size", Some(&admin))
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["source"], "default",
+        "the owner's own value is not Ines's: {body}"
+    );
+}

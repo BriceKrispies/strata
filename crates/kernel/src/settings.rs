@@ -36,12 +36,13 @@ use crate::intent::{
     Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, ErrorKind, EventBody, Output,
 };
 use crate::limits;
-use crate::rules::holds_any;
+use crate::rules::{authorize, holds_any, Subject};
 use crate::schema::{Grant, TenantSchema, TenantSchemaExt};
-use crate::state::TenantState;
+use crate::state::{TenantState, TenantStateExt};
 use crate::types::{
-    Principal, PrincipalId, SchemaChange, SettingDef, SettingId, SettingLevel, SettingOverride,
-    SettingResolution, SettingSource, SettingValues, TeamId, Value, ValueExt,
+    Action, Principal, PrincipalId, RecordId, Resource, SchemaChange, SettingAllowed, SettingDef,
+    SettingId, SettingLevel, SettingOverride, SettingResolution, SettingSource, SettingType,
+    SettingValues, TeamId, Value, ValueExt,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -65,7 +66,51 @@ pub const SETTING_RESOLVE_FOR: &str = "setting-resolve-for";
 /// definitions come with a release and none ships yet, so no name is taken; a release that adds
 /// one lists it here, and the tenants that already define the name are refused at their next
 /// schema change.
-pub const PLATFORM_SETTINGS: &[&str] = &[];
+pub const PLATFORM_SETTINGS: &[&str] = &[MEMBER_NAMES];
+
+/// The setting that says who may see the display names of the members a view names (WG-5600).
+pub const MEMBER_NAMES: &str = "member_names";
+
+/// The definitions the platform owns (SET-005, WG-5600): every tenant has them whatever its own
+/// schema holds, a tenant's value at their levels is an override like any other, and a tenant
+/// cannot define a setting of the same name (SET-003).
+pub fn platform_definitions() -> &'static [SettingDef] {
+    static DEFINITIONS: std::sync::OnceLock<Vec<SettingDef>> = std::sync::OnceLock::new();
+    DEFINITIONS.get_or_init(|| {
+        vec![SettingDef {
+            id: SettingId::new(MEMBER_NAMES).expect("member_names is a setting id"),
+            label: "Who sees member names".to_string(),
+            r#type: SettingType::new("string").expect("string is a setting type"),
+            default: Value::Str("members".to_string()),
+            levels: BTreeSet::from([SettingLevel::Tenant]),
+            locked_by: None,
+            area: None,
+            description: Some(
+                "Who may see the display names of the members a view names: members (signed-in readers, the default), everyone (anonymous readers too) or nobody. A reader always sees their own name."
+                    .to_string(),
+            ),
+            allowed: Some(SettingAllowed::Closed {
+                values: ["members", "everyone", "nobody"]
+                    .iter()
+                    .map(|mode| Value::Str((*mode).to_string()))
+                    .collect(),
+            }),
+        }]
+    })
+}
+
+/// Every definition the tenant has, its own and the platform's that it does not shadow, in the
+/// order of the setting ids (WG-5600).
+pub fn all_definitions(schema: &TenantSchema) -> Vec<&SettingDef> {
+    let mut defs: BTreeMap<&SettingId, &SettingDef> = BTreeMap::new();
+    for def in platform_definitions() {
+        defs.insert(&def.id, def);
+    }
+    for def in schema.settings.iter().flat_map(|defs| defs.values()) {
+        defs.insert(&def.id, def);
+    }
+    defs.into_values().collect()
+}
 
 /// The platform level of one setting as the control plane holds it: the value, absent once
 /// removed, and the revision, which rises at each change and is never reused (SET-051).
@@ -169,7 +214,11 @@ pub fn override_key(setting: &SettingId, level: SettingLevel, subject: &str) -> 
 
 /// The definition of a setting of the tenant.
 pub fn definition<'a>(schema: &'a TenantSchema, setting: &SettingId) -> Option<&'a SettingDef> {
-    schema.settings.as_ref().and_then(|defs| defs.get(setting))
+    schema
+        .settings
+        .as_ref()
+        .and_then(|defs| defs.get(setting))
+        .or_else(|| platform_definitions().iter().find(|def| def.id == *setting))
 }
 
 /// One override, by setting, level and subject (the tenant, a team or a person).
@@ -314,12 +363,71 @@ pub fn resolve_all_with(
     principal: &Principal,
     platform: &PlatformLevels,
 ) -> Vec<SettingResolution> {
-    tenant
-        .schema
-        .settings
-        .iter()
-        .flat_map(|defs| defs.values())
+    all_definitions(&tenant.schema)
+        .into_iter()
         .map(|def| resolve_definition(tenant, def, principal, platform))
+        .collect()
+}
+
+/// The capability that writes at a level. The platform level has none: the control plane writes
+/// it (SET-030).
+pub fn write_capability(level: SettingLevel) -> Option<&'static str> {
+    match level {
+        SettingLevel::Platform => None,
+        SettingLevel::Tenant => Some(SETTING_WRITE_TENANT),
+        SettingLevel::Team => Some(SETTING_WRITE_TEAM),
+        SettingLevel::Person => Some(SETTING_WRITE_PERSON),
+    }
+}
+
+/// Whether the principal may read settings at all (SET-010): the capability `setting-read`.
+pub fn may_read(tenant: &TenantState, principal: &Principal) -> bool {
+    holds_any(
+        tenant,
+        principal,
+        &BTreeSet::from([Grant::Capability(SETTING_READ.to_string())]),
+    )
+}
+
+/// A setting as one principal may see it (WG-5600): its definition, the value the principal reads
+/// and the level it comes from, and the levels the principal may write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingView {
+    pub definition: SettingDef,
+    pub resolution: SettingResolution,
+    pub writable: BTreeSet<SettingLevel>,
+}
+
+/// Every setting the principal may see, with what the principal reads and may write (WG-5600).
+/// Only a signed-in person writes, and a level is writable when the definition opens it, it is
+/// not the platform's, and the principal holds its write capability.
+pub fn views_for(
+    tenant: &TenantState,
+    principal: &Principal,
+    platform: &PlatformLevels,
+) -> Vec<SettingView> {
+    all_definitions(&tenant.schema)
+        .into_iter()
+        .map(|def| {
+            let writable = open_levels(def)
+                .into_iter()
+                .filter(|level| {
+                    matches!(principal, Principal::User(_))
+                        && write_capability(*level).is_some_and(|name| {
+                            holds_any(
+                                tenant,
+                                principal,
+                                &BTreeSet::from([Grant::Capability(name.to_string())]),
+                            )
+                        })
+                })
+                .collect();
+            SettingView {
+                definition: def.clone(),
+                resolution: resolve_definition(tenant, def, principal, platform),
+                writable,
+            }
+        })
         .collect()
 }
 
@@ -490,6 +598,127 @@ pub fn definition_problems_against(
         }
         if let Some((_, problem)) = type_problem(def.r#type.as_str(), &def.default) {
             problems.push(format!("{at}: default: {problem} (SET-002)"));
+        }
+        if let Some(allowed) = &def.allowed {
+            allowed_definition_problems(&at, def, allowed, problems);
+        }
+    }
+}
+
+/// The problems of the allowed values of a definition (WG-5600): a closed list holds values of the
+/// type and the default is one of them, a range is of whole numbers and holds the default, and a
+/// reference is of a whole-number type.
+fn allowed_definition_problems(
+    at: &str,
+    def: &SettingDef,
+    allowed: &SettingAllowed,
+    problems: &mut Vec<String>,
+) {
+    match allowed {
+        SettingAllowed::Closed { values } => {
+            if values.is_empty() {
+                problems.push(format!("{at}: a closed list allows at least one value"));
+            }
+            for value in values {
+                if let Some((_, problem)) = type_problem(def.r#type.as_str(), value) {
+                    problems.push(format!("{at}: allowed value: {problem} (WG-5600)"));
+                }
+            }
+            if !values.contains(&def.default) {
+                problems.push(format!(
+                    "{at}: the default is not one of the allowed values (WG-5600)"
+                ));
+            }
+        }
+        SettingAllowed::Range { min, max } => {
+            let ty = def.r#type.as_str();
+            if ty != "i64" && ty != "timestamp" {
+                problems.push(format!(
+                    "{at}: a range allows whole numbers, not type {ty} (WG-5600)"
+                ));
+            }
+            if min > max {
+                problems.push(format!(
+                    "{at}: the range is empty: {min} is more than {max} (WG-5600)"
+                ));
+            }
+            let inside =
+                matches!(def.default, Value::Int(n) | Value::Time(n) if (*min..=*max).contains(&n));
+            if !inside {
+                problems.push(format!(
+                    "{at}: the default is outside the range {min} to {max} (WG-5600)"
+                ));
+            }
+        }
+        SettingAllowed::Reference { .. } => {
+            if def.r#type.as_str() != "i64" {
+                problems.push(format!(
+                    "{at}: a reference names a record by a whole number, so its type is i64, not {} (WG-5600)",
+                    def.r#type.as_str()
+                ));
+            }
+        }
+    }
+}
+
+/// Why a value is outside the values a setting allows, with the rule that refuses it and the
+/// message, or `None` (WG-5600). A closed list refuses a value that is not in it (`InvalidIntent`),
+/// a range one outside its bounds (`LimitExceeded`), and a reference one that names no record of
+/// the object type which the writer may read (`UnknownRecord`: a record that is missing and one
+/// that is hidden are refused alike, so the refusal reveals nothing).
+pub fn allowed_problem(
+    tenant: &TenantState,
+    ctx: &Context,
+    allowed: &SettingAllowed,
+    value: &Value,
+) -> Option<(ErrorKind, &'static str, String)> {
+    match allowed {
+        SettingAllowed::Closed { values } => (!values.contains(value)).then(|| {
+            (
+                ErrorKind::InvalidIntent,
+                "setting:value_is_allowed",
+                format!("{value:?} is not one of the values the setting allows"),
+            )
+        }),
+        SettingAllowed::Range { min, max } => match value {
+            Value::Int(n) | Value::Time(n) if (*min..=*max).contains(n) => None,
+            _ => Some((
+                ErrorKind::LimitExceeded,
+                "setting:value_in_range",
+                format!("the setting takes a whole number from {min} to {max}"),
+            )),
+        },
+        SettingAllowed::Reference { object } => {
+            let Value::Int(id) = value else {
+                return Some((
+                    ErrorKind::TypeMismatch,
+                    "setting:value_names_a_record",
+                    "a reference names a record by its whole-number id".to_string(),
+                ));
+            };
+            let readable = u64::try_from(*id)
+                .ok()
+                .and_then(|id| tenant.record(object, RecordId(id)))
+                .is_some_and(|record| {
+                    authorize(
+                        tenant,
+                        &tenant.schema,
+                        &ctx.principal,
+                        ctx.now,
+                        Action::Read,
+                        &Resource::Object(object.clone()),
+                        Subject::stored(record),
+                        None,
+                    )
+                    .0
+                });
+            (!readable).then(|| {
+                (
+                    ErrorKind::UnknownRecord,
+                    "setting:record_is_readable",
+                    format!("no record {id} of {object} is one the writer may read"),
+                )
+            })
         }
     }
 }
@@ -765,6 +994,17 @@ pub fn write_setting(
             "setting:value_has_the_type",
             def.r#type.as_str(),
         ));
+        if let Some(allowed) = &def.allowed {
+            if let Some((kind, rule, problem)) = allowed_problem(tenant, ctx, allowed, value) {
+                return Err(refuse(
+                    &evidence,
+                    kind,
+                    rule,
+                    format!("setting {setting}: {problem}"),
+                ));
+            }
+            evidence.push(Check::pass("setting:value_is_allowed", def.r#type.as_str()));
+        }
     }
 
     let current = override_of(tenant, setting, level, &subject);

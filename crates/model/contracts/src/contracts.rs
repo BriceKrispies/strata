@@ -14090,6 +14090,43 @@ impl fmt::Display for SettingResolveAllError {
 
 impl std::error::Error for SettingResolveAllError {}
 
+/// The request of contract `setting-definitions`: List the setting definitions the caller may see.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct SettingDefinitionsRequest {}
+
+/// The response of contract `setting-definitions`: List the setting definitions the caller may see.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct SettingDefinitionsResponse {
+    /// Field `settings`.
+    pub settings: Vec<types::SettingEntry>,
+}
+
+/// The errors of contract `setting-definitions`: List the setting definitions the caller may see.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum SettingDefinitionsError {
+    /// No valid session or credential accompanies the request.
+    #[serde(rename = "unauthenticated")]
+    Unauthenticated(types::ApiError),
+    /// The caller holds no permission for the operation.
+    #[serde(rename = "forbidden")]
+    Forbidden(types::ApiError),
+    /// A dependency of the operation did not answer.
+    #[serde(rename = "unavailable")]
+    Unavailable(types::ApiError),
+}
+
+impl fmt::Display for SettingDefinitionsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unauthenticated(_) => f.write_str("unauthenticated"),
+            Self::Forbidden(_) => f.write_str("forbidden"),
+            Self::Unavailable(_) => f.write_str("unavailable"),
+        }
+    }
+}
+
+impl std::error::Error for SettingDefinitionsError {}
+
 /// The request of contract `setting-set-platform`: Set or remove the platform level of a setting.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SettingSetPlatformRequest {
@@ -21434,6 +21471,25 @@ pub trait Gateway {
     ) -> impl std::future::Future<Output = Result<SettingResolveAllResponse, SettingResolveAllError>>
            + Send;
 
+    /// List the setting definitions the caller may see
+    ///
+    /// Postconditions:
+    ///
+    /// - Each entry is a setting the tenant or the platform defines, with the value the caller reads and the level that value comes from (SET-010, SET-012).
+    /// - The writable levels of an entry are the levels its definition opens for which the caller holds the write capability; the platform level is never among them (SET-030 to SET-034).
+    /// - A setting closed by a lock is listed as locked, with the levels a lock leaves open (SET-023).
+    ///
+    /// Authorisation: public, scheme session, the tenant's policies decide. A signed-in principal whose policies permit the operation
+    ///
+    /// Idempotent: repeating a call has the effect of making it once.
+    ///
+    /// Contract `setting-definitions`, reference CT-307.
+    fn setting_definitions(
+        &self,
+        request: SettingDefinitionsRequest,
+    ) -> impl std::future::Future<Output = Result<SettingDefinitionsResponse, SettingDefinitionsError>>
+           + Send;
+
     /// Set or remove the tenant level of a setting
     ///
     /// Preconditions:
@@ -26611,6 +26667,18 @@ pub mod meta {
         timeout_ms: None,
     };
 
+    /// Contract `setting-definitions`: List the setting definitions the caller may see.
+    pub const SETTING_DEFINITIONS: ContractMeta = ContractMeta {
+        id: "setting-definitions",
+        name: "List the setting definitions the caller may see",
+        reference: Some("CT-307"),
+        realisation: Realisation::Generated,
+        implemented_by: Some("gateway"),
+        auth: Some("session"),
+        idempotent: Some(true),
+        timeout_ms: None,
+    };
+
     /// Contract `setting-set-platform`: Set or remove the platform level of a setting.
     pub const SETTING_SET_PLATFORM: ContractMeta = ContractMeta {
         id: "setting-set-platform",
@@ -28062,6 +28130,7 @@ pub mod meta {
         SETTING_SAVE_DEFINITION,
         SETTING_RESOLVE,
         SETTING_RESOLVE_ALL,
+        SETTING_DEFINITIONS,
         SETTING_SET_PLATFORM,
         SETTING_SET_TENANT,
         SETTING_SET_TEAM,
@@ -29179,6 +29248,16 @@ impl strata_runtime::ContractError for crate::contracts::SettingResolveError {
 }
 
 impl strata_runtime::ContractError for crate::contracts::SettingResolveAllError {
+    fn status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated { .. } => 401,
+            Self::Forbidden { .. } => 403,
+            Self::Unavailable { .. } => 503,
+        }
+    }
+}
+
+impl strata_runtime::ContractError for crate::contracts::SettingDefinitionsError {
     fn status(&self) -> u16 {
         match self {
             Self::Unauthenticated { .. } => 401,

@@ -291,6 +291,11 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
         &["platform level", "tenant, team and person"],
     ),
     (
+        "setting-area-other-product",
+        layers::SETTING_AREA_OTHER_PRODUCT,
+        &["\"area\"", "\"member-tiers\""],
+    ),
+    (
         "import-mismatch",
         layers::IMPORT_MISMATCH,
         &[
