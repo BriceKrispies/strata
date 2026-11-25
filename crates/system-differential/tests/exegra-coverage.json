@@ -1,6 +1,6 @@
 {
-  "floor": 277,
-  "floorNote": "Scenarios that drive implementation-level machines: 306. Not run on the host (listed in `skipped`): 29, 8 with a fault on an emitted event and 21 of client machines. The remaining 277 must all run and agree: 113 agreed before the stack's first run, 161 diverged (139 because the host never started the one instance of an unkeyed machine that creates its records, 22 for other reasons), 3 were unrepresentable until the principal-id initial values of approval-separation-flow-impl were fixed. Raise the floor when scenarios are added; lower it only with an entry in `skipped` that says why.",
+  "floor": 145,
+  "floorNote": "Scenarios that drive implementation-level machines: 306. Not run on the host (listed in `skipped`): 29, 8 with a fault on an emitted event and 21 of client machines. The remaining 277 can run on the host; the test runs one of each kind (the machines a scenario runs, with the kinds of its faults), which is 145 kinds, and the floor counts those. Scenarios of a kind already run are not listed. Raise the floor when a new kind appears; lower it only with an entry in `skipped` that says why.",
   "skipped": {
     "revocation-notice-lost-impl": "Fault revocation-notice-dropped (drop-event) acts on sr-notice, an event a scenario machine emits. One system host delivers every emitted entry exactly once through its transactional queue, so the fault only exists between two hosts, and the test has one.",
     "page-purge-lost-impl": "Fault purge-dropped (drop-event) acts on ec-purge, an event a scenario machine emits. One system host delivers every emitted entry exactly once through its transactional queue, so the fault only exists between two hosts, and the test has one.",

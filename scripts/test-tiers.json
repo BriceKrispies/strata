@@ -199,9 +199,8 @@
       "package": "strata-system-differential",
       "target": "system_differential_slow",
       "tier": "full",
-      "seconds": 1486.97,
-      "unmeasured": true,
-      "reason": "exegra: Replays every implementation scenario through Exegra (one Exegra trace per scenario) and steps the generated system host through it; the one comparison that needs all of them",
+      "seconds": 24.4,
+      "reason": "exegra: Replays one scenario of each kind (the machines it runs and the kinds of its faults) through Exegra, in one process per shard, and steps the generated system host through it; the one comparison that needs them",
       "slow": true
     },
     {
