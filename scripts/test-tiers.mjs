@@ -94,10 +94,12 @@ function exeName(file) {
 }
 
 /**
- * Every test binary a `cargo test` log reports: `{name, label, tests, status, seconds}` from the
- * `Running tests\x.rs (...)` line and the `test result: ... finished in Ns` line after it. `name` is
- * the integration test name, `lib` or `bin` for unit tests, `doc` for doctests; `label` adds the
- * crate and source path. The log must hold the `Running` lines, which cargo writes to stderr.
+ * Every test binary a `cargo test` log reports: `{name, label, tests, passed, failed, status, seconds, cases}`
+ * from the `Running tests\x.rs (...)` line and the `test result: ... finished in Ns` line after it. `name` is
+ * the integration test name, `lib` or `bin` for unit tests, `doc` for doctests; `label` adds the crate and
+ * source path. `cases` is every test of the binary that ran, `{name, ok, seconds}`, from its `test x ... ok`
+ * lines; `seconds` is the `<0.012s>` that `-Z unstable-options --report-time` adds, otherwise null. Ignored
+ * tests are not cases. The log must hold the `Running` lines, which cargo writes to stderr.
  */
 export function parseCargoLog(text) {
   const rows = [];
@@ -108,17 +110,22 @@ export function parseCargoLog(text) {
       const path = m[1].replace(/\\/g, '/');
       const test = /(?:^|\/)tests\/([^/]+?)(?:\.rs|\/main\.rs)$/.exec(path);
       const exe = exeName(/\(([^()]*)\)\s*$/.exec(line)?.[1] ?? '');
-      current = { name: test ? test[1] : path.endsWith('main.rs') ? 'bin' : 'lib', label: `${exe} ${path}`.trim() };
+      current = { name: test ? test[1] : path.endsWith('main.rs') ? 'bin' : 'lib', label: `${exe} ${path}`.trim(), cases: [] };
       continue;
     }
     m = /^\s+Doc-tests (\S+)/.exec(line);
     if (m) {
-      current = { name: 'doc', label: `${m[1]} (doc tests)` };
+      current = { name: 'doc', label: `${m[1]} (doc tests)`, cases: [] };
+      continue;
+    }
+    m = /^test (\S+) \.\.\. (ok|FAILED|ignored)(?: <([\d.]+)s>)?\s*$/.exec(line);
+    if (m && current) {
+      if (m[2] !== 'ignored') current.cases.push({ name: m[1], ok: m[2] === 'ok', seconds: m[3] === undefined ? null : Number(m[3]) });
       continue;
     }
     m = /^test result: (\w+)\. (\d+) passed; (\d+) failed;.*finished in ([\d.]+)s/.exec(line);
     if (m && current) {
-      rows.push({ ...current, status: m[1], tests: Number(m[2]) + Number(m[3]), seconds: Number(m[4]) });
+      rows.push({ ...current, status: m[1], tests: Number(m[2]) + Number(m[3]), passed: Number(m[2]), failed: Number(m[3]), seconds: Number(m[4]) });
       current = null;
     }
   }
