@@ -318,3 +318,47 @@ test('a part without section shapes is drawn from its rows', () => {
   assert.equal(open.items[1].state?.label, 'Draft', 'a state that departs from normal is said in words');
   assert.equal(open.items[0].time.text, '3 hours ago', 'a number in a field named *_at is a time');
 });
+
+// Row actions (WG-5466, D-DS-32): the answer of preflight for each row decides how the action is
+// drawn on that row, and a refused one says why in words (D-DS-31).
+const rowActionPart = {
+  ...part,
+  actions: {
+    showcase_community__react: { screen: 'showcase_community__hub', label: 'React', operation: 'showcase_community__react_to_message', form: null, row: 'messages', arguments: { message: 'row.id', kind: 'form.kind' }, confirm: null, on_success: {}, on_error: 'inline', when_refused: 'disable' },
+    showcase_community__hide: { screen: 'showcase_community__hub', label: 'Hide', operation: 'showcase_community__hide_message', form: null, row: 'messages', arguments: { message: 'row.id' }, confirm: null, on_success: {}, on_error: 'inline', when_refused: 'hide' },
+    showcase_community__pin: { screen: 'showcase_community__hub', label: 'Pin', operation: 'showcase_community__hide_message', form: null, row: 'messages', arguments: { message: 'row.id' }, confirm: null, on_success: {}, on_error: 'inline', when_refused: 'disable' },
+  },
+};
+
+test('a row action is drawn on its row as the answer of preflight says: refused disabled with its wording, refused and hidden removed, unknown enabled', () => {
+  const rowId = model.data.messages[0].id;
+  const affordances = {
+    messages: {
+      [String(rowId)]: {
+        showcase_community__react: { state: 'refused', code: 'own-message', detail: 'You cannot react to your own message.' },
+        showcase_community__hide: { state: 'refused', code: 'not-moderator', detail: 'Only moderators hide messages.' },
+        showcase_community__pin: { state: 'unknown', reason: 'withheld-read' },
+      },
+    },
+  };
+  const page = compose(rowActionPart, { ...model, affordances }, ctx);
+  const card = byId(page, 'section:messages').items[0];
+  assert.deepEqual(card.actions.map((a) => a.id), ['showcase_community__react', 'showcase_community__pin'], 'a refused hide is removed from the row');
+  const [react, pin] = card.actions;
+  assert.equal(react.label, 'React');
+  assert.equal(react.disabled, true, 'a refused disable is drawn disabled');
+  assert.equal(react.note, 'You cannot react to your own message.', 'the condition wording says why');
+  assert.equal(pin.disabled, false, 'unknown is drawn enabled');
+  assert.equal(pin.note, null);
+  assert.equal(react.row, String(rowId), 'a press names the row it sits on');
+  const said = card.actions.map((a) => `${a.label} ${a.note ?? ''}`).join(' ');
+  assert.equal(/epoch|user:|[{}"]/.test(said), false, 'no epoch, principal or JSON text reaches the page model');
+});
+
+test('a row without an answer draws its row actions enabled, and a page with no row action draws none', () => {
+  const page = compose(rowActionPart, model, ctx);
+  const card = byId(page, 'section:messages').items[0];
+  assert.deepEqual(card.actions.map((a) => [a.id, a.disabled]), [['showcase_community__react', false], ['showcase_community__hide', false], ['showcase_community__pin', false]], 'no answer is unknown, drawn enabled');
+  const plain = compose(part, model, ctx);
+  assert.equal(byId(plain, 'section:messages').items[0].actions.length, 0);
+});

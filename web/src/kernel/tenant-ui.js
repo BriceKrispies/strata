@@ -262,17 +262,35 @@ export function formInputs(form, values) {
 
 /**
  * The inputs of the operation an action invokes: each argument read from form.<field> of the form
- * it names, or route.<param>.
+ * it names, route.<param>, or, for a row action, row.id or row.<field> of the row it sits in (a
+ * reference field sends the id it points at, WG-5466).
  * @param {any} action @param {Record<string, string | boolean>} formValues @param {Record<string, string>} route
+ * @param {any} [row]
  */
-export function actionInputs(action, formValues, route) {
+export function actionInputs(action, formValues, route, row = null) {
   /** @type {Record<string, any>} */
   const inputs = {};
   for (const [input, source] of Object.entries(action?.arguments ?? {})) {
     const [scope, name] = String(source).split('.', 2);
-    inputs[input] = scope === 'form' ? formValues[name] ?? '' : scope === 'route' ? route[name] ?? '' : '';
+    inputs[input] = scope === 'form' ? formValues[name] ?? '' : scope === 'route' ? route[name] ?? '' : scope === 'row' ? rowValue(row, name) : '';
   }
   return inputs;
+}
+
+/**
+ * A field of a row as an input sends it: its id for `id`, a reference's id, else its value.
+ * @param {any} row @param {string} name
+ */
+export function rowValue(row, name) {
+  if (name === 'id') return row?.id ?? '';
+  const value = row?.fields?.[name];
+  if (value && typeof value === 'object' && isPlainRecord(value.ref)) return value.ref.id ?? '';
+  return value ?? '';
+}
+
+/** @param {unknown} value */
+function isPlainRecord(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
@@ -347,7 +365,7 @@ export function explainRefusal(errors, owner, form, error) {
  * @param {{ forms: Record<string, TenantForm>, confirm: string | null, signedIn: boolean, now?: number, lang?: string, timeZone?: string, screens?: ManifestEntry[], moreLoading?: string | null }} context
  */
 export function tenantPage(entry, part, model, context) {
-  const actions = Object.entries(part?.actions ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, action]) => ({
+  const actions = Object.entries(part?.actions ?? {}).filter(([, action]) => !action?.row).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, action]) => ({
     id,
     label: action.label,
     confirm: action.confirm ?? null,
@@ -364,6 +382,8 @@ export function tenantPage(entry, part, model, context) {
     screens: (context.screens ?? []).map((e) => ({ id: e.id, route: e.route })),
     route: entry.route ?? '',
     moreLoading: context.moreLoading ?? null,
+    confirm: context.confirm ?? null,
+    affordances: model?.affordances ?? {},
   });
   return {
     kind: 'tenant',
