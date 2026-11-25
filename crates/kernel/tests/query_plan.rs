@@ -56,6 +56,7 @@ fn query(id: &str, filter: Expr, params: &[&str], order: Vec<OrderKey>) -> Query
         limit: None,
         aggregates: None,
         declared_fields: None,
+        tree: None,
     }
 }
 

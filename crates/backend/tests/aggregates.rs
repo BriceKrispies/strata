@@ -159,6 +159,7 @@ fn query(
         limit: None,
         aggregates,
         declared_fields: Some(fields.iter().map(|f| FieldId::new(*f).unwrap()).collect()),
+        tree: None,
     })
 }
 

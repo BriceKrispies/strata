@@ -158,6 +158,7 @@ fn notes_screen() -> World {
             limit: None,
             aggregates: None,
             declared_fields: None,
+            tree: None,
         })],
         vec![SchemaChange::DefineView(ViewDef {
             id: ViewId::new("notes_view").unwrap(),

@@ -220,6 +220,7 @@ fn schema_changes() -> Vec<SchemaChange> {
         limit: Some(10),
         aggregates: None,
         declared_fields: None,
+        tree: None,
     };
     let view = ViewDef {
         id: ViewId::new("home").unwrap(),
@@ -965,6 +966,7 @@ fn samples() -> Vec<(&'static str, Json)> {
             revision: StateRevision(5),
             schema_version: SchemaVersion(2),
             next: Some(PageCursor::Offset(40)),
+            depths: None,
         }),
     ));
 

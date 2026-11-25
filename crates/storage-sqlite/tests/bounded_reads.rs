@@ -35,6 +35,7 @@ fn query_def(id: &str, filter: Expr, order: Vec<OrderKey>) -> QueryDef {
         limit: None,
         aggregates: None,
         declared_fields: None,
+        tree: None,
     }
 }
 

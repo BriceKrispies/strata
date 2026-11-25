@@ -223,5 +223,6 @@ pub fn read(
         revision: tenant.revision,
         schema_version: schema.version,
         next,
+        depths: None,
     })
 }

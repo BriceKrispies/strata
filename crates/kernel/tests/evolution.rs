@@ -158,6 +158,7 @@ fn query(id: &str, of: &str, filter: Option<Expr>) -> SchemaChange {
         limit: None,
         aggregates: None,
         declared_fields: None,
+        tree: None,
     })
 }
 

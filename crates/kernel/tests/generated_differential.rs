@@ -724,6 +724,7 @@ fn intent_of(op: &Op) -> Intent {
                     limit: Some(*limit),
                     aggregates: None,
                     declared_fields: None,
+                    tree: None,
                 }),
                 SchemaOp::BadPermissions => SchemaChange::DefineRolePermissions {
                     role: role("editor"),
@@ -1366,9 +1367,7 @@ fn reads_a_field(expr: &Expr, named: &dyn Fn(&str) -> bool) -> bool {
         | Expr::Arith(_, a, b)
         | Expr::MsBetween(a, b)
         | Expr::Concat(a, b) => reads_a_field(a, named) || reads_a_field(b, named),
-        Expr::AncestorOf(a, b, c, d) => {
-            [a, b, c, d].iter().any(|item| reads_a_field(item, named))
-        }
+        Expr::AncestorOf(a, b, c, d) => [a, b, c, d].iter().any(|item| reads_a_field(item, named)),
         Expr::If(a, b, c) => {
             reads_a_field(a, named) || reads_a_field(b, named) || reads_a_field(c, named)
         }
@@ -1916,6 +1915,7 @@ fn following_reads(tenant: &TenantState) -> Option<TenantState> {
         limit: None,
         aggregates: None,
         declared_fields: None,
+        tree: None,
     };
     schema.queries.insert(query.id.clone(), query);
     let mut out = TenantState::clone(tenant);

@@ -49,6 +49,7 @@ fn query(id: &str, order: Vec<OrderKey>, filter: Option<Expr>, limit: Option<u32
         limit,
         aggregates: None,
         declared_fields: None,
+        tree: None,
     }
 }
 

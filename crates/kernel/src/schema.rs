@@ -272,6 +272,40 @@ impl TenantSchemaExt for TenantSchema {
                     limits::MAX_PAGE_SIZE
                 ));
             }
+            if let Some(tree) = &query.tree {
+                let via = self.objects.get(&query.object).and_then(|object| {
+                    crate::types::FieldId::new(&tree.via)
+                        .ok()
+                        .and_then(|id| object.fields.get(&id))
+                        .and_then(|def| def.ty.ref_target())
+                        .map(|(target, _, single)| (*target == query.object, single))
+                });
+                if !matches!(via, Some((true, false))) {
+                    problems.push(format!(
+                        "tree: query {} names {} as its parent field, which is not a single reference to {}",
+                        query.id, tree.via, query.object
+                    ));
+                }
+                if !query.params.contains(&tree.root) {
+                    problems.push(format!(
+                        "tree: query {} names {} as its root, which it does not declare as a parameter",
+                        query.id, tree.root
+                    ));
+                }
+                if tree.max_depth == 0 || tree.max_depth > limits::MAX_TREE_DEPTH {
+                    problems.push(format!(
+                        "tree: query {} declares a depth outside 1 to {}",
+                        query.id,
+                        limits::MAX_TREE_DEPTH
+                    ));
+                }
+                if !query.order.is_empty() || query.limit.is_some() || query.aggregates.is_some() {
+                    problems.push(format!(
+                        "tree: query {} orders, limits or aggregates a descendants read, which has its own order and no aggregates",
+                        query.id
+                    ));
+                }
+            }
         }
 
         for object in self.objects.values() {

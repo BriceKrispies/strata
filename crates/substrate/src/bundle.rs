@@ -605,6 +605,7 @@ impl Bundle {
                     .then(|| query.aggregates.iter().map(AggregateSpec::def).collect()),
                 declared_fields: (!query.declared_fields.is_empty())
                     .then(|| query.declared_fields.clone()),
+                tree: None,
             }));
         }
         for view in &self.views {

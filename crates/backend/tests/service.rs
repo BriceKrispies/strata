@@ -483,6 +483,7 @@ async fn the_seeded_blog_is_served_from_tenant_metadata() {
         limit: Some(2),
         aggregates: None,
         declared_fields: None,
+        tree: None,
     };
     let section = |query: &str| ViewSection {
         query: QueryId::new(query).unwrap(),

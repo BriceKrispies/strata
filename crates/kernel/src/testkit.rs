@@ -231,6 +231,7 @@ pub fn notes_schema() -> Vec<SchemaChange> {
             limit: None,
             aggregates: None,
             declared_fields: None,
+            tree: None,
         }),
         SchemaChange::DefineQuery(QueryDef {
             id: QueryId::new("note_by_slug").expect("id"),
@@ -241,6 +242,7 @@ pub fn notes_schema() -> Vec<SchemaChange> {
             limit: Some(1),
             aggregates: None,
             declared_fields: None,
+            tree: None,
         }),
     ]
 }

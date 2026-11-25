@@ -1692,6 +1692,7 @@ pub fn pair_pages_follow_writes_and_definitions(store: &dyn Store) {
         limit: None,
         aggregates: None,
         declared_fields: None,
+        tree: None,
     };
     let change = |pair: &mut Pair, changes: Vec<SchemaChange>| {
         pair.ok(

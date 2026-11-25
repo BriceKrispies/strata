@@ -211,6 +211,7 @@ fn found(store: &dyn Store, name: &str) -> TenantId {
             limit: None,
             aggregates: None,
             declared_fields: None,
+            tree: None,
         },
     );
     schema.views.insert(

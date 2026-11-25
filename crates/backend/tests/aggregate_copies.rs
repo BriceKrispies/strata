@@ -187,6 +187,7 @@ fn schema_changes(shape: Shape) -> Vec<SchemaChange> {
             aggregate("sum_score", AggregateKind::Sum, Some("score")),
         ]),
         declared_fields: Some(vec![field("rank"), field("status"), field("score")]),
+        tree: None,
     }));
     changes
 }

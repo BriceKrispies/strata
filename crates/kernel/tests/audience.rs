@@ -62,6 +62,7 @@ fn stats_query(declared: &[&str]) -> QueryDef {
         limit: None,
         aggregates: Some(aggregates),
         declared_fields: Some(declared.iter().map(|f| field(f)).collect()),
+        tree: None,
     }
 }
 
@@ -75,6 +76,7 @@ fn plain_query() -> QueryDef {
         limit: None,
         aggregates: None,
         declared_fields: None,
+        tree: None,
     }
 }
 

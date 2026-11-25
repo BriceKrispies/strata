@@ -151,6 +151,7 @@ fn neutral_changes(schema: &TenantSchema) -> Vec<(&'static str, Vec<SchemaChange
         limit: Some(5),
         aggregates: None,
         declared_fields: None,
+        tree: None,
     };
     vec![
         ("a query restated", vec![SchemaChange::DefineQuery(query)]),

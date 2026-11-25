@@ -106,6 +106,7 @@ fn stats_query(aggs: Vec<AggregateDef>, declared: &[&str]) -> QueryDef {
         limit: None,
         aggregates: Some(aggs),
         declared_fields: Some(declared.iter().map(|f| field(f)).collect()),
+        tree: None,
     }
 }
 
@@ -120,6 +121,7 @@ fn plain_query() -> QueryDef {
         limit: None,
         aggregates: None,
         declared_fields: None,
+        tree: None,
     }
 }
 
@@ -617,6 +619,7 @@ fn by_team_query() -> QueryDef {
             aggregate("count_in_tight", Count, None, None, None, false, 3),
         ]),
         declared_fields: Some(vec![field("status"), field("rank")]),
+        tree: None,
     }
 }
 
@@ -640,6 +643,7 @@ fn scored_query() -> QueryDef {
             100,
         )]),
         declared_fields: Some(vec![field("status")]),
+        tree: None,
     }
 }
 
@@ -678,6 +682,7 @@ fn more_query() -> QueryDef {
             },
         ]),
         declared_fields: Some(vec![field("rank"), field("status"), field("team")]),
+        tree: None,
     }
 }
 

@@ -33,6 +33,12 @@ pub const MAX_PAGE_SIZE: u32 = 200;
 pub const MAX_SCAN_RECORDS: u32 = 10_000;
 /// The most reference hops an `ancestor_of` walk may take (WG-5510). Past it the walk is an error, never a silent answer.
 pub const MAX_ANCESTOR_HOPS: u32 = 32;
+/// The most levels below its root a descendants query may read (WG-5510, `TreeDef::max_depth`).
+pub const MAX_TREE_DEPTH: u32 = 32;
+/// The most records a descendants read may reach in all, the scan window of a named query (KRN-1288).
+pub const MAX_TREE_NODES: usize = 10_000;
+/// The most children one record may have below it in a descendants read (the largest page, MAX_PAGE_SIZE).
+pub const MAX_TREE_CHILDREN: u32 = MAX_PAGE_SIZE;
 /// The most triggers a schema may define (CT-790).
 pub const MAX_TRIGGERS: usize = 100;
 /// The most steps one automation may declare (automation-def, CT-792).

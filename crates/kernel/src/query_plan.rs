@@ -78,6 +78,7 @@ use crate::types::{
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
+use strata_model_core::types::TreeDef;
 
 pub use strata_model_core::types::{IndexBound, IndexPosition};
 
@@ -567,9 +568,18 @@ fn pair_plan(
 
 /// The pair indexes the plans of a schema's queries read (KRN-2921): what a store keeps.
 pub fn index_pairs(schema: &TenantSchema) -> BTreeSet<IndexPair> {
+    let trees = schema.queries.values().filter_map(|def| {
+        let tree = def.tree.as_ref()?;
+        Some(IndexPair {
+            object: def.object.clone(),
+            field: FieldId::new(&tree.via).ok()?,
+            order: "$created_at".to_string(),
+        })
+    });
     schema
         .queries
         .values()
+        .filter(|def| def.tree.is_none())
         .filter_map(|def| match plan_query(schema, def) {
             QueryPlan::Index(IndexPlan {
                 field,
@@ -582,6 +592,7 @@ pub fn index_pairs(schema: &TenantSchema) -> BTreeSet<IndexPair> {
             }),
             _ => None,
         })
+        .chain(trees)
         .collect()
 }
 
@@ -1450,8 +1461,147 @@ impl<'a> Reader<'a> {
             if let Some(missing) = missing_error(filter, &env) {
                 return Err(missing);
             }
+            if let Err(error) = &outcome {
+                if error.0.starts_with(expr::ANCESTOR_REFUSAL) {
+                    return Err(DomainError::new(ErrorKind::InvalidIntent, error.0.clone()));
+                }
+            }
         }
         Ok(outcome.unwrap_or(false))
+    }
+
+    /// The descendants of the record the root parameter names, level by level (WG-5510). Each level is the
+    /// children of the level above, read through the pair index of the parent field. A record the reader may
+    /// not read is not expanded, so nothing below it is returned; the rows are those the filter passes, the
+    /// root excluded, in level order and then by child order. A tree deeper than the declared depth, a cycle,
+    /// more than MAX_TREE_CHILDREN children of one record, or more than MAX_TREE_NODES records in all, is a
+    /// refusal. The page is an offset into that whole answer.
+    fn descendants(
+        &mut self,
+        def: &QueryDef,
+        tree: &TreeDef,
+        cursor: Option<&PageCursor>,
+        size: u32,
+    ) -> Result<(Vec<Arc<Record>>, Vec<u32>, Option<PageCursor>), DomainError> {
+        let start = match cursor {
+            None => 0,
+            Some(PageCursor::Offset(offset)) => *offset as usize,
+            Some(_) => return Err(wrong_cursor()),
+        };
+        let root = match self.params.get(&tree.root) {
+            None | Some(Value::Null) => return Ok((Vec::new(), Vec::new(), None)),
+            Some(Value::Ref(id)) => *id,
+            Some(other) => {
+                return Err(DomainError::new(
+                    ErrorKind::InvalidIntent,
+                    format!(
+                        "the root parameter {} must be a record reference, not {other:?}",
+                        tree.root
+                    ),
+                ))
+            }
+        };
+        let via = FieldId::new(&tree.via)
+            .map_err(|e| DomainError::new(ErrorKind::InvalidIntent, e.to_string()))?;
+        let Some(top) = self.lookup.record(&def.object, root)? else {
+            return Ok((Vec::new(), Vec::new(), None));
+        };
+        if !self.visible(top)? {
+            return Ok((Vec::new(), Vec::new(), None));
+        }
+        let mut seen = BTreeSet::from([root]);
+        let mut frontier = vec![root];
+        let mut found: Vec<(Arc<Record>, u32)> = Vec::new();
+        for level in 1..=tree.max_depth {
+            let mut next = Vec::new();
+            for node in &frontier {
+                for child in self.children(&def.object, &via, *node, &tree.via)? {
+                    if !seen.insert(child.id) {
+                        return Err(DomainError::new(
+                            ErrorKind::InvalidIntent,
+                            format!(
+                                "descendants: the references through {} form a cycle",
+                                tree.via
+                            ),
+                        ));
+                    }
+                    if !self.visible(&child)? {
+                        continue;
+                    }
+                    if self.passes(def.filter.as_ref(), &child)? {
+                        found.push((self.shown(&child)?, level));
+                    }
+                    next.push(child.id);
+                }
+            }
+            if found.len() > limits::MAX_TREE_NODES || seen.len() > limits::MAX_TREE_NODES {
+                return Err(DomainError::new(
+                    ErrorKind::InvalidIntent,
+                    format!(
+                        "descendants: the tree has more than {} records",
+                        limits::MAX_TREE_NODES
+                    ),
+                ));
+            }
+            if next.is_empty() {
+                break;
+            }
+            if level == tree.max_depth {
+                for node in &next {
+                    if !self
+                        .children(&def.object, &via, *node, &tree.via)?
+                        .is_empty()
+                    {
+                        return Err(DomainError::new(
+                            ErrorKind::InvalidIntent,
+                            format!(
+                                "descendants: the tree through {} is deeper than {} levels",
+                                tree.via, tree.max_depth
+                            ),
+                        ));
+                    }
+                }
+            }
+            frontier = next;
+        }
+        let total = found.len();
+        let end = total.min(start + size as usize);
+        let page = found.get(start.min(total)..end).unwrap_or_default();
+        let rows = page.iter().map(|(record, _)| record.clone()).collect();
+        let depths = page.iter().map(|(_, level)| *level).collect();
+        let next = (end < total).then_some(PageCursor::Offset(end as u32));
+        Ok((rows, depths, next))
+    }
+
+    /// The children of a record through its parent field, in the order of the pair index (by creation, then
+    /// id), read as one level of a descendants walk. More than MAX_TREE_CHILDREN is a refusal.
+    fn children(
+        &self,
+        object: &ObjectTypeId,
+        via: &FieldId,
+        node: RecordId,
+        name: &str,
+    ) -> Result<Vec<Arc<Record>>, DomainError> {
+        let need = Need::PairPage {
+            object: object.clone(),
+            field: via.clone(),
+            value: Value::Ref(node),
+            order: "$created_at".to_string(),
+            descending: false,
+            after: None,
+            limit: limits::MAX_TREE_CHILDREN + 1,
+        };
+        let records = fetch(self.lookup, need)?;
+        if records.len() > limits::MAX_TREE_CHILDREN as usize {
+            return Err(DomainError::new(
+                ErrorKind::InvalidIntent,
+                format!(
+                    "descendants: a record has more than {} children through {name}",
+                    limits::MAX_TREE_CHILDREN
+                ),
+            ));
+        }
+        Ok(records.into_iter().cloned().collect())
     }
 
     /// A window of the object type in id order (KRN-1286).
@@ -1760,6 +1910,16 @@ fn read_named_with(
         params,
         collect,
     };
+    if let Some(tree) = &def.tree {
+        let (rows, depths, next) = reader.descendants(def, tree, cursor, size)?;
+        return Ok(ReadResult {
+            rows,
+            revision: tenant.revision,
+            schema_version: schema.version,
+            next,
+            depths: Some(depths),
+        });
+    }
     let (rows, next) = match (plan_query(schema, def), cursor) {
         (QueryPlan::Window, None) => reader.window(def, None, size)?,
         (QueryPlan::Window, Some(PageCursor::After(after))) => {
@@ -1792,6 +1952,7 @@ fn read_named_with(
         revision: tenant.revision,
         schema_version: schema.version,
         next,
+        depths: None,
     })
 }
 

@@ -256,6 +256,7 @@ mod tests {
                     limit: None,
                     aggregates: None,
                     declared_fields: None,
+                    tree: None,
                 })],
                 expected_version: None,
                 existing: ExistingData::Reject,

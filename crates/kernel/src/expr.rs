@@ -109,6 +109,11 @@ fn first_missing(expr: &Expr, env: &Env<'_>, lookup: Lookup<'_>) -> Option<Need>
     }
 }
 
+/// The message prefix of an `ancestor_of` refusal: the walk is longer than its limit, returns to a record it
+/// visited, or is not the walk the kernel can make. A read that meets one fails with it, and a policy that meets one
+/// does not grant (WG-5510). It is never taken for an ordinary false.
+pub const ANCESTOR_REFUSAL: &str = "ancestor_of:";
+
 /// The walk of `ancestor_of` (WG-5510): whether `target` is `from` or one of its ancestors through the
 /// single reference field `field` of the object type `object`. The walk reads one record per hop from the
 /// lookup, so it never loads more than `limits::MAX_ANCESTOR_HOPS` records. A record the snapshot does not

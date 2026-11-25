@@ -52,6 +52,7 @@ fn query_def(id: &str, filter: Expr, params: &[&str], order: Vec<OrderKey>) -> Q
         limit: None,
         aggregates: None,
         declared_fields: None,
+        tree: None,
     }
 }
 

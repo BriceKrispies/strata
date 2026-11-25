@@ -108,6 +108,7 @@ fn offer_schema() -> Vec<SchemaChange> {
             limit: None,
             aggregates: None,
             declared_fields: None,
+            tree: None,
         }),
         SchemaChange::DefineQuery(QueryDef {
             id: QueryId::new("big_offers").expect("id"),
@@ -121,6 +122,7 @@ fn offer_schema() -> Vec<SchemaChange> {
             limit: None,
             aggregates: None,
             declared_fields: None,
+            tree: None,
         }),
     ]
 }

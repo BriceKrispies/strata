@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
+use strata_model_core::types::TreeDef;
 
 const NOW: i64 = 20_000;
 
@@ -50,6 +51,10 @@ fn comment_world() -> World {
                 object: object("comment"),
                 field: field_def("body", FieldType::Str, false),
             },
+            SchemaChange::DefineField {
+                object: object("comment"),
+                field: field_def("hidden", FieldType::Bool, true),
+            },
             SchemaChange::DefineRelationship {
                 object: object("comment"),
                 field: field("parent"),
@@ -64,7 +69,15 @@ fn comment_world() -> World {
 
 /// Creates a comment under `parent` (or at the top) as the owner.
 fn comment(world: &World, parent: Option<RecordId>) -> (World, RecordId) {
-    let mut fields = BTreeMap::from([(field("body"), text("a comment"))]);
+    comment_with(world, parent, false)
+}
+
+/// Creates a comment under `parent`, hidden or not.
+fn comment_with(world: &World, parent: Option<RecordId>, hidden: bool) -> (World, RecordId) {
+    let mut fields = BTreeMap::from([
+        (field("body"), text("a comment")),
+        (field("hidden"), Value::Bool(hidden)),
+    ]);
     if let Some(parent) = parent {
         fields.insert(field("parent"), Value::Ref(parent));
     }
@@ -103,6 +116,7 @@ fn query(id: &str, filter: Option<Expr>) -> SchemaChange {
         limit: None,
         aggregates: None,
         declared_fields: None,
+        tree: None,
     })
 }
 
@@ -241,4 +255,176 @@ fn a_manager_reads_the_subtree_of_a_four_level_tree_and_nothing_above_it() {
     let expected: BTreeSet<u64> = [a, b, c].iter().map(|id| id.0).collect();
     assert_eq!(seen, expected);
     assert!(!seen.contains(&root.0) && !seen.contains(&d.0));
+}
+
+/// A descendants query: the comments below the record the parameter `root` names, `max_depth` levels down.
+fn descendants(id: &str, max_depth: u32) -> SchemaChange {
+    SchemaChange::DefineQuery(QueryDef {
+        id: QueryId::new(id).unwrap(),
+        object: object("comment"),
+        filter: None,
+        params: BTreeSet::from(["root".to_string()]),
+        order: vec![],
+        limit: None,
+        aggregates: None,
+        declared_fields: None,
+        tree: Some(TreeDef {
+            via: "parent".to_string(),
+            root: "root".to_string(),
+            max_depth,
+        }),
+    })
+}
+
+/// The rows of a descendants query, as (id, level) pairs, read as `who` below `root`.
+fn levels(
+    world: &World,
+    who: Principal,
+    query: &str,
+    root: RecordId,
+) -> Result<Vec<(u64, u32)>, DomainError> {
+    let request = ReadRequest::Named {
+        query: QueryId::new(query).unwrap(),
+        params: BTreeMap::from([("root".to_string(), Value::Ref(root))]),
+        page_size: Some(200),
+        cursor: None,
+    };
+    let result = read(&world.state(&tid()), &request, &ctx("alpha", who, NOW))?;
+    let depths = result.depths.clone().expect("a descendants read gives depths");
+    Ok(result
+        .rows
+        .iter()
+        .map(|row| row.id.0)
+        .zip(depths)
+        .collect())
+}
+
+/// A manager of `a` reads the comments under it, and the condition also says a hidden comment is not
+/// readable by the manager.
+fn manager_of(a: RecordId) -> PolicyDef {
+    PolicyDef {
+        id: PolicyId::new("manager_subtree").expect("policy id"),
+        role: role("manager"),
+        resource: Resource::Object(object("comment")),
+        actions: BTreeSet::from([Action::Read]),
+        condition: Some(Expr::And(vec![
+            Expr::AncestorOf(
+                Box::new(Expr::Lit(Value::Ref(a))),
+                Box::new(var(Scope::Record, "$id")),
+                Box::new(lit("comment")),
+                Box::new(lit("parent")),
+            ),
+            Expr::Not(Box::new(eq(var(Scope::Record, "hidden"), Expr::Lit(Value::Bool(true))))),
+        ])),
+    }
+}
+
+/// The comments under `root` and at which level, through the three shapes the tree read must answer:
+/// the levels of a four-level tree, a refusal past the declared depth, and a cycle.
+#[test]
+fn a_descendants_query_gives_each_row_its_level_below_the_root() {
+    let world = comment_world();
+    // root -> a -> b -> c, and d under root.
+    let (world, root) = comment(&world, None);
+    let (world, a) = comment(&world, Some(root));
+    let (world, b) = comment(&world, Some(a));
+    let (world, c) = comment(&world, Some(b));
+    let (world, d) = comment(&world, Some(root));
+    let world = define(&world, vec![descendants("below", 3)]);
+    let rows = levels(&world, owner(), "below", root).expect("the tree reads");
+    let expected = vec![(a.0, 1), (d.0, 1), (b.0, 2), (c.0, 3)];
+    assert_eq!(rows, expected, "level order, children in creation order");
+}
+
+#[test]
+fn a_tree_deeper_than_the_declared_depth_is_refused_not_cut_short() {
+    let world = comment_world();
+    let (world, root) = comment(&world, None);
+    let (world, a) = comment(&world, Some(root));
+    let (world, b) = comment(&world, Some(a));
+    let (world, _) = comment(&world, Some(b));
+    let world = define(&world, vec![descendants("shallow", 2)]);
+    let refused = levels(&world, owner(), "shallow", root).expect_err("the tree is deeper");
+    assert!(
+        refused.message.contains("deeper than 2 levels"),
+        "the refusal names the depth: {}",
+        refused.message
+    );
+}
+
+#[test]
+fn a_cycle_in_a_descendants_read_is_refused() {
+    let world = comment_world();
+    let (world, a) = comment(&world, None);
+    let (world, b) = comment(&world, Some(a));
+    let (world, _) = step(
+        &world,
+        owner(),
+        Intent::UpdateRecord {
+            object: object("comment"),
+            id: a,
+            fields: BTreeMap::from([(field("parent"), Value::Ref(b))]),
+            expected_version: None,
+        },
+    )
+    .expect("the update is accepted: the schema does not refuse cycles");
+    let world = define(&world, vec![descendants("loop", 4)]);
+    let refused = levels(&world, owner(), "loop", a).expect_err("the cycle is refused");
+    assert!(
+        refused.message.contains("cycle"),
+        "the refusal names the cycle: {}",
+        refused.message
+    );
+}
+
+/// The manager's descendants read does not pass through a comment the manager may not read: with the
+/// middle comment hidden, the comment below it is not returned either (WG-5510, the read rule).
+#[test]
+fn a_hidden_intermediate_comment_hides_what_is_below_it() {
+    for (hide_middle, expected) in [(false, vec![(2, 1), (3, 2)]), (true, vec![])] {
+        let world = comment_world();
+        let (world, a) = comment(&world, None);
+        let (world, b) = comment_with(&world, Some(a), hide_middle);
+        let (world, c) = comment(&world, Some(b));
+        let world = define(
+            &world,
+            vec![
+                SchemaChange::DefineRole(RoleDef {
+                    id: role("manager"),
+                    label: "Manager".into(),
+                }),
+                SchemaChange::DefinePolicy(manager_of(a)),
+                descendants("below", 3),
+            ],
+        );
+        let (world, _) = step(
+            &world,
+            owner(),
+            Intent::AssignRole {
+                principal: principal_id("alpha:manager"),
+                role: role("manager"),
+            },
+        )
+        .expect("the role is assigned");
+        let rows = levels(&world, user("alpha:manager"), "below", a).expect("the manager reads");
+        let expected: Vec<(u64, u32)> = expected
+            .into_iter()
+            .map(|(which, level)| (if which == 2 { b.0 } else { c.0 }, level))
+            .collect();
+        assert_eq!(rows, expected, "hide_middle = {hide_middle}");
+    }
+}
+
+/// The plan declares the reads a descendants query makes: the pair index of its parent field, ordered by
+/// creation, which the storage keeps for the query.
+#[test]
+fn a_descendants_query_declares_the_pair_index_it_reads_each_level_through() {
+    let world = define(&comment_world(), vec![descendants("below", 3)]);
+    let schema = TenantSchema::clone(&world.tenants[&tid()].schema);
+    let pairs = strata_kernel::query_plan::index_pairs(&schema);
+    assert!(pairs.contains(&strata_kernel::query_plan::IndexPair {
+        object: object("comment"),
+        field: field("parent"),
+        order: "$created_at".to_string(),
+    }));
 }
