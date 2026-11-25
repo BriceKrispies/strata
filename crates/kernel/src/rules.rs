@@ -2,18 +2,18 @@
 //! transition and read is built from.
 
 use crate::expr::{self, Env};
-use crate::intent::{Check, CheckExt, DomainError, DomainErrorExt, ErrorKind};
+use crate::intent::{Check, CheckExt, DomainError, DomainErrorExt, ErrorKind, SchemaChange};
 use crate::limits;
 use crate::schema::{
-    Action, Grant, ObjectAction, ObjectActionExt, ObjectTypeDef, Resource, TenantSchema,
-    TenantSchemaExt, WorkflowDefExt,
+    Action, Grant, ObjectAction, ObjectActionExt, ObjectTypeDef, PermissionExt, Resource,
+    TenantSchema, TenantSchemaExt, WorkflowDefExt,
 };
 use crate::state::{
     Coverage, CoverageExt, Need, Principal, Record, RecordExt, TenantState, TenantStateExt,
 };
 use crate::types::{
-    owner_role, public_role, refs_in, FieldId, FieldTypeExt, ObjectTypeId, PrincipalId, RecordId,
-    RoleId, Timestamp, Value, ValueExt,
+    owner_role, public_role, refs_in, FieldId, FieldTypeExt, ObjectTypeId, PolicyId, PrincipalId,
+    RecordId, RoleId, Timestamp, Value, ValueExt,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -341,6 +341,104 @@ pub fn may_confer(tenant: &TenantState, principal: &Principal, role: &RoleId) ->
                 lacking.join(", ")
             ),
         )
+    }
+}
+
+/// One power a role holds: a grant of its permissions, or a power that one of its policies gives it
+/// (ADM-1085). A policy power is what [`holds_policy_power`] reads: the action on the resource under
+/// the condition, as the policy names them.
+pub enum RolePower {
+    Grant(Grant),
+    Policy {
+        policy: PolicyId,
+        action: Action,
+        resource: Resource,
+        condition: Option<crate::types::Expr>,
+    },
+}
+
+/// The powers a schema change adds to the roles it names, each with its role. A permission the
+/// role already grants, and a policy power the same policy already gives the same role, is not
+/// added again. A change that names no role adds nothing here.
+pub fn powers_added(schema: &TenantSchema, change: &SchemaChange) -> Vec<(RoleId, RolePower)> {
+    match change {
+        SchemaChange::DefineRolePermissions { role, permissions } => {
+            if !schema.roles.contains_key(role) {
+                return Vec::new();
+            }
+            let held = schema.grants_of(role);
+            permissions
+                .iter()
+                .flat_map(PermissionExt::grants)
+                .filter(|grant| !held.contains(grant))
+                .map(|grant| (role.clone(), RolePower::Grant(grant)))
+                .collect()
+        }
+        SchemaChange::DefinePolicy(def) => {
+            let previous = schema.policies.get(&def.id);
+            def.actions
+                .iter()
+                .filter(|action| {
+                    !previous.is_some_and(|old| {
+                        old.role == def.role
+                            && old.resource == def.resource
+                            && old.condition == def.condition
+                            && old.actions.contains(action)
+                    })
+                })
+                .map(|action| {
+                    (
+                        def.role.clone(),
+                        RolePower::Policy {
+                            policy: def.id.clone(),
+                            action: *action,
+                            resource: def.resource.clone(),
+                            condition: def.condition.clone(),
+                        },
+                    )
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Whether `principal` holds one power: a capability or an object permission, as a role grants it
+/// (through its permissions, or through a policy without a condition), or a policy power under its
+/// condition. The owner holds every power.
+pub fn holds_role_power(tenant: &TenantState, principal: &Principal, power: &RolePower) -> bool {
+    match power {
+        RolePower::Grant(Grant::Capability(name)) => holds_any(
+            tenant,
+            principal,
+            &BTreeSet::from([Grant::Capability(name.clone())]),
+        ),
+        RolePower::Grant(Grant::Object(object, verb)) => holds_power(
+            tenant,
+            principal,
+            verb.action(),
+            &Resource::Object(object.clone()),
+        ),
+        RolePower::Policy {
+            action,
+            resource,
+            condition,
+            ..
+        } => holds_policy_power(tenant, principal, *action, resource, condition),
+    }
+}
+
+/// A role power as a sentence fragment: `capability <name>`, `<object>:<verb>`, or the policy that
+/// gives it with its action and resource.
+pub fn describe_role_power(power: &RolePower) -> String {
+    match power {
+        RolePower::Grant(grant) => describe_grant(grant),
+        RolePower::Policy {
+            policy,
+            action,
+            resource,
+            ..
+        } => format!("policy {policy}: {action:?} on {resource:?}"),
     }
 }
 

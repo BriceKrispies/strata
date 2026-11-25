@@ -2551,7 +2551,49 @@ fn require_definition_authority(
             _ => {}
         }
     }
+    for change in changes {
+        require_powers_held(draft, change)?;
+    }
     Ok(())
+}
+
+/// ADM-1085, ADM-152: a change that adds a power to a role (a permission or capability the role
+/// grants, or a power one of its policies gives it) is refused unless the acting principal holds
+/// every power the change adds. The owner holds them all. Each power the principal lacks is named
+/// in the refusal. A change that adds nothing to a role, and a change that only removes a power,
+/// is not refused here.
+///
+/// The check runs against the schema before the change, so the powers a change adds are the ones
+/// the role did not hold before it. It covers every path that changes a role's powers through
+/// `ChangeSchema`, which includes a product's install, upgrade and staged upgrade. Team roles and
+/// operation invokers keep their own checks (ADM-152, D-6547).
+fn require_powers_held(draft: &mut Draft<'_>, change: &SchemaChange) -> Result<(), DomainError> {
+    let added = crate::rules::powers_added(&draft.tenant.schema, change);
+    let Some((role, _)) = added.first() else {
+        return Ok(());
+    };
+    let role = role.clone();
+    let (tenant, ctx) = (draft.tenant, draft.ctx);
+    let lacking: Vec<String> = added
+        .iter()
+        .filter(|(_, power)| !crate::rules::holds_role_power(tenant, &ctx.principal, power))
+        .map(|(_, power)| crate::rules::describe_role_power(power))
+        .collect();
+    let rule = format!("permission:widen:{role}");
+    if lacking.is_empty() {
+        draft.evidence.push(Check::pass(
+            rule,
+            format!("holds every power the change adds to role {role}"),
+        ));
+        Ok(())
+    } else {
+        let detail = lacking.join(", ");
+        draft.evidence.push(Check::fail(rule, detail.clone()));
+        Err(draft.reject(
+            ErrorKind::Unauthorized,
+            format!("may not widen role {role}: lacks {detail}"),
+        ))
+    }
 }
 
 /// The acting principal holds the capability `name`; the owner holds every capability.
