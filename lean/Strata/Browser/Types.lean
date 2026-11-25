@@ -43,6 +43,10 @@ structure Catalogue where
   validSignIn : List (String × String) → Bool
   /-- The address a search with these values goes to (the search form's success navigation). -/
   searchTarget : List (String × String) → Route
+  /-- The delay before a reconnect attempt, in milliseconds (the machine's wait, with no jitter). -/
+  reconnectMs : Nat
+  /-- The interval of the heartbeat, in milliseconds. -/
+  heartbeatMs : Nat
 
 /-- The kind of a request the kernel has in flight. `session`, `view`, `signIn` and `signOut` are the
 kinds slice 1 names. `personal` stands for every request whose reply belongs to the person signed in
@@ -104,6 +108,15 @@ def ThemeMode.key : ThemeMode → String
   | .light => "light"
   | .dark => "dark"
 
+/-- The live connection's state, as the page holds it: not yet open, opening, open, or waiting to try
+again. -/
+inductive WsState where
+  | idle
+  | connecting
+  | opened
+  | waiting
+  deriving DecidableEq
+
 /-- The kernel's state, for the routing and session slice. Later slices add their fields here:
 forms, the live connection, the tenant interface, the Lab and the rest of the page state. -/
 structure State where
@@ -131,6 +144,18 @@ structure State where
   menuOpen : Bool := false
   /-- The ids of the toasts on screen. -/
   toasts : List Nat := []
+  /-- The live connection (`liveInit`, `liveStep` in `machines.js`). -/
+  wsState : WsState := .idle
+  /-- The last notice sequence number acknowledged (0 for none). -/
+  wsLast : Nat := 0
+  /-- Refused upgrades counted since the socket last opened. -/
+  wsRefusals : Nat := 0
+  /-- Live updates have given up after repeated refusals. -/
+  wsStopped : Bool := false
+  /-- The token of the running reconnect timer, if any. -/
+  wsReconnect : Option Nat := none
+  /-- The token of the running heartbeat timer, if any. -/
+  wsHeartbeat : Option Nat := none
 
 /-- Effects out of the kernel. `http` and `timer "request"` are the request and its deadline; the
 other effects are the page's own (URL, scroll), the live connection, storage, the browser's passkey
@@ -176,5 +201,11 @@ inductive Msg where
   | timer (name : String) (token : Nat)
   | dismiss (id : Nat)
   | sharedAnswer (id : Nat)
+  /-- The decoded frames of the live connection: the welcome (with the server's head), a notice (its
+  sequence number, and whether the page's live bindings read the view again for it), a resync, a pong. -/
+  | welcome (head : Nat)
+  | frameEvent (seq : Nat) (refresh : Bool)
+  | resync (head : Nat)
+  | pong (head : Nat)
 
 end Strata.Browser

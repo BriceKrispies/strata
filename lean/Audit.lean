@@ -269,3 +269,6 @@ import Strata
 #print axioms Strata.Browser.session_change_keeps_theme
 #print axioms Strata.Browser.dismissed_toast_gone
 #print axioms Strata.Browser.toast_expiry_removes
+#print axioms Strata.Browser.in_order_notice_acked
+#print axioms Strata.Browser.stopped_never_reconnects
+#print axioms Strata.Browser.refusal_counts_and_stops

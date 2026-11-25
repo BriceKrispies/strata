@@ -27,7 +27,7 @@ liveness of a reply: a request that never answers stays awaited until its deadli
 decodes into a `failure`.
 
 Slice 2 adds the cold start (`initCold`, `dropColdView`, `learnSession`). Not yet: the bootstrapped view (`init` takes the session only),
-forms beyond the sign-in and the search, the live connection's frames and socket effects, toasts and
+forms beyond the sign-in and the search, toasts and
 focus, the page builders and every message of a later slice. No unfinished proof and no added axiom.
 -/
 
@@ -37,6 +37,9 @@ namespace Strata.Browser
 
 /-- The request deadline the kernel gives every request, in milliseconds (`REQUEST_TIMEOUT_MS`). -/
 def requestDeadlineMs : Nat := 30000
+
+/-- The refused upgrades after which live updates stop (`WS_REFUSAL_LIMIT`). -/
+def refusalLimit : Nat := 5
 
 /-- The effects of asking for `k` under request `id`: the request and its deadline. -/
 def fetch (id : Nat) (k : ReqKind) : List Effect :=
@@ -302,6 +305,118 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   | sharedAnswer {s : State} {id : Nat} :
       pendingOf s id .shared →
       Allowed cat s (.sharedAnswer id) { s with pending := dropId s.pending id } []
+  /-- The socket opened: the refusals are forgotten, and live updates may run again. -/
+  | socketOpened {s : State} :
+      Allowed cat s .wsOpen { s with wsRefusals := 0, wsStopped := false } []
+  /-- The welcome of a first connection: the subscription starts at the server's head, the view is
+  read again (what changed before it is not replayed), and the heartbeat starts. -/
+  | welcomeFirst {s : State} {head : Nat} :
+      s.wsLast = 0 →
+      Allowed cat s (.welcome head)
+        { askView s s.route with
+          wsState := .opened
+          wsLast := head
+          nextId := s.nextId + 2
+          wsHeartbeat := some (s.nextId + 1) }
+        ([.wsSend "subscribe"] ++ fetch s.nextId .view ++ [.timer "heartbeat" (s.nextId + 1) cat.heartbeatMs])
+  /-- The welcome of a resumed connection: the subscription goes on from the last notice; nothing is read
+  again. -/
+  | welcomeResume {s : State} {head : Nat} :
+      s.wsLast ≠ 0 →
+      Allowed cat s (.welcome head)
+        { s with
+          wsState := .opened
+          nextId := s.nextId + 1
+          wsHeartbeat := some s.nextId }
+        [.wsSend "subscribe", .timer "heartbeat" s.nextId cat.heartbeatMs]
+  /-- The next notice: it is acknowledged, and the page's live bindings read the view again for it. -/
+  | eventRefresh {s : State} {seq : Nat} :
+      seq = s.wsLast + 1 →
+      Allowed cat s (.frameEvent seq true) { askView s s.route with wsLast := seq }
+        ([.wsSend "ack"] ++ fetch s.nextId .view)
+  /-- The next notice, and no live binding reads the view again for it: acknowledged. -/
+  | eventQuiet {s : State} {seq : Nat} :
+      seq = s.wsLast + 1 →
+      Allowed cat s (.frameEvent seq false) { s with wsLast := seq } [.wsSend "ack"]
+  /-- A notice that is not the next one: a frame went missing, so the socket is closed and the view is
+  read again. -/
+  | eventGap {s : State} {seq : Nat} {refresh : Bool} :
+      seq ≠ s.wsLast + 1 →
+      Allowed cat s (.frameEvent seq refresh) (askView s s.route) ([.wsClose] ++ fetch s.nextId .view)
+  /-- A resync: the page is too far behind to replay, so it carries on from the head, reading the view
+  again. -/
+  | resyncRefresh {s : State} {head : Nat} :
+      Allowed cat s (.resync head) { askView s s.route with wsLast := head } (fetch s.nextId .view)
+  /-- A pong that names a head ahead of the notices the page has: the view is read again. -/
+  | pongBehind {s : State} {head : Nat} :
+      s.wsLast < head →
+      Allowed cat s (.pong head) (askView s s.route) (fetch s.nextId .view)
+  /-- A pong that is not ahead of the page's notices changes nothing. -/
+  | pongCurrent {s : State} {head : Nat} :
+      head ≤ s.wsLast →
+      Allowed cat s (.pong head) s []
+  /-- The socket closed after it had opened: the page waits and tries again after the reconnect delay. -/
+  | wsClosedLater {s : State} :
+      s.wsState = .opened →
+      Allowed cat s (.wsClosed false)
+        { s with
+          wsState := .waiting
+          wsHeartbeat := none
+          wsReconnect := some s.nextId
+          nextId := s.nextId + 1 }
+        [.timer "reconnect" s.nextId cat.reconnectMs]
+  /-- An upgrade was refused, and that is not the limit yet: the session is read again (the refusal may be
+  an expired request token), and the page waits to try again. -/
+  | wsRefusedKeep {s : State} :
+      s.wsState = .connecting →
+      s.wsRefusals + 1 < refusalLimit →
+      Allowed cat s (.wsClosed true)
+        { s with
+          wsState := .waiting
+          wsRefusals := s.wsRefusals + 1
+          wsHeartbeat := none
+          wsReconnect := some (s.nextId + 1)
+          nextId := s.nextId + 2
+          pending := ⟨s.nextId, .session, s.generation⟩ :: s.pending }
+        (fetch s.nextId .session ++ [.timer "reconnect" (s.nextId + 1) cat.reconnectMs])
+  /-- The refusal that reaches the limit: live updates stop, and no attempt is made again. -/
+  | wsRefusedStop {s : State} :
+      s.wsState = .connecting →
+      refusalLimit ≤ s.wsRefusals + 1 →
+      Allowed cat s (.wsClosed true)
+        { s with
+          wsState := .waiting
+          wsRefusals := s.wsRefusals + 1
+          wsStopped := true
+          wsHeartbeat := none
+          wsReconnect := none
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .session, s.generation⟩ :: s.pending }
+        (fetch s.nextId .session)
+  /-- The reconnect timer runs out while live updates have not stopped: the socket connects again. -/
+  | reconnectFires {s : State} {token : Nat} :
+      s.wsReconnect = some token →
+      s.wsStopped = false →
+      Allowed cat s (.timer "reconnect" token) { s with wsState := .connecting, wsReconnect := none }
+        [.wsConnect none]
+  /-- A reconnect timer that is not the running one, or that fires after live updates stopped, changes
+  nothing. -/
+  | reconnectStale {s : State} {token : Nat} :
+      (s.wsReconnect ≠ some token ∨ s.wsStopped = true) →
+      Allowed cat s (.timer "reconnect" token) s []
+  /-- The heartbeat is due on an open connection: a ping goes, and the next heartbeat is armed. -/
+  | heartbeatDue {s : State} {token : Nat} :
+      s.wsHeartbeat = some token →
+      s.wsState = .opened →
+      Allowed cat s (.timer "heartbeat" token)
+        { s with
+          wsHeartbeat := some s.nextId
+          nextId := s.nextId + 1 }
+        [.wsSend "ping", .timer "heartbeat" s.nextId cat.heartbeatMs]
+  /-- A heartbeat timer that is not the running one, or whose connection is not open, changes nothing. -/
+  | heartbeatStale {s : State} {token : Nat} :
+      (s.wsHeartbeat ≠ some token ∨ s.wsState ≠ .opened) →
+      Allowed cat s (.timer "heartbeat" token) s []
 
 /-- The states the kernel can reach from the initial state by allowed steps. -/
 inductive Reachable (cat : Catalogue) : State → Prop
@@ -454,6 +569,28 @@ theorem toast_expiry_removes (cat : Catalogue) {s s' : State} {m : Msg} {token :
     (hm : m = .timer "toast" token) (ha : Allowed cat s m s' es) : token ∉ s'.toasts := by
   cases ha <;> simp_all
 
+/-! ### The live connection (slice 5) -/
+
+/-- **An in-order notice is acknowledged, and only an in-order one moves the acknowledged number.** -/
+theorem in_order_notice_acked (cat : Catalogue) {s s' : State} {m : Msg} {seq : Nat} {refresh : Bool}
+    {es : List Effect} (hm : m = .frameEvent seq refresh) (ha : Allowed cat s m s' es)
+    (hin : seq = s.wsLast + 1) : s'.wsLast = seq := by
+  cases ha <;> simp_all
+
+/-- **A page that has stopped live updates never tries to reconnect.** A reconnect timer that leads to a
+connection attempt runs only while live updates have not stopped. -/
+theorem stopped_never_reconnects (cat : Catalogue) {s s' : State} {m : Msg} {token : Nat}
+    {es : List Effect} (hm : m = .timer "reconnect" token) (ha : Allowed cat s m s' es)
+    (hes : es ≠ []) : s.wsStopped = false := by
+  cases ha <;> simp_all
+
+/-- **A refused upgrade is counted, and the count reaching the limit stops live updates.** -/
+theorem refusal_counts_and_stops (cat : Catalogue) {s s' : State} {m : Msg} {es : List Effect}
+    (hm : m = .wsClosed true) (ha : Allowed cat s m s' es) (hconn : s.wsState = .connecting)
+    (hnot : s.wsStopped = false) :
+    s'.wsRefusals = s.wsRefusals + 1 ∧ (s'.wsStopped = true ↔ refusalLimit ≤ s'.wsRefusals) := by
+  cases ha <;> simp_all [refusalLimit] <;> omega
+
 /-! ## Non-vacuity -/
 
 /-- A catalogue with one screen, which needs a signed-in person, for the witness below. -/
@@ -462,7 +599,9 @@ def sampleCatalogue : Catalogue :=
     needsSession := fun scr => scr == 0
     signOutOn := fun _ => true
     validSignIn := fun _ => true
-    searchTarget := fun _ => root }
+    searchTarget := fun _ => root
+    reconnectMs := 1000
+    heartbeatMs := 15000 }
 
 /-- The relation is not empty where the theorems look: a page that starts for a person, reads the
 view of its screen and holds it is a reachable state, holding a model read for that person. -/

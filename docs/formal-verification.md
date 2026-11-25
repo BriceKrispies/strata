@@ -322,14 +322,15 @@ what the B2 implementation will be proved against.
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `ws_open` | resets the refusal count and the stop flag | not covered | 5 |
-| `ws_message` welcome | the live state starts; the view is read again on the first connection | not covered | 5 |
-| `ws_message` event (a notice or a heartbeat) | applies the frame; the view is read again when the live bindings say so; the manifest on a schema notice; the session on a membership notice | not covered | 5 (tenant bindings: 11) |
-| `ws_message` resync | carries on from the head; view and manifest read again | not covered | 5 |
-| `ws_message` pong | a head beyond the connection's own reads the view again | not covered | 5 |
-| `ws_closed`, not refused | the live state closes; a reconnect timer | not covered | 5 |
-| `ws_closed`, refused | the session is read with a refusal counted; after five, live updates stop | not covered | 5 (the session answer is covered in 1) |
-| `timer` heartbeat, reconnect, emit | a ping; a reconnect attempt unless stopped; a delayed frame | not covered | 5 |
+| `ws_open` | resets the refusal count and the stop flag | covered | 5 (`socketOpened`) |
+| `ws_message` welcome | a first connection subscribes from the head and reads the view again; a resumed one subscribes on; the heartbeat starts | partly | 5 (`welcomeFirst`, `welcomeResume`; the generated machine's welcome transition was not read, so the head as the acknowledged number is the spec's reading) |
+| `ws_message` event (a notice or a heartbeat) | acknowledges the next notice; reads the view again when the live bindings say so; a gap closes the socket and reads the view again | partly | 5 (`eventRefresh`, `eventQuiet`, `eventGap`; the live bindings' decision is an input of the message; the manifest on a schema notice: 11; the session on a membership notice: not yet) |
+| `ws_message` resync | carries on from the head; the view is read again | covered | 5 (`resyncRefresh`; the manifest read again: 11) |
+| `ws_message` pong | a head beyond the connection's own notices reads the view again | covered | 5 (`pongBehind`, `pongCurrent`) |
+| `ws_closed`, not refused | the live state waits; a reconnect timer | covered | 5 (`wsClosedLater`) |
+| `ws_closed`, refused | the refusal is counted; the session is read again; after five, live updates stop (F7) | covered | 5 (`wsRefusedKeep`, `wsRefusedStop`; the count is taken at the close, see F7) |
+| `timer` heartbeat, reconnect | a ping and the next heartbeat; a reconnect attempt unless stopped | covered | 5 (`heartbeatDue`, `reconnectFires`, and the stale cases) |
+| `timer` emit (a delayed frame) | the delayed frame is performed | not covered | 5 |
 
 #### Presentation
 
@@ -419,12 +420,13 @@ what the B2 implementation will be proved against.
 | `timer` request | every request (30 000 ms) | covered | 1 |
 | `timer` toast | every toast (5 s, or 9 s for a warning) | partly | 4 (expiry is covered; raising a toast is not yet a constructor) |
 | `timer` lab.poll | the Lab's run poll | not covered | 12 |
-| `timer` heartbeat, reconnect, emit | the live connection and its delayed frames | not covered | 5 |
+| `timer` heartbeat, reconnect | the live connection's heartbeat and reconnect timers | covered | 5 |
+| `timer` emit | the delayed frames of the live connection | not covered | 5 |
 | `push_url` | an address change, with the replace flag | covered | 1 |
 | `scroll_top` | navigation | covered | 1 |
-| `ws_connect` | a socket open with the request token (at init with a session, and when a waiting socket connects) | not covered | 5 |
-| `ws_send` | subscribe, ack, ping, and the Lab's cancel | not covered | 5 (cancel: 12) |
-| `ws_close` | closing the socket | not covered | 5 |
+| `ws_connect` | a socket open with the request token (at init with a session, and when a waiting socket connects) | partly | 5 (`reconnectFires` emits it with no token; the request token, and the socket at init, are not yet in the relation) |
+| `ws_send` | subscribe, ack, ping, and the Lab's cancel | partly | 5 (subscribe, ack and ping: covered; cancel: 12) |
+| `ws_close` | closing the socket, after a gap in the notices | covered | 5 (`eventGap`) |
 | `store` | the theme choice in storage | covered | 4 (`themeCycle` stores the mode's key) |
 | `passkey` (`create`, `get`) | the browser's passkey prompt | not covered | 6 (sign-in), 7 (second factor), 8 (registration) |
 | `log` | the record-rule disagreement, and the worker's diagnostics | not covered | 9 |
@@ -462,6 +464,11 @@ changed by its owner.
 - **F6 (minor): the sign-in form after a change of person.** The spec clears the whole sign-in form
   on a change of person (`switched`). `clearUserState` clears only the password and keeps the login
   name. Both are safe; the spec is the stricter, and B2 must choose one.
+- **F7: a refused upgrade is counted when the session read answers.** `onHttp`'s `session` case counts
+  `pending.refusal` (`wsRefusals`, and `wsStopped` at the limit) only when the session read comes back,
+  so a lost session read is never counted. The spec counts the refusal when the socket closes
+  (`wsRefusedKeep`, `wsRefusedStop`) and states `refusal_counts_and_stops`. B2 must count one of them;
+  the spec's count is the one that cannot be lost.
 
 ### 7.4 What the spec leaves out, by design
 
@@ -550,7 +557,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 | 2 (done) | Cold start: the session read at start, a view that answers before the session (dropped and read again), the session answer that makes the session known (`learnSession`); the bootstrapped view remains partly, see row `init` | 1 |
 | 3 (partly done) | Forms, for the sign-in and the search: the typed values, the complete and incomplete submissions, the refusal, the search's navigation (`inputLogin`, `signInIncomplete`, `loginRefused`, `searchSubmit`). Still open in this slice: the csrf token and idempotency key of a request (with the `http` effect), the words of a refusal, focus, and the typed draft (`Drafts.lean`) | 1 |
 | 4 (partly done) | Presentation: the theme and its store effect, the system theme, the menu, dismissing and expiring toasts, the dev expire request (`themeCycle`, `systemThemeSet`, `menuToggle`, `dismissToast`, `toastExpires`, `devExpire`, `sharedAnswer`). Still open: raising a toast (every row's toast), the menu closing on a navigation, and focus and announcements | 1 |
-| 5 | Live connection: the socket machine, the welcome, notices, resync, pong, the session frame when active, refused upgrades, the socket effects and timers | 1, 2 |
+| 5 (partly done) | Live connection (`welcomeFirst`, `welcomeResume`, `eventRefresh`, `eventQuiet`, `eventGap`, `resyncRefresh`, `pongBehind`, `pongCurrent`, `wsClosedLater`, `wsRefusedKeep`, `wsRefusedStop`, `reconnectFires`, `heartbeatDue`, `socketOpened`). Still open: the session frame when active, the delayed frames (emit), the request token on connect, the session frame of a membership notice, and the schema notice's manifest (11) | 1, 2 |
 | 6 | Sign-in methods: passkey sign-in, emailed links, invitations, identity providers (OIDC and SAML), `navigate_away` | 3, 5 |
 | 7 | Second factors and step-up: the waiting sign-in, the factors section, recovery codes, the step-up prompt and its retry, the passkey as a second factor | 3, 6 |
 | 8 | The person's sessions and passkeys on the desk | 3, 7 |
@@ -563,8 +570,8 @@ How the existing theorems meet this one (no existing theorem is changed):
 
 ### 7.7 Counts
 
-The messages table has 78 rows (a row is one message, or one family of messages with the same handling):
-22 covered, 10 partly, 46 not covered (after slice 4). The effects table has 14 rows: 4 covered, 2 partly, 8 not
+The messages table has 79 rows (a row is one message, or one family of messages with the same handling):
+28 covered, 12 partly, 39 not covered (after slice 5). The effects table has 15 rows: 6 covered, 4 partly, 5 not
 covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
