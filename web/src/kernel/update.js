@@ -291,6 +291,11 @@ export function principalOf(session) {
   return { id: session.principal, tenant: session.tenant, kind: 'member', roles };
 }
 
+/** The person a session names: its principal when it is signed in, null for a visitor. @param {any} session */
+function personOf(session) {
+  return session?.authenticated === true ? session.principal ?? null : null;
+}
+
 /** The scope the generated expressions read on the current screen. */
 function scopeOf(state, extra = {}) {
   const screen = screenOf(state);
@@ -807,7 +812,18 @@ function onHttp(state, msg) {
   switch (pending.kind) {
     case 'session': {
       if (!msg.ok) return { state, effects: [] };
+      // A session that names another person, or nobody, is a change of person: what the former person
+      // held is dropped and the view is read again (the specification's sessionChanged).
+      const changed = personOf(state.session) !== personOf(outputs.session);
       let known = sessionRead({ ...state, session: outputs.session }, outputs.session.authenticated === true, msg.at);
+      /** @type {Effect[]} */
+      const reread = [];
+      if (changed) {
+        known = clearUserState(known);
+        const fetched = fetchView(known, msg, true);
+        known = fetched.state;
+        reread.push(...fetched.effects);
+      }
       // The session was read because the socket upgrade was refused and the server answered: that
       // is a refusal, not an outage. After enough of them live updates stop, visibly.
       if (pending.refusal) {
@@ -821,8 +837,8 @@ function onHttp(state, msg) {
       // A link the page was opened with waits for the request token that this reply brings.
       const linked = linksLand(known, msg, { request });
       const landed = oidcLand(linked.state, msg, { request });
-      const entered = enterScreen(landed.state, msg, state.view.model?.view, { afterSession: true });
-      return { state: entered.state, effects: [...open, ...linked.effects, ...landed.effects, ...entered.effects] };
+      const entered = enterScreen(landed.state, msg, landed.state.view.model?.view, { afterSession: true });
+      return { state: entered.state, effects: [...open, ...reread, ...linked.effects, ...landed.effects, ...entered.effects] };
     }
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };

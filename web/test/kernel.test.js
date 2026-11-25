@@ -339,3 +339,20 @@ test('a session end drops the view read for the former person, on a page that ne
   assert.equal(ended.state.view.status, 'loading', 'the page waits for the view it reads again');
   assert.ok(ended.effects.some((e) => e.type === 'http'), 'the view is read again');
 });
+
+// F3: a session read that names another person, or nobody, left the former person's state in place: the
+// session changed and the model read for the former person stayed on the page. The spec's sessionChanged
+// is a change of person (switched): the model is dropped and the view is read again.
+test('a session read naming another person, or nobody, drops what the former person held', () => {
+  const others = [{ ...member, principal: 'user:omar', display_name: 'Omar', csrf_token: 'tok2' }, anonymous];
+  for (const session of others) {
+    const start = boot({ path: '/', session: { session: member }, view: homeModel() }).state;
+    // A refused socket upgrade reads the session again; the read answers with the other session.
+    const refused = update(start, { type: 'ws_closed', refused: true, ...stamp });
+    const read = refused.effects.find((e) => e.type === 'http' && e.path === '/api/session');
+    const replied = update(refused.state, { type: 'http_result', id: read.id, ok: true, status: 200, body: { session }, ...stamp });
+    assert.equal(replied.state.view.model, null, 'the model read for the former person is dropped');
+    assert.equal(replied.state.generation, 1, 'the change of person is counted');
+    assert.ok(replied.effects.some((e) => e.type === 'http' && e.path.startsWith('/api/view')), 'the view is read again');
+  }
+});
