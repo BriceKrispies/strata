@@ -606,3 +606,32 @@ import Strata
 #print axioms Strata.Reduction.bridge_run
 #print axioms Strata.Reduction.backend_fine_refines
 #print axioms Strata.Reduction.run_congr
+
+-- Boundary codec (WG-5653)
+#print axioms Strata.Codec.lawful_nat
+#print axioms Strata.Codec.lawful_int
+#print axioms Strata.Codec.lawful_bool
+#print axioms Strata.Codec.lawful_str
+#print axioms Strata.Codec.lawful_pair
+#print axioms Strata.Codec.lawful_iso
+#print axioms Strata.Codec.lawful_opt
+#print axioms Strata.Codec.lawful_list
+#print axioms Strata.Codec.lawful_onDelete
+#print axioms Strata.Codec.lawful_err
+#print axioms Strata.Codec.lawful_ty
+#print axioms Strata.Codec.lawful_elem
+#print axioms Strata.Codec.lawful_val
+#print axioms Strata.Codec.lawful_fieldDef
+#print axioms Strata.Codec.lawful_limits
+#print axioms Strata.Codec.lawful_record
+#print axioms Strata.Codec.lawful_tenant
+#print axioms Strata.Codec.lawful_intent
+#print axioms Strata.Codec.lawful_ctx
+#print axioms Strata.Codec.lawful_result
+#print axioms Strata.Codec.decodeBytes_encodeBytes
+#print axioms Strata.Codec.encodeBytes_of_decodeBytes
+#print axioms Strata.Codec.fix_val_str
+#print axioms Strata.Codec.fix_tenant
+#print axioms Strata.Codec.fix_intent_update
+#print axioms Strata.Codec.fix_result_ok
+#print axioms Strata.Codec.boundary_codecs

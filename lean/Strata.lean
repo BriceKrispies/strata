@@ -39,3 +39,7 @@ import Strata.System.Liveness
 import Strata.Reduction.Transactions
 import Strata.Reduction.Distributed
 import Strata.Reduction.Backend
+
+import Strata.Codec.Core
+import Strata.Codec.Boundary
+import Strata.Codec.Fixtures

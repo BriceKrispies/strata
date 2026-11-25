@@ -342,6 +342,103 @@ outcomes occurred, not whether each was reached through the rule it names; the u
   lands) and `require` on an undeclared field, where the kernel may define a field the model does
   not; that difference is to be settled in the model, not hidden by the generator.
 
+## 7b. Boundary codec (WG-5653)
+
+The values that cross between the Rust backend and the compiled Lean kernel have one canonical
+byte encoding, proved in Lean and mirrored in Rust:
+
+- `lean/Strata/Codec/Core.lean`: the combinators and primitives, with `Lawful e d` (below) proved
+  for each;
+- `lean/Strata/Codec/Boundary.lean`: the boundary types of `Strata.Model`;
+- `lean/Strata/Codec/Fixtures.lean`: byte fixtures and the summary theorem `boundary_codecs`;
+- `crates/lean-kernel-ffi/src/codec.rs`: the Rust encoder and decoder, and
+  `crates/lean-kernel-ffi/tests/lean_kernel_ffi_it.rs`, which checks the same fixture bytes and
+  round trips generated values.
+
+The entry points are `encodeBytes e x : ByteArray` and `decodeBytes d b : Option α`. `decodeBytes`
+reads the whole input, so trailing bytes do not decode.
+
+### Lawfulness
+
+`Lawful e d` holds when:
+- round trip: `d (e x ++ rest) = some (x, rest)` for every `x` and every `rest`;
+- canonical: `d bs = some (x, rest)` implies `bs = e x ++ rest`.
+
+Together they give one encoding per value and no other bytes that decode. Prefix-freeness follows:
+no proper prefix of an encoding decodes to a complete value, and an encoding with a byte appended
+does not decode (`decodeBytes`).
+
+### Format, byte by byte
+
+- **Tag**: one byte, the constructor's index in declaration order.
+- **Natural**: minimal LEB128. Seven bits per byte, low group first, bit 7 set on every byte but
+  the last. A multi-byte natural never ends in `0x00`, so `0` is `00`, `128` is `80 01`, and
+  `300` is `AC 02`.
+- **Integer**: a sign tag, then a natural. `00` and the natural `i` if `i >= 0`; `01` and the
+  natural `-i - 1` if negative. So `-1` is `01 00` and `-2` is `01 01`.
+- **Boolean**: `00` false, `01` true.
+- **String**: the natural length of its UTF-8 bytes, then the bytes. Decoding requires that the
+  bytes are the UTF-8 of the string they decode to (valid UTF-8).
+- **List**: the natural count, then the elements. **Option**: `00` for none, `01` then the value.
+- **Structure**: its fields in declaration order (a pair is its two components).
+
+The types, with their tags:
+
+| Type | Encoding |
+|---|---|
+| `OnDelete` | `00` restrict, `01` setNull |
+| `Ty` | `00` int, `01` str, `02` bool, `03` ref restrict, `04` ref setNull, `05` list then the element type |
+| `Elem` | `00` null, `01` int, `02` str, `03` bool, `04` ref (natural) |
+| `Val` | `00` null, `01` int, `02` str, `03` bool, `04` ref (natural), `05` list (count, elements) |
+| `FieldDef` | `ty`, `required` (bool), `unique` (bool), `default` (`Val`) |
+| `Limits` | `maxString`, `maxList`, `maxUnique`, `maxRecord` (naturals) |
+| `Record` | `owner`, `version`, then the fields as a list of (field id, `Val`) |
+| `Tenant` | `schema` (list of (field id, `FieldDef`)), `owner`, `editors` (list), `writers` (list), `records` (list of (record id, `Record`)), `nextId`, `limits`, `uniques` (list of lists of field ids) |
+| `Ctx` | `tenant`, `principal` |
+| `Intent` | `00` create (fields); `01` update (id, fields, option expected version); `02` delete (id, option expected version); `03` setRequired (field, strict); `04` setUnique (field, strict); `05` defineUnique (list of field ids) |
+| `Err` | one byte: `00` noTenant, `01` unauthorized, `02` notFound, `03` invalid, `04` migrationRejected, `05` danglingReference, `06` stillReferenced, `07` versionConflict, `08` limitExceeded, `09` uniqueViolated, `0A` invalidSchema |
+| step result (`Except Err Tenant`) | `00` then `Err`, or `01` then `Tenant` |
+
+Fixtures (each proved by evaluation in `Fixtures.lean`; the Rust tests assert the same bytes):
+- `encVal (.ref 300) = [4, 172, 2]`, that is `04 AC 02`;
+- `encVal (.list [.int 5, .null]) = [5, 2, 1, 0, 5, 0]`;
+- `encIntent (.update 5 [(1, .str "x")] none) = [1, 5, 1, 1, 2, 1, 120, 0]`;
+- `encTenant fxTenant`, a tenant with one string field, owner 7, next id 1 and the kernel's limits,
+  is `01 01 01 01 00 00 07 00 00 00 01 80 80 04 E8 07 C8 01 80 80 10 00` (22 bytes);
+- `encResult (.error .unauthorized) = [0, 1]`.
+
+`World` (a function from tenant ids to tenants) is not encoded. The boundary carries one tenant.
+
+### Theorems
+
+Combinators (each proves `Lawful` for its codec, from the `Lawful`s of its parts):
+`lawful_nat`, `lawful_int`, `lawful_bool`, `lawful_str`, `lawful_pair`, `lawful_iso` (a codec
+through an isomorphism), `lawful_opt`, `lawful_list`.
+
+Boundary types: `lawful_onDelete`, `lawful_err`, `lawful_ty`, `lawful_elem`, `lawful_val`,
+`lawful_fieldDef`, `lawful_limits`, `lawful_record`, `lawful_tenant`, `lawful_intent`,
+`lawful_ctx`, `lawful_result`.
+
+Entry points, for any `Lawful e d`:
+- `decodeBytes_encodeBytes : decodeBytes d (encodeBytes e x) = some x`;
+- `encodeBytes_of_decodeBytes : decodeBytes d b = some x → encodeBytes e x = b`.
+
+`boundary_codecs` states both for `Tenant`, `Val`, `Elem`, `Ty`, `FieldDef`, `Limits`, `Record`,
+`Intent`, `Ctx`, `Err`, the step result and `OnDelete`. `lake env lean Audit.lean` lists the axioms
+of the codec theorems: `propext`, `Classical.choice` and `Quot.sound` only, with no `sorry`.
+
+### The Rust mirror, and what it does not cover
+
+`codec.rs` encodes the Lean boundary types restricted to the modelled fragment, with the same
+bytes. Two Rust choices are narrower than Lean's unbounded types, and the decoder refuses what it
+cannot represent: an integer outside `i64`, a natural outside `u64`, and a type nested more than
+`MAX_TY_DEPTH` (64) lists deep. Every value the Rust types hold encodes to the bytes Lean encodes.
+
+The Rust kernel's own types are wider than the model's and are not encoded directly: its `Value`
+has `Time` and `File` values, its field ids are strings, and its `Intent` has more variants. The
+mapping from kernel values to these boundary types is a separate piece of work (the correspondence
+in `docs/verification.md`) and is not part of this codec.
+
 ## Temporal logic library
 
 Built for C2 (WG-5656) in `lean/Strata/Temporal/`, imported from `lean/Strata.lean`. It has no
