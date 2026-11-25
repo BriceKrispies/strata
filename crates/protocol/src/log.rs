@@ -41,7 +41,7 @@ pub fn emit_line(line: &str) {
     if direct {
         write_stdout_line(&mut std::io::stdout().lock(), line);
     } else {
-        print!("{line}\n");
+        println!("{line}");
     }
 }
 
