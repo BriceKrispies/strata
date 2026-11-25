@@ -1585,3 +1585,45 @@ fn a_held_transaction_is_not_approved_by_its_actor_or_the_person_it_was_made_for
     );
     assert_eq!(refusal("alpha:owner"), None);
 }
+
+/// Verifies: ADM-1629
+/// Every leg of a transaction is checked as a posting: a transaction whose leg adjusts the
+/// account of the person who posts it is refused with `SelfAction` and the check
+/// `ledger:self_action`, and posts nothing, while the same legs under an ordinary reason, and an
+/// adjustment to someone else's account, are accepted.
+#[test]
+fn a_transaction_leg_adjusting_the_posters_own_account_is_refused() {
+    let world = ledger_world(vec![]);
+    let own = tx_refusal(
+        &world,
+        "owner",
+        T0,
+        transaction(
+            "own",
+            "adjust",
+            vec![leg(pool(), -5), leg(person("owner"), 5)],
+        ),
+    );
+    assert_eq!(own.kind, ErrorKind::SelfAction, "{}", own.message);
+    assert_eq!(failed_rule(&own), "ledger:self_action");
+    assert_eq!(ledger_of(&world), ledger::empty_state());
+
+    transacted(
+        &world,
+        T0,
+        transaction(
+            "ordinary",
+            "test",
+            vec![leg(pool(), -5), leg(person("owner"), 5)],
+        ),
+    );
+    transacted(
+        &world,
+        T0,
+        transaction(
+            "other",
+            "adjust",
+            vec![leg(pool(), -5), leg(person("writer1"), 5)],
+        ),
+    );
+}
