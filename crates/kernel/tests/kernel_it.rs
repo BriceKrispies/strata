@@ -62,3 +62,6 @@ mod triggers;
 
 #[path = "ancestry.rs"]
 mod ancestry;
+
+#[path = "computed.rs"]
+mod computed;

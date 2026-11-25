@@ -1,7 +1,7 @@
-//! Kernel-computed fields (D-8307; KRN-2924 to KRN-2926): the declarations the kernel refuses, the
+//! Kernel-computed fields (D-8307; KRN-2924 to KRN-2928): the declarations the kernel refuses, the
 //! recomputation in the commit of a write, the bound on it, and the clock refresh.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use strata_kernel::testkit::*;
 use strata_kernel::*;
@@ -140,6 +140,7 @@ fn refresh(world: &World, now: i64, after: Option<RecordId>) -> Result<(World, O
         .map(|(next, transition)| (next, transition.output))
 }
 
+// Verifies: KRN-2924
 #[test]
 fn a_computed_field_with_a_default_or_a_writer_is_refused() {
     let changes = |field: FieldDef| {
@@ -248,6 +249,7 @@ fn a_computed_field_reads_no_reader_and_no_other_computed_field() {
     assert!(error.message.contains("computed field overdue"), "{}", error.message);
 }
 
+// Verifies: KRN-2925
 #[test]
 fn a_write_recomputes_the_referring_record_in_its_commit() {
     let world = model();
@@ -290,6 +292,7 @@ fn a_write_recomputes_the_referring_record_in_its_commit() {
     assert_eq!(record(&world, "ticket", referring).version, before + 1);
 }
 
+// Verifies: KRN-2926
 #[test]
 fn a_write_that_would_recompute_too_many_referring_records_is_refused() {
     let mut world = model();
@@ -308,6 +311,7 @@ fn a_write_that_would_recompute_too_many_referring_records_is_refused() {
     );
 }
 
+// Verifies: KRN-2928
 #[test]
 fn a_clock_step_refreshes_only_the_values_that_changed() {
     let world = model();
@@ -374,6 +378,7 @@ fn a_clock_step_refreshes_only_the_values_that_changed() {
     assert_eq!(error.kind, ErrorKind::InvalidIntent);
 }
 
+// Verifies: KRN-2927
 #[test]
 fn a_refresh_examines_one_batch_from_its_cursor() {
     let mut world = model();
@@ -433,4 +438,42 @@ fn a_field_defined_over_existing_records_is_derived_for_them() {
         &Value::Bool(true),
         "the change that defines the field derives it for the record that exists"
     );
+}
+
+// Verifies: KRN-2924
+#[test]
+fn a_workflow_that_sets_a_computed_field_is_refused() {
+    let base = model();
+    let changes = vec![
+        SchemaChange::DefineField {
+            object: object("task"),
+            field: field_def("state", FieldType::Str, false),
+        },
+        SchemaChange::DefineWorkflow(WorkflowDef {
+            id: WorkflowId::new("task_flow").expect("id"),
+            object: object("task"),
+            field: field("state"),
+            initial: BTreeSet::from(["open".to_string()]),
+            transitions: vec![WorkflowTransition {
+                name: "finish".into(),
+                from: "open".into(),
+                to: "done".into(),
+                guard: None,
+                set: BTreeMap::from([(field("overdue"), Expr::Lit(Value::Bool(false)))]),
+            }],
+        }),
+    ];
+    let error = step(
+        &base,
+        "owner",
+        9_020,
+        Intent::ChangeSchema {
+            changes,
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    )
+    .expect_err("a workflow that sets a computed field is refused");
+    assert_eq!(error.kind, ErrorKind::InvalidSchema);
+    assert!(error.message.contains("computed field task.overdue"), "{}", error.message);
 }
