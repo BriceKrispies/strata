@@ -139,6 +139,10 @@ pub const REDEFINES_ENTITY: &str = "layer.redefines-entity";
 pub const OUTSIDE_CATALOGUE: &str = "layer.outside-catalogue";
 /// A value in a typed section that does not conform to its platform type.
 pub const VALUE_INVALID: &str = "layer.value-invalid";
+/// A branch step of an operation that tests a binding no find-record step before it bound (WG-5596).
+pub const OPERATION_BINDING_UNBOUND: &str = "layer.operation-binding-unbound";
+/// A branch step of an operation that holds a find-record step or another branch (WG-5596).
+pub const OPERATION_BRANCH_HOLDS: &str = "layer.operation-branch-holds";
 /// A product entity whose id is not in the namespace of its product.
 pub const NAMESPACE_MISSING: &str = "layer.namespace-missing";
 /// A name in the namespace of a product that nothing declares.
@@ -713,8 +717,17 @@ fn check_product(
                         let scope = context.scope_of(section, item);
                         for text in &exprs {
                             check_fixed_record(&file, id, &text.at, &text.text, out);
+                            // The predicate of a find-record step reads the candidate of its object type.
+                            let text_scope = context
+                                .find_predicate_scope(item, &text.at, &scope)
+                                .unwrap_or_else(|| scope.clone());
                             out.extend(layer_expr::check_text(
-                                &file, id, &text.at, &text.text, &scope, &context,
+                                &file,
+                                id,
+                                &text.at,
+                                &text.text,
+                                &text_scope,
+                                &context,
                             ));
                         }
                         if *section == "objects" {
@@ -722,6 +735,9 @@ fn check_product(
                         }
                         if matches!(*section, "operations" | "automations" | "workflows") {
                             check_balance(&file, id, item, out);
+                        }
+                        if *section == "operations" {
+                            check_operation_bindings(&file, id, item, out);
                         }
                         if *section == "eventKinds" {
                             check_event_kind(&file, id, item, out);
@@ -1236,6 +1252,79 @@ fn check_balance(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic>) 
                 "\"{id}\" in {file} writes the field \"{field}\" from its own current value ({text:?}), which keeps a mutable balance in a record instead of the ledger. A count, a budget or a stock that goes up and down is a ledger unit: declare it under \"ledgerUnits\" and change it with a \"PostLedger\" step, whose entries are the journal, whose idempotency key makes a retry change nothing and whose limits hold under concurrent writes (LDG-001). Remove the write and post to the ledger."
             ),
         ));
+    }
+}
+
+/// The bindings a branch step tests (WG-5596): a `Found` test names a find-record step before it, in
+/// its own list or in an enclosing one. A binding a branch makes is not read after the branch.
+fn check_operation_bindings(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic>) {
+    let Some(steps) = item.get("steps").and_then(Value::as_array) else {
+        return;
+    };
+    walk_bindings(file, id, steps, &mut Vec::new(), out);
+}
+
+fn walk_bindings(
+    file: &str,
+    id: &str,
+    steps: &[Value],
+    finds: &mut Vec<String>,
+    out: &mut Vec<Diagnostic>,
+) {
+    for step in steps {
+        for (kind, body) in step.as_object().into_iter().flatten() {
+            match kind.as_str() {
+                "FindRecord" => {
+                    if let Some(name) = body.get("id").and_then(Value::as_str) {
+                        finds.push(name.to_string());
+                    }
+                }
+                "Branch" => {
+                    let step_id = body.get("id").and_then(Value::as_str).unwrap_or("");
+                    let binding = body
+                        .get("test")
+                        .and_then(|test| test.get("Found"))
+                        .and_then(|found| found.get("binding"))
+                        .and_then(Value::as_str);
+                    if let Some(binding) = binding {
+                        if !finds.iter().any(|name| name == binding) {
+                            out.push(Diagnostic::new(
+                                OPERATION_BINDING_UNBOUND,
+                                id,
+                                format!(
+                                    "\"{id}\" in {file}: the branch step \"{step_id}\" tests the binding \"{binding}\", which no find-record step before it bound. A branch tests a record that a find-record step bound as param.<step id>; name a find-record step declared earlier in the operation, in the list the branch is in or an enclosing one."
+                                ),
+                            ));
+                        }
+                    }
+                    for side in ["matched", "unmatched"] {
+                        let list = body.get(side).and_then(Value::as_array);
+                        for nested in list.into_iter().flatten() {
+                            for (inner_kind, _) in nested.as_object().into_iter().flatten() {
+                                if inner_kind == "FindRecord" || inner_kind == "Branch" {
+                                    out.push(Diagnostic::new(
+                                        OPERATION_BRANCH_HOLDS,
+                                        id,
+                                        format!(
+                                            "\"{id}\" in {file}: the branch step \"{step_id}\" holds a {inner_kind} step in its {side} steps. A branch holds only record and posting steps (WG-5596); move the find-record step before the branch and test its binding."
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                        let mut inner = finds.clone();
+                        walk_bindings(
+                            file,
+                            id,
+                            list.map_or(&[][..], Vec::as_slice),
+                            &mut inner,
+                            out,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 

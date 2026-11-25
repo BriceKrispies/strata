@@ -1,0 +1,56 @@
+{
+  // A toggle as a product (WG-5596): a person's reaction of one kind to a message is removed when it is
+  // there and created when it is not, in one tenant operation. A find-record step reads the caller's
+  // reaction for the message and kind, and a branch on found deletes it or creates it. The file declares
+  // everything it names in its own namespace toggle__ (D-6582).
+  "product": { "id": "toggle", "name": "Toggle", "imports": { "spec": "../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "toggle__message",
+      "label": "Message",
+      "fields": { "body": { "id": "body", "label": "Body", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {}
+    },
+    {
+      "id": "toggle__reaction",
+      "label": "Reaction",
+      "fields": {
+        "message": { "id": "message", "label": "Message", "ty": { "Ref": { "target": "toggle__message", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "reactor": { "id": "reactor", "label": "From", "ty": "Str", "required": true, "unique": false },
+        "kind": { "id": "kind", "label": "Reaction", "ty": "Str", "required": true, "unique": false }
+      },
+      "constraints": {},
+      "unique": { "one_of_a_kind": { "id": "one_of_a_kind", "fields": ["message", "reactor", "kind"], "message": "You have already reacted to this message that way." } }
+    }
+  ],
+  "operations": [
+    {
+      "id": "toggle__react",
+      "label": "React, or take the reaction back",
+      "inputs": [
+        { "name": "message", "ty": { "Ref": { "target": "toggle__message", "on-delete": "Restrict" } }, "required": true },
+        { "name": "kind", "ty": "Str", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [
+        {
+          "FindRecord": {
+            "id": "mine",
+            "object": "toggle__reaction",
+            "predicate": "record.message == param.message and record.reactor == principal and record.kind == param.kind",
+            "error": "toggle-ambiguous"
+          }
+        },
+        {
+          "Branch": {
+            "id": "toggle",
+            "test": { "Found": { "binding": "mine" } },
+            "matched": [ { "DeleteRecord": { "id": "removed", "object": "toggle__reaction", "record": "param.mine" } } ],
+            "unmatched": [ { "CreateRecord": { "id": "added", "object": "toggle__reaction", "fields": { "message": "param.message", "reactor": "principal", "kind": "param.kind" } } } ]
+          }
+        }
+      ]
+    }
+  ]
+}

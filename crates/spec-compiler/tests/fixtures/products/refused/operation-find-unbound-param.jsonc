@@ -1,0 +1,35 @@
+{
+  // Refused: a find-record predicate reads param.kind, which the operation has no input or earlier binding for (layer.expr-unknown-param, WG-5596). The kind input is left out.
+  "product": { "id": "toggle", "name": "Toggle", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "toggle__message",
+      "label": "Message",
+      "fields": { "body": { "id": "body", "label": "Body", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {}
+    },
+    {
+      "id": "toggle__reaction",
+      "label": "Reaction",
+      "fields": {
+        "message": { "id": "message", "label": "Message", "ty": { "Ref": { "target": "toggle__message", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "reactor": { "id": "reactor", "label": "From", "ty": "Str", "required": true, "unique": false },
+        "kind": { "id": "kind", "label": "Reaction", "ty": "Str", "required": true, "unique": false }
+      },
+      "constraints": {},
+      "unique": { "one_of_a_kind": { "id": "one_of_a_kind", "fields": ["message", "reactor", "kind"], "message": "You have already reacted to this message that way." } }
+    }
+  ],
+  "operations": [
+    {
+      "id": "toggle__react",
+      "label": "React",
+      "inputs": [ { "name": "message", "ty": { "Ref": { "target": "toggle__message", "on-delete": "Restrict" } }, "required": true } ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [
+        { "FindRecord": { "id": "mine", "object": "toggle__reaction", "predicate": "record.message == param.message and record.kind == param.kind", "error": "toggle-ambiguous" } }
+      ]
+    }
+  ]
+}

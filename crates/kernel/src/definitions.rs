@@ -24,9 +24,10 @@ use crate::expr::{self, Expr, Shape, TypeEnv};
 use crate::limits;
 use crate::schema::{Action, FieldDef, FieldType, ObjectTypeDef, Resource, TenantSchema};
 use crate::types::{
-    public_role, AutomationDef, AutomationStep, AutomationStepDef, FieldId, FieldTypeExt,
-    LedgerUnit, ObjectTypeId, RoleId, SettingId, StepName, TemplateId, TenantOperationDef,
-    TenantOperationPostingOwner, TenantOperationStep, TriggerDef, TriggerEvent, UniqueDef,
+    public_role, AutomationDef, AutomationStep, AutomationStepDef, BranchTest, FieldId,
+    FieldTypeExt, LedgerUnit, ObjectTypeId, RoleId, SettingId, StepName, TemplateId,
+    TenantOperationDef, TenantOperationPostingOwner, TenantOperationStep, TriggerDef, TriggerEvent,
+    UniqueDef,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -327,7 +328,7 @@ pub fn uniques(object: &ObjectTypeDef) -> impl Iterator<Item = &UniqueDef> {
 pub fn operation_powers(op: &TenantOperationDef) -> (Vec<(Action, Resource)>, BTreeSet<String>) {
     let mut actions: Vec<(Action, Resource)> = Vec::new();
     let mut capabilities = BTreeSet::new();
-    for step in &op.steps {
+    for step in all_steps(&op.steps) {
         let wanted = match step {
             TenantOperationStep::CreateRecord { object, .. } => {
                 Some((Action::Create, Resource::Object(object.clone())))
@@ -342,6 +343,8 @@ pub fn operation_powers(op: &TenantOperationDef) -> (Vec<(Action, Resource)>, BT
                 capabilities.insert(LEDGER_POST.to_string());
                 None
             }
+            // A find reads under the invoker's own rights, not a power of the operation.
+            TenantOperationStep::FindRecord { .. } | TenantOperationStep::Branch { .. } => None,
         };
         if let Some(wanted) = wanted {
             if !actions.contains(&wanted) {
@@ -350,6 +353,23 @@ pub fn operation_powers(op: &TenantOperationDef) -> (Vec<(Action, Resource)>, BT
         }
     }
     (actions, capabilities)
+}
+
+/// Every step of a list in order, each branch's steps after the branch that holds them, to any
+/// depth: what a check or a count of the steps of an operation walks.
+pub fn all_steps(steps: &[TenantOperationStep]) -> Vec<&TenantOperationStep> {
+    let mut out = Vec::new();
+    for step in steps {
+        out.push(step);
+        if let TenantOperationStep::Branch {
+            matched, unmatched, ..
+        } = step
+        {
+            out.extend(all_steps(matched));
+            out.extend(all_steps(unmatched));
+        }
+    }
+    out
 }
 
 /// Whether a name is one an input or a step id may take: `[a-z][a-z0-9_]*`, so that it can be
@@ -836,15 +856,15 @@ pub fn operation_problems(
     let none = BTreeMap::new();
     for op in schema.operations.iter().flat_map(BTreeMap::values) {
         let at = format!("operation {}", op.id);
-        if op.steps.len() > limits::MAX_OPERATION_STEPS {
+        let all = all_steps(&op.steps);
+        if all.len() > limits::MAX_OPERATION_STEPS {
             problems.push(format!(
                 "{at}: {} steps is more than the maximum of {}",
-                op.steps.len(),
+                all.len(),
                 limits::MAX_OPERATION_STEPS
             ));
         }
-        let postings = op
-            .steps
+        let postings = all
             .iter()
             .filter(|s| matches!(s, TenantOperationStep::PostLedger { .. }))
             .count();
@@ -931,65 +951,16 @@ pub fn operation_problems(
             problems.push(format!("{at}: condition {id} is declared twice"));
         }
         let mut params = inputs.clone();
-        for step in &op.steps {
-            let id = step_id(step);
-            let sat = format!("{at}.{id}");
-            if !is_param_name(id) {
-                problems.push(format!("{at}: step {id:?} is not a name"));
-            }
-            if inputs.contains(id) {
-                problems.push(format!("{at}: step {id} has the name of an input"));
-            }
-            let env = TypeEnv {
-                fields,
-                params: &params,
-                roles,
-                objects: &schema.objects,
-            };
-            match step {
-                TenantOperationStep::CreateRecord {
-                    object,
-                    fields: written,
-                    ..
-                }
-                | TenantOperationStep::UpdateRecord {
-                    object,
-                    fields: written,
-                    ..
-                } => written_problems(schema, &sat, object, written, &env, problems),
-                TenantOperationStep::DeleteRecord { object, .. } => {
-                    written_problems(schema, &sat, object, &BTreeMap::new(), &env, problems)
-                }
-                TenantOperationStep::PostLedger { .. } => {}
-            }
-            match step {
-                TenantOperationStep::UpdateRecord { record, .. }
-                | TenantOperationStep::DeleteRecord { record, .. } => {
-                    check_expr(problems, &sat, "record", record, &env, false)
-                }
-                TenantOperationStep::PostLedger {
-                    owner,
-                    scope,
-                    amount,
-                    unit,
-                    ..
-                } => {
-                    report(ledger_unit_reference(schema, unit), &sat, problems);
-                    if let TenantOperationPostingOwner::Principal { principal } = owner {
-                        check_expr(problems, &sat, "owner", principal, &env, false);
-                    }
-                    if let Some(scope) = scope {
-                        check_expr(problems, &sat, "scope", scope, &env, false);
-                    }
-                    check_expr(problems, &sat, "amount", amount, &env, false);
-                }
-                TenantOperationStep::CreateRecord { .. } => {}
-            }
-            if matches!(step, TenantOperationStep::CreateRecord { .. }) {
-                params.insert(id.to_string());
-            }
-        }
-        for id in repeated(op.steps.iter().map(step_id)) {
+        let mut finds = BTreeSet::new();
+        let check = StepCheck {
+            schema,
+            roles,
+            fields,
+            at: &at,
+            inputs: &inputs,
+        };
+        steps_problems(check, &op.steps, &mut params, &mut finds, problems);
+        for id in repeated(all_steps(&op.steps).into_iter().map(step_id)) {
             problems.push(format!("{at}: step {id} is declared twice"));
         }
         for capability in operation_powers(op).1 {
@@ -1000,13 +971,191 @@ pub fn operation_problems(
     }
 }
 
+/// What the steps of one tenant operation are checked against: the schema, the roles, the fields
+/// of the subject, the name of the operation for the messages, and its inputs.
+#[derive(Clone, Copy)]
+struct StepCheck<'a> {
+    schema: &'a TenantSchema,
+    roles: &'a BTreeSet<RoleId>,
+    fields: &'a BTreeMap<FieldId, FieldDef>,
+    at: &'a str,
+    inputs: &'a BTreeSet<String>,
+}
+
+/// The problems of the steps of a list, in order. Each step reads the inputs and the steps before
+/// it. The steps a branch holds read what the list read before the branch; a binding made inside a
+/// branch is not read after it. `finds` holds the find-record steps read so far.
+fn steps_problems(
+    check: StepCheck<'_>,
+    steps: &[TenantOperationStep],
+    params: &mut BTreeSet<String>,
+    finds: &mut BTreeSet<String>,
+    problems: &mut Vec<String>,
+) {
+    let StepCheck {
+        schema,
+        roles,
+        fields,
+        at,
+        inputs,
+    } = check;
+    for step in steps {
+        let id = step_id(step);
+        let sat = format!("{at}.{id}");
+        if !is_param_name(id) {
+            problems.push(format!("{at}: step {id:?} is not a name"));
+        }
+        if inputs.contains(id) {
+            problems.push(format!("{at}: step {id} has the name of an input"));
+        }
+        let env = TypeEnv {
+            fields,
+            params,
+            roles,
+            objects: &schema.objects,
+        };
+        match step {
+            TenantOperationStep::CreateRecord {
+                object,
+                fields: written,
+                ..
+            }
+            | TenantOperationStep::UpdateRecord {
+                object,
+                fields: written,
+                ..
+            } => written_problems(schema, &sat, object, written, &env, problems),
+            TenantOperationStep::DeleteRecord { object, .. } => {
+                written_problems(schema, &sat, object, &BTreeMap::new(), &env, problems)
+            }
+            TenantOperationStep::PostLedger { .. }
+            | TenantOperationStep::FindRecord { .. }
+            | TenantOperationStep::Branch { .. } => {}
+        }
+        match step {
+            TenantOperationStep::UpdateRecord { record, .. }
+            | TenantOperationStep::DeleteRecord { record, .. } => {
+                check_expr(problems, &sat, "record", record, &env, false)
+            }
+            TenantOperationStep::PostLedger {
+                owner,
+                scope,
+                amount,
+                unit,
+                ..
+            } => {
+                report(ledger_unit_reference(schema, unit), &sat, problems);
+                if let TenantOperationPostingOwner::Principal { principal } = owner {
+                    check_expr(problems, &sat, "owner", principal, &env, false);
+                }
+                if let Some(scope) = scope {
+                    check_expr(problems, &sat, "scope", scope, &env, false);
+                }
+                check_expr(problems, &sat, "amount", amount, &env, false);
+            }
+            TenantOperationStep::FindRecord {
+                object,
+                predicate,
+                error,
+                ..
+            } => find_problems(
+                schema, &sat, object, predicate, error, params, roles, problems,
+            ),
+            TenantOperationStep::Branch {
+                test,
+                matched,
+                unmatched,
+                ..
+            } => {
+                match test {
+                    BranchTest::Found { binding } => {
+                        if !finds.contains(binding) {
+                            problems.push(format!(
+                                "{sat}: tests {binding}, which is not a find-record step before it"
+                            ));
+                        }
+                    }
+                    BranchTest::Condition { expr } => {
+                        check_expr(problems, &sat, "condition", expr, &env, true)
+                    }
+                }
+                for nested in matched.iter().chain(unmatched.iter()) {
+                    if matches!(
+                        nested,
+                        TenantOperationStep::FindRecord { .. } | TenantOperationStep::Branch { .. }
+                    ) {
+                        problems.push(format!(
+                            "{sat}: step {} is a find or a branch, which a branch does not hold",
+                            step_id(nested)
+                        ));
+                    }
+                }
+                for side in [matched, unmatched] {
+                    let mut inner = params.clone();
+                    let mut inner_finds = finds.clone();
+                    steps_problems(check, side, &mut inner, &mut inner_finds, problems);
+                }
+            }
+            TenantOperationStep::CreateRecord { .. } => {}
+        }
+        match step {
+            TenantOperationStep::CreateRecord { .. } => {
+                params.insert(id.to_string());
+            }
+            TenantOperationStep::FindRecord { .. } => {
+                params.insert(id.to_string());
+                finds.insert(id.to_string());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The problems of a find-record step: an object type that exists, an error code for more than one
+/// match, and a predicate that checks as a truth value over the candidate's fields (`record`).
+#[allow(clippy::too_many_arguments)]
+fn find_problems(
+    schema: &TenantSchema,
+    at: &str,
+    object: &ObjectTypeId,
+    predicate: &Expr,
+    error: &str,
+    params: &BTreeSet<String>,
+    roles: &BTreeSet<RoleId>,
+    problems: &mut Vec<String>,
+) {
+    let Some(def) = schema.objects.get(object) else {
+        problems.push(format!("{at}: unknown object type {object}"));
+        return;
+    };
+    if error.trim().is_empty() {
+        problems.push(format!("{at}: names no error code for more than one match"));
+    }
+    let nodes = expr_nodes(predicate);
+    if nodes > limits::MAX_CONDITION_NODES {
+        problems.push(format!(
+            "{at}: predicate has {nodes} nodes, more than the maximum of {}",
+            limits::MAX_CONDITION_NODES
+        ));
+    }
+    let env = TypeEnv {
+        fields: &def.fields,
+        params,
+        roles,
+        objects: &schema.objects,
+    };
+    check_expr(problems, at, "predicate", predicate, &env, true);
+}
+
 /// The id of a step of a tenant operation.
-fn step_id(step: &TenantOperationStep) -> &str {
+pub fn step_id(step: &TenantOperationStep) -> &str {
     match step {
         TenantOperationStep::CreateRecord { id, .. }
         | TenantOperationStep::UpdateRecord { id, .. }
         | TenantOperationStep::DeleteRecord { id, .. }
-        | TenantOperationStep::PostLedger { id, .. } => id,
+        | TenantOperationStep::PostLedger { id, .. }
+        | TenantOperationStep::FindRecord { id, .. }
+        | TenantOperationStep::Branch { id, .. } => id,
     }
 }
 

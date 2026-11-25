@@ -253,6 +253,29 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
         &["\"SendMail\"", "\"tenant-operation-step\"", "PostLedger"],
     ),
     (
+        "operation-find-unbound-param",
+        layer_expr::EXPR_UNKNOWN_PARAM,
+        &["undeclared parameter kind", "the scope binds"],
+    ),
+    (
+        "operation-find-unknown-field",
+        layer_expr::EXPR_UNKNOWN_FIELD,
+        &["unknown field colour", "is refused at position"],
+    ),
+    (
+        "operation-branch-unbound-binding",
+        layers::OPERATION_BINDING_UNBOUND,
+        &["\"ghost\"", "which no find-record step before it bound"],
+    ),
+    (
+        "operation-branch-holds-find",
+        layers::OPERATION_BRANCH_HOLDS,
+        &[
+            "holds a FindRecord step in its matched steps",
+            "A branch holds only record and posting steps",
+        ],
+    ),
+    (
         "reference-unknown-object",
         layers::REFERENCE_UNKNOWN,
         &["\"member_tiers__ghost\"", "no product file declares"],
@@ -276,6 +299,25 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
         ],
     ),
 ];
+
+/// A toggle: a find-record step and a branch on what it found, in one operation (WG-5596).
+#[test]
+fn an_operation_that_finds_a_record_and_branches_on_it_is_accepted() {
+    if let Err(diagnostics) = load_with(&[product("operation-toggle.jsonc")]) {
+        panic!(
+            "operation-toggle.jsonc was refused:
+{}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(
+                    "
+"
+                )
+        );
+    }
+}
 
 #[test]
 fn each_refused_product_is_refused_by_specc_with_its_rule() {

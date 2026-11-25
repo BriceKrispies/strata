@@ -11469,6 +11469,8 @@ pub fn operation_step_id(step: &types::TenantOperationStep) -> String {
         types::TenantOperationStep::UpdateRecord { id, .. } => id.clone(),
         types::TenantOperationStep::DeleteRecord { id, .. } => id.clone(),
         types::TenantOperationStep::PostLedger { id, .. } => id.clone(),
+        types::TenantOperationStep::FindRecord { id, .. } => id.clone(),
+        types::TenantOperationStep::Branch { id, .. } => id.clone(),
     }
 }
 
@@ -11552,6 +11554,13 @@ pub fn operation_step_problems(
                     Vec::<String>::new()
                 }),
             ),
+            types::TenantOperationStep::FindRecord { .. } => Vec::<String>::new(),
+            types::TenantOperationStep::Branch { test, .. } => match test {
+                types::BranchTest::Found { binding: _ } => Vec::<String>::new(),
+                types::BranchTest::Condition { expr } => {
+                    expr_problem(&sat, &"condition".to_string(), expr, env)
+                }
+            },
         }),
     )
 }
@@ -11805,7 +11814,18 @@ pub fn operation_lacks(
     principal: &types::Principal,
     op: &types::TenantOperationDef,
 ) -> Vec<String> {
-    let actions = op.steps.iter().fold(Vec::<String>::new(), |acc, s| {
+    let steps_all = support::concat(
+        &op.steps,
+        &op.steps
+            .iter()
+            .fold(Vec::<types::TenantOperationStep>::new(), |acc, s| match s {
+                types::TenantOperationStep::Branch {
+                    matched, unmatched, ..
+                } => support::concat(&acc, &support::concat(matched, unmatched)),
+                _ => acc.clone(),
+            }),
+    );
+    let actions = steps_all.iter().fold(Vec::<String>::new(), |acc, s| {
         let one = match s {
             types::TenantOperationStep::CreateRecord { object, .. } => {
                 if holds_power(
@@ -11856,6 +11876,8 @@ pub fn operation_lacks(
                 }
             }
             types::TenantOperationStep::PostLedger { .. } => Vec::<String>::new(),
+            types::TenantOperationStep::FindRecord { .. } => Vec::<String>::new(),
+            types::TenantOperationStep::Branch { .. } => Vec::<String>::new(),
         };
         one.iter().fold(acc.clone(), |acc2, x| {
             if acc2.iter().any(|y| *y == *x) {
@@ -11865,7 +11887,7 @@ pub fn operation_lacks(
             }
         })
     });
-    let posts = op.steps.iter().any(|s| match s {
+    let posts = steps_all.iter().any(|s| match s {
         types::TenantOperationStep::PostLedger { .. } => true,
         _ => false,
     });
