@@ -75,6 +75,7 @@ fn discard_with(
             object: object("note"),
             record: param("note"),
         }],
+        agent_policy: None,
     }
 }
 
@@ -137,6 +138,7 @@ fn member_only() -> TenantOperationDef {
             reason: "counted".into(),
             reference: None,
         }],
+        agent_policy: None,
     }
 }
 

@@ -321,6 +321,7 @@ mod tests {
                 object: object("note"),
                 record: Expr::Param("note".into()),
             }],
+            agent_policy: None,
         };
         world = step(
             &world,

@@ -1409,6 +1409,7 @@ mod tests {
             correlation: "t".into(),
             verified_address: None,
             idempotency_key: None,
+            agent: None,
         }
     }
 

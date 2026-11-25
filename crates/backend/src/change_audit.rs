@@ -26,7 +26,7 @@
 //!
 //! - **A held operation** (D-8400): `hold.filed` when a hold rule or `file-hold` files a change
 //!   (the change itself leaves no entry, since nothing changed), with `hold`, `requester`,
-//!   `on_behalf_of`, `approver`, `rule`, `input_hash`, `expires_at` and `change` (the name of the
+//!   `on_behalf_of`, `agent` (the agent whose call it was, ADM-1606), `approver`, `rule`, `input_hash`, `expires_at` and `change` (the name of the
 //!   intent it freezes); `hold.decided` when `decide-hold` approves or rejects one, with `hold`,
 //!   `state`, `revision`, `requester` and `decided_by`, and, for an approval, the entry of the change
 //!   it applied, written with the requester as `actor` and the approver as `approved_by`;
@@ -305,6 +305,10 @@ fn record_filed(app: &App, ctx: &Context, intent: &Intent, id: &HeldOperationId,
     fields.insert(
         "on_behalf_of".into(),
         json!(held.on_behalf_of.as_ref().map(PrincipalId::as_str)),
+    );
+    fields.insert(
+        "agent".into(),
+        json!(held.agent.as_ref().map(PrincipalId::as_str)),
     );
     fields.insert("approver".into(), json!(held.approver.to_string()));
     fields.insert(

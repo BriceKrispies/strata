@@ -360,6 +360,7 @@ fn schema_changes() -> Vec<SchemaChange> {
                 object: object("note"),
                 record: Expr::Param("note".into()),
             }],
+            agent_policy: None,
         }),
         SchemaChange::RemoveOperation(TenantOperationId::new("redeem").unwrap()),
         SchemaChange::DefineUnique {
@@ -731,6 +732,7 @@ fn samples() -> Vec<(&'static str, Json)> {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     };
     s.push(("context", json(&context)));
     s.push(("context", json(&ctx("alpha", Principal::Anonymous, 5))));

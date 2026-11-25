@@ -297,6 +297,7 @@ impl Site {
             correlation: "t-aggregate-copies".into(),
             verified_address: None,
             idempotency_key: None,
+            agent: None,
         }
     }
 

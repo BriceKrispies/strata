@@ -319,6 +319,7 @@ fn an_operation_that_a_widening_role_invokes_is_defined_only_with_the_definers_p
                 (field("slug"), Expr::Param("slug".into())),
             ]),
         }],
+        agent_policy: None,
     };
     let definer = with_roles(&base(), "stranger", &["schema_admin", "reviewer"]);
     let error = refused(change(

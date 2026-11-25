@@ -488,6 +488,7 @@ pub fn run_planned_staged<E: std::fmt::Display>(
                 },
                 language: None,
                 hop: None,
+                agent: None,
             };
             let expected = if first.as_deref() == Some(stage.version.as_str()) {
                 target.expected_version

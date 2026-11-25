@@ -810,6 +810,7 @@ pub(super) fn step_context(
         idempotency_key: key.map(str::to_string),
         language: None,
         hop: Some(u32::try_from(run.hop.saturating_add(1)).unwrap_or(u32::MAX)),
+        agent: None,
     }
 }
 

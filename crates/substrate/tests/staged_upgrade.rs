@@ -50,6 +50,7 @@ fn context_at(now: i64, correlation: &str) -> Context {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 
@@ -440,6 +441,7 @@ fn an_early_operation_is_refused_by_the_kernel_without_the_staging_role() {
         subject: None,
         conditions: vec![],
         steps: vec![],
+        agent_policy: None,
     };
     let without_role = commit(
         world.clone(),

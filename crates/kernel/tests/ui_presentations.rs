@@ -201,6 +201,7 @@ fn notes_screen() -> World {
                 object: object("note"),
                 record: Expr::Param("note".into()),
             }],
+            agent_policy: None,
         })],
         vec![SchemaChange::DefineUiElement {
             id: "notes_screen".into(),

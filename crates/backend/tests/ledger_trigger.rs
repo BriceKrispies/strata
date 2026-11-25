@@ -317,6 +317,7 @@ fn admin_context(correlation: &str) -> Context {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 

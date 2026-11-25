@@ -90,6 +90,7 @@ fn ctx(site: &TenantId, principal: Principal, now: i64) -> Context {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 
@@ -806,6 +807,7 @@ fn photo_operation() -> TenantOperationDef {
                 Expr::Param("image".into()),
             )]),
         }],
+        agent_policy: None,
     }
 }
 

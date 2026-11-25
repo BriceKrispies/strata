@@ -62,9 +62,19 @@ pub struct Identity {
     /// The caller's idempotency key. [`Identity::context`] hands it to the store for a signed-in
     /// caller only.
     pub idempotency_key: Option<String>,
+    /// The agent acting for the person of `principal`, when the request came with the access token
+    /// of an agent (TOK-003): [`crate::service::tokens::agent_call`] makes it from the token. The
+    /// kernel holds every call of an agent to its ceiling and its policy (D-8401).
+    pub agent: Option<strata_kernel::AgentCall>,
 }
 
 impl Identity {
+    /// This identity as an agent acting for it.
+    pub fn acting_through(mut self, agent: strata_kernel::AgentCall) -> Self {
+        self.agent = Some(agent);
+        self
+    }
+
     pub fn anonymous(&self) -> bool {
         self.session.is_none()
     }
@@ -82,6 +92,7 @@ impl Identity {
             idempotency_key: self.idempotency_key.clone().filter(|_| !self.anonymous()),
             language: None,
             hop: None,
+            agent: self.agent.clone(),
         }
     }
 }
@@ -221,6 +232,7 @@ pub fn identify(app: &App, caller: &Caller) -> Result<Identity, ApiError> {
         correlation: caller.correlation.clone(),
         verified_address: None,
         idempotency_key: caller.idempotency_key.clone(),
+        agent: None,
     };
     let Some(token) = &caller.token else {
         return Ok(anonymous(SessionState::Anonymous));
@@ -272,6 +284,7 @@ pub fn identify(app: &App, caller: &Caller) -> Result<Identity, ApiError> {
         correlation: caller.correlation.clone(),
         verified_address,
         idempotency_key: caller.idempotency_key.clone(),
+        agent: None,
     })
 }
 
@@ -437,6 +450,7 @@ pub(crate) fn start_session(
         correlation: caller.correlation.clone(),
         verified_address: account.verified_email,
         idempotency_key: None,
+        agent: None,
     };
     Ok(LoginReply {
         token,

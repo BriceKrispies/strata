@@ -403,6 +403,7 @@ mod journal {
             correlation: "t-journal".into(),
             verified_address: None,
             idempotency_key: None,
+            agent: None,
         }
     }
 
@@ -421,6 +422,7 @@ mod journal {
             idempotency_key: None,
             language: None,
             hop: None,
+            agent: None,
         };
         execute(
             memory.as_ref(),

@@ -618,6 +618,7 @@ mod tests {
                 level: OperationSettingLevel::Person,
                 value: Expr::Param("channel".into()),
             }],
+            agent_policy: None,
         };
         let define = Intent::ChangeSchema {
             changes: vec![

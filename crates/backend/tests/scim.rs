@@ -601,6 +601,7 @@ fn decide(backend: &Backend, principal: &PrincipalId, intent: strata_kernel::Int
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     };
     strata_storage_api::execute(backend.store.as_ref(), &intent, &context)
         .unwrap_or_else(|e| panic!("the kernel refused: {e:?}"));

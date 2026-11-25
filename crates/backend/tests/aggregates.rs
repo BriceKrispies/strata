@@ -187,6 +187,7 @@ fn context(principal: Principal) -> Context {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 

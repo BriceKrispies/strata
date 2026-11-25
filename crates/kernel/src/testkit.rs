@@ -42,6 +42,7 @@ pub fn ctx(tenant: &str, principal: Principal, now: i64) -> Context {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 

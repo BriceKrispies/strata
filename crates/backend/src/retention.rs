@@ -247,6 +247,7 @@ fn batch(
             idempotency_key: None,
             language: None,
             hop: None,
+            agent: None,
         };
         let intent = Intent::ExpireRecords {
             object: def.id.clone(),

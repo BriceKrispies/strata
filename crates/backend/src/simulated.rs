@@ -238,6 +238,7 @@ fn identity(tenant: &TenantId, principal: &PrincipalId) -> Result<Identity, Stri
         correlation: "simulated".into(),
         verified_address: None,
         idempotency_key: None,
+        agent: None,
     })
 }
 

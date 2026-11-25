@@ -136,6 +136,7 @@ pub(crate) fn owner_context(
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     })
 }
 

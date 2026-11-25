@@ -301,6 +301,7 @@ fn signed_in(tenant: &str, who: &str) -> Identity {
         correlation: "t-schedules".into(),
         verified_address: None,
         idempotency_key: None,
+        agent: None,
     }
 }
 

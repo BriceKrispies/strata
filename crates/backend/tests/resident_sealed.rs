@@ -50,6 +50,7 @@ fn ctx(site: &TenantId, principal: Principal, now: i64) -> strata_kernel::Contex
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 

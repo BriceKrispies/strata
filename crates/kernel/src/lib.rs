@@ -18,6 +18,7 @@
 //! `use strata_kernel::*` brings into scope.
 
 pub mod activation;
+pub mod agents;
 pub mod aggregates;
 pub mod approvals;
 pub mod audience;

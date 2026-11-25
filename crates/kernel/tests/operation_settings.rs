@@ -61,6 +61,7 @@ fn operation(
         subject: None,
         conditions: Vec::new(),
         steps,
+        agent_policy: None,
     }
 }
 

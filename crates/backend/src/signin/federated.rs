@@ -161,6 +161,7 @@ fn grant_default_role(
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     };
     crate::ops::run_intent(
         app,

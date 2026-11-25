@@ -112,6 +112,7 @@ fn ctx(principal: Principal) -> Context {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 

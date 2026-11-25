@@ -214,6 +214,7 @@ fn give_the_tenant_a_member_role(backend: &Backend) {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     };
     execute(
         backend.store.as_ref(),

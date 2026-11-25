@@ -307,6 +307,7 @@ fn stamp_note() -> TenantOperationDef {
                 (field("slug"), param("slug")),
             ]),
         }],
+        agent_policy: None,
     }
 }
 
@@ -456,6 +457,7 @@ fn signed_in(tenant: &str, who: &str) -> Identity {
         correlation: "t-approvals".into(),
         verified_address: None,
         idempotency_key: None,
+        agent: None,
     }
 }
 

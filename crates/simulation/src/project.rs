@@ -272,6 +272,7 @@ fn diff_queries(
                 idempotency_key: None,
                 language: None,
                 hop: None,
+                agent: None,
             };
             let request = ReadRequest::Named {
                 query: query.id.clone(),
@@ -467,6 +468,7 @@ fn injection(scenario: &Scenario, proposal: &Proposal) -> Injection {
                 idempotency_key: None,
                 language: None,
                 hop: None,
+                agent: None,
             },
             intent: Intent::ChangeSchema {
                 changes: proposal.changes.clone(),

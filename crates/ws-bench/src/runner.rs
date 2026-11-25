@@ -562,6 +562,7 @@ impl Runner<'_> {
             idempotency_key: None,
             language: None,
             hop: None,
+            agent: None,
         }
     }
 

@@ -146,6 +146,7 @@ fn tally(id: &str, fail: bool) -> TenantOperationDef {
                 fields: BTreeMap::from([(FieldId::new("count").unwrap(), count)]),
             },
         ],
+        agent_policy: None,
     }
 }
 
@@ -175,6 +176,7 @@ fn recount() -> TenantOperationDef {
             record: Expr::Param("of".into()),
             fields: BTreeMap::from([(FieldId::new("count").unwrap(), Expr::Lit(Value::Int(3)))]),
         }],
+        agent_policy: None,
     }
 }
 
@@ -214,6 +216,7 @@ impl Backend {
             idempotency_key: None,
             language: None,
             hop: None,
+            agent: None,
         };
         execute(self.store.as_ref(), &intent, &ctx).expect("the owner defines the operations");
     }

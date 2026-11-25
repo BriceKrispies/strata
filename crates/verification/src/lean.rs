@@ -230,6 +230,7 @@ fn initial_world() -> World {
                 idempotency_key: None,
                 language: None,
                 hop: None,
+                agent: None,
             };
             world
                 .step(&intent, &ctx)
@@ -510,6 +511,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                     idempotency_key: None,
                     language: None,
                     hop: None,
+                    agent: None,
                 };
                 let intent = match rest {
                     ["create", fields @ ..] => Intent::CreateRecord {

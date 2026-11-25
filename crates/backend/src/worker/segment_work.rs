@@ -108,6 +108,7 @@ fn platform(tenant: &TenantId, job_key: &str, now: Timestamp) -> Context {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 
