@@ -20,6 +20,7 @@
 pub mod activation;
 pub mod agents;
 pub mod aggregates;
+pub mod append_only;
 pub mod approvals;
 pub mod audience;
 pub mod automation;

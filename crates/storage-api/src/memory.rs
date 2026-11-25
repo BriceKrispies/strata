@@ -59,6 +59,9 @@ struct Inner {
     plans: BTreeMap<TenantId, String>,
     /// Each tenant's audit trail in order, each line with its chain value (crate::audit_chain).
     audit: BTreeMap<TenantId, Vec<(AuditEntry, String)>>,
+    /// The last anchor of each tenant's audit chain, kept apart from the tenant's own data
+    /// (D-8423).
+    audit_anchors: BTreeMap<TenantId, crate::audit_chain::AuditAnchor>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
     /// Results by tenant, principal scope and key, with the receipt of the commit.
     idempotency: BTreeMap<(TenantId, String, String), (IdempotencyEntry, Receipt)>,
@@ -1574,6 +1577,47 @@ impl Store for MemoryStore {
         Ok(lines)
     }
 
+    fn audit_anchor(
+        &self,
+        tenant: &TenantId,
+    ) -> StoreResult<Option<crate::audit_chain::AuditAnchor>> {
+        Ok(self.lock()?.audit_anchors.get(tenant).cloned())
+    }
+
+    fn audit_anchor_advance(
+        &self,
+        tenant: &TenantId,
+        at: i64,
+    ) -> StoreResult<Option<crate::audit_chain::AuditAnchor>> {
+        let mut inner = self.lock()?;
+        let head = inner
+            .audit
+            .get(tenant)
+            .and_then(|lines| lines.last().map(|(_, chain)| (lines.len() as u64, chain)))
+            .map(|(seq, chain)| (seq, chain.clone()));
+        let held = inner.audit_anchors.get(tenant).cloned();
+        // An anchor that the chain no longer holds stays as it is: a chain cut or rewritten behind
+        // it is not anchored over, so the verification still finds it.
+        if let Some(anchor) = &held {
+            let at_anchor = inner
+                .audit
+                .get(tenant)
+                .and_then(|lines| lines.get((anchor.seq as usize).checked_sub(1)?))
+                .map(|(_, chain)| chain);
+            if at_anchor != Some(&anchor.chain) {
+                return Ok(held);
+            }
+        }
+        match (head, held) {
+            (Some((seq, chain)), held) if held.as_ref().is_none_or(|a| a.seq < seq) => {
+                let anchor = crate::audit_chain::AuditAnchor { seq, chain, at };
+                inner.audit_anchors.insert(tenant.clone(), anchor.clone());
+                Ok(Some(anchor))
+            }
+            (_, held) => Ok(held),
+        }
+    }
+
     fn audit_chain(
         &self,
         tenant: &TenantId,
@@ -1692,6 +1736,17 @@ impl Store for MemoryStore {
             audit.iter().map(|(entry, _)| entry),
             state.ledger.as_ref(),
         )?;
+        // A record of an append-only type is never removed or rewritten, by a restore either
+        // (D-8422, OBS-3128).
+        if let Some(current) = inner.tenants.get(tenant) {
+            let held = strata_kernel::append_only::declared(&current.schema)
+                .into_iter()
+                .filter_map(|object| current.records.get(&object))
+                .flat_map(|records| records.values().map(|record| &**record));
+            if let Some(refusal) = strata_kernel::append_only::restore_refusal(held, &state) {
+                return Err(StoreError::Invalid(refusal));
+            }
+        }
         // Event sequence numbers are never reused: the events stay and the counter does not go
         // back, so a subscriber that has passed a number still sees every later event.
         let seen = inner.tenants.get(tenant).map_or(0, |t| t.event_seq);
@@ -1798,6 +1853,7 @@ impl Store for MemoryStore {
         inner.recoveries.retain(|(t, _), _| t != tenant);
         inner.docs.retain(|(t, _, _), _| t != tenant);
         inner.audit.remove(tenant);
+        inner.audit_anchors.remove(tenant);
         inner.snapshots.retain(|(t, _), _| t != tenant);
         inner.jobs.remove(tenant);
         inner.runs.remove(tenant);

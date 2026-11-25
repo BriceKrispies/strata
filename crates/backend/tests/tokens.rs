@@ -727,3 +727,115 @@ async fn an_identity_outage_refuses_sessions_and_keeps_published_content() {
         200
     );
 }
+
+impl Backend {
+    /// The data of each audit entry of `fieldnotes` named `event`, oldest first, as the store
+    /// holds it: the members that name a person are sealed under that person's key.
+    fn audit_of(&self, event: &str) -> Vec<Json> {
+        use strata_storage_api::Store;
+        let site = strata_kernel::TenantId::new("fieldnotes").unwrap();
+        self.store
+            .audit_list(&site, Some("audit"), 10_000)
+            .unwrap()
+            .into_iter()
+            .filter(|line| line.event == event)
+            .map(|line| serde_json::from_str(&line.data).unwrap())
+            .collect()
+    }
+}
+
+/// Verifies: OBS-3126
+///
+/// Each token issue and refusal, delegation grant and revocation, and session start and end is an
+/// audit entry that names the credential, the person acted for and the actor, not a telemetry
+/// line only.
+#[tokio::test]
+async fn token_delegation_and_session_events_are_audit_entries() {
+    let backend = start().await;
+    let owner = backend.owner().await;
+    let ines = backend.person("ines").await;
+    let agent = backend.client(&owner, &["read:post"]).await;
+
+    // A session start is an entry that names the method.
+    let started = backend.audit_of("session.started");
+    assert!(started.len() >= 2, "{started:?}");
+    assert_eq!(started[0]["credential"], "password", "{}", started[0]);
+    assert!(started[0]["session"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("s_")));
+
+    // A delegation granted, a token made on it, one refused, and the delegation revoked.
+    let (status, grant) = backend
+        .call(
+            "fieldnotes",
+            Some(&ines),
+            "/internal/grants/create",
+            json!({ "agent": agent.id, "scope": "read:post", "purpose": "tidy drafts" }),
+        )
+        .await;
+    assert_eq!(status, 200, "{grant}");
+    let grant_id = grant["grant"].as_str().unwrap().to_string();
+    let created = backend.audit_of("grant.created");
+    assert_eq!(created.len(), 1, "{created:?}");
+    assert_eq!(created[0]["grant"], grant_id.as_str());
+    assert_eq!(created[0]["client"], agent.id.as_str());
+    assert!(created[0]["actor"].is_string() && created[0]["acted_for"].is_string());
+
+    let exchange = |secret: &str| {
+        backend.call(
+            "fieldnotes",
+            None,
+            "/internal/token",
+            json!({
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "client_id": agent.id, "client_secret": secret, "grant": grant_id,
+            }),
+        )
+    };
+    assert_eq!(exchange(&agent.secret).await.0, 200);
+    assert_eq!(exchange("not-the-secret").await.0, 401);
+    let issued = backend.audit_of("token.issued");
+    assert_eq!(issued.len(), 1, "{issued:?}");
+    assert_eq!(issued[0]["credential"], "delegation");
+    assert_eq!(issued[0]["client"], agent.id.as_str());
+    assert_eq!(issued[0]["grant"], grant_id.as_str());
+    assert!(issued[0]["acted_for"].is_string(), "{}", issued[0]);
+    assert_eq!(issued[0]["scope"], "read:post");
+    let refused = backend.audit_of("token.refused");
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0]["client"], agent.id.as_str());
+    assert!(
+        !refused[0].to_string().contains("not-the-secret"),
+        "a refusal names no secret"
+    );
+
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            Some(&ines),
+            "/internal/grants/revoke",
+            json!({ "grant": grant_id }),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let revoked = backend.audit_of("grant.revoked");
+    assert_eq!(revoked.len(), 1, "{revoked:?}");
+    assert_eq!(revoked[0]["grant"], grant_id.as_str());
+    assert!(revoked[0]["actor"].is_string() && revoked[0]["acted_for"].is_string());
+
+    // The end of a session is an entry too: the owner signs out, and ines is ended by the owner's
+    // revocation of her other sessions.
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/session/logout",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let ended = backend.audit_of("session.ended");
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert_eq!(ended[0]["reason"], "sign_out");
+    assert!(ended[0]["actor"].is_string() && ended[0]["principal"].is_string());
+}

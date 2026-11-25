@@ -525,6 +525,7 @@ pub fn classify(change: &SchemaChange, schema: &TenantSchema) -> ChangeClass {
         | ClearLanguageField { .. }
         | SetTranslationGroup { .. }
         | ClearTranslationGroup { .. }
+        | SetAppendOnly { .. }
         | DefineMailTemplate(_)
         | DefineNoticeTemplate(_)
         | DefineToken(_)

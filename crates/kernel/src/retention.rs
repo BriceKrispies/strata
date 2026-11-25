@@ -276,6 +276,10 @@ pub fn decide(
         let Some(record) = lookup.record(object, id)? else {
             continue;
         };
+        if def.append_only == Some(true) {
+            kept.push(format!("{object} {id}: the type is append-only"));
+            continue;
+        }
         if !ended(def, record, ctx.now) {
             kept.push(format!("{object} {id}: its retention has not ended"));
             continue;

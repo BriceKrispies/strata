@@ -108,6 +108,7 @@ fn record_type(id: &str, fields: Vec<(FieldId, FieldDef)>) -> ObjectTypeDef {
         translation_group: None,
         unique: None,
         searchable: None,
+        append_only: None,
     }
 }
 

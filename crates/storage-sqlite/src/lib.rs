@@ -154,7 +154,24 @@ const CONTROL_MIGRATIONS: &[Migration] = &[
         sql: TENANT_PLAN_MIGRATION_SQL,
     },
     CONTROL_PLATFORM_SETTINGS,
+    CONTROL_AUDIT_ANCHORS,
 ];
+
+/// The anchor of each tenant's audit chain (D-6208, D-8423): the newest chained line's number and
+/// chain value at the last anchor. It is in the control database and in no tenant's file, so
+/// someone who rewrites a tenant's file cannot rewrite it with the file.
+const CONTROL_AUDIT_ANCHORS: Migration = Migration {
+    version: 6,
+    name: "audit chain anchors",
+    sql: "
+    CREATE TABLE audit_anchors (
+        tenant TEXT PRIMARY KEY,
+        seq    INTEGER NOT NULL,
+        chain  TEXT NOT NULL,
+        at     INTEGER NOT NULL
+    );
+    ",
+};
 
 /// The plan a tenant holds (BIL-150), on the tenant's row of the directory: a tenant that existed
 /// before the column holds `standard`.
@@ -1082,6 +1099,28 @@ fn select_strings(
     rows.collect::<Result<Vec<_>, _>>().map_err(db)
 }
 
+/// Refuse to restore a snapshot that lacks or rewrites a record of an append-only type the tenant
+/// holds now (D-8422, OBS-3128): such a record is never removed or changed, by a restore either.
+fn check_append_only_restorable(
+    tx: &Connection,
+    tenant: &TenantId,
+    snapshot: &TenantState,
+) -> StoreResult<()> {
+    let Some(current) = header_with(tx, tenant, None)? else {
+        return Ok(());
+    };
+    for object in strata_kernel::append_only::declared(&current.schema) {
+        let mut held = Vec::new();
+        for data in all_of(tx, &object)? {
+            held.push(decode::<Record>(&data, "record")?);
+        }
+        if let Some(refusal) = strata_kernel::append_only::restore_refusal(held.iter(), snapshot) {
+            return Err(StoreError::Invalid(refusal));
+        }
+    }
+    Ok(())
+}
+
 fn all_of(tx: &Connection, object: &ObjectTypeId) -> StoreResult<Vec<String>> {
     select_strings(
         tx,
@@ -1664,6 +1703,26 @@ fn insert_commit_work(tx: &Connection, commit: &Commit) -> StoreResult<()> {
     Ok(())
 }
 
+/// The anchor of a tenant's audit chain in the control database.
+fn read_anchor(
+    conn: &Connection,
+    tenant: &TenantId,
+) -> StoreResult<Option<strata_storage_api::audit_chain::AuditAnchor>> {
+    conn.query_row(
+        "SELECT seq, chain, at FROM audit_anchors WHERE tenant = ?1",
+        params![tenant.as_str()],
+        |r| {
+            Ok(strata_storage_api::audit_chain::AuditAnchor {
+                seq: r.get::<_, i64>(0)? as u64,
+                chain: r.get(1)?,
+                at: r.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db)
+}
+
 /// One line of the audit trail, chained to the line before it, in the transaction `tx`.
 fn append_audit(tx: &Connection, entry: &AuditEntry) -> StoreResult<()> {
     let previous: Option<String> = tx
@@ -2180,6 +2239,11 @@ impl SqliteStore {
             remove_files(&dir.join(&file))?;
         }
         self.control.write(dbe, |tx| {
+            tx.execute(
+                "DELETE FROM audit_anchors WHERE tenant = ?1",
+                params![tenant.as_str()],
+            )
+            .map_err(db)?;
             tx.execute(
                 "DELETE FROM tenant_directory WHERE id = ?1",
                 params![tenant.as_str()],
@@ -5079,6 +5143,77 @@ impl Store for SqliteStore {
         file.write(dbe, |tx| append_audit(tx, entry))
     }
 
+    fn audit_anchor(
+        &self,
+        tenant: &TenantId,
+    ) -> StoreResult<Option<strata_storage_api::audit_chain::AuditAnchor>> {
+        let conn = self.control.lock().map_err(dbe)?;
+        read_anchor(&conn, tenant)
+    }
+
+    fn audit_anchor_advance(
+        &self,
+        tenant: &TenantId,
+        at: i64,
+    ) -> StoreResult<Option<strata_storage_api::audit_chain::AuditAnchor>> {
+        let held = self.audit_anchor(tenant)?;
+        // The chain as the tenant's file holds it: its newest chained line, and the line at the
+        // anchor already held.
+        let found = self.on_tenant(tenant, |conn| {
+            let head: Option<(i64, String)> = conn
+                .query_row(
+                    "SELECT seq, chain FROM audit_log WHERE chain IS NOT NULL ORDER BY seq DESC LIMIT 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .map_err(db)?;
+            let at_anchor: Option<String> = match &held {
+                Some(anchor) => conn
+                    .query_row(
+                        "SELECT chain FROM audit_log WHERE seq = ?1",
+                        params![anchor.seq as i64],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(db)?
+                    .flatten(),
+                None => None,
+            };
+            Ok((head, at_anchor))
+        })?;
+        let Some((head, at_anchor)) = found else {
+            return Ok(held);
+        };
+        // An anchor that the chain no longer holds stays as it is: a chain cut or rewritten behind
+        // it is not anchored over, so the verification still finds it.
+        if let Some(anchor) = &held {
+            if at_anchor.as_deref() != Some(anchor.chain.as_str()) {
+                return Ok(held);
+            }
+        }
+        match head {
+            Some((seq, chain)) if held.as_ref().is_none_or(|a| a.seq < seq as u64) => {
+                let anchor = strata_storage_api::audit_chain::AuditAnchor {
+                    seq: seq as u64,
+                    chain,
+                    at,
+                };
+                self.control.write(dbe, |tx| {
+                    tx.execute(
+                        "INSERT INTO audit_anchors (tenant, seq, chain, at) VALUES (?1, ?2, ?3, ?4)
+                         ON CONFLICT(tenant) DO UPDATE SET
+                            seq = excluded.seq, chain = excluded.chain, at = excluded.at",
+                        params![tenant.as_str(), anchor.seq as i64, anchor.chain, anchor.at],
+                    )
+                    .map_err(db)
+                })?;
+                Ok(Some(anchor))
+            }
+            _ => Ok(held),
+        }
+    }
+
     fn audit_chain(
         &self,
         tenant: &TenantId,
@@ -5229,6 +5364,7 @@ impl Store for SqliteStore {
         file.write(dbe, |tx| {
             let held = guard_generation(tx, tenant, expected)?;
             ledger::check_restorable(tx, &state)?;
+            check_append_only_restorable(tx, tenant, &state)?;
             tx.execute("DELETE FROM records", []).map_err(db)?;
             raise_object_revision(tx, "")?;
             tx.execute(

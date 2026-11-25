@@ -75,15 +75,38 @@ pub fn run_intent_at(
     anonymous: bool,
     at: Option<StateRevision>,
 ) -> Result<Executed, ApiError> {
+    run_intent_by(app, ctx, intent, anonymous, at, None)
+}
+
+/// [`run_intent`] for a change an identity provider makes: the kernel decides it as `ctx` (the
+/// authority the platform acts with), and the audit names the provider and its provisioning token
+/// as the actor, never the person `ctx` stands for (OBS-3127).
+pub fn run_intent_attributed(
+    app: &App,
+    ctx: &Context,
+    intent: &Intent,
+    attribution: &crate::authz_audit::Attribution,
+) -> Result<Executed, ApiError> {
+    run_intent_by(app, ctx, intent, false, None, Some(attribution))
+}
+
+fn run_intent_by(
+    app: &App,
+    ctx: &Context,
+    intent: &Intent,
+    anonymous: bool,
+    at: Option<StateRevision>,
+    by: Option<&crate::authz_audit::Attribution>,
+) -> Result<Executed, ApiError> {
     let prior = crate::change_audit::before(app, ctx, intent);
-    let done = match run_intent_unaudited_at(app, ctx, intent, anonymous, at) {
+    let done = match run_intent_unaudited_by(app, ctx, intent, anonymous, at, by) {
         Ok(done) => done,
         Err(error) => {
             crate::change_audit::refused(app, ctx, intent, &error);
             return Err(error);
         }
     };
-    crate::change_audit::record(app, ctx, intent, prior, &done);
+    crate::change_audit::record(app, ctx, intent, prior, &done, by);
     Ok(done)
 }
 
@@ -95,15 +118,16 @@ pub fn run_intent_unaudited(
     intent: &Intent,
     anonymous: bool,
 ) -> Result<Executed, ApiError> {
-    run_intent_unaudited_at(app, ctx, intent, anonymous, None)
+    run_intent_unaudited_by(app, ctx, intent, anonymous, None, None)
 }
 
-fn run_intent_unaudited_at(
+fn run_intent_unaudited_by(
     app: &App,
     ctx: &Context,
     intent: &Intent,
     anonymous: bool,
     at: Option<StateRevision>,
+    by: Option<&crate::authz_audit::Attribution>,
 ) -> Result<Executed, ApiError> {
     // A file attached to a record must be one the caller may attach (w5fileref).
     crate::files::attach::check_intent(app, ctx, intent)?;
@@ -155,7 +179,11 @@ fn run_intent_unaudited_at(
                 }),
             );
             app.hub.committed();
-            crate::auth::announce_ended(app, affected, &ctx.correlation);
+            let by = match by {
+                Some(provider) => provider.fields(),
+                None => crate::authz_audit::actor_fields(&ctx.principal),
+            };
+            crate::auth::announce_ended(app, affected, &ctx.correlation, &by);
         }
         Err(ExecuteError::Domain(error)) => {
             app.stats
@@ -221,6 +249,8 @@ fn audit_separation_refusal(
         ErrorKind::AgentDenied => "refused.agent_denied",
         ErrorKind::AgentAdminPower => "refused.agent_admin_power",
         ErrorKind::ScopeUnknownField => "refused.scope_unknown_field",
+        // An update or a delete of a record of an append-only type, by any path (OBS-3128).
+        ErrorKind::AppendOnly => "refused.append_only",
         _ => return,
     };
     let failed: Vec<&str> = error

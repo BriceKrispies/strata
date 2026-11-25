@@ -228,6 +228,47 @@ fn mint(
 ///
 /// Implements: TOK-001, TOK-002, TOK-003, TOK-004, TOK-005, TOK-253
 pub fn issue(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiError> {
+    let answer = issue_unaudited(app, caller, body);
+    let client = body.get("client_id").and_then(Json::as_str);
+    let grant = body.get("grant").and_then(Json::as_str);
+    match &answer {
+        Ok(token) => {
+            let acted_for = grant.and_then(|id| {
+                get::<Grant>(app, &caller.site, GRANT_KIND, id)
+                    .ok()
+                    .flatten()
+                    .map(|held| held.principal)
+            });
+            crate::authz_audit::token_issued(
+                app,
+                &caller.site,
+                &caller.correlation,
+                client.unwrap_or_default(),
+                grant.filter(|_| acted_for.is_some()),
+                acted_for.as_deref(),
+                token
+                    .get("scope")
+                    .and_then(Json::as_str)
+                    .unwrap_or_default(),
+                token
+                    .get("expires_at")
+                    .and_then(Json::as_i64)
+                    .unwrap_or_default(),
+            );
+        }
+        Err(error) => crate::authz_audit::token_refused(
+            app,
+            &caller.site,
+            &caller.correlation,
+            client,
+            grant,
+            &error.0.message,
+        ),
+    }
+    answer
+}
+
+fn issue_unaudited(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiError> {
     let grant_type = body
         .get("grant_type")
         .and_then(Json::as_str)
@@ -413,6 +454,16 @@ pub fn create_grant(app: &App, identity: &Identity, body: &Json) -> Result<Json,
         revoked_at: None,
     };
     put(app, &identity.tenant, GRANT_KIND, &grant.id, &grant, true)?;
+    crate::authz_audit::grant_created(
+        app,
+        &identity.tenant,
+        &identity.correlation,
+        who.as_str(),
+        agent,
+        &grant.id,
+        &grant.scopes,
+        grant.expires_at,
+    );
     Ok(json!({ "grant": grant.id, "expires_at": grant.expires_at, "scopes": grant.scopes }))
 }
 
@@ -434,10 +485,14 @@ pub fn revoke_grant(app: &App, identity: &Identity, body: &Json) -> Result<Json,
         grant.revoked_at = Some(app.now().0);
         put(app, &identity.tenant, GRANT_KIND, id, &grant, false)?;
     }
-    app.audit(
-        "grant.revoked",
+    crate::authz_audit::grant_revoked(
+        app,
+        &identity.tenant,
         &identity.correlation,
-        json!({ "tenant": identity.tenant.as_str(), "grant": id }),
+        who.as_str(),
+        &grant.principal,
+        &grant.agent,
+        id,
     );
     Ok(json!({ "grant": id, "revoked": true }))
 }

@@ -1345,6 +1345,27 @@ pub trait Store: Send + Sync {
         ))
     }
 
+    /// The last anchor of the tenant's audit chain, held outside the tenant database (D-6208,
+    /// D-8423): `None` while the head was never anchored. An adapter that keeps none says so.
+    fn audit_anchor(&self, _tenant: &TenantId) -> StoreResult<Option<audit_chain::AuditAnchor>> {
+        Err(StoreError::Unavailable(
+            "this store keeps no audit anchor".into(),
+        ))
+    }
+    /// Anchor the head of the tenant's audit chain, as of `at`, unless it is anchored already: the
+    /// newest chained line is written to the control side, which the tenant's own database does
+    /// not hold, and an anchor is only moved forward. Returns the anchor now held; `None` for a
+    /// tenant with no chained line.
+    fn audit_anchor_advance(
+        &self,
+        _tenant: &TenantId,
+        _at: i64,
+    ) -> StoreResult<Option<audit_chain::AuditAnchor>> {
+        Err(StoreError::Unavailable(
+            "this store keeps no audit anchor".into(),
+        ))
+    }
+
     /// The verified e-mail address of the account of `principal` in `tenant`, if it has an
     /// account and the account has one.
     fn verified_address(

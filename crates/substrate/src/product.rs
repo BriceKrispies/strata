@@ -1178,6 +1178,11 @@ impl ProductBundle {
                             fields: fields.clone(),
                         });
                     }
+                    if object.append_only == Some(true) {
+                        changes.push(SchemaChange::SetAppendOnly {
+                            object: key.clone(),
+                        });
+                    }
                 }
             }
             "policy" => changes.extend(

@@ -14,9 +14,11 @@
 //! was read, how many lines chained, how many were written before the chain existed, and what
 //! was wrong at the first break.
 //!
-//! What it does not find: the removal of the newest lines, because the head of the chain is not
-//! anchored outside the tenant database yet (D-6208, [`App::verify_audit_chain`]), and the
-//! alteration of a line written before the chain existed.
+//! The head of the chain is anchored outside the tenant database at each anchor interval (D-6208,
+//! D-8423, OBS-3129): a chain that stops short of its last anchor is a break with the code
+//! `AnchorMismatch`, and `first_break` is the first sequence number it has lost. What it does not
+//! find: the alteration of a line written before the chain existed, and the removal of lines
+//! written after the last anchor.
 //!
 //! Implements: CT-128
 
@@ -82,6 +84,9 @@ pub fn verify(app: &App, identity: &Identity, body: &Json_) -> Result<Json_, Api
     if let Some((sequence, reason)) = &report.first_break {
         answer["first_break"] = json!(sequence);
         answer["reason"] = json!(reason);
+    }
+    if let Some(code) = &report.code {
+        answer["code"] = json!(code);
     }
     Ok(answer)
 }

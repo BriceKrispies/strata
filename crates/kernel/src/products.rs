@@ -284,6 +284,7 @@ pub fn touched(change: &SchemaChange) -> Vec<EntityRef> {
         | C::SetLanguageField { object, .. }
         | C::ClearLanguageField { object }
         | C::SetTranslationGroup { object, .. }
+        | C::SetAppendOnly { object }
         | C::ClearTranslationGroup { object } => entity(EntityKind::Object, object),
         C::DefineRole(def) => entity(EntityKind::Role, &def.id),
         C::DefineRolePermissions { role, .. } | C::RemoveRole(role) => {

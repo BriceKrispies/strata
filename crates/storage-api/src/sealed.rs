@@ -77,7 +77,8 @@ pub const AUDIT_SCOPE: &str = "audit";
 
 /// Members of an audit line that name a person: each is sealed under the key of the person it
 /// names, when it holds a principal id.
-pub const AUDIT_SUBJECT_MEMBERS: &[&str] = &["principal", "actor", "subject", "by", "owner"];
+pub const AUDIT_SUBJECT_MEMBERS: &[&str] =
+    &["principal", "actor", "subject", "by", "owner", "acted_for"];
 
 /// Members of an audit line that hold a person's data: sealed under the key of the person the
 /// first subject member names, when one does.
@@ -1132,6 +1133,21 @@ impl Store for SealedStore {
     fn audit_append(&self, tenant: &TenantId, entry: &AuditEntry) -> StoreResult<()> {
         let sealed = self.seal_audit(tenant, entry)?;
         self.inner.audit_append(tenant, &sealed)
+    }
+
+    fn audit_anchor(
+        &self,
+        tenant: &TenantId,
+    ) -> StoreResult<Option<crate::audit_chain::AuditAnchor>> {
+        self.inner.audit_anchor(tenant)
+    }
+
+    fn audit_anchor_advance(
+        &self,
+        tenant: &TenantId,
+        at: i64,
+    ) -> StoreResult<Option<crate::audit_chain::AuditAnchor>> {
+        self.inner.audit_anchor_advance(tenant, at)
     }
 
     fn audit_list(

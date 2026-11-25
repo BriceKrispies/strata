@@ -8,6 +8,7 @@ pub mod aggregates;
 pub mod app;
 pub mod audit_log;
 pub mod auth;
+pub mod authz_audit;
 pub mod change_audit;
 #[cfg(feature = "development")]
 pub mod dev;

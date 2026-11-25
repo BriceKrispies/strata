@@ -439,19 +439,55 @@ impl App {
                     )
                     .map_err(|e| e.to_string())
             });
-        if let Err(error) = written {
-            LOG.error(
+        match written {
+            Ok(()) => self.anchor_if_due(tenant),
+            Err(error) => LOG.error(
                 "audit.write_failed",
                 correlation,
                 json!({ "tenant": tenant, "event": event, "error": error }),
-            );
+            ),
         }
+    }
+
+    /// Anchor the head of a tenant's audit chain outside the tenant database when the last anchor
+    /// is older than the anchor interval, or there is none (D-6208, D-8423, OBS-3129). A failure
+    /// is logged and changes nothing: the line is in the chain either way.
+    fn anchor_if_due(&self, tenant: &str) {
+        let Ok(tenant) = TenantId::new(tenant) else {
+            return;
+        };
+        let now = self.now().0;
+        let due = match self.store.audit_anchor(&tenant) {
+            Ok(Some(held)) => now - held.at >= strata_storage_api::audit_chain::ANCHOR_INTERVAL_MS,
+            Ok(None) => true,
+            // A store that keeps no anchor has nothing to write.
+            Err(_) => false,
+        };
+        if due {
+            if let Err(error) = self.anchor_audit_head(&tenant) {
+                LOG.error(
+                    "audit.anchor_failed",
+                    "",
+                    json!({ "tenant": tenant.as_str(), "error": error.to_string() }),
+                );
+            }
+        }
+    }
+
+    /// Anchor the head of a tenant's audit chain now, whatever the interval says, and answer the
+    /// anchor held afterwards.
+    pub fn anchor_audit_head(
+        &self,
+        tenant: &TenantId,
+    ) -> Result<Option<strata_storage_api::audit_chain::AuditAnchor>, StoreError> {
+        self.store.audit_anchor_advance(tenant, self.now().0)
     }
 
     /// Check the audit chain of a tenant from its first line (PRV-359, OBS-007): an altered line
     /// or one removed from the middle is the first break. The chain covers the sealed form of each
-    /// line, so it verifies after an erasure as before it. The head is not anchored outside the
-    /// tenant database yet (D-6208), so the removal of the newest lines is not found.
+    /// line, so it verifies after an erasure as before it. The head is anchored outside the tenant
+    /// database at each anchor interval (D-6208, D-8423), so a chain that stops short of its last
+    /// anchor is refused with `AnchorMismatch` (OBS-3129).
     pub fn verify_audit_chain(
         &self,
         tenant: &TenantId,
@@ -471,7 +507,15 @@ impl App {
                 break;
             }
         }
-        Ok(strata_storage_api::audit_chain::verify_audit_chain(&lines))
+        let anchor = match self.store.audit_anchor(tenant) {
+            Ok(anchor) => anchor,
+            Err(StoreError::Unavailable(_)) => None,
+            Err(error) => return Err(error),
+        };
+        Ok(strata_storage_api::audit_chain::verify_audit_chain(
+            &lines,
+            anchor.as_ref(),
+        ))
     }
 
     /// The one place the backend reads the clock for domain purposes.

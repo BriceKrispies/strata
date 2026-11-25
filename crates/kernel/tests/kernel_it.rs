@@ -7,6 +7,9 @@ mod agents;
 #[path = "aggregates.rs"]
 mod aggregates;
 
+#[path = "append_only.rs"]
+mod append_only;
+
 #[path = "behaviour.rs"]
 mod behaviour;
 

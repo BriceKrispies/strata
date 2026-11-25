@@ -49,6 +49,7 @@ pub fn is_object_meta(change: &SchemaChange) -> bool {
             | SchemaChange::ClearLanguageField { .. }
             | SchemaChange::SetTranslationGroup { .. }
             | SchemaChange::ClearTranslationGroup { .. }
+            | SchemaChange::SetAppendOnly { .. }
             | SchemaChange::RemoveObject { .. }
             | SchemaChange::RemoveRole(_)
     )
@@ -108,6 +109,10 @@ pub fn apply(schema: &mut TenantSchema, change: &SchemaChange) -> Result<String,
                 .take()
                 .ok_or_else(|| format!("{id} declares no translation group"))?;
             Ok(format!("clear translation group of {id}"))
+        }
+        SchemaChange::SetAppendOnly { object: id } => {
+            object(schema, id)?.append_only = Some(true);
+            Ok(format!("declare {id} append-only"))
         }
         SchemaChange::RemoveObject { id, .. } => {
             schema
