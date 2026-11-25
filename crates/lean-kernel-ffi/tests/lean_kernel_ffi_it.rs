@@ -4,11 +4,9 @@
 use strata_lean_kernel_ffi::codec::{
     decode_ctx, decode_field_def, decode_intent, decode_record, decode_refusal, decode_step_result,
     decode_tenant, decode_ty, decode_val, encode_ctx, encode_field_def, encode_intent,
-    encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val, Ctx,
-    CmpOp, Elem, Expr, FieldDef, Intent, Limits, ObjType, OnDelete, Record, Refusal, Scope, StepResult,
-    Tenant, Ty,
-    Val,
-    MAX_EXPR_DEPTH, MAX_TY_DEPTH,
+    encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val, CmpOp,
+    Ctx, Elem, Expr, FieldDef, Intent, Limits, ObjType, OnDelete, Record, Refusal, Scope,
+    StepResult, Tenant, Ty, Val, MAX_EXPR_DEPTH, MAX_TY_DEPTH,
 };
 use strata_lean_kernel_ffi::{step, step_reference};
 
@@ -95,7 +93,10 @@ fn codec_fixtures_match_the_lean_encoder() {
         encode_ty(&Ty::List(Box::new(Ty::Ref(0, OnDelete::SetNull)))),
         vec![5, 4, 0]
     );
-    assert_eq!(encode_ty(&Ty::Ref(300, OnDelete::Restrict)), vec![3, 172, 2]);
+    assert_eq!(
+        encode_ty(&Ty::Ref(300, OnDelete::Restrict)),
+        vec![3, 172, 2]
+    );
     let field = FieldDef {
         ty: Ty::Int,
         required: false,
@@ -159,13 +160,10 @@ fn codec_fixtures_match_the_lean_encoder() {
         decode_val(&[5, 2, 1, 0, 5, 0]),
         Some(Val::List(vec![Elem::Int(5), Elem::Null]))
     );
-    assert_eq!(decode_field_def(&[0, 0, 1, 1, 1, 1]), Some(field));
+    assert_eq!(decode_field_def(&[0, 0, 1, 0, 1, 1, 1]), Some(field));
     assert_eq!(decode_record(&[4, 1, 1, 2, 3, 1]), Some(record));
     assert_eq!(decode_tenant(FIXTURE_TENANT), Some(fixture_tenant()));
-    assert_eq!(
-        decode_intent(&[1, 1, 5, 1, 1, 2, 1, 120, 0]),
-        Some(update)
-    );
+    assert_eq!(decode_intent(&[1, 1, 5, 1, 1, 2, 1, 120, 0]), Some(update));
     assert_eq!(
         decode_ty(&[5, 4, 0]),
         Some(Ty::List(Box::new(Ty::Ref(0, OnDelete::SetNull))))

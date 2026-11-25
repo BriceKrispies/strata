@@ -238,6 +238,13 @@ pub const ACCEPTED_KINDS: [&str; 9] = [
     "composite ok",
 ];
 
+/// Outcome kinds the model can print that no scenario can reach, each with the reason. They are
+/// left out of the coverage requirement; anything else that never occurs is a coverage gap.
+pub const UNREACHABLE: [(&str, &str); 1] = [(
+    "err evaluation",
+    "the kernel's expr::check refuses ill-typed constraints and defaults when they are defined, so      an accepted schema never fails to evaluate; reachable again once the model has schema validity      (slice 11 of WG-5373)",
+)];
+
 /// What a run found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Totals {
@@ -332,6 +339,7 @@ pub fn run(
     let mut required: Vec<String> = lean_error_names(&main)?
         .into_iter()
         .map(|name| format!("err {name}"))
+        .filter(|kind| !UNREACHABLE.iter().any(|(k, _)| k == kind))
         .collect();
     required.extend(ACCEPTED_KINDS.iter().map(|kind| kind.to_string()));
     std::fs::create_dir_all(out_dir)
