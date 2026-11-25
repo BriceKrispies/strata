@@ -362,3 +362,43 @@ test('a row without an answer draws its row actions enabled, and a page with no 
   const plain = compose(part, model, ctx);
   assert.equal(byId(plain, 'section:messages').items[0].actions.length, 0);
 });
+
+// A kernel-computed field (D-8307) reaches the client as a stored field: the shape lists it with its
+// type and the row carries its value. A write recomputes the value on the server, and the next view
+// reply carries the recomputed value, which the page draws. The composite "when equals" of the task
+// (WG-5513, criterion 4) does not exist yet, so this tests the value the page draws.
+test('a kernel-computed field is drawn like a stored one, and the value a write recomputed is the one drawn', () => {
+  const ticketPart = {
+    kind: 'screen',
+    id: 'kernel_tasks__tickets',
+    screen: { route: '/tickets', view: 'kernel_tasks__tickets_view', title: 'Tickets', kind: 'list', auth: 'session', query: [] },
+    sections: {
+      tickets: { single: false, shape: shape('kernel_tasks__ticket', [f('status', 'str'), f('task', 'ref<kernel_tasks__task>', false), f('title', 'str')]) },
+    },
+    forms: {},
+    actions: {},
+    live: {},
+  };
+  const viewOf = (title) => ({
+    view: 'kernel_tasks__tickets_view',
+    title: 'Tickets',
+    people: {},
+    data: {
+      tickets: [row(3, { status: 'open', task: { ref: { object: 'kernel_tasks__task', id: 1, title } }, title })],
+    },
+    next: {},
+  });
+
+  const before = compose(ticketPart, viewOf('Draft the plan'), ctx);
+  const card = byId(before, 'section:tickets').items[0];
+  assert.equal(card.title, 'Draft the plan', 'the computed value is drawn as the title of the card');
+  assert.equal(drawnStrings(before).includes('Draft the plan'), true);
+
+  // The task is retitled: the kernel recomputes the ticket's title in the same commit, and the
+  // client draws what the next view reply carries.
+  const after = compose(ticketPart, viewOf('Final plan'), ctx);
+  const recomputed = byId(after, 'section:tickets').items[0];
+  assert.equal(recomputed.title, 'Final plan');
+  assert.equal(drawnStrings(after).includes('Draft the plan'), false, 'the stale value is not drawn');
+  assert.equal(drawnStrings(after).includes('Final plan'), true);
+});
