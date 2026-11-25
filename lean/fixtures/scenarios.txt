@@ -1512,3 +1512,8 @@ op 1 100 create 1=s:elm 10=s:a
 op 1 100 update 2 1=s:ash 10=s:a
 op 1 100 create 1=s:fir 10=s:b
 end
+scenario h-strict-change-needs-conforming-records
+op 1 100 create 1=s:yew
+op 1 100 require 4 lax
+op 1 100 composite 3 10 4 6
+end

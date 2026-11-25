@@ -646,8 +646,10 @@ theorem stepTenant_preserves_distinct (t t' : Tenant) (p : PrincipalId) (i : Int
       · cases h
       · split at h
         · cases h
-        · cases h
-          exact ⟨hs, hr⟩
+        · split at h
+          · cases h
+          · cases h
+            exact ⟨hs, hr⟩
 
 /-! ## The uniqueness invariant through accepted steps -/
 
@@ -787,17 +789,19 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : PrincipalId) (i : Inten
       · cases h
       · split at h
         · cases h
-        · rename_i hdupf
-          cases h
-          unfold Tenant.UniqueRecords
-          intro q₁ hq₁ q₂ hq₂ hne
-          have hU' := hU q₁ hq₁ q₂ hq₂ hne
-          refine ⟨hU'.1, fun u hu' => ?_⟩
-          rcases List.mem_append.mp hu' with hu | hu
-          · exact hU'.2 u hu
-          · rw [List.mem_singleton] at hu
-            subst hu
-            exact dupFields_false (Bool.eq_false_iff.mpr hdupf) hq₁ hq₂ hne
+        · split at h
+          · cases h
+          · rename_i hdupf _hcf
+            cases h
+            unfold Tenant.UniqueRecords
+            intro q₁ hq₁ q₂ hq₂ hne
+            have hU' := hU q₁ hq₁ q₂ hq₂ hne
+            refine ⟨hU'.1, fun u hu' => ?_⟩
+            rcases List.mem_append.mp hu' with hu | hu
+            · exact hU'.2 u hu
+            · rw [List.mem_singleton] at hu
+              subst hu
+              exact dupFields_false (Bool.eq_false_iff.mpr hdupf) hq₁ hq₂ hne
 
 /-! ## Refusals -/
 
@@ -948,5 +952,72 @@ theorem conforms_makeUnique {s : Schema} {f : FieldId} {r : Record} (h : conform
     subst he
     unfold requiredOk at h3 ⊢
     split <;> simpa using h3
+
+/-! ## A strict schema change needs conforming records -/
+
+/-- The rule the kernel's `Reject` applies to every schema change: an accepted strict schema change
+    leaves every record conforming to the resulting schema, including a record that an earlier lax
+    change had already left non-conforming. -/
+theorem strict_schema_change_conforms (t t' : Tenant) (p : PrincipalId) (i : Intent)
+    (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t') :
+    ∀ q ∈ t'.records, conforms t'.schema q.2 = true := by
+  cases i with
+  | create fs => simp [Intent.isSchema] at hi
+  | update id fs ev => simp [Intent.isSchema] at hi
+  | delete id ev => simp [Intent.isSchema] at hi
+  | setRequired f s =>
+    simp only [Intent.strict] at hs
+    subst hs
+    simp only [stepTenant] at h
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · rename_i hn
+        cases h
+        intro q hq
+        have hall : (t.records.all fun q => conforms (makeRequired t.schema f) q.2) = true := by
+          cases hb : t.records.all (fun q => conforms (makeRequired t.schema f) q.2) with
+          | true => rfl
+          | false => exfalso; apply hn; simp [hb]
+        exact List.all_eq_true.mp hall q hq
+  | setUnique f s =>
+    simp only [Intent.strict] at hs
+    subst hs
+    simp only [stepTenant] at h
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · split at h
+        · cases h
+        · split at h
+          · cases h
+          · rename_i hn
+            cases h
+            intro q hq
+            have hall : (t.records.all fun q => conforms (makeUnique t.schema f) q.2) = true := by
+              cases hb : t.records.all (fun q => conforms (makeUnique t.schema f) q.2) with
+              | true => rfl
+              | false => exfalso; apply hn; simp [uniqueClash, hb]
+            exact List.all_eq_true.mp hall q hq
+  | defineUnique fs =>
+    simp only [stepTenant] at h
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · split at h
+        · cases h
+        · split at h
+          · cases h
+          · rename_i hn
+            cases h
+            intro q hq
+            have hall : t.records.all (fun q => conforms t.schema q.2) = true := by
+              cases hb : t.records.all (fun q => conforms t.schema q.2) with
+              | true => rfl
+              | false => exfalso; apply hn; simp [hb]
+            exact List.all_eq_true.mp hall q hq
 
 end Strata

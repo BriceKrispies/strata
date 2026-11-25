@@ -307,13 +307,14 @@ def decideTenant (h : Header) (n : Nat) (look : RecordId → Option Record)
       | none => .error .invalidSchema
       | some d =>
         if d.ty.isList then .error .invalidSchema
-        else if uniqueClash h.limits all f strict then
+        else if uniqueClash h.limits h.schema all f strict then
           .error .migrationRejected
         else .ok (.schema (makeUnique h.schema f) h.uniques)
   | .defineUnique fs =>
     if p != h.owner then .error .unauthorized
     else if !uniqueFieldsOk h.schema fs then .error .invalidSchema
     else if dupFields all fs then .error .uniqueViolated
+    else if !(all.all (fun q => conforms h.schema q.2)) then .error .migrationRejected
     else .ok (.schema h.schema (h.uniques ++ [fs]))
 
 /-- A decision made through any source of key values. It reads keys of tenant `x` only. -/
@@ -442,7 +443,7 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
       | some d =>
         by_cases hd : d.ty.isList = true
         · simp [ho, hl, hd, Except.map]
-        · by_cases hs : uniqueClash t.limits t.records f strict = true
+        · by_cases hs : uniqueClash t.limits t.schema t.records f strict = true
           · simp only [ho, hl, hd, hs, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte,
               Except.map]
           · simp only [ho, hl, hd, hs, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte,
@@ -454,7 +455,9 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
     · by_cases hok : uniqueFieldsOk t.schema fs = true
       · by_cases hd : dupFields t.records fs = true
         · simp [ho, hok, hd, Except.map]
-        · simp [ho, hok, hd, Delta.apply, Except.map]
+        · by_cases hc : (t.records.all (fun q => conforms t.schema q.2)) = true
+          · simp [ho, hok, hd, hc, Delta.apply, Except.map]
+          · simp [ho, hok, hd, hc, Except.map]
       · simp [ho, hok, Except.map]
     · simp [ho, Except.map]
 
