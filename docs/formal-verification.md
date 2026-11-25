@@ -241,6 +241,45 @@ testing of the Rust kernel against the model, at scale) WG-5651, A1 WG-5373, A2 
 WG-5653, A3 WG-5658, A4 (requirements point to theorems) WG-5662, B1 WG-5654, B2 WG-5659, C1
 WG-5655, C2 WG-5656, C3 WG-5661, C4 WG-5660.
 
+## 7. S1 result: compiled Lean called from Rust (WG-5649)
+
+`crates/lean-kernel-ffi` calls compiled Lean from the Rust workspace on Windows with the MSVC
+Rust toolchain. Recipe (all of it in the crate's `build.rs`, needing only `lake` and `leanc` on
+PATH):
+
+1. `lake build` in `crates/lean-kernel-ffi/lean` compiles the Lean module to C.
+2. `leanc` (Lean's bundled clang) compiles that C and `lean/shim.c`, and links both into
+   `strata_ffi.dll` with an import library. The shim exposes a plain C ABI (pointer and length in;
+   pointer, length and an owning handle out; release), so Rust never includes `lean.h`, whose
+   functions are mostly inline and compiled with clang-only features. The toolchain's clang ships no
+   libc headers, so the shim uses only `lean.h`.
+3. The DLL imports the Lean runtime and `Init` from the toolchain's `libInit_shared.dll`, which
+   depends only on Windows system DLLs. `build.rs` copies both DLLs next to the profile's binaries.
+
+Runtime rules: `lean_initialize_runtime_module`, the module's initialiser
+(`initialize_<package>_<Module>`, here `initialize_strataffi_StrataFfi`), then
+`lean_io_mark_end_initialization`, once per process. Every other thread that calls into Lean is
+registered with `lean_initialize_thread` and unregistered with `lean_finalize_thread` at exit; both
+are exported by the runtime but not declared in `lean.h`. The crate does this with a thread-local
+guard, so callers on tokio worker threads do nothing. The test
+`many_tokio_worker_threads_call_lean_at_once` runs 64 blocking tasks on an 8-worker runtime, 200
+calls each, all checked against a Rust reference. `crates/lean-kernel-ffi` is the one crate allowed
+`unsafe`; every unsafe block is a call across the boundary.
+
+Measured (release build, this machine, 2026-11-25):
+
+| Payload | Boundary alone (identity function) | Lean step | Same step in Rust |
+|---|---|---|---|
+| 16 bytes | 69 ns | 258 ns | 121 ns |
+| 1 MiB | 0.30 ms | 8.5 ms | 0.60 ms |
+
+The boundary costs about 70 ns a call plus two copies of the bytes. The Lean code itself was about
+2x slower than Rust on a small input and 14x on a byte loop over 1 MiB (`ByteArray.get!` and
+`push`). The speed of the executable Lean kernel is therefore the risk to watch in A2, not the
+boundary. Size: `strata_ffi.dll` is 66 KB for the spike; the backend gains a run-time dependency
+on `libInit_shared.dll` (28.6 MB, the Lean runtime and standard library). The backend binary itself
+does not grow, since the link is dynamic.
+
 ## Sources
 
 - C. Hawblitzel et al., *IronFleet: Proving Practical Distributed Systems Correct*, SOSP 2015:

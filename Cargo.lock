@@ -4031,6 +4031,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-lean-kernel-ffi"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "strata-machine-store"
 version = "0.1.0"
 dependencies = [

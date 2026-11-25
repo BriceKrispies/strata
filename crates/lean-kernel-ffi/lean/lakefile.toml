@@ -1,0 +1,6 @@
+name = "strataffi"
+version = "0.1.0"
+defaultTargets = ["StrataFfi"]
+
+[[lean_lib]]
+name = "StrataFfi"

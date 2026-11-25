@@ -34,6 +34,7 @@ members = [
     "crates/model-core",
     "crates/system-differential",
     "crates/ws-bench",
+    "crates/lean-kernel-ffi",
 ]
 
 [workspace.package]
