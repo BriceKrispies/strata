@@ -63,6 +63,7 @@ No `sorry`, no added axioms. `Audit.lean` prints the axioms each theorem depends
 -/
 
 import Strata.Model
+import Strata.References
 import Strata.WorkingSet.Arbiter
 
 namespace Strata.WorkingSet
@@ -71,75 +72,99 @@ open Strata
 
 /-! ## Header and counters -/
 
-/-- The structural part of a tenant: what changes only with a schema or membership change. The
-    counters (the record counter here; the revision and event sequence in Rust) are a key of their
-    own, because every commit changes them. -/
-structure Header where
+/-- The structural part of an object type: what changes only with a schema change. -/
+structure TypeHead where
   schema : Schema
+  uniques : List (List FieldId) := []
+
+/-- The structural part of a tenant: its object types' schemas and constraints, and its members.
+    The records and the counter are keys of their own, because every commit changes them. -/
+structure Header where
+  types : List (TypeId × TypeHead)
   owner : PrincipalId
   editors : List PrincipalId
   writers : List PrincipalId
   limits : Limits := Limits.kernel
-  uniques : List (List FieldId) := []
+
+def TypeHead.ofObj (o : ObjType) : TypeHead := { schema := o.schema, uniques := o.uniques }
+
+/-- An object type with the given structure and records. -/
+def TypeHead.withRecords (hh : TypeHead) (rs : Records) : ObjType :=
+  { schema := hh.schema, uniques := hh.uniques, records := rs }
 
 def _root_.Strata.Tenant.header (t : Tenant) : Header :=
-  { schema := t.schema, owner := t.owner, editors := t.editors, writers := t.writers,
-    limits := t.limits, uniques := t.uniques }
+  { types := t.types.map (fun e => (e.1, TypeHead.ofObj e.2)), owner := t.owner,
+    editors := t.editors, writers := t.writers, limits := t.limits }
 
 /-- A header as a tenant with no records, so the model's permission functions apply to it. They
     read neither records nor the counter. -/
 def Header.asTenant (h : Header) : Tenant :=
-  { schema := h.schema, owner := h.owner, editors := h.editors, writers := h.writers,
-    records := [], nextId := 0, limits := h.limits, uniques := h.uniques }
+  { types := h.types.map (fun e => (e.1, TypeHead.withRecords e.2 [])),
+    owner := h.owner, editors := h.editors, writers := h.writers, nextId := 0, limits := h.limits }
+
+/-- The records of each object type of a tenant, in the tenant's type order. -/
+def _root_.Strata.Tenant.tables (t : Tenant) : List (TypeId × Records) :=
+  t.types.map (fun e => (e.1, e.2.records))
+
+/-- The object types of a header, each with the records the store holds for it, in the same
+    order: the tenant's own list of object types. -/
+def assembleTypes (h : Header) (all : List (TypeId × Records)) : List (TypeId × ObjType) :=
+  List.zipWith (fun hh tb => (hh.1, TypeHead.withRecords hh.2 tb.2)) h.types all
+
+/-- The records of one object type, as the store holds them (none for a type it does not have). -/
+def tableOf (all : List (TypeId × Records)) (ty : TypeId) : Records := (all.lookup ty).getD []
 
 /-! ## Keys, values and the store -/
 
 inductive Key where
   | header (t : TenantId)
   | counters (t : TenantId)
-  /-- One record, by id. Its value says whether the record exists: absence is a fact too. -/
-  | record (t : TenantId) (id : RecordId)
-  /-- Every record of the tenant. -/
+  /-- One record of one object type, by id. Its value says whether the record exists: absence is a
+      fact too. -/
+  | record (t : TenantId) (ty : TypeId) (id : RecordId)
+  /-- The records of every object type of the tenant. -/
   | all (t : TenantId)
-  /-- The complete answer to a lookup by field value: the ids of the records with `f = v`. -/
-  | answer (t : TenantId) (f : FieldId) (v : Val)
-  /-- An ordered answer: up to `limit` ids above `after`, in the stored order (a page). -/
-  | page (t : TenantId) (after : RecordId) (limit : Nat)
+  /-- The complete answer to a lookup by field value in one object type: the ids of its records
+      with `f = v`. -/
+  | answer (t : TenantId) (ty : TypeId) (f : FieldId) (v : Val)
+  /-- An ordered answer: up to `limit` ids above `after`, in the stored order (a page), of one
+      object type. -/
+  | page (t : TenantId) (ty : TypeId) (after : RecordId) (limit : Nat)
   deriving DecidableEq
 
 def Key.tenant : Key → TenantId
   | .header t => t
   | .counters t => t
-  | .record t _ => t
+  | .record t _ _ => t
   | .all t => t
-  | .answer t _ _ => t
-  | .page t _ _ => t
+  | .answer t _ _ _ => t
+  | .page t _ _ _ => t
 
 /-- The value under a key. `none` inside means the tenant does not exist. -/
 inductive Payload where
   | header (h : Option Header)
   | counters (n : Option Nat)
   | record (r : Option Record)
-  | all (rs : Option (List (RecordId × Record)))
+  | all (rs : Option (List (TypeId × Records)))
   | answer (ids : Option (List RecordId))
   | page (ids : Option (List RecordId))
 
 /-- The ids of the records whose field `f` is `v`. -/
-def answerOf (t : Tenant) (f : FieldId) (v : Val) : List RecordId :=
-  (t.records.filter (fun q => q.2.fields.get f == v)).map Prod.fst
+def answerOf (rs : Records) (f : FieldId) (v : Val) : List RecordId :=
+  (rs.filter (fun q => q.2.fields.get f == v)).map Prod.fst
 
 /-- Up to `l` ids above `a`, in the stored order. -/
-def pageOf (t : Tenant) (a : RecordId) (l : Nat) : List RecordId :=
-  ((t.records.filter (fun q => decide (a < q.1))).map Prod.fst).take l
+def pageOf (rs : Records) (a : RecordId) (l : Nat) : List RecordId :=
+  ((rs.filter (fun q => decide (a < q.1))).map Prod.fst).take l
 
 /-- The authority's answer for a key: what the store would load. -/
 def fetch (w : World) : Key → Payload
   | .header t => .header ((w t).map Tenant.header)
   | .counters t => .counters ((w t).map Tenant.nextId)
-  | .record t id => .record ((w t).bind (fun tn => tn.records.lookup id))
-  | .all t => .all ((w t).map Tenant.records)
-  | .answer t f v => .answer ((w t).map (fun tn => answerOf tn f v))
-  | .page t a l => .page ((w t).map (fun tn => pageOf tn a l))
+  | .record t ty id => .record ((w t).bind (fun tn => tn.recordAt ty id))
+  | .all t => .all ((w t).map Tenant.tables)
+  | .answer t ty f v => .answer ((w t).bind (fun tn => (tn.typ? ty).map (fun o => answerOf o.records f v)))
+  | .page t ty a l => .page ((w t).bind (fun tn => (tn.typ? ty).map (fun o => pageOf o.records a l)))
 
 theorem fetch_congr (w w' : World) (k : Key) (h : w k.tenant = w' k.tenant) :
     fetch w k = fetch w' k := by
@@ -173,55 +198,81 @@ def Store.set (s : Store) (x : TenantId) (t : Option Tenant) : Store :=
 /-! ## Deltas and decisions from partial state -/
 
 inductive Delta where
-  | create (id : RecordId) (r : Record)
-  | replace (id : RecordId) (r : Record)
-  /-- Remove record `id` and clear the references to it held by the records named in `cleared`.
-      Like the Rust kernel's `StateDelta`, the delta names every record it writes. -/
-  | remove (id : RecordId) (cleared : List RecordId)
-  | schema (s : Schema) (us : List (List FieldId))
+  | create (ty : TypeId) (id : RecordId) (r : Record)
+  | replace (ty : TypeId) (id : RecordId) (r : Record)
+  /-- Remove record `id` of type `ty`, and clear the references to it held by the records named in
+      `cleared`. Like the Rust kernel's `StateDelta`, the delta names every record it writes. -/
+  | remove (ty : TypeId) (id : RecordId) (cleared : List (TypeId × RecordId))
+  | schema (ty : TypeId) (h : TypeHead)
 
-/-- Remove record `id` and clear the references to it in the records named in `cleared`. -/
-def removeRecords (rs : Records) (id : RecordId) (cleared : List RecordId) : Records :=
-  (rs.filter (fun q => q.1 != id)).map
-    (fun q => if cleared.contains q.1 then (q.1, clearRef id q.2) else q)
+/-- The tenant with object type `ty` replaced by `f` applied to it. A type the tenant does not have
+    is left as it is. -/
+def _root_.Strata.Tenant.modType (t : Tenant) (ty : TypeId) (f : ObjType → ObjType) : Tenant :=
+  match t.typ? ty with
+  | some o => t.putType ty (f o)
+  | none => t
+
+/-- One object type after the removal of record `id` of type `ty`: in its own table the record is
+    gone, and the records named in `cl` (the records that refer to it) have their references
+    cleared. -/
+def removeObj (ty : TypeId) (id : RecordId) (cl : List (TypeId × RecordId)) (j : TypeId)
+    (o : ObjType) : ObjType :=
+  let kept := if j == ty then o.records.filter (fun q => q.1 != id) else o.records
+  { o with records := kept.map (fun q =>
+    if cl.contains (j, q.1) then (q.1, clearRef o.schema ty id q.2) else q) }
+
+/-- The tenant after the removal of record `id` of type `ty`, clearing the references named in
+    `cl`. -/
+def _root_.Strata.Tenant.removeAt (t : Tenant) (ty : TypeId) (id : RecordId)
+    (cl : List (TypeId × RecordId)) : Tenant :=
+  { t with types := t.types.map (fun e => (e.1, removeObj ty id cl e.1 e.2)) }
 
 def Delta.apply (t : Tenant) : Delta → Tenant
-  | .create id r => { t with records := (id, r) :: t.records, nextId := id + 1 }
-  | .replace id r => { t with records := t.records.map (fun q => if q.1 == id then (q.1, r) else q) }
-  | .remove id cleared => { t with records := removeRecords t.records id cleared }
-  | .schema s us => { t with schema := s, uniques := us }
+  | .create ty id r =>
+    { t.modType ty (fun o => { o with records := (id, r) :: o.records }) with nextId := id + 1 }
+  | .replace ty id r =>
+    t.modType ty (fun o => { o with records := o.records.map (fun q =>
+      if q.1 == id then (q.1, r) else q) })
+  | .remove ty id cl => t.removeAt ty id cl
+  | .schema ty h => t.modType ty (fun o => { o with schema := h.schema, uniques := h.uniques })
 
 /-! ### Validity read through single records
 
-`problem` reads the record list only through `Records.has`: a written record is valid if every
-record it references exists. These are the same functions with existence given as a lookup, so a
-decision can be made from the referenced records alone. -/
+`problem` reads the record tables only through whether a referenced record exists (in the type
+its field names) and, for the unique checks, through the records of the type written. These are
+the same functions with existence given as a lookup, so a decision can be made from the records
+it reads alone. -/
 
-def elemResolvesVia (has : RecordId → Bool) : Elem → Bool
-  | .ref id => has id
+def refHasVia (has : TypeId → RecordId → Bool) (ty : Ty) (id : RecordId) : Bool :=
+  match ty.target? with
+  | some t => has t id
+  | none => true
+
+def elemResolvesVia (has : TypeId → RecordId → Bool) (ty : Ty) : Elem → Bool
+  | .ref id => refHasVia has ty id
   | _ => true
 
-def resolvesVia (has : RecordId → Bool) : Val → Bool
-  | .ref id => has id
-  | .list vs => vs.all (elemResolvesVia has)
+def resolvesVia (has : TypeId → RecordId → Bool) (ty : Ty) : Val → Bool
+  | .ref id => refHasVia has ty id
+  | .list vs => vs.all (elemResolvesVia has ty)
   | _ => true
 
-def valueProblemVia (L : Limits) (uniq : Bool) (has : RecordId → Bool) (rs : Records)
+def valueProblemVia (L : Limits) (uniq : Bool) (has : TypeId → RecordId → Bool) (rs : Records)
     (self : RecordId) (f : FieldId) (d : FieldDef) (v : Val) : Option Err :=
   if v.overLimit L then some .limitExceeded
   else if d.unique && decide (L.maxUnique < v.size) then some .limitExceeded
   else if !v.hasType d.ty then some .invalid
   else if uniq && d.unique && clashAt rs self f v then some .uniqueViolated
-  else if !resolvesVia has v then some .danglingReference
+  else if !resolvesVia has d.ty v then some .danglingReference
   else none
 
-def fieldProblemVia (L : Limits) (uniq : Bool) (has : RecordId → Bool) (rs : Records)
+def fieldProblemVia (L : Limits) (uniq : Bool) (has : TypeId → RecordId → Bool) (rs : Records)
     (self : RecordId) (fs : Fields) (fd : FieldId × FieldDef) : Option Err :=
   if fd.2.required && (fs.valuesOf fd.1).isEmpty then some .invalid
   else (fs.valuesOf fd.1).findSome? (valueProblemVia L uniq has rs self fd.1 fd.2)
 
 def problemVia (L : Limits) (schema : Schema) (us : List (List FieldId)) (uniq : Bool)
-    (has : RecordId → Bool) (rs : Records) (self : RecordId) (r : Record) : Option Err :=
+    (has : TypeId → RecordId → Bool) (rs : Records) (self : RecordId) (r : Record) : Option Err :=
   if decide (L.maxRecord < r.size) then some .limitExceeded
   else if r.fields.all (fun fv => (schema.lookup fv.1).isSome) then
     match schema.findSome? (fieldProblemVia L uniq has rs self r.fields) with
@@ -230,27 +281,33 @@ def problemVia (L : Limits) (schema : Schema) (us : List (List FieldId)) (uniq :
   else some .invalid
 
 /-- The validity of a written record depends on the other records through whether the records it
-    references exist (`has`) and, for the unique checks, through the record list (`rs`). -/
+    references exist (`has`) and, for the unique checks, through the records of its type (`rs`). -/
 theorem problem_eq_via (L : Limits) (schema : Schema) (us : List (List FieldId)) (uniq : Bool)
-    (rs : Records) (self : RecordId) (r : Record) :
-    problem L schema us uniq rs self r =
-      problemVia L schema us uniq (fun id => (rs.lookup id).isSome) rs self r := by
-  have he : Elem.resolves rs = elemResolvesVia (fun id => (rs.lookup id).isSome) := by
-    funext e; cases e <;> rfl
-  have h0 : Val.resolves rs = resolvesVia (fun id => (rs.lookup id).isSome) := by
-    funext v; cases v <;> simp [Val.resolves, resolvesVia, he, Records.has]
-  have h1 : valueProblem L uniq rs self = valueProblemVia L uniq (fun id => (rs.lookup id).isSome) rs self := by
+    (env : Env) (rs : Records) (self : RecordId) (r : Record) :
+    problem L schema us uniq env rs self r =
+      problemVia L schema us uniq (fun T id => Records.has (env T) id) rs self r := by
+  have he : ∀ ty, Elem.resolves env ty = elemResolvesVia (fun T id => Records.has (env T) id) ty := by
+    intro ty; funext e; cases e <;> rfl
+  have h0 : ∀ ty, Val.resolves env ty = resolvesVia (fun T id => Records.has (env T) id) ty := by
+    intro ty; funext v
+    cases v with
+    | ref id => rfl
+    | list vs => simp only [Val.resolves, resolvesVia, he ty]
+    | _ => rfl
+  have h1 : valueProblem L uniq env rs self = valueProblemVia L uniq (fun T id => Records.has (env T) id) rs self := by
     funext f d v; simp only [valueProblem, valueProblemVia, h0]
-  have h2 : fieldProblem L uniq rs self = fieldProblemVia L uniq (fun id => (rs.lookup id).isSome) rs self := by
+  have h2 : fieldProblem L uniq env rs self = fieldProblemVia L uniq (fun T id => Records.has (env T) id) rs self := by
     funext fs fd; simp only [fieldProblem, fieldProblemVia, h1]
   unfold problem problemVia
   rw [h2]
   rfl
 
-/-- The records that hold a reference to `id`, single or in a list: the ones a delete of `id`
-    clears. -/
-def referrers (all : List (RecordId × Record)) (id : RecordId) : List RecordId :=
-  (all.filter (fun q => q.2.refersTo id)).map Prod.fst
+/-- The records that hold a reference to record `id` of type `ty`, in any object type, as
+    `(type, id)` pairs: the ones a delete of it clears. -/
+def referrers (h : Header) (all : List (TypeId × Records)) (ty : TypeId) (id : RecordId) :
+    List (TypeId × RecordId) :=
+  (assembleTypes h all).flatMap (fun e =>
+    (e.2.records.filter (fun q => recRefers e.2.schema ty id q.2)).map (fun q => (e.1, q.1)))
 
 def applyWorld (w : World) (x : TenantId) (d : Delta) : World :=
   upd w x ((w x).map (fun t => d.apply t))
@@ -258,65 +315,93 @@ def applyWorld (w : World) (x : TenantId) (d : Delta) : World :=
 def Store.applyDelta (s : Store) (x : TenantId) (d : Delta) : Store :=
   { world := applyWorld s.world x d, gen := upd s.gen x (s.gen x + 1) }
 
-/-- The kernel's decision for one tenant from its header, its counter, single records and the
-    record list. What each intent reads:
-    - create: the header, the counter, and the record of every id the new record references
-      (only whether it exists);
-    - update: the header, the record itself, and the record of every id the new value references;
-    - delete: the header, the record itself, and the whole record list (to find records that
-      forbid the delete and records whose references to it are cleared);
-    - a strict schema change: the header and the whole record list. -/
-def decideTenant (h : Header) (n : Nat) (look : RecordId → Option Record)
-    (all : List (RecordId × Record)) (p : PrincipalId) : Intent → Except Err Delta
-  | .create fs =>
-    if !canCreate h.asTenant p then .error .unauthorized
-    else
-      let r := newRecord h.schema p fs
-      match problemVia h.limits h.schema h.uniques true (fun id => (look id).isSome) all n r with
-      | some e => .error e
-      | none => .ok (.create n r)
-  | .update id fs ev =>
-    match look id with
-    | none => .error (missingRecord h.asTenant p)
-    | some old =>
-      if !canEdit h.asTenant p old then .error .unauthorized
-      else if versionClash ev old then .error .versionConflict
+/-- The kernel's decision for one tenant from its header, its counter, the records it looks up one
+    by one, and the records of each object type. What each intent reads:
+    - create: the header of its type, the counter, and the record of every id the new record
+      references (only whether it exists), and the records of its type (for the unique checks);
+    - update: the header of its type, the record itself, and the records of its type and the
+      existence of the records it references;
+    - delete: the header of its type, the record itself, and every object type's records (to find
+      the records that forbid the delete and the records whose references to it are cleared);
+    - a schema change: the header and every object type's records (the strict check). -/
+def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option Record)
+    (all : List (TypeId × Records)) (p : PrincipalId) : Intent → Except Err Delta
+  | .create ty fs =>
+    match h.types.lookup ty with
+    | none => .error (unknownType h.asTenant p)
+    | some o =>
+      if !canCreate h.asTenant p then .error .unauthorized
       else
-        let r := patched old fs
-        match problemVia h.limits h.schema h.uniques true (fun id => (look id).isSome) all id r with
+        let r := newRecord o.schema p fs
+        match problemVia h.limits o.schema o.uniques true (fun T id => (look T id).isSome)
+            (tableOf all ty) n r with
         | some e => .error e
-        | none => .ok (.replace id r)
-  | .delete id ev =>
-    match look id with
-    | none => .error (missingRecord h.asTenant p)
-    | some old =>
-      if !canEdit h.asTenant p old then .error .unauthorized
-      else if versionClash ev old then .error .versionConflict
-      else if all.any (blocks h.schema id) then .error .stillReferenced
-      else .ok (.remove id (referrers all id))
-  | .setRequired f strict =>
+        | none => .ok (.create ty n r)
+  | .update ty id fs ev =>
+    match h.types.lookup ty with
+    | none => .error (unknownType h.asTenant p)
+    | some o =>
+      match look ty id with
+      | none => .error (missingRecord h.asTenant p)
+      | some old =>
+        if !canEdit h.asTenant p old then .error .unauthorized
+        else if versionClash ev old then .error .versionConflict
+        else
+          let r := patched old fs
+          match problemVia h.limits o.schema o.uniques true (fun T id => (look T id).isSome)
+              (tableOf all ty) id r with
+          | some e => .error e
+          | none => .ok (.replace ty id r)
+  | .delete ty id ev =>
+    match h.types.lookup ty with
+    | none => .error (unknownType h.asTenant p)
+    | some _ =>
+      match look ty id with
+      | none => .error (missingRecord h.asTenant p)
+      | some old =>
+        if !canEdit h.asTenant p old then .error .unauthorized
+        else if versionClash ev old then .error .versionConflict
+        else if (assembleTypes h all).any (fun e => e.2.records.any (blocks e.1 e.2.schema ty id))
+          then .error .stillReferenced
+        else .ok (.remove ty id (referrers h all ty id))
+  | .setRequired ty f strict =>
     if p != h.owner then .error .unauthorized
     else
-      let schema' := makeRequired h.schema f
-      if schemaChangeRefused h.limits schema' h.uniques all strict then .error .migrationRejected
-      else .ok (.schema schema' h.uniques)
-  | .setUnique f strict =>
+      match h.types.lookup ty with
+      | none => .error (unknownType h.asTenant p)
+      | some o =>
+        let types' := putTypeList (assembleTypes h all) ty
+          { schema := makeRequired o.schema f, uniques := o.uniques, records := tableOf all ty }
+        if schemaChangeRefused h.limits types' strict then .error .migrationRejected
+        else .ok (.schema ty { schema := makeRequired o.schema f, uniques := o.uniques })
+  | .setUnique ty f strict =>
     if p != h.owner then .error .unauthorized
     else
-      match h.schema.lookup f with
-      | none => .error .invalidSchema
-      | some d =>
-        if d.ty.isList then .error .invalidSchema
-        else if schemaChangeRefused h.limits (makeUnique h.schema f) h.uniques all strict then
-          .error .migrationRejected
-        else .ok (.schema (makeUnique h.schema f) h.uniques)
-  | .defineUnique fs =>
+      match h.types.lookup ty with
+      | none => .error (unknownType h.asTenant p)
+      | some o =>
+        match o.schema.lookup f with
+        | none => .error .invalidSchema
+        | some d =>
+          if d.ty.isList then .error .invalidSchema
+          else
+            let types' := putTypeList (assembleTypes h all) ty
+              { schema := makeUnique o.schema f, uniques := o.uniques, records := tableOf all ty }
+            if schemaChangeRefused h.limits types' strict then .error .migrationRejected
+            else .ok (.schema ty { schema := makeUnique o.schema f, uniques := o.uniques })
+  | .defineUnique ty fs =>
     if p != h.owner then .error .unauthorized
-    else if !uniqueFieldsOk h.schema fs then .error .invalidSchema
-    else if dupFields all fs then .error .uniqueViolated
-    else if schemaChangeRefused h.limits h.schema (h.uniques ++ [fs]) all true then
-      .error .migrationRejected
-    else .ok (.schema h.schema (h.uniques ++ [fs]))
+    else
+      match h.types.lookup ty with
+      | none => .error (unknownType h.asTenant p)
+      | some o =>
+        if !uniqueFieldsOk o.schema fs then .error .invalidSchema
+        else if dupFields (tableOf all ty) fs then .error .uniqueViolated
+        else
+          let types' := putTypeList (assembleTypes h all) ty
+            { schema := o.schema, uniques := o.uniques ++ [fs], records := tableOf all ty }
+          if schemaChangeRefused h.limits types' true then .error .migrationRejected
+          else .ok (.schema ty { schema := o.schema, uniques := o.uniques ++ [fs] })
 
 /-- A decision made through any source of key values. It reads keys of tenant `x` only. -/
 def decideOn (get : Key → Payload) (x : TenantId) (p : PrincipalId) (i : Intent) :
@@ -324,7 +409,7 @@ def decideOn (get : Key → Payload) (x : TenantId) (p : PrincipalId) (i : Inten
   match get (.header x), get (.counters x) with
   | .header (some h), .counters (some n) =>
     decideTenant h n
-      (fun id => match get (.record x id) with
+      (fun ty id => match get (.record x ty id) with
         | .record r => r
         | _ => none)
       (match get (.all x) with
@@ -338,129 +423,229 @@ theorem decideOn_congr (get get' : Key → Payload) (x : TenantId) (p : Principa
   have hh := h (.header x) rfl
   have hc := h (.counters x) rfl
   have ha := h (.all x) rfl
-  have hr : ∀ id, get (.record x id) = get' (.record x id) := fun id => h _ rfl
+  have hr : ∀ ty id, get (.record x ty id) = get' (.record x ty id) := fun ty id => h _ rfl
   simp only [decideOn, hh, hc, ha, hr]
 
-private theorem clearRef_none (id : RecordId) (r : Record)
-    (h : r.refersTo id = false) : clearRef id r = r := by
-  simp [clearRef, h]
+/-! ### The header and the tables of a tenant, against its object types -/
 
-/-- Clearing only the records `referrers` names is clearing every record: the others hold no
-    reference to clear. -/
-private theorem remove_map_eq (rs : Records) (id : RecordId) :
-    (rs.filter (fun q => q.1 != id)).map
-      (fun q => if (referrers rs id).contains q.1 then (q.1, clearRef id q.2) else q)
-    = (rs.filter (fun q => q.1 != id)).map (fun q => (q.1, clearRef id q.2)) := by
-  apply List.map_congr_left
-  intro q hq
-  have hq' := (List.mem_filter.mp hq).1
-  by_cases hc : (referrers rs id).contains q.1 = true
-  · have hc' : q.1 ∈ referrers rs id := by simpa using hc
-    simp [hc']
-  · simp only [hc, Bool.false_eq_true, ite_false]
-    have hn : q.2.refersTo id = false := by
-      cases hq2 : q.2.refersTo id with
-      | false => rfl
-      | true =>
-        exfalso
-        apply hc
-        have : q.1 ∈ referrers rs id := List.mem_map.mpr ⟨q, List.mem_filter.mpr ⟨hq', hq2⟩, rfl⟩
-        simpa using this
-    rw [clearRef_none id q.2 hn]
+theorem lookup_map_snd {α β γ : Type} [BEq α] [LawfulBEq α] (l : List (α × β)) (g : β → γ) (k : α) :
+    (l.map (fun e => (e.1, g e.2))).lookup k = (l.lookup k).map g := by
+  induction l with
+  | nil => simp [List.lookup]
+  | cons e es ih =>
+    obtain ⟨j, o⟩ := e
+    by_cases hk : k == j
+    · simp [List.lookup, hk]
+    · simp [List.lookup, hk, ih]
 
-@[simp] private theorem header_schema (t : Tenant) : t.header.schema = t.schema := rfl
-@[simp] private theorem header_owner (t : Tenant) : t.header.owner = t.owner := rfl
-@[simp] private theorem header_limits (t : Tenant) : t.header.limits = t.limits := rfl
-@[simp] private theorem header_uniques (t : Tenant) : t.header.uniques = t.uniques := rfl
-@[simp] private theorem canCreate_asTenant (t : Tenant) (p : PrincipalId) :
+theorem header_types_lookup (t : Tenant) (ty : TypeId) :
+    t.header.types.lookup ty = (t.typ? ty).map TypeHead.ofObj := by
+  unfold Tenant.header Tenant.typ?
+  exact lookup_map_snd t.types TypeHead.ofObj ty
+
+theorem tables_lookup (t : Tenant) (ty : TypeId) :
+    tableOf t.tables ty = ((t.typ? ty).map ObjType.records).getD [] := by
+  unfold tableOf Tenant.tables Tenant.typ?
+  rw [lookup_map_snd t.types ObjType.records ty]
+
+theorem assemble_map (l : List (TypeId × ObjType)) :
+    List.zipWith (fun hh tb => (hh.1, TypeHead.withRecords hh.2 tb.2))
+      (l.map (fun e => (e.1, TypeHead.ofObj e.2))) (l.map (fun e => (e.1, e.2.records))) = l := by
+  induction l with
+  | nil => rfl
+  | cons e es ih =>
+    obtain ⟨j, o⟩ := e
+    have hcons : List.zipWith (fun hh tb => (hh.1, TypeHead.withRecords hh.2 tb.2))
+        (((j, o) :: es).map (fun e => (e.1, TypeHead.ofObj e.2)))
+        (((j, o) :: es).map (fun e => (e.1, e.2.records))) =
+      (j, TypeHead.withRecords (TypeHead.ofObj o) o.records) ::
+        List.zipWith (fun hh tb => (hh.1, TypeHead.withRecords hh.2 tb.2))
+          (es.map (fun e => (e.1, TypeHead.ofObj e.2))) (es.map (fun e => (e.1, e.2.records))) := rfl
+    rw [hcons, ih]
+    rfl
+
+theorem assemble_header (t : Tenant) : assembleTypes t.header t.tables = t.types :=
+  assemble_map t.types
+
+theorem recordAt_has (t : Tenant) (ty : TypeId) (id : RecordId) :
+    (t.recordAt ty id).isSome = Records.has (t.env ty) id := by
+  unfold Tenant.recordAt Tenant.env Records.has
+  cases t.typ? ty with
+  | none => rfl
+  | some o => rfl
+
+theorem canCreate_header (t : Tenant) (p : PrincipalId) :
     canCreate t.header.asTenant p = canCreate t p := rfl
-@[simp] private theorem canEdit_asTenant (t : Tenant) (p : PrincipalId) (r : Record) :
+
+theorem canEdit_header (t : Tenant) (p : PrincipalId) (r : Record) :
     canEdit t.header.asTenant p r = canEdit t p r := rfl
-@[simp] private theorem missingRecord_asTenant (t : Tenant) (p : PrincipalId) :
+
+theorem missingRecord_header (t : Tenant) (p : PrincipalId) :
     missingRecord t.header.asTenant p = missingRecord t p := rfl
 
-private theorem except_map_match {α β ε : Type} (x : Except ε α) (f : α → β) :
+theorem unknownType_header (t : Tenant) (p : PrincipalId) :
+    unknownType t.header.asTenant p = unknownType t p := rfl
+
+theorem except_map_match {α β ε : Type} (x : Except ε α) (f : α → β) :
     x.map f = (match x with | .ok a => .ok (f a) | .error e => .error e) := by
   cases x <;> rfl
 
-/-- A decision from the header, the counter, the tenant's own lookup and record list, applied as
+@[simp] theorem header_limits (t : Tenant) : t.header.limits = t.limits := rfl
+@[simp] theorem header_owner (t : Tenant) : t.header.owner = t.owner := rfl
+
+theorem referrers_types (t : Tenant) (ty : TypeId) (id : RecordId) :
+    referrers t.header t.tables ty id =
+      t.types.flatMap (fun e =>
+        (e.2.records.filter (fun q => recRefers e.2.schema ty id q.2)).map (fun q => (e.1, q.1))) := by
+  unfold referrers
+  rw [assemble_header]
+
+theorem referrer_mem (t : Tenant) (ty : TypeId) (id : RecordId) (e : TypeId × ObjType)
+    (he : e ∈ t.types) (q : RecordId × Record) (hq : q ∈ e.2.records)
+    (hr : recRefers e.2.schema ty id q.2 = true) :
+    (referrers t.header t.tables ty id).contains (e.1, q.1) = true := by
+  rw [referrers_types]
+  simp only [List.contains_iff_exists_mem_beq, beq_iff_eq]  
+  exact ⟨(e.1, q.1), List.mem_flatMap.mpr ⟨e, he, List.mem_map.mpr ⟨q, List.mem_filter.mpr ⟨hq, hr⟩, rfl⟩⟩, rfl⟩
+
+theorem removeAt_referrers (t : Tenant) (ty : TypeId) (id : RecordId) :
+    t.removeAt ty id (referrers t.header t.tables ty id) = t.afterDelete ty id := by
+  unfold Tenant.removeAt Tenant.afterDelete
+  congr 1
+  apply List.map_congr_left
+  intro e he
+  congr 1
+  unfold removeObj delObj delClear
+  dsimp only
+  congr 1
+  apply List.map_congr_left
+  intro q hq
+  have hq' : q ∈ (if e.1 == ty then e.2.records.filter (fun q => q.1 != id) else e.2.records) := hq
+  have hqe : q ∈ e.2.records := by
+    by_cases hk : (e.1 == ty) = true
+    · rw [if_pos hk] at hq'; exact (List.mem_filter.mp hq').1
+    · rw [if_neg hk] at hq'; exact hq'
+  by_cases hr : recRefers e.2.schema ty id q.2 = true
+  · simp only [referrer_mem t ty id e he q hqe hr, if_true]
+  · have hr' : recRefers e.2.schema ty id q.2 = false := by simpa using hr
+    have hcl : clearRef e.2.schema ty id q.2 = q.2 := by
+      unfold clearRef; rw [if_neg (by simpa using hr')]
+    by_cases hc : (referrers t.header t.tables ty id).contains (e.1, q.1) = true
+    · simp only [hc, if_true, hcl]
+    · simp only [hc, if_false, Bool.false_eq_true, hcl]
+
+/-- A decision from the header, the counter, the tenant's own lookup and record tables, applied as
     a delta, is the kernel's step. -/
 theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
-    (decideTenant t.header t.nextId (fun id => t.records.lookup id) t.records p i).map
+    (decideTenant t.header t.nextId (fun T id => t.recordAt T id) t.tables p i).map
       (Delta.apply t) = stepTenant t p i := by
+  have hhas : (fun T id => (t.recordAt T id).isSome) = (fun T id => Records.has (t.env T) id) := by
+    funext T id; exact recordAt_has t T id
   cases i with
-  | create fs =>
-    simp only [decideTenant, stepTenant, canCreate_asTenant, header_schema, header_limits,
-      header_uniques, problem_eq_via]
-    by_cases hc : canCreate t p = true
-    · cases hk : problemVia t.limits t.schema t.uniques true
-          (fun id => (t.records.lookup id).isSome) t.records t.nextId (newRecord t.schema p fs) with
-      | none => simp [hc, hk, Delta.apply, Except.map]
-      | some e => simp [hc, hk, Except.map]
-    · simp [hc, Except.map]
-  | update id fs ev =>
-    simp only [decideTenant, stepTenant, canEdit_asTenant, missingRecord_asTenant, header_schema,
-      header_limits, header_uniques, problem_eq_via]
-    cases hl : t.records.lookup id with
-    | none => simp [Except.map]
-    | some old =>
-      by_cases hc : canEdit t p old = true
-      · by_cases hv : versionClash ev old = true
-        · simp [hc, hv, Except.map]
-        · have hv' : versionClash ev old = false := by simpa using hv
-          cases hk : problemVia t.limits t.schema t.uniques true
-              (fun id => (t.records.lookup id).isSome) t.records id (patched old fs) with
-          | none => simp [hc, hv', hk, Delta.apply, Except.map]
-          | some e => simp [hc, hv', hk, Except.map]
-      · simp [hc, Except.map]
-  | delete id ev =>
-    simp only [decideTenant, stepTenant, canEdit_asTenant, missingRecord_asTenant, header_schema]
-    cases hl : t.records.lookup id with
-    | none => simp [Except.map]
-    | some old =>
-      by_cases hc : canEdit t p old = true
-      · by_cases hv : versionClash ev old = true
-        · simp [hc, hv, Except.map]
-        · have hv' : versionClash ev old = false := by simpa using hv
-          by_cases hb : t.records.any (blocks t.schema id) = true
-          · simp [hc, hv', hb, Except.map]
-          · have hb' : t.records.any (blocks t.schema id) = false := by simpa using hb
-            simp only [hc, hv', hb', Bool.not_true, Bool.false_eq_true, ite_false, Except.map,
-              Delta.apply, Except.ok.injEq]
-            simp only [removeRecords, remove_map_eq]
-      · simp [hc, Except.map]
-  | setRequired f strict =>
-    simp only [decideTenant, stepTenant, header_owner, header_schema, header_limits, header_uniques]
-    by_cases ho : p = t.owner
-    · by_cases hs : schemaChangeRefused t.limits (makeRequired t.schema f) t.uniques t.records strict
-          = true
-      · simp [ho, hs, Except.map]
-      · simp [ho, hs, Delta.apply, Except.map]
-    · simp [ho, Except.map]
-  | setUnique f strict =>
-    simp only [decideTenant, stepTenant, header_owner, header_schema, header_limits, header_uniques]
-    by_cases ho : p = t.owner
-    · cases hl : t.schema.lookup f with
-      | none => simp [ho, hl, Except.map]
-      | some d =>
-        by_cases hd : d.ty.isList = true
-        · simp [ho, hl, hd, Except.map]
-        · by_cases hs : schemaChangeRefused t.limits (makeUnique t.schema f) t.uniques t.records strict
-              = true
-          · simp [ho, hl, hd, hs, Except.map]
-          · simp [ho, hl, hd, hs, Delta.apply, Except.map]
-    · simp [ho, Except.map]
-  | defineUnique fs =>
-    simp only [decideTenant, stepTenant, header_owner, header_schema, header_limits, header_uniques]
-    by_cases ho : p = t.owner
-    · by_cases hok : uniqueFieldsOk t.schema fs = true
-      · by_cases hd : dupFields t.records fs = true
-        · simp [ho, hok, hd, Except.map]
-        · by_cases hs : schemaChangeRefused t.limits t.schema (t.uniques ++ [fs]) t.records true = true
-          · simp [ho, hok, hd, hs, Except.map]
-          · simp [ho, hok, hd, hs, Delta.apply, Except.map]
-      · simp [ho, hok, Except.map]
-    · simp [ho, Except.map]
+  | create ty fs =>
+    simp only [TypeHead.ofObj, decideTenant, stepTenant, header_types_lookup, tables_lookup, unknownType_header,
+      canCreate_header, hhas, problem_eq_via]
+    cases hT : t.typ? ty with
+    | none => simp [TypeHead.ofObj, Except.map]
+    | some o =>
+      by_cases hc : canCreate t p = true
+      · cases hk : problemVia t.limits o.schema o.uniques true
+            (fun T id => Records.has (t.env T) id) o.records
+            t.nextId (newRecord o.schema p fs) with
+        | none => simp [TypeHead.ofObj, hc, hk, Delta.apply, Tenant.modType, hT, Except.map]
+        | some e => simp [TypeHead.ofObj, hc, hk, Except.map]
+      · simp [TypeHead.ofObj, hc, Except.map]
+  | update ty id fs ev =>
+    simp only [TypeHead.ofObj, decideTenant, stepTenant, header_types_lookup, tables_lookup, unknownType_header,
+      canEdit_header, missingRecord_header, hhas, problem_eq_via]
+    cases hT : t.typ? ty with
+    | none => simp [TypeHead.ofObj, Except.map]
+    | some o =>
+      cases hl : o.records.lookup id with
+      | none => simp [TypeHead.ofObj, hT, hl, Except.map, Tenant.recordAt]
+      | some old =>
+        by_cases hc : canEdit t p old = true
+        · by_cases hv : versionClash ev old = true
+          · simp [TypeHead.ofObj, hT, hl, hc, hv, Except.map, Tenant.recordAt]
+          · have hv' : versionClash ev old = false := by simpa using hv
+            cases hk : problemVia t.limits o.schema o.uniques true
+                (fun T id => Records.has (t.env T) id) o.records
+                id (patched old fs) with
+            | none => simp [TypeHead.ofObj, hT, hl, hc, hv', hk, Delta.apply, Tenant.modType, Tenant.recordAt, Except.map]
+            | some e => simp [TypeHead.ofObj, hT, hl, hc, hv', hk, Except.map, Tenant.recordAt]
+        · simp [TypeHead.ofObj, hT, hl, hc, Except.map, Tenant.recordAt]
+  | delete ty id ev =>
+    simp only [decideTenant, stepTenant, header_types_lookup, unknownType_header,
+      canEdit_header, missingRecord_header, assemble_header]
+    cases hT : t.typ? ty with
+    | none => simp [TypeHead.ofObj, Except.map]
+    | some o =>
+      cases hl : o.records.lookup id with
+      | none => simp [TypeHead.ofObj, hT, hl, Except.map, Tenant.recordAt, missingRecord_header]
+      | some old =>
+        by_cases hc : canEdit t p old = true
+        · by_cases hv : versionClash ev old = true
+          · simp [TypeHead.ofObj, hT, hl, hc, hv, Except.map, Tenant.recordAt]
+          · have hv' : versionClash ev old = false := by simpa using hv
+            by_cases hb : (t.types.any (fun e => e.2.records.any (blocks e.1 e.2.schema ty id))) = true
+            · simp [TypeHead.ofObj, hT, hl, hc, hv', hb, Tenant.recordAt, Tenant.blockedDelete, Except.map]
+            · have hb' : (t.types.any (fun e => e.2.records.any (blocks e.1 e.2.schema ty id))) = false := by
+                simpa using hb
+              simp [TypeHead.ofObj, hT, hl, hc, hv', hb', Tenant.recordAt, Tenant.blockedDelete, Delta.apply, Except.map,
+                Tenant.afterDelete, removeAt_referrers]
+        · simp [TypeHead.ofObj, hT, hl, hc, Except.map, Tenant.recordAt]
+  | setRequired ty f strict =>
+    simp only [decideTenant, stepTenant, header_types_lookup, assemble_header]
+    cases hT : t.typ? ty with
+    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map, unknownType_header]
+    | some o =>
+      by_cases ho : p = t.owner
+      · simp only [tables_lookup, hT, Option.map_some, Option.getD_some, header_owner, header_limits,
+          Tenant.putType, ho, bne_self_eq_false, Bool.false_eq_true, ite_false,
+          if_false, TypeHead.ofObj]
+        repeat' split
+        all_goals (try split)
+        all_goals simp_all [Except.map, Delta.apply, Tenant.modType, hT, Tenant.putType]
+      · simp [ho, Except.map]
+  | setUnique ty f strict =>
+    simp only [decideTenant, stepTenant, header_types_lookup, assemble_header]
+    cases hT : t.typ? ty with
+    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map, unknownType_header]
+    | some o =>
+      by_cases ho : p = t.owner
+      · cases hl : o.schema.lookup f with
+        | none => simp [ho, hT, hl, TypeHead.ofObj, Except.map]
+        | some d =>
+          by_cases hd : d.ty.isList = true
+          · simp [ho, hT, hl, hd, TypeHead.ofObj, Except.map]
+          · simp only [tables_lookup, hT, Option.map_some, Option.getD_some, header_owner,
+              header_limits, Tenant.putType, ho, hl, hd, TypeHead.ofObj, bne_self_eq_false,
+              Bool.false_eq_true, ite_false, if_false, Bool.not_true]
+            by_cases hs : schemaChangeRefused t.limits (putTypeList t.types ty
+                { schema := makeUnique o.schema f, uniques := o.uniques, records := o.records })
+                strict = true
+            · simp [hs, Except.map]
+            · simp [hs, Except.map, Delta.apply, Tenant.modType, hT, Tenant.putType]
+      · simp [ho, Except.map]
+  | defineUnique ty fs =>
+    simp only [decideTenant, stepTenant, header_types_lookup, assemble_header]
+    cases hT : t.typ? ty with
+    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map, unknownType_header]
+    | some o =>
+      by_cases ho : p = t.owner
+      · by_cases hok : uniqueFieldsOk o.schema fs = true
+        · simp only [tables_lookup, hT, Option.map_some, Option.getD_some, ho, hok,
+            TypeHead.ofObj, Bool.true_and, Bool.not_true, bne_self_eq_false, Bool.false_eq_true,
+            ite_false, if_false]
+          by_cases hd : dupFields o.records fs = true
+          · simp [hd, Except.map]
+          · simp only [hd, Bool.false_eq_true, ite_false, if_false]
+            by_cases hs : schemaChangeRefused t.limits (putTypeList t.types ty
+                { schema := o.schema, uniques := o.uniques ++ [fs], records := o.records }) true = true
+            · split <;> split <;> simp_all [Except.map, Tenant.putType]
+            · simp [hs, Except.map, Delta.apply, Tenant.modType, hT, Tenant.putType]
+        · simp [ho, hT, hok, TypeHead.ofObj, Except.map]
+      · simp [ho, Except.map]
 
 /-- A decision made through the store's answers is the kernel's step on the store's world. -/
 theorem decideOn_fetch (w : World) (i : Intent) (c : Ctx) :
@@ -473,7 +658,7 @@ theorem decideOn_fetch (w : World) (i : Intent) (c : Ctx) :
     have h := decideTenant_faithful t c.principal i
     rw [except_map_match] at h
     rw [except_map_match, ← h]
-    cases decideTenant t.header t.nextId (fun id => t.records.lookup id) t.records c.principal i with
+    cases decideTenant t.header t.nextId (fun T id => t.recordAt T id) t.tables c.principal i with
     | error e => rfl
     | ok d =>
       simp only []
@@ -512,21 +697,21 @@ theorem fetch_applyWorld_other (w : World) (x : TenantId) (d : Delta) (k : Key)
 def touchedIn : Delta → Key → Bool
   | .schema _ _, .header _ => true
   | _, .header _ => false
-  | .create _ _, .counters _ => true
+  | .create _ _ _, .counters _ => true
   | _, .counters _ => false
-  | .create id' _, .record _ id => id == id'
-  | .replace id' _, .record _ id => id == id'
-  | .remove id' cl, .record _ id => id == id' || cl.contains id
-  | .schema _ _, .record _ _ => false
+  | .create ty' id' _, .record _ ty id => ty == ty' && id == id'
+  | .replace ty' id' _, .record _ ty id => ty == ty' && id == id'
+  | .remove ty' id' cl, .record _ ty id => (ty == ty' && id == id') || cl.contains (ty, id)
+  | .schema _ _, .record _ _ _ => false
   | .schema _ _, .all _ => false
   | _, .all _ => true
-  | .schema _ _, .answer _ _ _ => false
-  | .create _ _, .answer _ _ _ => true
-  | .replace _ _, .answer _ _ _ => true
-  | .remove _ _, .answer _ _ _ => true
-  | .create id' _, .page _ a _ => decide (a < id')
-  | .remove id' _, .page _ a _ => decide (a < id')
-  | _, .page _ _ _ => false
+  | .schema _ _, .answer _ _ _ _ => false
+  | .create _ _ _, .answer _ _ _ _ => true
+  | .replace _ _ _, .answer _ _ _ _ => true
+  | .remove _ _ _, .answer _ _ _ _ => true
+  | .create ty' id' _, .page _ ty a _ => ty == ty' && decide (a < id')
+  | .remove ty' id' _, .page _ ty a _ => ty == ty' && decide (a < id')
+  | _, .page _ _ _ _ => false
 
 private theorem beq_false_of_ne {a b : Nat} (h : a ≠ b) : (a == b) = false := by simp [h]
 
@@ -634,69 +819,438 @@ private theorem page_filter_remove (rs : List (RecordId × Record)) (a id : Reco
     simp [ha, hne]
   · simp [ha]
 
+/-! ### What a delta leaves of a tenant -/
+
+theorem map_ofObj_putTypeList (l : List (TypeId × ObjType)) (ty : TypeId) (o o' : ObjType)
+    (hl : l.lookup ty = some o) (h : TypeHead.ofObj o' = TypeHead.ofObj o) :
+    (putTypeList l ty o').map (fun e => (e.1, TypeHead.ofObj e.2)) =
+      l.map (fun e => (e.1, TypeHead.ofObj e.2)) := by
+  induction l with
+  | nil => simp [List.lookup] at hl
+  | cons e es ih =>
+    obtain ⟨k, p⟩ := e
+    unfold putTypeList
+    by_cases hk : (k == ty) = true
+    · rw [if_pos hk]
+      have hkt : k = ty := by simpa using hk
+      subst hkt
+      have hp : p = o := Option.some.inj (by rw [← hl]; simp [List.lookup_cons_self])
+      subst hp
+      simp [h]
+    · rw [if_neg hk]
+      have hl' : es.lookup ty = some o := by
+        rw [lookup_cons_nat, if_neg (fun h => hk (by simp [h]))] at hl
+        exact hl
+      simp [ih hl']
+
+theorem header_modType (tn : Tenant) (ty : TypeId) (f : ObjType → ObjType)
+    (hf : ∀ o, TypeHead.ofObj (f o) = TypeHead.ofObj o) :
+    (tn.modType ty f).header = tn.header := by
+  unfold Tenant.modType
+  cases hT : tn.typ? ty with
+  | none => rfl
+  | some o =>
+    have hl : tn.types.lookup ty = some o := hT
+    unfold Tenant.header Tenant.putType
+    simp only
+    rw [map_ofObj_putTypeList tn.types ty o (f o) hl (hf o)]
+
+theorem header_removeAt (tn : Tenant) (ty : TypeId) (id : RecordId) (cl : List (TypeId × RecordId)) :
+    (tn.removeAt ty id cl).header = tn.header := by
+  unfold Tenant.removeAt Tenant.header
+  simp only [List.map_map]
+  congr 1
+
+theorem header_afterDelete (tn : Tenant) (ty : TypeId) (id : RecordId) :
+    (tn.afterDelete ty id).header = tn.header := by
+  unfold Tenant.afterDelete Tenant.header
+  simp only [List.map_map]
+  congr 1
+
+theorem nextId_modType (tn : Tenant) (ty : TypeId) (f : ObjType → ObjType) :
+    (tn.modType ty f).nextId = tn.nextId := by
+  unfold Tenant.modType
+  cases tn.typ? ty <;> rfl
+
+theorem nextId_removeAt (tn : Tenant) (ty : TypeId) (id : RecordId) (cl : List (TypeId × RecordId)) :
+    (tn.removeAt ty id cl).nextId = tn.nextId := rfl
+
+theorem nextId_afterDelete (tn : Tenant) (ty : TypeId) (id : RecordId) :
+    (tn.afterDelete ty id).nextId = tn.nextId := rfl
+
+theorem typ?_removeAt (tn : Tenant) (ty id : TypeId) (cl : List (TypeId × RecordId)) (k : TypeId) :
+    (tn.removeAt ty id cl).typ? k = (tn.typ? k).map (removeObj ty id cl k) := by
+  unfold Tenant.removeAt Tenant.typ?
+  exact lookup_map_entry tn.types (removeObj ty id cl) k
+
+theorem typ?_modType_other (tn : Tenant) (ty k : TypeId) (f : ObjType → ObjType) (h : k ≠ ty) :
+    (tn.modType ty f).typ? k = tn.typ? k := by
+  unfold Tenant.modType
+  cases hT : tn.typ? ty with
+  | none => rfl
+  | some o => exact typ?_putType_other tn ty k (f o) h
+
+theorem typ?_modType_self (tn : Tenant) (ty : TypeId) (f : ObjType → ObjType) (o : ObjType)
+    (h : tn.typ? ty = some o) : (tn.modType ty f).typ? ty = some (f o) := by
+  unfold Tenant.modType
+  rw [h]
+  exact typ?_putType_self tn ty o (f o) h
+
+theorem tables_modType_records (tn : Tenant) (ty : TypeId) (f : ObjType → ObjType)
+    (hf : ∀ o, (f o).records = o.records) : (tn.modType ty f).tables = tn.tables := by
+  unfold Tenant.modType
+  cases hT : tn.typ? ty with
+  | none => rfl
+  | some o =>
+    have hl : tn.types.lookup ty = some o := hT
+    unfold Tenant.tables Tenant.putType
+    simp only
+    have key : ∀ (l : List (TypeId × ObjType)) (o' : ObjType), l.lookup ty = some o →
+        o'.records = o.records →
+        (putTypeList l ty o').map (fun e => (e.1, e.2.records)) = l.map (fun e => (e.1, e.2.records)) := by
+      intro l o' hl' hr
+      induction l with
+      | nil => simp [List.lookup] at hl'
+      | cons e es ih =>
+        obtain ⟨k, p⟩ := e
+        unfold putTypeList
+        by_cases hk : (k == ty) = true
+        · rw [if_pos hk]
+          have hkt : k = ty := by simpa using hk
+          subst hkt
+          have hp : p = o := by simpa [List.lookup] using hl'
+          subst hp
+          simp [hr]
+        · rw [if_neg hk]
+          have hl2 : es.lookup ty = some o := by
+            rw [lookup_cons_nat, if_neg (fun h => hk (by simp [h]))] at hl'
+            exact hl'
+          simp [ih hl2]
+    exact key tn.types (f o) hl (hf o)
+
+theorem recordAt_modType_records (tn : Tenant) (ty ty' : TypeId) (f : ObjType → ObjType) (id : RecordId)
+    (hf : ∀ o, (f o).records = o.records) :
+    (tn.modType ty' f).recordAt ty id = tn.recordAt ty id := by
+  by_cases hy : (ty == ty') = true
+  · have hyt : ty = ty' := by simpa using hy
+    subst hyt
+    unfold Tenant.recordAt
+    cases hT : tn.typ? ty with
+    | none =>
+      simp [Tenant.modType, hT]
+    | some o =>
+      rw [typ?_modType_self tn ty f o hT]
+      simp [hf o, hT]
+  · have hyf : (ty == ty') = false := by simpa using hy
+    have hne : ty ≠ ty' := by simpa using hy
+    unfold Tenant.recordAt
+    rw [typ?_modType_other tn ty' ty f hne]
+
+theorem recordAt_create_other (tn : Tenant) (ty ty' : TypeId) (id id' : RecordId) (r : Record)
+    (h : (ty == ty' && id == id') = false) :
+    (tn.modType ty' (fun o => { o with records := (id', r) :: o.records })).recordAt ty id =
+      tn.recordAt ty id := by
+  by_cases hy : (ty == ty') = true
+  · have hyt : ty = ty' := by simpa using hy
+    subst hyt
+    have hid : id ≠ id' := by
+      intro he; subst he; simp at h
+    unfold Tenant.recordAt
+    cases hT : tn.typ? ty with
+    | none => simp [Tenant.modType, hT]
+    | some o =>
+      rw [typ?_modType_self tn ty _ o hT]
+      simp only [Option.bind_some]
+      exact lookup_cons_ne o.records id id' r hid
+  · have hne : ty ≠ ty' := by simpa using hy
+    unfold Tenant.recordAt
+    rw [typ?_modType_other tn ty' ty _ hne]
+
+theorem recordAt_replace_other (tn : Tenant) (ty ty' : TypeId) (id id' : RecordId) (r : Record)
+    (h : (ty == ty' && id == id') = false) :
+    (tn.modType ty' (fun o => { o with records := o.records.map (fun q =>
+        if q.1 == id' then (q.1, r) else q) })).recordAt ty id = tn.recordAt ty id := by
+  by_cases hy : (ty == ty') = true
+  · have hyt : ty = ty' := by simpa using hy
+    subst hyt
+    have hid : id ≠ id' := by
+      intro he; subst he; simp at h
+    unfold Tenant.recordAt
+    cases hT : tn.typ? ty with
+    | none => simp [Tenant.modType, hT]
+    | some o =>
+      rw [typ?_modType_self tn ty _ o hT]
+      simp only [Option.bind_some]
+      exact lookup_map_fixed o.records id (fun q => if q.1 == id' then (q.1, r) else q)
+        (fun q => by split <;> rfl) (fun q hq => by simp [hq, beq_false_of_ne hid])
+  · have hne : ty ≠ ty' := by simpa using hy
+    unfold Tenant.recordAt
+    rw [typ?_modType_other tn ty' ty _ hne]
+
+theorem recordAt_removeAt_other (tn : Tenant) (ty ty' : TypeId) (id id' : RecordId)
+    (cl : List (TypeId × RecordId)) (h : ((ty == ty' && id == id') || cl.contains (ty, id)) = false) :
+    (tn.removeAt ty' id' cl).recordAt ty id = tn.recordAt ty id := by
+  have h1 : (ty == ty' && id == id') = false := by
+    cases hb : (ty == ty' && id == id') with
+    | false => rfl
+    | true => rw [hb] at h; simp at h
+  have h2 : cl.contains (ty, id) = false := by
+    cases hb : cl.contains (ty, id) with
+    | false => rfl
+    | true => rw [hb] at h; simp at h
+  unfold Tenant.recordAt
+  rw [typ?_removeAt]
+  cases hT : tn.typ? ty with
+  | none => rfl
+  | some o =>
+    simp only [Option.map_some, Option.bind_some]
+    unfold removeObj
+    simp only [hT]
+    have hg1 : ∀ q : RecordId × Record, (if cl.contains (ty, q.1) = true then (q.1, clearRef o.schema ty' id' q.2) else q).1 = q.1 := fun q => by by_cases h : cl.contains (ty, q.1) = true <;> simp only [h, if_true, ite_true, if_false, ite_false, Bool.false_eq_true]
+    have hg2 : ∀ q : RecordId × Record, q.1 = id → (if cl.contains (ty, q.1) = true then (q.1, clearRef o.schema ty' id' q.2) else q) = q := fun q hq => by rw [hq]; simp only [h2, if_false, ite_false, Bool.false_eq_true]
+    by_cases hy : (ty == ty') = true
+    · rw [if_pos hy] at *
+      have hid : id ≠ id' := by
+        intro he; subst he; simp [hy] at h1
+      rw [lookup_map_fixed _ id _ hg1 hg2]
+      exact lookup_filter_remove o.records id id' hid
+    · rw [if_neg hy]
+      exact lookup_map_fixed _ id _ hg1 hg2
+
+/-- The records of a page: every id of a record of the type above `a`, the same after a removal
+    of record `id` of type `ty'` when `a` is not below `id`. -/
+theorem sound_header_create (tn : Tenant) (ty' : TypeId) (id' : RecordId) (r : Record) :
+    Tenant.header (Delta.apply tn (.create ty' id' r)) = Tenant.header tn :=
+  header_modType tn ty' _ (fun o => rfl)
+
+theorem sound_header_replace (tn : Tenant) (ty' : TypeId) (id' : RecordId) (r : Record) :
+    Tenant.header (Delta.apply tn (.replace ty' id' r)) = Tenant.header tn :=
+  header_modType tn ty' _ (fun o => rfl)
+
+theorem sound_header_remove (tn : Tenant) (ty' : TypeId) (id' : RecordId)
+    (cl : List (TypeId × RecordId)) :
+    Tenant.header (Delta.apply tn (.remove ty' id' cl)) = Tenant.header tn :=
+  header_removeAt tn ty' id' cl
+
+theorem typ?_modType_records_map (tn : Tenant) (ty ty' : TypeId) (f : ObjType → ObjType)
+    (hf : ∀ o, (f o).records = o.records) {B : Type} (g : Records → B) :
+    ((tn.modType ty' f).typ? ty).map (fun o => g o.records) = (tn.typ? ty).map (fun o => g o.records) := by
+  by_cases hy : (ty == ty') = true
+  · have hyt : ty = ty' := by simpa using hy
+    subst hyt
+    cases hT : tn.typ? ty with
+    | none => simp [Tenant.modType, hT]
+    | some o =>
+      rw [typ?_modType_self tn ty f o hT]
+      simp [hf o]
+  · have hne : ty ≠ ty' := by simpa using hy
+    rw [typ?_modType_other tn ty' ty f hne]
+
+theorem page_create_other (tn : Tenant) (ty ty' : TypeId) (id' : RecordId) (r : Record) (a : RecordId)
+    (l : Nat) (h : (ty == ty' && decide (a < id')) = false) :
+    ((tn.modType ty' (fun o => { o with records := (id', r) :: o.records })).typ? ty).map
+      (fun o => pageOf o.records a l) = (tn.typ? ty).map (fun o => pageOf o.records a l) := by
+  by_cases hy : (ty == ty') = true
+  · have hyt : ty = ty' := by simpa using hy
+    subst hyt
+    have hna : ¬ a < id' := by
+      intro hlt
+      have : decide (a < id') = true := by simpa using hlt
+      rw [this] at h; simp at h
+    cases hT : tn.typ? ty with
+    | none => simp [Tenant.modType, hT]
+    | some o =>
+      rw [typ?_modType_self tn ty _ o hT]
+      simp only [Option.map_some, pageOf]
+      rw [page_cons_le _ _ _ _ hna]
+  · have hne : ty ≠ ty' := by simpa using hy
+    rw [typ?_modType_other tn ty' ty _ hne]
+
+theorem page_replace_other (tn : Tenant) (ty ty' : TypeId) (id' : RecordId) (r : Record) (a : RecordId)
+    (l : Nat) :
+    ((tn.modType ty' (fun o => { o with records := o.records.map (fun q =>
+        if q.1 == id' then (q.1, r) else q) })).typ? ty).map (fun o => pageOf o.records a l) =
+      (tn.typ? ty).map (fun o => pageOf o.records a l) := by
+  by_cases hy : (ty == ty') = true
+  · have hyt : ty = ty' := by simpa using hy
+    subst hyt
+    cases hT : tn.typ? ty with
+    | none => simp [Tenant.modType, hT]
+    | some o =>
+      rw [typ?_modType_self tn ty _ o hT]
+      simp only [Option.map_some, pageOf]
+      rw [page_map_fst _ _ (fun q => if q.1 == id' then (q.1, r) else q) (fun q => by split <;> rfl)]
+  · have hne : ty ≠ ty' := by simpa using hy
+    rw [typ?_modType_other tn ty' ty _ hne]
+
+theorem page_remove_other (tn : Tenant) (ty ty' : TypeId) (id' : RecordId)
+    (cl : List (TypeId × RecordId)) (a : RecordId) (l : Nat)
+    (h : (ty == ty' && decide (a < id')) = false) :
+    ((tn.removeAt ty' id' cl).typ? ty).map (fun o => pageOf o.records a l) =
+      (tn.typ? ty).map (fun o => pageOf o.records a l) := by
+  rw [typ?_removeAt]
+  cases hT : tn.typ? ty with
+  | none => rfl
+  | some o =>
+    simp only [Option.map_some, removeObj, pageOf]
+    have hk : (ty == ty') = true → ¬ a < id' := by
+      intro hy hlt
+      have : decide (a < id') = true := by simpa using hlt
+      rw [this] at h; simp [hy] at h
+    by_cases hy : (ty == ty') = true
+    · rw [if_pos hy]
+      have hna : ¬ a < id' := hk hy
+      rw [page_map_fst _ _ (fun q => if cl.contains (ty, q.1) = true then (q.1, clearRef o.schema ty' id' q.2) else q) (fun q => by split <;> rfl), page_filter_remove _ _ _ hna]
+    · rw [if_neg hy]
+      rw [page_map_fst _ _ (fun q => if cl.contains (ty, q.1) = true then (q.1, clearRef o.schema ty' id' q.2) else q) (fun q => by by_cases h : cl.contains (ty, q.1) = true <;> simp only [h, if_true, ite_true, if_false, ite_false, Bool.false_eq_true])]
 theorem touchedIn_sound : InvSound touchedIn := by
   intro w x d k hx hin
   cases k with
   | header t =>
     simp only [Key.tenant] at hx; subst hx
-    cases d <;> simp_all [touchedIn, fetch, applyWorld] <;>
-      (cases w t <;> simp [Delta.apply, Tenant.header])
+    cases d with
+    | schema ty' h' => simp [touchedIn] at hin
+    | create ty' id' r =>
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t with
+      | none => rfl
+      | some tn => simp only [Option.map_some, sound_header_create]
+    | replace ty' id' r =>
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t with
+      | none => rfl
+      | some tn => simp only [Option.map_some, sound_header_replace]
+    | remove ty' id' cl =>
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t with
+      | none => rfl
+      | some tn => simp only [Option.map_some, sound_header_remove]
   | counters t =>
     simp only [Key.tenant] at hx; subst hx
-    cases d <;> simp_all [touchedIn, fetch, applyWorld] <;>
-      (cases w t <;> simp [Delta.apply])
-  | record t id =>
-    simp only [Key.tenant] at hx; subst hx
     cases d with
-    | create id' r =>
-      have hne : id ≠ id' := by simpa [touchedIn] using hin
+    | create ty' id' r => simp [touchedIn] at hin
+    | schema ty' h' =>
       simp only [fetch, applyWorld, upd_same]
-      cases w t <;> simp [Delta.apply, lookup_cons_ne _ _ _ _ hne]
-    | replace id' r =>
-      have hne : id ≠ id' := by simpa [touchedIn] using hin
-      simp only [fetch, applyWorld, upd_same]
-      cases w t <;> simp [Delta.apply, lookup_map_replace _ _ _ _ hne]
-    | remove id' cl =>
-      have hne : id ≠ id' ∧ ¬ id ∈ cl := by simpa [touchedIn] using hin
-      simp only [fetch, applyWorld, upd_same]
-      cases w t with
+      cases hw : w t with
       | none => rfl
       | some tn =>
-        simp only [Option.map_some, Option.bind_some, Delta.apply, removeRecords]
-        rw [lookup_map_fixed _ id _ (fun q => by split <;> rfl) (fun q hq => by simp [hq, hne.2]),
-          lookup_filter_remove _ _ _ hne.1]
-    | schema s =>
+        simp only [Delta.apply, Option.map_some]
+        exact congrArg (fun n => Payload.counters (some n)) (nextId_modType tn _ _)
+    | replace ty' id' r =>
       simp only [fetch, applyWorld, upd_same]
-      cases w t <;> simp [Delta.apply]
+      cases hw : w t with
+      | none => rfl
+      | some tn =>
+        simp only [Delta.apply, Option.map_some]
+        exact congrArg (fun n => Payload.counters (some n)) (nextId_modType tn _ _)
+    | remove ty' id' cl =>
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t <;> simp [Delta.apply, nextId_removeAt]
+  | record t ty id =>
+    simp only [Key.tenant] at hx; subst hx
+    cases d with
+    | create ty' id' r =>
+      have h : (ty == ty' && id == id') = false := by simpa [touchedIn] using hin
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t with
+      | none => rfl
+      | some tn =>
+        simp only [Option.map_some, Option.bind_some]
+        congr 1
+        exact recordAt_create_other tn ty ty' id id' r h
+    | replace ty' id' r =>
+      have h : (ty == ty' && id == id') = false := by simpa [touchedIn] using hin
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t with
+      | none => rfl
+      | some tn =>
+        simp only [Option.map_some, Option.bind_some]
+        congr 1
+        exact recordAt_replace_other tn ty ty' id id' r h
+    | remove ty' id' cl =>
+      have h : ((ty == ty' && id == id') || cl.contains (ty, id)) = false := by
+        simpa [touchedIn] using hin
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t with
+      | none => rfl
+      | some tn =>
+        simp only [Option.map_some, Option.bind_some]
+        congr 1
+        exact recordAt_removeAt_other tn ty ty' id id' cl h
+    | schema ty' h' =>
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t with
+      | none => rfl
+      | some tn =>
+        simp only [Option.map_some, Option.bind_some]
+        congr 1
+        exact recordAt_modType_records tn ty ty' (fun o => { o with schema := h'.schema, uniques := h'.uniques }) id (fun o => rfl)
   | all t =>
     simp only [Key.tenant] at hx; subst hx
-    cases d <;> simp_all [touchedIn, fetch, applyWorld] <;>
-      (cases w t <;> simp [Delta.apply])
-  | answer t f v =>
-    simp only [Key.tenant] at hx; subst hx
-    cases d <;> simp_all [touchedIn, fetch, applyWorld] <;>
-      (cases w t <;> simp [Delta.apply, answerOf])
-  | page t a l =>
-    simp only [Key.tenant] at hx; subst hx
     cases d with
-    | create id' r =>
-      have hne : ¬ a < id' := by simpa [touchedIn] using hin
+    | schema ty' h' =>
       simp only [fetch, applyWorld, upd_same]
-      cases w t <;> simp [Delta.apply, pageOf, page_cons_le _ _ _ _ hne]
-    | replace id' r =>
-      simp only [fetch, applyWorld, upd_same]
-      cases w t <;> simp [Delta.apply, pageOf, page_map_replace]
-    | remove id' cl =>
-      have hne : ¬ a < id' := by simpa [touchedIn] using hin
-      simp only [fetch, applyWorld, upd_same]
-      cases w t with
+      cases hw : w t with
       | none => rfl
       | some tn =>
-        simp only [Option.map_some, Delta.apply, pageOf, removeRecords]
-        rw [page_map_fst _ _ _ (fun q => by split <;> rfl), page_filter_remove _ _ _ hne]
-    | schema sc =>
+        simp only [Option.map_some]
+        congr 1
+        exact congrArg some (tables_modType_records tn ty' (fun o => { o with schema := h'.schema, uniques := h'.uniques }) (fun o => rfl))
+    | create ty' id' r => simp [touchedIn] at hin
+    | replace ty' id' r => simp [touchedIn] at hin
+    | remove ty' id' cl => simp [touchedIn] at hin
+  | answer t ty f v =>
+    simp only [Key.tenant] at hx; subst hx
+    cases d with
+    | schema ty' h' =>
       simp only [fetch, applyWorld, upd_same]
-      cases w t <;> simp [Delta.apply, pageOf]
+      cases hw : w t with
+      | none => rfl
+      | some tn =>
+        simp only [Option.map_some, Option.bind_some]
+        congr 1
+        exact typ?_modType_records_map tn ty ty' (fun o => { o with schema := h'.schema, uniques := h'.uniques }) (fun o => rfl) (fun rs => answerOf rs f v)
+    | create ty' id' r => simp [touchedIn] at hin
+    | replace ty' id' r => simp [touchedIn] at hin
+    | remove ty' id' cl => simp [touchedIn] at hin
+  | page t ty a l =>
+    simp only [Key.tenant] at hx; subst hx
+    cases d with
+    | create ty' id' r =>
+      have h : (ty == ty' && decide (a < id')) = false := by simpa [touchedIn] using hin
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t with
+      | none => rfl
+      | some tn =>
+        simp only [Option.map_some, Option.bind_some]
+        congr 1
+        exact page_create_other tn ty ty' id' r a l h
+    | replace ty' id' r =>
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t with
+      | none => rfl
+      | some tn =>
+        simp only [Option.map_some, Option.bind_some]
+        congr 1
+        exact page_replace_other tn ty ty' id' r a l
+    | remove ty' id' cl =>
+      have h : (ty == ty' && decide (a < id')) = false := by simpa [touchedIn] using hin
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t with
+      | none => rfl
+      | some tn =>
+        simp only [Option.map_some, Option.bind_some]
+        congr 1
+        exact page_remove_other tn ty ty' id' cl a l h
+    | schema ty' h' =>
+      simp only [fetch, applyWorld, upd_same]
+      cases hw : w t with
+      | none => rfl
+      | some tn =>
+        simp only [Option.map_some, Option.bind_some]
+        congr 1
+        exact typ?_modType_records_map tn ty ty' (fun o => { o with schema := h'.schema, uniques := h'.uniques }) (fun o => rfl) (fun rs => pageOf rs a l)
+
 
 /-! ## The working set -/
 
@@ -2616,7 +3170,7 @@ theorem resubmit_no_conflict (sys : Sys σ) (j : Slot) (p : Pending) (ops : List
 
 /-- The world of the counterexamples: tenant 1 exists, empty. -/
 def cexTenant : Tenant :=
-  { schema := [], owner := 0, editors := [], writers := [], records := [], nextId := 1 }
+  { types := [], owner := 0, editors := [], writers := [], nextId := 1 }
 
 def cexWorld : World := fun x => if x = 1 then some cexTenant else none
 

@@ -367,3 +367,14 @@ import Strata
 #print axioms Strata.Browser.invite_accepted_signs_nobody_in
 #print axioms Strata.Browser.oidc_redirect_leaves_page
 #print axioms Strata.Browser.link_sent_only_complete
+
+-- Slice 4: several object types
+#print axioms Strata.unknown_type_refused
+#print axioms Strata.unknown_type_owner
+#print axioms Strata.unknown_type_other
+#print axioms Strata.unknown_type_hidden
+#print axioms Strata.create_refs_resolve
+#print axioms Strata.update_refs_resolve
+#print axioms Strata.write_refused_dangling_across_types
+#print axioms Strata.update_refused_dangling_across_types
+#print axioms Strata.unknown_type_schema_refused

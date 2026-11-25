@@ -21,7 +21,9 @@ Fields may be references to records of the same type, which a delete either refu
 clears (slice 1, below), and lists of scalars or of references, whose elements a delete removes
 (slice 2). Written values and records are held to the kernel's size limits, as an abstract bound
 (slice 2). `step` is a total, computable function. Slice 3 adds unique fields and composite unique constraints, checked on a write and when a
-constraint is defined over existing data. It has no constraints,
+constraint is defined over existing data. Slice 4 adds several object types per tenant: a write
+may name any of them, a reference may name a record of another type, and an intent naming a type
+the tenant lacks is refused. It has no constraints,
 workflows, queries, events or policy conditions: the assumptions below list each
 omission, and the gap analysis further down says which slice will add each. The theorems are
 about this model. The Rust kernel is compared with it on generated scenarios, which is evidence and
@@ -53,6 +55,9 @@ builds their module, without reading the statements (`specifications/README.md`)
 | Size limits (slice 2) | `create_refused_over_record_bound` | A record over the record bound is refused with `limitExceeded` before its fields are checked |
 | | `create_within_limits`, `update_within_limits`, `problem_none_within` | Every record an accepted create or update writes is within the record bound and holds no value over the string or list bound |
 | Uniqueness (slice 3) | `stepTenant_preserves_unique`, `step_preserves_unique` | An accepted strict step keeps every unique field and every composite constraint unique: no two distinct records agree on one (agreeing needs a present, non-list value in each field) |
+| Several object types (slice 4) | `unknown_type_refused`, `unknown_type_owner`, `unknown_type_other`, `unknown_type_schema_refused`, `unknown_type_hidden` | An intent naming an object type the tenant does not have is refused with `unknownObject` for the owner and `unauthorized` for anyone else, for a record intent and for a schema change; a caller who may neither create nor edit gets `unauthorized` whether or not the type exists |
+| References across types (slice 4) | `create_refs_resolve`, `update_refs_resolve`, `write_refused_dangling_across_types`, `update_refused_dangling_across_types`, `stepTenant_preserves_refs` | A write whose reference names no record of the type its field names is never accepted, for a create or an update; an accepted step keeps every reference of every type resolving |
+| Deletes across types (slice 4) | `delete_refused_while_referenced`, `delete_leaves_no_reference` | Both quantify over every referring type: a record of any type naming the deleted one through a restricting or required field refuses the delete; after an accepted delete no record of any type names it |
 | | `stepTenant_preserves_distinct` | An accepted step keeps the schema's names distinct and each record's field names distinct, so a delete's clearing of references keeps them so |
 | | `create_duplicate_refused`, `update_duplicate_refused` | A write that is otherwise valid and duplicates another record's unique value, or agrees with another record on a composite constraint, is refused with `uniqueViolated`, and no state follows |
 | | `define_unique_refused_over_duplicates`, `set_unique_refused_over_duplicates` | A composite constraint that existing records already violate is refused with `uniqueViolated`; a strict unique field over records that agree on it is refused with `migrationRejected`; no state follows |
@@ -71,8 +76,9 @@ and no added axiom; a test fails if the sources contain one or the audit reports
    constraints are checked on written values only; the kernel's schema rules for them (a list
    field cannot be unique, a composite names two to four distinct fields of the object) are the
    model's `invalidSchema` refusals and nothing more. Its references are
-   references, single or in lists, to records of the tenant's one object type; references between
-   types are not modelled (see the review notes of slices 1 and 2).
+   references, single or in lists, to records of the tenant's object types, the target of a field
+   being the type it names (slice 4). Object types are fixed by the fixture; creating or removing
+   one is not modelled (slice 11).
 3. Its authorization is owner, editors, and writers on their own records. The kernel's policies
    are data with arbitrary conditions.
 4. Its size limits are the kernel's numbers over an abstract measure, not over the kernel's
@@ -182,7 +188,7 @@ and `Quot.sound`.
 | `World := TenantId → Option Tenant` | `World { tenants: BTreeMap<TenantId, Arc<TenantState>> }` |
 | `Tenant.schema` | one `ObjectTypeDef` of `TenantSchema.objects` |
 | `FieldDef { ty, required, unique, default }` | `FieldDef { ty, required, unique, default, .. }`, `default` a constant |
-| `Ty.ref onDelete` | `FieldType::Ref { target, on_delete }` with `target` the tenant's one object type |
+| `Ty.ref onDelete` | `FieldType::Ref { target, on_delete }` with `target` one of the tenant's object types |
 | `Ty.list elem` | `FieldType::List(elem)`, `elem` a scalar or reference type |
 | `Val` | `Value` restricted to `Null`, `Int`, `Str`, `Bool`, `Ref` and `List` of those (`Elem`) |
 | `Record { owner, version, fields }` | `Record { created_by, version, fields, .. }` |
@@ -238,6 +244,14 @@ Slice 2's additions to the scenario format:
   fields `0` to `8`, absent ones as `null`. `patch <id> [v=<n>] <fields>` is a patch: only the
   named fields change, `n` removing one. `delete <id> [v=<n>]` deletes. `v=<n>`, only directly
   after the id, is the expected version.
+- Slice 4's additions: `type <n>` between the principal and the intent names the object type of the
+  intent: `1` is `item` (the default when the line has no `type`), `2` is `part`, and any other
+  number names a type the tenant does not have. The part type has fields `1` (a reference to an item
+  that restricts its delete), `2` (a reference to an item that clears), `3` (a list of references to
+  items that clear) and `4` (an int). Items gain `11` (a reference to a part that restricts) and
+  `12` (a reference to a part that clears). The owner's refusal of a missing type prints as
+  `err unknown_object`, anyone else's as `err unauthorized`. The state prints each further type as
+  `type <n> required=<fields>` followed by its records as `type <n> record <id> ..`.
 - Slice 3's additions: `unique <f> strict|lax` makes field `f` unique (`strict` refuses a change
   over existing records that already agree on `f`, `lax` leaves them as they are), and
   `composite <f> <f> ..` defines a composite unique constraint over the named fields. The
@@ -295,7 +309,7 @@ From `transition::create_record`, `update_record`, `delete_record` and `rules::v
 
 | Decision | Refusal | Model | Slice |
 |---|---|---|---|
-| The object type does not exist; the refusal is `Unauthorized` unless the caller could act on that type, so a refusal never reveals which types exist | `UnknownObject` / `Unauthorized` | not covered (one object type) | 4 |
+| The object type does not exist; the refusal is `UnknownObject` for the owner, who may act on every type, and `Unauthorized` for anyone else, so a caller who may not act on a type cannot tell whether it exists | `UnknownObject` / `Unauthorized` | covered for records and schema changes (`unknown_type_refused`, `unknown_type_schema_refused`, `unknown_type_hidden`) | 4 |
 | Update or delete of a record that does not exist; `Unauthorized` unless the caller could act on some record of the type | `UnknownRecord` / `Unauthorized` | covered (`missingRecord`) | 0 |
 | The caller may not create, update (judged on the old and the new record) or delete | `Unauthorized` | partly: owner, editors, writers on their own records | 6 |
 | `expected_version` given and not the stored version, checked after authorization | `VersionConflict` | covered (`versionClash`) | 2 |
@@ -308,12 +322,12 @@ From `transition::create_record`, `update_record`, `delete_record` and `rules::v
 | 2. a field the type does not declare | `UnknownField` | covered (`invalid`) | 0 |
 | 3. per field in id order: required and absent; a value over the string or list limits; a unique value over `MAX_UNIQUE_BYTES`; the wrong type | `MissingRequired`, `LimitExceeded`, `TypeMismatch` | covered for required, type (lists elementwise) and the string and list limits; partly for the unique-value limit (abstract size, not the encoding; field `10` is unique in the fixtures) | 0, 2, 3 |
 | 4. per field in id order, after its type: a unique value another record holds | `UniqueViolated` | covered (`valueProblem`, before the reference check of the same field) | 3 |
-| 5. per field in id order, after its type: a reference to a record that does not exist | `DanglingReference` | covered for single references and list elements within the one type | 1, 2 (across types 4) |
+| 5. per field in id order, after its type: a reference to a record that does not exist | `DanglingReference` | covered for single references and list elements, across types too | 1, 2, 4 |
 | 6. composite unique constraints whose fields all have values, held by another record | `UniqueViolated` | covered (`compositeProblem`, after every field) | 3 |
 | 7. a workflow field holding a value that is not one of its states | `WorkflowViolation` | not covered | 8 |
 | 8. only if nothing above failed: constraints, failing on `false`; `Evaluation` when one cannot be evaluated | `ConstraintViolated`, `Evaluation` | not covered | 5 |
 | Accepted create: the record under the next id, `created_by` the caller (none for the system), counter + 1 | | covered (owner = caller) | 0 |
-| Delete: another record of any type referring through a `restrict` field, or through a required single reference, blocks it; a record referring to itself does not | `StillReferenced` | covered for references and lists within the one type (a required list never blocks) | 1, 2 (across types 4) |
+| Delete: another record of any type referring through a `restrict` field, or through a required single reference, blocks it; a record referring to itself does not | `StillReferenced` | covered for references and lists, across types too (a required list never blocks) | 1, 2, 4 |
 | Accepted delete: the record removed; every other reference to it cleared (a list loses the element); each cleared record's version + 1 | | covered within the one type | 1, 2 |
 | Events: `RecordCreated`, `RecordUpdated` (naming the transitions fired), `RecordDeleted`, an update event per cleared referrer; revision + 1; one `Publish` effect per event | | not covered | 9 |
 
@@ -463,7 +477,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **1 (done)** | Single references within the one type: `DanglingReference` on write in field order, `StillReferenced` for restricting or required fields, clearing on delete; referential integrity as an invariant | 0 |
 | **2 (done)** | Record writes in full: patch updates, versions and `expected_version`, constant defaults, lists (of scalars and of references: element removal on delete, a required list never blocks), the size limits as an abstract bound | 1 |
 | **3 (done)** | Uniqueness: single-field and composite (only when every field has a value), on write and on defining a constraint over existing data | 2 |
-| 4 | Several object types: `UnknownObject` with its hiding rule, references and referrers across types | 1 |
+| **4 (done)** | Several object types: `UnknownObject` with its hiding rule, references and referrers across types | 1 |
 | 5 | Expressions as an abstract three-valued language over record, old, new, principal, roles and `now`, with evaluation errors; constraints (checked last); expression defaults | 2, 4 |
 | 6 | Roles and policies as data, replacing the fixed tiers: the owner role, role permissions, policies with conditions, capabilities, the system and anonymous principals | 5 |
 | 7 | Tenants, members, teams, invitations, reserved principal ids | 6 |
@@ -600,6 +614,37 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
   model answers by scanning the records; the explanation of a refusal, which names the clashing
   record only to a reader who may see it (the model gives the kind only); and the kernel's count of
   grandfathered records.
+
+### Slice 4 review note: what was abstracted
+
+- **Object types are a list of entries with global ids.** A tenant holds its types as a list of
+  `(id, object type)` pairs; `putType` replaces the first entry of its id only. Record ids come from
+  the tenant's one counter, as the kernel's do, so an id names a record of one type at a time
+  within a tenant.
+- **Roles are tenant-wide.** The owner, editors and writers act on every type of the tenant. The
+  kernel's fixture gives the same roles a policy per type (`editors_all`, `writers_create`,
+  `writers_own` and their `part_` counterparts), so the two agree on the fixture's types only.
+- **The hiding rule is the owner's alone.** An unknown type is `unknownObject` for the owner and
+  `unauthorized` for anyone else. The model has no notion of a caller who may act on some types
+  and not this one, so a caller in that position learns the same refusal as any other non-owner.
+- **Schema changes on an unknown type changed in this slice.** They were `invalidSchema`. They are
+  now `unknownObject` for the owner (`unknownType`), after the owner check, as record intents are.
+  No slice-1 to slice-3 scenario names a missing type in a schema change, so their outputs are
+  unchanged apart from the `type 2` lines of the state.
+- **The check order is kept.** Object type first, then the record, the permission, the version, then
+  the referrer scan or the validation. The referrer scan considers every type; the validation
+  resolves a reference in the type its field names.
+- **Restated theorems.** Several slice-2 and slice-3 statements were stated over the one table.
+  They are restated over the typed tables, with the same content: `setRequired_spec`,
+  `setUnique_spec`, `defineUnique_spec` (the counter and the records of no type, and the one type's
+  schema or constraints), `setRequired_records`, `setUnique_records`, `defineUnique_records`,
+  `schemaViolated_false` (over every type), `mem_afterDelete` (over any clearing function, which
+  `clearRef` is). Two statements have typed counterparts under new names rather than restatements:
+  `has_afterDelete` is `env_afterDelete_has`, and `resolves_dropRef` is `resolves_dropRef_sub`.
+- **Not modelled.** Object types are fixed by the fixture: creating or removing a type, a type's
+  permissions, and the kernel's referrer index are not modelled. Fields `11` and `12` are the only
+  item fields that name a part; a reference to a type the fixture does not define is refused by the
+  kernel's own schema check, which the model does not state.
 
 ## What covers the rest
 

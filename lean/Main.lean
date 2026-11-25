@@ -10,38 +10,57 @@ import Strata.Model
 
 open Strata
 
-/-- The two tenants every scenario starts from, each with an owner, an editor and two writers.
-    Their fields, in field id order as the kernel's schema is:
-    `0` an optional list of references that restricts the delete of an element's target;
+/-- The object type every `op` without a `type` names (id `1`, the "item" type). Its fields:
+    `0` an optional list of references to items that restricts the delete of the item;
     `1` a required string; `2` an optional integer; `3` an optional boolean;
-    `4` an optional reference cleared when its target is deleted (`set-null`);
-    `5` an optional reference that restricts the delete (`restrict`);
+    `4` an optional item reference cleared when its target is deleted (`set-null`);
+    `5` an optional item reference that restricts the delete (`restrict`);
     `6` an optional integer whose default is the constant `7`;
     `7` an optional list of strings;
-    `8` an optional list of references that loses an element when its target is deleted
-    (`set-null`);
-    `10` an optional string that is unique (slice 3).
-    The size limits are the kernel's. -/
+    `8` an optional list of item references that loses an element when its target is deleted;
+    `10` an optional string that is unique (slice 3);
+    `11` an optional reference to a part that restricts the delete of the part;
+    `12` an optional reference to a part cleared when the part is deleted (`set-null`). -/
+def itemSchema : Schema :=
+  [(0, { ty := .list (.ref 1 .restrict), required := false }),
+   (1, { ty := .str, required := true }), (2, { ty := .int, required := false }),
+   (3, { ty := .bool, required := false }),
+   (4, { ty := .ref 1 .setNull, required := false }),
+   (5, { ty := .ref 1 .restrict, required := false }),
+   (6, { ty := .int, required := false, default := .int 7 }),
+   (7, { ty := .list .str, required := false }),
+   (8, { ty := .list (.ref 1 .setNull), required := false }),
+   (10, { ty := .str, required := false, unique := true }),
+   (11, { ty := .ref 2 .restrict, required := false }),
+   (12, { ty := .ref 2 .setNull, required := false })]
+
+/-- The second object type, "part" (id `2`), whose references point into items and back:
+    `1` a reference to an item that restricts its delete; `2` a reference to an item cleared when
+    it is deleted (`set-null`); `3` a list of item references, each cleared (`set-null`);
+    `4` an optional integer. -/
+def partSchema : Schema :=
+  [(1, { ty := .ref 1 .restrict, required := false }),
+   (2, { ty := .ref 1 .setNull, required := false }),
+   (3, { ty := .list (.ref 1 .setNull), required := false }),
+   (4, { ty := .int, required := false })]
+
+/-- The two object types every scenario starts from, each tenant with an owner, an editor and two
+    writers. The size limits are the kernel's. -/
 def initialTenant (n : Nat) : Tenant :=
-  { schema := [(0, { ty := .list (.ref .restrict), required := false }),
-               (1, { ty := .str, required := true }), (2, { ty := .int, required := false }),
-               (3, { ty := .bool, required := false }),
-               (4, { ty := .ref .setNull, required := false }),
-               (5, { ty := .ref .restrict, required := false }),
-               (6, { ty := .int, required := false, default := .int 7 }),
-               (7, { ty := .list .str, required := false }),
-               (8, { ty := .list (.ref .setNull), required := false }),
-               (10, { ty := .str, required := false, unique := true })],
+  { types := [(1, { schema := itemSchema }), (2, { schema := partSchema })],
     owner := n * 100,
     editors := [n * 100 + 1],
     writers := [n * 100 + 2, n * 100 + 3],
-    records := [],
     nextId := 1,
     limits := Limits.kernel }
 
-/-- The fields of the fixture schema. An `update` line names each of them, as `null` when the line
-    does not, so it replaces the record (`patch` patches). -/
-def fixtureFields : List FieldId := [0, 1, 2, 3, 4, 5, 6, 7, 8, 10]
+/-- The fields an `update` line names for each object type: the item's fields, or the part's.
+    A line that does not name one of them gives it `null`, so it replaces the record (`patch`
+    patches). -/
+def fieldsOf (ty : TypeId) : List FieldId :=
+  if ty = 1 then [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]
+  else if ty = 2 then [1, 2, 3, 4]
+  else []
 
 def initialWorld : World := fun x =>
   if x = 1 then some (initialTenant 1) else if x = 2 then some (initialTenant 2) else none
@@ -52,8 +71,7 @@ def dropChars (s : String) (n : Nat) : String :=
 
 /-- The string without trailing spaces or carriage returns. -/
 def trimEnd (s : String) : String :=
-  String.ofList (s.toList.reverse.dropWhile (fun c => c == ' ' || c == '
-')).reverse
+  String.ofList (s.toList.reverse.dropWhile (fun c => c == ' ' || c == '\r')).reverse
 
 /-- `<count>:<rest>`, split at the first colon. -/
 def splitCount (s : String) : Option (Nat × String) :=
@@ -104,10 +122,10 @@ def parseExpected : List String → Option (Option Nat × List String)
     else some (none, t :: rest)
   | [] => some (none, [])
 
-/-- An `update` line replaces the record: it is the patch that names every field of the fixture
-    schema, the ones the line leaves out as `null`. -/
-def replacement (fs : Fields) : Fields :=
-  fs ++ (fixtureFields.filter (fun f => !fs.any (fun fv => fv.1 == f))).map (fun f => (f, .null))
+/-- An `update` line replaces the record: it is the patch that names every field of its type, the
+    ones the line leaves out as `null`. -/
+def replacement (ty : TypeId) (fs : Fields) : Fields :=
+  fs ++ ((fieldsOf ty).filter (fun f => !fs.any (fun fv => fv.1 == f))).map (fun f => (f, .null))
 
 def parseField (s : String) : Option (FieldId × Val) :=
   match s.splitOn "=" with
@@ -120,26 +138,32 @@ def parseField (s : String) : Option (FieldId × Val) :=
 def parseFields (tokens : List String) : Option Fields :=
   tokens.mapM parseField
 
+/-- A `type <n>` before the intent names the object type; without it the type is `1`. -/
+def splitType : List String → Option (TypeId × List String)
+  | "type" :: n :: rest => n.toNat?.map (fun k => (k, rest))
+  | rest => some (1, rest)
+
 def parseOp (tokens : List String) : Option (Ctx × Intent) :=
   match tokens with
-  | "op" :: t :: p :: rest => do
+  | "op" :: t :: p :: rest0 => do
     let c : Ctx := { tenant := ← t.toNat?, principal := ← p.toNat? }
+    let (ty, rest) ← splitType rest0
     match rest with
-    | "create" :: fields => pure (c, .create (← parseFields fields))
+    | "create" :: fields => pure (c, .create ty (← parseFields fields))
     | "update" :: id :: rest => do
       let (ev, fields) ← parseExpected rest
-      pure (c, .update (← id.toNat?) (replacement (← parseFields fields)) ev)
+      pure (c, .update ty (← id.toNat?) (replacement ty (← parseFields fields)) ev)
     | "patch" :: id :: rest => do
       let (ev, fields) ← parseExpected rest
-      pure (c, .update (← id.toNat?) (← parseFields fields) ev)
+      pure (c, .update ty (← id.toNat?) (← parseFields fields) ev)
     | "delete" :: id :: rest => do
       let (ev, more) ← parseExpected rest
-      if more.isEmpty then pure (c, .delete (← id.toNat?) ev) else none
-    | ["require", f, "strict"] => pure (c, .setRequired (← f.toNat?) true)
-    | ["require", f, "lax"] => pure (c, .setRequired (← f.toNat?) false)
-    | ["unique", f, "strict"] => pure (c, .setUnique (← f.toNat?) true)
-    | ["unique", f, "lax"] => pure (c, .setUnique (← f.toNat?) false)
-    | "composite" :: fs => pure (c, .defineUnique (← fs.mapM String.toNat?))
+      if more.isEmpty then pure (c, .delete ty (← id.toNat?) ev) else none
+    | ["require", f, "strict"] => pure (c, .setRequired ty (← f.toNat?) true)
+    | ["require", f, "lax"] => pure (c, .setRequired ty (← f.toNat?) false)
+    | ["unique", f, "strict"] => pure (c, .setUnique ty (← f.toNat?) true)
+    | ["unique", f, "lax"] => pure (c, .setUnique ty (← f.toNat?) false)
+    | "composite" :: fs => pure (c, .defineUnique ty (← fs.mapM String.toNat?))
     | _ => none
   | _ => none
 
@@ -180,6 +204,7 @@ def showErr : Err → String
   | .notFound => "not_found"
   | .invalid => "invalid"
   | .migrationRejected => "migration_rejected"
+  | .unknownObject => "unknown_object"
   | .danglingReference => "dangling_reference"
   | .stillReferenced => "still_referenced"
   | .versionConflict => "version_conflict"
@@ -194,14 +219,25 @@ def sortBy {α : Type} (key : α → Nat) : List α → List α
     let rest := sortBy key xs
     (rest.filter (fun y => key y < key x)) ++ [x] ++ (rest.filter (fun y => ¬ key y < key x))
 
-def showTenant (id : Nat) (t : Tenant) : List String :=
-  let required := (sortBy (fun (fd : FieldId × FieldDef) => fd.1) (t.schema.filter (fun fd => fd.2.required))).map
-    (fun fd => toString fd.1)
-  let header := s!"tenant {id} next={t.nextId} required={",".intercalate required}"
-  let records := (sortBy (fun (q : RecordId × Record) => q.1) t.records).map fun q =>
+/-- The required fields of an object type, by id. -/
+def requiredOf (o : ObjType) : String :=
+  ",".intercalate ((sortBy (fun (fd : FieldId × FieldDef) => fd.1) (o.schema.filter (fun fd => fd.2.required))).map
+    (fun fd => toString fd.1))
+
+/-- The records of an object type, one line each; `pre` marks the type on a non-default type. -/
+def recordLines (pre : String) (o : ObjType) : List String :=
+  (sortBy (fun (q : RecordId × Record) => q.1) o.records).map fun q =>
     let fields := (sortBy (fun (fv : FieldId × Val) => fv.1) q.2.fields).map fun fv => s!"{fv.1}={showVal fv.2}"
-    trimEnd s!"record {q.1} owner={q.2.owner} v={q.2.version} {" ".intercalate fields}"
-  header :: records
+    trimEnd s!"{pre}record {q.1} owner={q.2.owner} v={q.2.version} {" ".intercalate fields}"
+
+/-- The tenant: its counter and the default type's required fields and records, then each other
+    object type's required fields and records, marked with its id. -/
+def showTenant (id : Nat) (t : Tenant) : List String :=
+  let d : ObjType := (t.typ? 1).getD { schema := [] }
+  let header := s!"tenant {id} next={t.nextId} required={requiredOf d}"
+  let others := sortBy (fun (e : TypeId × ObjType) => e.1) (t.types.filter (fun e => e.1 != 1))
+  header :: recordLines "" d ++
+    others.flatMap fun e => s!"type {e.1} required={requiredOf e.2}" :: recordLines s!"type {e.1} " e.2
 
 def showWorld (w : World) : List String :=
   [1, 2].flatMap fun id =>
