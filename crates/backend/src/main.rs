@@ -368,6 +368,7 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
 
 #[tokio::main]
 async fn main() {
+    strata_protocol::log::use_stdout();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("migrate-fleet") {
         server::exit_on_error("strata-backend", migrate_fleet(&args[1..]));
