@@ -72,6 +72,9 @@ pub use strata_model_core::types::{
     LedgerPeriodTotal, LedgerPoolDecl, LedgerPoolName, LedgerPostingRequest, LedgerPostingResult,
     LedgerScope, LedgerState, LedgerUnit, LedgerUnitDecl,
 };
+pub use strata_model_core::types::{
+    LedgerJournalBreak, LedgerJournalCheck, LedgerLeg, LedgerTransaction,
+};
 /// The interface elements of [`crate::ui`]: the screens, forms, actions, live bindings and error
 /// messages a tenant's products installed, held in the schema (D-8250).
 pub use strata_model_core::types::{

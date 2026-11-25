@@ -29,6 +29,7 @@
 use crate::intent::{Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, ErrorKind};
 use crate::intent::{EventBody, Output};
 use crate::ledger::{self, Decided, LEDGER_CONFIGURE};
+use crate::ledger_chain;
 use crate::rules::holds_any;
 use crate::schema::{Grant, TenantSchema};
 use crate::state::{CoverageExt, Need, Principal, State, TenantState};
@@ -299,22 +300,31 @@ pub fn decide(
                 ctx.now,
                 expiry,
             );
+            // The entry follows the journal as the header before it leaves it (LDG-2921).
+            let previous = ledger_chain::previous_of(Some(&header), &header.account);
             header = LedgerAccount {
                 balance: LedgerAmount(after),
                 last_sequence: header.last_sequence + 1,
                 buckets: header_buckets(next_buckets),
                 ..header
             };
-            let entry = LedgerEntry {
-                account: header.account,
-                sequence: header.last_sequence,
-                amount: LedgerAmount(amount),
-                idempotency_key: expiry_key(bucket.period_start),
-                reason: EXPIRY_REASON.to_string(),
-                caused_by: None,
-                at: ctx.now,
-                corrects: None,
-            };
+            let entry = ledger_chain::seal(
+                LedgerEntry {
+                    account: header.account,
+                    sequence: header.last_sequence,
+                    amount: LedgerAmount(amount),
+                    idempotency_key: expiry_key(bucket.period_start),
+                    reason: EXPIRY_REASON.to_string(),
+                    caused_by: None,
+                    at: ctx.now,
+                    corrects: None,
+                    transaction: None,
+                    previous_hash: None,
+                    hash: None,
+                },
+                &previous,
+            );
+            header.head_hash = entry.hash.clone();
             if let Some(owner) = &header.owner {
                 events.push(EventBody::LedgerEntryPosted {
                     account: header.account,

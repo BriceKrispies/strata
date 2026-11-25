@@ -224,6 +224,13 @@ pub fn transition_pinned(
             draft.evidence.extend(decided.evidence);
             decided.output
         }
+        Intent::PostLedgerTransaction { transaction } => {
+            let decided = crate::ledger_transaction::decide(state, transaction, ctx)?;
+            draft.ops.extend(decided.ops);
+            draft.events.extend(decided.events);
+            draft.evidence.extend(decided.evidence);
+            decided.output
+        }
         Intent::ExpireLedger { unit, cutoff } => {
             let decided = crate::ledger_expiry::decide(state, unit, *cutoff, ctx)?;
             draft.ops.extend(decided.ops);
@@ -304,7 +311,8 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         | Intent::RevokeInvitation { .. }
         | Intent::WriteSetting { .. }
         // The accounts a posting needs are named by `refine_needs`, which knows the tenant.
-        | Intent::PostLedger { .. } => {}
+        | Intent::PostLedger { .. }
+        | Intent::PostLedgerTransaction { .. } => {}
         Intent::ExpireLedger { unit, cutoff } => {
             out.extend(crate::ledger_expiry::needs(unit, *cutoff));
         }
@@ -447,6 +455,9 @@ pub fn refine_needs(state: &State, intent: &Intent) -> Vec<Need> {
     }
     if let Intent::PostLedger { postings } = intent {
         return crate::ledger::intent_needs(&tenant.id, postings);
+    }
+    if let Intent::PostLedgerTransaction { transaction } = intent {
+        return crate::ledger_transaction::needs(&tenant.id, transaction);
     }
     if let Intent::ExpireLedger { unit, cutoff } = intent {
         return crate::ledger_expiry::needs(unit, *cutoff);

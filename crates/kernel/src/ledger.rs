@@ -33,6 +33,7 @@ use crate::intent::{
     Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, ErrorKind, EventBody, Output,
     SchemaChange,
 };
+use crate::ledger_chain;
 use crate::ledger_expiry;
 use crate::ledger_policy;
 use crate::limits;
@@ -106,17 +107,20 @@ pub fn account_key(account: &LedgerAccountId) -> String {
 }
 
 /// The scope of a request: empty when it names none (D-6551).
-fn scope_text(scope: &Option<LedgerScope>) -> &str {
+pub(crate) fn scope_text(scope: &Option<LedgerScope>) -> &str {
     scope.as_ref().map_or("", |s| s.as_str())
 }
 
 /// A scope as its type, for the answers that carry one.
-fn scope_value(scope: &str) -> LedgerScope {
+pub(crate) fn scope_value(scope: &str) -> LedgerScope {
     LedgerScope(scope.to_string())
 }
 
 /// The header of an account, if the snapshot holds it.
-fn header<'a>(tenant: &'a TenantState, account: &LedgerAccountId) -> Option<&'a LedgerAccount> {
+pub(crate) fn header<'a>(
+    tenant: &'a TenantState,
+    account: &LedgerAccountId,
+) -> Option<&'a LedgerAccount> {
     tenant
         .ledger
         .as_ref()
@@ -490,6 +494,17 @@ pub fn post_after(
     request: &LedgerPostingRequest,
     ctx: &Context,
 ) -> Result<Posted, DomainError> {
+    post_in(state, earlier, request, None, ctx)
+}
+
+/// [`post_after`] for one leg of the transaction `transaction`: the entry names it (LDG-2903).
+pub(crate) fn post_in(
+    state: &State,
+    earlier: &[DeltaOp],
+    request: &LedgerPostingRequest,
+    transaction: Option<&str>,
+    ctx: &Context,
+) -> Result<Posted, DomainError> {
     let Some(tenant) = state.tenant.as_deref() else {
         return Err(refuse(
             ErrorKind::TenantNotFound,
@@ -631,6 +646,7 @@ pub fn post_after(
             if entry.amount == request.amount
                 && entry.reason == request.reason
                 && entry.corrects == request.corrects
+                && entry.transaction.as_deref() == transaction
             {
                 evidence.push(Check::pass(
                     "ledger:idempotency",
@@ -812,19 +828,32 @@ pub fn post_after(
         opened_at: current.as_ref().map_or(ctx.now, |a| a.opened_at),
         periods,
         buckets,
+        head_hash: None,
     };
-    let entry = LedgerEntry {
-        account,
-        sequence: last + 1,
-        amount: request.amount,
-        idempotency_key: key.clone(),
-        reason: request.reason.clone(),
-        caused_by: match &ctx.principal {
-            Principal::User(id) => Some(id.clone()),
-            _ => None,
+    // LDG-2921: the entry names the hash of the one before it, and the header names its own.
+    let previous = ledger_chain::previous_of(current.as_ref(), &account);
+    let entry = ledger_chain::seal(
+        LedgerEntry {
+            account,
+            sequence: last + 1,
+            amount: request.amount,
+            idempotency_key: key.clone(),
+            reason: request.reason.clone(),
+            caused_by: match &ctx.principal {
+                Principal::User(id) => Some(id.clone()),
+                _ => None,
+            },
+            at: ctx.now,
+            corrects: request.corrects,
+            transaction: transaction.map(str::to_string),
+            previous_hash: None,
+            hash: None,
         },
-        at: ctx.now,
-        corrects: request.corrects,
+        &previous,
+    );
+    let next = LedgerAccount {
+        head_hash: entry.hash.clone(),
+        ..next
     };
     let event = EventBody::LedgerEntryPosted {
         account,
@@ -871,13 +900,13 @@ pub(crate) fn balance_of(account: &LedgerAccount) -> LedgerBalance {
 }
 
 /// A refusal made before anything was checked.
-fn refuse(kind: ErrorKind, rule: &str, message: impl Into<String>) -> DomainError {
+pub(crate) fn refuse(kind: ErrorKind, rule: &str, message: impl Into<String>) -> DomainError {
     let message = message.into();
     DomainError::new(kind, message.clone()).with(vec![Check::fail(rule, message)])
 }
 
 /// A refusal after the checks in `evidence`, naming the rule that failed.
-fn refused(
+pub(crate) fn refused(
     mut evidence: Vec<Check>,
     kind: ErrorKind,
     rule: &str,
@@ -959,7 +988,7 @@ pub fn decide_intent(
 }
 
 /// Whether the principal holds a capability; the owner holds every one.
-fn holds(tenant: &TenantState, principal: &Principal, name: &str) -> bool {
+pub(crate) fn holds(tenant: &TenantState, principal: &Principal, name: &str) -> bool {
     holds_any(
         tenant,
         principal,

@@ -1680,19 +1680,18 @@ impl Store for MemoryStore {
             .get(&(tenant.clone(), id))
             .map(|(_, state)| state.clone())
             .ok_or_else(|| StoreError::NotFound(format!("snapshot {id} of {tenant}")))?;
-        // Ledger entries are never removed (LDG-022): a snapshot older than an entry is not
-        // restored.
-        let entries = |t: &TenantState| {
-            t.ledger
-                .as_ref()
-                .map_or(0, |l| l.entries.values().map(Vec::len).sum::<usize>())
-        };
-        if inner.tenants.get(tenant).map_or(0, |t| entries(t)) > entries(&state) {
-            return Err(StoreError::Invalid(
-                "the ledger holds entries posted after the snapshot, and entries are never removed"
-                    .into(),
-            ));
-        }
+        // Ledger entries are never removed (LDG-022, LDG-2911): a snapshot that lacks an entry
+        // is not restored, nor one whose journal head is older than the last anchor of the
+        // audit log (LDG-2924).
+        let heads = strata_kernel::ledger_chain::heads(
+            inner.tenants.get(tenant).and_then(|t| t.ledger.as_ref()),
+        );
+        let audit = inner.audit.get(tenant).map(Vec::as_slice).unwrap_or(&[]);
+        crate::ledger_audit::check_restore(
+            &heads,
+            audit.iter().map(|(entry, _)| entry),
+            state.ledger.as_ref(),
+        )?;
         // Event sequence numbers are never reused: the events stay and the counter does not go
         // back, so a subscriber that has passed a number still sees every later event.
         let seen = inner.tenants.get(tenant).map_or(0, |t| t.event_seq);
@@ -2307,6 +2306,13 @@ fn commit_in(
     let now = commit.journal.context.now;
     inner.add_jobs(tenant, &commit.jobs, now);
     inner.add_exceptions(tenant, &commit.exceptions);
+    // The audit lines of the ledger entries, in the commit that wrote them (LDG-2925).
+    for entry in &commit.audit {
+        let lines = inner.audit.entry(tenant.clone()).or_default();
+        let previous = lines.last().map(|(_, chain)| chain.as_str()).unwrap_or("");
+        let chain = crate::audit_chain::audit_link(previous, entry);
+        lines.push((entry.clone(), chain));
+    }
     let mut last_position = None;
     for event in &commit.events {
         let next = inner.positions.entry(tenant.clone()).or_insert(0);

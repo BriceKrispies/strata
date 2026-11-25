@@ -3040,3 +3040,121 @@ pub fn automation_purge_conforms(store: &dyn Store) {
     assert_eq!(exceptions_of(), vec!["dead-open", "parked-open"]);
     assert_eq!(job_keys(&alpha), vec!["open"]);
 }
+
+/// A ledger transaction is audited in its commit and a restore cannot drop it (LDG-2911,
+/// LDG-2923, LDG-2924, LDG-2925). Not a row of the conformance table: a store runs it by name.
+///
+/// Verifies: LDG-2925, LDG-2923, LDG-2911
+pub fn a_ledger_transaction_is_audited_in_its_commit_and_a_restore_cannot_drop_it(
+    store: &dyn Store,
+) {
+    let mut pair = Pair::new(store);
+    let alpha = tenant_id("alpha");
+    let owner = user("alpha:owner");
+    let unit = LedgerUnit::new("points").unwrap();
+    let pool = LedgerPoolName::new("budget").unwrap();
+    pair.ok(
+        "alpha",
+        owner.clone(),
+        Intent::ChangeSchema {
+            changes: vec![
+                SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+                    unit: unit.clone(),
+                    description: "Points".into(),
+                    expiry: None,
+                }),
+                SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
+                    pool: pool.clone(),
+                    description: "Budget".into(),
+                }),
+            ],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    );
+    let before = store
+        .create_snapshot(&alpha, "before the ledger", Timestamp(42))
+        .unwrap();
+    let writer = LedgerOwner::Principal {
+        principal: principal_id("alpha:writer1"),
+    };
+    let leg = |owner: LedgerOwner, amount: i64| LedgerLeg {
+        owner,
+        unit: unit.clone(),
+        amount: LedgerAmount(amount),
+        scope: None,
+    };
+    let transaction = |key: &str, amount: i64| LedgerTransaction {
+        operation: "conformance".into(),
+        idempotency_key: key.into(),
+        reason: "award".into(),
+        on_behalf_of: None,
+        legs: vec![
+            leg(LedgerOwner::Pool { pool: pool.clone() }, -amount),
+            leg(writer.clone(), amount),
+        ],
+    };
+    for (key, amount) in [("a", 10), ("b", 5)] {
+        pair.ok(
+            "alpha",
+            owner.clone(),
+            Intent::PostLedgerTransaction {
+                transaction: transaction(key, amount),
+            },
+        );
+    }
+
+    // One audit line for each transaction, naming it, its header and the head it produced, and
+    // written by the commit that wrote the entries.
+    let lines = store.audit_list(&alpha, Some("audit"), 100).unwrap();
+    let postings: Vec<&AuditEntry> = lines
+        .iter()
+        .filter(|l| l.event == "ledger.posting")
+        .collect();
+    assert_eq!(
+        postings.len(),
+        2,
+        "one line for each transaction: {lines:?}"
+    );
+    let account = ledger::account_id(&alpha, &writer, &unit, "");
+    let whole = store.load_complete(&alpha).unwrap();
+    let ledger_now = whole.tenant.as_ref().unwrap().ledger.as_ref().unwrap();
+    let key = ledger::account_key(&account);
+    let head = ledger_now.accounts[&key].head_hash.clone().expect("a head");
+    let last: serde_json::Value = serde_json::from_str(&postings[1].data).unwrap();
+    assert_eq!(last["operation"], "conformance");
+    assert_eq!(last["idempotency_key"], "b");
+    assert_eq!(last["actor"], "alpha:owner");
+    assert_eq!(last["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        last["transaction"].as_str(),
+        ledger_now.entries[&key][1].transaction.as_deref()
+    );
+    let anchored = crate::ledger_audit::anchors(postings.iter().copied());
+    assert_eq!(
+        anchored[&key],
+        (2, head),
+        "the anchor is the head of the journal"
+    );
+    assert_eq!(
+        ledger::replayed_balance(&ledger_now.entries[&key]),
+        Ok(15),
+        "the balance is the sum of the entries"
+    );
+    assert_eq!(strata_kernel::ledger_chain::check_state(ledger_now), Ok(4));
+
+    // A snapshot from before the entries is not restored over them.
+    let refused = store.restore_snapshot(&alpha, before.id, None);
+    match refused {
+        Err(StoreError::Invalid(message)) => assert!(
+            message.starts_with("restore-drops-entries"),
+            "the refusal names its code: {message}"
+        ),
+        other => panic!("the restore was not refused: {other:?}"),
+    }
+    assert_eq!(
+        store.load_complete(&alpha).unwrap().tenant.unwrap().ledger,
+        whole.tenant.unwrap().ledger,
+        "a refused restore changes nothing"
+    );
+}

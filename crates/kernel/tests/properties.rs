@@ -373,7 +373,9 @@ fn some_policy_could_authorise(
         // An invocation is authorised by the operation's invokers, not by a policy (D-6547).
         Intent::InvokeOperation { .. } => return matches!(principal, Principal::User(_)),
         // A posting is authorised by a capability, not a policy; the generator draws none.
-        Intent::PostLedger { .. } | Intent::ExpireLedger { .. } => return false,
+        Intent::PostLedger { .. }
+        | Intent::PostLedgerTransaction { .. }
+        | Intent::ExpireLedger { .. } => return false,
         // A setting write is authorised by the setting's write rule, not a policy; the generator
         // draws none.
         Intent::WriteSetting { .. } => return false,

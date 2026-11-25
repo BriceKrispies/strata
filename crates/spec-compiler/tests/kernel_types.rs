@@ -512,6 +512,9 @@ fn sample_entry() -> LedgerEntry {
         caused_by: Some(principal_id("alpha:owner")),
         at: Timestamp(12),
         corrects: None,
+        transaction: None,
+        previous_hash: None,
+        hash: None,
     }
 }
 
@@ -530,6 +533,7 @@ fn sample_header() -> LedgerAccount {
             credits: 5,
         }],
         buckets: None,
+        head_hash: None,
     }
 }
 

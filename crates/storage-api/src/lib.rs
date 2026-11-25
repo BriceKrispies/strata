@@ -50,6 +50,7 @@ pub mod audit_chain;
 pub mod covering;
 pub mod generation;
 pub mod jobs;
+pub mod ledger_audit;
 pub mod memory;
 pub mod resident;
 pub mod schedules;
@@ -262,6 +263,11 @@ pub struct Commit {
     /// whose id the tenant holds already is not written again.
     #[serde(default)]
     pub exceptions: Vec<ExceptionRecord>,
+    /// The audit lines of the ledger entries the delta appends, written in the same transaction
+    /// (LDG-2925, LDG-2926). [`Commit::of`] derives them; a store that cannot write one refuses
+    /// the commit, so a posting is never unaudited.
+    #[serde(default)]
+    pub audit: Vec<AuditEntry>,
     /// The generation of the state the decision was made on: the generation the first load of
     /// the decision attempt returned. Compared in the write transaction that compares the base
     /// revision. `None` is accepted only with `base_revision: None` (a commit that creates the
@@ -318,6 +324,7 @@ impl Commit {
         Commit {
             jobs,
             exceptions,
+            audit: ledger_audit::lines(intent, context, &transition.delta),
             expected_generation,
             delta: transition.delta.clone(),
             events: transition.events.clone(),

@@ -87,6 +87,9 @@ pub const MAX_LEDGER_REASON_BYTES: usize = 256;
 pub const MAX_LEDGER_SCOPE_BYTES: usize = 128;
 /// The most postings one `PostLedger` intent may make (as a tenant operation, D-6548).
 pub const MAX_LEDGER_POSTINGS: usize = 8;
+/// The most entries one ledger transaction may name, whatever the tenant declares (LDG-2914): the
+/// tenant's own maximum is the setting `ledger_max_transaction_legs`, and this is its ceiling.
+pub const MAX_LEDGER_TRANSACTION_LEGS: usize = 64;
 /// The most ledger units a tenant may declare (D-6554, LDG-1550).
 pub const MAX_LEDGER_UNITS: usize = 64;
 /// The most ledger pools a tenant may declare (D-6554, LDG-1550).
