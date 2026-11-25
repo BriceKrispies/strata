@@ -372,3 +372,89 @@ fn a_presentation_that_names_what_does_not_exist_is_refused() {
         "{diagnostics:?}"
     );
 }
+
+/// WG-5596: the toggle compiles into a tenant bundle, the bundle installs into a tenant, and the
+/// operation it declares runs in the kernel. The first invocation adds the caller's reaction and the
+/// second removes it.
+#[test]
+fn the_toggle_product_installs_and_its_operation_adds_then_removes_a_reaction() {
+    use strata_kernel::testkit::{ctx, field, object, text};
+    use strata_kernel::{
+        DomainError, Intent, Output, Principal, PrincipalId, RecordId, TenantId, TenantOperationId,
+        TenantStateExt, Value, World,
+    };
+    use strata_substrate::bundle::{
+        install_into, install_product, Bundle, ProductBundle, ProductInstall, ProductTarget,
+    };
+
+    let output = bundle_of(&product("operation-toggle.jsonc"));
+    let bundle = ProductBundle::from_json(&output.files[0].contents)
+        .unwrap_or_else(|e| panic!("the bundle is refused: {e}"));
+
+    let tenant = TenantId::new("acme").expect("tenant id");
+    let admin = Principal::User(PrincipalId::new("user:admin").expect("principal id"));
+    let doc = json!({
+        "id": "acme",
+        "name": "Acme",
+        "owner": "user:admin",
+        "created_at": "2026-01-01T00:00:00Z"
+    });
+    let mut world = install_into(
+        &World::default(),
+        &Bundle::from_json(&doc.to_string()).expect("tenant bundle"),
+    )
+    .unwrap_or_else(|e| panic!("{e:?}"));
+
+    let schema = world.tenants[&tenant].schema.clone();
+    let target = ProductTarget {
+        tenant: &tenant,
+        principal: admin.clone(),
+        now: 1_800_000_000_000,
+        release: "0.2",
+        schema: &schema,
+        installed: None,
+        expected_version: None,
+        idempotency_key: None,
+    };
+    let answer = install_product(&bundle, &target, &mut |ctx: strata_kernel::Context,
+                                                         intent: Intent|
+     -> Result<Output, DomainError> {
+        let (next, outcome) = world.step(&intent, &ctx)?;
+        world = next;
+        Ok(outcome.output)
+    });
+    match answer {
+        Ok(ProductInstall::Applied { .. }) => {}
+        other => panic!("the toggle product was not installed: {other:?}"),
+    }
+
+    let run = |world: &World, intent: Intent| -> World {
+        world
+            .step(&intent, &ctx("acme", admin.clone(), 1_800_000_000_100))
+            .unwrap_or_else(|e| panic!("{e:?}"))
+            .0
+    };
+    let reactions = |world: &World| {
+        world.tenants[&tenant]
+            .records_of(&object("toggle__reaction"))
+            .count()
+    };
+
+    let message = Intent::CreateRecord {
+        object: object("toggle__message"),
+        fields: std::collections::BTreeMap::from([(field("body"), text("Hello"))]),
+    };
+    let world = run(&world, message);
+    let toggle = |key: &str| Intent::InvokeOperation {
+        operation: TenantOperationId::new("toggle__react").expect("operation id"),
+        inputs: std::collections::BTreeMap::from([
+            ("message".to_string(), Value::Ref(RecordId(1))),
+            ("kind".to_string(), text("love")),
+        ]),
+        idempotency_key: key.to_string(),
+    };
+    let added = run(&world, toggle("k-add"));
+    assert_eq!(reactions(&added), 1, "the first toggle adds the reaction");
+    let removed = run(&added, toggle("k-remove"));
+    assert_eq!(reactions(&removed), 0, "the second toggle removes it");
+}
