@@ -1655,7 +1655,33 @@ fn insert_commit_work(tx: &Connection, commit: &Commit) -> StoreResult<()> {
         &commit.jobs,
         commit.journal.context.now,
     )?;
-    insert_exceptions(tx, &commit.exceptions)
+    insert_exceptions(tx, &commit.exceptions)?;
+    // The audit lines of the ledger entries of the commit (LDG-2925): a line that cannot be
+    // written refuses the commit, which then changes nothing (LDG-2926).
+    for entry in &commit.audit {
+        append_audit(tx, entry)?;
+    }
+    Ok(())
+}
+
+/// One line of the audit trail, chained to the line before it, in the transaction `tx`.
+fn append_audit(tx: &Connection, entry: &AuditEntry) -> StoreResult<()> {
+    let previous: Option<String> = tx
+        .query_row(
+            "SELECT chain FROM audit_log WHERE chain IS NOT NULL ORDER BY seq DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(db)?;
+    let chain =
+        strata_storage_api::audit_chain::audit_link(previous.as_deref().unwrap_or(""), entry);
+    tx.execute(
+        "INSERT INTO audit_log (at, kind, event, correlation, data, chain) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![entry.at, entry.kind, entry.event, entry.correlation, entry.data, chain],
+    )
+    .map_err(db)
+    .map(|_| ())
 }
 
 impl SqliteStore {
@@ -5048,28 +5074,9 @@ impl Store for SqliteStore {
 
     fn audit_append(&self, tenant: &TenantId, entry: &AuditEntry) -> StoreResult<()> {
         let file = self.existing(tenant)?;
-        file.write(dbe, |tx| {
-            // The chain value of the line before, in the same transaction as the line, so that
-            // two appends never chain to the same line.
-            let previous: Option<String> = tx
-                .query_row(
-                    "SELECT chain FROM audit_log WHERE chain IS NOT NULL ORDER BY seq DESC LIMIT 1",
-                    [],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(db)?;
-            let chain = strata_storage_api::audit_chain::audit_link(
-                previous.as_deref().unwrap_or(""),
-                entry,
-            );
-            tx.execute(
-                "INSERT INTO audit_log (at, kind, event, correlation, data, chain) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![entry.at, entry.kind, entry.event, entry.correlation, entry.data, chain],
-            )
-            .map_err(db)
-            .map(|_| ())
-        })
+        // The chain value of the line before, in the same transaction as the line, so that two
+        // appends never chain to the same line.
+        file.write(dbe, |tx| append_audit(tx, entry))
     }
 
     fn audit_chain(
@@ -5221,7 +5228,7 @@ impl Store for SqliteStore {
         let file = self.existing(tenant)?;
         file.write(dbe, |tx| {
             let held = guard_generation(tx, tenant, expected)?;
-            ledger::check_restorable(tx, state.revision)?;
+            ledger::check_restorable(tx, &state)?;
             tx.execute("DELETE FROM records", []).map_err(db)?;
             raise_object_revision(tx, "")?;
             tx.execute(

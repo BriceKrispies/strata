@@ -8,6 +8,8 @@ use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
 use std::sync::Arc;
 use strata_kernel::ledger;
+use strata_kernel::ledger_chain;
+use strata_kernel::ledger_transaction;
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 
@@ -1028,4 +1030,558 @@ fn a_reversal_under_a_cap_that_counts_every_credit_counts_as_one() {
     );
     let world = posted(&world, T0 + 3, person("writer1"), 5, "credit-five");
     assert_eq!(balance(&world, &person("writer1")), 5);
+}
+
+// ------------------------------------------------------------------------------------------------
+// The double-entry journal (D-8430) and its hash chain (D-8431)
+
+fn leg(owner: LedgerOwner, amount: i64) -> LedgerLeg {
+    LedgerLeg {
+        owner,
+        unit: points(),
+        amount: LedgerAmount(amount),
+        scope: None,
+    }
+}
+
+fn transaction(key: &str, reason: &str, legs: Vec<LedgerLeg>) -> LedgerTransaction {
+    LedgerTransaction {
+        operation: "test-operation".into(),
+        idempotency_key: key.into(),
+        reason: reason.into(),
+        on_behalf_of: None,
+        legs,
+    }
+}
+
+fn post_transaction_as(
+    world: &World,
+    who: &str,
+    now: i64,
+    tx: LedgerTransaction,
+) -> Result<(World, Transition), DomainError> {
+    world.step(
+        &Intent::PostLedgerTransaction { transaction: tx },
+        &ctx("alpha", user(&format!("alpha:{who}")), now),
+    )
+}
+
+fn transacted(world: &World, now: i64, tx: LedgerTransaction) -> World {
+    post_transaction_as(world, "owner", now, tx)
+        .unwrap_or_else(|e| panic!("the transaction was refused: {}", e.describe()))
+        .0
+}
+
+fn tx_refusal(world: &World, who: &str, now: i64, tx: LedgerTransaction) -> DomainError {
+    post_transaction_as(world, who, now, tx)
+        .err()
+        .expect("the transaction was accepted")
+}
+
+fn ledger_of(world: &World) -> LedgerState {
+    world.tenants[&tenant_id("alpha")]
+        .ledger
+        .clone()
+        .unwrap_or_else(ledger::empty_state)
+}
+
+/// Verifies: LDG-2903
+/// A transaction has at least two entries that sum to zero for each unit: one entry, and two that
+/// do not net to zero, are refused and change nothing; a balanced one is accepted.
+#[test]
+fn a_transaction_is_refused_unless_its_entries_net_to_zero_for_each_unit() {
+    let world = ledger_world(vec![]);
+    let one = tx_refusal(
+        &world,
+        "owner",
+        T0,
+        transaction("one", "test", vec![leg(pool(), 5)]),
+    );
+    assert_eq!(failed_rule(&one), "ledger:unbalanced-transaction");
+    let lopsided = tx_refusal(
+        &world,
+        "owner",
+        T0,
+        transaction(
+            "lopsided",
+            "test",
+            vec![leg(pool(), -5), leg(person("writer1"), 6)],
+        ),
+    );
+    assert_eq!(failed_rule(&lopsided), "ledger:unbalanced-transaction");
+    assert_eq!(
+        ledger_of(&world),
+        ledger::empty_state(),
+        "a refusal changes nothing"
+    );
+    let world = transacted(
+        &world,
+        T0,
+        transaction(
+            "even",
+            "test",
+            vec![leg(pool(), -5), leg(person("writer1"), 5)],
+        ),
+    );
+    assert_eq!(balance(&world, &pool()), -5);
+    assert_eq!(balance(&world, &person("writer1")), 5);
+}
+
+/// Verifies: LDG-2915, LDG-2917
+/// A transfer is one transaction of two entries, and an award to several recipients one entry per
+/// recipient and one for the pool that funds them; every entry names the transaction.
+#[test]
+fn a_transfer_and_an_award_are_one_transaction_each() {
+    let world = ledger_world(vec![]);
+    let world = transacted(
+        &world,
+        T0,
+        transaction(
+            "transfer",
+            "transfer",
+            vec![leg(person("writer1"), -5), leg(person("writer2"), 5)],
+        ),
+    );
+    let sender = entries(&world, &person("writer1"), "");
+    let recipient = entries(&world, &person("writer2"), "");
+    assert_eq!((sender.len(), recipient.len()), (1, 1));
+    assert_eq!(sender[0].transaction, recipient[0].transaction);
+    assert!(sender[0].transaction.is_some());
+    assert_eq!(sender[0].amount.0 + recipient[0].amount.0, 0);
+
+    let award = transaction(
+        "award",
+        "award",
+        vec![
+            leg(pool(), -9),
+            leg(person("writer1"), 3),
+            leg(person("writer2"), 3),
+            leg(person("owner"), 3),
+        ],
+    );
+    let world = transacted(&world, T0 + 1, award);
+    let ids: std::collections::BTreeSet<_> = [
+        pool(),
+        person("writer1"),
+        person("writer2"),
+        person("owner"),
+    ]
+    .iter()
+    .filter_map(|o| {
+        entries(&world, o, "")
+            .into_iter()
+            .find(|e| e.idempotency_key.starts_with("award"))
+    })
+    .map(|e| e.transaction)
+    .collect();
+    assert_eq!(
+        ids.len(),
+        1,
+        "the four entries of the award are one transaction"
+    );
+    assert_eq!(balance(&world, &pool()), -9);
+}
+
+/// Verifies: LDG-2904
+/// A transaction is one commit: when its last entry is refused, the entries before it are not
+/// written either, and the delta of an accepted one carries all of its entries.
+#[test]
+fn a_transaction_with_a_refused_entry_leaves_no_entry() {
+    let world = ledger_world(vec![unit_limit(Some(0), None, None)]);
+    let world = posted(&world, T0, person("writer1"), 5, "seed");
+    let before = ledger_of(&world);
+    // The first two entries fit; the third takes writer2 below the floor.
+    let refusal = tx_refusal(
+        &world,
+        "owner",
+        T0 + 1,
+        transaction(
+            "half",
+            "test",
+            vec![
+                leg(person("writer1"), -5),
+                leg(pool(), 6),
+                leg(person("writer2"), -1),
+            ],
+        ),
+    );
+    assert_eq!(failed_rule(&refusal), "ledger:below-floor");
+    assert_eq!(
+        ledger_of(&world),
+        before,
+        "nothing of the transaction is visible"
+    );
+    let (_, accepted) = post_transaction_as(
+        &world,
+        "owner",
+        T0 + 1,
+        transaction(
+            "whole",
+            "test",
+            vec![leg(person("writer1"), -5), leg(pool(), 5)],
+        ),
+    )
+    .unwrap();
+    let appended = accepted
+        .delta
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DeltaOp::Ledger(LedgerDelta::AppendEntry(_))))
+        .count();
+    assert_eq!(appended, 2, "both entries are in the one delta");
+}
+
+/// Verifies: LDG-2906
+/// A transaction whose header lacks the operation, the key, the correlation or the actor is
+/// refused as header-incomplete.
+#[test]
+fn a_transaction_without_a_complete_header_is_refused() {
+    let world = ledger_world(vec![]);
+    let legs = || vec![leg(pool(), -1), leg(person("writer1"), 1)];
+    let mut nameless = transaction("k", "test", legs());
+    nameless.operation = String::new();
+    assert_eq!(
+        failed_rule(&tx_refusal(&world, "owner", T0, nameless)),
+        "ledger:header-incomplete"
+    );
+    let keyless = transaction("", "test", legs());
+    assert_eq!(
+        failed_rule(&tx_refusal(&world, "owner", T0, keyless)),
+        "ledger:header-incomplete"
+    );
+    let intent = Intent::PostLedgerTransaction {
+        transaction: transaction("k", "test", legs()),
+    };
+    let mut uncorrelated = ctx("alpha", user("alpha:owner"), T0);
+    uncorrelated.correlation = String::new();
+    let refusal = world.step(&intent, &uncorrelated).err().expect("refused");
+    assert_eq!(failed_rule(&refusal), "ledger:header-incomplete");
+}
+
+/// Verifies: LDG-2912
+/// No step changes, removes or reorders an entry: after each of a run of postings, transactions
+/// and reversals, the entries of every account begin with the entries it held before.
+#[test]
+fn every_step_extends_the_journal_and_changes_no_entry() {
+    let mut world = ledger_world(vec![]);
+    let mut history: Vec<LedgerState> = vec![ledger_of(&world)];
+    for step in 0..6i64 {
+        let now = T0 + step;
+        world = match step % 3 {
+            0 => posted(
+                &world,
+                now,
+                person("writer1"),
+                10 + step,
+                &format!("p{step}"),
+            ),
+            1 => transacted(
+                &world,
+                now,
+                transaction(
+                    &format!("t{step}"),
+                    "test",
+                    vec![leg(pool(), -3), leg(person("writer1"), 3)],
+                ),
+            ),
+            _ => post_as(
+                &world,
+                "owner",
+                now,
+                vec![reversal_of(1, 10, &format!("r{step}"))],
+            )
+            .map(|(w, _)| w)
+            .unwrap_or(world),
+        };
+        history.push(ledger_of(&world));
+    }
+    for pair in history.windows(2) {
+        for (account, earlier) in &pair[0].entries {
+            let later = &pair[1].entries[account];
+            assert!(later.len() >= earlier.len());
+            assert_eq!(
+                &later[..earlier.len()],
+                &earlier[..],
+                "an entry changed or moved"
+            );
+        }
+    }
+    assert!(
+        history
+            .last()
+            .unwrap()
+            .entries
+            .values()
+            .map(Vec::len)
+            .sum::<usize>()
+            >= 6
+    );
+}
+
+/// Verifies: LDG-2913
+/// Two transactions decided on one snapshot that together take a pool below its floor: the
+/// second does not commit on the first's state, and decided again it is refused.
+#[test]
+fn two_concurrent_transactions_cannot_both_overdraw_a_pool() {
+    let world = ledger_world(vec![unit_limit(Some(0), None, None)]);
+    let world = posted(&world, T0, pool(), 100, "fund");
+    let alpha = tenant_id("alpha");
+    let snapshot = world.state(&alpha);
+    let spend = |state: &State, to: &str, key: &str, now: i64| {
+        transition(
+            state,
+            &Intent::PostLedgerTransaction {
+                transaction: transaction(key, "award", vec![leg(pool(), -60), leg(person(to), 60)]),
+            },
+            &ctx("alpha", user("alpha:owner"), now),
+        )
+    };
+    let first = spend(&snapshot, "writer1", "a", T0 + 1).unwrap();
+    let second = spend(&snapshot, "writer2", "b", T0 + 2).unwrap();
+    let after_first = apply_delta(Some(&world.tenants[&alpha]), &first.delta).unwrap();
+    let lost = apply_delta(Some(&after_first), &second.delta).unwrap_err();
+    assert_eq!(lost.kind, ErrorKind::VersionConflict);
+    let mut tenants = world.tenants.clone();
+    tenants.insert(alpha.clone(), Arc::new(after_first));
+    let world = World { tenants };
+    let again = spend(&world.state(&alpha), "writer2", "b", T0 + 3).unwrap_err();
+    assert_eq!(failed_rule(&again), "ledger:below-floor");
+    assert_eq!(balance(&world, &pool()), 40);
+}
+
+/// Verifies: LDG-2914
+/// The most entries of a transaction is the tenant's setting `ledger_max_transaction_legs`.
+#[test]
+fn a_transaction_with_more_entries_than_the_tenant_allows_is_refused() {
+    let setting = SettingDef {
+        id: SettingId::new(strata_kernel::ledger_transaction::MAX_LEGS_SETTING).unwrap(),
+        label: "Most entries of a transaction".into(),
+        r#type: SettingType::new("i64").unwrap(),
+        default: Value::Int(2),
+        levels: std::collections::BTreeSet::from([SettingLevel::Tenant]),
+        locked_by: None,
+        area: None,
+        description: None,
+        allowed: None,
+    };
+    let world = change_as(
+        &ledger_world(vec![]),
+        "owner",
+        T0 - 500,
+        vec![SchemaChange::DefineSetting(setting)],
+    )
+    .unwrap();
+    let three = transaction(
+        "three",
+        "award",
+        vec![
+            leg(pool(), -2),
+            leg(person("writer1"), 1),
+            leg(person("writer2"), 1),
+        ],
+    );
+    assert_eq!(
+        failed_rule(&tx_refusal(&world, "owner", T0, three)),
+        "ledger:too-many-legs"
+    );
+    transacted(
+        &world,
+        T0,
+        transaction(
+            "two",
+            "award",
+            vec![leg(pool(), -1), leg(person("writer1"), 1)],
+        ),
+    );
+}
+
+/// Verifies: LDG-2921
+/// Each entry names the hash of the entry before it (the genesis value of its account for the
+/// first), carries a hash of its own content, and the header holds the head.
+#[test]
+fn each_entry_carries_the_hash_of_the_one_before_it() {
+    let world = ledger_world(vec![]);
+    let world = posted(&world, T0, person("writer1"), 10, "a");
+    let world = transacted(
+        &world,
+        T0 + 1,
+        transaction(
+            "t",
+            "test",
+            vec![leg(person("writer1"), -4), leg(pool(), 4)],
+        ),
+    );
+    let world = posted(&world, T0 + 2, person("writer1"), 1, "c");
+    let journal = entries(&world, &person("writer1"), "");
+    assert_eq!(journal.len(), 3);
+    let account = journal[0].account;
+    assert_eq!(
+        journal[0].previous_hash,
+        Some(ledger_chain::genesis(&account))
+    );
+    for pair in journal.windows(2) {
+        assert_eq!(pair[1].previous_hash, pair[0].hash);
+    }
+    for entry in &journal {
+        assert_eq!(
+            entry.hash.as_deref(),
+            Some(ledger_chain::entry_hash(entry, entry.previous_hash.as_deref().unwrap()).as_str())
+        );
+    }
+    let header = account_of(&world, &person("writer1"), "").unwrap();
+    assert_eq!(header.head_hash, journal[2].hash);
+    assert_eq!(ledger_chain::check_state(&ledger_of(&world)), Ok(4));
+}
+
+/// Verifies: LDG-2922
+/// A verification names the first entry that was changed, removed or put out of order, as
+/// chain-broken; an erasure of the actor, which clears caused-by, does not break the chain.
+#[test]
+fn a_changed_removed_or_reordered_entry_is_found_and_named() {
+    let mut world = ledger_world(vec![]);
+    for n in 1..=4 {
+        world = posted(&world, T0 + n, person("writer1"), n, &format!("k{n}"));
+    }
+    let state = ledger_of(&world);
+    let account = entries(&world, &person("writer1"), "")[0].account;
+    let key = ledger::account_key(&account);
+    let header = state.accounts[&key].clone();
+    let journal = state.entries[&key].clone();
+    assert_eq!(
+        ledger_chain::check_journal(&account, Some(&header), &journal),
+        None
+    );
+
+    let broken_at = |entries: &[LedgerEntry], header: &LedgerAccount| {
+        ledger_chain::check_journal(&account, Some(header), entries).map(|b| (b.sequence, b.code))
+    };
+    let mut changed = journal.clone();
+    changed[1].amount = LedgerAmount(99);
+    assert_eq!(broken_at(&changed, &header), Some((2, "chain-broken")));
+    let mut removed = journal.clone();
+    removed.remove(1);
+    assert_eq!(broken_at(&removed, &header), Some((2, "chain-broken")));
+    let mut reordered = journal.clone();
+    reordered.swap(2, 3);
+    assert_eq!(broken_at(&reordered, &header), Some((3, "chain-broken")));
+    let truncated = journal[..3].to_vec();
+    assert_eq!(broken_at(&truncated, &header), Some((4, "chain-broken")));
+    let mut erased = journal.clone();
+    erased[0].caused_by = None;
+    assert_eq!(broken_at(&erased, &header), None);
+    // A balance that is not the sum of the entries is drift, not a broken chain.
+    let drifted = LedgerAccount {
+        balance: LedgerAmount(header.balance.0 + 1),
+        ..header.clone()
+    };
+    assert_eq!(broken_at(&journal, &drifted), Some((4, "balance-drift")));
+}
+
+/// Verifies: LDG-2911
+/// A snapshot that lacks an entry the journal holds, or holds another head at the same entry, is
+/// refused with restore-drops-entries; one that holds the whole journal is not.
+#[test]
+fn a_snapshot_that_lacks_an_entry_is_not_restored_over_the_journal() {
+    let world = ledger_world(vec![]);
+    let one = posted(&world, T0, person("writer1"), 1, "a");
+    let two = posted(&one, T0 + 1, person("writer1"), 2, "b");
+    let (early, now) = (ledger_of(&one), ledger_of(&two));
+    let heads = ledger_chain::heads(Some(&now));
+    let refusal = ledger_chain::restore_refusal(&heads, &early).expect("refused");
+    assert_eq!(refusal.code, "restore-drops-entries");
+    assert_eq!(ledger_chain::restore_refusal(&heads, &now), None);
+    assert_eq!(
+        ledger_chain::restore_refusal(&ledger_chain::heads(Some(&early)), &now),
+        None,
+        "a snapshot that holds more is not a drop"
+    );
+    // Another head at the same number is a different journal.
+    let mut forked = now.clone();
+    for account in forked.accounts.values_mut() {
+        account.head_hash = Some("0".repeat(64));
+    }
+    assert_eq!(
+        ledger_chain::restore_refusal(&heads, &forked).map(|r| r.code),
+        Some("restore-drops-entries")
+    );
+}
+
+/// Verifies: LDG-2924
+/// A journal head older than the last anchor is refused with head-behind-anchor, and so is a head
+/// of the same number whose hash is not the anchored one.
+#[test]
+fn a_head_older_than_the_last_anchor_is_refused() {
+    let world = ledger_world(vec![]);
+    let one = posted(&world, T0, person("writer1"), 1, "a");
+    let two = posted(&one, T0 + 1, person("writer1"), 2, "b");
+    let (older, newer) = (ledger_of(&one), ledger_of(&two));
+    let account = entries(&two, &person("writer1"), "")[0].account;
+    let key = ledger::account_key(&account);
+    let head = newer.accounts[&key].head_hash.clone().unwrap();
+    let anchors = std::collections::BTreeMap::from([(key.clone(), (2, head))]);
+    assert_eq!(ledger_chain::anchor_refusal(&anchors, &newer), None);
+    assert_eq!(
+        ledger_chain::anchor_refusal(&anchors, &older).map(|r| r.code),
+        Some("head-behind-anchor")
+    );
+    let wrong = std::collections::BTreeMap::from([(key, (2, "f".repeat(64)))]);
+    assert_eq!(
+        ledger_chain::anchor_refusal(&wrong, &newer).map(|r| r.code),
+        Some("head-behind-anchor")
+    );
+}
+
+/// Verifies: LDG-2903
+/// A retried transaction replays its first entries and writes nothing; the same key with another
+/// request is refused (D-8437).
+#[test]
+fn a_retried_transaction_replays_and_a_changed_one_is_refused() {
+    let world = ledger_world(vec![]);
+    let tx = || {
+        transaction(
+            "once",
+            "test",
+            vec![leg(pool(), -5), leg(person("writer1"), 5)],
+        )
+    };
+    let world = transacted(&world, T0, tx());
+    let (same, transition) = post_transaction_as(&world, "owner", T0 + 1, tx()).unwrap();
+    assert_eq!(ledger_of(&same), ledger_of(&world));
+    assert!(transition
+        .delta
+        .ops
+        .iter()
+        .all(|op| !matches!(op, DeltaOp::Ledger(_))));
+    match transition.output {
+        Output::LedgerPosted { results } => assert!(results.iter().all(|r| r.replayed)),
+        other => panic!("{other:?}"),
+    }
+    let changed = transaction(
+        "once",
+        "test",
+        vec![leg(pool(), -6), leg(person("writer1"), 6)],
+    );
+    assert!(tx_refusal(&world, "owner", T0 + 2, changed).kind == ErrorKind::VersionConflict);
+}
+
+/// Verifies: LDG-2907
+/// An approval of a held transaction is refused as self-approval when the approver is its actor or
+/// the principal the actor acted for, and not otherwise.
+#[test]
+fn a_held_transaction_is_not_approved_by_its_actor_or_the_person_it_was_made_for() {
+    let actor = principal_id("alpha:writer1");
+    let for_whom = principal_id("alpha:writer2");
+    let refusal = |who: &str| {
+        ledger_transaction::approval_refusal(&user(who), &actor, Some(&for_whom))
+            .map(|e| failed_rule(&e).to_string())
+    };
+    assert_eq!(
+        refusal("alpha:writer1"),
+        Some("ledger:self-approval".into())
+    );
+    assert_eq!(
+        refusal("alpha:writer2"),
+        Some("ledger:self-approval".into())
+    );
+    assert_eq!(refusal("alpha:owner"), None);
 }

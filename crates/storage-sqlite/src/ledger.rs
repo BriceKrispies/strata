@@ -468,22 +468,50 @@ pub(crate) fn apply(
     Ok(())
 }
 
-/// Refuse to restore a snapshot older than an entry: entries are never removed (LDG-022).
-pub(crate) fn check_restorable(tx: &Connection, revision: StateRevision) -> StoreResult<()> {
+/// Refuse to restore a snapshot older than an entry: entries are never removed (LDG-022,
+/// LDG-2911), and a snapshot whose journal head is older than the last anchor of the audit log
+/// (LDG-2924). The audit log is not rolled back by a restore, so the anchors stand.
+pub(crate) fn check_restorable(tx: &Connection, snapshot: &TenantState) -> StoreResult<()> {
     let newer: i64 = tx
         .query_row(
             "SELECT COUNT(*) FROM ledger_entries WHERE revision > ?1",
-            params![revision.0 as i64],
+            params![snapshot.revision.0 as i64],
             |row| row.get(0),
         )
         .map_err(db)?;
     if newer > 0 {
-        return Err(StoreError::Invalid(
-            "the ledger holds entries posted after the snapshot, and entries are never removed"
-                .into(),
-        ));
+        return Err(StoreError::Invalid(format!(
+            "{}: the ledger holds entries posted after the snapshot, and entries are never removed",
+            strata_kernel::ledger_chain::RESTORE_DROPS_ENTRIES
+        )));
     }
-    Ok(())
+    let mut heads = std::collections::BTreeMap::new();
+    for data in select_accounts(tx, "SELECT data FROM ledger_accounts", &[])? {
+        let account: LedgerAccount = decode(&data, "ledger account")?;
+        heads.insert(
+            account_key(&account.account),
+            (account.last_sequence, account.head_hash),
+        );
+    }
+    let mut statement = tx
+        .prepare_cached(
+            "SELECT at, kind, event, correlation, data FROM audit_log WHERE event LIKE 'ledger.%' ORDER BY seq",
+        )
+        .map_err(db)?;
+    let lines = statement
+        .query_map([], |r| {
+            Ok(strata_storage_api::AuditEntry {
+                at: r.get(0)?,
+                kind: r.get(1)?,
+                event: r.get(2)?,
+                correlation: r.get(3)?,
+                data: r.get(4)?,
+            })
+        })
+        .map_err(db)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db)?;
+    strata_storage_api::ledger_audit::check_restore(&heads, &lines, snapshot.ledger.as_ref())
 }
 
 /// Clear a principal from the ledger of a tenant file (LDG-027, LDG-028): the owner of its

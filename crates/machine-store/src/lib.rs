@@ -318,6 +318,7 @@ impl<'a> ApiTx<'a> {
         }];
         let owner = PrincipalId::new("runtime").expect("a valid principal id");
         let commit = Commit {
+            audit: Vec::new(),
             journal: JournalEntry {
                 tenant: tenant.clone(),
                 base_revision: None,
@@ -626,6 +627,7 @@ impl<'a> ApiTx<'a> {
             ops,
         };
         let commit = Commit {
+            audit: Vec::new(),
             journal: JournalEntry {
                 tenant: self.tenant.clone(),
                 base_revision: delta.base_revision,

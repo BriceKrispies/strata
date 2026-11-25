@@ -1831,6 +1831,21 @@ pub const TYPES: &[TypeDecl] = &[
                 ty: Ty::Int(0, 18446744073709551615),
                 optional: true,
             },
+            Field {
+                wire: "transaction",
+                ty: Ty::Text,
+                optional: true,
+            },
+            Field {
+                wire: "previous_hash",
+                ty: Ty::Text,
+                optional: true,
+            },
+            Field {
+                wire: "hash",
+                ty: Ty::Text,
+                optional: true,
+            },
         ]),
     },
     TypeDecl {

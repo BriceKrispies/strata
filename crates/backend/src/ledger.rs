@@ -19,6 +19,7 @@
 //! | `definitions`       | list-ledger-definitions (CT-810) |
 //! | `remove-definition` | remove-ledger-definition (CT-811)|
 //! | `verify`            | verify-ledger-balance (CT-287)   |
+//! | `post-transaction`  | post-ledger-transaction (D-8430) |
 //! | `expire`            | expire-ledger-credits (CT-812)   |
 //!
 //! `verify` and `expire` are for operators and tests. The expiry of credits also runs as a job of
@@ -37,6 +38,7 @@ use serde::Deserialize;
 use serde_json::{json, Value as Json_};
 use strata_kernel::ext::DomainErrorExt;
 use strata_kernel::ledger;
+use strata_kernel::ledger_chain;
 use strata_kernel::ledger_expiry;
 use strata_kernel::{
     Context, DomainError, ErrorKind, ExistingData, Intent, LedgerAccountId, LedgerDefinitionRef,
@@ -46,10 +48,12 @@ use strata_kernel::{
 };
 use strata_protocol::api::ErrorCode;
 use strata_storage_api::jobs::{JobReport, JobWork, Lease, NewJob, RetryPolicy, WorkerWrites};
+use strata_storage_api::StoreError;
 
 /// The operations of the route. The BFF names the first eleven; `verify` and `expire` are for
 /// operators and tests and are served on the internal route only.
-pub const OPERATIONS: [&str; 13] = [
+pub const OPERATIONS: [&str; 14] = [
+    "post-transaction",
     "post",
     "balance",
     "entries",
@@ -134,7 +138,23 @@ struct UnitRequest {
 struct VerifyRequest {
     #[serde(default)]
     tenant: Option<String>,
-    account: LedgerAccountId,
+    /// One account; the whole journal of the tenant when absent (LDG-2927).
+    #[serde(default)]
+    account: Option<LedgerAccountId>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TransactionRequest {
+    #[serde(default)]
+    tenant: Option<String>,
+    #[serde(default)]
+    operation: Option<String>,
+    idempotency_key: String,
+    reason: String,
+    #[serde(default)]
+    on_behalf_of: Option<strata_kernel::PrincipalId>,
+    legs: Vec<strata_kernel::LedgerLeg>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -296,6 +316,30 @@ pub fn handle(app: &App, identity: &Identity, op: &str, body: Json_) -> Result<J
                 )),
             }
         }
+        // Implements: D-8430, LDG-2903
+        "post-transaction" => {
+            let r: TransactionRequest = parse(body)?;
+            same_tenant(app, identity, &r.tenant)?;
+            let intent = Intent::PostLedgerTransaction {
+                transaction: strata_kernel::LedgerTransaction {
+                    operation: r
+                        .operation
+                        .unwrap_or_else(|| "post-ledger-transaction".to_string()),
+                    idempotency_key: r.idempotency_key,
+                    reason: r.reason,
+                    on_behalf_of: r.on_behalf_of,
+                    legs: r.legs,
+                },
+            };
+            let done = run_intent(app, &identity.context(app), &intent, identity.anonymous())?;
+            match done.transition.output {
+                Output::LedgerPosted { results } => Ok(json!({ "results": results })),
+                other => Err(ApiError::hidden(
+                    ErrorCode::Internal,
+                    format!("unexpected output {other:?}"),
+                )),
+            }
+        }
         // Implements: CT-282, CT-807
         "balance" | "my-balance" => {
             let r: AccountRequest = parse(body)?;
@@ -411,7 +455,7 @@ pub fn handle(app: &App, identity: &Identity, op: &str, body: Json_) -> Result<J
         "verify" => {
             let r: VerifyRequest = parse(body)?;
             same_tenant(app, identity, &r.tenant)?;
-            verify(app, identity, &r.account)
+            verify(app, identity, r.account.as_ref())
         }
         // Implements: CT-812
         "expire" => {
@@ -466,45 +510,159 @@ pub fn handle(app: &App, identity: &Identity, op: &str, body: Json_) -> Result<J
     }
 }
 
-/// Compare the stored balance of an account with the sum of its journal (CT-287, LDG-019,
-/// LDG-020): `ok`, the `stored` balance, the `replayed` sum, the number of entries replayed and,
-/// when the numbers of the entries have a gap, the first number that is missing.
-fn verify(app: &App, identity: &Identity, account: &LedgerAccountId) -> Result<Json_, ApiError> {
+/// Verify the journal of one account, or of the tenant when `account` is none (CT-287, LDG-019,
+/// LDG-020, LDG-2921 to LDG-2928): the stored balance against the sum of the entries, the numbers
+/// without a gap, the hash chain, and the entries against the anchors of the audit log. The
+/// first entry that is changed, removed or out of order is named with its code (`chain-broken`
+/// or `balance-drift`). The caller holds `ledger-read`, and the result is recorded in the audit
+/// log (LDG-2928). For one account the answer also carries the `stored` balance, the `replayed`
+/// sum, the number of `entries` and the `gap`.
+fn verify(
+    app: &App,
+    identity: &Identity,
+    account: Option<&LedgerAccountId>,
+) -> Result<Json_, ApiError> {
     let ctx = identity.context(app);
-    let wanted = [Need::Ledger(LedgerNeed::Account { account: *account })];
+    let wanted: Vec<Need> = account
+        .map(|account| Need::Ledger(LedgerNeed::Account { account: *account }))
+        .into_iter()
+        .collect();
     let state = app.store.load(&ctx.tenant, &wanted)?;
     ledger::verify_access(&state, &ctx).map_err(|e| ApiError::domain(e, identity.anonymous()))?;
-    let Some(header) = ledger::header_of(&state, account) else {
-        return Err(ApiError::new(
-            ErrorCode::NotFound,
-            "No such ledger account.",
-        ));
+    let anchors = audit_anchors(app, &ctx.tenant)?;
+    let mut answer;
+    let (accounts, read, first_break);
+    match account {
+        Some(account) => {
+            let Some(header) = ledger::header_of(&state, account) else {
+                return Err(ApiError::new(
+                    ErrorCode::NotFound,
+                    "No such ledger account.",
+                ));
+            };
+            let mut replay = ledger::Replay::default();
+            let mut all = Vec::new();
+            let mut after: Option<u64> = None;
+            loop {
+                let page = app.store.load(
+                    &ctx.tenant,
+                    &[Need::Ledger(LedgerNeed::Entries {
+                        account: *account,
+                        after,
+                        limit: VERIFY_PAGE,
+                    })],
+                )?;
+                let entries = ledger::entries_of(&page, account);
+                replay.feed(&entries);
+                after = entries.last().map(|e| e.sequence);
+                let full = entries.len() >= VERIFY_PAGE as usize;
+                all.extend(entries);
+                if replay.gap.is_some() || !full {
+                    break;
+                }
+            }
+            let found = ledger_chain::check_journal(account, Some(&header), &all)
+                .or_else(|| anchor_break(account, &anchors, &all));
+            accounts = 1u64;
+            read = all.len() as u64;
+            first_break = found;
+            answer = json!({
+                "stored": header.balance,
+                "replayed": replay.sum,
+                "entries": replay.last,
+                "gap": replay.gap,
+            });
+        }
+        None => {
+            let whole = app.store.load_complete(&ctx.tenant)?;
+            let empty = ledger::empty_state();
+            let ledger_state = whole
+                .tenant
+                .as_deref()
+                .and_then(|t| t.ledger.as_ref())
+                .unwrap_or(&empty);
+            let mut found = None;
+            for (key, header) in &ledger_state.accounts {
+                let entries = ledger_state.entries.get(key).map_or(&[][..], Vec::as_slice);
+                found = ledger_chain::check_journal(&header.account, Some(header), entries)
+                    .or_else(|| anchor_break(&header.account, &anchors, entries));
+                if found.is_some() {
+                    break;
+                }
+            }
+            accounts = ledger_state.accounts.len() as u64;
+            read = ledger_state.entries.values().map(|e| e.len() as u64).sum();
+            first_break = found;
+            answer = json!({ "accounts": accounts, "entries": read });
+        }
+    }
+    let code = first_break
+        .as_ref()
+        .map(|b| (b.account.to_string(), b.sequence, b.code));
+    let line = strata_storage_api::ledger_audit::verification_line(
+        &ctx,
+        if account.is_some() {
+            "account"
+        } else {
+            "tenant"
+        },
+        accounts,
+        read,
+        code.as_ref().map(|(a, s, c)| (a.as_str(), *s, *c)),
+    );
+    app.store.audit_append(&ctx.tenant, &line)?;
+    answer["ok"] = json!(first_break.is_none());
+    answer["first_break"] = match &first_break {
+        Some(b) => json!({ "account": b.account, "sequence": b.sequence, "code": b.code }),
+        None => Json_::Null,
     };
-    let mut replay = ledger::Replay::default();
-    let mut after: Option<u64> = None;
+    Ok(answer)
+}
+
+/// The newest anchor of each account in the audit log of the tenant (LDG-2923).
+fn audit_anchors(
+    app: &App,
+    tenant: &TenantId,
+) -> Result<std::collections::BTreeMap<String, (u64, String)>, ApiError> {
+    const PAGE: usize = 1000;
+    let mut lines = Vec::new();
+    let mut after = 0;
     loop {
-        let page = app.store.load(
-            &ctx.tenant,
-            &[Need::Ledger(LedgerNeed::Entries {
-                account: *account,
-                after,
-                limit: VERIFY_PAGE,
-            })],
-        )?;
-        let entries = ledger::entries_of(&page, account);
-        replay.feed(&entries);
-        after = entries.last().map(|e| e.sequence);
-        if replay.gap.is_some() || entries.len() < VERIFY_PAGE as usize {
+        let page = match app.store.audit_chain(tenant, after, PAGE) {
+            Ok(page) => page,
+            Err(StoreError::Unavailable(_)) => {
+                lines = app.store.audit_list(tenant, Some("audit"), 1_000_000)?;
+                break;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let Some(last) = page.last() else {
+            break;
+        };
+        after = last.seq;
+        let full = page.len() == PAGE;
+        lines.extend(page.into_iter().map(|l| l.entry));
+        if !full {
             break;
         }
     }
-    Ok(json!({
-        "ok": replay.agrees(header.balance.0, header.last_sequence),
-        "stored": header.balance,
-        "replayed": replay.sum,
-        "entries": replay.last,
-        "gap": replay.gap,
-    }))
+    Ok(strata_storage_api::ledger_audit::anchors(&lines))
+}
+
+/// The first anchor of `account` that the entries do not hold: the entry numbered as the anchor
+/// is missing or is not the one that was anchored (LDG-2923).
+fn anchor_break(
+    account: &LedgerAccountId,
+    anchors: &std::collections::BTreeMap<String, (u64, String)>,
+    entries: &[strata_kernel::LedgerEntry],
+) -> Option<ledger_chain::Break> {
+    let (sequence, hash) = anchors.get(&ledger::account_key(account))?;
+    let held = entries.iter().find(|e| e.sequence == *sequence);
+    (held.and_then(|e| e.hash.as_deref()) != Some(hash.as_str())).then(|| ledger_chain::Break {
+        account: *account,
+        sequence: *sequence,
+        code: ledger_chain::CHAIN_BROKEN,
+    })
 }
 
 /// The id of the first account that still has credit due at `cutoff`, if one has.

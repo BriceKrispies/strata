@@ -189,3 +189,12 @@ fn simultaneous_misses_on_one_record_are_one_load() {
     assert_eq!(after.record_misses - before.record_misses, 1);
     assert_eq!(after.record_hits - before.record_hits, threads as u64 - 1);
 }
+
+/// A ledger transaction is audited in its commit and a restore cannot drop it.
+// Verifies: LDG-2925, LDG-2923, LDG-2911
+#[test]
+fn memory_store_audits_a_transaction_and_refuses_a_restore_that_drops_it() {
+    conformance::a_ledger_transaction_is_audited_in_its_commit_and_a_restore_cannot_drop_it(
+        &MemoryStore::new(),
+    );
+}

@@ -966,7 +966,40 @@ fn insert_commit_work(t: &mut Transaction<'_>, commit: &Commit) -> StoreResult<(
         &commit.jobs,
         commit.journal.context.now,
     )?;
-    insert_exceptions(t, &commit.exceptions)
+    insert_exceptions(t, &commit.exceptions)?;
+    // The audit lines of the ledger entries of the commit (LDG-2925): a line that cannot be
+    // written refuses the commit, which then changes nothing (LDG-2926).
+    for entry in &commit.audit {
+        append_audit(t, entry)?;
+    }
+    Ok(())
+}
+
+/// One line of the audit trail, chained to the line before it, in the transaction `t`.
+fn append_audit(t: &mut Transaction<'_>, entry: &AuditEntry) -> StoreResult<()> {
+    let previous = select_strings(
+        t,
+        "SELECT chain FROM audit_log WHERE chain IS NOT NULL ORDER BY seq DESC LIMIT 1",
+        &[],
+    )?;
+    let chain = strata_storage_api::audit_chain::audit_link(
+        previous.first().map(String::as_str).unwrap_or(""),
+        entry,
+    );
+    t.execute(
+        "INSERT INTO audit_log (seq, at, kind, event, correlation, data, chain)
+         VALUES ((SELECT COALESCE(MAX(seq), 0) + 1 FROM audit_log), $1, $2, $3, $4, $5, $6)",
+        &[
+            &entry.at,
+            &entry.kind,
+            &entry.event,
+            &entry.correlation,
+            &entry.data,
+            &chain,
+        ],
+    )
+    .map_err(db)?;
+    Ok(())
 }
 
 // ---- The segment block (tenant step 15) ----
@@ -4305,33 +4338,9 @@ impl Store for PostgresStore {
     }
 
     fn audit_append(&self, tenant: &TenantId, entry: &AuditEntry) -> StoreResult<()> {
-        self.on_existing(tenant, |t| {
-            // The chain value of the line before, under the tenant's writer lock, so that two
-            // appends never chain to the same line.
-            let previous = select_strings(
-                t,
-                "SELECT chain FROM audit_log WHERE chain IS NOT NULL ORDER BY seq DESC LIMIT 1",
-                &[],
-            )?;
-            let chain = strata_storage_api::audit_chain::audit_link(
-                previous.first().map(String::as_str).unwrap_or(""),
-                entry,
-            );
-            t.execute(
-                "INSERT INTO audit_log (seq, at, kind, event, correlation, data, chain)
-                 VALUES ((SELECT COALESCE(MAX(seq), 0) + 1 FROM audit_log), $1, $2, $3, $4, $5, $6)",
-                &[
-                    &entry.at,
-                    &entry.kind,
-                    &entry.event,
-                    &entry.correlation,
-                    &entry.data,
-                    &chain,
-                ],
-            )
-            .map_err(db)?;
-            Ok(())
-        })
+        // The chain value of the line before, under the tenant's writer lock, so that two appends
+        // never chain to the same line.
+        self.on_existing(tenant, |t| append_audit(t, entry))
     }
 
     fn audit_chain(
@@ -4491,7 +4500,7 @@ impl Store for PostgresStore {
             )
             .map_err(db)?;
             let held = guard_generation(t, tenant, expected)?;
-            ledger::check_restorable(t, state.revision)?;
+            ledger::check_restorable(t, &state)?;
             t.execute("DELETE FROM records", &[]).map_err(db)?;
             raise_object_revision(t, "")?;
             let revision: i64 = state.revision.0 as i64;

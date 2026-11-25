@@ -664,6 +664,22 @@ impl SealedStore {
 
     /// The commit as it is stored: personal fields sealed and the journal's hashes over the
     /// sealed form. A commit of a tenant whose schema declares no personal field is unchanged.
+    /// The audit lines of a commit, sealed as a line of [`Store::audit_append`] is (LDG-2925): the
+    /// members that name a person are sealed under that person's key.
+    fn seal_commit_audit<'c>(&self, commit: Cow<'c, Commit>) -> StoreResult<Cow<'c, Commit>> {
+        if commit.audit.is_empty() {
+            return Ok(commit);
+        }
+        let tenant = commit.delta.tenant.clone();
+        let mut sealed = commit.into_owned();
+        let mut lines = Vec::with_capacity(sealed.audit.len());
+        for line in &sealed.audit {
+            lines.push(self.seal_audit(&tenant, line)?.into_owned());
+        }
+        sealed.audit = lines;
+        Ok(Cow::Owned(sealed))
+    }
+
     fn seal_commit<'c>(&self, commit: &'c Commit) -> StoreResult<Cow<'c, Commit>> {
         let tenant = &commit.delta.tenant;
         let schema = match schema_after(&commit.delta) {
@@ -1032,7 +1048,7 @@ impl Store for SealedStore {
     }
 
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
-        let sealed = self.seal_commit(commit)?;
+        let sealed = self.seal_commit_audit(self.seal_commit(commit)?)?;
         self.inner.commit(&sealed)
     }
 
@@ -1041,7 +1057,7 @@ impl Store for SealedStore {
         commit: &Commit,
         write: &seg::SegmentWrite,
     ) -> StoreResult<Receipt> {
-        let sealed = self.seal_commit(commit)?;
+        let sealed = self.seal_commit_audit(self.seal_commit(commit)?)?;
         self.inner.commit_with_segments(&sealed, write)
     }
 

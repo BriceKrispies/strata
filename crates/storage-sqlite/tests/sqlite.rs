@@ -800,3 +800,171 @@ fn an_unfinished_install_is_rolled_back_after_a_restart_and_a_finished_one_stays
     assert!(store.load_complete(&half).unwrap().tenant.is_none());
     assert!(store.load_complete(&whole).unwrap().tenant.is_some());
 }
+
+/// A tenant with the unit `points` and the pool `budget`, and a transaction posted to its owner.
+fn tenant_with_a_ledger(store: &SqliteStore) -> (TenantId, Principal) {
+    let alpha = tenant_id("alpha");
+    let owner = Principal::User(principal_id("alpha:owner"));
+    execute(
+        store,
+        &Intent::CreateTenant {
+            name: "alpha".into(),
+            owner: principal_id("alpha:owner"),
+        },
+        &ctx("alpha", Principal::System, 10),
+    )
+    .unwrap();
+    execute(
+        store,
+        &Intent::ChangeSchema {
+            changes: vec![
+                SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+                    unit: LedgerUnit::new("points").unwrap(),
+                    description: "Points".into(),
+                    expiry: None,
+                }),
+                SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
+                    pool: LedgerPoolName::new("budget").unwrap(),
+                    description: "Budget".into(),
+                }),
+            ],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+        &ctx("alpha", owner.clone(), 11),
+    )
+    .unwrap();
+    (alpha, owner)
+}
+
+fn award(key: &str, amount: i64) -> Intent {
+    let leg = |owner: LedgerOwner, amount: i64| LedgerLeg {
+        owner,
+        unit: LedgerUnit::new("points").unwrap(),
+        amount: LedgerAmount(amount),
+        scope: None,
+    };
+    Intent::PostLedgerTransaction {
+        transaction: LedgerTransaction {
+            operation: "sqlite-test".into(),
+            idempotency_key: key.into(),
+            reason: "award".into(),
+            on_behalf_of: None,
+            legs: vec![
+                leg(
+                    LedgerOwner::Pool {
+                        pool: LedgerPoolName::new("budget").unwrap(),
+                    },
+                    -amount,
+                ),
+                leg(
+                    LedgerOwner::Principal {
+                        principal: principal_id("alpha:owner"),
+                    },
+                    amount,
+                ),
+            ],
+        },
+    }
+}
+
+/// Verifies: LDG-2925, LDG-2923, LDG-2911
+///
+/// On disk, a transaction is audited by its own commit and a snapshot from before it is not
+/// restored over it.
+#[test]
+fn a_ledger_transaction_is_audited_and_a_restore_cannot_drop_it_on_disk() {
+    let store = SqliteStore::open(&fresh_path("ledger-audit"), Timestamp(1)).unwrap();
+    conformance::a_ledger_transaction_is_audited_in_its_commit_and_a_restore_cannot_drop_it(&store);
+}
+
+/// Verifies: LDG-2926
+///
+/// A commit whose audit line cannot be written changes nothing: no entry, no header, no event and
+/// no revision of the transaction is left, and the same transaction commits once the audit log
+/// accepts lines again.
+#[test]
+fn a_commit_that_cannot_append_its_audit_line_changes_nothing() {
+    let store = SqliteStore::open(&fresh_path("audit-refused"), Timestamp(1)).unwrap();
+    let (alpha, owner) = tenant_with_a_ledger(&store);
+    let file = store.tenant_file(&alpha).unwrap().unwrap();
+    let before = store.load_complete(&alpha).unwrap();
+    let events_before = store.events_after(&alpha, 0, 1000).unwrap().len();
+    {
+        let conn = rusqlite::Connection::open(&file).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER audit_refused BEFORE INSERT ON audit_log
+             BEGIN SELECT RAISE(ABORT, 'the audit log refuses a line'); END;",
+        )
+        .unwrap();
+    }
+    assert!(execute(&store, &award("a", 5), &ctx("alpha", owner.clone(), 20)).is_err());
+    let after = store.load_complete(&alpha).unwrap();
+    assert_eq!(
+        after.tenant.as_ref().unwrap().revision,
+        before.tenant.as_ref().unwrap().revision
+    );
+    assert_eq!(after.tenant.unwrap().ledger, before.tenant.unwrap().ledger);
+    assert_eq!(
+        store.events_after(&alpha, 0, 1000).unwrap().len(),
+        events_before
+    );
+    {
+        let conn = rusqlite::Connection::open(&file).unwrap();
+        conn.execute_batch("DROP TRIGGER audit_refused;").unwrap();
+    }
+    execute(&store, &award("a", 5), &ctx("alpha", owner, 21)).unwrap();
+    let lines = store.audit_list(&alpha, Some("audit"), 10).unwrap();
+    assert_eq!(
+        lines.iter().filter(|l| l.event == "ledger.posting").count(),
+        1
+    );
+}
+
+/// Verifies: LDG-2924
+///
+/// A journal cut back by someone with the database, together with its header, passes the check
+/// against the journal it holds, and a restore of a snapshot that matches the cut is refused as
+/// behind the anchor the audit log kept.
+#[test]
+fn a_restore_to_a_truncated_journal_is_refused_behind_the_anchor() {
+    let store = SqliteStore::open(&fresh_path("anchor"), Timestamp(1)).unwrap();
+    let (alpha, owner) = tenant_with_a_ledger(&store);
+    execute(&store, &award("a", 5), &ctx("alpha", owner.clone(), 20)).unwrap();
+    let snapshot = store.create_snapshot(&alpha, "one", Timestamp(21)).unwrap();
+    execute(&store, &award("b", 7), &ctx("alpha", owner, 22)).unwrap();
+    // The snapshot is older than the second entries: refused for dropping them.
+    let dropped = store.restore_snapshot(&alpha, snapshot.id, None);
+    assert!(
+        matches!(&dropped, Err(StoreError::Invalid(m)) if m.starts_with("restore-drops-entries")),
+        "{dropped:?}"
+    );
+    // The database is cut back to the snapshot: the entries after it and the headers go.
+    let held = store.load_snapshot(&alpha, snapshot.id).unwrap();
+    let file = store.tenant_file(&alpha).unwrap().unwrap();
+    {
+        let conn = rusqlite::Connection::open(&file).unwrap();
+        conn.execute_batch(
+            "DROP TRIGGER ledger_entries_append_only_delete;
+             DELETE FROM ledger_entries WHERE sequence > 1;",
+        )
+        .unwrap();
+        for header in held.ledger.as_ref().unwrap().accounts.values() {
+            conn.execute(
+                "UPDATE ledger_accounts SET balance = ?1, last_sequence = ?2, data = ?3 WHERE account_id = ?4",
+                rusqlite::params![
+                    header.balance.0,
+                    header.last_sequence as i64,
+                    serde_json::to_string(header).unwrap(),
+                    header.account.to_string()
+                ],
+            )
+            .unwrap();
+        }
+    }
+    let refused = store.restore_snapshot(&alpha, snapshot.id, None);
+    assert!(
+        matches!(&refused, Err(StoreError::Invalid(m)) if m.starts_with("head-behind-anchor")),
+        "{refused:?}"
+    );
+}

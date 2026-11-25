@@ -336,3 +336,186 @@ async fn the_owner_posts_a_retry_counts_once_and_a_member_reads_only_their_own()
         .await;
     assert_eq!(status, 422, "{body}");
 }
+
+/// The ledger journal through the functions the routes call, on a store the test holds, so that
+/// the audit log it writes can be read.
+mod journal {
+    use serde_json::{json, Value as Json};
+    use std::sync::Arc;
+    use strata_backend::app::{App, Config, Shared};
+    use strata_backend::auth::Identity;
+    use strata_backend::ledger;
+    use strata_backend::mail::DevSink;
+    use strata_kernel::{
+        Context, ExistingData, Intent, LedgerPoolDecl, LedgerPoolName, LedgerUnit, LedgerUnitDecl,
+        Principal, PrincipalId, SchemaChange, SessionId, TenantId, Timestamp,
+    };
+    use strata_protocol::ws::SessionState;
+    use strata_storage_api::memory::MemoryStore;
+    use strata_storage_api::{execute, SessionRecord, Store};
+
+    fn who(name: &str) -> PrincipalId {
+        PrincipalId::new(name).expect("principal id")
+    }
+
+    fn app_on(store: Arc<MemoryStore>) -> Shared {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let cfg = Config {
+            addr: "127.0.0.1:0".parse().expect("address"),
+            service_token: "test-service-token-0123456789abcdef".into(),
+            dev: true,
+            tenants_dir: root.join("tenants"),
+            lean_dir: root.join("lean"),
+            session_ttl_ms: 3_600_000,
+            session_idle_ms: 3_600_000,
+            throttle: Default::default(),
+            passkey_challenge_ttl_ms: 300_000,
+            link_ttl_ms: 900_000,
+            mail: Arc::new(DevSink::memory()),
+            federation: Arc::new(strata_backend::signin::oidc::Federation::none()),
+            factors: Default::default(),
+            limits: Default::default(),
+        };
+        App::new(cfg, store)
+    }
+
+    fn identity(app: &App, site: &TenantId, principal: &str) -> Identity {
+        let principal = who(principal);
+        let now = app.now().0;
+        Identity {
+            tenant: site.clone(),
+            principal: Principal::User(principal.clone()),
+            session: Some(SessionRecord {
+                id: SessionId::new(format!("s-{}", principal.as_str())).expect("session id"),
+                token_hash: "hash".into(),
+                csrf_token: "csrf".into(),
+                tenant: site.clone(),
+                principal,
+                display_name: "someone".into(),
+                created_at: Timestamp(now),
+                last_seen_at: Timestamp(now),
+                expires_at: Timestamp(i64::MAX),
+                revoked_at: None,
+                authenticated_at: Timestamp(now),
+                network: None,
+            }),
+            state: SessionState::Active,
+            correlation: "t-journal".into(),
+            verified_address: None,
+            idempotency_key: None,
+        }
+    }
+
+    /// A tenant `alpha` owned by `alpha:owner` with the unit `points` and the pool `budget`.
+    fn started() -> (Shared, Arc<MemoryStore>, TenantId) {
+        let memory = Arc::new(MemoryStore::new());
+        let app = app_on(memory.clone());
+        let site = TenantId::new("alpha").unwrap();
+        let context = |principal: Principal, now: i64| Context {
+            tenant: site.clone(),
+            principal,
+            session: None,
+            now: Timestamp(now),
+            correlation: "found".into(),
+            verified_address: None,
+            idempotency_key: None,
+            language: None,
+            hop: None,
+        };
+        execute(
+            memory.as_ref(),
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: who("alpha:owner"),
+            },
+            &context(Principal::System, 1_000),
+        )
+        .unwrap();
+        execute(
+            memory.as_ref(),
+            &Intent::ChangeSchema {
+                changes: vec![
+                    SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+                        unit: LedgerUnit::new("points").unwrap(),
+                        description: "Points".into(),
+                        expiry: None,
+                    }),
+                    SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
+                        pool: LedgerPoolName::new("budget").unwrap(),
+                        description: "Budget".into(),
+                    }),
+                ],
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
+            &context(Principal::User(who("alpha:owner")), 1_001),
+        )
+        .unwrap();
+        (app, memory, site)
+    }
+
+    fn award(key: &str, to: i64, from: i64) -> Json {
+        json!({
+            "operation": "journal-test",
+            "idempotency_key": key,
+            "reason": "award",
+            "legs": [
+                { "owner": { "pool": { "pool": "budget" } }, "unit": "points", "amount": -from },
+                { "owner": { "principal": { "principal": "alpha:owner" } }, "unit": "points", "amount": to },
+            ],
+        })
+    }
+
+    /// Verifies: LDG-2903, LDG-2925
+    #[test]
+    fn a_transaction_over_the_route_is_balanced_and_audited() {
+        let (app, store, site) = started();
+        let owner = identity(&app, &site, "alpha:owner");
+        let posted =
+            ledger::handle(&app, &owner, "post-transaction", award("a", 5, 5)).expect("posted");
+        assert_eq!(posted["results"].as_array().unwrap().len(), 2);
+        let refused = ledger::handle(&app, &owner, "post-transaction", award("b", 5, 4));
+        assert!(refused.is_err(), "unequal legs are refused");
+        let lines = store.audit_list(&site, Some("audit"), 10).unwrap();
+        assert_eq!(
+            lines.iter().filter(|l| l.event == "ledger.posting").count(),
+            1,
+            "the refused transaction left no line"
+        );
+    }
+
+    /// Verifies: LDG-2927, LDG-2928, LDG-2922
+    #[test]
+    fn a_verification_needs_ledger_read_and_is_recorded() {
+        let (app, store, site) = started();
+        let owner = identity(&app, &site, "alpha:owner");
+        ledger::handle(&app, &owner, "post-transaction", award("a", 5, 5)).unwrap();
+        ledger::handle(&app, &owner, "post-transaction", award("b", 2, 2)).unwrap();
+        let verified = ledger::handle(&app, &owner, "verify", json!({})).expect("verified");
+        assert_eq!(verified["ok"], true, "{verified}");
+        assert_eq!(verified["accounts"], 2);
+        assert_eq!(verified["entries"], 4);
+        assert!(verified["first_break"].is_null());
+        let lines = store.audit_list(&site, Some("audit"), 10).unwrap();
+        let recorded: Vec<_> = lines
+            .iter()
+            .filter(|l| l.event == "ledger.verification")
+            .collect();
+        assert_eq!(recorded.len(), 1);
+        let data: Json = serde_json::from_str(&recorded[0].data).unwrap();
+        assert_eq!(data["ok"], true);
+        assert_eq!(data["scope"], "tenant");
+        // A person without ledger-read is refused, and nothing is recorded.
+        let stranger = identity(&app, &site, "alpha:stranger");
+        assert!(ledger::handle(&app, &stranger, "verify", json!({})).is_err());
+        assert_eq!(
+            store
+                .audit_list(&site, Some("audit"), 10)
+                .unwrap()
+                .iter()
+                .filter(|l| l.event == "ledger.verification")
+                .count(),
+            1
+        );
+    }
+}
