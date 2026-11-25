@@ -707,7 +707,11 @@ fn ask(query: &str, aggregate_name: &str, params: &[(&str, Value)]) -> Aggregate
     }
 }
 
-fn run_on(state: &State, who: &Principal, request: &AggregateRequest) -> Result<AggregateResult, DomainError> {
+fn run_on(
+    state: &State,
+    who: &Principal,
+    request: &AggregateRequest,
+) -> Result<AggregateResult, DomainError> {
     aggregates::run(state, request, &ctx("alpha", who.clone(), 90_000))
 }
 
