@@ -184,6 +184,34 @@ level to shorten a cold build.
 `var/shots/` for visual review; the browser tests also save theirs under
 `tests/e2e/screenshots/`. `python scripts/covers.py` redraws the cover plates.
 
+### Run history
+
+Every gate run writes a `gate` record, pass or fail, and every gate test run writes a `tests` record, to
+`var/runs/<kind>/<UTC second>.json` (`var/` is gitignored). The module is `scripts/run-history.mjs`; the
+records are written atomically (a temporary file, then a rename), and each kind keeps its newest runs only:
+10 by default, or `STRATA_RUNS_KEEP` (a whole number of at least 1).
+
+- The `gate` record holds the start time, the total seconds, the commit and whether its tree had changes, the
+  flags, the verdict (`passed`, `failed`, or `stopped` when the run ended part way), the failed and not-run check
+  names, and each command as a step: name, command, seconds, ok, and the check lines that followed it with their
+  pass or fail. A run stopped by an error or a kill still records what ran (the record is written on process exit).
+- The `tests` record holds each test binary (package, target, label, seconds, status, passed, failed) and each
+  test that ran (package, binary, name, seconds, ok), with the test phase's steps. Per-test seconds are present
+  only when the run reported them (`perTestTimes`).
+
+`node scripts/runs.mjs [gate|tests] [--json]` prints the latest run of a kind, with each time's change in
+seconds (Δ) against the run before it. A gate run lists its steps slowest first and the total; a test run lists
+the 20 slowest binaries and the 20 slowest tests. A time that grew by more than 20% is marked `REGRESSED`.
+
+Per-test times are not in the gate's test record. libtest prints them only with
+`-Z unstable-options --report-time`, which needs `RUSTC_BOOTSTRAP=1` in the environment. Setting that variable
+changes cargo's build fingerprint: on `cargo test -p strata-spec-expr --test spec_expr_it`, setting it after an
+unset build recompiled `quote`, `strata-spec-expr` and `strata-spec-parts` (about 47 s), and every unset/set
+switch in a shared target directory repeats that. The gate therefore runs cargo test with no flag and reads each
+binary's time from `finished in`. Running the built binaries directly with `RUSTC_BOOTSTRAP=1 <exe> -Z unstable-options --report-time`
+needs no rebuild, but it runs every test a second time, so it is not the gate's path. The test record reads
+per-test times when a log carries them (the parser handles both forms).
+
 ## Environment
 
 | Variable | Service | Default |
