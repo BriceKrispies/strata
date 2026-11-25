@@ -417,6 +417,53 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
   | heartbeatStale {s : State} {token : Nat} :
       (s.wsHeartbeat ≠ some token ∨ s.wsState ≠ .opened) →
       Allowed cat s (.timer "heartbeat" token) s []
+  /-- The emailed-link form is complete: the request is sent; it is the same answer whether or not the
+  address has an account. -/
+  | linkAsk {s : State} {values : List (String × String)} :
+      cat.validLink values = true →
+      Allowed cat s (.submit "link" values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .shared, s.generation⟩ :: s.pending
+          linkSent := false }
+        (fetch s.nextId .shared)
+  /-- The link request was answered: the page says a link is on its way. -/
+  | linkAnswer {s : State} {id : Nat} :
+      pendingOf s id .shared →
+      Allowed cat s (.linkAnswer id) { s with pending := dropId s.pending id, linkSent := true } []
+  /-- An invitation's form is complete: the request is sent (its answer signs nobody in). -/
+  | inviteAsk {s : State} {values : List (String × String)} :
+      cat.validInvite values = true →
+      Allowed cat s (.submit "invite" values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .shared, s.generation⟩ :: s.pending }
+        (fetch s.nextId .shared)
+  /-- The invitation was accepted: nobody is signed in; the page goes on to the address the reply names
+  (the sign-in page), replacing the address. -/
+  | inviteAccepted {s : State} {id : Nat} {target : Route} :
+      pendingOf s id .shared →
+      Allowed cat s (.inviteAccepted id target)
+        { s with
+          route := target
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .view, s.generation⟩ :: dropViews (dropId s.pending id)
+          view := { status := .loading, model := s.view.model, request := some s.nextId } }
+        (navEffects s.route target true ++ fetch s.nextId .view)
+  /-- A provider's button is pressed for a provider the site offers: the start is asked for. -/
+  | oidcStart {s : State} {provider : String} :
+      cat.validProvider provider = true →
+      Allowed cat s (.action "oidc.start" provider)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .shared, s.generation⟩ :: s.pending }
+        (fetch s.nextId .shared)
+  /-- The provider's start answered with the address to send the browser to: the browser leaves for it.
+  Nothing in the page changes. -/
+  | oidcRedirect {s : State} {id : Nat} {href : String} :
+      pendingOf s id .shared →
+      Allowed cat s (.oidcRedirect id href) { s with pending := dropId s.pending id }
+        [.navigateAway href]
 
 /-- The states the kernel can reach from the initial state by allowed steps. -/
 inductive Reachable (cat : Catalogue) : State → Prop
@@ -591,6 +638,27 @@ theorem refusal_counts_and_stops (cat : Catalogue) {s s' : State} {m : Msg} {es 
     s'.wsRefusals = s.wsRefusals + 1 ∧ (s'.wsStopped = true ↔ refusalLimit ≤ s'.wsRefusals) := by
   cases ha <;> simp_all [refusalLimit] <;> omega
 
+/-! ### The sign-in methods (slice 6) -/
+
+/-- **An accepted invitation signs nobody in.** -/
+theorem invite_accepted_signs_nobody_in (cat : Catalogue) {s s' : State} {id : Nat} {target : Route}
+    {es : List Effect} (ha : Allowed cat s (.inviteAccepted id target) s' es) :
+    s'.session = s.session := by
+  cases ha; rfl
+
+/-- **An identity provider's redirect leaves the page where it is, except for the leaving.** -/
+theorem oidc_redirect_leaves_page (cat : Catalogue) {s s' : State} {id : Nat} {href : String}
+    {es : List Effect} (ha : Allowed cat s (.oidcRedirect id href) s' es) :
+    s'.session = s.session ∧ s'.view = s.view ∧ es = [.navigateAway href] := by
+  cases ha; exact ⟨rfl, rfl, rfl⟩
+
+/-- **An emailed-link request is sent only for a complete form.** -/
+theorem link_sent_only_complete (cat : Catalogue) {s s' : State} {m : Msg}
+    {values : List (String × String)} {es : List Effect}
+    (hm : m = .submit "link" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
+    cat.validLink values = true := by
+  cases ha <;> simp_all
+
 /-! ## Non-vacuity -/
 
 /-- A catalogue with one screen, which needs a signed-in person, for the witness below. -/
@@ -601,7 +669,10 @@ def sampleCatalogue : Catalogue :=
     validSignIn := fun _ => true
     searchTarget := fun _ => root
     reconnectMs := 1000
-    heartbeatMs := 15000 }
+    heartbeatMs := 15000
+    validLink := fun _ => true
+    validInvite := fun _ => true
+    validProvider := fun _ => true }
 
 /-- The relation is not empty where the theorems look: a page that starts for a person, reads the
 view of its screen and holds it is a reachable state, holding a model read for that person. -/

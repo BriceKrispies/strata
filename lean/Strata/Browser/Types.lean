@@ -47,6 +47,12 @@ structure Catalogue where
   reconnectMs : Nat
   /-- The interval of the heartbeat, in milliseconds. -/
   heartbeatMs : Nat
+  /-- The emailed-link request form is complete. -/
+  validLink : List (String × String) → Bool
+  /-- The invitation form (the password) is complete. -/
+  validInvite : List (String × String) → Bool
+  /-- The identity provider named by an action is one the site offers. -/
+  validProvider : String → Bool
 
 /-- The kind of a request the kernel has in flight. `session`, `view`, `signIn` and `signOut` are the
 kinds slice 1 names. `personal` stands for every request whose reply belongs to the person signed in
@@ -156,6 +162,8 @@ structure State where
   wsReconnect : Option Nat := none
   /-- The token of the running heartbeat timer, if any. -/
   wsHeartbeat : Option Nat := none
+  /-- The emailed-link request was answered: the page says a link is on its way. -/
+  linkSent : Bool := false
 
 /-- Effects out of the kernel. `http` and `timer "request"` are the request and its deadline; the
 other effects are the page's own (URL, scroll), the live connection, storage, the browser's passkey
@@ -207,5 +215,11 @@ inductive Msg where
   | frameEvent (seq : Nat) (refresh : Bool)
   | resync (head : Nat)
   | pong (head : Nat)
+  /-- The answers of the sign-in methods: a link was requested (sent, whether or not the address has an
+  account); an invitation was accepted, and the page goes to the reply's address; an identity provider's
+  start answered with the address to send the browser to. -/
+  | linkAnswer (id : Nat)
+  | inviteAccepted (id : Nat) (target : Route)
+  | oidcRedirect (id : Nat) (href : String)
 
 end Strata.Browser

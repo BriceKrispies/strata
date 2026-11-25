@@ -366,9 +366,10 @@ what the B2 implementation will be proved against.
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `submit` link, `input` link; `http_result` links.request, links.sign_in | emailed sign-in: the request; the opened link is sent for checking; signs in | not covered | 6 |
-| `submit` invite, `input` invite; `http_result` invites.accept | an owner's invitation: the password and its acceptance; signs nobody in | not covered | 6 |
-| `action oidc.start`; `http_result` oidc.providers (entered on the sign-in page), oidc.start | the providers list; the start, which navigates the browser to the provider | not covered | 6 |
+| `submit` link; `http_result` links.request | emailed sign-in: the request is sent and the page says a link is on its way (`linkAsk`, `linkAnswer`) | partly | 6 (the opened link's sign-in, `links.sign_in`, and its refusal are not yet in the relation) |
+| `submit` invite; `http_result` invites.accept | an owner's invitation: the request; on acceptance the page goes on to sign-in and nobody is signed in (`inviteAsk`, `inviteAccepted`) | partly | 6 (the form's typed values, `input` invite, are not yet in the relation) |
+| `action oidc.start`; `http_result` oidc.start | the start: the request; the reply's address is left for by the browser (`oidcStart`, `oidcRedirect`) | covered | 6 |
+| `http_result` oidc.providers (entered on the sign-in page) | the providers list | not covered | 6 |
 | `http_result` oidc.sign_in | the provider's answer is sent; signs in as a login does | not covered | 6 |
 
 #### Records and the editor
@@ -430,7 +431,7 @@ what the B2 implementation will be proved against.
 | `store` | the theme choice in storage | covered | 4 (`themeCycle` stores the mode's key) |
 | `passkey` (`create`, `get`) | the browser's passkey prompt | not covered | 6 (sign-in), 7 (second factor), 8 (registration) |
 | `log` | the record-rule disagreement, and the worker's diagnostics | not covered | 9 |
-| `navigate_away` | the redirect to an identity provider; emitted by `oidc.js` but absent from the `Effect` type in `types.js` (F5) | not covered | 6 |
+| `navigate_away` | the redirect to an identity provider; emitted by `oidc.js` but absent from the `Effect` type in `types.js` (F5) | covered | 6 (`oidcRedirect`; `types.js` still needs the declaration, F5) |
 
 ### 7.3 Where the JavaScript does not meet what the spec requires
 
@@ -558,7 +559,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 | 3 (partly done) | Forms, for the sign-in and the search: the typed values, the complete and incomplete submissions, the refusal, the search's navigation (`inputLogin`, `signInIncomplete`, `loginRefused`, `searchSubmit`). Still open in this slice: the csrf token and idempotency key of a request (with the `http` effect), the words of a refusal, focus, and the typed draft (`Drafts.lean`) | 1 |
 | 4 (partly done) | Presentation: the theme and its store effect, the system theme, the menu, dismissing and expiring toasts, the dev expire request (`themeCycle`, `systemThemeSet`, `menuToggle`, `dismissToast`, `toastExpires`, `devExpire`, `sharedAnswer`). Still open: raising a toast (every row's toast), the menu closing on a navigation, and focus and announcements | 1 |
 | 5 (partly done) | Live connection (`welcomeFirst`, `welcomeResume`, `eventRefresh`, `eventQuiet`, `eventGap`, `resyncRefresh`, `pongBehind`, `pongCurrent`, `wsClosedLater`, `wsRefusedKeep`, `wsRefusedStop`, `reconnectFires`, `heartbeatDue`, `socketOpened`). Still open: the session frame when active, the delayed frames (emit), the request token on connect, the session frame of a membership notice, and the schema notice's manifest (11) | 1, 2 |
-| 6 | Sign-in methods: passkey sign-in, emailed links, invitations, identity providers (OIDC and SAML), `navigate_away` | 3, 5 |
+| 6 (partly done) | Sign-in methods: emailed links (request and answer), invitations (request and acceptance), the identity provider's start and redirect (`linkAsk`, `linkAnswer`, `inviteAsk`, `inviteAccepted`, `oidcStart`, `oidcRedirect`). Still open: the opened link's sign-in, passkey sign-in, the providers list, the provider's answer (`oidc.sign_in`), SAML, and the typed values of the invitation form | 3, 5 |
 | 7 | Second factors and step-up: the waiting sign-in, the factors section, recovery codes, the step-up prompt and its retry, the passkey as a second factor | 3, 6 |
 | 8 | The person's sessions and passkeys on the desk | 3, 7 |
 | 9 | Records: the editor's saves, publish and unpublish, preview, row actions, paging, the client's record-rule check and its log | 3, 5 |
@@ -570,8 +571,8 @@ How the existing theorems meet this one (no existing theorem is changed):
 
 ### 7.7 Counts
 
-The messages table has 79 rows (a row is one message, or one family of messages with the same handling):
-28 covered, 12 partly, 39 not covered (after slice 5). The effects table has 15 rows: 6 covered, 4 partly, 5 not
+The messages table has 80 rows (a row is one message, or one family of messages with the same handling):
+29 covered, 14 partly, 37 not covered (after slice 6). The effects table has 15 rows: 7 covered, 4 partly, 4 not
 covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.

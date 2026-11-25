@@ -272,3 +272,6 @@ import Strata
 #print axioms Strata.Browser.in_order_notice_acked
 #print axioms Strata.Browser.stopped_never_reconnects
 #print axioms Strata.Browser.refusal_counts_and_stops
+#print axioms Strata.Browser.invite_accepted_signs_nobody_in
+#print axioms Strata.Browser.oidc_redirect_leaves_page
+#print axioms Strata.Browser.link_sent_only_complete
