@@ -562,6 +562,7 @@ async fn members(
         if matches!(
             request,
             MembersRequest::AssignRole { .. }
+                | MembersRequest::AssignScopedRole { .. }
                 | MembersRequest::AddTeamMember { .. }
                 | MembersRequest::Invite { .. }
                 | MembersRequest::RevokeInvitation { .. }

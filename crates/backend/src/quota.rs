@@ -645,6 +645,7 @@ fn frees_room(intent: &Intent) -> bool {
         Intent::DeleteRecord { .. }
             | Intent::EraseSubject { .. }
             | Intent::RevokeRole { .. }
+            | Intent::RevokeScopedRole { .. }
             | Intent::RevokeTeamRole { .. }
             | Intent::RemoveTeamMember { .. }
             | Intent::RevokeInvitation { .. }

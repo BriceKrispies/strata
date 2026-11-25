@@ -151,6 +151,12 @@ pub const TYPED_SECTIONS: &[TypedSection] = &[
         purpose: "rules that hold a change for approval (values of the platform type hold-rule, D-8400)",
     },
     TypedSection {
+        section: "separations",
+        ty: "separation-def",
+        id_field: Some("id"),
+        purpose: "separations of duties: two capabilities no one holds together (values of the platform type separation-def, D-8482)",
+    },
+    TypedSection {
         section: "eventKinds",
         ty: "event-kind-decl",
         id_field: None,

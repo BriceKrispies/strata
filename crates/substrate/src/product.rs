@@ -64,6 +64,7 @@ const BUILT_SECTIONS: &[&str] = &[
     "automations",
     "operations",
     "holds",
+    "separations",
     "capabilities",
     "settings",
     "ledger-units",
@@ -196,6 +197,9 @@ pub struct ProductBundle {
     /// The rules that hold a change for approval (`holds`, D-8400), installed after the
     /// operations, roles and settings they name.
     pub holds: BTreeMap<HoldRuleId, HoldRule>,
+    /// The separations of duties of the product (`separations`, D-8482): two capabilities that
+    /// no principal holds together, installed after the capabilities they name.
+    pub separations: BTreeMap<SeparationId, SeparationDef>,
     pub capabilities: BTreeMap<CapabilityName, CapabilityDef>,
     pub settings: BTreeMap<SettingId, SettingDef>,
     pub ledger_units: BTreeMap<LedgerUnit, LedgerUnitDecl>,
@@ -955,6 +959,13 @@ impl ProductBundle {
             &expressions_of_hold,
             &|rule: &HoldRule| rule.id.clone(),
         )?;
+        let separations: BTreeMap<SeparationId, SeparationDef> = parse_list(
+            &mut content,
+            "separations",
+            "id",
+            &|_, _| Ok(()),
+            &|def: &SeparationDef| def.id.clone(),
+        )?;
         for role in role_permissions.keys() {
             if !roles.contains_key(role) {
                 return Err(bad(format!(
@@ -1004,6 +1015,7 @@ impl ProductBundle {
             automations,
             operations,
             holds,
+            separations,
             capabilities,
             settings,
             ledger_units,
@@ -1093,6 +1105,11 @@ impl ProductBundle {
                 .map(|id| OwnedEntity::of("operation", id)),
         );
         out.extend(self.holds.keys().map(|id| OwnedEntity::of("hold-rule", id)));
+        out.extend(
+            self.separations
+                .keys()
+                .map(|id| OwnedEntity::of("separation", id)),
+        );
         out.extend(
             self.segments
                 .keys()
@@ -1245,6 +1262,12 @@ impl ProductBundle {
                     .iter()
                     .filter(|(k, _)| k.to_string() == id)
                     .map(|(_, v)| SchemaChange::DefineHoldRule(v.clone())),
+            ),
+            "separation" => changes.extend(
+                self.separations
+                    .iter()
+                    .filter(|(k, _)| k.to_string() == id)
+                    .map(|(_, v)| SchemaChange::DefineSeparation(v.clone())),
             ),
             "capability" => changes.extend(
                 self.capabilities
@@ -1409,6 +1432,13 @@ impl ProductBundle {
                 .find(|(k, _)| k.to_string() == id)
                 .and_then(|(key, def)| {
                     same(schema.hold_rules.as_ref().and_then(|t| t.get(key)), def)
+                }),
+            "separation" => self
+                .separations
+                .iter()
+                .find(|(k, _)| k.to_string() == id)
+                .and_then(|(key, def)| {
+                    same(schema.separations.as_ref().and_then(|t| t.get(key)), def)
                 }),
             "capability" => self
                 .capabilities
@@ -1925,6 +1955,8 @@ fn removal_rank(kind: &str) -> u8 {
         "ui-element" => 0,
         // A hold rule names operations, roles and settings, and nothing names it.
         "hold-rule" => 0,
+        // A separation names capabilities, which go after it, and nothing names it.
+        "separation" => 0,
         "trigger" => 0,
         "automation" => 1,
         "operation" => 2,
@@ -1960,6 +1992,7 @@ fn removal_change(entity: &OwnedEntity, delete_records: bool) -> Result<SchemaCh
         "automation" => SchemaChange::RemoveAutomation(WorkflowId::new(id).map_err(at)?),
         "operation" => SchemaChange::RemoveOperation(TenantOperationId::new(id).map_err(at)?),
         "hold-rule" => SchemaChange::RemoveHoldRule(HoldRuleId::new(id).map_err(at)?),
+        "separation" => SchemaChange::RemoveSeparation(SeparationId::new(id).map_err(at)?),
         "mail-template" => SchemaChange::RemoveMailTemplate(TemplateId(id.to_string())),
         "notice-template" => SchemaChange::RemoveNoticeTemplate(TemplateId(id.to_string())),
         "token" => SchemaChange::RemoveToken(id.to_string()),

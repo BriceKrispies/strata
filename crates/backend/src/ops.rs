@@ -12,7 +12,7 @@ use strata_kernel::ext::*;
 use strata_kernel::refs_in;
 use strata_kernel::rules::Lookup;
 use strata_kernel::{
-    read, read_needs, visible, Check, Context, DomainError, ErrorKind, FieldId, Intent,
+    read, read_needs, visible, Check, Context, DomainError, ErrorKind, Expr, FieldId, Intent,
     InvitationId, Need, ObjectTypeId, Output, PageCursor, Principal, PrincipalId, ReadRequest,
     ReadResult, Record, RecordId, RoleId, SettingId, State, StateRevision, TeamId, TenantId,
     TenantState, Value, ViewSection,
@@ -214,6 +214,9 @@ fn audit_separation_refusal(
         ErrorKind::LastOwner => "refused.last_owner",
         ErrorKind::ConflictingRoles => "refused.conflicting_roles",
         ErrorKind::ScopeUnknownField => "refused.scope_unknown_field",
+        // ADM-1648: every other refusal of a scoped assignment or of taking one away is audited
+        // too, whatever its kind.
+        _ if is_scoped_role_intent(intent) => "refused.scoped_role",
         _ => return,
     };
     let failed: Vec<&str> = error
@@ -237,6 +240,14 @@ fn audit_separation_refusal(
             "message": error.message,
         }),
     );
+}
+
+/// Whether an intent makes or takes away a scoped role assignment (ADM-1648).
+fn is_scoped_role_intent(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::AssignScopedRole { .. } | Intent::RevokeScopedRole { .. }
+    )
 }
 
 fn object_id(name: &str) -> Result<ObjectTypeId, ApiError> {
@@ -407,6 +418,15 @@ fn named<T, E: std::fmt::Display>(what: &str, parsed: Result<T, E>) -> Result<T,
     parsed.map_err(|problem| ApiError::new(ErrorCode::Invalid, format!("{what}: {problem}")))
 }
 
+/// The scope of a scoped role assignment: the kernel's expression as JSON, or text of the tenant
+/// rule language, which a person writing a request by hand finds easier to get right.
+fn scope_of(scope: &Json) -> Result<Expr, ApiError> {
+    match scope {
+        Json::String(text) => named("scope", strata_kernel::expr::parse(text)),
+        other => named("scope", serde_json::from_value::<Expr>(other.clone())),
+    }
+}
+
 /// Change who holds which role: assign or revoke a role, add or remove a team member, invite and
 /// redeem, and revoke an invitation (ADM-150 to ADM-153, ADM-1083). Each is one kernel intent,
 /// decided by the kernel as the signed-in person. The address an invitation is redeemed with is
@@ -419,7 +439,45 @@ pub fn members(
     identity: &Identity,
     request: &MembersRequest,
 ) -> Result<MembersReply, ApiError> {
-    let intent = match request {
+    let intent = match intent_of_members(request) {
+        Ok(intent) => intent,
+        Err(error) => {
+            // A scoped role request that names no valid intent is a refusal too (ADM-1648).
+            if matches!(
+                request,
+                MembersRequest::AssignScopedRole { .. } | MembersRequest::RevokeScopedRole { .. }
+            ) {
+                let ctx = identity.context(app);
+                app.audit(
+                    "refused.scoped_role",
+                    &ctx.correlation,
+                    json!({
+                        "tenant": ctx.tenant.as_str(),
+                        "kind": "InvalidIntent",
+                        "actor": match &ctx.principal {
+                            Principal::User(id) => json!(id.as_str()),
+                            other => json!(format!("{other:?}").to_lowercase()),
+                        },
+                        "message": error.describe(),
+                    }),
+                );
+            }
+            return Err(error);
+        }
+    };
+    let ctx = identity.context(app);
+    let done = run_intent(app, &ctx, &intent, identity.anonymous())?;
+    Ok(MembersReply {
+        revision: done.receipt.revision.0,
+        event_seq: done.transition.delta.event_seq,
+        checks_passed: done.transition.evidence.len(),
+        held: crate::holds::notice_of(&done.transition.output),
+    })
+}
+
+/// The kernel intent a members request names.
+fn intent_of_members(request: &MembersRequest) -> Result<Intent, ApiError> {
+    Ok(match request {
         MembersRequest::AssignRole { principal, role } => Intent::AssignRole {
             principal: named("principal", PrincipalId::new(principal.as_str()))?,
             role: named("role", RoleId::new(role.as_str()))?,
@@ -427,6 +485,26 @@ pub fn members(
         MembersRequest::RevokeRole { principal, role } => Intent::RevokeRole {
             principal: named("principal", PrincipalId::new(principal.as_str()))?,
             role: named("role", RoleId::new(role.as_str()))?,
+        },
+        MembersRequest::AssignScopedRole {
+            principal,
+            role,
+            object,
+            scope,
+        } => Intent::AssignScopedRole {
+            principal: named("principal", PrincipalId::new(principal.as_str()))?,
+            role: named("role", RoleId::new(role.as_str()))?,
+            object: named("object", ObjectTypeId::new(object.as_str()))?,
+            scope: scope_of(scope)?,
+        },
+        MembersRequest::RevokeScopedRole {
+            principal,
+            role,
+            object,
+        } => Intent::RevokeScopedRole {
+            principal: named("principal", PrincipalId::new(principal.as_str()))?,
+            role: named("role", RoleId::new(role.as_str()))?,
+            object: named("object", ObjectTypeId::new(object.as_str()))?,
         },
         MembersRequest::AddTeamMember { team, principal } => Intent::AddTeamMember {
             team: named("team", TeamId::new(team.as_str()))?,
@@ -454,14 +532,6 @@ pub fn members(
         MembersRequest::RevokeInvitation { invitation } => Intent::RevokeInvitation {
             invitation: named("invitation", InvitationId::new(invitation.as_str()))?,
         },
-    };
-    let ctx = identity.context(app);
-    let done = run_intent(app, &ctx, &intent, identity.anonymous())?;
-    Ok(MembersReply {
-        revision: done.receipt.revision.0,
-        event_seq: done.transition.delta.event_seq,
-        checks_passed: done.transition.evidence.len(),
-        held: crate::holds::notice_of(&done.transition.output),
     })
 }
 

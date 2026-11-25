@@ -158,6 +158,11 @@ fn decide_intent(
             object,
             scope,
         } => assign_scoped_role(&mut draft, principal, role, object, scope)?,
+        Intent::RevokeScopedRole {
+            principal,
+            role,
+            object,
+        } => revoke_scoped_role(&mut draft, principal, role, object)?,
         Intent::RevokeRole { principal, role } => {
             change_member(&mut draft, principal, role, false)?
         }
@@ -383,6 +388,7 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         Intent::CreateTenant { .. }
         | Intent::AssignRole { .. }
         | Intent::AssignScopedRole { .. }
+        | Intent::RevokeScopedRole { .. }
         | Intent::RevokeRole { .. }
         | Intent::DefineTeam { .. }
         | Intent::AssignTeamRole { .. }
@@ -1413,6 +1419,32 @@ fn assign_scoped_role(
     Ok(Output::Member)
 }
 
+/// ADM-1643: take away the one scoped assignment of `role` that `principal` holds on `object`.
+/// Asked as much of the acting principal as taking the role away (ADM-1080). The role a person
+/// holds directly, and the same role scoped to another object type, are untouched, and an
+/// assignment that does not exist is `InvalidIntent`, so a refusal never hides a typing mistake.
+fn revoke_scoped_role(
+    draft: &mut Draft<'_>,
+    principal: &PrincipalId,
+    role: &RoleId,
+    object: &ObjectTypeId,
+) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    if !draft.tenant.schema.roles.contains_key(role) {
+        return Err(draft.reject(ErrorKind::UnknownRole, format!("no role {role}")));
+    }
+    require_conferrable(draft, [role])?;
+    let Some(schema) = crate::scoped::without_one(&draft.tenant.schema, principal, role, object)
+    else {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            format!("{principal} holds no scoped role {role} on {object}"),
+        ));
+    };
+    draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
+    Ok(Output::Member)
+}
+
 /// ADM-1630: a change must not give a principal two duties the platform keeps apart
 /// ([`crate::duties`]). `members` and the schema are the state after the change; a pair the
 /// tenant held before it is not made worse by it. The refusal is `ConflictingRoles`.
@@ -2174,6 +2206,9 @@ pub(crate) fn apply_change(
         SchemaChange::DefineHoldRule(_) | SchemaChange::RemoveHoldRule(_) => {
             crate::holds::apply(schema, change)?
         }
+        SchemaChange::DefineSeparation(_) | SchemaChange::RemoveSeparation(_) => {
+            crate::duties::apply(schema, change)?
+        }
         SchemaChange::RecordProduct(_) | SchemaChange::RemoveProduct(_) => {
             crate::products::apply(schema, change)?
         }
@@ -2789,6 +2824,9 @@ fn require_definition_authority(
     }
     if changes.iter().any(crate::holds::is_hold_change) {
         require_capability(draft, crate::holds::HOLDS_DEFINE)?;
+    }
+    if changes.iter().any(crate::duties::is_separation_change) {
+        require_capability(draft, crate::duties::SEPARATIONS_DEFINE)?;
     }
     if changes.iter().any(crate::ledger::is_ledger_change) {
         require_capability(draft, crate::ledger::LEDGER_CONFIGURE)?;

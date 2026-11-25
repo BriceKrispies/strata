@@ -117,6 +117,11 @@ pub fn exists(schema: &TenantSchema, entity: &EntityRef) -> Option<bool> {
             .iter()
             .flatten()
             .any(|(k, _)| k.to_string() == id),
+        EntityKind::Separation => schema
+            .separations
+            .iter()
+            .flatten()
+            .any(|(k, _)| k.to_string() == id),
         EntityKind::UiElement => crate::ui::element(schema, id).is_some(),
         EntityKind::Capability => schema
             .capabilities
@@ -331,6 +336,8 @@ pub fn touched(change: &SchemaChange) -> Vec<EntityRef> {
         C::DefineUiElement { id, .. } | C::RemoveUiElement(id) => entity(EntityKind::UiElement, id),
         C::DefineHoldRule(rule) => entity(EntityKind::HoldRule, &rule.id),
         C::RemoveHoldRule(id) => entity(EntityKind::HoldRule, id),
+        C::DefineSeparation(def) => entity(EntityKind::Separation, &def.id),
+        C::RemoveSeparation(id) => entity(EntityKind::Separation, id),
         C::RecordProduct(_) | C::RemoveProduct(_) => Vec::new(),
     }
 }

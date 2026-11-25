@@ -67,7 +67,7 @@ pub use strata_model_core::types::{
 /// changes filed instead of applied, kept in it like invitations.
 pub use strata_model_core::types::{
     HeldChange, HeldOperation, HeldOperationId, HoldDecision, HoldRule, HoldRuleId, HoldState,
-    HoldTarget,
+    HoldTarget, SeparationDef, SeparationId,
 };
 /// The tenant ledger of [`crate::ledger`]: declarations in the tenant schema, accounts and
 /// entries in the tenant state, its needs, delta operations, requests and answers.

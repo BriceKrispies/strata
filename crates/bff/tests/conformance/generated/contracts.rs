@@ -175,6 +175,7 @@ pub const ROLES: &[(&str, &[&str])] = &[
             "automations-define",
             "automations-read",
             "holds-define",
+            "separations-define",
         ],
     ),
     (
@@ -1430,6 +1431,7 @@ pub const TYPES: &[TypeDecl] = &[
             "operation",
             "ui-element",
             "hold-rule",
+            "separation",
         ]),
     },
     TypeDecl {
@@ -3270,6 +3272,8 @@ pub const COVERED: &[&str] = &[
     "read-view",
     "assign-role",
     "revoke-role",
+    "assign-scoped-role",
+    "revoke-scoped-role",
     "add-team-member",
     "remove-team-member",
     "invite-person",
@@ -3519,6 +3523,16 @@ pub const SKIPPED: &[(&str, &str, &str)] = &[
     ),
     (
         "revoke-role",
+        "success",
+        "it has required inputs and no conformanceExample",
+    ),
+    (
+        "assign-scoped-role",
+        "success",
+        "it has required inputs and no conformanceExample",
+    ),
+    (
+        "revoke-scoped-role",
         "success",
         "it has required inputs and no conformanceExample",
     ),
@@ -6888,6 +6902,90 @@ pub const REVOKE_ROLE: Contract = Contract {
 #[tokio::test]
 async fn revoke_role() {
     conform(&SPEC, &REVOKE_ROLE).await;
+}
+
+/// Contract `assign-scoped-role` (CT-1857): POST /api/members/assign-scoped-role.
+pub const ASSIGN_SCOPED_ROLE: Contract = Contract {
+    id: "assign-scoped-role",
+    method: "POST",
+    shape: Shape::Json,
+    scheme: Scheme::Session,
+    requires: &["members-manage"],
+    roles: &[],
+    origin: true,
+    csrf: true,
+    step_up: true,
+    read_only: false,
+    tenant_input: None,
+    probe: Request {
+        path: "/api/members/assign-scoped-role",
+        query: &[],
+        body: None,
+    },
+    success: None,
+    setup: &[],
+    reply: Reply::Members(&[
+        Field {
+            wire: "revision",
+            ty: Ty::Int(0, 18446744073709551615),
+            optional: false,
+        },
+        Field {
+            wire: "event_seq",
+            ty: Ty::Int(0, 18446744073709551615),
+            optional: false,
+        },
+    ]),
+    errors: &["unauthenticated", "forbidden", "invalid", "unavailable"],
+    step_up_error: Some("step_up_required"),
+    quota: None,
+};
+
+#[tokio::test]
+async fn assign_scoped_role() {
+    conform(&SPEC, &ASSIGN_SCOPED_ROLE).await;
+}
+
+/// Contract `revoke-scoped-role` (CT-1858): POST /api/members/revoke-scoped-role.
+pub const REVOKE_SCOPED_ROLE: Contract = Contract {
+    id: "revoke-scoped-role",
+    method: "POST",
+    shape: Shape::Json,
+    scheme: Scheme::Session,
+    requires: &["members-manage"],
+    roles: &[],
+    origin: true,
+    csrf: true,
+    step_up: false,
+    read_only: false,
+    tenant_input: None,
+    probe: Request {
+        path: "/api/members/revoke-scoped-role",
+        query: &[],
+        body: None,
+    },
+    success: None,
+    setup: &[],
+    reply: Reply::Members(&[
+        Field {
+            wire: "revision",
+            ty: Ty::Int(0, 18446744073709551615),
+            optional: false,
+        },
+        Field {
+            wire: "event_seq",
+            ty: Ty::Int(0, 18446744073709551615),
+            optional: false,
+        },
+    ]),
+    errors: &["unauthenticated", "forbidden", "invalid", "unavailable"],
+    step_up_error: Some("step_up_required"),
+    quota: None,
+};
+
+#[tokio::test]
+async fn revoke_scoped_role() {
+    conform(&SPEC, &REVOKE_SCOPED_ROLE).await;
 }
 
 /// Contract `add-team-member` (CT-267): POST /api/members/add-team-member.
