@@ -483,6 +483,7 @@ fn approve_review() -> TenantOperationDef {
             record: Expr::Param("review".into()),
             fields: BTreeMap::from([(field("state"), lit("approved"))]),
         }],
+        agent_policy: None,
     }
 }
 

@@ -254,6 +254,7 @@ fn context_at(now: i64, correlation: &str) -> Context {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 

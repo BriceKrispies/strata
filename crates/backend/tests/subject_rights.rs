@@ -73,6 +73,7 @@ fn ctx(site: &TenantId, principal: Principal, now: i64, correlation: &str) -> Co
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 
@@ -401,6 +402,7 @@ fn identity(app: &App, site: &TenantId, principal: &str, age_ms: i64) -> Identit
         correlation: "t-rights".into(),
         verified_address: None,
         idempotency_key: None,
+        agent: None,
     }
 }
 
@@ -413,6 +415,7 @@ fn anonymous(site: &TenantId) -> Identity {
         correlation: "t-anon".into(),
         verified_address: None,
         idempotency_key: None,
+        agent: None,
     }
 }
 

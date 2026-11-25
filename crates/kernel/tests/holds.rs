@@ -76,6 +76,7 @@ fn file_note(id: &str, invokers: TenantOperationInvokers) -> TenantOperationDef 
                 (field("slug"), Expr::Param("slug".into())),
             ]),
         }],
+        agent_policy: None,
     }
 }
 

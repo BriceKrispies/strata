@@ -190,6 +190,7 @@ fn stamp() -> TenantOperationDef {
                 (field("slug"), Expr::Param("slug".into())),
             ]),
         }],
+        agent_policy: None,
     }
 }
 

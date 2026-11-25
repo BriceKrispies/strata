@@ -817,6 +817,7 @@ pub fn install<E>(
             idempotency_key: None,
             language: None,
             hop: None,
+            agent: None,
         };
         execute(ctx, intent).map_err(|error| InstallError::Step { step, error })
     };

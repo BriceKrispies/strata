@@ -100,6 +100,7 @@ pub fn pump(
             idempotency_key: None,
             language: None,
             hop: None,
+            agent: None,
         };
         // What every decision reads: the subject record of the person of each event a trigger
         // matches, or of every event when a subscriber's decision follows.

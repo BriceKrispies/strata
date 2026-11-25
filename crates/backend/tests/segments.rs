@@ -122,6 +122,7 @@ fn as_admin(now: i64) -> Context {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 

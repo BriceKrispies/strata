@@ -120,14 +120,28 @@ pub fn invoke(
     if request.dry_run {
         let transition = decide(app, &ctx, &intent).map_err(explain)?;
         crate::files::attach::check_events(app, &ctx, &transition)?;
-        let result = result_of(&transition.output, transition.delta.new_revision, false)
-            .ok_or_else(unexpected)?;
+        // A call that would be filed as a held operation (a hold rule, or the approval policy of
+        // an agent, ADM-1606) shows no change: the dry run says it would be held.
+        let held = crate::holds::notice_of(&transition.output);
+        let result = match &held {
+            Some(_) => strata_kernel::operations::TenantOperationResult {
+                operation: operation.clone(),
+                replayed: false,
+                created: Vec::new(),
+                changed: Vec::new(),
+                deleted: Vec::new(),
+                entries: Vec::new(),
+                revision: transition.delta.new_revision,
+            },
+            None => result_of(&transition.output, transition.delta.new_revision, false)
+                .ok_or_else(unexpected)?,
+        };
         return Ok(OperationReply {
             result,
             event_seq: transition.delta.event_seq,
             checks_passed: transition.evidence.len(),
             dry_run: true,
-            held: None,
+            held,
         });
     }
     let done = run_intent(app, &ctx, &intent, false).map_err(explain)?;

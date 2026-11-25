@@ -168,6 +168,7 @@ fn redeem() -> TenantOperationDef {
                 fields: BTreeMap::from([(field("rank"), int(1))]),
             },
         ],
+        agent_policy: None,
     }
 }
 

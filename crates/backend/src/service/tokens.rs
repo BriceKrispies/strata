@@ -540,6 +540,25 @@ pub fn verify(
     Ok(Ok(Verified { claims, scopes }))
 }
 
+/// The agent a token speaks for, as the kernel's context states it (D-8401): the principal
+/// `agent:<client>` named by the `act` claim, with the scopes the token grants now. `None` for a
+/// token of a service account, which names no agent. The scopes are those of [`Verified`], which
+/// holds each to the delegator's current grants (TOK-004), so the kernel's ceiling check
+/// intersects the agent's own roles with them.
+pub fn agent_call(verified: &Verified) -> Option<strata_kernel::AgentCall> {
+    let acting = verified.claims.act.as_ref()?;
+    let agent = PrincipalId::new(format!(
+        "{}{}",
+        strata_kernel::agents::AGENT_PREFIX,
+        acting.sub
+    ))
+    .ok()?;
+    Some(strata_kernel::AgentCall {
+        agent,
+        scopes: verified.scopes.clone(),
+    })
+}
+
 fn describe(verified: &Verified) -> Json {
     let claims = &verified.claims;
     json!({

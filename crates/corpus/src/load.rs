@@ -218,6 +218,7 @@ fn context(tenant: &TenantId, principal: Principal, at: i64, correlation: String
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 

@@ -229,6 +229,7 @@ fn context(tenant: &TenantId, now: Time) -> Context {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     }
 }
 

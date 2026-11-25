@@ -1043,6 +1043,7 @@ pub fn run_batch(
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     };
     let (members, next) = kept::members(app.store.as_ref(), &ctx, segment, after, Some(BATCH))
         .map_err(|e| ApiError::execute(e, false).describe())?;

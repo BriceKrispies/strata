@@ -780,6 +780,7 @@ fn expire_due(app: &App, tenant: &TenantId, now: Timestamp, job: &str) -> Result
                 idempotency_key: None,
                 language: None,
                 hop: None,
+                agent: None,
             };
             let intent = Intent::ExpireLedger {
                 unit: unit.clone(),

@@ -198,6 +198,10 @@ fn run_intent_unaudited_at(
     })
 }
 
+/// ADM-1605, ADM-1606, ADM-1607: a refusal of an agent's call (outside its ceiling, to an operation
+/// whose policy is deny, or for an administration power) is audited too, naming the agent and the
+/// person it acted for as `actor`.
+///
 /// ADM-1613, ADM-1624, ADM-1629, ADM-1630, ADM-1611: a refusal for acting on oneself, for leaving
 /// the tenant without an owner, for giving one person two duties the platform keeps apart, and
 /// for a scope that names a field the object type does not have is an audit entry of the tenant,
@@ -213,6 +217,9 @@ fn audit_separation_refusal(
         ErrorKind::SelfAction => "refused.self_action",
         ErrorKind::LastOwner => "refused.last_owner",
         ErrorKind::ConflictingRoles => "refused.conflicting_roles",
+        ErrorKind::AgentCeilingDenies => "refused.agent_ceiling_denies",
+        ErrorKind::AgentDenied => "refused.agent_denied",
+        ErrorKind::AgentAdminPower => "refused.agent_admin_power",
         ErrorKind::ScopeUnknownField => "refused.scope_unknown_field",
         _ => return,
     };
@@ -233,6 +240,7 @@ fn audit_separation_refusal(
                 strata_kernel::Principal::User(id) => json!(id.as_str()),
                 other => json!(format!("{other:?}").to_lowercase()),
             },
+            "agent": ctx.agent.as_ref().map(|call| call.agent.as_str()),
             "failed": failed,
             "message": error.message,
         }),

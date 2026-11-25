@@ -85,6 +85,15 @@ fn decide_intent(
         ));
     }
     refuse_reserved_principals(intent, ctx)?;
+    if let Intent::CreateTenant { owner, .. } = intent {
+        if crate::agents::agent_named(owner).is_some() {
+            return Err(refuse(
+                ErrorKind::AgentAdminPower,
+                "agent:no_admin_power",
+                format!("the agent {owner} cannot own a tenant"),
+            ));
+        }
+    }
     let tenant = match (intent, state.tenant.as_deref()) {
         (Intent::CreateTenant { name, owner }, None) => {
             return create_tenant(ctx, name, owner).map(|t| (t, pins.clone()))
@@ -111,6 +120,25 @@ fn decide_intent(
             "tenant:snapshot_matches_context",
             "snapshot holds another tenant",
         ));
+    }
+    // A call of an agent passes the gate first: its policy, its ceiling and its token (D-8401).
+    // An approval is filed as a held operation for a human approver (ADM-1606, ADM-1608).
+    if holding {
+        if let Some(call) = &ctx.agent {
+            match crate::agents::gate(tenant, ctx, call, intent)? {
+                crate::agents::Gate::Pass => {}
+                crate::agents::Gate::Hold { approver } => {
+                    let change =
+                        crate::holds::change_of(intent).expect("the gate holds a holdable change");
+                    let rule =
+                        crate::holds::rule_holding(tenant, ctx, &change).map(|r| r.id.clone());
+                    return crate::holds::file(
+                        state, tenant, ctx, pins, change, approver, rule, None,
+                    )
+                    .map(|t| (t, pins.clone()));
+                }
+            }
+        }
     }
     // A change that a hold rule names is filed, not applied (D-8400, ADM-1601).
     if holding {
@@ -1421,6 +1449,13 @@ fn require_duties_apart(
     members: &BTreeMap<PrincipalId, BTreeSet<RoleId>>,
     schema: &TenantSchema,
 ) -> Result<(), DomainError> {
+    // ADM-1607: the same paths may never give an agent an administration power.
+    if let Some(message) = crate::agents::made_by(
+        (&draft.tenant.members, &draft.tenant.schema),
+        (members, schema),
+    ) {
+        return Err(draft.reject(ErrorKind::AgentAdminPower, message));
+    }
     match crate::duties::made_by(
         (&draft.tenant.members, &draft.tenant.schema),
         (members, schema),

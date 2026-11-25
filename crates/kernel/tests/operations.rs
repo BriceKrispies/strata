@@ -79,6 +79,7 @@ fn feature() -> TenantOperationDef {
                 fields: BTreeMap::from([(field("rank"), int(7))]),
             },
         ],
+        agent_policy: None,
     }
 }
 
@@ -124,6 +125,7 @@ fn discard() -> TenantOperationDef {
             object: object("note"),
             record: param("note"),
         }],
+        agent_policy: None,
     }
 }
 
@@ -148,6 +150,7 @@ fn count() -> TenantOperationDef {
             reason: "counted".into(),
             reference: None,
         }],
+        agent_policy: None,
     }
 }
 
@@ -397,6 +400,7 @@ fn react_op() -> TenantOperationDef {
                 }],
             },
         ],
+        agent_policy: None,
     }
 }
 
@@ -434,6 +438,7 @@ fn bump_title_op() -> TenantOperationDef {
                 unmatched: Vec::new(),
             },
         ],
+        agent_policy: None,
     }
 }
 
@@ -760,6 +765,7 @@ fn ledger_op(id: &str, steps: Vec<TenantOperationStep>) -> TenantOperationDef {
         subject: None,
         conditions: Vec::new(),
         steps,
+        agent_policy: None,
     }
 }
 

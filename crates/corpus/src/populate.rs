@@ -232,6 +232,7 @@ impl Populator<'_> {
             idempotency_key: None,
             language: None,
             hop: None,
+            agent: None,
         };
         self.commits += 1;
         run(self.store, &ctx, &intent)

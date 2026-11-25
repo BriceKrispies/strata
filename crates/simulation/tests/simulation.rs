@@ -436,6 +436,7 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     };
     let role_of = |name: &str| RoleId::new(name).unwrap();
     let mut work: Vec<Scheduled> = schedule_of(17, 8);

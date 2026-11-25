@@ -81,6 +81,7 @@ fn identity(app: &App, site: &TenantId, principal: &str, correlation: &str) -> I
         correlation: correlation.to_string(),
         verified_address: None,
         idempotency_key: None,
+        agent: None,
     }
 }
 
@@ -106,6 +107,7 @@ fn started() -> (Shared, Arc<MemoryStore>, TenantId) {
             idempotency_key: None,
             language: None,
             hop: None,
+            agent: None,
         },
     )
     .expect("the tenant is created");

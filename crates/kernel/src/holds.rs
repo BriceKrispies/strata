@@ -448,6 +448,8 @@ pub(crate) fn file(
     on_behalf_of: Option<PrincipalId>,
 ) -> Result<Transition, DomainError> {
     let mut evidence: Vec<Check> = Vec::new();
+    // A call of an agent is held for the person it acts for, and names the agent (ADM-1606).
+    let agent = ctx.agent.as_ref().map(|call| call.agent.clone());
     let Principal::User(requester) = &ctx.principal else {
         return Err(refuse(
             &evidence,
@@ -517,6 +519,7 @@ pub(crate) fn file(
             expires_at.0
         ),
     ));
+    let on_behalf_of = on_behalf_of.or_else(|| agent.as_ref().map(|_| requester.clone()));
     holds.insert(
         id.clone(),
         HeldOperation {
@@ -534,6 +537,7 @@ pub(crate) fn file(
             decided_by: None,
             decided_at: None,
             reason: None,
+            agent,
         },
     );
     Ok(schema_transition(
@@ -589,7 +593,13 @@ pub(crate) fn decide(
     };
     // 2. A signed-in person, who is not an automation, holding the approver permission.
     let decider = match &ctx.principal {
-        Principal::User(who) if crate::automation::automation_named(who).is_none() => who,
+        Principal::User(who)
+            if crate::automation::automation_named(who).is_none()
+                && crate::agents::agent_named(who).is_none()
+                && ctx.agent.is_none() =>
+        {
+            who
+        }
         _ => {
             return Err(refuse(
                 &evidence,
@@ -646,6 +656,20 @@ pub(crate) fn decide(
         ));
     }
     evidence.push(Check::pass("hold:expiry", held.expires_at.0.to_string()));
+    // An approval of an agent's call asks its ceiling again: it may have lost it since (ADM-1606).
+    if decision == HoldDecision::Approve {
+        if let Some(agent) = &held.agent {
+            if let Some(problem) = crate::agents::recheck(tenant, agent, &intent_of(&held.change)) {
+                return Err(refuse(
+                    &evidence,
+                    ErrorKind::StaleHold,
+                    "hold:agent_ceiling",
+                    format!("{hold} no longer applies: {problem}"),
+                ));
+            }
+            evidence.push(Check::pass("hold:agent_ceiling", agent.as_str()));
+        }
+    }
 
     let decided = |state: HoldState| HeldOperation {
         revision: held.revision + 1,

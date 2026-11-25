@@ -222,6 +222,7 @@ fn signed_in(tenant: &str, who: &str) -> Identity {
         correlation: "t-mail".into(),
         verified_address: None,
         idempotency_key: None,
+        agent: None,
     }
 }
 
@@ -234,6 +235,7 @@ fn visitor(tenant: &str) -> Identity {
         correlation: "t-mail-visitor".into(),
         verified_address: None,
         idempotency_key: None,
+        agent: None,
     }
 }
 

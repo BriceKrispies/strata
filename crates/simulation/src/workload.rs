@@ -333,6 +333,7 @@ pub fn generate(
             idempotency_key: None,
             language: None,
             hop: None,
+            agent: None,
         };
         if let Ok((next, _)) = scratch.step(&intent, &context) {
             scratch = next;

@@ -393,6 +393,7 @@ fn owner_changes(store: &MemoryStore, now: i64, changes: Vec<SchemaChange>) {
         idempotency_key: None,
         language: None,
         hop: None,
+        agent: None,
     };
     let intent = Intent::ChangeSchema {
         changes,
