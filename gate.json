@@ -1,4 +1,46 @@
 {
-  "startedMilestones": [1],
-  "startedScopes": []
+  "startedMilestones": [
+    1
+  ],
+  "startedScopes": [
+    {
+      "name": "plinth-built",
+      "refs": [
+        "ADM-1601",
+        "ADM-1602",
+        "ADM-1603",
+        "ADM-1604",
+        "ADM-1609",
+        "ADM-1610",
+        "ADM-1611",
+        "ADM-1612",
+        "ADM-1613",
+        "ADM-1614",
+        "ADM-1624",
+        "ADM-1629",
+        "ADM-1630",
+        "ADM-1632",
+        "ADM-1640",
+        "ADM-1641",
+        "LDG-2903",
+        "LDG-2904",
+        "LDG-2906",
+        "LDG-2907",
+        "LDG-2911",
+        "LDG-2912",
+        "LDG-2913",
+        "LDG-2914",
+        "LDG-2915",
+        "LDG-2917",
+        "LDG-2921",
+        "LDG-2922",
+        "LDG-2923",
+        "LDG-2924",
+        "LDG-2925",
+        "LDG-2926",
+        "LDG-2927",
+        "LDG-2928"
+      ]
+    }
+  ]
 }
