@@ -95,7 +95,9 @@ def switched (s : State) (who : Option Principal) (r : Route) : State :=
     loginError := false
     factorPrompt := false
     stepUp := false
-    ceremony := none }
+    ceremony := none
+    editorValues := []
+    editorError := false }
 
 /-- The kernel's transitions for the routing and session slice. -/
 inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect → Prop
@@ -648,6 +650,48 @@ inductive Allowed (cat : Catalogue) : State → Msg → State → List Effect �
       s.ceremony = some id →
       Allowed cat s (.passkeyResult id false) { s with ceremony := none } []
 
+  /-- A typed value of the article editor: the field takes it; nothing is sent. -/
+  | inputEditor {s : State} {name value : String} :
+      Allowed cat s (.input "editor" name value)
+        { s with editorValues := setField s.editorValues name value } []
+  /-- The article is saved, and the page's check passes it: the save is sent (`editor.save`). -/
+  | editorSave {s : State} {values : List (String × String)} :
+      cat.recordOk values = true →
+      Allowed cat s (.submit "editor" values)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending
+          editorError := false }
+        (fetch s.nextId .personal)
+  /-- The page's check refuses the article: nothing is sent, and the editor says so before any request. -/
+  | editorSaveRefused {s : State} {values : List (String × String)} :
+      cat.recordOk values = false →
+      Allowed cat s (.submit "editor" values) { s with editorError := true } []
+  /-- Publishing sends the editor's article, when the page's check passes it. -/
+  | editorPublish {s : State} {arg : String} :
+      cat.recordOk s.editorValues = true →
+      Allowed cat s (.action "editor.publish" arg)
+        { s with
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .personal, s.generation⟩ :: s.pending
+          editorError := false }
+        (fetch s.nextId .personal)
+  /-- Publishing a refused article sends nothing. -/
+  | editorPublishRefused {s : State} {arg : String} :
+      cat.recordOk s.editorValues = false →
+      Allowed cat s (.action "editor.publish" arg) { s with editorError := true } []
+  /-- The save is answered: the view of the article is read again. -/
+  | editorAnswerRefresh {s : State} {id : Nat} :
+      pendingOf s id .personal →
+      Allowed cat s (.editorAnswer id)
+        { s with
+          route := s.route
+          nextId := s.nextId + 1
+          pending := ⟨s.nextId, .view, s.generation⟩ :: dropViews (dropId s.pending id)
+          view := { status := .loading, model := s.view.model, request := some s.nextId }
+          editorError := false }
+        (fetch s.nextId .view)
+
 /-- The states the kernel can reach from the initial state by allowed steps. -/
 inductive Reachable (cat : Catalogue) : State → Prop
   | start : Reachable cat
@@ -856,7 +900,7 @@ theorem second_factor_sent_only_when_waiting (cat : Catalogue) {s s' : State} {m
     {values : List (String × String)} {es : List Effect}
     (hm : m = .submit "second" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
     s.factorPrompt = true ∧ cat.validSecondFactor values = true := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all [factorsRequests, deskRequests]
 
 /-- **A sign-in that is accepted ends the second-factor prompt.** -/
 theorem sign_in_ends_prompt (cat : Catalogue) {s s' : State} {id : Nat} {who : Principal} {target : Route}
@@ -877,13 +921,33 @@ theorem refused_second_keeps_prompt (cat : Catalogue) {s s' : State} {id : Nat} 
 theorem passkey_answer_for_ceremony (cat : Catalogue) {s s' : State} {id : Nat} {ok : Bool}
     {es : List Effect} (ha : Allowed cat s (.passkeyResult id ok) s' es) (hes : es ≠ []) :
     s.ceremony = some id := by
-  cases ha <;> simp_all
+  cases ha <;> simp_all [factorsRequests, deskRequests]
 
 /-- **A change to the person's list is read again, and only that.** -/
 theorem changed_list_is_read_again (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}
     (ha : Allowed cat s (.personalAnswer id true) s' es) :
     es = fetch s.nextId .personal := by
   cases ha <;> rfl
+
+/-! ### Records: the editor (slice 9) -/
+
+/-- **An article is saved only when the page's check passes it.** Refused on the page, it sends nothing. -/
+theorem save_sent_only_checked (cat : Catalogue) {s s' : State} {m : Msg}
+    {values : List (String × String)} {es : List Effect}
+    (hm : m = .submit "editor" values) (ha : Allowed cat s m s' es) (hes : es ≠ []) :
+    cat.recordOk values = true := by
+  cases ha <;> simp_all [factorsRequests, deskRequests]
+
+/-- **An article is published only when the page's check passes the editor's article.** -/
+theorem publish_sent_only_checked (cat : Catalogue) {s s' : State} {m : Msg} {arg : String}
+    {es : List Effect} (hm : m = .action "editor.publish" arg) (ha : Allowed cat s m s' es)
+    (hes : es ≠ []) : cat.recordOk s.editorValues = true := by
+  cases ha <;> simp_all [factorsRequests, deskRequests]
+
+/-- **A save that is answered reads the article's view again.** -/
+theorem editor_answer_reads_view (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}
+    (ha : Allowed cat s (.editorAnswer id) s' es) : es = fetch s.nextId .view := by
+  cases ha; rfl
 
 /-! ## Non-vacuity -/
 
@@ -898,7 +962,8 @@ def sampleCatalogue : Catalogue :=
     validInvite := fun _ => true
     validProvider := fun _ => true
     validSecondFactor := fun _ => true
-    validStepUp := fun _ => true }
+    validStepUp := fun _ => true
+    recordOk := fun _ => true }
 
 /-- The relation is not empty where the theorems look: a page that starts for a person, reads the
 view of its screen and holds it is a reachable state, holding a model read for that person. -/

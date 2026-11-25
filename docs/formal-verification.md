@@ -508,13 +508,13 @@ what the B2 implementation will be proved against.
 
 | Message | What update does | Status | Slice |
 |---|---|---|---|
-| `submit` editor; `input` editor | save in a status; the two-step saves of a new record | not covered | 9 |
-| `action editor.tab`, `editor.publish`, `editor.unpublish`, `editor.reload` | tabs, status changes, reload | not covered | 9 |
-| `http_result` editor.save | saved (the ids and version taken) or refused (the wording, focus); an unknown outcome keeps the key | not covered | 9 |
+| `submit` editor; `input` editor | save of an article the page's check passes (`editorSave`); a refused article sends nothing and the editor says so (`editorSaveRefused`); typed values (`inputEditor`); the two-step save of a new record is not yet | partly | 9 |
+| `action editor.publish`; `editor.unpublish`, `editor.tab`, `editor.reload` | publish sends the article when the check passes (`editorPublish`, `editorPublishRefused`); unpublish, tabs and reload are not yet | partly | 9 |
+| `http_result` editor.save | the answer reads the view again (`editorAnswerRefresh`); a refusal from the server ends the request, and its words and focus are not yet | partly | 9 |
 | `http_result` editor.preview; the preview tab | the preview of the body | not covered | 9 |
 | `action` row action (generated row buttons) and its confirmation | the row's action; the two-press confirmation | not covered | 9 |
 | `http_result` post.action | the row action done or refused | not covered | 9 |
-| The client's record-rule check before a save (`record-rules.js`) | a refusal before any request, in the kernel's words | not covered | 9 |
+| The client's record-rule check before a save (`record-rules.js`) | a refusal before any request, in the kernel's words | covered | 9 (the check is `recordOk`, a catalogue input; the drift log of `record-rules.js` is a later effect) |
 
 #### Settings
 
@@ -694,7 +694,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 | 6 (partly done) | Sign-in methods: emailed links (request and answer), invitations (request and acceptance), the identity provider's start and redirect (`linkAsk`, `linkAnswer`, `inviteAsk`, `inviteAccepted`, `oidcStart`, `oidcRedirect`). Still open: the opened link's sign-in, passkey sign-in, the providers list, the provider's answer (`oidc.sign_in`), SAML, and the typed values of the invitation form | 3, 5 |
 | 7 (partly done) | Second factors and step-up: the waiting sign-in and the second-factor code (`signInWaiting`, `secondSubmit`, `secondRefused`), the step-up (`stepUpRequired`, `stepUpSubmit`, `stepUpAnswer`, `stepUpCancel`), the factor requests and their answers (`factorsAsk`, `factorsAnswer`). Still open: the passkey as a second factor, the enrolment and recovery-code details, and the redispatch of a refused action once confirmed | 3, 6 |
 | 8 (partly done) | The person's sessions and passkeys on the desk: the revocations and the passkey removal (`deskAsk`), the registration (`passkeyAddAsk`, `personalCeremony`, `passkeyCompleted`, `passkeyDeclined`), and their answers (`personalAnswerReload`, `personalAnswerQuiet`). Still open: the list reads, the support check of passkeys, and the toasts | 3, 7 |
-| 9 | Records: the editor's saves, publish and unpublish, preview, row actions, paging, the client's record-rule check and its log | 3, 5 |
+| 9 (partly done) | Records: the editor's save and publish with the page's check (`editorSave`, `editorSaveRefused`, `editorPublish`, `editorPublishRefused`, `inputEditor`), and the answer that reads the view again (`editorAnswerRefresh`). Still open: unpublish, preview, row actions, paging, the two-step save of a new record, and the drift log | 3, 5 |
 | 10 | Settings: the definitions, saves by level, setting notices | 3, 5 |
 | 11 | Tenant interface: manifest, parts, tenant screens by address, tenant forms and actions, lost drafts, the held part (`Loop`) | 3, 5 |
 | 12 | Impact Lab: overview, runs and their frames, polling, apply, replay, verify, diagnostics | 3, 5, 7 |
@@ -704,7 +704,7 @@ How the existing theorems meet this one (no existing theorem is changed):
 ### 7.7 Counts
 
 The messages table has 80 rows (a row is one message, or one family of messages with the same handling):
-33 covered, 19 partly, 28 not covered (after slice 8). The effects table has
+34 covered, 22 partly, 24 not covered (after slice 9). The effects table has
 15 rows: 8 covered, 5 partly, 2 not covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.

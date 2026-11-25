@@ -319,3 +319,6 @@ import Strata
 #print axioms Strata.Browser.refused_second_keeps_prompt
 #print axioms Strata.Browser.passkey_answer_for_ceremony
 #print axioms Strata.Browser.changed_list_is_read_again
+#print axioms Strata.Browser.save_sent_only_checked
+#print axioms Strata.Browser.publish_sent_only_checked
+#print axioms Strata.Browser.editor_answer_reads_view

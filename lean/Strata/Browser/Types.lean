@@ -53,6 +53,8 @@ structure Catalogue where
   validSecondFactor : List (String × String) → Bool
   /-- The step-up form (a password or a code) is complete. -/
   validStepUp : List (String × String) → Bool
+  /-- The page's check of an article (the record rules the server sent for the editor) passes it. -/
+  recordOk : List (String × String) → Bool
 
 /-- The kind of a request the kernel has in flight. `session`, `view`, `signIn` and `signOut` are the
 kinds slice 1 names. `personal` stands for every request whose reply belongs to the person signed in
@@ -187,6 +189,10 @@ structure State where
   stepUp : Bool := false
   /-- The passkey ceremony in flight: the request id the browser's prompt answers under. -/
   ceremony : Option Nat := none
+  /-- The editor's typed values. -/
+  editorValues : List (String × String) := []
+  /-- The editor shows that its article was refused (by the page's check or the server). -/
+  editorError : Bool := false
 
 /-- Effects out of the kernel. `http` and `timer "request"` are the request and its deadline; the
 other effects are the page's own (URL, scroll), the live connection, storage, the browser's passkey
@@ -259,6 +265,8 @@ inductive Msg where
   | personalAnswer (id : Nat) (reload : Bool)
   /-- The passkey registration started: its challenge came back, and the browser's prompt is asked for. -/
   | personalChallenge (id : Nat)
+  /-- An article save was answered: the view is read again. -/
+  | editorAnswer (id : Nat)
 
 /-- The desk's actions that make a request for the person signed in: the revocation of a session or of the
 others, and the removal of a passkey (`sessions.js`, `passkeys.js`). -/
