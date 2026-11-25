@@ -15,8 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::expr::parse;
 use strata_kernel::*;
 
-use crate::product::read_definitions;
 pub use crate::product::*;
+use crate::product::{read_definitions, read_settings};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,6 +52,10 @@ pub struct Bundle {
     /// authoring syntax, in the shape the product bundle gives them.
     #[serde(default)]
     pub automations: Vec<Json>,
+    /// The settings the tenant declares (`setting-def`, the shape a product's `settings` section
+    /// has, WG-5601): a default, the levels that may override it and its allowed values.
+    #[serde(default)]
+    pub settings: Vec<Json>,
     /// The triggers of the tenant (`trigger-def`, D-6520).
     #[serde(default)]
     pub triggers: Vec<Json>,
@@ -759,6 +763,10 @@ impl Bundle {
         );
         changes.extend(triggers.into_values().map(SchemaChange::DefineTrigger));
         changes.extend(operations.into_values().map(SchemaChange::DefineOperation));
+        let mut settings_section = serde_json::Map::new();
+        settings_section.insert("settings".into(), Json::Array(self.settings.clone()));
+        let settings = read_settings(&mut settings_section).map_err(|e| e.message)?;
+        changes.extend(settings.into_values().map(SchemaChange::DefineSetting));
         if let Some(theme) = &self.theme {
             changes.push(SchemaChange::DefineSetting(crate::theme::setting_def(
                 theme,
