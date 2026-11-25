@@ -29,10 +29,6 @@ fn root() -> PathBuf {
     support::repo_root()
 }
 
-fn platform_text() -> String {
-    strata_spec_parts::read_spec_text(&root().join(PLATFORM)).unwrap()
-}
-
 fn product(relative: &str) -> ProductFile {
     let file = root().join(PRODUCTS).join(relative);
     ProductFile {
@@ -63,10 +59,9 @@ fn with_release(file: ProductFile, version: Option<&str>, platform: Option<Value
     }
 }
 
-/// The platform, loaded and parsed once for every test in this binary.
+/// The platform, loaded and parsed once for the slow binary (shared with the layer tests).
 fn prepared_platform() -> &'static layers::PreparedPlatform {
-    static PREPARED: std::sync::OnceLock<layers::PreparedPlatform> = std::sync::OnceLock::new();
-    PREPARED.get_or_init(|| layers::prepare_platform(PLATFORM, &platform_text()))
+    crate::layers::prepared_platform()
 }
 
 fn generate(file: &ProductFile) -> Result<bundle::Output, Vec<Diagnostic>> {

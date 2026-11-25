@@ -49,7 +49,7 @@ fn product(relative: &str) -> ProductFile {
 }
 
 /// The platform, loaded and parsed once for every test in this binary.
-fn prepared_platform() -> &'static layers::PreparedPlatform {
+pub(crate) fn prepared_platform() -> &'static layers::PreparedPlatform {
     static PREPARED: std::sync::OnceLock<layers::PreparedPlatform> = std::sync::OnceLock::new();
     PREPARED.get_or_init(|| layers::prepare_platform(PLATFORM, &platform_text()))
 }
@@ -604,55 +604,55 @@ fn exegra_validate_all(
         .collect()
 }
 
-/// Exegra accepts the fixture product and the complete products beside the platform, and reports
-/// the platform semantic hash unchanged with each set. The three validations (the platform alone
-/// and the two layered projects) run together, in one batch.
+/// The platform semantic hash the committed generated files name: specc writes Exegra's
+/// `semanticHash` of the platform alone into the first line of every generated file, and the gate
+/// checks that Exegra reports that hash (`spec-gate.mjs`, the generated-files step). Reading it
+/// here stands in for a validation of the platform alone.
+fn committed_platform_hash() -> String {
+    let file = root().join("crates/model/records/src/lib.rs");
+    let text = fs::read_to_string(&file).unwrap();
+    let first = text.lines().next().unwrap_or_default();
+    first
+        .split("(semantic hash ")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .unwrap_or_else(|| panic!("no semantic hash in the header of {}", file.display()))
+        .to_string()
+}
+
+/// Exegra accepts the fixture product and the complete products beside the platform, in one
+/// project, and reports the platform semantic hash unchanged: `semanticHash` is the hash of the
+/// platform text alone, whatever products are added.
 #[test]
 fn exegra_accepts_the_products_and_reports_the_platform_hash_unchanged() {
     let Some(cli) = support::exegra_cli("the layered validation") else {
         return;
     };
-    let platform = exegra_specs("exegra-platform", &[]);
-    let accepted = exegra_specs("exegra-accepted", &["badges.jsonc"]);
-    let complete = exegra_specs(
-        "exegra-complete",
-        &["ledger-trigger.jsonc", "promotions.jsonc"],
+    let accepted = exegra_specs(
+        "exegra-accepted",
+        &["badges.jsonc", "ledger-trigger.jsonc", "promotions.jsonc"],
     );
     let validations = exegra_validate_all(
         &cli,
         "validations-accepted",
-        &[
-            ("alone", &platform, "platform"),
-            ("accepted", &accepted, "layered"),
-            ("complete", &complete, "layered"),
-        ],
+        &[("accepted", &accepted, "layered")],
     );
-    let alone = &validations["alone"];
-    assert!(alone["semanticHash"].is_string(), "{alone}");
 
     let layered = &validations["accepted"];
     assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
     assert_eq!(layered["result"]["errors"], Value::from(0), "{layered}");
     assert_eq!(
-        layered["semanticHash"], alone["semanticHash"],
+        layered["semanticHash"],
+        Value::from(committed_platform_hash()),
         "adding products changed the platform semantic hash, which the generated headers carry"
     );
-    assert_eq!(
-        layered["result"]["products"][0]["product"],
-        Value::from("badges")
-    );
-
-    let layered = &validations["complete"];
-    assert_eq!(layered["ok"], Value::Bool(true), "{layered}");
-    assert_eq!(layered["result"]["errors"], Value::from(0), "{layered}");
-    assert_eq!(layered["semanticHash"], alone["semanticHash"]);
     let products: Vec<&str> = layered["result"]["products"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|p| p["product"].as_str())
         .collect();
-    assert_eq!(products, vec!["ledger-trigger", "promotions"]);
+    assert_eq!(products, vec!["badges", "ledger-trigger", "promotions"]);
 }
 
 /// Exegra refuses two of the refused products with the same rule as specc: one expression rule
