@@ -1690,7 +1690,7 @@ fn walk_write_settings(
                             out.push(Diagnostic::new(
                                 WRITE_SETTING_LEVEL_NOT_ALLOWED,
                                 id,
-                                format!("\"{id}\" in {file}: the step \"{step_id}\" writes the setting \"{setting}\" at the level \"{level}\", which its definition does not allow ({}). Write at a level the definition lists under \"levels\".", levels.join(", ")),
+                                format!("\"{id}\" in {file}: the step \"{step_id}\" writes the setting \"{setting}\" at the level \"{level}\", which its definition does not allow (its levels are {}). Write at a level the definition lists under \"levels\".", levels.iter().map(|allowed| format!("\"{allowed}\"")).collect::<Vec<_>>().join(", ")),
                             ));
                         }
                         Some(_) => {}

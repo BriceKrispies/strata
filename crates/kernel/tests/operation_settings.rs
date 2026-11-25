@@ -31,7 +31,12 @@ fn input(name: &str, ty: FieldType) -> TenantOperationInput {
     }
 }
 
-fn write(id: &str, setting: &str, level: OperationSettingLevel, value: Expr) -> TenantOperationStep {
+fn write(
+    id: &str,
+    setting: &str,
+    level: OperationSettingLevel,
+    value: Expr,
+) -> TenantOperationStep {
     TenantOperationStep::WriteSetting {
         id: id.into(),
         setting: sid(setting),
@@ -160,10 +165,23 @@ fn setting_world() -> World {
         )),
         SchemaChange::DefineOperation(operation(
             "choose_twice",
-            vec![input("first", FieldType::Str), input("second", FieldType::Str)],
             vec![
-                write("a", "home_channel", OperationSettingLevel::Person, param("first")),
-                write("b", "home_channel", OperationSettingLevel::Person, param("second")),
+                input("first", FieldType::Str),
+                input("second", FieldType::Str),
+            ],
+            vec![
+                write(
+                    "a",
+                    "home_channel",
+                    OperationSettingLevel::Person,
+                    param("first"),
+                ),
+                write(
+                    "b",
+                    "home_channel",
+                    OperationSettingLevel::Person,
+                    param("second"),
+                ),
             ],
         )),
         SchemaChange::DefineOperation(operation(
@@ -176,7 +194,12 @@ fn setting_world() -> World {
                     OperationSettingLevel::Person,
                     param("channel"),
                 ),
-                write("digest", "digest_hour", OperationSettingLevel::Tenant, int(5)),
+                write(
+                    "digest",
+                    "digest_hour",
+                    OperationSettingLevel::Tenant,
+                    int(5),
+                ),
             ],
         )),
     ];
@@ -199,7 +222,11 @@ fn a_person_step_writes_only_the_invokers_own_value_and_makes_one_event() {
         &world,
         "writer1",
         6_000,
-        invoke("choose_channel", &[("channel", Value::Str("random".into()))], "k-1"),
+        invoke(
+            "choose_channel",
+            &[("channel", Value::Str("random".into()))],
+            "k-1",
+        ),
     )
     .expect("accepted");
     assert_eq!(
@@ -211,7 +238,10 @@ fn a_person_step_writes_only_the_invokers_own_value_and_makes_one_event() {
         Value::Str("general".into()),
         "another person's value is not written"
     );
-    assert_eq!(setting_events(&transition), vec!["alpha:writer1".to_string()]);
+    assert_eq!(
+        setting_events(&transition),
+        vec!["alpha:writer1".to_string()]
+    );
 }
 
 /// A value outside the closed list is refused with the rule the settings route applies.
@@ -222,7 +252,11 @@ fn a_value_outside_the_allowed_list_is_refused_as_the_settings_route_refuses_it(
         &world,
         "writer1",
         6_000,
-        invoke("choose_channel", &[("channel", Value::Str("blue".into()))], "k-1"),
+        invoke(
+            "choose_channel",
+            &[("channel", Value::Str("blue".into()))],
+            "k-1",
+        ),
     )
     .expect_err("refused");
     assert_eq!(err.kind, ErrorKind::InvalidIntent);
@@ -277,8 +311,9 @@ fn a_tenant_step_needs_setting_write_tenant_of_its_invoker() {
     .expect_err("refused");
     assert_eq!(err.kind, ErrorKind::Unauthorized);
     assert!(
-        err.evidence.iter().any(|check| !check.passed
-            && check.rule == "permission:capability:setting-write-tenant"),
+        err.evidence.iter().any(
+            |check| !check.passed && check.rule == "permission:capability:setting-write-tenant"
+        ),
         "{:?}",
         err.evidence
     );
@@ -314,10 +349,12 @@ fn each_write_of_an_invocation_makes_one_event_and_the_second_reads_the_first() 
         value_of(&after, "writer1", "home_channel"),
         Value::Str("general".into())
     );
+    // Defining the setting makes its revision one, so the two writes make three: the second write
+    // names the revision the first one left, or it would be refused as a version conflict.
     assert_eq!(
         settings::tenant_revision(tenant(&after), &sid("home_channel")),
-        2,
-        "the second write names the revision the first one left"
+        3,
+        "each write raises the setting's revision by one"
     );
     assert_eq!(
         setting_events(&transition),
@@ -361,8 +398,9 @@ fn the_writes_of_an_invocation_commit_together_or_not_at_all() {
         ),
     )
     .expect("the owner's invocation commits both writes");
+    // The home channel is the invoker's own: the owner wrote it, not writer1.
     assert_eq!(
-        value_of(&after, "writer1", "home_channel"),
+        value_of(&after, "owner", "home_channel"),
         Value::Str("random".into())
     );
     assert_eq!(value_of(&after, "writer1", "digest_hour"), Value::Int(5));
@@ -375,8 +413,16 @@ fn the_writes_of_an_invocation_commit_together_or_not_at_all() {
 fn an_operation_that_writes_an_undefined_setting_or_a_closed_level_is_refused_when_defined() {
     let world = setting_world();
     for (name, setting, level) in [
-        ("write_ghost", "ghost_setting", OperationSettingLevel::Person),
-        ("write_digest_mine", "digest_hour", OperationSettingLevel::Person),
+        (
+            "write_ghost",
+            "ghost_setting",
+            OperationSettingLevel::Person,
+        ),
+        (
+            "write_digest_mine",
+            "digest_hour",
+            OperationSettingLevel::Person,
+        ),
     ] {
         let op = operation(
             name,

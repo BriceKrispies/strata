@@ -296,7 +296,7 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
     (
         "operation-write-setting-level",
         layers::WRITE_SETTING_LEVEL_NOT_ALLOWED,
-        &["\"tenant\"", "does not allow", "(tenant)"],
+        &["\"tenant\"", "does not allow", "its levels are \"tenant\""],
     ),
     (
         "reference-unknown-object",
