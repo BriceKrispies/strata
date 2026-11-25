@@ -159,6 +159,9 @@ pub struct ViewData {
     pub sections: BTreeMap<String, SectionData>,
     /// Object types whose changes can alter this view.
     pub depends_on: BTreeSet<ObjectTypeId>,
+    /// The settings the view's arguments read, for this reader (SET-1540, WG-5600): a notice of a
+    /// change of one of them reads the view again.
+    pub settings: BTreeSet<SettingId>,
     pub revision: StateRevision,
     pub schema_version: SchemaVersion,
     /// What the kernel will check on a record of each object type the reader asked about (the
@@ -645,6 +648,15 @@ pub fn project(data: &ViewData) -> Json {
     if !next.is_empty() {
         model["next"] = json!(next);
     }
+    // The settings the arguments read, so that a change of one of them reads the view again
+    // (WG-5600). Named only when there are some, as the view contracts declare no output for them.
+    if !data.settings.is_empty() {
+        model["settings"] = json!(data
+            .settings
+            .iter()
+            .map(|setting| setting.as_str())
+            .collect::<Vec<_>>());
+    }
     // The editor's rules are a member of the model of their own, the output `record-rules` of the
     // view contract (CT-251), not a section of `data`: a section is a record or a list of them.
     if !data.record_rules.is_empty() {
@@ -687,6 +699,7 @@ mod people_and_refs {
             params: BTreeMap::new(),
             sections: BTreeMap::from([("posts".to_string(), section)]),
             depends_on: BTreeSet::new(),
+            settings: BTreeSet::new(),
             revision: StateRevision(1),
             schema_version: SchemaVersion(1),
             record_rules: BTreeMap::new(),
@@ -707,6 +720,15 @@ mod people_and_refs {
     }
 
     /// The reply carries no principal string; authors are handles into `people`.
+    #[test]
+    fn a_view_names_the_settings_its_arguments_read_only_when_it_reads_some() {
+        let mut with = data(Vec::new(), BTreeMap::new());
+        with.settings = BTreeSet::from([SettingId::new("page_size").unwrap()]);
+        assert_eq!(project(&with)["settings"], json!(["page_size"]));
+        let without = data(Vec::new(), BTreeMap::new());
+        assert!(project(&without).get("settings").is_none());
+    }
+
     #[test]
     fn a_reply_carries_handles_and_no_principal_string() {
         let rows = vec![

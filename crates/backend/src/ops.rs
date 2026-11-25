@@ -869,6 +869,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         params: route,
         sections,
         depends_on,
+        settings: settings.keys().cloned().collect(),
         revision,
         schema_version: schema.version,
         record_rules,
