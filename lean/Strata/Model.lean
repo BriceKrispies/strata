@@ -3,10 +3,10 @@ The abstract model of the Strata kernel.
 
 This is a deliberately small model: one object type per tenant, three scalar value kinds,
 references between its records, lists of either, versions, patch updates, constant defaults, the
-size limits as an abstract bound, ownership-based authorization and one kind of schema change. It
-is not the Rust kernel and proving things about it proves nothing about the Rust kernel by itself.
-What connects the two is stated in `docs/verification.md` and exercised by the correspondence
-fixtures.
+size limits as an abstract bound, unique fields and composite unique constraints, ownership-based
+authorization and three kinds of schema change. It is not the Rust kernel and proving things about
+it proves nothing about the Rust kernel by itself. What connects the two is stated in
+`docs/verification.md` and exercised by the correspondence fixtures.
 
 Everything here is a total, computable function, so the model can also be run (`Main.lean`).
 -/
@@ -62,8 +62,9 @@ inductive Ty where
 structure FieldDef where
   ty : Ty
   required : Bool
-  /-- Whether the field is declared unique. Slice 2 models only what the flag does to the size
-      limits (a unique value has a bound of its own); uniqueness itself is slice 3. -/
+  /-- Whether the field is declared unique: no two records hold the same keyed value in it
+      (`Val.keyed`). A unique value has a bound of its own on its encoded size, and a list field
+      is never unique (`setUnique` and `defineUnique` refuse one). -/
   unique : Bool := false
   /-- The constant a create fills the field with when the intent does not name it; `null` for no
       default. -/
@@ -89,6 +90,10 @@ def Val.hasType : Val → Ty → Bool
   | _, _ => false
 
 def Val.isList : Val → Bool
+  | .list _ => true
+  | _ => false
+
+def Ty.isList : Ty → Bool
   | .list _ => true
   | _ => false
 
@@ -192,6 +197,13 @@ inductive Err where
   | versionConflict
   /-- A written value or record is over a size bound. -/
   | limitExceeded
+  /-- A written record agrees with another record on a unique field, or on every field of a
+      composite unique constraint. -/
+  | uniqueViolated
+  /-- A schema change defines something the schema cannot hold: a field the tenant does not have,
+      a unique field that is a list, or a composite constraint of the wrong size, with a repeated
+      field or a list field. -/
+  | invalidSchema
   deriving DecidableEq, Repr
 
 /-! ## References
@@ -224,37 +236,87 @@ def refsOk (rs : Records) (r : Record) : Bool :=
   r.fields.all (fun fv => fv.2.resolves rs)
 
 /-- The values a record gives a field: one, or none when it does not mention it. (A field named
-    twice has two; the kernel's records are maps, and the scenarios never name a field twice.) -/
+    twice has two; the kernel's records are maps, and the model's writes keep one per name, so
+    a create's fields and a patch's keep one value per name (`normalise`, `Fields.set`).) -/
 def Fields.valuesOf (fs : Fields) (f : FieldId) : List Val :=
   (fs.filter (fun fv => fv.1 == f)).map Prod.snd
 
+/-! ## Unique fields and composite constraints
+
+A unique field, and each composite constraint, is a set of fields on which no two records may
+agree. Two records agree on a set of fields when each field holds a keyed value (present and not
+a list) in both, and the same one. A composite constraint whose fields are not all present in a
+record does not apply to it, which `Val.keyed` gives for free. A unique field is the one-field
+case of this, so one notion serves both. -/
+
+/-- A value a unique constraint can clash on: present, and not a list. A list is never unique
+    (the kernel refuses a unique list field), so no list clashes. -/
+def Val.keyed : Val → Bool
+  | .null => false
+  | .list _ => false
+  | _ => true
+
+/-- Two records agree on the fields `us`: each holds a keyed value in each of them, and the same. -/
+def agreeOn (us : List FieldId) (fs gs : Fields) : Bool :=
+  us.all (fun f => (fs.get f).keyed && fs.get f == gs.get f)
+
+/-- Some two distinct records agree on the fields `us`: the stored data violates the constraint. -/
+def dupFields (rs : Records) (us : List FieldId) : Bool :=
+  rs.any (fun q₁ => rs.any (fun q₂ => q₁.1 != q₂.1 && agreeOn us q₁.2.fields q₂.2.fields))
+
+/-- The strict refusal of making field `f` unique: the stored records already agree on it, or hold
+    a value over the unique bound. -/
+def uniqueClash (L : Limits) (rs : Records) (f : FieldId) (strict : Bool) : Bool :=
+  strict && (dupFields rs [f] || rs.any (fun q => decide (L.maxUnique < (q.2.fields.get f).size)))
+
+/-- The value `v`, keyed, that another record, not the one with id `self`, holds in field `f`. -/
+def clashAt (rs : Records) (self : RecordId) (f : FieldId) (v : Val) : Bool :=
+  v.keyed && rs.any (fun q => q.1 != self && q.2.fields.get f == v)
+
 /-- What is wrong with one value of a field defined by `d`, if anything, in the kernel's order:
-    over the string or list bound, a unique value over its bound, the wrong type (for a list, any
-    element of the wrong type), a reference or a reference element naming no record. -/
-def valueProblem (L : Limits) (rs : Records) (d : FieldDef) (v : Val) : Option Err :=
+    over the string or list bound, a unique value over its bound, the wrong type, a unique value
+    another record holds (only when `uniq`), a reference or a reference element naming no record.
+    `uniq` says whether the unique checks are made: a write that is refused for some other reason
+    and whose unique checks are not made is reported as it would be without them. -/
+def valueProblem (L : Limits) (uniq : Bool) (rs : Records) (self : RecordId) (f : FieldId)
+    (d : FieldDef) (v : Val) : Option Err :=
   if v.overLimit L then some .limitExceeded
   else if d.unique && decide (L.maxUnique < v.size) then some .limitExceeded
   else if !v.hasType d.ty then some .invalid
+  else if uniq && d.unique && clashAt rs self f v then some .uniqueViolated
   else if !v.resolves rs then some .danglingReference
   else none
 
 /-- What is wrong with a record's values of one field of the schema, if anything. -/
-def fieldProblem (L : Limits) (rs : Records) (fs : Fields) (fd : FieldId × FieldDef) :
-    Option Err :=
+def fieldProblem (L : Limits) (uniq : Bool) (rs : Records) (self : RecordId) (fs : Fields)
+    (fd : FieldId × FieldDef) : Option Err :=
   if fd.2.required && (fs.valuesOf fd.1).isEmpty then some .invalid
-  else (fs.valuesOf fd.1).findSome? (valueProblem L rs fd.2)
+  else (fs.valuesOf fd.1).findSome? (valueProblem L uniq rs self fd.1 fd.2)
 
-/-- The refusal for writing record `r` among records `rs`, or `none` if it may be written.
+/-- The composite unique constraints, after the fields: a record that agrees with another record
+    on every field of one of them is refused (when `uniq`). -/
+def compositeProblem (uniq : Bool) (rs : Records) (self : RecordId) (fs : Fields)
+    (us : List (List FieldId)) : Option Err :=
+  if uniq && us.any (fun u => rs.any (fun q => q.1 != self && agreeOn u fs q.2.fields)) then
+    some .uniqueViolated
+  else none
+
+/-- The refusal for writing record `r` as record `self` among records `rs`, or `none` if it may be
+    written, with the unique checks made when `uniq`.
 
     When several things are wrong, which refusal is given is part of the outcome: a record over
     the record bound comes first, then a field the schema does not know, then the fields of the
-    schema in schema order, each refused for being missing, over a bound, of the wrong type or
-    naming no record. (The kernel's schema is ordered by field id, and the correspondence
-    fixtures declare it in that order.) -/
-def problem (L : Limits) (schema : Schema) (rs : Records) (r : Record) : Option Err :=
+    schema in schema order, each refused for being missing, over a bound, of the wrong type, a
+    unique value held by another record, or naming no record; then the composite constraints.
+    (The kernel's schema is ordered by field id, and the correspondence fixtures declare it in that
+    order.) -/
+def problem (L : Limits) (schema : Schema) (us : List (List FieldId)) (uniq : Bool)
+    (rs : Records) (self : RecordId) (r : Record) : Option Err :=
   if decide (L.maxRecord < r.size) then some .limitExceeded
   else if r.fields.all (fun fv => (schema.lookup fv.1).isSome) then
-    schema.findSome? (fieldProblem L rs r.fields)
+    match schema.findSome? (fieldProblem L uniq rs self r.fields) with
+    | some e => some e
+    | none => compositeProblem uniq rs self r.fields us
   else some .invalid
 
 /-- Whether a value names record `id`: it is a reference to it, or a list holding one. -/
@@ -308,6 +370,8 @@ structure Tenant where
   nextId : Nat
   /-- The size bounds. The kernel's are constants (`Limits.kernel`). -/
   limits : Limits := Limits.kernel
+  /-- The composite unique constraints, each a list of fields (the kernel's `UniqueDef`). -/
+  uniques : List (List FieldId) := []
   deriving Repr
 
 /-- The whole state: each tenant id has a tenant or does not. -/
@@ -324,6 +388,12 @@ inductive Intent where
   /-- Make a field required. `strict` rejects the change if an existing record would not
       conform; otherwise existing records are left as they are. -/
   | setRequired (f : FieldId) (strict : Bool)
+  /-- Make a field unique. `strict` rejects the change if existing records already agree on it;
+      otherwise existing records are left as they are. -/
+  | setUnique (f : FieldId) (strict : Bool)
+  /-- Define a composite unique constraint over these fields. Refused if existing records already
+      agree on all of them. -/
+  | defineUnique (fs : List FieldId)
   deriving Repr
 
 /-- The explicit environment of a step: which tenant, and who is acting. -/
@@ -351,9 +421,19 @@ def canEditAny (t : Tenant) (p : PrincipalId) : Bool :=
 def missingRecord (t : Tenant) (p : PrincipalId) : Err :=
   if canEditAny t p then .notFound else .unauthorized
 
-/-- Absent values are not stored. -/
+/-- One entry of a patch: field `fv.1` takes value `fv.2`, or is removed if that is `null`. -/
+def Fields.set (fs : Fields) (fv : FieldId × Val) : Fields :=
+  if fv.2 == .null then fs.filter (fun g => g.1 != fv.1)
+  else fv :: fs.filter (fun g => g.1 != fv.1)
+
+/-- A patch applied to fields, entry by entry. -/
+def Fields.patch (fs ps : Fields) : Fields :=
+  ps.foldl Fields.set fs
+
+/-- Absent values are not stored, and a name given twice keeps its last value: the fields of a
+    create are built as the kernel builds its records, a map from names to values. -/
 def normalise (fs : Fields) : Fields :=
-  fs.filter (fun fv => fv.2 != .null)
+  fs.foldl Fields.set []
 
 /-- The fields a create writes: the named ones that are not `null`, then the default of every field
     of the schema that the intent does not name at all and whose default is not `null`. (The
@@ -367,15 +447,6 @@ def withDefaults (schema : Schema) (fs : Fields) : Fields :=
 def newRecord (schema : Schema) (p : PrincipalId) (fs : Fields) : Record :=
   { owner := p, version := 1, fields := withDefaults schema fs }
 
-/-- One entry of a patch: field `fv.1` takes value `fv.2`, or is removed if that is `null`. -/
-def Fields.set (fs : Fields) (fv : FieldId × Val) : Fields :=
-  if fv.2 == .null then fs.filter (fun g => g.1 != fv.1)
-  else fv :: fs.filter (fun g => g.1 != fv.1)
-
-/-- A patch applied to fields, entry by entry. -/
-def Fields.patch (fs ps : Fields) : Fields :=
-  ps.foldl Fields.set fs
-
 /-- The record an accepted update writes: patched, one version on. -/
 def patched (old : Record) (ps : Fields) : Record :=
   { owner := old.owner, version := old.version + 1, fields := old.fields.patch ps }
@@ -388,6 +459,17 @@ def versionClash : Option Nat → Record → Bool
 def makeRequired (schema : Schema) (f : FieldId) : Schema :=
   schema.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with required := true }) else fd)
 
+def makeUnique (schema : Schema) (f : FieldId) : Schema :=
+  schema.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with unique := true }) else fd)
+
+/-- A composite definition the schema can hold: two to four fields, none repeated, each one of the
+    schema and not a list (the kernel's `unique_problems`). -/
+def uniqueFieldsOk (schema : Schema) (fs : List FieldId) : Bool :=
+  decide (2 ≤ fs.length) && decide (fs.length ≤ 4) && decide fs.Nodup &&
+    fs.all (fun f => match schema.lookup f with
+      | some d => !d.ty.isList
+      | none => false)
+
 /-- One intent against one tenant. An expected version is checked after the permission, so only
     one who may act on the record learns that it is at another version. -/
 def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
@@ -395,7 +477,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
     if !canCreate t p then .error .unauthorized
     else
       let r := newRecord t.schema p fs
-      match problem t.limits t.schema t.records r with
+      match problem t.limits t.schema t.uniques true t.records t.nextId r with
       | some e => .error e
       | none => .ok { t with records := (t.nextId, r) :: t.records, nextId := t.nextId + 1 }
   | .update id fs ev =>
@@ -406,7 +488,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
       else if versionClash ev old then .error .versionConflict
       else
         let r := patched old fs
-        match problem t.limits t.schema t.records r with
+        match problem t.limits t.schema t.uniques true t.records id r with
         | some e => .error e
         | none =>
           .ok { t with records := t.records.map (fun q => if q.1 == id then (q.1, r) else q) }
@@ -425,6 +507,21 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
       let schema' := makeRequired t.schema f
       if strict && !(t.records.all (fun q => conforms schema' q.2)) then .error .migrationRejected
       else .ok { t with schema := schema' }
+  | .setUnique f strict =>
+    if p != t.owner then .error .unauthorized
+    else
+      match t.schema.lookup f with
+      | none => .error .invalidSchema
+      | some d =>
+        if d.ty.isList then .error .invalidSchema
+        else if uniqueClash t.limits t.records f strict then
+          .error .migrationRejected
+        else .ok { t with schema := makeUnique t.schema f }
+  | .defineUnique fs =>
+    if p != t.owner then .error .unauthorized
+    else if !uniqueFieldsOk t.schema fs then .error .invalidSchema
+    else if dupFields t.records fs then .error .uniqueViolated
+    else .ok { t with uniques := t.uniques ++ [fs] }
 
 /-- The transition function of the model: one intent, in one context, against the world. -/
 def step (w : World) (i : Intent) (c : Ctx) : Except Err World :=
@@ -445,11 +542,14 @@ def authorized (t : Tenant) (p : PrincipalId) : Intent → Bool
     | some old => canEdit t p old
     | none => false
   | .setRequired _ _ => p == t.owner
+  | .setUnique _ _ => p == t.owner
+  | .defineUnique _ => p == t.owner
 
-/-- A schema change that leaves existing records as they are is the one intent that is allowed
-    to break record conformance. Every other intent is strict. -/
+/-- A schema change that leaves existing records as they are is the one kind of intent that is
+    allowed to break record conformance or uniqueness. Every other intent is strict. -/
 def Intent.strict : Intent → Bool
   | .setRequired _ s => s
+  | .setUnique _ s => s
   | _ => true
 
 /-- Referential integrity: every reference held by a record of the tenant, single or in a list,
@@ -457,11 +557,24 @@ def Intent.strict : Intent → Bool
 def Tenant.RefsOk (t : Tenant) : Prop :=
   ∀ q ∈ t.records, refsOk t.records q.2 = true
 
+/-- The names are distinct: the schema names each field once, and each record holds each field at
+    most once (the kernel's records are maps). -/
+def Tenant.Distinct (t : Tenant) : Prop :=
+  (t.schema.map Prod.fst).Nodup ∧ ∀ q ∈ t.records, (q.2.fields.map Prod.fst).Nodup
+
+/-- No two distinct records of the tenant agree on a unique field, or on every field of a
+    composite unique constraint. -/
+def Tenant.UniqueRecords (t : Tenant) : Prop :=
+  ∀ q₁ ∈ t.records, ∀ q₂ ∈ t.records, q₁.1 ≠ q₂.1 →
+    (∀ fd ∈ t.schema, fd.2.unique = true → agreeOn [fd.1] q₁.2.fields q₂.2.fields = false) ∧
+    (∀ u ∈ t.uniques, agreeOn u q₁.2.fields q₂.2.fields = false)
+
 /-- The state invariant of one tenant: every record conforms to the schema, was given an id
-    below the counter, and refers only to existing records. -/
+    below the counter, refers only to existing records, and the names are distinct and the
+    unique constraints hold. -/
 def Tenant.WF (t : Tenant) : Prop :=
   (∀ q ∈ t.records, conforms t.schema q.2 = true) ∧ (∀ q ∈ t.records, q.1 < t.nextId) ∧
-    t.RefsOk
+    t.RefsOk ∧ t.Distinct ∧ t.UniqueRecords
 
 def World.WF (w : World) : Prop :=
   ∀ x t, w x = some t → t.WF

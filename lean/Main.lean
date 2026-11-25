@@ -19,7 +19,8 @@ open Strata
     `6` an optional integer whose default is the constant `7`;
     `7` an optional list of strings;
     `8` an optional list of references that loses an element when its target is deleted
-    (`set-null`).
+    (`set-null`);
+    `10` an optional string that is unique (slice 3).
     The size limits are the kernel's. -/
 def initialTenant (n : Nat) : Tenant :=
   { schema := [(0, { ty := .list (.ref .restrict), required := false }),
@@ -29,7 +30,8 @@ def initialTenant (n : Nat) : Tenant :=
                (5, { ty := .ref .restrict, required := false }),
                (6, { ty := .int, required := false, default := .int 7 }),
                (7, { ty := .list .str, required := false }),
-               (8, { ty := .list (.ref .setNull), required := false })],
+               (8, { ty := .list (.ref .setNull), required := false }),
+               (10, { ty := .str, required := false, unique := true })],
     owner := n * 100,
     editors := [n * 100 + 1],
     writers := [n * 100 + 2, n * 100 + 3],
@@ -39,7 +41,7 @@ def initialTenant (n : Nat) : Tenant :=
 
 /-- The fields of the fixture schema. An `update` line names each of them, as `null` when the line
     does not, so it replaces the record (`patch` patches). -/
-def fixtureFields : List FieldId := [0, 1, 2, 3, 4, 5, 6, 7, 8]
+def fixtureFields : List FieldId := [0, 1, 2, 3, 4, 5, 6, 7, 8, 10]
 
 def initialWorld : World := fun x =>
   if x = 1 then some (initialTenant 1) else if x = 2 then some (initialTenant 2) else none
@@ -50,7 +52,8 @@ def dropChars (s : String) (n : Nat) : String :=
 
 /-- The string without trailing spaces or carriage returns. -/
 def trimEnd (s : String) : String :=
-  String.ofList (s.toList.reverse.dropWhile (fun c => c == ' ' || c == '')).reverse
+  String.ofList (s.toList.reverse.dropWhile (fun c => c == ' ' || c == '
+')).reverse
 
 /-- `<count>:<rest>`, split at the first colon. -/
 def splitCount (s : String) : Option (Nat × String) :=
@@ -134,6 +137,9 @@ def parseOp (tokens : List String) : Option (Ctx × Intent) :=
       if more.isEmpty then pure (c, .delete (← id.toNat?) ev) else none
     | ["require", f, "strict"] => pure (c, .setRequired (← f.toNat?) true)
     | ["require", f, "lax"] => pure (c, .setRequired (← f.toNat?) false)
+    | ["unique", f, "strict"] => pure (c, .setUnique (← f.toNat?) true)
+    | ["unique", f, "lax"] => pure (c, .setUnique (← f.toNat?) false)
+    | "composite" :: fs => pure (c, .defineUnique (← fs.mapM String.toNat?))
     | _ => none
   | _ => none
 
@@ -178,6 +184,8 @@ def showErr : Err → String
   | .stillReferenced => "still_referenced"
   | .versionConflict => "version_conflict"
   | .limitExceeded => "limit_exceeded"
+  | .uniqueViolated => "unique_violated"
+  | .invalidSchema => "invalid_schema"
 
 /-- Insertion sort on a key; the lists here are a handful of elements. -/
 def sortBy {α : Type} (key : α → Nat) : List α → List α
