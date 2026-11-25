@@ -92,6 +92,19 @@ pub fn posting_key(
     format!("op:{operation}:{invoker}:{key}:{step}")
 }
 
+/// The idempotency key of a posting that names the record it is for (WG-5598): the operation, the
+/// reference and the posting step, so that a reversal in a later invocation finds the posting again.
+pub fn reference_key(operation: &TenantOperationId, reference: &str, step: &str) -> String {
+    format!("ref:{operation}:{reference}:{step}")
+}
+
+/// The idempotency key of the reversal of a posting made under a reference (WG-5598). It names the
+/// posting step, not the reversal step, so that a second reversal of the posting is found whichever
+/// step makes it.
+pub fn reversal_key(operation: &TenantOperationId, reference: &str, posting: &str) -> String {
+    format!("rev:{operation}:{reference}:{posting}")
+}
+
 /// The result of an accepted invocation as contract invoke-tenant-operation answers it, from the
 /// transition's output, the revision it was committed at and whether it is a repeat's recorded
 /// result. `None` for the output of any other intent.
@@ -883,7 +896,22 @@ impl Run<'_> {
                 scope,
                 amount,
                 reason,
-            } => self.post(id, owner, unit, scope.as_ref(), amount, reason),
+                reference,
+            } => self.post(
+                id,
+                owner,
+                unit,
+                scope.as_ref(),
+                amount,
+                reason,
+                reference.as_ref(),
+            ),
+            TenantOperationStep::ReverseLedger {
+                id,
+                posting,
+                reference,
+                reason,
+            } => self.reverse(id, posting, reference, reason),
             TenantOperationStep::FindRecord {
                 id,
                 object,
@@ -1368,6 +1396,7 @@ impl Run<'_> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn post(
         &mut self,
         step: &str,
@@ -1376,9 +1405,48 @@ impl Run<'_> {
         scope: Option<&Expr>,
         amount: &Expr,
         reason: &str,
+        reference: Option<&Expr>,
     ) -> Result<(), DomainError> {
         let rule = |what: &str| format!("operation:{}:{step}.{what}", self.operation);
-        let owner = match owner {
+        let owner = self.posting_owner(step, owner)?;
+        let scope = self.posting_scope(step, scope)?;
+        let amount = match self.eval(&format!("{step}.amount"), amount)? {
+            Value::Int(n) => LedgerAmount(n),
+            other => {
+                return Err(self.fail(
+                    ErrorKind::InvalidIntent,
+                    rule("amount"),
+                    format!("the amount of step {step} is {}, not an int", other.kind()),
+                ))
+            }
+        };
+        let idempotency_key = match reference {
+            None => posting_key(self.operation, &self.invoker, self.key, step),
+            Some(e) => {
+                let text = self.reference_text(step, e)?;
+                reference_key(self.operation, &text, step)
+            }
+        };
+        let request = LedgerPostingRequest {
+            owner,
+            unit: unit.clone(),
+            amount,
+            idempotency_key,
+            reason: reason.to_string(),
+            corrects: None,
+            scope,
+        };
+        self.post_to_ledger(request)
+    }
+
+    /// The owner of a posting step, as the posting names it.
+    fn posting_owner(
+        &self,
+        step: &str,
+        owner: &TenantOperationPostingOwner,
+    ) -> Result<LedgerOwner, DomainError> {
+        let rule = |what: &str| format!("operation:{}:{step}.{what}", self.operation);
+        Ok(match owner {
             TenantOperationPostingOwner::Invoker => LedgerOwner::Principal {
                 principal: self.invoker.clone(),
             },
@@ -1409,8 +1477,17 @@ impl Run<'_> {
                     }
                 }
             }
-        };
-        let scope = match scope {
+        })
+    }
+
+    /// The scope of a posting step, as the posting names it.
+    fn posting_scope(
+        &self,
+        step: &str,
+        scope: Option<&Expr>,
+    ) -> Result<Option<LedgerScope>, DomainError> {
+        let rule = |what: &str| format!("operation:{}:{step}.{what}", self.operation);
+        Ok(match scope {
             None => None,
             Some(e) => match self.eval(&format!("{step}.scope"), e)? {
                 Value::Null => None,
@@ -1432,27 +1509,76 @@ impl Run<'_> {
                     ))
                 }
             },
+        })
+    }
+
+    /// The text of a reference of a posting step: the id of the record it is for, or text.
+    fn reference_text(&self, step: &str, reference: &Expr) -> Result<String, DomainError> {
+        match self.eval(&format!("{step}.reference"), reference)? {
+            Value::Ref(id) => Ok(id.to_string()),
+            Value::Str(text) if !text.is_empty() => Ok(text),
+            other => Err(self.fail(
+                ErrorKind::InvalidIntent,
+                format!("operation:{}:{step}.reference", self.operation),
+                format!(
+                    "the reference of step {step} is {}, not a record or text",
+                    other.kind()
+                ),
+            )),
+        }
+    }
+
+    /// A reverse-ledger step (WG-5598): the reversal of the posting step `posting` of this operation,
+    /// made under the reference. The posting's owner, unit and scope are the ones it names; the
+    /// reversal is refused when that posting was never made or was already reversed.
+    fn reverse(
+        &mut self,
+        step: &str,
+        posting: &str,
+        reference: &Expr,
+        reason: &str,
+    ) -> Result<(), DomainError> {
+        let op = self.op;
+        let found = crate::definitions::all_steps(&op.steps)
+            .into_iter()
+            .find_map(|s| match s {
+                TenantOperationStep::PostLedger {
+                    id,
+                    owner,
+                    unit,
+                    scope,
+                    ..
+                } if id == posting => Some((owner, unit, scope.as_ref())),
+                _ => None,
+            });
+        let Some((owner, unit, scope)) = found else {
+            return Err(self.fail(
+                ErrorKind::InvalidIntent,
+                format!("operation:{}:{step}.posting", self.operation),
+                format!(
+                    "step {step} reverses {posting}, which is no posting step of the operation"
+                ),
+            ));
         };
-        let amount = match self.eval(&format!("{step}.amount"), amount)? {
-            Value::Int(n) => LedgerAmount(n),
-            other => {
-                return Err(self.fail(
-                    ErrorKind::InvalidIntent,
-                    rule("amount"),
-                    format!("the amount of step {step} is {}, not an int", other.kind()),
-                ))
-            }
-        };
+        let owner = self.posting_owner(step, owner)?;
+        let scope = self.posting_scope(step, scope)?;
+        let text = self.reference_text(step, reference)?;
         let request = LedgerPostingRequest {
             owner,
             unit: unit.clone(),
-            amount,
-            idempotency_key: posting_key(self.operation, &self.invoker, self.key, step),
+            // The amount is the negated amount of the posting, which the ledger reads from the entry.
+            amount: LedgerAmount(0),
+            idempotency_key: reversal_key(self.operation, &text, posting),
             reason: reason.to_string(),
             corrects: None,
             scope,
         };
-        self.post_to_ledger(request)
+        let posting_key = reference_key(self.operation, &text, posting);
+        let state = self.ledger_state();
+        let posted =
+            crate::ledger::reverse_after(&state, &self.ops, &request, &posting_key, self.ctx)?;
+        self.absorb(posted);
+        Ok(())
     }
 
     /// The one call into the ledger engine (contract decide-ledger-posting CT-280): the posting
@@ -1463,17 +1589,27 @@ impl Run<'_> {
     /// cap, a key used with another request) refuses the invocation, and a snapshot that lacks the
     /// account's header or the entry of the key is `InsufficientState` naming it.
     fn post_to_ledger(&mut self, request: LedgerPostingRequest) -> Result<(), DomainError> {
-        let state = State {
+        let state = self.ledger_state();
+        let posted = crate::ledger::post_after(&state, &self.ops, &request, self.ctx)?;
+        self.absorb(posted);
+        Ok(())
+    }
+
+    /// The snapshot the ledger decides on: the working copy of the tenant and the coverage.
+    fn ledger_state(&self) -> State {
+        State {
             tenant_id: self.work.id.clone(),
             tenant: Some(Arc::new(self.work.clone())),
             coverage: self.coverage.clone(),
-        };
-        let posted = crate::ledger::post_after(&state, &self.ops, &request, self.ctx)?;
+        }
+    }
+
+    /// What an accepted posting adds to the invocation: its operations, events, checks and entry.
+    fn absorb(&mut self, posted: crate::ledger::Posted) {
         self.evidence.extend(posted.evidence);
         self.ops.extend(posted.ops);
         self.events.extend(posted.events);
         self.entries.push(posted.result.entry);
-        Ok(())
     }
 
     /// The accepted invocation: one delta with every change, the events of every change in step
@@ -1588,6 +1724,58 @@ fn known_fields(
         .collect()
 }
 
+/// The needs of a posting step: the account's header and the limit of the account, when its owner
+/// and scope are known before the run (WG-5598: a reversal asks for the same).
+fn posting_needs_of(
+    loaded: Option<&TenantState>,
+    owner: &TenantOperationPostingOwner,
+    unit: &LedgerUnit,
+    scope: Option<&Expr>,
+    subject: Option<&Record>,
+    inputs: &BTreeMap<String, Value>,
+    out: &mut BTreeSet<Need>,
+) {
+    // The account's header, when its owner and scope are known before the run; the
+    // entry of the posting's key (which names the invoker and the invocation's key)
+    // and an owner the invoker is are asked for by the decision, one need at a time.
+    let Some(tenant) = loaded else {
+        return;
+    };
+    let owner = match owner {
+        TenantOperationPostingOwner::Pool { pool } => {
+            Some(LedgerOwner::Pool { pool: pool.clone() })
+        }
+        TenantOperationPostingOwner::Principal { principal } => {
+            match known(principal, subject, inputs) {
+                Some(Value::Str(text)) => PrincipalId::new(text)
+                    .ok()
+                    .map(|principal| LedgerOwner::Principal { principal }),
+                _ => None,
+            }
+        }
+        TenantOperationPostingOwner::Invoker => None,
+    };
+    let scope = match scope {
+        None => Some(String::new()),
+        Some(e) => match known(e, subject, inputs) {
+            Some(Value::Str(text)) => Some(text),
+            Some(Value::Null) => Some(String::new()),
+            _ => None,
+        },
+    };
+    if let (Some(owner), Some(scope)) = (owner, scope) {
+        out.insert(Need::Ledger(crate::types::LedgerNeed::Account {
+            account: crate::ledger::account_id(&tenant.id, &owner, unit, &scope),
+        }));
+        // The limit of this account, and no other (D-6554).
+        out.insert(Need::Ledger(crate::types::LedgerNeed::Limit {
+            owner,
+            unit: unit.clone(),
+            scope: crate::types::LedgerScope(scope),
+        }));
+    }
+}
+
 fn plan(
     schema: &TenantSchema,
     loaded: Option<&TenantState>,
@@ -1661,45 +1849,22 @@ fn plan(
             }
             TenantOperationStep::PostLedger {
                 owner, unit, scope, ..
-            } => {
-                // The account's header, when its owner and scope are known before the run; the
-                // entry of the posting's key (which names the invoker and the invocation's key)
-                // and an owner the invoker is are asked for by the decision, one need at a time.
-                let Some(tenant) = loaded else {
-                    continue;
-                };
-                let owner = match owner {
-                    TenantOperationPostingOwner::Pool { pool } => {
-                        Some(LedgerOwner::Pool { pool: pool.clone() })
-                    }
-                    TenantOperationPostingOwner::Principal { principal } => {
-                        match known(principal, subject, inputs) {
-                            Some(Value::Str(text)) => PrincipalId::new(text)
-                                .ok()
-                                .map(|principal| LedgerOwner::Principal { principal }),
-                            _ => None,
-                        }
-                    }
-                    TenantOperationPostingOwner::Invoker => None,
-                };
-                let scope = match scope {
-                    None => Some(String::new()),
-                    Some(e) => match known(e, subject, inputs) {
-                        Some(Value::Str(text)) => Some(text),
-                        Some(Value::Null) => Some(String::new()),
+            } => posting_needs_of(loaded, owner, unit, scope.as_ref(), subject, inputs, out),
+            TenantOperationStep::ReverseLedger { posting, .. } => {
+                let found = crate::definitions::all_steps(&op.steps)
+                    .into_iter()
+                    .find_map(|s| match s {
+                        TenantOperationStep::PostLedger {
+                            id,
+                            owner,
+                            unit,
+                            scope,
+                            ..
+                        } if id == posting => Some((owner, unit, scope.as_ref())),
                         _ => None,
-                    },
-                };
-                if let (Some(owner), Some(scope)) = (owner, scope) {
-                    out.insert(Need::Ledger(crate::types::LedgerNeed::Account {
-                        account: crate::ledger::account_id(&tenant.id, &owner, unit, &scope),
-                    }));
-                    // The limit of this account, and no other (D-6554).
-                    out.insert(Need::Ledger(crate::types::LedgerNeed::Limit {
-                        owner,
-                        unit: unit.clone(),
-                        scope: crate::types::LedgerScope(scope),
-                    }));
+                    });
+                if let Some((owner, unit, scope)) = found {
+                    posting_needs_of(loaded, owner, unit, scope, subject, inputs, out);
                 }
             }
         }

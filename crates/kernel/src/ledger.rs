@@ -233,6 +233,10 @@ pub struct Limits {
     pub floor: Option<i64>,
     pub cap: Option<i64>,
     pub period_cap: Option<(u64, LedgerPeriod)>,
+    /// Whether a posting that names the entry it corrects (a reversal, WG-5598) neither counts
+    /// toward the cap per period nor frees capacity under it. Only postings that add credit
+    /// count in any case: a debit never frees capacity in its period.
+    pub period_additions_only: bool,
 }
 
 fn is_account_limit(
@@ -281,6 +285,11 @@ pub fn limits_of(
     let floor = |limit: &LedgerLimit| limit.floor.map(|a| a.0);
     let cap = |limit: &LedgerLimit| limit.cap.map(|a| a.0);
     let period = |limit: &LedgerLimit| limit.period_cap.zip(limit.period);
+    // The cap per period and its flag are one limit (LDG-012): the account's when it sets one.
+    let period_source = match of_account.and_then(period) {
+        Some(_) => of_account,
+        None => of_unit,
+    };
     Limits {
         floor: of_account
             .and_then(floor)
@@ -289,6 +298,8 @@ pub fn limits_of(
         period_cap: of_account
             .and_then(period)
             .or_else(|| of_unit.and_then(period)),
+        period_additions_only: period_source
+            .is_some_and(|limit| limit.additions_only == Some(true)),
     }
 }
 
@@ -337,6 +348,114 @@ pub fn intent_needs(tenant: &TenantId, postings: &[LedgerPostingRequest]) -> Vec
         out.extend(posting_needs(tenant, request));
     }
     out.into_iter().collect()
+}
+
+/// The reversal of a posting (WG-5598): a posting of the negated amount that names the entry it
+/// corrects (LDG-023). The posting to reverse is the entry of the account under `posting_key`,
+/// found in `earlier` or in the snapshot; `request` names the account, the unit, the scope, the
+/// reason and the key of the reversal, and its amount is ignored. A posting that was never made is
+/// refused as `ledger:no-such-posting` and a posting already reversed as
+/// `ledger:already-reversed`; both change nothing. A key of the reversal recorded with the same
+/// request is not a repeat here: the reversal is refused, because the posting was reversed once.
+pub fn reverse_after(
+    state: &State,
+    earlier: &[DeltaOp],
+    request: &LedgerPostingRequest,
+    posting_key: &str,
+    ctx: &Context,
+) -> Result<Posted, DomainError> {
+    let Some(tenant) = state.tenant.as_deref() else {
+        return Err(refuse(
+            ErrorKind::TenantNotFound,
+            "tenant:exists",
+            "no such tenant",
+        ));
+    };
+    let account = account_id(
+        &tenant.id,
+        &request.owner,
+        &request.unit,
+        scope_text(&request.scope),
+    );
+    let mut evidence = Vec::new();
+    let written = |key: &str| {
+        earlier.iter().find_map(|op| match op {
+            DeltaOp::Ledger(LedgerDelta::AppendEntry(e))
+                if e.account == account && e.idempotency_key == key =>
+            {
+                Some(e.clone())
+            }
+            _ => None,
+        })
+    };
+    // The posting, made in this change or in the snapshot.
+    let original = match written(posting_key) {
+        Some(entry) => Some(entry),
+        None => {
+            require(
+                state,
+                LedgerNeed::EntryByKey {
+                    account,
+                    key: posting_key.to_string(),
+                },
+            )?;
+            loaded_entries(tenant, &account)
+                .iter()
+                .find(|e| e.idempotency_key == posting_key)
+                .cloned()
+        }
+    };
+    let Some(original) = original else {
+        return Err(refused(
+            evidence,
+            ErrorKind::UnknownRecord,
+            "ledger:no-such-posting",
+            format!("the account holds no posting under the key {posting_key}"),
+        ));
+    };
+    // The reversal, made before in this change or recorded in the snapshot, reverses it already.
+    let reversed = match written(&request.idempotency_key) {
+        Some(_) => true,
+        None => {
+            require(
+                state,
+                LedgerNeed::EntryByKey {
+                    account,
+                    key: request.idempotency_key.clone(),
+                },
+            )?;
+            loaded_entries(tenant, &account)
+                .iter()
+                .any(|e| e.idempotency_key == request.idempotency_key)
+        }
+    };
+    if reversed {
+        return Err(refused(
+            evidence,
+            ErrorKind::ConstraintViolated,
+            "ledger:already-reversed",
+            format!(
+                "the posting under the key {posting_key} was reversed already (entry {})",
+                original.sequence
+            ),
+        ));
+    }
+    evidence.push(Check::pass(
+        "ledger:reversal",
+        format!(
+            "entry {} under the key {posting_key} is reversed once",
+            original.sequence
+        ),
+    ));
+    let reversal = LedgerPostingRequest {
+        amount: LedgerAmount(-original.amount.0),
+        corrects: Some(original.sequence),
+        ..request.clone()
+    };
+    let mut posted = post_after(state, earlier, &reversal, ctx)?;
+    evidence.append(&mut posted.evidence);
+    posted.evidence = evidence;
+    Ok(posted)
 }
 
 /// Decide one posting against a snapshot (contract `decide-ledger-posting`, CT-280).
@@ -617,9 +736,11 @@ pub fn post_after(
             format!("{after} against cap {cap}"),
         ));
     }
-    // LDG-014: the credits of the period of the entry.
+    // LDG-014: the credits of the period of the entry. A reversal names the entry it corrects and
+    // counts only when the cap does not count additions only (WG-5598).
+    let counts = amount > 0 && !(applying.period_additions_only && request.corrects.is_some());
     if let Some((period_cap, period)) = applying.period_cap {
-        if amount > 0 {
+        if counts {
             let so_far = current
                 .as_ref()
                 .map_or(0, |a| credits_in(a, period, ctx.now));
@@ -655,7 +776,7 @@ pub fn post_after(
             LedgerPeriodTotal {
                 period,
                 start: period_start(period, ctx.now),
-                credits: if amount > 0 {
+                credits: if counts {
                     kept.saturating_add(amount as u64)
                 } else {
                     kept
@@ -1336,6 +1457,11 @@ fn limit_problems(schema: &TenantSchema, limit: &LedgerLimit, problems: &mut Vec
     }
     if limit.floor.is_none() && limit.cap.is_none() && limit.period_cap.is_none() {
         problems.push(format!("{at}: sets no limit"));
+    }
+    if limit.additions_only == Some(true) && limit.period_cap.is_none() {
+        problems.push(format!(
+            "{at}: counts additions only, which needs a cap per period (WG-5598)"
+        ));
     }
 }
 
