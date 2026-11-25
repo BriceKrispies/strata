@@ -394,13 +394,18 @@ The types, with their tags:
 | `Val` | `00` null, `01` int, `02` str, `03` bool, `04` ref (natural), `05` list (count, elements) |
 | `FieldDef` | `ty`, `required` (bool), `unique` (bool), `default` (`Expr`, slice 5: the constant default is `lit v`) |
 | `Limits` | `maxString`, `maxList`, `maxUnique`, `maxRecord` (naturals) |
-| `Record` | `owner`, `version`, then the fields as a list of (field id, `Val`) |
+| `Record` | `owner` (option of the creating user id: `00` none, `01` then the id), `version`, then the fields as a list of (field id, `Val`) |
 | `ObjType` | `schema` (list of (field id, `FieldDef`)), `uniques` (list of lists of field ids), `records` (list of (record id, `Record`)), `constraints` (list of `Expr`, slice 5) |
-| `Tenant` | `types` (list of (object type id, `ObjType`)), `owner`, `editors` (list), `writers` (list), `nextId`, `limits` |
-| `Ctx` | `tenant`, `principal` |
+| `Tenant` | `types` (list of (object type id, `ObjType`)), `members` (list of (user id, list of role ids)), `grants` (list of (role id, `Grant`)), `policies` (list of `Policy`), `nextId`, `limits` |
+| `Principal` (slice 6) | `00` user then its id (natural); `01` system; `02` anonymous |
+| `Action` (slice 6) | `00` read, `01` create, `02` update, `03` delete, `04` manage |
+| `Resource` (slice 6) | `00` object then the object type id (natural); `01` any object; `02` schema |
+| `Grant` (slice 6) | `00` capability then its id (natural); `01` object then the object type id (natural) and an `Action` |
+| `Policy` (slice 6) | role id (natural), `Resource`, list of `Action`, option of `Expr` (the condition) |
+| `Ctx` | `tenant`, `principal` (`Principal`) |
 | `Intent` | each begins with its tag, then the object type id (natural): `00` create (fields); `01` update (id, fields, option expected version); `02` delete (id, option expected version); `03` setRequired (field, strict); `04` setUnique (field, strict); `05` defineUnique (list of field ids) |
 | `Err` | one byte: `00` noTenant, `01` unauthorized, `02` notFound, `03` invalid, `04` migrationRejected, `05` danglingReference, `06` stillReferenced, `07` versionConflict, `08` limitExceeded, `09` uniqueViolated, `0A` invalidSchema, `0B` unknownObject, `0C` constraintViolated, `0D` evaluation |
-| `Expr` (slice 5) | one tag byte, then its parts in prefix order: `00` lit (`Val`); `01` field (scope: `00` record, `01` old, `02` new; field id); `02` principal; `03` comparison (operator: `00` eq, `01` ne, `02` lt, `03` le, `04` gt, `05` ge; two operands); `04` and and `05` or (two operands each); `06` not and `07` isNull (one operand) |
+| `Expr` (slice 5) | one tag byte, then its parts in prefix order: `00` lit (`Val`); `01` field (scope: `00` record, `01` old, `02` new; field id); `02` principal; `03` comparison (operator: `00` eq, `01` ne, `02` lt, `03` le, `04` gt, `05` ge; two operands); `04` and and `05` or (two operands each); `06` not and `07` isNull (one operand); `08` `$created_by` (scope) |
 | step result (`Except Err Tenant`) | `00` then `Err`, or `01` then `Tenant` |
 
 Fixtures (each proved by evaluation in `Fixtures.lean`; the Rust tests assert the same bytes):
@@ -409,11 +414,10 @@ Fixtures (each proved by evaluation in `Fixtures.lean`; the Rust tests assert th
 - `encTy (.list (.ref 0 .setNull)) = [5, 4, 0]` and `encTy (.ref 300 .restrict) = [3, 172, 2]`;
 - `encIntent (.update 1 5 [(1, .str "x")] none) = [1, 1, 5, 1, 1, 2, 1, 120, 0]`;
 - `encTenant fxTenant`, a tenant with one string field, owner 7, next id 1 and the kernel's limits,
-  is `01 01 01 01 01 01 00 00 00 00 00 00 07 00 00 01 80 80 04 E8 07 C8 01 80 80 10` (26 bytes): one
-  object type, id `01`, with one field (id `01`, str, required, not unique, default the literal
-  null), no
-  uniques, no records and no constraints, then the owner, the two empty role lists, the next id and
-  the limits;
+  is `01 01 01 01 01 01 00 00 00 00 00 00 01 07 01 00 00 00 01 80 80 04 E8 07 C8 01 80 80 10`
+  (29 bytes): one object type, id `01`, with one field (id `01`, str, required, not unique, default the
+  literal null), no uniques, no records and no constraints, then the members (one: user 7 with role
+  `00`, the owner), the empty grant and policy lists, the next id and the limits;
 - `encResult (.error .unauthorized) = [0, 1]`.
 
 `World` (a function from tenant ids to tenants) is not encoded. The boundary carries one tenant.

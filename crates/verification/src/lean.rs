@@ -15,7 +15,7 @@
 //! | fields 0 to 8, 10, 11, 12 of type 1 | `f0: list of ref item, restrict`, `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict`, `f6: int, default 7`, `f7: list of string`, `f8: list of ref item, set-null`, `f10: string, unique`, `f11: ref part, restrict`, `f12: ref part, set-null` |
 //! | fields 1 to 4 of type 2 | `f1: ref item, restrict`, `f2: ref item, set-null`, `f3: list of ref item, set-null`, `f4: int` |
 //! | `type <n>` before the intent | the object type of the intent; any number but `1` and `2` names a type the tenant does not have |
-//! | owner, editors, writers | the `owner` role; an `editor` role allowed everything on `item`; a `writer` role allowed to create, and to update or delete where `record.$created_by == principal` |
+//! | members, roles and policies | the `owner` role; an `editor` role with policies allowing every action on each object type; a `writer` role with policies allowing read and create, and update or delete where `record.$created_by == principal`; the `public` role with a policy allowing create of `part` when no user acts (`isNull(principal)`), so an anonymous caller may create a part; the system holds no role |
 //! | `create fs` | `CreateRecord` |
 //! | `update id [v=n] fs` | `UpdateRecord` naming fields `f0` to `f8` and `f10`, absent ones as `null` |
 //! | `patch id [v=n] fs` | `UpdateRecord` naming only the fields given, `n` removing one |
@@ -37,6 +37,7 @@
 //! ```text
 //! scenario <name>              starts a scenario from the initial world
 //! op <tenant> <principal> [type <n>] <intent> [args]
+//!                              `<principal>` is a user number, `system` (no role) or `anon` (the `public` role only);
 //!                              one intent, as `create f=v ..`, `update <id> [v=n] f=v ..`,
 //!                              `patch <id> [v=n] f=v ..`, `delete <id> [v=n]`,
 //!                              `require <field> strict|lax`
@@ -54,7 +55,8 @@
 //!
 //! Agreement on these scenarios is evidence of correspondence on the modelled fragment. It is
 //! not a proof, and it says nothing about what the model leaves out: workflows, queries, events,
-//! roles and policies, the clock, and the expression functions beyond the slice 5 fragment.
+//! teams, scopes, role and policy definitions by intent, the clock, and the expression functions beyond
+//! the slice 5 fragment.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -423,6 +425,16 @@ fn principal(n: u64) -> Principal {
     Principal::User(id(format!("p{n}")))
 }
 
+/// A principal token of the scenario format: a number is that user, `system` the system and `anon` an
+/// anonymous caller.
+fn parse_principal(token: &str) -> Principal {
+    match token {
+        "system" => Principal::System,
+        "anon" => Principal::Anonymous,
+        number => principal(number.parse().expect("fixture principal")),
+    }
+}
+
 /// The kernel world that corresponds to the model's `initialWorld`.
 fn initial_world() -> World {
     let mut world = World::default();
@@ -550,6 +562,14 @@ fn initial_world() -> World {
                 "writer",
                 &[Action::Update, Action::Delete],
                 Some(own),
+            ),
+            // Anyone who holds `public` may create a part when no user is acting: an anonymous caller.
+            policy(
+                part(),
+                "public_creates_parts_anonymously",
+                "public",
+                &[Action::Create],
+                Some(Expr::IsNull(Box::new(Expr::Principal))),
             ),
         ]);
         world = run(
@@ -736,11 +756,11 @@ fn show_world(world: &World) -> Vec<String> {
                 out.push(format!("type 2 required={}", required_text(&object)));
             }
             for record in tenant.records_of(&object) {
+                // The creator as the model prints it: its user id, or `-` when no user created the record.
                 let owner = record
                     .created_by
                     .as_ref()
-                    .map_or("0", |p| &p.as_str()[1..])
-                    .to_string();
+                    .map_or_else(|| "-".to_string(), |p| p.as_str()[1..].to_string());
                 let mut numbered: Vec<(u64, &Value)> = record
                     .fields
                     .iter()
@@ -813,7 +833,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                 at += 1;
                 let ctx = Context {
                     tenant: id(format!("t{tenant}")),
-                    principal: principal(who.parse().expect("fixture principal")),
+                    principal: parse_principal(who),
                     session: None,
                     now: Timestamp(at),
                     correlation: "fixture".into(),

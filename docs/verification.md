@@ -14,8 +14,7 @@ confidence scores.
 ## The Lean model
 
 `lean/Strata/Model.lean` defines a small model: tenants as a function from ids, one object type
-per tenant with typed fields that may be required, records with an owner and a version, an owner,
-editors and writers, and four intents: create (filling constant defaults), update (a patch),
+per tenant with typed fields that may be required, records with an owner and a version, roles and policies as data (slice 6), and four intents: create (filling constant defaults), update (a patch),
 delete (both naming an expected version or not), and make a field required (strictly or not).
 Fields may be references to records of the same type, which a delete either refuses to break or
 clears (slice 1, below), and lists of scalars or of references, whose elements a delete removes
@@ -23,9 +22,10 @@ clears (slice 1, below), and lists of scalars or of references, whose elements a
 (slice 2). `step` is a total, computable function. Slice 3 adds unique fields and composite unique constraints, checked on a write and when a
 constraint is defined over existing data. Slice 4 adds several object types per tenant: a write
 may name any of them, a reference may name a record of another type, and an intent naming a type
-the tenant lacks is refused. Slice 5 adds expressions, constraints and expression defaults, and the model
- has no
-workflows, queries, events or policy conditions: the assumptions below list each
+the tenant lacks is refused. Slice 5 adds expressions, constraints and expression defaults. Slice 6 replaces the fixed tiers by
+roles and policies as data (the owner role, role permissions, policies with conditions, capabilities,
+the system and the anonymous principal). The model has no workflows, queries, events, teams or
+scopes: the assumptions below list each
 omission, and the gap analysis further down says which slice will add each. The theorems are
 about this model. The Rust kernel is compared with it on generated scenarios, which is evidence and
 not a proof.
@@ -77,6 +77,14 @@ builds their module, without reading the statements (`specifications/README.md`)
 | | `evalExpr_congr`, `constraintProblem_congr`, `satisfied_of_putType` | A state-only constraint has the same value on a stored record as on the record a write checks (the old record and the principal do not enter it), and replacing a type's schema keeps its records' constraints |
 | | `delete_breaks_satisfied` | The invariant is not preserved by a delete: an accepted delete can leave a record violating a constraint, since the kernel's clearing of a reference does not re-check the constraints of the record it rewrites (a concrete counterexample, `brkAfter_not_satisfied`) |
 | Codec (slice 5) | `lawful_expr`, `decExprN_encExpr`, `decExprN_canon`, `lawful_objType`, `lawful_fieldDef`, `lawful_err` | The expression encoding round-trips for any fuel that covers its nodes, and every decoding is canonical; the object type and the field definition carry their constraints and default expressions; the error tags are fourteen |
+| Roles and policies (slice 6) | `allows_iff`, `default_deny`, `default_deny_create`, `default_deny_update`, `default_deny_delete` | The Bool decision holds exactly when the principal is permitted the action (`Tenant.Permits`: the owner role, a grant of a held role naming the action on the type, or a policy of a held role naming the action on the resource whose condition is `true`). A principal no role of which permits the action is refused `unauthorized` at the step, and no state follows |
+| | `create_ok_permitted`, `update_ok_permitted`, `delete_ok_permitted`, `setRequired_ok_permitted` | An accepted step, of a record intent or a schema change, is permitted for the record it writes: its principal holds a role that permits the action |
+| | `system_never_permitted`, `system_refused_create`, `system_refused_update`, `system_refused_delete`, `system_refused_schema`, `rolesOf_system` | The system holds no role, so nothing permits it: every record intent and schema change it makes is refused `unauthorized` |
+| | `rolesOf_anonymous`, `anonymous_not_owner`, `anonymous_permitted_only_public` | An anonymous caller holds `public` and nothing else; what it is permitted is only what a grant or a policy of `public` gives it |
+| | `owner_holds_every_capability`, `capability_held_by_grant` | The owner role holds every capability; any other holding of a capability is a grant of a role the principal holds |
+| | `unknown_type_owner`, `unknown_type_other`, `unknown_type_hidden`, `unknown_type_schema_refused` | The slice 4 refusals, restated over the decision: a principal the owner role makes able to act on the type gets `unknownObject` for an unknown type, anyone else `unauthorized`, and a schema change needs the schema permission |
+| | `fixture_owner_permits`, `fixture_editor_permits`, `fixture_stranger_refused_item`, `fixture_anonymous_refused_item`, `fixture_anonymous_creates_part`, `fixture_stranger_refused_part`, `fixture_editor_creates_item`, `fixture_writer_updates_own`, `fixture_writer_refused_other`, `fixture_editor_updates_other`, `fixture_writer_missing_record_hidden`, `fixture_editor_missing_record`, `fixture_system_refused_item` | The fixture's roles decide as the tiers of slices 0 to 5 did (owner, editor, writers who may change only the records they created), and the anonymous caller creates only parts; checked by evaluation on tenant `1` and on a tenant of two items |
+| | `step_ok_authorized`, `unauthorized_cannot_update`, `unauthorized_cannot_delete`, `missing_record_hidden_on_update`, `missing_record_hidden_on_delete`, `version_conflict_on_update`, `version_conflict_on_delete`, `delete_refused_while_referenced`, `update_duplicate_refused`, `create_duplicate_refused` | Restated over the generalised decision: the permission is that of the record as it would be written (for an update, the patched record), and a record-free check for a missing record asks the type and the action; the statements keep their meaning (no statement weakened) |
 
 `lake build` checks them. `lake env lean Audit.lean` prints the axioms each depends on: only
 Lean's standard `propext`, `Classical.choice` and `Quot.sound`. There is no `sorry`, no `admit`
@@ -93,8 +101,11 @@ and no added axiom; a test fails if the sources contain one or the audit reports
    references, single or in lists, to records of the tenant's object types, the target of a field
    being the type it names (slice 4). Object types are fixed by the fixture; creating or removing
    one is not modelled (slice 11).
-3. Its authorization is owner, editors, and writers on their own records. The kernel's policies
-   are data with arbitrary conditions.
+3. Its authorization is roles and policies as data (slice 6): principals hold roles directly, roles
+   grant actions on object types and capabilities, and policies grant actions under conditions of the
+   slice 5 expressions. Teams, scopes, role and policy definitions by intent, and automation principals
+   are not modelled (slices 7, 15 and the gap analysis). Policy ids are left out: they name a policy in
+   a refusal and decide nothing.
 4. Its size limits are the kernel's numbers over an abstract measure, not over the kernel's
    encodings (slice 2's review note): a string's bytes and a list's length are exact, a record's
    and a unique value's encoded size are bounded below.
@@ -205,10 +216,11 @@ and `Quot.sound`.
 | `Ty.ref onDelete` | `FieldType::Ref { target, on_delete }` with `target` one of the tenant's object types |
 | `Ty.list elem` | `FieldType::List(elem)`, `elem` a scalar or reference type |
 | `Val` | `Value` restricted to `Null`, `Int`, `Str`, `Bool`, `Ref` and `List` of those (`Elem`) |
-| `Record { owner, version, fields }` | `Record { created_by, version, fields, .. }` |
+| `Record { owner, version, fields }` | `Record { created_by, version, fields, .. }`; `owner` is none when the system or an anonymous caller created the record |
 | `Limits`, `Limits.kernel` | the constants of `limits.rs` |
 | `Tenant.uniques` | `ObjectTypeDef.unique`, the composite constraints of the object type (`UniqueDef`, by its fields) |
-| `Tenant.owner`, `editors`, `writers` | members holding `owner`; a role with an unconditional policy; a role with a policy conditioned on `record.$created_by == principal` |
+| `Tenant.members`, `grants`, `policies` | `members` (each user with its roles; the owner holds the owner role); `grants` (a role's permissions and capabilities); `policies` (a role, a resource, actions and an optional condition: the kernel's policy without its id) |
+| `Principal` | `Principal` (`User`, `System`, `Anonymous`) |
 | `Ctx { tenant, principal }` | `Context { tenant, principal, .. }` |
 | `Intent.create / update / delete` | `Intent::CreateRecord / UpdateRecord / DeleteRecord`, with `expected_version` |
 | `Intent.setRequired f strict` | `Intent::ChangeSchema` with `Reject` or `Grandfather` |
@@ -271,6 +283,9 @@ Slice 2's additions to the scenario format:
   `composite <f> <f> ..` defines a composite unique constraint over the named fields. The
   refusals print as `err unique_violated`, `err invalid_schema`, and `err migration_rejected`
   for a strict change over duplicate data.
+- Slice 6's additions to the scenario format: the principal of an `op` line is a user number, `system`
+  (which holds no role) or `anon` (an anonymous caller, which holds `public` only). A record with no
+  creator prints `owner=-`.
 - A record prints its version after its owner: `record 1 owner=102 v=2 1=s:oak 6=i:7`. A string of
   at least 100 characters that repeats one character prints as `s*<n>:<c>`, a list of at least
   100 equal elements as `l*<n>:<element>`; other lists as `l:` and their elements joined by
@@ -373,13 +388,16 @@ From `transition::change_schema`, `plan_migration`, `apply_change` and `schema::
 
 | Decision | Model | Slice |
 |---|---|---|
-| The `owner` role may do everything in its tenant | covered (`Tenant.owner`) | 0 |
-| A role permission granting an action on an object type allows it | not covered | 6 |
-| A policy of a held role, for the action and resource (`AnyObject` matches every type), allows it when it has no condition or its condition is exactly `true`; `false`, `null` and an evaluation error do not | partly: editors (unconditional) and writers (`record.$created_by == principal`) | 6 |
-| Default deny | covered | 0 |
-| Roles: the system holds none, the anonymous caller `public`, an automation principal only its run-as roles, a person its direct and team roles and `public` | not covered | 6, 7, 15 |
+| The `owner` role may do everything in its tenant | covered (`ownerRole`, held through `members`) | 0, 6 |
+| A role permission granting an action on an object type allows it | covered (`Grant.object`; never for a manage action) | 6 |
+| A policy of a held role, for the action and resource (`AnyObject` matches every type), allows it when it has no condition or its condition is exactly `true`; `false`, `null` and an evaluation error do not | covered (`Policy`, `condHolds`, `Resource.covers`; conditions of the slice 5 fragment, `$created_by` included) | 6 |
+| Default deny | covered (`default_deny`, `Tenant.Permits`) | 6 |
+| Roles: the system holds none, the anonymous caller `public`, a person its direct roles and `public` | covered (`rolesOf`); a person's team roles are not | 6 (teams 7) |
+| An automation principal holds only its run-as roles | not covered | 15 |
 | Conferring a role: only an owner confers `owner`; a role that grants nothing is free; otherwise the conferrer must hold every permission and policy power of it | not covered | 7 |
-| Capabilities: the owner holds every capability | not covered | 6 |
+| Capabilities: the owner holds every capability | covered as data (`HoldsCapability`); no modelled intent is gated by one (the gated changes are slices 11 to 13) | 6 |
+| Scoped roles (D-8403): a role held through a scope gives its powers where the scope holds | not covered | unassigned |
+| Defining roles, permissions and policies by a schema change (`DefineRole`, `DefinePolicy`, `DefineRolePermissions`), and refusing a change that adds a power its definer lacks | not covered | 11 |
 
 ### Membership, teams, invitations
 
@@ -491,7 +509,7 @@ defaults) and `schema::problems` (the static check of expressions). The fragment
 | Decision | Refusal | Model | Slice |
 |---|---|---|---|
 | The clock: `now`, and a time value in a comparison | `Evaluation` (a kind mismatch) | not covered: the model has no clock and no time value | 10 |
-| Roles: `hasRole` | none (`false`) | not covered: roles and the principal's role set are slice 6 | 6 |
+| Roles: `hasRole` | none (`false`) | not covered: the fragment has no `hasRole` (the roles a principal holds are modelled, slice 6) | 6 |
 | Arithmetic (`+`, `-`, `*`, `ms_between`, `days`), checked within 2^53 - 1 | `Evaluation` (`integer-overflow`) | not covered | 10 |
 | Text functions (`concat`, `len`, `lower`, `graphemes`, slugs, emoji), the 4,096-byte bound | `Evaluation` (`string-too-long`) | not covered | 10 |
 | `in`, `contains`, `starts_with` | `Evaluation` on a kind mismatch | not covered | 10 |
@@ -515,7 +533,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **3 (done)** | Uniqueness: single-field and composite (only when every field has a value), on write and on defining a constraint over existing data | 2 |
 | **4 (done)** | Several object types: `UnknownObject` with its hiding rule, references and referrers across types | 1 |
 | **5 (done)** | Expressions: literals, field reads of the record, the old record and the new record, the principal, comparisons, the three-valued connectives, `isNull`, evaluation errors; constraints (checked last, state-only); expression defaults | 2, 4 |
-| 6 | Roles and policies as data, replacing the fixed tiers: the owner role, role permissions, policies with conditions, capabilities, the system and anonymous principals | 5 |
+| **6 (done)** | Roles and policies as data, replacing the fixed tiers: the owner role, role permissions, policies with conditions, capabilities, the system and anonymous principals | 5 |
 | 7 | Tenants, members, teams, invitations, reserved principal ids | 6 |
 | 8 | Workflows: initial states, transitions with guards and assignments, re-authorization, state validity; approvals | 5, 6 |
 | 9 | Events and revisions: event bodies, sequence numbers, the revision, `Publish` effects, the grandfathered count | 1 to 8, for their content |
@@ -786,6 +804,60 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
   initial tenant; `ChangeSchema` is slice 11); the clock; roles; the string and arithmetic functions;
   the reference-following and ancestor expressions; and the kernel's `Expr::Or`/`And` over lists, which
   the model's binary connectives represent exactly.
+
+### Slice 6 review note: what was abstracted
+
+- **Principals are a sum type.** `Principal` is a user (its id), the system or an anonymous caller.
+  The system holds no role; an anonymous caller holds `public` and nothing else; a user holds its
+  direct roles and `public` (`Tenant.rolesOf`, the kernel's `roles_of` without teams and automation).
+  `Expr.principal` reads a user as `p<n>` and reads null for the system and for an anonymous caller,
+  as the kernel does. A record's creator is `Record.owner`, which is none when no user created the
+  record; `Expr.createdBy` reads it as `p<n>` or null, the kernel's `$created_by`.
+- **Roles are numbers, two of them built in.** `ownerRole` (0) may do everything; `publicRole` (1)
+  is held by every user and by the anonymous caller. The fixture's editor is role 2 and its writers
+  are role 3. A role has no definition in the model: it is named by the members, grants and policies
+  that name it. Defining a role by a schema change is slice 11.
+- **One decision, without scopes.** `Tenant.allows` is the kernel's `authorize` with the scoped roles
+  (D-8403) and the clock and the lookups removed. In order: the owner role; a grant of a role the
+  principal holds on the object type (never for `manage`); a policy of such a role whose action and
+  resource match and whose condition is exactly `true`. Default deny. `Tenant.Permits` is the same
+  decision as a proposition, and `allows_iff` says they agree.
+- **The environment of a decision is the kernel's subject.** A create's condition reads the candidate
+  record. An update's reads the stored record as `record` and `old` and the patched record as `new`.
+  A delete's reads the stored record in all three. A decision with no record (a missing record, an
+  unknown type, a schema change) reads none, so a condition on a field of it is null and does not
+  hold. A condition that is null or an error does not permit.
+- **The order is unchanged.** A create's defaults are evaluated before the permission is asked, as
+  the kernel does (`default_error_before_permission`); the unknown type and the missing record are
+  decided on the action and the type, without a record. WG-5665 is still open and is not fixed here.
+- **Capabilities are data.** A role holds a capability through a grant (`Grant.capability`); the owner
+  holds every capability (`HoldsCapability`). No intent of the model is gated by a capability: the
+  kernel's capability checks are on definitions that slices 11 to 13 add (automations, settings, holds,
+  separations, the ledger, products) and on the role changes of slice 11.
+- **The schema permission** is `manage` on the schema (`canManage`). Only the owner holds it in the
+  fixture, so a schema change by anyone else is still refused `unauthorized`.
+- **The fixture's roles** are the Rust fixture's: `editors_all`, `writers_create`, `writers_own` and
+  their `part_` counterparts, with the same conditions. The one new policy is the public role's: it
+  creates a part when `isNull(principal)`, which only an anonymous caller satisfies. Existing scenario
+  outputs are unchanged. The expected output of the whole file is regenerated by `bless_fixtures`, not
+  here.
+- **The writer's rule is checked on concrete records.** The general statement that a writer may update
+  a record exactly when its creator is that writer needs `Nat.repr` to be injective, and the library
+  names no such lemma. The fixture theorems `fixture_writer_updates_own` and
+  `fixture_writer_refused_other` decide the rule on two records instead.
+- **Statement changes.** `canEdit`, `canEditAny` and `canCreate` are replaced by `canUpdate`,
+  `canDelete`, `canCreate` (over the candidate record), `canWithoutRecord` and `canManage`. `unknownType`
+  and `missingRecord` take the type and the action. `step_ok_authorized`, `unauthorized_cannot_update`,
+  `missing_record_hidden_on_update` and the other authorization theorems keep their statements in
+  substance, restated over these decisions; `unknown_type_hidden` takes the permission for each action
+  and, for a create, for every candidate record. No statement was weakened.
+- **The executable kernel** takes the header (members, grants, policies) and calls the model's
+  decisions on it, so its permission tests are the model's, and its refinement theorems are as before.
+- **Not modelled.** Teams and their roles (slice 7); conferring roles (`may_confer`, slice 7); scoped
+  roles (D-8403, unassigned); automation principals and their run-as roles (slice 15); defining roles,
+  permissions and policies by a schema change (slice 11); `hasRole`, the clock, a condition that reads
+  through a reference, and the capability-gated changes (slices 11 to 13); reads, whose visibility uses
+  the same decision (slice 10).
 
 ## What covers the rest
 

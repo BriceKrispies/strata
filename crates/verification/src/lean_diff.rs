@@ -48,11 +48,31 @@ pub struct ByDesign {
     pub explains: fn(ops: &[Op], lean: &str, rust: &str) -> bool,
 }
 
+/// Who makes a generated operation: a user by its number, the system (which holds no role), or an
+/// anonymous caller (which holds `public` only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Caller {
+    User(u64),
+    System,
+    Anonymous,
+}
+
+impl Caller {
+    /// The principal as an `op` line names it.
+    fn token(self) -> String {
+        match self {
+            Caller::User(n) => n.to_string(),
+            Caller::System => "system".to_string(),
+            Caller::Anonymous => "anon".to_string(),
+        }
+    }
+}
+
 /// One generated operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Op {
     pub tenant: u64,
-    pub principal: u64,
+    pub principal: Caller,
     /// The object type the intent names: `1` is `item`, `2` is `part`, and any other number names
     /// a type the tenant does not have. Rendered as `type <n>` unless it is `1`.
     pub object: u64,
@@ -92,9 +112,14 @@ fn expected_text(expected: Option<u64>) -> String {
 impl Op {
     pub fn render(&self) -> String {
         let head = if self.object == 1 {
-            format!("op {} {}", self.tenant, self.principal)
+            format!("op {} {}", self.tenant, self.principal.token())
         } else {
-            format!("op {} {} type {}", self.tenant, self.principal, self.object)
+            format!(
+                "op {} {} type {}",
+                self.tenant,
+                self.principal.token(),
+                self.object
+            )
         };
         match &self.kind {
             OpKind::Create(f) => format!("{head} create{}", fields_text(f)),
@@ -527,7 +552,7 @@ pub fn generate(seed: u64) -> Scenario {
             let first = created[t] + 1;
             let owner = |kind| Op {
                 tenant,
-                principal: home,
+                principal: Caller::User(home),
                 object: 1,
                 kind,
             };
@@ -702,9 +727,16 @@ pub fn generate(seed: u64) -> Scenario {
             (2, OpKind::Unique(f, strict)) => OpKind::Unique(1 + f % 4, strict),
             (_, kind) => kind,
         };
+        // One operation in twenty-four is the system's, one in twelve an anonymous caller's, so the
+        // system and the `public` role are exercised on every type.
+        let caller = match rng.below(24) {
+            0 => Caller::System,
+            1 | 2 => Caller::Anonymous,
+            _ => Caller::User(principal),
+        };
         ops.push(Op {
             tenant,
-            principal,
+            principal: caller,
             object,
             kind,
         });

@@ -109,9 +109,56 @@ pub enum CmpOp {
     Ge,
 }
 
+/// An acting principal: a user by its id, the system, or an anonymous caller. Lean's `Principal`:
+/// a user is tag `0` and its id, the system `1` and an anonymous caller `2`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Principal {
+    User(u64),
+    System,
+    Anonymous,
+}
+
+/// An action a policy names: read `0`, create `1`, update `2`, delete `3`, manage `4`. Lean's
+/// `Action`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Read,
+    Create,
+    Update,
+    Delete,
+    Manage,
+}
+
+/// What a policy names: an object type (`0`, its id), every object type (`1`) or the schema (`2`).
+/// Lean's `Resource`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resource {
+    Object(u64),
+    AnyObject,
+    Schema,
+}
+
+/// What a role grants: a capability (`0`, its id), or an action on the records of an object type
+/// (`1`, the object type and the action). Lean's `Grant`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Grant {
+    Capability(u64),
+    Object(u64, Action),
+}
+
+/// A policy: the role it belongs to, the resource, the actions it names and its condition, if any
+/// (Lean's `Policy`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Policy {
+    pub role: u64,
+    pub resource: Resource,
+    pub actions: Vec<Action>,
+    pub condition: Option<Expr>,
+}
+
 /// An expression of a constraint or of a field default (slice 5). Lean's `Expr`: a literal (tag
 /// `0`), a field read (`1`, the scope and the field id), the principal (`2`), a comparison (`3`),
-/// `and` (`4`), `or` (`5`), `not` (`6`) and `isNull` (`7`).
+/// `and` (`4`), `or` (`5`), `not` (`6`), `isNull` (`7`) and `$created_by` (`8`, the scope).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
     Lit(Val),
@@ -122,6 +169,7 @@ pub enum Expr {
     Or(Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
     IsNull(Box<Expr>),
+    CreatedBy(Scope),
 }
 
 /// The definition of a field of the schema. `default` is the expression a create fills the field
@@ -154,10 +202,11 @@ impl Limits {
     };
 }
 
-/// A stored record: its owner, its version, and its fields by id.
+/// A stored record: the user who created it (none when the system or an anonymous caller did), its
+/// version, and its fields by id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {
-    pub owner: u64,
+    pub owner: Option<u64>,
     pub version: u64,
     pub fields: Vec<(u64, Val)>,
 }
@@ -172,14 +221,15 @@ pub struct ObjType {
     pub constraints: Vec<Expr>,
 }
 
-/// Everything one tenant owns, as the boundary carries it: its object types by id, its owner,
-/// editors and writers, the next record id, and the size bounds.
+/// Everything one tenant owns, as the boundary carries it: its object types by id, its members
+/// (each user with its roles), what each role grants, its policies, the next record id, and the size
+/// bounds. The owner is a member holding role `0`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tenant {
     pub types: Vec<(u64, ObjType)>,
-    pub owner: u64,
-    pub editors: Vec<u64>,
-    pub writers: Vec<u64>,
+    pub members: Vec<(u64, Vec<u64>)>,
+    pub grants: Vec<(u64, Grant)>,
+    pub policies: Vec<Policy>,
     pub next_id: u64,
     pub limits: Limits,
 }
@@ -188,7 +238,7 @@ pub struct Tenant {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ctx {
     pub tenant: u64,
-    pub principal: u64,
+    pub principal: Principal,
 }
 
 /// Why a step was refused: the kernel's refusals of the model, `Err` in Lean.
@@ -443,6 +493,10 @@ fn put_expr(out: &mut Vec<u8>, e: &Expr) {
             out.push(7);
             put_expr(out, a);
         }
+        Expr::CreatedBy(s) => {
+            out.push(8);
+            put_scope(out, s);
+        }
     }
 }
 
@@ -466,9 +520,89 @@ fn put_limits(out: &mut Vec<u8>, l: &Limits) {
 }
 
 fn put_record(out: &mut Vec<u8>, r: &Record) {
-    put_nat(out, r.owner);
+    put_opt_nat(out, r.owner);
     put_nat(out, r.version);
     put_list(out, r.fields.as_slice(), put_field);
+}
+
+/// A principal: a user is tag `0` and its id, the system `1`, an anonymous caller `2` (`encPrincipal`).
+fn put_principal(out: &mut Vec<u8>, p: &Principal) {
+    match p {
+        Principal::User(id) => {
+            out.push(0);
+            put_nat(out, *id);
+        }
+        Principal::System => out.push(1),
+        Principal::Anonymous => out.push(2),
+    }
+}
+
+/// An action: read `0`, create `1`, update `2`, delete `3`, manage `4` (`encAction`).
+fn put_action(out: &mut Vec<u8>, a: &Action) {
+    out.push(match a {
+        Action::Read => 0,
+        Action::Create => 1,
+        Action::Update => 2,
+        Action::Delete => 3,
+        Action::Manage => 4,
+    });
+}
+
+/// A resource: an object type `0` and its id, every object type `1`, the schema `2` (`encResource`).
+fn put_resource(out: &mut Vec<u8>, r: &Resource) {
+    match r {
+        Resource::Object(ty) => {
+            out.push(0);
+            put_nat(out, *ty);
+        }
+        Resource::AnyObject => out.push(1),
+        Resource::Schema => out.push(2),
+    }
+}
+
+/// A grant: a capability `0` and its id, or an object type `1` and an action (`encGrant`).
+fn put_grant(out: &mut Vec<u8>, g: &Grant) {
+    match g {
+        Grant::Capability(c) => {
+            out.push(0);
+            put_nat(out, *c);
+        }
+        Grant::Object(ty, a) => {
+            out.push(1);
+            put_nat(out, *ty);
+            put_action(out, a);
+        }
+    }
+}
+
+fn put_action_item(out: &mut Vec<u8>, a: &Action) {
+    put_action(out, a);
+}
+
+/// A policy: its role, its resource, its actions, then its condition as an option (`encPolicy`).
+fn put_policy(out: &mut Vec<u8>, p: &Policy) {
+    put_nat(out, p.role);
+    put_resource(out, &p.resource);
+    put_list(out, p.actions.as_slice(), put_action_item);
+    match &p.condition {
+        None => out.push(0),
+        Some(c) => {
+            out.push(1);
+            put_expr(out, c);
+        }
+    }
+}
+
+/// A member: a user, then its roles (`encMember`).
+fn put_member(out: &mut Vec<u8>, m: &(u64, Vec<u64>)) {
+    put_nat(out, m.0);
+    put_u64_list(out, &m.1);
+}
+
+/// A grant entry: a role, then what it grants (`encGrantEntry`).
+fn put_grant_entry(out: &mut Vec<u8>, e: &(u64, Grant)) {
+    put_nat(out, e.0);
+    put_grant(out, &e.1);
 }
 
 fn put_record_entry(out: &mut Vec<u8>, e: &(u64, Record)) {
@@ -495,16 +629,16 @@ fn put_type_entry(out: &mut Vec<u8>, e: &(u64, ObjType)) {
 
 fn put_tenant(out: &mut Vec<u8>, t: &Tenant) {
     put_list(out, t.types.as_slice(), put_type_entry);
-    put_nat(out, t.owner);
-    put_list(out, t.editors.as_slice(), put_u64);
-    put_list(out, t.writers.as_slice(), put_u64);
+    put_list(out, t.members.as_slice(), put_member);
+    put_list(out, t.grants.as_slice(), put_grant_entry);
+    put_list(out, t.policies.as_slice(), put_policy);
     put_nat(out, t.next_id);
     put_limits(out, &t.limits);
 }
 
 fn put_ctx(out: &mut Vec<u8>, c: &Ctx) {
     put_nat(out, c.tenant);
-    put_nat(out, c.principal);
+    put_principal(out, &c.principal);
 }
 
 fn put_intent(out: &mut Vec<u8>, i: &Intent) {
@@ -875,6 +1009,7 @@ fn get_expr(r: &mut Reader<'_>, depth: usize) -> Option<Expr> {
         }
         6 => Some(Expr::Not(Box::new(get_expr(r, depth + 1)?))),
         7 => Some(Expr::IsNull(Box::new(get_expr(r, depth + 1)?))),
+        8 => Some(Expr::CreatedBy(get_scope(r)?)),
         _ => None,
     }
 }
@@ -916,8 +1051,81 @@ fn get_limits(r: &mut Reader<'_>) -> Option<Limits> {
     })
 }
 
+fn get_principal(r: &mut Reader<'_>) -> Option<Principal> {
+    match r.byte()? {
+        0 => Some(Principal::User(get_nat(r)?)),
+        1 => Some(Principal::System),
+        2 => Some(Principal::Anonymous),
+        _ => None,
+    }
+}
+
+fn get_action(r: &mut Reader<'_>) -> Option<Action> {
+    match r.byte()? {
+        0 => Some(Action::Read),
+        1 => Some(Action::Create),
+        2 => Some(Action::Update),
+        3 => Some(Action::Delete),
+        4 => Some(Action::Manage),
+        _ => None,
+    }
+}
+
+fn get_resource(r: &mut Reader<'_>) -> Option<Resource> {
+    match r.byte()? {
+        0 => Some(Resource::Object(get_nat(r)?)),
+        1 => Some(Resource::AnyObject),
+        2 => Some(Resource::Schema),
+        _ => None,
+    }
+}
+
+fn get_grant(r: &mut Reader<'_>) -> Option<Grant> {
+    match r.byte()? {
+        0 => Some(Grant::Capability(get_nat(r)?)),
+        1 => {
+            let ty = get_nat(r)?;
+            Some(Grant::Object(ty, get_action(r)?))
+        }
+        _ => None,
+    }
+}
+
+fn get_action_item(r: &mut Reader<'_>) -> Option<Action> {
+    get_action(r)
+}
+
+fn get_policy(r: &mut Reader<'_>) -> Option<Policy> {
+    let role = get_nat(r)?;
+    let resource = get_resource(r)?;
+    let actions = get_list(r, get_action_item)?;
+    let condition = match r.byte()? {
+        0 => None,
+        1 => Some(get_expr(r, 0)?),
+        _ => return None,
+    };
+    Some(Policy {
+        role,
+        resource,
+        actions,
+        condition,
+    })
+}
+
+fn get_member(r: &mut Reader<'_>) -> Option<(u64, Vec<u64>)> {
+    let id = get_nat(r)?;
+    let roles = get_u64_list(r)?;
+    Some((id, roles))
+}
+
+fn get_grant_entry(r: &mut Reader<'_>) -> Option<(u64, Grant)> {
+    let role = get_nat(r)?;
+    let grant = get_grant(r)?;
+    Some((role, grant))
+}
+
 fn get_record(r: &mut Reader<'_>) -> Option<Record> {
-    let owner = get_nat(r)?;
+    let owner = get_opt_nat(r)?;
     let version = get_nat(r)?;
     let fields = get_list(r, get_field)?;
     Some(Record {
@@ -954,16 +1162,16 @@ fn get_type_entry(r: &mut Reader<'_>) -> Option<(u64, ObjType)> {
 
 fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
     let types = get_list(r, get_type_entry)?;
-    let owner = get_nat(r)?;
-    let editors = get_u64_list(r)?;
-    let writers = get_u64_list(r)?;
+    let members = get_list(r, get_member)?;
+    let grants = get_list(r, get_grant_entry)?;
+    let policies = get_list(r, get_policy)?;
     let next_id = get_nat(r)?;
     let limits = get_limits(r)?;
     Some(Tenant {
         types,
-        owner,
-        editors,
-        writers,
+        members,
+        grants,
+        policies,
         next_id,
         limits,
     })
@@ -971,7 +1179,7 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
 
 fn get_ctx(r: &mut Reader<'_>) -> Option<Ctx> {
     let tenant = get_nat(r)?;
-    let principal = get_nat(r)?;
+    let principal = get_principal(r)?;
     Some(Ctx { tenant, principal })
 }
 

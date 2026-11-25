@@ -71,14 +71,14 @@ pub fn all() -> Vec<Obligation> {
             "authorization",
             "An unauthorized principal cannot mutate a protected record",
             "A step is accepted only if the acting principal is authorized for it; an update or delete by a principal who may not edit the record is refused with `unauthorized`, and so is one of a record that does not exist by a principal who could edit no record it did not create.",
-            &["unauthorized_cannot_mutate", "unauthorized_cannot_update", "unauthorized_cannot_delete", "missing_record_hidden_on_update", "missing_record_hidden_on_delete", "step_ok_authorized"],
+            &["unauthorized_cannot_mutate", "unauthorized_cannot_update", "unauthorized_cannot_delete", "missing_record_hidden_on_update", "missing_record_hidden_on_delete", "step_ok_authorized", "default_deny_create", "create_ok_permitted", "system_never_permitted"],
             &[
                 "strata-kernel::properties::what_no_policy_authorises_is_rejected",
                 "strata-kernel::behaviour::writers_edit_only_their_own_notes",
                 "strata-kernel::behaviour::an_unauthorised_caller_cannot_tell_a_missing_record_from_an_existing_one",
                 "strata-substrate::publication_template::an_author_cannot_touch_another_authors_post",
             ],
-            "The model's authorization is owner, editors, and writers on their own records. The kernel's policies are data with arbitrary conditions; the theorem covers the shape, not every policy a tenant can write.",
+            "The model's authorization is roles and policies as data (slice 6): members, role grants and policies whose conditions are slice 5 expressions, with default deny. Teams, scopes and automation principals are not modelled. The theorem covers the shape, not every policy a tenant can write.",
         ),
         obligation(
             "tenant_isolation",

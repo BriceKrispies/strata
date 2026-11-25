@@ -4,9 +4,10 @@
 use strata_lean_kernel_ffi::codec::{
     decode_ctx, decode_field_def, decode_intent, decode_record, decode_refusal, decode_step_result,
     decode_tenant, decode_ty, decode_val, encode_ctx, encode_field_def, encode_intent,
-    encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val, CmpOp,
-    Ctx, Elem, Expr, FieldDef, Intent, Limits, ObjType, OnDelete, Record, Refusal, Scope,
-    StepResult, Tenant, Ty, Val, MAX_EXPR_DEPTH, MAX_TY_DEPTH,
+    encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val,
+    Action, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, Limits, ObjType, OnDelete, Policy,
+    Principal, Record, Refusal, Resource, Scope, StepResult, Tenant, Ty, Val, MAX_EXPR_DEPTH,
+    MAX_TY_DEPTH,
 };
 use strata_lean_kernel_ffi::{step, step_reference};
 
@@ -67,16 +68,17 @@ fn fixture_tenant() -> Tenant {
                 constraints: vec![],
             },
         )],
-        owner: 7,
-        editors: vec![],
-        writers: vec![],
+        members: vec![(7, vec![0])],
+        grants: vec![],
+        policies: vec![],
         next_id: 1,
         limits: Limits::KERNEL,
     }
 }
 
 const FIXTURE_TENANT: &[u8] = &[
-    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 7, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128,
+    16,
 ];
 
 #[test]
@@ -105,18 +107,38 @@ fn codec_fixtures_match_the_lean_encoder() {
     };
     assert_eq!(encode_field_def(&field), vec![0, 0, 1, 0, 1, 1, 1]);
     let record = Record {
-        owner: 4,
+        owner: Some(4),
         version: 1,
         fields: vec![(2, Val::Bool(true))],
     };
-    assert_eq!(encode_record(&record), vec![4, 1, 1, 2, 3, 1]);
+    assert_eq!(encode_record(&record), vec![1, 4, 1, 1, 2, 3, 1]);
+    let anonymous_record = Record {
+        owner: None,
+        version: 1,
+        fields: vec![(2, Val::Bool(true))],
+    };
+    assert_eq!(encode_record(&anonymous_record), vec![0, 1, 1, 2, 3, 1]);
     assert_eq!(encode_tenant(&fixture_tenant()), FIXTURE_TENANT);
     assert_eq!(
         encode_ctx(&Ctx {
             tenant: 3,
-            principal: 9
+            principal: Principal::User(9)
         }),
-        vec![3, 9]
+        vec![3, 0, 9]
+    );
+    assert_eq!(
+        encode_ctx(&Ctx {
+            tenant: 3,
+            principal: Principal::System
+        }),
+        vec![3, 1]
+    );
+    assert_eq!(
+        encode_ctx(&Ctx {
+            tenant: 3,
+            principal: Principal::Anonymous
+        }),
+        vec![3, 2]
     );
     assert_eq!(
         encode_intent(&Intent::SetRequired {
@@ -161,7 +183,7 @@ fn codec_fixtures_match_the_lean_encoder() {
         Some(Val::List(vec![Elem::Int(5), Elem::Null]))
     );
     assert_eq!(decode_field_def(&[0, 0, 1, 0, 1, 1, 1]), Some(field));
-    assert_eq!(decode_record(&[4, 1, 1, 2, 3, 1]), Some(record));
+    assert_eq!(decode_record(&[1, 4, 1, 1, 2, 3, 1]), Some(record));
     assert_eq!(decode_tenant(FIXTURE_TENANT), Some(fixture_tenant()));
     assert_eq!(decode_intent(&[1, 1, 5, 1, 1, 2, 1, 120, 0]), Some(update));
     assert_eq!(
@@ -173,10 +195,10 @@ fn codec_fixtures_match_the_lean_encoder() {
         Some(Ty::Ref(300, OnDelete::Restrict))
     );
     assert_eq!(
-        decode_ctx(&[3, 9]),
+        decode_ctx(&[3, 0, 9]),
         Some(Ctx {
             tenant: 3,
-            principal: 9
+            principal: Principal::User(9)
         })
     );
     assert_eq!(
@@ -304,7 +326,7 @@ fn gen_expr(rng: &mut Rng, depth: usize) -> Expr {
     if depth >= 3 {
         return Expr::Lit(gen_val(rng));
     }
-    match rng.below(9) {
+    match rng.below(10) {
         0 => Expr::Lit(gen_val(rng)),
         1 => Expr::Field(gen_scope(rng), gen_nat(rng)),
         2 => Expr::Principal,
@@ -323,6 +345,7 @@ fn gen_expr(rng: &mut Rng, depth: usize) -> Expr {
         ),
         6 => Expr::Not(Box::new(gen_expr(rng, depth + 1))),
         7 => Expr::IsNull(Box::new(gen_expr(rng, depth + 1))),
+        8 => Expr::CreatedBy(gen_scope(rng)),
         _ => Expr::Lit(Val::Null),
     }
 }
@@ -352,7 +375,7 @@ fn gen_fields(rng: &mut Rng) -> Vec<(u64, Val)> {
 }
 
 fn gen_record(rng: &mut Rng) -> Record {
-    let owner = gen_nat(rng);
+    let owner = gen_opt(rng);
     let version = gen_nat(rng);
     let fields = gen_fields(rng);
     Record {
@@ -407,9 +430,22 @@ fn gen_tenant(rng: &mut Rng) -> Tenant {
         let obj = gen_obj_type(rng);
         types.push((id, obj));
     }
-    let owner = gen_nat(rng);
-    let editors = gen_ids(rng, 3);
-    let writers = gen_ids(rng, 3);
+    let mut members = Vec::new();
+    for _ in 0..rng.below(3) {
+        let id = gen_nat(rng);
+        let roles = gen_ids(rng, 3);
+        members.push((id, roles));
+    }
+    let mut grants = Vec::new();
+    for _ in 0..rng.below(3) {
+        let role = gen_nat(rng);
+        let grant = gen_grant(rng);
+        grants.push((role, grant));
+    }
+    let mut policies = Vec::new();
+    for _ in 0..rng.below(3) {
+        policies.push(gen_policy(rng));
+    }
     let next_id = gen_nat(rng);
     let limits = Limits {
         max_string: gen_nat(rng),
@@ -419,11 +455,66 @@ fn gen_tenant(rng: &mut Rng) -> Tenant {
     };
     Tenant {
         types,
-        owner,
-        editors,
-        writers,
+        members,
+        grants,
+        policies,
         next_id,
         limits,
+    }
+}
+
+fn gen_principal(rng: &mut Rng) -> Principal {
+    match rng.below(3) {
+        0 => Principal::User(gen_nat(rng)),
+        1 => Principal::System,
+        _ => Principal::Anonymous,
+    }
+}
+
+fn gen_action(rng: &mut Rng) -> Action {
+    match rng.below(5) {
+        0 => Action::Read,
+        1 => Action::Create,
+        2 => Action::Update,
+        3 => Action::Delete,
+        _ => Action::Manage,
+    }
+}
+
+fn gen_resource(rng: &mut Rng) -> Resource {
+    match rng.below(3) {
+        0 => Resource::Object(gen_nat(rng)),
+        1 => Resource::AnyObject,
+        _ => Resource::Schema,
+    }
+}
+
+fn gen_grant(rng: &mut Rng) -> Grant {
+    if rng.coin() {
+        Grant::Capability(gen_nat(rng))
+    } else {
+        let ty = gen_nat(rng);
+        Grant::Object(ty, gen_action(rng))
+    }
+}
+
+fn gen_policy(rng: &mut Rng) -> Policy {
+    let role = gen_nat(rng);
+    let resource = gen_resource(rng);
+    let mut actions = Vec::new();
+    for _ in 0..rng.below(4) {
+        actions.push(gen_action(rng));
+    }
+    let condition = if rng.coin() {
+        Some(gen_expr(rng, 0))
+    } else {
+        None
+    };
+    Policy {
+        role,
+        resource,
+        actions,
+        condition,
     }
 }
 
@@ -544,7 +635,7 @@ fn generated_values_round_trip_and_decode_only_canonically() {
         check_round_trip(&r, encode_record, decode_record);
         let c = Ctx {
             tenant: gen_nat(&mut rng),
-            principal: gen_nat(&mut rng),
+            principal: gen_principal(&mut rng),
         };
         check_round_trip(&c, encode_ctx, decode_ctx);
         let i = gen_intent(&mut rng);
