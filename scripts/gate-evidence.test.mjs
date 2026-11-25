@@ -1,7 +1,7 @@
 // Tests for scripts/gate-evidence.mjs. Run with: node --test scripts/gate-evidence.test.mjs
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { collectRefs, evaluateEvidence, indexLean, indexRust, isRequirementRef, leanOutcome, parseCargo, parseLake, reportLines, rustOutcome, verifiesFromDoc } from './gate-evidence.mjs';
+import { collectRefs, evaluateEvidence, indexLean, indexRust, isRequirementRef, leanOutcome, normaliseScopes, parseCargo, parseLake, reportLines, rustOutcome, scopeMatches, scopeProblems, verifiesFromDoc } from './gate-evidence.mjs';
 
 test('refs have the shape of a requirement id, and Verifies lines name them in any case', () => {
   for (const ok of ['KRN-001', 'EML-1562', 'MIG-602', 'A-B-12.3']) assert.ok(isRequirementRef(ok), ok);
@@ -221,4 +221,56 @@ test('a declared check must exist and name the requirement back, and documentati
   assert.match(named('conformance', ['CT-404']).checkProblems[0], /not a contract/);
   assert.equal(named('conformance', ['CT-001']).checkProblems.length, 0);
   assert.equal(named('test', ['crates/k/tests/t.rs::missing']).ok, false);
+});
+
+const scoped = [
+  requirement('l-1', 'LDG-001', 11),
+  requirement('l-2', 'LDG-002', 13),
+  requirement('s-1', 'SEC-001', 2),
+  requirement('s-2', 'ADM-1088', 2),
+];
+
+test('a scope holds the requirements its prefixes and refs name, less the milestones it excludes', () => {
+  const [ledger, admin] = normaliseScopes([
+    { name: 'ledger', prefixes: ['LDG-'], excludeMilestones: [13] },
+    { name: 'admin', refs: ['adm-1088'] },
+  ]);
+  assert.deepEqual(scoped.filter((r) => scopeMatches(ledger, r)).map((r) => r.ref), ['LDG-001']);
+  assert.deepEqual(scoped.filter((r) => scopeMatches(admin, r)).map((r) => r.ref), ['ADM-1088']);
+  assert.deepEqual(normaliseScopes([{ prefixes: ['LDG-'] }, 'x']), [], 'an entry without a name is left out');
+});
+
+test('a malformed scope, one that names nothing, and one that names what is not there are refused', () => {
+  const problems = (scopes) => scopeProblems(scopes, scoped);
+  assert.match(problems([{ name: 'a', prefixes: ['LDG-'], owner: 'x' }])[0], /unknown key "owner"/);
+  assert.match(problems([{ prefixes: ['LDG-'] }])[0], /name must be a non-empty string/);
+  assert.match(problems([{ name: 'a' }])[0], /neither prefixes nor refs/);
+  assert.match(problems([{ name: 'a', prefixes: ['XYZ-'] }])[0], /prefix "XYZ-" matches no requirement/);
+  assert.match(problems([{ name: 'a', refs: ['ADM-1099'] }])[0], /ref "ADM-1099" is not a requirement of the specification/);
+  assert.match(problems([{ name: 'a', prefixes: ['LDG-'] }, { name: 'a', refs: ['SEC-001'] }])[0], /given to two scopes/);
+  assert.match(problems([{ name: 'a', prefixes: 'LDG-' }])[0], /prefixes must be an array of non-empty strings/);
+  assert.match(problems([{ name: 'a', prefixes: ['LDG-'], excludeMilestones: ['13'] }])[0], /excludeMilestones must be an array of milestone numbers/);
+  assert.match(problems([null])[0], /must be an object/);
+  assert.match(problems('LDG-')[0], /startedScopes must be an array/);
+  assert.deepEqual(problems([{ name: 'ledger', prefixes: ['LDG-'], excludeMilestones: [13] }, { name: 'admin', refs: ['LDG-001'] }]), []);
+});
+
+test('a scope-held requirement is held like a started milestone: it needs a proof, and the summary names the scopes', () => {
+  const passing = { file: 'crates/x/tests/t.rs', line: 1, name: 'ledger_ok', names: [{ name: 'ledger_ok', binaries: ['t'] }], refs: ['LDG-001'] };
+  const base = { requirements: scoped, rustTests: [passing], rustResults: [{ name: 'ledger_ok', outcome: 'passed', binary: 't' }], started: [], scopes: [{ name: 'ledger', prefixes: ['LDG-'], excludeMilestones: [13] }] };
+  const proven = evaluateEvidence(base);
+  assert.equal(proven.ok, true, 'LDG-001 is proven; LDG-002 is in milestone 13 and out of the scope; the rest are planned');
+  assert.deepEqual(proven.scopes, [{ name: 'ledger', matched: ['l-1'], proven: ['l-1'], unproven: [] }]);
+  assert.deepEqual(proven.scopeOnly, { held: 1, proven: 1 });
+  assert.equal(reportLines(proven)[0], '0 of 0 started requirements proven, and scopes ledger hold 1 more, 1 of them proven; 1 proven in all; 3 planned (not held to the code)');
+  assert.ok(reportLines(proven).includes('scope ledger: 1 matched, 1 proven, 0 unproven'));
+
+  const unproven = evaluateEvidence({ ...base, rustTests: [], rustResults: [] });
+  assert.equal(unproven.ok, false);
+  assert.equal(unproven.unproven[0].holder, 'scope ledger');
+  assert.match(reportLines(unproven).find((l) => l.startsWith('unproven:')), /LDG-001 \(l-1, scope ledger\)/);
+
+  const refused = evaluateEvidence({ ...base, scopes: [{ name: 'ledger', prefixes: ['NOPE-'] }] });
+  assert.equal(refused.ok, false);
+  assert.ok(reportLines(refused).some((l) => l.startsWith('scope problem: scope ledger: prefix "NOPE-" matches no requirement')));
 });

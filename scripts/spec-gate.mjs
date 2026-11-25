@@ -27,9 +27,10 @@
 //   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata), reading this checkout's
 //      specification (spec-hash.mjs: the gate fails when Exegra reads another one): validate the
 //      specification, evaluate its claims.
-//   3. Evidence (scripts/gate-evidence.mjs): every requirement of a started milestone (gate.json) has a
-//      passing proof: a Rust test or Lean theorem with a `Verifies: <REF>` line that the recorded results show
-//      as passed, or, for a construction requirement, verified Exegra claims that model it. A `Verifies:` line
+//   3. Evidence (scripts/gate-evidence.mjs): every requirement of a started milestone, or held by a started
+//      scope (gate.json startedScopes), has a passing proof: a Rust test or Lean theorem with a `Verifies: <REF>`
+//      line that the recorded results show as passed, or, for a construction requirement, verified Exegra claims
+//      that model it. A `Verifies:` line
 //      naming a ref the specification does not have fails too.
 //   4. Counts read from the specification itself, compared with the last successful gate record.
 //   4b. The specification and the code agree (scripts/gate-audit-checks.mjs, nothing compiled): every
@@ -258,8 +259,11 @@ const documentationCount = allRequirements.length - requirements.length;
 const modelClaims = spec.claims.filter((claim) => String(claim.id).startsWith('m-'));
 const requirementIds = new Set(allRequirements.map((claim) => claim.id));
 let startedList = [];
+let startedScopes = [];
 try {
-  startedList = readGateConfig(root).startedMilestones;
+  const gateConfig = readGateConfig(root);
+  startedList = gateConfig.startedMilestones;
+  startedScopes = gateConfig.startedScopes ?? [];
 } catch (error) {
   check('gate.json names started milestones', false, error.message);
 }
@@ -584,13 +588,14 @@ if (withBrowser) {
 
   let evidence = null;
   try {
-    evidence = runEvidence({ root, spec, resultsDir, verdicts: written ? claims : null, started: startedList });
+    evidence = runEvidence({ root, spec, resultsDir, verdicts: written ? claims : null, started: startedList, scopes: startedScopes });
   } catch (error) {
     check('requirement evidence', false, `unreadable: ${error.message}`);
   }
   if (evidence) {
     const lines = reportLines(evidence);
-    check('every started requirement has a passing proof, and every Verifies line names a known ref', evidence.ok, `${lines[0]} (milestones ${startedList.join(', ')})`);
+    const scopeNote = startedScopes.length > 0 ? `; scopes ${startedScopes.map((s) => s?.name).join(', ')}` : '';
+    check('every started requirement has a passing proof, and every Verifies line names a known ref', evidence.ok, `${lines[0]} (milestones ${startedList.join(', ')}${scopeNote})`);
     detail(lines.slice(1));
   }
 }
