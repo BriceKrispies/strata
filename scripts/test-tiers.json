@@ -115,9 +115,9 @@
       "package": "strata-simulation",
       "target": "simulation_slow",
       "tier": "full",
-      "seconds": 8.37,
-      "unmeasured": true,
-      "reason": "simulation: Determinism and minimisation over the Fieldnotes bundle, and the shell path with each fault of the failure modes, which share one fault-free baseline run; scoped runs include it when the simulation crate or a tenant bundle changed"
+      "seconds": 35.51,
+      "unmeasured": false,
+      "reason": "simulation: Determinism and minimisation over the Fieldnotes bundle, and the shell path with each fault of the failure modes, which share one fault-free baseline run and one faulted run; scoped runs include it when the simulation crate or a tenant bundle changed"
     },
     {
       "package": "strata-spec-compiler",

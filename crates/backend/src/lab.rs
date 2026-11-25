@@ -1596,7 +1596,7 @@ mod tests {
             .collect();
         let world = add_notes_tenant(World::default(), "alpha", 1_000);
         let base_event_seq = world.tenants[&alpha].event_seq;
-        let schedule = generate(&world, &alpha, 3, 200, 1_000_000, 60_000);
+        let schedule = generate(&world, &alpha, 3, 15, 1_000_000, 60_000);
         let scenario = Scenario {
             name: "generated-3".into(),
             seed: 3,
