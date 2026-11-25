@@ -5,7 +5,7 @@ primitives, the patterns and how products extend them, the app shell and templat
 that turns data into interface, interaction, wireframes, who sees what (public and private, role by
 role), the layouts a tenant arranges, how all of it is versioned, and the loop in which an agent
 builds a tenant's screens while the tenant watches. This is a design. Its requirements are in
-`specifications/design-system.jsonc` (DS-001 to DS-023, D-DS-1 to D-DS-31), the properties that can
+`specifications/design-system.jsonc` (DS-001 to DS-053, D-DS-1 to D-DS-31), the properties that can
 be stated precisely are proved in Lean (`lean/Strata/UI/`), and the work is listed at the end in
 dependency order, each item a Workgraph task under WG-5457. It was revised after three adversarial
 review rounds; the answers are in the last section, and everything above it is the current design.
@@ -585,7 +585,8 @@ static tree with a closed set of node kinds and no expressions.**
 - **Accessible-structure checks** at definition: every interactive primitive has an accessible name from
   a literal `text` or a required slot (a slot whose field is required, so it is never empty), or it is
   refused (`ui.a11y.unnamed-control`); every image has an alt slot or is marked decorative
-  (`ui.a11y.image-alt`); headings do not skip levels within the body (`ui.a11y.heading-order`).
+  (`ui.a11y.image-alt`); headings do not skip levels within the body (`ui.a11y.heading-order`); the
+  other refusals of D-DS-18 are listed under "Accessibility by construction" (DS-024 to DS-035).
 - **Composite-typed host props.** The catalogue marks which props of a host pattern take a composite:
   `board.card`, `record-list.item`, `data-table.columns[].cell`, `stream.message`, `feed.item`,
   `time-grid.event`, `plane.marker`. A composite in such a prop is drawn once per item.
@@ -1393,6 +1394,50 @@ anonymised exports enter only after an exporter and the owner's privacy review.
   notice the same way, with no announcement unless the focused item changed.
 - **Forced colours, targets, reflow, safe areas, touch**: see "Layer 2: primitives" and "Layer 4".
 
+### Accessibility by construction (D-DS-18, owner decision of 2026-11-25, WG-5610)
+
+Generated UI is accessible by construction: a definition that would produce an inaccessible screen is
+refused when it is defined, and the generated renderer and the gate hold the rest. The requirements are
+in `specifications/design-system.jsonc`, under the sections "Accessibility" and "Accessible primitives".
+None of them is checked yet; each is held by the check its task adds.
+
+**Definition-time refusals**, checked by specc and the kernel when a screen, form, composite or
+presentation is defined. Each refusal has one code:
+
+| Requirement | Refused when | Code |
+|---|---|---|
+| DS-024 | an interactive control has no accessible name | `ui.a11y.unnamed-control` |
+| DS-025 | an image or media element has neither alt text nor a decorative flag | `ui.a11y.image-alt` |
+| DS-026 | a heading skips a level | `ui.a11y.heading-order` |
+| DS-027 | a screen provides no main landmark or no navigation landmark, counting its shell's | `ui.a11y.landmark` |
+| DS-028 | a form field has no label (a placeholder or the identifier does not count) | `ui.a11y.field-label` |
+| DS-029 | a field's error text is not wired to its control by `aria-describedby` and `aria-invalid` | `ui.a11y.error-association` |
+| DS-030 | an async result region has no live-region politeness | `ui.a11y.live-region` |
+| DS-031 | a gesture has no keyboard path | `ui.a11y.gesture-keyboard` |
+| DS-032 | a gesture has no single-pointer path that is not a drag | `ui.a11y.gesture-pointer` |
+| DS-033 | a colour pair is below 4.5 to 1 for text, or 3 to 1 for a control boundary or focus indicator | `ui.a11y.contrast` |
+| DS-034 | a target is under 24 by 24 CSS pixels (44 by 44 in a touch shell) | `ui.a11y.target-size` |
+| DS-035 | a motion has no reduced-motion alternative | `ui.a11y.reduced-motion` |
+
+**Runtime guarantees of the generated renderer.** Focus is restored to the nearest surviving heading
+after its element is removed (DS-036). One polite announcement is made per completed write (DS-037).
+`lang` and `dir` are set on the root from the request language (DS-038, D-6593). Every focusable element
+shows a visible focus indicator in both colour schemes and in forced colours (DS-039). Keyboard focus is
+never trapped outside a modal dialog or sheet (DS-040). Escape closes every overlay (DS-041). A modal
+dialog or sheet moves focus in, keeps it, and returns it to its opener (DS-042).
+
+**Gate checks.** axe with the WCAG 2.2 AA rules on every generated screen and every gallery entry, in both
+colour schemes and at phone and desk widths (DS-043). Keyboard scripts for every primitive and pattern
+(DS-044). The contrast of the generated token stylesheets, computed from the CSS the browser receives
+(DS-045). Placement (DS-046): the definition-time refusals and the contrast verification run on the
+gate's routine path, which needs no browser. axe and the keyboard scripts drive Chromium, so they run
+under `--browser`, as the browser suites already do.
+
+**Accessible primitives** (DS-047 to DS-053), each following a WAI-ARIA pattern: dialog and sheet, the
+Dialog (Modal) pattern; menu, the Menu Button pattern; tabs, the Tabs pattern with manual activation;
+the record picker, the Combobox pattern; tooltip, the Tooltip pattern; toast region, the status and
+alert live-region roles.
+
 ## The agent build loop
 
 ### What exists today, and what it does not do
@@ -1878,10 +1923,13 @@ platform admin role (WG-5474) and gap 6's reference coercion (in WG-5466).
 `specifications/design-system.jsonc` is an area part (`AREA_PARTS` in `scripts/split-spec.mjs`: ids that
 are `ds-` and a number, or start `d-ds-`; the behaviour-model ids `ds-save`, `ds-open` and so on are not
 in it). It holds thirty-one decisions: D-DS-1 to D-DS-6 and D-DS-20 to D-DS-22 are the owner's, decided
-2026-11-22, and D-DS-31 (no pills) is the owner's, decided 2026-11-24; the others are proposals, with a
-source saying so. It holds twenty-three requirements, milestone 7: DS-001 to DS-021, each stated of its
-Lean model and checked by the theorems that carry its `Verifies:` line, and DS-022 and DS-023, held by
-the stylesheet check of D-DS-31 (`npm run check:styles`) and its failing fixture. Requirements checked by tests are added with those tests:
+2026-11-22; D-DS-18 (accessible by rule) is the owner's, decided 2026-11-25 (WG-5610); and D-DS-31 (no
+pills) is the owner's, decided 2026-11-24; the others are proposals, with a source saying so. It holds
+fifty-three requirements, milestone 7: DS-001 to DS-021, each stated of its Lean model and checked by the
+theorems that carry its `Verifies:` line; DS-022 and DS-023, held by the stylesheet check of D-DS-31
+(`npm run check:styles`) and its failing fixture; and DS-024 to DS-053, the accessibility requirements of
+D-DS-18 (see "Accessibility by construction" under "International and accessible by rule"), which no check
+holds yet. Requirements checked by tests are added with those tests:
 
 | Planned requirement | Its check | Added by |
 |---|---|---|
