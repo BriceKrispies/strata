@@ -1125,6 +1125,36 @@ satisfy it; a per-record rule leaves the column, and the server marks withheld v
    drawn as available when the platform cannot say it is.
 3. **Forms** decide on submit.
 
+**Row actions (D-DS-32, WG-5466).** A row action is an operation the screen already offers (a
+ui-action, or a form on the screen), invoked on one row of a list section, whose subject is that
+section's object. It is declared on the ui-action:
+
+```jsonc
+{ "screen": "notes", "label": "Discard", "operation": "discard", "row": "notes",
+  "arguments": { "note": "row.id" }, "when-refused": "hide", "on-success": {}, "on-error": "inline" }
+```
+
+- `row` names the list section; `arguments` may take `row.id` (the record's id) or `row.<field>`
+  (its value, a reference sent as the id it points at) besides `form.<field>` and `route.<param>`.
+- A form a row action names is opened prefilled from the row (`prefill` on the form maps a form
+  field to `row.<field>`); typed text wins over a prefill that arrives later.
+- The view reply carries, for each row and row action, the answer of the kernel's `preflight`
+  (`allowed`, `refused` with the condition's code and wording, or `unknown`). Preflight runs stages
+  1 to 4 of the decision that the invocation makes, with the inputs the row supplies, through the
+  same functions; `unknown` when a needed input is not in the row, when a condition reads a record
+  or field the viewer may not read, when the snapshot does not hold what it reads, and past the
+  session's budget (`strata_substrate::affordance`, `strata_kernel::operations::preflight`).
+- `when-refused` removes a refused row action (`hide`) or draws it disabled with the condition's
+  wording (`disable`, the default). `unknown` is drawn enabled. A press that the invocation refuses
+  reads the view again, so the row shows the kernel's present answer.
+- An answer that reads the principal or the clock makes the reply individual: it is sent
+  `private, no-store`.
+
+Not yet: the kernel does not yet check a row argument's field against the section's object at
+definition time; a row action on the data-table pattern is not drawn (only record cards carry row
+actions); and an admin row action whose `unknown` answer is drawn disabled (as the paragraph above
+says for admin actions) waits for the visibility work (WG-5465).
+
 **The admin panel, by construction.** An admin panel is a screen (or variant) declared for a group of
 admin roles; every admin element on it inherits that audience; declaring it, or any admin element, for
 members or the public is refused (`ui.audience.admin-for-members`, `admin_needs_role`). The four routes
