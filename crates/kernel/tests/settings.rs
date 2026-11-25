@@ -2,7 +2,7 @@
 //! kernel holds, what it refuses when a definition is made or an override is written, how a read
 //! resolves, who may write each level and what the events say. One rule per test.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::settings;
 use strata_kernel::testkit::*;
 use strata_kernel::*;
@@ -1350,4 +1350,254 @@ fn a_tenant_definition_with_the_name_of_a_platform_definition_is_refused() {
         problems.iter().any(|p| p.contains("SET-003")),
         "{problems:?}"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Allowed values, the platform's member_names setting and the definitions a person may see
+// (WG-5600).
+// ---------------------------------------------------------------------------------------------
+
+fn allowed_def(id: &str, ty: &str, default: Value, allowed: SettingAllowed) -> SettingDef {
+    SettingDef {
+        allowed: Some(allowed),
+        ..layered(id, ty, default)
+    }
+}
+
+fn closed(values: &[&str]) -> SettingAllowed {
+    SettingAllowed::Closed {
+        values: values.iter().map(|v| text_value(v)).collect(),
+    }
+}
+
+/// The notes world with a closed list, a range and a reference defined at the tenant level only,
+/// and one person record, number 1.
+fn with_allowed_settings() -> World {
+    let tenant_only = |def: SettingDef| SettingDef {
+        levels: BTreeSet::from([SettingLevel::Tenant]),
+        ..def
+    };
+    let world = define(
+        &notes_world(),
+        tenant_only(allowed_def(
+            "digest_mode",
+            "string",
+            text_value("daily"),
+            closed(&["daily", "weekly"]),
+        )),
+    );
+    let world = define(
+        &world,
+        tenant_only(allowed_def(
+            "page_size",
+            "i64",
+            Value::Int(20),
+            SettingAllowed::Range { min: 1, max: 100 },
+        )),
+    );
+    let world = define(
+        &world,
+        tenant_only(allowed_def(
+            "featured_person",
+            "i64",
+            Value::Int(0),
+            SettingAllowed::Reference {
+                object: object("person"),
+            },
+        )),
+    );
+    must(
+        &world,
+        "owner",
+        5_500,
+        Intent::CreateRecord {
+            object: object("person"),
+            fields: BTreeMap::from([(field("name"), text_value("Ada"))]),
+        },
+    )
+}
+
+fn allowed_refusal(result: Result<(World, Transition), DomainError>) -> DomainError {
+    refusal(result)
+}
+
+#[test]
+fn a_closed_list_refuses_a_value_outside_it_with_the_stated_code() {
+    let world = with_allowed_settings();
+    let error = allowed_refusal(write(
+        &world,
+        "owner",
+        6_000,
+        "digest_mode",
+        SettingLevel::Tenant,
+        None,
+        Some(text_value("hourly")),
+        0,
+    ));
+    assert_eq!(error.kind, ErrorKind::InvalidIntent, "{error:?}");
+    let world = set_tenant(&world, "digest_mode", text_value("weekly"), 0);
+    assert_eq!(
+        value_for(&world, "writer1", "digest_mode"),
+        text_value("weekly")
+    );
+}
+
+#[test]
+fn a_range_refuses_a_number_outside_its_bounds_with_the_stated_code() {
+    let world = with_allowed_settings();
+    for outside in [0_i64, 101] {
+        let error = allowed_refusal(write(
+            &world,
+            "owner",
+            6_000,
+            "page_size",
+            SettingLevel::Tenant,
+            None,
+            Some(Value::Int(outside)),
+            0,
+        ));
+        assert_eq!(error.kind, ErrorKind::LimitExceeded, "{outside}: {error:?}");
+    }
+    let world = set_tenant(&world, "page_size", Value::Int(100), 0);
+    assert_eq!(value_for(&world, "writer1", "page_size"), Value::Int(100));
+}
+
+#[test]
+fn a_reference_names_a_record_the_writer_may_read_and_refuses_one_that_is_missing() {
+    let world = with_allowed_settings();
+    let error = allowed_refusal(write(
+        &world,
+        "owner",
+        6_000,
+        "featured_person",
+        SettingLevel::Tenant,
+        None,
+        Some(Value::Int(999)),
+        0,
+    ));
+    assert_eq!(error.kind, ErrorKind::UnknownRecord, "{error:?}");
+    let world = set_tenant(&world, "featured_person", Value::Int(1), 0);
+    assert_eq!(
+        value_for(&world, "writer1", "featured_person"),
+        Value::Int(1)
+    );
+}
+
+#[test]
+fn a_definition_whose_default_or_values_do_not_fit_its_allowed_values_is_a_problem() {
+    let schema = schema_of(&with_allowed_settings()).clone();
+    let mut bad = schema.clone();
+    settings::apply_define(
+        &mut bad,
+        &allowed_def(
+            "theme_mode",
+            "string",
+            text_value("dark"),
+            closed(&["light", "auto"]),
+        ),
+    );
+    settings::apply_define(
+        &mut bad,
+        &allowed_def(
+            "zoom",
+            "i64",
+            Value::Int(500),
+            SettingAllowed::Range { min: 1, max: 100 },
+        ),
+    );
+    let mut problems = Vec::new();
+    settings::definition_problems_against(&bad, &[], &mut problems);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("theme_mode") && p.contains("not one of the allowed values")),
+        "{problems:?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("zoom") && p.contains("outside the range")),
+        "{problems:?}"
+    );
+    let mut clean = Vec::new();
+    settings::definition_problems_against(&schema, &[], &mut clean);
+    assert!(clean.is_empty(), "{clean:?}");
+}
+
+#[test]
+fn member_names_is_a_platform_definition_every_tenant_reads_and_a_tenant_cannot_redefine() {
+    let world = notes_world();
+    let read = resolve_as(&world, Some("writer1"), "member_names");
+    assert_eq!(read.value, text_value("members"));
+    assert_eq!(read.source, SettingSource::Default);
+
+    let world = set_tenant(&world, "member_names", text_value("everyone"), 0);
+    assert_eq!(
+        resolve_as(&world, Some("writer1"), "member_names").value,
+        text_value("everyone")
+    );
+    let error = allowed_refusal(write(
+        &world,
+        "owner",
+        6_000,
+        "member_names",
+        SettingLevel::Tenant,
+        None,
+        Some(text_value("shouting")),
+        1,
+    ));
+    assert_eq!(error.kind, ErrorKind::InvalidIntent, "{error:?}");
+
+    let mut schema = schema_of(&world).clone();
+    settings::apply_define(
+        &mut schema,
+        &layered("member_names", "string", text_value("members")),
+    );
+    let mut problems = Vec::new();
+    settings::definition_problems_against(&schema, settings::PLATFORM_SETTINGS, &mut problems);
+    assert!(
+        problems.iter().any(|p| p.contains("SET-003")),
+        "{problems:?}"
+    );
+}
+
+#[test]
+fn a_person_sees_each_setting_with_the_levels_they_may_write() {
+    let world = with_allowed_settings();
+    let owner = settings::views_for(
+        tenant(&world),
+        &user("alpha:owner"),
+        &settings::PlatformLevels::new(),
+    );
+    let digest = owner
+        .iter()
+        .find(|view| view.definition.id == sid("digest_mode"))
+        .expect("the owner sees digest_mode");
+    assert_eq!(digest.resolution.value, text_value("daily"));
+    assert_eq!(digest.resolution.source, SettingSource::Default);
+    assert!(
+        digest.writable.contains(&SettingLevel::Tenant),
+        "{digest:?}"
+    );
+    assert!(!digest.writable.contains(&SettingLevel::Platform));
+    let names = owner
+        .iter()
+        .find(|view| view.definition.id == sid("member_names"))
+        .expect("the owner sees member_names");
+    assert_eq!(names.resolution.value, text_value("members"));
+
+    let reader = settings::views_for(
+        tenant(&world),
+        &user("alpha:writer1"),
+        &settings::PlatformLevels::new(),
+    );
+    let digest = reader
+        .iter()
+        .find(|view| view.definition.id == sid("digest_mode"))
+        .expect("the reader sees digest_mode");
+    assert!(
+        !digest.writable.contains(&SettingLevel::Tenant),
+        "a writer without the tenant capability may not write the tenant level: {digest:?}"
+    );
+    assert!(settings::may_read(tenant(&world), &user("alpha:writer1")));
 }

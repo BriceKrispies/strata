@@ -1907,6 +1907,18 @@ async fn settings_resolve_all(
         .map(Json)
 }
 
+/// The settings the signed-in person may see, with what they read and may write (CT-307):
+/// `GET /api/settings/definitions`. The backend's kernel decides every field.
+async fn settings_definitions(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    backend(&bff, &visit, "/internal/settings/definitions", &json!({}))
+        .await
+        .map(Json)
+}
+
 /// Define or change a setting of the tenant: `POST /api/settings/save-definition`.
 async fn setting_save_definition(
     State(bff): State<Shared>,
@@ -3337,6 +3349,7 @@ pub fn router(bff: Shared) -> Router {
         )
         .route("/subject-rights/:op", post(subject_rights))
         .route("/settings", get(settings_resolve_all))
+        .route("/settings/definitions", get(settings_definitions))
         .route("/settings/save-definition", post(setting_save_definition))
         .route("/settings/set-tenant", post(setting_set_tenant))
         .route("/settings/set-team", post(setting_set_team))

@@ -48,8 +48,8 @@ pub use strata_model_core::types::{
 /// The settings and product capabilities of [`crate::settings`] and [`crate::capabilities`]:
 /// definitions held in the tenant schema, overrides held in the tenant state.
 pub use strata_model_core::types::{
-    CapabilityDef, CapabilityName, SettingDef, SettingId, SettingLevel, SettingOverride,
-    SettingResolution, SettingSource, SettingType, SettingValues,
+    CapabilityDef, CapabilityName, SettingAllowed, SettingDef, SettingId, SettingLevel,
+    SettingOverride, SettingResolution, SettingSource, SettingType, SettingValues,
 };
 
 /// The declarations of an object type, the templates and tokens of a tenant and the products it has
