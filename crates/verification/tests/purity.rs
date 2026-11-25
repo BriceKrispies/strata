@@ -261,7 +261,16 @@ fn the_kernel_depends_only_on_serialisation_hashing_and_its_generated_types() {
     // keeps it pure (KRN-012).
     assert_eq!(
         dependencies("kernel"),
-        ["serde", "serde_json", "sha2", "strata-model-core"]
+        [
+            "serde",
+            "serde_json",
+            "sha2",
+            "strata-model-core",
+            // Unicode data and algorithms with no I/O, no clock and no global mutable state
+            // (docs/decisions.md D22): normalisation on write and the emoji properties.
+            "unicode-normalization",
+            "unicode-properties",
+        ]
     );
     assert_eq!(
         dependencies("substrate"),

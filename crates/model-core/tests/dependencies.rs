@@ -9,8 +9,18 @@
 
 use std::path::{Path, PathBuf};
 
-/// The dependencies the pure crate may have.
-const ALLOWED: &[&str] = &["serde", "serde_json", "sha2", "regex", "uuid"];
+/// The dependencies the pure crate may have. unicode-segmentation and unicode-properties are Unicode
+/// data and algorithms (grapheme clusters, the emoji properties): deterministic, with no I/O, no clock
+/// and no global mutable state. docs/decisions.md D22 names the rule they are allowed under.
+const ALLOWED: &[&str] = &[
+    "serde",
+    "serde_json",
+    "sha2",
+    "regex",
+    "uuid",
+    "unicode-segmentation",
+    "unicode-properties",
+];
 
 /// Crates that must never appear, by package name: the runtime and what it brings in, and crates
 /// that do I/O, networking or randomness.

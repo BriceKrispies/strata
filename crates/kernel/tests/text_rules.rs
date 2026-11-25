@@ -128,7 +128,10 @@ fn an_emoji_field_stores_the_vs16_form_of_either_spelling() {
     assert_eq!(form("\u{2764}\u{FE0F}"), "\u{2764}\u{FE0F}");
     assert_eq!(form("\u{A9}"), "\u{A9}\u{FE0F}");
     assert_eq!(form("1\u{20E3}"), "1\u{FE0F}\u{20E3}");
-    assert_eq!(form("\u{261D}\u{1F3FD}"), "\u{261D}\u{FE0F}\u{1F3FD}");
+    // A skin tone modifier sequence is fully qualified without VS16 (UTS #51): both spellings of
+    // it store the sequence without VS16.
+    assert_eq!(form("\u{261D}\u{1F3FD}"), "\u{261D}\u{1F3FD}");
+    assert_eq!(form("\u{261D}\u{FE0F}\u{1F3FD}"), "\u{261D}\u{1F3FD}");
     assert_eq!(form("\u{1F44D}\u{1F3FD}"), "\u{1F44D}\u{1F3FD}");
     // Text that is not one emoji is stored as written: no VS16 is added to it.
     assert_eq!(form("hello"), "hello");
