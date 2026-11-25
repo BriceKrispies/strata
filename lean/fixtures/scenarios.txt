@@ -1628,3 +1628,67 @@ op 1 101 type 2 create 4=i:1
 op 1 101 type 2 create 4=i:1 5=b:1
 op 1 999 type 2 create 4=i:1
 end
+scenario h-a-stranger-holds-only-public
+op 1 150 create 1=s:oak
+op 1 150 type 2 create 4=i:1
+op 1 150 update 1 1=s:ash
+op 1 150 delete 1
+end
+scenario h-the-system-holds-no-role
+op 1 system create 1=s:oak
+op 1 system type 2 create 4=i:1
+op 1 system require 1 lax
+op 1 101 create 1=s:oak
+op 1 system update 1 1=s:ash
+op 1 system delete 1
+op 1 system require 1 strict
+end
+scenario h-an-anonymous-caller-creates-a-part-with-no-creator
+op 1 anon type 2 create 4=i:1
+op 1 anon type 2 create 4=i:2 5=b:1
+op 1 101 type 2 create 4=i:3
+end
+scenario h-an-anonymous-caller-may-not-create-an-item
+op 1 anon create 1=s:oak
+op 1 anon type 3 create 1=s:oak
+op 1 100 type 3 create 1=s:oak
+end
+scenario h-an-anonymous-caller-may-not-change-a-record
+op 1 101 create 1=s:oak
+op 1 anon update 1 1=s:ash
+op 1 anon delete 1
+op 1 anon update 9 1=s:ash
+end
+scenario h-a-writer-changes-only-its-own-records
+op 1 102 create 1=s:oak
+op 1 103 create 1=s:ash
+op 1 102 update 1 1=s:elm
+op 1 102 update 2 1=s:fir
+op 1 103 delete 1
+op 1 103 delete 2
+op 1 102 delete 1
+end
+scenario h-an-editor-changes-any-record
+op 1 102 create 1=s:oak
+op 1 101 update 1 1=s:ash
+op 1 101 delete 1
+end
+scenario h-a-writer-cannot-tell-a-missing-record-from-another-writers
+op 1 102 update 9 1=s:ash
+op 1 102 delete 9
+op 1 101 update 9 1=s:ash
+op 1 101 delete 9
+end
+scenario h-the-owner-may-do-everything
+op 1 100 create 1=s:oak
+op 1 100 update 1 1=s:ash
+op 1 100 delete 1
+op 1 100 type 2 create 4=i:9
+op 1 100 require 1 strict
+end
+scenario h-an-editor-may-not-change-the-schema
+op 1 101 require 1 lax
+op 1 101 unique 10 strict
+op 1 101 composite 1 2
+op 1 100 require 1 lax
+end
