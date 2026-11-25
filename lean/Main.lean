@@ -11,6 +11,7 @@ The Rust kernel is run on the same scenarios and must print the same text. See
 -/
 
 import Strata.Impl.World
+import Strata.Bench
 
 open Strata
 open Strata.Impl
@@ -212,6 +213,10 @@ def specKernel : Kernel World :=
 def implKernel : Kernel IWorld :=
   { init := implInitial, step := stepI, render := fun w => showWorld (absW w) }
 
+/-- The indexed kernel: slots and indexes, printed through the abstraction. -/
+def xKernel : Kernel XWorld :=
+  { init := xInitial, step := stepX, render := fun w => showWorld (absX w) }
+
 partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (out : Array String) :
     Array String :=
   match lines with
@@ -244,6 +249,26 @@ def main (args : List String) : IO UInt32 := do
   | ["--impl", path] =>
     runScenarios implKernel path
     pure 0
+  | ["--indexed", path] =>
+    runScenarios xKernel path
+    pure 0
+  | ["--bench", n] | ["--impl", "--bench", n] =>
+    match n.toNat? with
+    | some n =>
+      let ok ← bench n 20000 20000
+      pure (if ok then 0 else 1)
+    | none =>
+      IO.eprintln "usage: strata_model --bench <number of operations>"
+      pure 2
+  | ["--bench", n, specMax, stage1Max] =>
+    match n.toNat?, specMax.toNat?, stage1Max.toNat? with
+    | some n, some a, some b =>
+      let ok ← bench n a b
+      pure (if ok then 0 else 1)
+    | _, _, _ =>
+      IO.eprintln "usage: strata_model --bench <n> [<spec max> <stage 1 max>]"
+      pure 2
   | _ =>
-    IO.eprintln "usage: strata_model [--impl] <scenarios file>"
+    IO.eprintln "usage: strata_model [--impl | --indexed] <scenarios file>
+       strata_model --bench <n> [<spec max> <stage 1 max>]"
     pure 2

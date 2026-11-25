@@ -152,20 +152,6 @@ theorem missingRecordI_eq (t : ITenant) (p : PrincipalId) :
 theorem unknownTypeI_eq (t : ITenant) (p : PrincipalId) :
     unknownTypeI t p = unknownType t.abs p := rfl
 
-theorem getRec_some (a : Array (Option Record)) (id : RecordId) (r : Record)
-    (h : getRec a id = some r) : a[id]? = some (some r) := by
-  unfold getRec at h
-  cases hc : a[id]? with
-  | none => rw [hc] at h; simp at h
-  | some o =>
-    rw [hc] at h
-    cases o with
-    | none => simp at h
-    | some x =>
-      simp at h
-      subst h
-      rfl
-
 theorem problemI_abs (t : ITenant) (o : IObj) (self : RecordId) (r : Record) :
     problem t.limits o.schema o.uniques true t.abs.env (absSlots o.slots) self r =
       problemI t.limits o.schema o.uniques true t.slotsOf o.slots self r := by

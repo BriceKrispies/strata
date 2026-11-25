@@ -114,5 +114,113 @@ theorem env_abs (t : ITenant) : t.abs.env = fun T => absSlots (t.slotsOf T) := b
   rw [typ?_abs]
   cases t.typ? T <;> simp [IObj.abs, absSlots, ascend]
 
+theorem lookup_cons_ne {α : Type} (T k : TypeId) (p : α) (es : List (TypeId × α))
+    (h : (T == k) = false) : ((k, p) :: es).lookup T = es.lookup T := by
+  simp [List.lookup, h]
+
+theorem lookup_cons_eq {α : Type} (k : TypeId) (p : α) (es : List (TypeId × α)) :
+    ((k, p) :: es).lookup k = some p := by
+  simp [List.lookup]
+
+theorem lookup_putTypeI (l : List (TypeId × IObj)) (ty : TypeId) (o : IObj) (T : TypeId) :
+    (putTypeI l ty o).lookup T = if T == ty then (if (l.lookup ty).isSome then some o else none)
+      else l.lookup T := by
+  induction l with
+  | nil => simp [putTypeI]
+  | cons e es ih =>
+    obtain ⟨k, p⟩ := e
+    by_cases hk : k = ty
+    · subst hk
+      by_cases hT : T = k
+      · subst hT; simp [putTypeI, lookup_cons_eq]
+      · have hTk : (T == k) = false := by simp [hT]
+        simp [putTypeI, hTk, lookup_cons_ne _ _ _ _ hTk, hT]
+    · have hkb : (k == ty) = false := by simp [hk]
+      simp only [putTypeI, hkb, Bool.false_eq_true, if_false]
+      by_cases hT : T = k
+      · subst hT
+        have hTy : (T == ty) = false := by simpa using hk
+        simp [hTy, lookup_cons_eq]
+      · have hTk : (T == k) = false := by simp [hT]
+        rw [lookup_cons_ne _ _ _ _ hTk, ih]
+        by_cases hTy : T = ty
+        · subst hTy
+          rw [lookup_cons_ne _ _ _ _ hTk]
+        · simp [hTy, lookup_cons_ne _ _ _ _ hTk]
+
+theorem inv_putType (t : ITenant) (ty : TypeId) (o : IObj) (n : Nat) (hn : t.nextId ≤ n)
+    (ho : o.slots.size ≤ n) (hinv : t.Inv) :
+    ∀ T q, (t.putType ty o).typ? T = some q → q.slots.size ≤ n := by
+  intro T q hq
+  unfold ITenant.putType ITenant.typ? at hq
+  simp only [lookup_putTypeI] at hq
+  by_cases hT : (T == ty) = true
+  · simp only [hT, if_true] at hq
+    split at hq
+    · simp at hq; subst hq; exact ho
+    · cases hq
+  · simp only [hT, Bool.false_eq_true, if_false] at hq
+    have := hinv T q hq
+    omega
+
+theorem lookup_map_entry {α β : Type} (l : List (TypeId × α)) (g : TypeId → α → β) (T : TypeId) :
+    (l.map (fun e => (e.1, g e.1 e.2))).lookup T = (l.lookup T).map (g T) := by
+  induction l with
+  | nil => rfl
+  | cons e es ih =>
+    obtain ⟨k, p⟩ := e
+    simp only [List.map_cons, List.lookup]
+    by_cases hT : T = k
+    · subst hT; simp
+    · have : (T == k) = false := by simp [hT]
+      simp [this, ih]
+
+theorem getRec_setSlot (a : Array (Option Record)) (id : RecordId) (v : Option Record)
+    (hb : id < a.size) (i : RecordId) :
+    getRec (setSlot a id v) i = if i = id then v else getRec a i := by
+  unfold getRec setSlot
+  rw [Array.getElem?_setIfInBounds]
+  by_cases h : id = i
+  · subst h; simp [hb]
+  · have h' : ¬ i = id := fun e => h e.symm
+    simp [h, h']
+
+theorem getRec_push_padTo (a : Array (Option Record)) (n : Nat) (r : Record) (h : a.size ≤ n)
+    (i : RecordId) :
+    getRec ((padTo a n).push (some r)) i = if i = n then some r else getRec a i := by
+  unfold getRec padTo
+  rw [Array.getElem?_push]
+  have hs : (a ++ Array.replicate (n - a.size) none).size = n := by simp; omega
+  rw [hs]
+  by_cases hi : i = n
+  · subst hi; simp
+  · simp only [hi, if_false]
+    rw [Array.getElem?_append]
+    by_cases hl : i < a.size
+    · simp [hl]
+    · have : a[i]? = none := by simp [Array.getElem?_eq_none, Nat.not_lt.mp hl]
+      simp [hl, this]
+      by_cases hr : i - a.size < n - a.size
+      · simp [Array.getElem?_replicate, hr]
+      · simp [hr]
+
+theorem size_setSlot (a : Array (Option Record)) (i : Nat) (v : Option Record) :
+    (setSlot a i v).size = a.size := by
+  simp [setSlot]
+
+theorem getRec_some (a : Array (Option Record)) (id : RecordId) (r : Record)
+    (h : getRec a id = some r) : a[id]? = some (some r) := by
+  unfold getRec at h
+  cases hc : a[id]? with
+  | none => rw [hc] at h; simp at h
+  | some o =>
+    rw [hc] at h
+    cases o with
+    | none => simp at h
+    | some x =>
+      simp at h
+      subst h
+      rfl
+
 end Impl
 end Strata

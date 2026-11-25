@@ -51,4 +51,14 @@ import Strata.Impl.Tenant
 import Strata.Impl.Problem
 import Strata.Impl.Step
 import Strata.Impl.World
+import Strata.Impl.XIndex
+import Strata.Impl.XTenant
+import Strata.Impl.XProblem
+import Strata.Impl.XStep
+import Strata.Impl.XLemmas
+import Strata.Impl.XProofs
+import Strata.Impl.XDelete
+import Strata.Impl.XSchema
+import Strata.Impl.XWorld
 import Strata.Fixture
+import Strata.Bench
