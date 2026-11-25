@@ -74,40 +74,37 @@ pub const MEMBER_NAMES: &str = "member_names";
 /// The definitions the platform owns (SET-005, WG-5600): every tenant has them whatever its own
 /// schema holds, a tenant's value at their levels is an override like any other, and a tenant
 /// cannot define a setting of the same name (SET-003).
-pub fn platform_definitions() -> &'static [SettingDef] {
-    static DEFINITIONS: std::sync::OnceLock<Vec<SettingDef>> = std::sync::OnceLock::new();
-    DEFINITIONS.get_or_init(|| {
-        vec![SettingDef {
-            id: SettingId::new(MEMBER_NAMES).expect("member_names is a setting id"),
-            label: "Who sees member names".to_string(),
-            r#type: SettingType::new("string").expect("string is a setting type"),
-            default: Value::Str("members".to_string()),
-            levels: BTreeSet::from([SettingLevel::Tenant]),
-            locked_by: None,
-            area: None,
-            description: Some(
-                "Who may see the display names of the members a view names: members (signed-in readers, the default), everyone (anonymous readers too) or nobody. A reader always sees their own name."
-                    .to_string(),
-            ),
-            allowed: Some(SettingAllowed::Closed {
-                values: ["members", "everyone", "nobody"]
-                    .iter()
-                    .map(|mode| Value::Str((*mode).to_string()))
-                    .collect(),
-            }),
-        }]
-    })
+pub fn platform_definitions() -> Vec<SettingDef> {
+    vec![SettingDef {
+        id: SettingId::new(MEMBER_NAMES).expect("member_names is a setting id"),
+        label: "Who sees member names".to_string(),
+        r#type: SettingType::new("string").expect("string is a setting type"),
+        default: Value::Str("members".to_string()),
+        levels: BTreeSet::from([SettingLevel::Tenant]),
+        locked_by: None,
+        area: None,
+        description: Some(
+            "Who may see the display names of the members a view names: members (signed-in readers, the default), everyone (anonymous readers too) or nobody. A reader always sees their own name."
+                .to_string(),
+        ),
+        allowed: Some(SettingAllowed::Closed {
+            values: ["members", "everyone", "nobody"]
+                .iter()
+                .map(|mode| Value::Str((*mode).to_string()))
+                .collect(),
+        }),
+    }]
 }
 
 /// Every definition the tenant has, its own and the platform's that it does not shadow, in the
 /// order of the setting ids (WG-5600).
-pub fn all_definitions(schema: &TenantSchema) -> Vec<&SettingDef> {
-    let mut defs: BTreeMap<&SettingId, &SettingDef> = BTreeMap::new();
+pub fn all_definitions(schema: &TenantSchema) -> Vec<SettingDef> {
+    let mut defs: BTreeMap<SettingId, SettingDef> = BTreeMap::new();
     for def in platform_definitions() {
-        defs.insert(&def.id, def);
+        defs.insert(def.id.clone(), def);
     }
     for def in schema.settings.iter().flat_map(|defs| defs.values()) {
-        defs.insert(&def.id, def);
+        defs.insert(def.id.clone(), def.clone());
     }
     defs.into_values().collect()
 }
@@ -213,12 +210,17 @@ pub fn override_key(setting: &SettingId, level: SettingLevel, subject: &str) -> 
 }
 
 /// The definition of a setting of the tenant.
-pub fn definition<'a>(schema: &'a TenantSchema, setting: &SettingId) -> Option<&'a SettingDef> {
+pub fn definition(schema: &TenantSchema, setting: &SettingId) -> Option<SettingDef> {
     schema
         .settings
         .as_ref()
         .and_then(|defs| defs.get(setting))
-        .or_else(|| platform_definitions().iter().find(|def| def.id == *setting))
+        .cloned()
+        .or_else(|| {
+            platform_definitions()
+                .into_iter()
+                .find(|def| def.id == *setting)
+        })
 }
 
 /// One override, by setting, level and subject (the tenant, a team or a person).
@@ -279,7 +281,7 @@ pub fn resolve_with(
     platform: &PlatformLevels,
 ) -> Result<SettingResolution, DomainError> {
     let def = definition(&tenant.schema, setting).ok_or_else(|| unknown_setting(setting))?;
-    Ok(resolve_definition(tenant, def, principal, platform))
+    Ok(resolve_definition(tenant, &def, principal, platform))
 }
 
 /// [`resolve_with`] for a definition already found.
@@ -365,7 +367,7 @@ pub fn resolve_all_with(
 ) -> Vec<SettingResolution> {
     all_definitions(&tenant.schema)
         .into_iter()
-        .map(|def| resolve_definition(tenant, def, principal, platform))
+        .map(|def| resolve_definition(tenant, &def, principal, platform))
         .collect()
 }
 
@@ -380,13 +382,22 @@ pub fn write_capability(level: SettingLevel) -> Option<&'static str> {
     }
 }
 
-/// Whether the principal may read settings at all (SET-010): the capability `setting-read`.
+/// Whether the principal may read settings at all (SET-010, WG-5600): the capability `setting-read`.
+/// The platform's account-holder role names it for every signed-in person (boundary.jsonc, roles),
+/// and platform roles are not among a tenant's roles, so a signed-in person who is not an
+/// automation holds it here; a visitor or the system holds it only through a tenant role that names
+/// it, and the signed-in checks of the routes refuse a visitor before this is asked.
 pub fn may_read(tenant: &TenantState, principal: &Principal) -> bool {
-    holds_any(
-        tenant,
-        principal,
-        &BTreeSet::from([Grant::Capability(SETTING_READ.to_string())]),
-    )
+    let signed_in = match principal {
+        Principal::User(id) => crate::automation::automation_roles(&tenant.schema, id).is_none(),
+        _ => false,
+    };
+    signed_in
+        || holds_any(
+            tenant,
+            principal,
+            &BTreeSet::from([Grant::Capability(SETTING_READ.to_string())]),
+        )
 }
 
 /// A setting as one principal may see it (WG-5600): its definition, the value the principal reads
@@ -409,22 +420,30 @@ pub fn views_for(
     all_definitions(&tenant.schema)
         .into_iter()
         .map(|def| {
-            let writable = open_levels(def)
+            let writable = open_levels(&def)
                 .into_iter()
                 .filter(|level| {
-                    matches!(principal, Principal::User(_))
-                        && write_capability(*level).is_some_and(|name| {
-                            holds_any(
-                                tenant,
-                                principal,
-                                &BTreeSet::from([Grant::Capability(name.to_string())]),
-                            )
-                        })
+                    let signed_in = matches!(principal, Principal::User(_));
+                    // The person level is the signed-in person's own, and the platform's account-holder
+                    // role gives every signed-in person its capability (SET-033, see may_read).
+                    match level {
+                        SettingLevel::Person => signed_in,
+                        _ => {
+                            signed_in
+                                && write_capability(*level).is_some_and(|name| {
+                                    holds_any(
+                                        tenant,
+                                        principal,
+                                        &BTreeSet::from([Grant::Capability(name.to_string())]),
+                                    )
+                                })
+                        }
+                    }
                 })
                 .collect();
             SettingView {
-                definition: def.clone(),
-                resolution: resolve_definition(tenant, def, principal, platform),
+                resolution: resolve_definition(tenant, &def, principal, platform),
+                definition: def,
                 writable,
             }
         })
@@ -511,7 +530,7 @@ pub fn copy_dependencies(
         .iter()
         .filter_map(|setting| {
             let def = definition(&tenant.schema, setting)?;
-            let found = resolve_definition(tenant, def, principal, &PlatformLevels::new());
+            let found = resolve_definition(tenant, &def, principal, &PlatformLevels::new());
             let refinement = match (found.source, principal, found.team) {
                 (SettingSource::Person, Principal::User(person), _) => {
                     Refinement::Person(person.clone())
@@ -923,7 +942,7 @@ pub fn write_setting(
     };
     evidence.push(Check::pass("setting:is_defined", setting.as_str()));
 
-    if !is_open(def, level) {
+    if !is_open(&def, level) {
         let why = if def.levels.contains(&level) {
             "a lock of the definition closes it"
         } else {

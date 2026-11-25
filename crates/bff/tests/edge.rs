@@ -1606,12 +1606,12 @@ async fn a_person_sees_the_settings_and_writes_only_their_own_person_level() {
         .await;
     assert_eq!(status, 200, "{body}");
     let names = setting_named(&body, "member_names");
-    assert_eq!(names["value"], "members");
+    assert_eq!(names["value"], json!({ "Str": "members" }));
     assert_eq!(names["source"], "default");
     assert_eq!(names["locked"], false);
     assert_eq!(
         names["allowed"]["closed"]["values"],
-        json!(["members", "everyone", "nobody"])
+        json!([{ "Str": "members" }, { "Str": "everyone" }, { "Str": "nobody" }])
     );
     let writable = names["writable_levels"]
         .as_array()
@@ -1680,7 +1680,7 @@ async fn a_person_sees_the_settings_and_writes_only_their_own_person_level() {
         .get("127.0.0.1", "/api/settings/reading_size", Some(&ines))
         .await;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["value"], json!(4));
+    assert_eq!(body["value"], json!({ "Int": 4 }));
     assert_eq!(body["source"], "person");
 
     let (status, body, _) = edge

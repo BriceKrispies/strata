@@ -812,9 +812,14 @@ fn a_person_cannot_read_the_value_of_another_person() {
     // Reading every setting answers the same for each reader, and none of them holds another's.
     let theirs = settings::resolve_all(tenant(&world), &user("alpha:writer2"));
     assert!(theirs.iter().all(|found| found.value != Value::Int(5)));
+    // Every setting of the tenant, the platform's member_names among them, answers each reader.
     let mine = settings::resolve_all(tenant(&world), &user("alpha:writer1"));
-    assert_eq!(mine.len(), 1);
-    assert_eq!(mine[0].value, Value::Int(5));
+    let page: Vec<_> = mine
+        .iter()
+        .filter(|found| found.setting == sid("page_size"))
+        .collect();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].value, Value::Int(5));
 
     // The one way to ask for another person's value is the service call of the dispatcher, which
     // takes the person as an argument; the answer is the one the person would get.
@@ -1334,7 +1339,11 @@ fn the_platform_value_is_read_between_the_tenant_and_the_default() {
         SettingSource::Default
     );
     let all = settings::resolve_all_with(tenant(&world), &owner, &platform);
-    assert_eq!(all[0].source, SettingSource::Platform);
+    let page = all
+        .iter()
+        .find(|found| found.setting == sid("page_size"))
+        .expect("page_size is listed");
+    assert_eq!(page.source, SettingSource::Platform);
 }
 
 // Verifies: SET-003
