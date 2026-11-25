@@ -11014,7 +11014,7 @@ pub enum TenantOperationPostingOwner {
 
 /// Tenant operation step
 ///
-/// One step of a tenant operation (D-6546). Expressions are in the tenant rule language over the inputs (param), the subject record (record), the invoker (principal, has_role), now, balance, in_segment and setting. A later step reads the id of the record an earlier create-record step made as param.<step id> (D-6548).
+/// One step of a tenant operation (D-6546). Expressions are in the tenant rule language over the inputs (param), the subject record (record), the invoker (principal, has_role), now, balance, in_segment and setting. A later step reads the id of the record an earlier create-record step made as param.<step id> (D-6548). find-record reads the records of object the invoker may read (a record the invoker may not read is not a candidate, so its existence is not revealed); its predicate is evaluated with record as the candidate; it binds param.<id> to the one record that matches, or to null when none does, and refuses with error when more than one matches. branch runs its matched steps when its test holds, otherwise its unmatched steps; a branch holds only record and posting steps, not a find or another branch; test found is true when the find-record step named by the binding bound a record, and test condition is true when its expression holds. A binding made inside a branch is visible only in that branch's steps.
 ///
 /// Specification type `tenant-operation-step`: a union, externally tagged.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -11062,6 +11062,47 @@ pub enum TenantOperationStep {
         amount: Expr,
         /// Field `reason`.
         reason: String,
+    },
+    /// The variant `find-record`.
+    FindRecord {
+        /// Field `id`.
+        id: String,
+        /// Field `object`.
+        object: ObjectTypeId,
+        /// Field `predicate`.
+        predicate: Expr,
+        /// Field `error`.
+        error: String,
+    },
+    /// The variant `branch`.
+    Branch {
+        /// Field `id`.
+        id: String,
+        /// Field `test`.
+        test: BranchTest,
+        /// Field `matched`.
+        matched: Vec<TenantOperationStep>,
+        /// Field `unmatched`.
+        unmatched: Vec<TenantOperationStep>,
+    },
+}
+
+/// Branch test
+///
+/// The test of a branch step of a tenant operation: found is true when the find-record step named by binding bound a record; condition is true when its expression holds, evaluated as the steps of the operation are (null or false is not true).
+///
+/// Specification type `branch-test`: a union, externally tagged.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum BranchTest {
+    /// The variant `found`.
+    Found {
+        /// Field `binding`.
+        binding: String,
+    },
+    /// The variant `condition`.
+    Condition {
+        /// Field `expr`.
+        expr: Expr,
     },
 }
 

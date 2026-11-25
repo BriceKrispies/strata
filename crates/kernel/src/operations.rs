@@ -50,7 +50,7 @@ use crate::state::{
 };
 use crate::transition::field_needs;
 use crate::types::{
-    Expr, FieldId, FieldTypeExt, ObjectTypeId, OnDelete, PrincipalId, RecordId, RoleId,
+    BranchTest, Expr, FieldId, FieldTypeExt, ObjectTypeId, OnDelete, PrincipalId, RecordId, RoleId,
     StateRevision, TenantOperationDef, TenantOperationId, TenantOperationPostingOwner,
     TenantOperationStep, Value, ValueExt,
 };
@@ -129,12 +129,7 @@ fn refusal(evidence: &[Check], kind: ErrorKind, rule: String, detail: String) ->
 
 /// The id of a step.
 fn step_id(step: &TenantOperationStep) -> &str {
-    match step {
-        TenantOperationStep::CreateRecord { id, .. }
-        | TenantOperationStep::UpdateRecord { id, .. }
-        | TenantOperationStep::DeleteRecord { id, .. }
-        | TenantOperationStep::PostLedger { id, .. } => id,
-    }
+    crate::definitions::step_id(step)
 }
 
 /// Decide an invocation of `operation` against a snapshot of `tenant` that covers `coverage`.
@@ -525,7 +520,160 @@ impl Run<'_> {
                 amount,
                 reason,
             } => self.post(id, owner, unit, scope.as_ref(), amount, reason),
+            TenantOperationStep::FindRecord {
+                id,
+                object,
+                predicate,
+                error,
+            } => self.find(id, object, predicate, error),
+            TenantOperationStep::Branch {
+                id,
+                test,
+                matched,
+                unmatched,
+            } => self.branch(id, test, matched, unmatched),
         }
+    }
+
+    /// Whether an expression of a step holds, evaluated as [`Run::eval`] evaluates one.
+    fn holds(&self, what: &str, e: &Expr) -> Result<bool, DomainError> {
+        let record = self.subject.as_deref();
+        let env = Env {
+            record,
+            old: record,
+            new: record,
+            params: &self.params,
+            now: self.ctx.now,
+            principal: &self.ctx.principal,
+            roles: &self.roles,
+            lookup: Some(self.lookup()),
+        };
+        expr::holds(e, &env).map_err(|error| {
+            missing_error(e, &env).unwrap_or_else(|| {
+                self.fail(
+                    ErrorKind::Evaluation,
+                    format!("operation:{}:{what}", self.operation),
+                    format!("{what}: {e}: {error}"),
+                )
+            })
+        })
+    }
+
+    /// A find-record step: the records of the object the invoker may read whose predicate holds,
+    /// the predicate's `record` being each candidate in turn. None binds `param.<step>` to null,
+    /// one to its id, and more than one refuses with the step's error code. A record the invoker
+    /// may not read is not a candidate, so the outcome does not reveal that it exists.
+    fn find(
+        &mut self,
+        step: &str,
+        object: &ObjectTypeId,
+        predicate: &Expr,
+        error: &str,
+    ) -> Result<(), DomainError> {
+        let schema = self.work.schema.clone();
+        if !schema.objects.contains_key(object) {
+            return Err(self.fail(
+                ErrorKind::UnknownObject,
+                format!("operation:{}:{step}", self.operation),
+                format!("no object type {object}"),
+            ));
+        }
+        let now = self.ctx.now;
+        let candidates: Vec<Arc<Record>> =
+            self.lookup().all_of(object)?.into_iter().cloned().collect();
+        let mut found: Vec<RecordId> = Vec::new();
+        for candidate in candidates {
+            if !visible_in(self.lookup(), &self.ctx.principal, &candidate, now)? {
+                continue;
+            }
+            let env = Env {
+                record: Some(&candidate),
+                old: Some(&candidate),
+                new: Some(&candidate),
+                params: &self.params,
+                now,
+                principal: &self.ctx.principal,
+                roles: &self.roles,
+                lookup: Some(self.lookup()),
+            };
+            let matches = expr::holds(predicate, &env).map_err(|e| {
+                missing_error(predicate, &env).unwrap_or_else(|| {
+                    self.fail(
+                        ErrorKind::Evaluation,
+                        format!("operation:{}:{step}.predicate", self.operation),
+                        format!("{step}.predicate: {predicate}: {e}"),
+                    )
+                })
+            })?;
+            if matches {
+                found.push(candidate.id);
+            }
+        }
+        let rule = format!("operation:{}:{step}", self.operation);
+        match found.as_slice() {
+            [] => {
+                self.params.insert(step.to_string(), Value::Null);
+                self.evidence
+                    .push(Check::pass(rule, format!("no {object} matches {step}")));
+                Ok(())
+            }
+            [one] => {
+                self.params.insert(step.to_string(), Value::Ref(*one));
+                self.evidence
+                    .push(Check::pass(rule, format!("{object} {one} matches {step}")));
+                Ok(())
+            }
+            _ => Err(self.fail(
+                ErrorKind::ConstraintViolated,
+                rule,
+                format!(
+                    "{error}: {} {object} records match step {step}, where at most one may",
+                    found.len()
+                ),
+            )),
+        }
+    }
+
+    /// A branch step: its test is read on the state the steps before it leave, and the steps of
+    /// the side it takes run in order. A binding that side makes is not read after the branch.
+    fn branch(
+        &mut self,
+        step: &str,
+        test: &BranchTest,
+        matched: &[TenantOperationStep],
+        unmatched: &[TenantOperationStep],
+    ) -> Result<(), DomainError> {
+        let rule = format!("operation:{}:{step}.test", self.operation);
+        let taken = match test {
+            BranchTest::Found { binding } => match self.params.get(binding) {
+                Some(Value::Ref(_)) => true,
+                Some(Value::Null) | None => false,
+                Some(other) => {
+                    return Err(self.fail(
+                        ErrorKind::InvalidIntent,
+                        rule,
+                        format!(
+                            "step {step} tests {binding}, which is {}, not a found record",
+                            other.kind()
+                        ),
+                    ))
+                }
+            },
+            BranchTest::Condition { expr } => self.holds(&format!("{step}.test"), expr)?,
+        };
+        self.evidence.push(Check::pass(
+            rule,
+            format!("{step}: {}", if taken { "matched" } else { "unmatched" }),
+        ));
+        let side = if taken { matched } else { unmatched };
+        let bound: BTreeSet<String> = self.params.keys().cloned().collect();
+        for inner in side {
+            if let Err(error) = self.step(inner) {
+                return Err(self.refused(step_id(inner), error));
+            }
+        }
+        self.params.retain(|name, _| bound.contains(name));
+        Ok(())
     }
 
     fn create(
@@ -1095,11 +1243,15 @@ fn plan(
         loaded.and_then(|tenant| tenant.record(&def.object, *id).cloned())
     });
     let subject = subject.as_deref();
-    for step in &op.steps {
+    for step in crate::definitions::all_steps(&op.steps) {
         match step {
             TenantOperationStep::CreateRecord { object, fields, .. } => {
                 field_needs(schema, out, object, &known_fields(fields, subject, inputs));
             }
+            TenantOperationStep::FindRecord { object, .. } => {
+                out.insert(Need::AllOf(object.clone()));
+            }
+            TenantOperationStep::Branch { .. } => {}
             TenantOperationStep::UpdateRecord {
                 object,
                 record,

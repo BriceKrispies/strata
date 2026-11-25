@@ -344,3 +344,313 @@ fn a_posting_is_keyed_by_operation_invoker_key_and_step() {
 // ---------------------------------------------------------------------------------------------
 // Tenants and plans.
 // ---------------------------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------------------------
+// Find and branch steps (WG-5596): a toggle, two toggles at once, and a find that reads only
+// what the invoker may read.
+// ---------------------------------------------------------------------------------------------
+
+fn react_op() -> TenantOperationDef {
+    TenantOperationDef {
+        id: op_id("react"),
+        label: "React, or take the reaction back".into(),
+        inputs: vec![input("note", note_ref()), input("kind", FieldType::Str)],
+        invokers: TenantOperationInvokers {
+            signed_in: true,
+            roles: BTreeSet::new(),
+        },
+        subject: None,
+        conditions: Vec::new(),
+        steps: vec![
+            TenantOperationStep::FindRecord {
+                id: "mine".into(),
+                object: object("reaction"),
+                predicate: Expr::And(vec![
+                    eq(var(Scope::Record, "message"), param("note")),
+                    eq(var(Scope::Record, "reactor"), Expr::Principal),
+                    eq(var(Scope::Record, "kind"), param("kind")),
+                ]),
+                error: "toggle-ambiguous".into(),
+            },
+            TenantOperationStep::Branch {
+                id: "toggle".into(),
+                test: BranchTest::Found {
+                    binding: "mine".into(),
+                },
+                matched: vec![TenantOperationStep::DeleteRecord {
+                    id: "removed".into(),
+                    object: object("reaction"),
+                    record: param("mine"),
+                }],
+                unmatched: vec![TenantOperationStep::CreateRecord {
+                    id: "added".into(),
+                    object: object("reaction"),
+                    fields: BTreeMap::from([
+                        (field("message"), param("note")),
+                        (field("reactor"), Expr::Principal),
+                        (field("kind"), param("kind")),
+                    ]),
+                }],
+            },
+        ],
+    }
+}
+
+/// Finds the notes with the title input and, when exactly one is visible to the invoker, raises its
+/// rank.
+fn bump_title_op() -> TenantOperationDef {
+    TenantOperationDef {
+        id: op_id("bump_title"),
+        label: "Raise the rank of the note with a title".into(),
+        inputs: vec![input("title", FieldType::Str)],
+        invokers: TenantOperationInvokers {
+            signed_in: true,
+            roles: BTreeSet::new(),
+        },
+        subject: None,
+        conditions: Vec::new(),
+        steps: vec![
+            TenantOperationStep::FindRecord {
+                id: "same".into(),
+                object: object("note"),
+                predicate: eq(var(Scope::Record, "title"), param("title")),
+                error: "title-ambiguous".into(),
+            },
+            TenantOperationStep::Branch {
+                id: "bump".into(),
+                test: BranchTest::Found {
+                    binding: "same".into(),
+                },
+                matched: vec![TenantOperationStep::UpdateRecord {
+                    id: "bumped".into(),
+                    object: object("note"),
+                    record: param("same"),
+                    fields: BTreeMap::from([(field("rank"), int(9))]),
+                }],
+                unmatched: Vec::new(),
+            },
+        ],
+    }
+}
+
+/// The notes world of alpha with a reaction object (one reaction per message, reactor and kind),
+/// readable by the writers only as their own, and the two operations above.
+fn reactions_world() -> World {
+    let reaction = object("reaction");
+    let own = eq(var(Scope::Record, "$created_by"), Expr::Principal);
+    let changes = vec![
+        SchemaChange::DefineObject {
+            id: reaction.clone(),
+            label: "Reaction".into(),
+        },
+        SchemaChange::DefineField {
+            object: reaction.clone(),
+            field: field_def(
+                "message",
+                FieldType::Ref {
+                    target: object("note"),
+                    on_delete: OnDelete::Restrict,
+                },
+                true,
+            ),
+        },
+        SchemaChange::DefineField {
+            object: reaction.clone(),
+            field: field_def("reactor", FieldType::Str, true),
+        },
+        SchemaChange::DefineField {
+            object: reaction.clone(),
+            field: field_def("kind", FieldType::Str, true),
+        },
+        SchemaChange::DefineUnique {
+            object: reaction.clone(),
+            unique: UniqueDef {
+                id: ConstraintId::new("one_of_a_kind").expect("constraint id"),
+                fields: vec![field("message"), field("reactor"), field("kind")],
+                message: "You have already reacted to this message that way.".into(),
+            },
+        },
+        SchemaChange::DefinePolicy(PolicyDef {
+            id: PolicyId::new("writers_read_own_reactions").expect("policy id"),
+            role: role("writer"),
+            resource: Resource::Object(reaction.clone()),
+            actions: BTreeSet::from([Action::Read]),
+            condition: Some(own),
+        }),
+        SchemaChange::DefineOperation(react_op()),
+        SchemaChange::DefineOperation(bump_title_op()),
+    ];
+    must(
+        &notes_world(),
+        "owner",
+        5_000,
+        Intent::ChangeSchema {
+            changes,
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    )
+}
+
+fn react(note: u64, kind: &str, key: &str) -> Intent {
+    invoke(
+        "react",
+        &[("note", Value::Ref(RecordId(note))), ("kind", text(kind))],
+        key,
+    )
+}
+
+fn reactions(world: &World) -> Vec<&Record> {
+    tenant(world)
+        .records_of(&object("reaction"))
+        .map(|record| record.as_ref())
+        .collect()
+}
+
+/// The reaction of a toggle is one commit: created when none is there, removed when one is, each
+/// of them one revision.
+#[test]
+fn a_toggle_removes_the_callers_reaction_when_present_and_creates_it_otherwise() {
+    let base = must(
+        &reactions_world(),
+        "writer1",
+        5_010,
+        new_note("Field notes", "field-notes"),
+    );
+    let revision = tenant(&base).revision;
+
+    let added = must(&base, "writer1", 5_011, react(1, "love", "k-add"));
+    assert_eq!(
+        reactions(&added).len(),
+        1,
+        "the first toggle creates one reaction"
+    );
+    assert_eq!(
+        tenant(&added).revision,
+        StateRevision(revision.0 + 1),
+        "the toggle is one commit"
+    );
+
+    let removed = must(&added, "writer1", 5_012, react(1, "love", "k-remove"));
+    assert!(
+        reactions(&removed).is_empty(),
+        "the second toggle removes the reaction it found"
+    );
+    assert_eq!(tenant(&removed).revision, StateRevision(revision.0 + 2));
+
+    // Another kind is a reaction of its own.
+    let other = must(&added, "writer1", 5_013, react(1, "laugh", "k-laugh"));
+    assert_eq!(reactions(&other).len(), 2);
+}
+
+/// Two toggles by the same person decided on the same state: the first commit is accepted, the
+/// second is based on a revision that is gone and fails with `VersionConflict`, which the caller
+/// may retry. The retry decides on the new state and removes the reaction, so at most one remains
+/// at any point. The unique constraint refuses a second create of the same triple as well.
+#[test]
+fn two_concurrent_toggles_by_one_person_leave_at_most_one_reaction() {
+    let base = must(
+        &reactions_world(),
+        "writer1",
+        5_020,
+        new_note("Field notes", "field-notes"),
+    );
+    let ctx_first = ctx("alpha", as_user("writer1"), 5_021);
+    let ctx_second = ctx("alpha", as_user("writer1"), 5_021);
+    let first_intent = react(1, "love", "k-first");
+    let second_intent = react(1, "love", "k-second");
+
+    // Both decide on the same snapshot: neither sees a reaction.
+    let (after_first, first) = base
+        .step(&first_intent, &ctx_first)
+        .expect("first accepted");
+    let second = transition(
+        &base.state(&tenant_id("alpha")),
+        &second_intent,
+        &ctx_second,
+    )
+    .expect("second decided on the stale snapshot");
+    assert_eq!(reactions(&after_first).len(), 1);
+    assert!(!first.delta.ops.is_empty());
+
+    // The loser's commit is refused for its base revision: the caller gets a conflict to retry.
+    let loser = apply_delta(
+        after_first
+            .tenants
+            .get(&tenant_id("alpha"))
+            .map(|t| t.as_ref()),
+        &second.delta,
+    )
+    .expect_err("the stale delta is refused");
+    assert_eq!(loser.kind, ErrorKind::VersionConflict);
+
+    // Retried on the new state, the second toggle removes the first reaction: none is left twice.
+    let (after_retry, _) = after_first
+        .step(&second_intent, &ctx_second)
+        .expect("retry accepted");
+    assert!(reactions(&after_retry).is_empty());
+
+    // A create of the same triple is refused by the unique constraint whatever the decision.
+    let duplicate = Intent::CreateRecord {
+        object: object("reaction"),
+        fields: BTreeMap::from([
+            (field("message"), Value::Ref(RecordId(1))),
+            (field("reactor"), text("alpha:writer1")),
+            (field("kind"), text("love")),
+        ]),
+    };
+    let refused = after_first
+        .step(&duplicate, &ctx("alpha", as_user("owner"), 5_022))
+        .expect_err("a duplicate reaction is refused");
+    assert_eq!(refused.kind, ErrorKind::UniqueViolated);
+}
+
+/// A find reads only the records the invoker may read. The writer's own note is found and raised;
+/// the same title on a reaction it cannot read (another person's) is not a candidate, so the
+/// toggle creates its own reaction without any refusal and leaves the other one alone.
+#[test]
+fn a_find_does_not_see_a_record_the_invoker_may_not_read() {
+    let world = must(
+        &reactions_world(),
+        "writer2",
+        5_030,
+        new_note("Field notes", "field-notes"),
+    );
+    let world = must(&world, "writer2", 5_031, react(1, "love", "k-theirs"));
+    let theirs = reactions(&world)[0].id;
+
+    // writer1 cannot read writer2's reaction: the find finds none, and the toggle creates one.
+    let world = must(&world, "writer1", 5_032, react(1, "love", "k-mine"));
+    let all = reactions(&world);
+    assert_eq!(all.len(), 2, "writer1 creates its own reaction");
+    assert!(
+        all.iter()
+            .any(|r| r.id == theirs && r.created_by == Some(principal_id("alpha:writer2"))),
+        "writer2's reaction is left as it was"
+    );
+}
+
+/// Two notes with one title that the invoker may read are two matches: the find refuses with the
+/// step's error code, and nothing is changed.
+#[test]
+fn two_readable_matches_refuse_with_the_steps_error_code() {
+    let world = must(
+        &reactions_world(),
+        "writer2",
+        5_040,
+        new_note("Dup", "dup-one"),
+    );
+    let world = must(&world, "writer1", 5_041, new_note("Dup", "dup-two"));
+    let rank_before = note(&world, 2).map(|n| n.version);
+    let refused = refused(
+        &world,
+        as_user("writer1"),
+        &invoke("bump_title", &[("title", text("Dup"))], "k-two"),
+    );
+    assert!(
+        refused.message.contains("title-ambiguous"),
+        "two readable matches refuse with the step's code: {}",
+        refused.message
+    );
+    assert_eq!(note(&world, 2).map(|n| n.version), rank_before);
+}

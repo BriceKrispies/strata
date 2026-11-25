@@ -198,6 +198,22 @@ impl ProductContext {
         ctx
     }
 
+    /// The scope of the predicate of a find-record step of an operation (WG-5596): its `record` is
+    /// the candidate, a record of the step's object type, and its params are the operation's own.
+    /// `None` for any other text, which keeps the scope the operation gives.
+    pub fn find_predicate_scope(&self, item: &Value, at: &str, operation: &Scope) -> Option<Scope> {
+        let (parent, field) = at.rsplit_once('.')?;
+        if field != "predicate" {
+            return None;
+        }
+        let payload = item.pointer(&format!("/{}", parent.replace('.', "/")))?;
+        let object = payload.get("object").and_then(Value::as_str)?;
+        Some(Scope {
+            fields: self.objects.get(object).cloned(),
+            params: operation.params.clone(),
+        })
+    }
+
     /// The scope a text is written in, found from the item that holds it. Objects: the fields of the
     /// object type itself. Policies: the object type of the resource. Segments: the subject type.
     /// Triggers: the object of a record event (none for the others) and the params the event binds.
@@ -267,15 +283,7 @@ impl ProductContext {
                     // named by that step (D-6548). The scope is the operation's, so every creating
                     // step's name is bound here; the kernel refuses a read before the step that
                     // creates it when the operation is defined.
-                    .chain(
-                        item.get("steps")
-                            .and_then(Value::as_array)
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|step| step.get("CreateRecord"))
-                            .filter_map(|create| create.get("id").and_then(Value::as_str))
-                            .map(str::to_string),
-                    )
+                    .chain(step_bindings(item.get("steps")))
                     .collect();
                 let fields = match item
                     .get("subject")
@@ -311,6 +319,28 @@ impl ProductContext {
             _ => Scope::default(),
         }
     }
+}
+
+/// The names an operation's steps bind as parameters: the id of each create-record and find-record
+/// step, in the steps of a branch as well (WG-5596). A branch's bindings are read only inside it;
+/// the kernel refuses a read outside that scope when the operation is defined.
+fn step_bindings(steps: Option<&Value>) -> Vec<String> {
+    let mut out = Vec::new();
+    for step in steps.and_then(Value::as_array).into_iter().flatten() {
+        for (kind, body) in step.as_object().into_iter().flatten() {
+            match kind.as_str() {
+                "CreateRecord" | "FindRecord" => {
+                    out.extend(body.get("id").and_then(Value::as_str).map(str::to_string));
+                }
+                "Branch" => {
+                    out.extend(step_bindings(body.get("matched")));
+                    out.extend(step_bindings(body.get("unmatched")));
+                }
+                _ => {}
+            }
+        }
+    }
+    out
 }
 
 /// The first problem of a text.
