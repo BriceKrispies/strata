@@ -1055,7 +1055,7 @@ theorem refused_second_keeps_prompt (cat : Catalogue) {s s' : State} {id : Nat} 
 theorem passkey_answer_for_ceremony (cat : Catalogue) {s s' : State} {id : Nat} {ok : Bool}
     {es : List Effect} (ha : Allowed cat s (.passkeyResult id ok) s' es) (hes : es ≠ []) :
     s.ceremony = some id := by
-  cases ha <;> simp_all [factorsRequests, deskRequests]
+  cases ha <;> simp_all
 
 /-- **A change to the person's list is read again, and only that.** -/
 theorem changed_list_is_read_again (cat : Catalogue) {s s' : State} {id : Nat} {es : List Effect}

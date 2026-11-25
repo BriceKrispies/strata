@@ -328,3 +328,6 @@ import Strata
 #print axioms Strata.Browser.lab_run_sent_only_complete
 #print axioms Strata.Browser.poll_only_while_running
 #print axioms Strata.Browser.apply_only_when_ready
+#print axioms Strata.Browser.page_data_is_own
+#print axioms Strata.Browser.visitor_sees_no_guarded_data
+#print axioms Strata.Browser.person_change_shows_loading
