@@ -250,3 +250,11 @@ import Strata
 #print axioms Strata.Ledger.ledger_append_only
 #print axioms Strata.Ledger.ledger_replay_idempotent
 #print axioms Strata.Ledger.ledger_no_overdraft
+
+#print axioms Strata.Browser.held_is_own
+#print axioms Strata.Browser.held_guarded_signed_in
+#print axioms Strata.Browser.page_shows_only_own
+#print axioms Strata.Browser.visitor_shows_no_guarded_page
+#print axioms Strata.Browser.session_change_drops_model
+#print axioms Strata.Browser.requests_are_pending
+#print axioms Strata.Browser.signed_in_view_reachable

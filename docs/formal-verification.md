@@ -241,6 +241,327 @@ testing of the Rust kernel against the model, at scale) WG-5651, A1 WG-5373, A2 
 WG-5653, A3 WG-5658, A4 (requirements point to theorems) WG-5662, B1 WG-5654, B2 WG-5659, C1
 WG-5655, C2 WG-5656, C3 WG-5661, C4 WG-5660.
 
+## 7. Browser kernel: gap analysis
+
+The browser kernel is `update(state, message) -> { state, effects }` in `web/src/kernel/update.js`
+with `view(state)` in `view.js`, run by the worker driver (`web/src/worker/main.js`). This section lists
+every message `update` handles and every effect it can emit, grouped by feature, and says for each
+whether the Lean spec covers it. It is the counterpart of the kernel gap analysis in
+`docs/verification.md`, and the list of work for Layer B (B1 WG-5654, then B2 WG-5659).
+
+The spec is in `lean/Strata/Browser/`. `Types.lean` declares the state, the messages and the effects
+of the whole kernel, abstractly (outcomes, not the JavaScript's algorithm). `Session.lean` states the
+relation `Allowed cat s m s' es` for the routing and session slice, with its theorems. The relation is
+what the B2 implementation will be proved against.
+
+### How to read the tables
+
+- **covered**: every outcome of the row is in `Allowed`, and no effect of the row waits for a later
+  slice.
+- **partly**: the slice 1 outcome is in `Allowed`, and a named part waits for the slice in the last
+  column.
+- **not covered**: no constructor of `Allowed` says anything about the row yet.
+- Toasts, announcements, focus, menu and confirmation resets are presentation (slice 4). They do not
+  make a row partly covered; the slice column names them where they matter.
+- A row is one message, or a family of messages with the same handling; the family's names are listed.
+  Replies are grouped by the request kind that decides them, as `onHttp` dispatches them.
+
+### 7.1 Messages
+
+#### Routing and the address
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `init`, bootstrapped session | route and session from the bootstrap; a view request | partly | 1 (route, session, view); 2 (bootstrapped view); 5 (socket start); 6 (link, invitation and provider captures) |
+| `init`, cold start (no bootstrapped session) | a session read and a view read in flight; the view may answer first | not covered | 2 |
+| `navigate` | moves the address; a view request; push and scroll unless the same address without replace; tenant parts and manifest for a tenant address; the provider list on the sign-in page | partly | 1 (address, view, push, scroll); 6 (providers); 11 (parts, manifest) |
+| `popstate` | moves the address; a view request; no push, no scroll | partly | 1 (address, view); 11 (tenant parts) |
+| `action reload` | a view request for the current address | covered | 1 |
+| `timer request` (a request past its deadline) | the request ends as status 0, an unreachable site | covered | 1 (decoded to `failure` or `viewFailure`) |
+
+#### The view
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `http_result` view, accepted | the model is held with the principal it answers for; the enter hooks of its screen run | partly | 1 (held model); 7, 8, 10, 12 (enter hooks) |
+| `http_result` view, not found | status missing; no model | covered | 1 |
+| `http_result` view, refused or failed | status error; no model; the sign-in page for an unauthenticated view is chosen by the page builder | partly | 1 (status); 13 (page choice) |
+| `http_result` view, no longer awaited | ignored | covered | 1 |
+| `action view.more` | a request for the next page of a list section, with its cursor | not covered | 9 |
+| `http_result` view.more | rows appended without repeats; the cursor moves on; a refusal toasts | not covered | 9 |
+
+#### The session
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `http_result` session, same person | nothing changes but the request | covered | 1 |
+| `http_result` session, another person or none | the session changes in place and the person's state is kept (F3); the spec clears it and reads the view again | covered | 1 |
+| `http_result` session, refused or unreachable | the request ends | covered | 1 |
+| `ws_message` session, expired or signed out | ends the session and clears the person's state; the session is read again; the view is read again only when a guard or a live binding asks (F1); the spec always reads the view again | covered | 1 |
+| `ws_message` session, while our own sign-out is pending | ignored | covered | 1 |
+| `ws_message` session, active | nothing | not covered | 5 |
+
+#### Sign-in and sign-out
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `submit` login, complete form | the sign-in request; the form is busy | partly | 1 (request, for values the catalogue accepts); 3 (form flow) |
+| `submit` login, incomplete form | field messages; no request | not covered | 3 |
+| `http_result` login, accepted | signed in: session, the person's state cleared, the address moved to the reply's target | partly | 1; 5 (live socket reset) |
+| `http_result` login, second factor waiting | the code prompt, no session yet | not covered | 7 |
+| `http_result` login, refused | the request ends; the refusal's words on the form; focus on the password | partly | 1 (request ends); 3 (words, focus) |
+| `action logout` | the sign-out request, when the screen offers sign-out | covered | 1 |
+| `http_result` logout, accepted | no session; the person's state cleared; the address replaced | partly | 1; 5 (live socket reset) |
+| `http_result` logout, refused | the request ends (the warning is presentation) | covered | 1 |
+| `submit` search | navigates to the search address with the query | not covered | 3 |
+| `input` login | the typed value; clears the field's error | not covered | 3 |
+
+#### Live connection
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `ws_open` | resets the refusal count and the stop flag | not covered | 5 |
+| `ws_message` welcome | the live state starts; the view is read again on the first connection | not covered | 5 |
+| `ws_message` event (a notice or a heartbeat) | applies the frame; the view is read again when the live bindings say so; the manifest on a schema notice; the session on a membership notice | not covered | 5 (tenant bindings: 11) |
+| `ws_message` resync | carries on from the head; view and manifest read again | not covered | 5 |
+| `ws_message` pong | a head beyond the connection's own reads the view again | not covered | 5 |
+| `ws_closed`, not refused | the live state closes; a reconnect timer | not covered | 5 |
+| `ws_closed`, refused | the session is read with a refusal counted; after five, live updates stop | not covered | 5 (the session answer is covered in 1) |
+| `timer` heartbeat, reconnect, emit | a ping; a reconnect attempt unless stopped; a delayed frame | not covered | 5 |
+
+#### Presentation
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `system_theme` | records the device's colour scheme | not covered | 4 |
+| `action theme` | cycles auto, light, dark; stores the choice | not covered | 4 |
+| `action menu` | toggles the menu | not covered | 4 |
+| `action dismiss` | removes a toast | not covered | 4 |
+| `timer toast` | removes a toast when its time passes | not covered | 4 |
+| `action dev.expire`, `http_result` dev | asks the gateway to expire the session; reports done or failed | not covered | 4 |
+
+#### Passkeys, second factors and step-up
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `action passkeys.sign_in`; `http_result` passkeys.challenge, passkeys.sign_in; `passkey_result` (sign-in) | passkey sign-in: challenge, browser prompt, answer; signs in as a login does | not covered | 6 |
+| `action passkeys.add`, `passkeys.remove`; `http_result` passkeys.list, passkeys.register_start, passkeys.register_finish, passkeys.remove; `passkey_result` (registration) | the person's passkeys | not covered | 8 |
+| `action factors.enrol_start`, `factors.enrol_cancel`, `factors.remove_totp`, `factors.new_codes`, `factors.dismiss_codes`, `factors.use`, `factors.use_passkey`, `factors.stepup_cancel` | the authenticator, recovery codes, the factor choice, the step-up prompt | not covered | 7 |
+| `submit` second, totpconfirm, stepup; `input` second, totpconfirm, stepup | the second-factor code, the enrolment confirmation, the re-authentication | not covered | 7 |
+| `http_result` factors.summary (entered with the desk), enrol_start, enrol_finish, remove_totp, new_codes | the factors section's state | not covered | 7 |
+| `http_result` factors.pk_challenge; `passkey_result` (second factor) | a passkey as the second factor | not covered | 7 |
+| `http_result` factors.second | the second factor completes a sign-in | not covered | 7 |
+| `http_result` factors.stepup; any refusal `step_up_required` | the refused action is asked again once confirmed; the step-up prompt is shown | not covered | 7 |
+
+#### Sessions list
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `action sessions.revoke`, `sessions.revoke_others`; `http_result` sessions.list (entered with the desk), sessions.revoke, sessions.revoke_others | the person's own sessions: list, end one, end the others | not covered | 8 |
+
+#### Sign-in methods: links, invitations, identity providers
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `submit` link, `input` link; `http_result` links.request, links.sign_in | emailed sign-in: the request; the opened link is sent for checking; signs in | not covered | 6 |
+| `submit` invite, `input` invite; `http_result` invites.accept | an owner's invitation: the password and its acceptance; signs nobody in | not covered | 6 |
+| `action oidc.start`; `http_result` oidc.providers (entered on the sign-in page), oidc.start | the providers list; the start, which navigates the browser to the provider | not covered | 6 |
+| `http_result` oidc.sign_in | the provider's answer is sent; signs in as a login does | not covered | 6 |
+
+#### Records and the editor
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `submit` editor; `input` editor | save in a status; the two-step saves of a new record | not covered | 9 |
+| `action editor.tab`, `editor.publish`, `editor.unpublish`, `editor.reload` | tabs, status changes, reload | not covered | 9 |
+| `http_result` editor.save | saved (the ids and version taken) or refused (the wording, focus); an unknown outcome keeps the key | not covered | 9 |
+| `http_result` editor.preview; the preview tab | the preview of the body | not covered | 9 |
+| `action` row action (generated row buttons) and its confirmation | the row's action; the two-press confirmation | not covered | 9 |
+| `http_result` post.action | the row action done or refused | not covered | 9 |
+| The client's record-rule check before a save (`record-rules.js`) | a refusal before any request, in the kernel's words | not covered | 9 |
+
+#### Settings
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `http_result` settings.definitions (entered with the page) | the settings list | not covered | 10 |
+| `submit` settings, `submit` settings:level:id, `input` settings; `http_result` settings.write | a save of one setting at one level, at the revision read; read again after the answer | not covered | 10 |
+| setting notice (`ws_message` event, kind setting) | the view is read again when the view reads the setting | not covered | 10 (with 5) |
+
+#### Tenant interface
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `http_result` ui.manifest | a manifest not older than the held one is accepted; its parts are asked for | not covered | 11 |
+| `http_result` ui.part | the part is held; a form whose field was removed names what was lost | not covered | 11 |
+| schema notice (`ws_message` event) | the manifest is read again | not covered | 11 (with 5) |
+| `action tenant.action` | a tenant action: confirmation, row prefill, opening a form | not covered | 11 |
+| `submit` tenant:id, `input` tenant:id | a tenant form's values and submission | not covered | 11 |
+| `http_result` tenant.submit, tenant.action | the operation's answer: toast, navigation, or the refusal's words | not covered | 11 |
+
+#### Impact Lab
+
+| Message | What update does | Status | Slice |
+|---|---|---|---|
+| `action lab.tab`, `lab.preset`, `lab.cancel`, `lab.apply`, `lab.replay`, `lab.verify`, `lab.diagnostics` | the Lab's controls; apply only when the projection is current | not covered | 12 |
+| `submit` lab, `input` lab | the projection's form | not covered | 12 |
+| `http_result` lab.overview (entered with the page), lab.run, lab.result, lab.apply, lab.replay, lab.verify, lab.diagnostics | the Lab's answers; polling the run | not covered | 12 |
+| `timer` lab.poll | polls the run | not covered | 12 |
+| `ws_message` run (verification, progress, cancelled, finished) | the run's frames | not covered | 12 |
+
+### 7.2 Effects
+
+| Effect | Emitted by | Status | Slice |
+|---|---|---|---|
+| `http` (method, path, body, csrf, idempotency key, correlation) | every request | partly | 1 (id and kind); 3 (body, csrf token, key, correlation) |
+| `timer` request | every request (30 000 ms) | covered | 1 |
+| `timer` toast | every toast (5 s, or 9 s for a warning) | not covered | 4 |
+| `timer` lab.poll | the Lab's run poll | not covered | 12 |
+| `timer` heartbeat, reconnect, emit | the live connection and its delayed frames | not covered | 5 |
+| `push_url` | an address change, with the replace flag | covered | 1 |
+| `scroll_top` | navigation | covered | 1 |
+| `ws_connect` | a socket open with the request token (at init with a session, and when a waiting socket connects) | not covered | 5 |
+| `ws_send` | subscribe, ack, ping, and the Lab's cancel | not covered | 5 (cancel: 12) |
+| `ws_close` | closing the socket | not covered | 5 |
+| `store` | the theme choice in storage | not covered | 4 |
+| `passkey` (`create`, `get`) | the browser's passkey prompt | not covered | 6 (sign-in), 7 (second factor), 8 (registration) |
+| `log` | the record-rule disagreement, and the worker's diagnostics | not covered | 9 |
+| `navigate_away` | the redirect to an identity provider; emitted by `oidc.js` but absent from the `Effect` type in `types.js` (F5) | not covered | 6 |
+
+### 7.3 Where the JavaScript does not meet what the spec requires
+
+These are read from the code and not yet run. Each is a requirement the relation states and the
+JavaScript does not meet; B2 cannot be proved until the JavaScript changes, or the requirement is
+changed by its owner.
+
+- **F1: a held model survives a session end on an unguarded page.** `clearUserState` keeps `view`
+  unless the current address is guarded (`view: guardedScreen(state) ? ... : state.view`), and the
+  session frame re-reads the view only when a guard or a live binding asks (`refresh`). So on an
+  unguarded page with no refresh, the model read for the former person is kept, and `view.js` draws
+  it for the visitor. Whether it holds personal data depends on the screen (`people[*].self` and
+  `affordances` come from the reply for that person). Requirement: `session_change_drops_model`.
+- **F2: a view reply asked for before the session ended is applied after it.** `onHttp` accepts a
+  `view` reply when `state.view.request === msg.id`. `view` is in neither `USER_KINDS` nor
+  `USER_KIND_PREFIXES`, so the generation check does not drop it, and `clearUserState` resets
+  `view.request` only on a guarded page. Requirement: a reply of an earlier generation changes nothing
+  (`switched` forgets the request; `dropViewAnswer`).
+- **F3: a session reply that names another person, or none, keeps the former person's state.**
+  `onHttp`'s `session` case calls `sessionRead` with the new session and never calls
+  `clearUserState`, so the sessions list, passkeys, factors, Lab, editor and settings forms of the
+  former person stay in memory, as does the held model. Requirement: `sessionChanged`.
+- **F4 (for slice 2, not a defect yet): a view may answer before the session is known.** At a cold
+  start the view reply can arrive before the session reply, while the session is unknown. The relation
+  takes a view answer only for the session it holds, so slice 2 must state the rule for an unknown
+  session before the cold start is covered.
+- **F5: `navigate_away` is undeclared.** `oidc.js` emits it; `types.js` does not declare it; the worker
+  forwards it to the main thread through its default branch. Slice 6 declares it.
+
+### 7.4 What the spec leaves out, by design
+
+- **The generated tables.** Routes, screens, contracts, forms, actions, error wording, live bindings and
+  the client machines are generated from `specifications/` into `web/src/generated`. The kernel's
+  decisions that come from them enter the relation as catalogue parameters (`screenOf`,
+  `needsSession`, `signOutOn`, `validSignIn`) and, from their slices, as abstract tables. Their own
+  contracts are a separate check, not part of the kernel's.
+- **The driver.** `web/src/worker/main.js` performs the effects, supplies time (`at`) and randomness
+  (`rand`), draws the correlation ids and the idempotency keys, and times the requests. It is trusted,
+  as IronFleet's UDP layer was. Request ids are the spec's `nextId`; the deadline is
+  `requestDeadlineMs`.
+- **The page.** `web/src/main.js`, `components/dom.js` and `views/*.js` draw the view model with DOM
+  APIs. Trusted; the view model's shape is the spec's concern from slice 13.
+- **Wording.** Refusal words, toasts and announcements come from the generated errors and the page's
+  own strings. They are checked by tests, not by the spec.
+- **Liveness.** The relation says what a step may do. It does not say that a step happens. A message
+  the relation has no case for has no allowed outcome until its slice adds one.
+- **The request-side guard for guarded views.** The brief's example, "no effect sends an application
+  request from a state without a session for a route that needs one", is not stated. The JavaScript
+  does request a guarded view for a visitor (`navigate` and `fetchView` are unconditional), and the page
+  relies on the gateway's `unauthenticated` answer to show the sign-in page (`view.js`). The spec states
+  what the page shows instead: a held model of a screen that needs a person is held only for a person
+  (`held_guarded_signed_in`), and a visitor is shown no such screen (`visitor_shows_no_guarded_page`).
+  If the owner wants the request itself withheld, `navigate` and `popstate` need a guard, and the
+  sign-in path changes with it. That is a decision for the owner, and this pass does not take it.
+
+### 7.5 Slice 1: what it states, and how the existing models are restated
+
+Slice 1 is routing and session. It was chosen because every later slice reads the session and the
+address (the page's screen, its guard, the person whose data is held), and because the rule that drops
+the held model at a change of person is the rule the browser's privacy depends on.
+
+Theorems, all in `Strata.Browser` and listed in `lean/Audit.lean`:
+
+- `held_is_own`: every view model the page holds was read for the person signed in now.
+- `held_guarded_signed_in`: a model of a screen that needs a person is held only while someone is
+  signed in.
+- `page_shows_only_own`: the page shows a model only to the person it was read for.
+- `visitor_shows_no_guarded_page`: a visitor is shown no screen that needs a person.
+- `session_change_drops_model`: a change of the person leaves no held model.
+- `requests_are_pending`: every request effect names a request the state awaits.
+- `signed_in_view_reachable`: a non-vacuity witness, a reachable state that holds a model read for a
+  person, so the theorems above are not empty.
+
+No unfinished proof and no added axiom. `lean/Audit.lean` prints the axioms each theorem depends on:
+`held_is_own`, `held_guarded_signed_in`, `page_shows_only_own`, `visitor_shows_no_guarded_page` and
+`requests_are_pending` on `propext` and `Quot.sound`; `session_change_drops_model` on `propext` alone;
+`signed_in_view_reachable` on `propext`, `Classical.choice` and `Quot.sound`.
+
+How the existing theorems meet this one (no existing theorem is changed):
+
+- `Strata.Client.Privacy` (FE-004, FE-005, FE-006). The held model is in memory; `Privacy` proves what
+  is at rest and what a session can open. `session_change_drops_model` covers the in-memory side at each
+  change of person. Slice 14 connects `page_shows_only_own` to `Privacy.served_own` (what a session can
+  be served was written by its principal), once the page's held data is a value of the store.
+- `Strata.Client.Drafts` (FE-017). The person's typed text in a draft is a form state, and slice 3 is
+  where `Drafts.dstep` meets the form flow. The rule that drops other people's values at orphaning
+  (`orphan_drops_server_values`) has the shape of `session_change_drops_model`; slice 3 states it for
+  the form values.
+- `Strata.Client.Cache` (FE-001 to FE-003, FE-009, FE-012, FE-015, FE-018, FE-019). The page's view model
+  is the kernel's copy of a view; the cache's stamped entries are not in the kernel yet. Slice 14 restates
+  `current_value` and `rest_above_floor` over the held model and the store.
+- `Strata.Client.Queue` (FE-007 to FE-011, FE-014, FE-016). The kernel has no offline queue yet; the
+  queue is planned in `docs/frontend.md` (follow-ups 4 to 9). Slice 14 adds it, with `submit_ok_guard`
+  and `at_most_once` stated over the queue's messages.
+- `Strata.UI.Visibility` (`render_sound`, `served_needs_content`, `admin_needs_role`; DS-007 to DS-014).
+  The page draws what the server serves to the person, and only the nodes `render` serves to the viewer.
+  Slice 13 states that by `render_sound`.
+- `Strata.UI.Composition` (`checked_bindings_resolve`, `publishable_bound`; DS-001 to DS-004). A tenant
+  page binds only the widgets the schema defines. Slice 11 restates `checked_bindings_resolve` over the
+  held part.
+- `Strata.UI.Loop` (`approve_applies_held`, `staged_invisible_until_last`; DS-015, DS-016, DS-021). The
+  kernel holds the previous part of a screen during an upgrade (`held` in `tenant-ui.js`). Slice 11
+  states that the page shows a held part only until its replacement arrives, in the terms of
+  `staged_invisible_until_last`.
+- `Strata.UI.Contrast` (`checkTheme_iff`; DS-005, DS-006). The kernel keeps the theme's mode, accent and
+  paper, and does not check contrast; the check belongs to the theme. Slice 4 states no contrast theorem
+  unless the kernel draws a colour it derived.
+
+### 7.6 Slices, in dependency order
+
+| Slice | Adds | Needs |
+|---|---|---|
+| 1 (done) | Routing and session: `init` with a bootstrapped session, `navigate`, `popstate`, `reload`, the view's answers, the session's answers and changes, sign-in and sign-out (their requests and answers), the session ending, a request's deadline; the held model and its theorems | |
+| 2 | Cold start: the session read at start, a view that answers before the session, the bootstrapped view | 1 |
+| 3 | Forms: the form flow (busy, accepted, refused), validation, the refusal's words and focus, the idempotency key and csrf token of a request, the search form's navigation, the typed draft (`Drafts.lean`) | 1 |
+| 4 | Presentation: theme and its store effect, the system theme, the menu, toasts and their timers, dev expire | 1 |
+| 5 | Live connection: the socket machine, the welcome, notices, resync, pong, the session frame when active, refused upgrades, the socket effects and timers | 1, 2 |
+| 6 | Sign-in methods: passkey sign-in, emailed links, invitations, identity providers (OIDC and SAML), `navigate_away` | 3, 5 |
+| 7 | Second factors and step-up: the waiting sign-in, the factors section, recovery codes, the step-up prompt and its retry, the passkey as a second factor | 3, 6 |
+| 8 | The person's sessions and passkeys on the desk | 3, 7 |
+| 9 | Records: the editor's saves, publish and unpublish, preview, row actions, paging, the client's record-rule check and its log | 3, 5 |
+| 10 | Settings: the definitions, saves by level, setting notices | 3, 5 |
+| 11 | Tenant interface: manifest, parts, tenant screens by address, tenant forms and actions, lost drafts, the held part (`Loop`) | 3, 5 |
+| 12 | Impact Lab: overview, runs and their frames, polling, apply, replay, verify, diagnostics | 3, 5, 7 |
+| 13 | View derivation: the page builders per screen kind, the title and navigation, the tenant's composition and display; `render_sound` over the page | 1, 9, 10, 11, 12 |
+| 14 | Browser storage: the view cache with stamps, the offline queue, the leader tab, drafts at rest (`docs/frontend.md`, follow-ups 4 to 9) | 3, 5 |
+
+### 7.7 Counts
+
+The messages table has 76 rows (a row is one message, or one family of messages with the same handling):
+11 covered, 9 partly, 56 not covered. The effects table has 14 rows: 3 covered, 1 partly, 10 not
+covered. All 13 top-level message types that `step` switches on have rows, and so do the 10 effect
+types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
+rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
+
 ## Sources
 
 - C. Hawblitzel et al., *IronFleet: Proving Practical Distributed Systems Correct*, SOSP 2015:

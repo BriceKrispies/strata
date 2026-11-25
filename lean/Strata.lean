@@ -21,3 +21,5 @@ import Strata.UI.Composition
 import Strata.UI.Contrast
 import Strata.UI.Visibility
 import Strata.UI.Loop
+import Strata.Browser.Types
+import Strata.Browser.Session
