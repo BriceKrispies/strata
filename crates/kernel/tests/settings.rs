@@ -1156,6 +1156,8 @@ fn home_view(source: ArgSource) -> SchemaChange {
         sections: std::collections::BTreeMap::from([(
             "main".to_string(),
             ViewSection {
+                marks: None,
+                joins: None,
                 query: QueryId::new("note_by_slug").unwrap(),
                 args: std::collections::BTreeMap::from([("slug".to_string(), source)]),
                 include: vec![],

@@ -188,9 +188,54 @@ A screen part (`GET /api/ui/parts/<hash>`) carries, beside `screen`, `forms`, `a
   of `fields`.
 - Each form and action in the part gains `shape`: `{"operation": id, "inputs": [{"name", "type",
   "required"}], "fingerprint"}`.
+- A list section that declares row marks or row joins (see "Row marks and joins") carries them in its
+  `shape` by name: `"marks": {"mine": {"object", "aggregate", "key", "second": null}}` and
+  `"joins": {"reactions": {"object", "aggregate", "key", "second"}}`. `object` is the object type the
+  lookup's query reads, `key` the reference field of that object that names the section's row, and
+  `second` the field a join's groups are made by (null for a mark). They are part of the fingerprint.
 - `fingerprint` is the SHA-256, in lower-case hex, of the canonical JSON of the shape without it. A
   change to a field's type, or to what an operation takes, changes the shape, the fingerprint and
   the part's hash.
+
+### Row marks and joins
+
+A list section may declare, beside its rows, two things that depend on the reader and on other
+records of the same tenant (WG-5599):
+
+- a **mark** of a row is a boolean: true when the reader holds a record that the mark's aggregate
+  counts for that row. The mark's query filters the records by the row (`record.<key> in
+  param.<list>`) and may read the reader (`principal`); the aggregate is a count grouped by the
+  reference field that names the row. Each record counts only as far as the reader may read it.
+- a **join** of a row is the groups of a grouped aggregate of another object type, keyed by a
+  reference to the row: the aggregate groups by that reference and by a second field, and the row
+  receives its groups as a list. The reader's policies decide which records are counted, so a record
+  the reader may not read is in no group.
+
+Both are asked for the rows of a page in batches of at most sixteen row identifiers (the bound of an
+`in` filter on an indexed field), one aggregate per batch, never one per row. A view that declares
+one, or that reads its reader through a `principal` argument, is individual to its reader: its reply
+is never stored as a copy that another reader is given.
+
+In the reply each row of the section carries them by name, whether or not a row holds any:
+
+```json
+{
+  "data": {
+    "messages": [
+      { "id": 12, "fields": { "title": "Offsite notes" },
+        "marks": { "mine": true },
+        "joins": { "reactions": [ { "key": "👍", "value": 3 }, { "key": "🎉", "value": 1 } ] } }
+    ]
+  }
+}
+```
+
+- `marks[name]` is a boolean. `joins[name]` is a list of `{ "key", "value" }`: `key` is the value of
+  the join's second field (a string here), `value` the aggregate's value (the count), and each
+  group appears once. A join with no group for the row is `[]`.
+- A row sends no principal: `mine` is the reader's own state, and no other reader's is in the reply.
+
+In a product, a section declares them as `"marks": {"mine": {"query": "my_reactions", "aggregate": "mine", "key": "ids"}}` and `"joins": {"reactions": {"query": "reactions_by_message", "aggregate": "per_emoji", "key": "ids"}}`. The lookup's `args` give its query's other parameters, each as an argument source, so `"principal"` passes the reader to a parameter; a query filter may also read `principal` directly.
 
 ### Presentations: person fields and display types
 

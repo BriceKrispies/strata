@@ -181,6 +181,35 @@ fn object_shape(schema: &TenantSchema, object: &strata_kernel::ObjectTypeId) -> 
     shape
 }
 
+/// The shape of one row mark or row join of a section (WG-5599): the object type of its query,
+/// the aggregate, the reference field the rows are keyed by, and for a join the second field its
+/// groups are made by. A mark has no second field.
+fn lookup_shape(
+    schema: &TenantSchema,
+    query: &strata_kernel::QueryId,
+    aggregate: &strata_kernel::AggregateId,
+) -> Json {
+    let object = schema
+        .queries
+        .get(query)
+        .map(|q| q.object.as_str().to_string());
+    let agg = strata_kernel::aggregates::section_aggregate(schema, query, aggregate);
+    let mut out = Map::new();
+    out.insert("object".into(), json!(object));
+    out.insert("aggregate".into(), json!(aggregate.as_str()));
+    out.insert(
+        "key".into(),
+        json!(agg.and_then(|a| a.group_by.as_ref()).map(|f| f.as_str())),
+    );
+    out.insert(
+        "second".into(),
+        json!(agg
+            .and_then(|a| a.group_by_second.as_ref())
+            .map(|f| f.as_str())),
+    );
+    Json::Object(out)
+}
+
 /// The shapes of the sections of a view, by section name.
 fn section_shapes(schema: &TenantSchema, view: &ViewId) -> Map<String, Json> {
     let Some(def) = schema.views.get(view) else {
@@ -194,6 +223,21 @@ fn section_shapes(schema: &TenantSchema, view: &ViewId) -> Map<String, Json> {
             if let Some(aggregate) = &section.aggregate {
                 shape.insert("aggregate".into(), json!(aggregate.as_str()));
                 shape.remove("fields");
+            }
+            // The row marks and joins of a list section (WG-5599): by name, each with its shape.
+            if let Some(marks) = section.marks.as_ref().filter(|m| !m.is_empty()) {
+                let by_name: Map<String, Json> = marks
+                    .iter()
+                    .map(|(mark, m)| (mark.clone(), lookup_shape(schema, &m.query, &m.aggregate)))
+                    .collect();
+                shape.insert("marks".into(), Json::Object(by_name));
+            }
+            if let Some(joins) = section.joins.as_ref().filter(|j| !j.is_empty()) {
+                let by_name: Map<String, Json> = joins
+                    .iter()
+                    .map(|(join, j)| (join.clone(), lookup_shape(schema, &j.query, &j.aggregate)))
+                    .collect();
+                shape.insert("joins".into(), Json::Object(by_name));
             }
             Some((
                 name.clone(),

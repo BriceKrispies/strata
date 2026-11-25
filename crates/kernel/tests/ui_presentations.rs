@@ -166,6 +166,8 @@ fn notes_screen() -> World {
             sections: BTreeMap::from([(
                 "notes".to_string(),
                 ViewSection {
+                    marks: None,
+                    joins: None,
                     query: QueryId::new("all_notes").unwrap(),
                     args: BTreeMap::new(),
                     include: vec![],

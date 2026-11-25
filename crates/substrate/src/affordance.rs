@@ -273,6 +273,8 @@ mod tests {
                     sections: Map::from([(
                         "notes".to_string(),
                         ViewSection {
+                            marks: None,
+                            joins: None,
                             query: QueryId::new("all_notes").unwrap(),
                             args: Map::new(),
                             include: vec![],
@@ -413,6 +415,8 @@ mod tests {
                 ref_targets: BTreeMap::new(),
                 next: None,
                 aggregate: None,
+                marks: BTreeMap::new(),
+                joins: BTreeMap::new(),
             },
         )]);
         let view = ViewId::new("notes_view").unwrap();

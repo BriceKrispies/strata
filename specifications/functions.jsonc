@@ -52583,7 +52583,7 @@
     },
     {
       "id": "section-request",
-      "description": "crates/substrate/src/project.rs section_request: the named read of a section, each argument (in name order) from a route parameter, a request parameter (each a string, null when absent), a constant, or an attribute of the single row of a section already evaluated (record-attribute; null when that section had no row). An argument that comes from a setting (setting) is null here: the hand-written section_request_with resolves it for the reader.",
+      "description": "crates/substrate/src/project.rs section_request: the named read of a section, each argument (in name order) from a route parameter, a request parameter (each a string, null when absent), a constant, or an attribute of the single row of a section already evaluated (record-attribute; null when that section had no row). An argument that comes from a setting (setting) or from the reader (principal) is null here: the hand-written section_request_with resolves it for the reader.",
       "params": [
         {
           "name": "section",
@@ -52603,7 +52603,7 @@
         }
       ],
       "returns": "read-request",
-      "body": "read-request.named{query: section.query, params: fold(k in keys(section.args), m = {}, match get(section.args, k) { None => m, Some(src) => insert(m, k, match src { route(key) => call text-value(get(route, key)), request(key) => call text-value(get(request, key)), const(x) => x, setting(s) => call null-value(), section{section: from, attribute} => match get(done, from) { Some(row) => match row { Some(r) => call record-attribute(r, attribute), None => call null-value() }, None => call null-value() } }) })}",
+      "body": "read-request.named{query: section.query, params: fold(k in keys(section.args), m = {}, match get(section.args, k) { None => m, Some(src) => insert(m, k, match src { route(key) => call text-value(get(route, key)), request(key) => call text-value(get(request, key)), const(x) => x, setting(s) => call null-value(), principal => call null-value(), section{section: from, attribute} => match get(done, from) { Some(row) => match row { Some(r) => call record-attribute(r, attribute), None => call null-value() }, None => call null-value() } }) })}",
       "examples": [
         {
           "args": {

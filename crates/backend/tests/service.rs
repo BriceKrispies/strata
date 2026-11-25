@@ -485,6 +485,8 @@ async fn the_seeded_blog_is_served_from_tenant_metadata() {
         declared_fields: None,
     };
     let section = |query: &str| ViewSection {
+        marks: None,
+        joins: None,
         query: QueryId::new(query).unwrap(),
         args: Default::default(),
         include: vec![],

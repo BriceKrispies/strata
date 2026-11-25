@@ -58,9 +58,11 @@ const CHOICE_WORD = /^[a-z][a-z0-9]*(?:[ _-][a-z0-9]+){0,3}$/;
  * @typedef {import('./display.js').DisplayNode} DisplayNode
  * @typedef {{ lang?: string, timeZone?: string, now?: number, people?: Record<string, any>, screens?: { id: string, route?: string }[], route?: string, forms?: Record<string, any>, moreLoading?: string | null, rowActions?: any[], affordances?: Record<string, any>, confirm?: string | null }} ComposeContext
  * @typedef {{ id: string, type: string, target: string | null, displayType: string | null, props: Record<string, any> | null, required: boolean, label: string }} Field
- * @typedef {{ name: string, label: string, single: boolean, aggregate: boolean, object: string | null, title: string | null, fields: Field[] }} Section
+ * @typedef {{ name: string, label: string, single: boolean, aggregate: boolean, object: string | null, title: string | null, fields: Field[], marks: Record<string, Lookup>, joins: Record<string, Lookup> }} Section
+ * @typedef {{ object: string | null, aggregate: string, key: string | null, second: string | null }} Lookup
+ * @typedef {{ key: string | null, value: number | string | null }} JoinGroup
  * @typedef {{ id: string, label: string, value: DisplayNode }} Fact
- * @typedef {{ key: string, title: string | null, href: string | null, subtitle: string | null, avatar: { initials: string, src: string | null } | null, state: DisplayNode | null, edge: string | null, person: DisplayNode | null, time: DisplayNode | null, timeLabel: string, body: { text?: string, blocks?: any[] } | null, meta: Fact[], number: string | null }} RecordModel
+ * @typedef {{ key: string, title: string | null, href: string | null, subtitle: string | null, avatar: { initials: string, src: string | null } | null, state: DisplayNode | null, edge: string | null, person: DisplayNode | null, time: DisplayNode | null, timeLabel: string, body: { text?: string, blocks?: any[] } | null, meta: Fact[], number: string | null, marks: Record<string, boolean>, joins: Record<string, JoinGroup[]> }} RecordModel
  */
 
 // ---- words --------------------------------------------------------------------------------
@@ -181,6 +183,8 @@ export function sectionOf(part, name, value) {
     aggregate,
     object: typeof shape?.object === 'string' ? shape.object : typeof firstRow?.object === 'string' ? firstRow.object : null,
     title: typeof shape?.title === 'string' ? shape.title : null,
+    marks: lookupsOf(shape?.marks),
+    joins: lookupsOf(shape?.joins),
     fields,
   };
 }
@@ -298,6 +302,53 @@ function initialsOf(name) {
 }
 
 /**
+ * A row mark or row join of a section, as its screen part's shape declares it (WG-5599): the object
+ * type its query reads, the aggregate, the reference field the rows are keyed by, and for a join the
+ * second field its groups are made by.
+ * @param {any} value @returns {Lookup}
+ */
+function lookupOf(value) {
+  return {
+    object: typeof value?.object === 'string' ? value.object : null,
+    aggregate: typeof value?.aggregate === 'string' ? value.aggregate : '',
+    key: typeof value?.key === 'string' ? value.key : null,
+    second: typeof value?.second === 'string' ? value.second : null,
+  };
+}
+
+/** The declared marks or joins of a section shape, by name. @param {any} declared @returns {Record<string, Lookup>} */
+function lookupsOf(declared) {
+  if (!isRecord(declared)) return {};
+  return Object.fromEntries(Object.entries(declared).map(([name, value]) => [name, lookupOf(value)]));
+}
+
+/**
+ * The marks of a row: each declared mark by name, true when the reader's records hold the row.
+ * @param {any} row @returns {Record<string, boolean>}
+ */
+function rowMarksOf(row) {
+  if (!isRecord(row?.marks)) return {};
+  return Object.fromEntries(Object.entries(row.marks).map(([name, held]) => [name, held === true]));
+}
+
+/**
+ * The joins of a row: each declared join by name, the groups the row holds (a key and a value each).
+ * @param {any} row @returns {Record<string, JoinGroup[]>}
+ */
+function rowJoinsOf(row) {
+  if (!isRecord(row?.joins)) return {};
+  return Object.fromEntries(
+    Object.entries(row.joins).map(([name, groups]) => [
+      name,
+      (Array.isArray(groups) ? groups : []).map((/** @type {any} */ g) => ({
+        key: typeof g?.key === 'string' ? g.key : null,
+        value: typeof g?.value === 'number' || typeof g?.value === 'string' ? g.value : null,
+      })),
+    ]),
+  );
+}
+
+/**
  * One record as a card or a detail shows it.
  * @param {Section} section @param {ReturnType<typeof rolesOf>} roles @param {any} row @param {ComposeContext} ctx
  * @returns {RecordModel}
@@ -361,6 +412,8 @@ function recordOf(section, roles, row, ctx) {
     body,
     meta,
     number: typeof numberId === 'number' || (typeof numberId === 'string' && /^\d{1,8}$/.test(numberId)) ? `No. ${numberId}` : null,
+    marks: rowMarksOf(row),
+    joins: rowJoinsOf(row),
   };
 }
 

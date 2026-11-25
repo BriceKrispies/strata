@@ -3,7 +3,7 @@
 // Plain functions: no browser, no worker.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { SKELETON_ROWS, compose, humanise, nodeText, nodesOf } from '../src/kernel/compose.js';
+import { SKELETON_ROWS, compose, humanise, nodeText, nodesOf, sectionOf } from '../src/kernel/compose.js';
 
 const NOW = Date.UTC(2026, 10, 24, 12, 0, 0);
 const HOUR = 3_600_000;
@@ -401,4 +401,45 @@ test('a kernel-computed field is drawn like a stored one, and the value a write 
   assert.equal(recomputed.title, 'Final plan');
   assert.equal(drawnStrings(after).includes('Draft the plan'), false, 'the stale value is not drawn');
   assert.equal(drawnStrings(after).includes('Final plan'), true);
+});
+
+/**
+ * WG-5599: a list section's shape declares its row marks and joins, and each row of the reply
+ * carries their values, typed, in the page model. Nothing is drawn for them yet.
+ */
+test('a row carries its reader-relative mark and its joined groups in the page model, as the shape declares them', () => {
+  const reactionPart = {
+    ...part,
+    sections: {
+      ...part.sections,
+      messages: {
+        single: false,
+        shape: {
+          ...part.sections.messages.shape,
+          marks: { mine: { object: 'showcase_community__reaction', aggregate: 'mine', key: 'message', second: null } },
+          joins: { reactions: { object: 'showcase_community__reaction', aggregate: 'per_emoji', key: 'message', second: 'emoji' } },
+        },
+      },
+    },
+  };
+  const declared = sectionOf(reactionPart, 'messages', model.data.messages);
+  assert.deepEqual(declared.marks.mine, { object: 'showcase_community__reaction', aggregate: 'mine', key: 'message', second: null });
+  assert.equal(declared.joins.reactions.second, 'emoji', 'a join says which field its groups are made by');
+
+  const reacted = {
+    ...model,
+    data: {
+      ...model.data,
+      messages: [{ ...model.data.messages[0], marks: { mine: true }, joins: { reactions: [{ key: '👍', value: 3 }, { key: '🎉', value: 1 }] } }],
+    },
+  };
+  const page = compose(reactionPart, reacted, ctx);
+  const card = byId(page, 'section:messages').items[0];
+  assert.deepEqual(card.marks, { mine: true }, 'the reader\'s mark is a boolean on the row');
+  assert.deepEqual(card.joins, { reactions: [{ key: '👍', value: 3 }, { key: '🎉', value: 1 }] }, 'the joined groups are a typed list of key and value');
+
+  const bare = compose(reactionPart, model, ctx);
+  const plain = byId(bare, 'section:messages').items[0];
+  assert.deepEqual(plain.marks, {}, 'a row the reply sends no mark for carries none');
+  assert.deepEqual(plain.joins, {});
 });
