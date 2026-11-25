@@ -26,6 +26,10 @@ def ITenant.header (t : ITenant) : Tenant :=
   { types := [], members := t.members, grants := t.grants, policies := t.policies,
     nextId := t.nextId, limits := t.limits }
 
+/-- May `p` attempt a create on type `ty` (the spec's `canAttemptCreate`, WG-5665). -/
+def canAttemptCreateI (t : ITenant) (p : Principal) (ty : TypeId) : Bool :=
+  canAttemptCreate t.header p ty
+
 /-- May `p` create a record of type `ty` that would be `r` (the spec's `canCreate`). -/
 def canCreateI (t : ITenant) (p : Principal) (ty : TypeId) (r : Record) : Bool :=
   canCreate t.header p ty r
@@ -65,6 +69,8 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
     match t.typ? ty with
     | none => .error (unknownTypeI t p ty .create)
     | some o =>
+      if !canAttemptCreateI t p ty then .error .unauthorized
+      else
       match newRecord o.schema p fs with
       | .error _ => .error .evaluation
       | .ok r =>
@@ -160,6 +166,9 @@ def stepI (w : IWorld) (i : Intent) (c : Ctx) : Except Err IWorld :=
 theorem canCreateI_eq (t : ITenant) (p : Principal) (ty : TypeId) (r : Record) :
     canCreateI t p ty r = canCreate t.abs p ty r := rfl
 
+theorem canAttemptCreateI_eq (t : ITenant) (p : Principal) (ty : TypeId) :
+    canAttemptCreateI t p ty = canAttemptCreate t.abs p ty := rfl
+
 theorem canUpdateI_eq (t : ITenant) (p : Principal) (ty : TypeId) (old new : Record) :
     canUpdateI t p ty old new = canUpdate t.abs p ty old new := rfl
 
@@ -232,10 +241,14 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
     | some o =>
       have hty' : t.abs.typ? ty = some o.abs := by rw [typ?_abs, hty]; rfl
       have hsz := hinv ty o hty
+      by_cases hA : (!canAttemptCreate t.abs p ty) = true
+      · simp [stepTenantI, stepTenant, hty, hty', canAttemptCreateI_eq, hA, Except.map]
+      have hA' : (!canAttemptCreate t.abs p ty) = false := by simpa using hA
       cases hr : newRecord o.schema p fs with
       | error u =>
         have hr' : newRecord o.abs.schema p fs = .error u := hr
-        simp only [stepTenantI, stepTenant, hty, hty', hr, hr']
+        simp only [stepTenantI, stepTenant, hty, hty', hr, hr', canAttemptCreateI_eq, hA',
+          if_false, Bool.false_eq_true]
         rfl
       | ok r =>
         have hr' : newRecord o.abs.schema p fs = .ok r := hr
@@ -243,7 +256,8 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
             t.abs.nextId r =
             problemI t.limits o.schema o.uniques true t.slotsOf o.slots t.nextId r :=
           problemI_abs t o t.nextId r
-        simp only [stepTenantI, stepTenant, hty, hty', hr, hr', canCreateI_eq]
+        simp only [stepTenantI, stepTenant, hty, hty', hr, hr', canCreateI_eq,
+          canAttemptCreateI_eq, hA', if_false, Bool.false_eq_true]
         by_cases hc : (!canCreate t.abs p ty r) = true
         · simp [hc, Except.map]
         · simp only [hc, if_false, Bool.false_eq_true, hp]

@@ -13,10 +13,11 @@ checks of `stepTenant`):
   `evaluation`; `true` and `null` pass (`constraint_violated_refused`, `constraint_evaluation_refused`,
   `null_constraint_passes`). No state follows a refusal (`create_constraint_refused`,
   `update_constraint_refused`).
-- Expression defaults. A create fills a field the intent does not name with the value of its default
-  expression, before the permission is asked and before the record is checked; a default that cannot
-  be evaluated refuses the create with `evaluation` whoever asks (`create_default_error_first`), and a
-  default that violates a constraint refuses it with `constraintViolated` (`default_refused_by_constraint`).
+- Expression defaults. The permission to create is asked first: a caller whom nothing could allow to
+  create on the type is refused `unauthorized` whatever the defaults are (`create_unauthorized_regardless_of_defaults`,
+  `unauthorized_regardless_of_defaults`; WG-5665). A caller who could create gets the defaults next: a
+  default that cannot be evaluated refuses the create with `evaluation` (`create_default_error_when_permitted`),
+  and a default that violates a constraint refuses it with `constraintViolated` (`default_refused_by_constraint`).
 - The constraint invariant. For the constraints the model admits (`Tenant.StateConstraints`: they read
   no old record and no principal, see `Expr.stateOnly`), every accepted create, update and schema change
   leaves every stored record satisfying every constraint of its type (`stepTenant_preserves_satisfied`,
@@ -136,7 +137,7 @@ theorem create_constraint_refused (t : Tenant) (p : Principal) (ty : TypeId) (fs
     (e : Err) (he : constraintProblem (writeEnv p r none) o.constraints = some e) :
     stepTenant t p (.create ty fs) = .error e ∧ ∀ t', stepTenant t p (.create ty fs) ≠ .ok t' := by
   have hs : stepTenant t p (.create ty fs) = .error e := by
-    simp [stepTenant, ho, hN, hc, hP, he]
+    simp [stepTenant, ho, hN, hc, canCreate_attempt _ _ _ _ hc, hP, he]
   exact ⟨hs, fun t' h => by rw [hs] at h; cases h⟩
 
 /-- An update whose structural checks pass is refused by a constraint that fails on the record it
@@ -153,13 +154,21 @@ theorem update_constraint_refused (t : Tenant) (p : Principal) (ty : TypeId) (id
     simp [stepTenant, ho, hl, hcan, hv, hP, he]
   exact ⟨hs, fun t' h => by rw [hs] at h; cases h⟩
 
-/-- A create whose default evaluation fails is refused with `evaluation` whether or not the caller
-    may create: the defaults are evaluated before the permission is asked (the kernel's
-    `create_record`). -/
-theorem create_default_error_first (t : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
-    (o : ObjType) (ho : t.typ? ty = some o) (hN : newRecord o.schema p fs = .error ()) :
+/-- A create by a caller whom nothing could allow to create on the type is refused `unauthorized`,
+    whatever its defaults: the permission is asked before the defaults are evaluated (WG-5665). -/
+theorem create_unauthorized_regardless_of_defaults (t : Tenant) (p : Principal) (ty : TypeId)
+    (fs : Fields) (o : ObjType) (ho : t.typ? ty = some o)
+    (hA : canAttemptCreate t p ty = false) :
+    stepTenant t p (.create ty fs) = .error .unauthorized := by
+  simp [stepTenant, ho, hA]
+
+/-- A create whose defaults fail is refused with `evaluation` for a caller who could create on the
+    type: for such a caller the defaults are the first failure (the record's own decision follows). -/
+theorem create_default_error_when_permitted (t : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
+    (o : ObjType) (ho : t.typ? ty = some o) (hA : canAttemptCreate t p ty = true)
+    (hN : newRecord o.schema p fs = .error ()) :
     stepTenant t p (.create ty fs) = .error .evaluation := by
-  simp [stepTenant, ho, hN]
+  simp [stepTenant, ho, hA, hN]
 
 /-- A create whose structural checks pass and whose defaults are written is accepted only when the
     constraints hold of the record with those defaults in it: the defaults are applied before the
@@ -199,8 +208,10 @@ def badDfltObj : ObjType :=
 def badDfltTenant : Tenant :=
   { types := [(1, badDfltObj)], members := [(0, [ownerRole])], grants := [], policies := [], nextId := 1 }
 
-theorem default_error_before_permission :
-    stepTenant badDfltTenant (.user 9) (.create 1 []) = .error .evaluation := rfl
+/-- The caller is not a member, so it may not create on the type, and its default would fail: the
+    refusal is `unauthorized`, the permission being asked first (WG-5665). -/
+theorem unauthorized_regardless_of_defaults :
+    stepTenant badDfltTenant (.user 9) (.create 1 []) = .error .unauthorized := rfl
 
 /-! ## The constraint invariant -/
 

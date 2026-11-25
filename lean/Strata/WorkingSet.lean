@@ -333,6 +333,8 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
     match h.types.lookup ty with
     | none => .error (unknownType h.asTenant p ty .create)
     | some o =>
+      if !canAttemptCreate h.asTenant p ty then .error .unauthorized
+      else
       match newRecord o.schema p fs with
       | .error _ => .error .evaluation
       | .ok r =>
@@ -491,6 +493,9 @@ theorem recordAt_has (t : Tenant) (ty : TypeId) (id : RecordId) :
 theorem canCreate_header (t : Tenant) (p : Principal) (ty : TypeId) (r : Record) :
     canCreate t.header.asTenant p ty r = canCreate t p ty r := rfl
 
+theorem canAttemptCreate_header (t : Tenant) (p : Principal) (ty : TypeId) :
+    canAttemptCreate t.header.asTenant p ty = canAttemptCreate t p ty := rfl
+
 theorem canUpdate_header (t : Tenant) (p : Principal) (ty : TypeId) (old new : Record) :
     canUpdate t.header.asTenant p ty old new = canUpdate t p ty old new := rfl
 
@@ -564,22 +569,25 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
   cases i with
   | create ty fs =>
     simp only [TypeHead.ofObj, decideTenant, stepTenant, header_types_lookup, tables_lookup, unknownType_header,
-      canCreate_header, hhas, problem_eq_via]
+      canCreate_header, canAttemptCreate_header, hhas, problem_eq_via]
     cases hT : t.typ? ty with
     | none => simp [TypeHead.ofObj, Except.map]
     | some o =>
-      cases hN : newRecord o.schema p fs with
-      | error e => simp [TypeHead.ofObj, hT, hN, Except.map]
-      | ok r =>
-        by_cases hc : canCreate t p ty r = true
-        · cases hk : problemVia t.limits o.schema o.uniques true
-              (fun T id => Records.has (t.env T) id) o.records t.nextId r with
-          | none =>
-            cases hC : constraintProblem (writeEnv p r none) o.constraints with
-            | none => simp [TypeHead.ofObj, hT, hN, hc, hk, hC, Delta.apply, Tenant.modType, Except.map]
-            | some e => simp [TypeHead.ofObj, hT, hN, hc, hk, hC, Except.map]
-          | some e => simp [TypeHead.ofObj, hT, hN, hc, hk, Except.map]
-        · simp [TypeHead.ofObj, hT, hN, hc, Except.map]
+      by_cases hA : canAttemptCreate t p ty = true
+      · cases hN : newRecord o.schema p fs with
+        | error e => simp [TypeHead.ofObj, hT, hN, hA, Except.map]
+        | ok r =>
+          by_cases hc : canCreate t p ty r = true
+          · cases hk : problemVia t.limits o.schema o.uniques true
+                (fun T id => Records.has (t.env T) id) o.records t.nextId r with
+            | none =>
+              cases hC : constraintProblem (writeEnv p r none) o.constraints with
+              | none => simp [TypeHead.ofObj, hT, hN, hA, hc, hk, hC, Delta.apply, Tenant.modType, Except.map]
+              | some e => simp [TypeHead.ofObj, hT, hN, hA, hc, hk, hC, Except.map]
+            | some e => simp [TypeHead.ofObj, hT, hN, hA, hc, hk, Except.map]
+          · simp [TypeHead.ofObj, hT, hN, hA, hc, Except.map]
+      · have hA' : canAttemptCreate t p ty = false := by simpa using hA
+        simp [TypeHead.ofObj, hT, hA', Except.map]
   | update ty id fs ev =>
     simp only [TypeHead.ofObj, decideTenant, stepTenant, header_types_lookup, tables_lookup, unknownType_header,
       canUpdate_header, missingRecord_header, hhas, problem_eq_via]

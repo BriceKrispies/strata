@@ -260,7 +260,7 @@ theorem create_refused_over_record_bound (t : Tenant) (p : Principal) (ty : Type
     (o : ObjType) (ho : t.typ? ty = some o) (r : Record)
     (hN : newRecord o.schema p fs = .ok r) (hc : canCreate t p ty r = true) (hs : t.limits.maxRecord < r.size) :
     stepTenant t p (.create ty fs) = .error .limitExceeded := by
-  simp [stepTenant, ho, hN, hc, problem, hs]
+  simp [stepTenant, ho, hN, hc, canCreate_attempt _ _ _ _ hc, problem, hs]
 
 /-- Every record an accepted create writes is within the record bound and holds no value over the
     string or list bound. -/

@@ -705,6 +705,7 @@ import Strata
 #print axioms Strata.Impl.compositeProblem_eq
 #print axioms Strata.Impl.problem_eq
 #print axioms Strata.Impl.canCreateI_eq
+#print axioms Strata.Impl.canAttemptCreateI_eq
 #print axioms Strata.Impl.canUpdateI_eq
 #print axioms Strata.Impl.canDeleteI_eq
 #print axioms Strata.Impl.missingRecordI_eq
@@ -830,11 +831,14 @@ import Strata
 #print axioms Strata.constraint_first_failure
 #print axioms Strata.create_constraint_refused
 #print axioms Strata.update_constraint_refused
-#print axioms Strata.create_default_error_first
+#print axioms Strata.create_default_error_when_permitted
+#print axioms Strata.create_unauthorized_regardless_of_defaults
 #print axioms Strata.create_checks_defaulted_record
 #print axioms Strata.default_refused_by_constraint
 #print axioms Strata.named_value_accepted
-#print axioms Strata.default_error_before_permission
+#print axioms Strata.unauthorized_regardless_of_defaults
+#print axioms Strata.canCreate_attempt
+#print axioms Strata.canCreate_false_of_attempt
 #print axioms Strata.evalExpr_congr
 #print axioms Strata.constraintProblem_congr
 #print axioms Strata.satisfied_of_putType

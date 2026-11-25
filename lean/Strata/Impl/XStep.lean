@@ -101,6 +101,8 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     match core.typ? ty with
     | none => .error (unknownTypeI core p ty .create, ⟨core, ux, cx, rx⟩)
     | some o =>
+      if !canAttemptCreateI core p ty then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
+      else
       match newRecord o.schema p fs with
       | .error _ => .error (.evaluation, ⟨core, ux, cx, rx⟩)
       | .ok r =>

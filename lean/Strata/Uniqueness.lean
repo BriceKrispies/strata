@@ -1144,7 +1144,7 @@ theorem create_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId
     step w (.create ty fs) c = .error .uniqueViolated ∧
       ∀ w', step w (.create ty fs) c ≠ .ok w' := by
   have hs : step w (.create ty fs) c = .error .uniqueViolated := by
-    simp [step, ht, stepTenant, ho, hN, hc, problem_uniq_refusal hfree hclash]
+    simp [step, ht, stepTenant, ho, hN, hc, canCreate_attempt _ _ _ _ hc, problem_uniq_refusal hfree hclash]
   exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
 
 theorem update_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId) (o : ObjType)

@@ -70,7 +70,7 @@ builds their module, without reading the statements (`specifications/README.md`)
 | | `and_null_error`, `and_int_error`, `or_false_error`, `cmp_kind_error`, `cmp_bool_order_error`, `not_int` | A comparison of two kinds, an ordering of booleans, and a non-boolean connective operand are evaluation errors |
 | Constraints (slice 5) | `constraint_violated_refused`, `constraint_evaluation_refused`, `null_constraint_passes`, `constraint_first_failure` | The first constraint that is `false` gives `constraintViolated`, the first that cannot be evaluated gives `evaluation`; `true` and `null` pass; the first failure decides |
 | | `create_constraint_refused`, `update_constraint_refused` | A write whose structural checks pass and whose constraint fails on the record it writes is refused with that error, and no state follows |
-| Defaults as expressions (slice 5) | `create_default_error_first`, `default_error_before_permission` | A create whose default expression fails is refused with `evaluation` whether or not the caller may create: the defaults come before the permission |
+| Defaults as expressions (slice 5) | `create_unauthorized_regardless_of_defaults`, `create_default_error_when_permitted`, `unauthorized_regardless_of_defaults` | A caller whom nothing could allow to create on the type is refused `unauthorized` whatever the defaults are; a caller who could create gets `evaluation` from a failing default, before the decision on the record: the permission comes before the defaults (WG-5665) |
 | | `create_checks_defaulted_record`, `default_refused_by_constraint`, `named_value_accepted` | An accepted create's record, with its defaults in it, satisfies the constraints; a default that violates a constraint refuses the create (a concrete tenant) |
 | | `create_fills_default` (restated for a constant default `.lit v`), `defaultsOf_mem`, `newRecord_parts`, `defaultsOf_nodup`, `newRecord_nodup` | An accepted create writes the constant default of each unnamed field; the defaults add no duplicate name |
 | Constraint invariant (slice 5) | `stepTenant_preserves_satisfied`, `step_preserves_satisfied` | For constraints that are state-only (`Tenant.StateConstraints`), an accepted create, update or schema change leaves every stored record satisfying every constraint of its type; it needs the state before to satisfy them (`Tenant.Satisfied`) |
@@ -763,9 +763,9 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
   stored record is the value a write checked (`constraintProblem_congr`).
 - **Defaults are expressions, evaluated before the permission is asked.** A field's default is an
   `Expr` (`.lit v` for a constant), evaluated with no record and the caller as principal. The
-  kernel's `create_record` evaluates the defaults before `require(Create)`, so an unauthorized caller
-  whose defaults fail is refused `evaluation`, not `unauthorized` (`create_default_error_first`,
-  `default_error_before_permission`). This is an observable order, and a leak: a caller who may not
+  kernel's `create_record` asks `may_attempt(Create)` before it evaluates the defaults (WG-5665), so an
+  unauthorized caller is refused `unauthorized` whether or not a default fails. A caller who could create
+  and whose default fails gets `evaluation`, as before. The order used to leak: a caller who may not
   create learns that an existing type has a failing default, where an unknown type gives
   `unauthorized`. The model follows the kernel, and `unknown_type_hidden` now takes as a premise
   that the defaults of the type evaluate.
@@ -827,9 +827,9 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
   A delete's reads the stored record in all three. A decision with no record (a missing record, an
   unknown type, a schema change) reads none, so a condition on a field of it is null and does not
   hold. A condition that is null or an error does not permit.
-- **The order is unchanged.** A create's defaults are evaluated before the permission is asked, as
-  the kernel does (`default_error_before_permission`); the unknown type and the missing record are
-  decided on the action and the type, without a record. WG-5665 is still open and is not fixed here.
+- **The order.** A create asks the permission to create on the type before it evaluates the defaults,
+  as the kernel does since WG-5665 (`create_unauthorized_regardless_of_defaults`); the unknown type and the missing record are
+  decided on the action and the type, without a record.
 - **Capabilities are data.** A role holds a capability through a grant (`Grant.capability`); the owner
   holds every capability (`HoldsCapability`). No intent of the model is gated by a capability: the
   kernel's capability checks are on definitions that slices 11 to 13 add (automations, settings, holds,

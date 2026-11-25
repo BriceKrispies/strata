@@ -11,8 +11,9 @@ use crate::intent::{
 };
 use crate::rewrite;
 use crate::rules::{
-    assigned_roles, authorize, authorize_needing, holds_any, holds_power, insufficient, may_confer,
-    missing_error, missing_grants, roles_of, validate_record, Lookup, Subject,
+    assigned_roles, authorize, authorize_needing, holds_any, holds_power, insufficient,
+    may_attempt, may_confer, missing_error, missing_grants, roles_of, validate_record, Lookup,
+    Subject,
 };
 use crate::schema::{
     normalise_address, Action, FieldDef, Grant, InvitationDef, ObjectTypeDef, Resource, TeamDef,
@@ -905,6 +906,17 @@ fn create_record(
         return Err(draft.reject(ErrorKind::InvalidIntent, problem));
     }
     let ctx = draft.ctx;
+    // The permission comes before the defaults (WG-5665): a caller whom no grant or policy could
+    // allow to create on this type is refused `unauthorized` whether or not a default would fail.
+    // A caller who could create still gets the full decision on the record below, after the
+    // defaults, as before.
+    let target = Resource::Object(object.clone());
+    if !may_attempt(draft.tenant, &ctx.principal, Action::Create, &target) {
+        return Err(draft.reject(
+            ErrorKind::Unauthorized,
+            format!("{:?} may not Create {target:?}", ctx.principal),
+        ));
+    }
     let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
 

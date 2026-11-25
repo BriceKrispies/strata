@@ -828,6 +828,37 @@ def canUpdate (t : Tenant) (p : Principal) (ty : TypeId) (old new : Record) : Bo
 def canDelete (t : Tenant) (p : Principal) (ty : TypeId) (old : Record) : Bool :=
   t.allows p .delete (.object ty) (subjectEnv p (some old) (some old))
 
+/-- May `p` attempt a create on type `ty` under some grant or policy, whatever the condition of
+    the policy and whatever the record? The kernel's `may_attempt`, asked before the defaults of
+    the type are evaluated (WG-5665): a caller whom nothing could allow is refused `unauthorized`
+    whether or not a default would fail. -/
+def canAttemptCreate (t : Tenant) (p : Principal) (ty : TypeId) : Bool :=
+  let roles := t.rolesOf p
+  roles.contains ownerRole ||
+    t.grants.any (fun g => roles.contains g.1 && g.2 == .object ty .create) ||
+    t.policies.any (fun pol => roles.contains pol.role && pol.actions.contains .create &&
+      pol.resource.covers (.object ty))
+
+/-- A create that the record allows is one the caller could attempt. -/
+theorem canCreate_attempt (t : Tenant) (p : Principal) (ty : TypeId) (r : Record)
+    (h : canCreate t p ty r = true) : canAttemptCreate t p ty = true := by
+  unfold canCreate Tenant.allows at h
+  unfold canAttemptCreate
+  simp only [Bool.or_eq_true, Bool.and_eq_true] at h ⊢
+  rcases h with (h | h) | h
+  · exact Or.inl (Or.inl h)
+  · exact Or.inl (Or.inr h.2)
+  · exact Or.inr (List.any_eq_true.mpr (by
+      obtain ⟨pol, hp, hq⟩ := List.any_eq_true.mp h
+      exact ⟨pol, hp, by simp only [Bool.and_eq_true] at hq ⊢; exact hq.1⟩))
+
+/-- A caller whom no grant or policy could allow to create is allowed no record of the type. -/
+theorem canCreate_false_of_attempt (t : Tenant) (p : Principal) (ty : TypeId) (r : Record)
+    (h : canAttemptCreate t p ty = false) : canCreate t p ty r = false := by
+  cases hc : canCreate t p ty r with
+  | false => rfl
+  | true => have := canCreate_attempt t p ty r hc; rw [h] at this; cases this
+
 /-- May `p` perform `a` on type `ty` when there is no record to test the permission against? Only
     what does not depend on a record: a grant, or a policy with no condition. The kernel asks this
     of a record intent whose record is missing (`stored`), and of an unknown type (`object_def`). -/
@@ -971,7 +1002,11 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
     match t.typ? ty with
     | none => .error (unknownType t p ty .create)
     | some o =>
-      -- The defaults are evaluated before the permission is asked (the kernel's `create_record`).
+      -- The permission comes before the defaults (WG-5665, the kernel's `create_record`): a caller
+      -- whom nothing could allow to create is refused whether or not a default would fail. A
+      -- caller who could goes on to the defaults, and then asks for the decision on the record.
+      if !canAttemptCreate t p ty then .error .unauthorized
+      else
       match newRecord o.schema p fs with
       | .error _ => .error .evaluation
       | .ok r =>

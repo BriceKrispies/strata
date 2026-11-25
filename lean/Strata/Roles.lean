@@ -113,7 +113,7 @@ theorem create_ok_permitted (t t' : Tenant) (p : Principal) (ty : TypeId) (fs : 
     ∃ r, newRecord o.schema p fs = .ok r ∧
       t.Permits p .create (.object ty) (subjectEnv p none (some r)) := by
   cases hN : newRecord o.schema p fs with
-  | error e => simp [stepTenant, ho, hN] at h
+  | error e => cases ha : canAttemptCreate t p ty <;> simp [stepTenant, ho, hN, ha] at h
   | ok r =>
     refine ⟨r, rfl, ?_⟩
     refine Classical.byContradiction fun hn => ?_

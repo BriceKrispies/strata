@@ -83,6 +83,8 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
       | none => simp [stepTenant, hT] at hs
       | some o =>
         simp only [stepTenant, hT] at hs
+        split at hs
+        · cases hs
         cases hN : newRecord o.schema c.principal fs with
         | error e => simp [hN] at hs
         | ok r =>
@@ -232,7 +234,9 @@ theorem default_deny_create (t : Tenant) (p : Principal) (ty : TypeId) (fs : Fie
     (h : ¬ t.Permits p .create (.object ty) (subjectEnv p none (some r))) :
     stepTenant t p (.create ty fs) = .error .unauthorized := by
   have hf : canCreate t p ty r = false := default_deny _ _ _ _ _ h
-  simp [stepTenant, hT, hN, hf]
+  cases ha : canAttemptCreate t p ty with
+  | false => simp [stepTenant, hT, ha]
+  | true => simp [stepTenant, hT, hN, hf, ha]
 
 /-! ## Property 1: accepted transitions preserve the invariant -/
 

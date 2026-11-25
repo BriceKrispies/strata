@@ -33,6 +33,11 @@ theorem create_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
   | none => exact good_error _ _
   | some o =>
     simp only [hty]
+    by_cases hA : (!canAttemptCreateI core p ty) = true
+    · simp only [hA, if_true]
+      exact good_error _ _
+    have hA' : (!canAttemptCreateI core p ty) = false := by simpa using hA
+    simp only [hA', if_false, Bool.false_eq_true]
     cases hr : newRecord o.schema p fs with
     | error u => simp only [hr]; exact good_error _ _
     | ok r =>

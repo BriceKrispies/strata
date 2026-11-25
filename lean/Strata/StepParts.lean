@@ -21,6 +21,8 @@ theorem create_ok_parts {t t' : Tenant} {p : Principal} {ty : TypeId} {fs : Fiel
       t' = { t.putType ty { o with records := (t.nextId, r) :: o.records } with
         nextId := t.nextId + 1 } := by
   simp only [stepTenant, ho] at h
+  split at h
+  · cases h
   cases hN : newRecord o.schema p fs with
   | error e => simp [hN] at h
   | ok r =>
