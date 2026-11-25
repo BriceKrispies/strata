@@ -36,7 +36,7 @@
 //! steps before it leave.
 
 use crate::definitions::operation_powers;
-use crate::expr::{self, Env};
+use crate::expr::{self, Env, Scope};
 use crate::intent::{
     Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, DomainEvent, Effect, ErrorKind,
     EventBody, Output, StateDelta, Transition,
@@ -139,6 +139,9 @@ fn step_id(step: &TenantOperationStep) -> &str {
 
 /// Decide an invocation of `operation` against a snapshot of `tenant` that covers `coverage`.
 /// The tenant and the context have already been matched by `transition`.
+///
+/// The four stages below are shared with [`preflight`], which runs the same functions on the
+/// inputs a row supplies: a stage's answer is the same whichever of the two asks it.
 pub fn invoke(
     tenant: &TenantState,
     coverage: &Coverage,
@@ -156,186 +159,29 @@ pub fn invoke(
             format!("no operation {operation}"),
         ));
     };
-    let at = format!("operation:{operation}");
-
-    // Who may invoke it (D-6547, OPR-1546).
-    let Principal::User(invoker) = &ctx.principal else {
-        return Err(refusal(
-            &evidence,
-            ErrorKind::Unauthorized,
-            format!("{at}:invoker"),
-            "only a signed-in person invokes a tenant operation".into(),
-        ));
-    };
-    let roles = roles_of(tenant, &ctx.principal);
-    if !op.invokers.signed_in && op.invokers.roles.is_disjoint(&roles) {
-        return Err(refusal(
-            &evidence,
-            ErrorKind::Unauthorized,
-            format!("{at}:invoker"),
-            format!("the invokers of operation {operation} do not name {invoker}"),
-        ));
-    }
-    evidence.push(Check::pass(
-        format!("{at}:invoker"),
-        "a signed-in person the invokers name, holding tenant-operation-invoke as every signed-in person does",
-    ));
-
-    // The key the run is known by; the store records the result under the context's key, so the
-    // two must be the same key.
-    if !valid_key(idempotency_key) {
-        return Err(refusal(
-            &evidence,
-            ErrorKind::InvalidIntent,
-            format!("{at}:idempotency_key"),
-            format!("an idempotency key is 1 to {MAX_KEY_BYTES} visible ASCII characters"),
-        ));
-    }
-    if ctx
-        .idempotency_key
-        .as_deref()
-        .is_some_and(|given| given != idempotency_key)
-    {
-        return Err(refusal(
-            &evidence,
-            ErrorKind::InvalidIntent,
-            format!("{at}:idempotency_key"),
-            "the context carries another idempotency key than the invocation".into(),
-        ));
-    }
-
-    // The inputs: declared, present when required, of their field type (OPR-1540).
-    for name in inputs.keys() {
-        if !op.inputs.iter().any(|input| &input.name == name) {
-            return Err(refusal(
-                &evidence,
-                ErrorKind::UnknownField,
-                format!("input:{operation}.{name}"),
-                format!("operation {operation} has no input {name}"),
-            ));
-        }
-    }
-    let mut params: BTreeMap<String, Value> = BTreeMap::new();
-    for input in &op.inputs {
-        let rule = format!("input:{operation}.{}", input.name);
-        let value = inputs.get(&input.name).cloned().unwrap_or(Value::Null);
-        if value.is_null() {
-            if input.required {
-                return Err(refusal(
-                    &evidence,
-                    ErrorKind::MissingRequired,
-                    rule,
-                    format!("the input {} is required", input.name),
-                ));
-            }
-            params.insert(input.name.clone(), Value::Null);
-            continue;
-        }
-        if let Some(problem) = limits::value_problem(&value) {
-            return Err(refusal(&evidence, ErrorKind::LimitExceeded, rule, problem));
-        }
-        if !input.ty.admits(&value) {
-            return Err(refusal(
-                &evidence,
-                ErrorKind::TypeMismatch,
-                rule,
-                format!(
-                    "the input {} expects {}, found {}",
-                    input.name,
-                    input.ty.name(),
-                    value.kind()
-                ),
-            ));
-        }
-        evidence.push(Check::pass(rule, input.ty.name()));
-        params.insert(input.name.clone(), value);
-    }
-
-    // The subject: a record the invoker may read, or no record at all as far as the invoker
-    // can tell.
     let lookup = Lookup { tenant, coverage };
-    let subject: Option<Arc<Record>> = match &op.subject {
-        None => None,
-        Some(def) => {
-            let rule = format!("{at}:subject");
-            let Some(Value::Ref(id)) = params.get(&def.input) else {
-                return Err(refusal(
-                    &evidence,
-                    ErrorKind::UnknownRecord,
-                    rule,
-                    format!("no {} named by the input {}", def.object, def.input),
-                ));
-            };
-            let id = *id;
-            let found = lookup.record(&def.object, id)?;
-            let readable = match found {
-                Some(record) => visible_in(lookup, &ctx.principal, record, ctx.now)?,
-                None => false,
-            };
-            if !readable {
-                return Err(refusal(
-                    &evidence,
-                    ErrorKind::UnknownRecord,
-                    rule,
-                    format!("no {} {id}", def.object),
-                ));
-            }
-            evidence.push(Check::pass(
-                rule,
-                format!("{} {id} is readable by the invoker", def.object),
-            ));
-            found.cloned()
-        }
-    };
-
-    // The conditions, on the state before any step (OPR-1543).
-    {
-        let record = subject.as_deref();
-        let env = Env {
-            record,
-            old: record,
-            new: record,
-            params: &params,
-            now: ctx.now,
-            principal: &ctx.principal,
-            roles: &roles,
-            lookup: Some(lookup),
-        };
-        for condition in &op.conditions {
-            let rule = format!("{at}:condition:{}", condition.id);
-            match expr::holds(&condition.expr, &env) {
-                Ok(true) => evidence.push(Check::pass(rule, condition.expr.to_string())),
-                Ok(false) => {
-                    return Err(refusal(
-                        &evidence,
-                        ErrorKind::ConstraintViolated,
-                        rule,
-                        format!("{}: {}", condition.error, condition.message),
-                    ))
-                }
-                Err(e) => {
-                    if let Some(missing) = missing_error(&condition.expr, &env) {
-                        return Err(missing);
-                    }
-                    return Err(refusal(
-                        &evidence,
-                        ErrorKind::Evaluation,
-                        rule,
-                        format!("{}: {e}", condition.expr),
-                    ));
-                }
-            }
-        }
-    }
+    let invoker = stage_invoker(tenant, ctx, operation, op, idempotency_key, &mut evidence)?;
+    let params = stage_inputs(operation, op, inputs, &mut evidence)?;
+    let subject = stage_subject(lookup, ctx, operation, op, &params, &mut evidence)?;
+    stage_conditions(
+        lookup,
+        ctx,
+        operation,
+        op,
+        &invoker.roles,
+        &params,
+        subject.as_deref(),
+        &mut evidence,
+    )?;
 
     // The steps, each on the state the steps before it leave (OPR-1543).
     let mut run = Run {
         ctx,
         op,
         operation,
-        invoker: invoker.clone(),
+        invoker: invoker.user,
         key: idempotency_key,
-        roles,
+        roles: invoker.roles,
         subject,
         params,
         work: TenantState::clone(tenant),
@@ -354,6 +200,522 @@ pub fn invoke(
         }
     }
     Ok(run.finish(tenant))
+}
+
+/// The answer of [`preflight`] for one invocation a row would make.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Preflight {
+    /// Stages 1 to 4 pass for these inputs, so the invocation is not refused by them. It may
+    /// still be refused by a step (a check of a record or the ledger); the invocation decides.
+    Allowed,
+    /// Stage 1, 2, 3 or 4 refuses: `code` is the condition's code for a condition, else the rule
+    /// of the failed check.
+    Refused { code: String, detail: String },
+    /// The answer depends on something preflight may not or cannot know.
+    Unknown(UnknownReason),
+}
+
+/// Why [`preflight`] answers `unknown`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnknownReason {
+    /// The row does not supply this input, which the operation needs.
+    InputNotSupplied(String),
+    /// A condition reads a record or a field the viewer may not read.
+    WithheldRead,
+    /// The snapshot does not hold what a stage reads.
+    NotLoaded,
+    /// The session's budget of preflight answers is spent.
+    Budget,
+}
+
+/// The number of preflight answers one session may still give. The session owns it: an answer
+/// past the budget is `unknown` with [`UnknownReason::Budget`], never a guess.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreflightBudget {
+    remaining: u32,
+}
+
+impl PreflightBudget {
+    pub fn new(remaining: u32) -> Self {
+        Self { remaining }
+    }
+
+    pub fn remaining(&self) -> u32 {
+        self.remaining
+    }
+
+    fn take(&mut self) -> bool {
+        match self.remaining.checked_sub(1) {
+            Some(rest) => {
+                self.remaining = rest;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// Whether the operation's conditions read the clock or the principal. A row affordance computed
+/// from such a condition is individual to the viewer and is never stored as a shared copy.
+pub fn reads_individual(op: &TenantOperationDef) -> bool {
+    op.conditions
+        .iter()
+        .any(|condition| reads_individual_expr(&condition.expr))
+}
+
+fn reads_individual_expr(e: &Expr) -> bool {
+    matches!(e, Expr::Now | Expr::Principal | Expr::HasRole(_))
+        || children(e).into_iter().any(reads_individual_expr)
+}
+
+/// Whether an invocation that `row` supplies inputs for would be allowed, by stages 1 to 4 run
+/// on the snapshot. Pure, and advisory: the invocation itself decides, and a refusal at the
+/// click refreshes the answer. `allowed` is never given from a check the invocation does not run,
+/// and any stage that would refuse is `refused`.
+///
+/// `unknown` when the row does not supply an input the operation needs (its required inputs and
+/// its subject input), when a condition reads a record or field the viewer may not read (under
+/// the viewer's read rights), when the snapshot does not hold what a stage reads, and past the
+/// session's budget.
+pub fn preflight(
+    tenant: &TenantState,
+    coverage: &Coverage,
+    ctx: &Context,
+    operation: &TenantOperationId,
+    row: &BTreeMap<String, Value>,
+    idempotency_key: &str,
+    budget: &mut PreflightBudget,
+) -> Preflight {
+    if !budget.take() {
+        return Preflight::Unknown(UnknownReason::Budget);
+    }
+    let Some(op) = operation_of(&tenant.schema, operation) else {
+        return Preflight::Refused {
+            code: "operation:exists".into(),
+            detail: format!("no operation {operation}"),
+        };
+    };
+    let lookup = Lookup { tenant, coverage };
+    let mut evidence: Vec<Check> = Vec::new();
+    let invoker = match stage_invoker(tenant, ctx, operation, op, idempotency_key, &mut evidence) {
+        Ok(invoker) => invoker,
+        Err(error) => return answer_refusal(op, &error),
+    };
+
+    // An input the operation needs that the row does not supply is not known to be refused.
+    let supplied = |name: &str| matches!(row.get(name), Some(value) if !value.is_null());
+    for input in &op.inputs {
+        if input.required && !supplied(&input.name) {
+            return Preflight::Unknown(UnknownReason::InputNotSupplied(input.name.clone()));
+        }
+    }
+    if let Some(def) = &op.subject {
+        if !supplied(&def.input) {
+            return Preflight::Unknown(UnknownReason::InputNotSupplied(def.input.clone()));
+        }
+    }
+
+    let params = match stage_inputs(operation, op, row, &mut evidence) {
+        Ok(params) => params,
+        Err(error) => return answer_refusal(op, &error),
+    };
+    let subject = match stage_subject(lookup, ctx, operation, op, &params, &mut evidence) {
+        Ok(subject) => subject,
+        Err(error) => return answer_refusal(op, &error),
+    };
+    let env = Env {
+        record: subject.as_deref(),
+        old: subject.as_deref(),
+        new: subject.as_deref(),
+        params: &params,
+        now: ctx.now,
+        principal: &ctx.principal,
+        roles: &invoker.roles,
+        lookup: Some(lookup),
+    };
+    if op
+        .conditions
+        .iter()
+        .any(|condition| reads_withheld(&condition.expr, &env, lookup, ctx))
+    {
+        return Preflight::Unknown(UnknownReason::WithheldRead);
+    }
+    match stage_conditions(
+        lookup,
+        ctx,
+        operation,
+        op,
+        &invoker.roles,
+        &params,
+        subject.as_deref(),
+        &mut evidence,
+    ) {
+        Ok(()) => Preflight::Allowed,
+        Err(error) => answer_refusal(op, &error),
+    }
+}
+
+/// The preflight answer of a refusal by one of the stages: a snapshot that falls short is
+/// `unknown`, every other refusal is `refused` with its code.
+fn answer_refusal(op: &TenantOperationDef, error: &DomainError) -> Preflight {
+    if error.kind == ErrorKind::InsufficientState {
+        return Preflight::Unknown(UnknownReason::NotLoaded);
+    }
+    let rule = error
+        .evidence
+        .last()
+        .map(|check| check.rule.clone())
+        .unwrap_or_default();
+    let code = match rule.rsplit_once(":condition:") {
+        Some((_, id)) => op
+            .conditions
+            .iter()
+            .find(|condition| condition.id == id)
+            .map(|condition| condition.error.clone())
+            .unwrap_or(rule),
+        None => rule,
+    };
+    Preflight::Refused {
+        code,
+        detail: error.message.clone(),
+    }
+}
+
+/// The principal who invokes, and the roles it holds, once stage 1 has passed.
+struct Invoker {
+    user: PrincipalId,
+    roles: BTreeSet<RoleId>,
+}
+
+/// Stage 1: the caller is a signed-in person whom the invokers of the operation name, and the
+/// idempotency key is acceptable (D-6547, OPR-1546, D-6595). The operation's existence is checked
+/// by the caller.
+fn stage_invoker(
+    tenant: &TenantState,
+    ctx: &Context,
+    operation: &TenantOperationId,
+    op: &TenantOperationDef,
+    idempotency_key: &str,
+    evidence: &mut Vec<Check>,
+) -> Result<Invoker, DomainError> {
+    let at = format!("operation:{operation}");
+    let Principal::User(invoker) = &ctx.principal else {
+        return Err(refusal(
+            evidence,
+            ErrorKind::Unauthorized,
+            format!("{at}:invoker"),
+            "only a signed-in person invokes a tenant operation".into(),
+        ));
+    };
+    let roles = roles_of(tenant, &ctx.principal);
+    if !op.invokers.signed_in && op.invokers.roles.is_disjoint(&roles) {
+        return Err(refusal(
+            evidence,
+            ErrorKind::Unauthorized,
+            format!("{at}:invoker"),
+            format!("the invokers of operation {operation} do not name {invoker}"),
+        ));
+    }
+    evidence.push(Check::pass(
+        format!("{at}:invoker"),
+        "a signed-in person the invokers name, holding tenant-operation-invoke as every signed-in person does",
+    ));
+
+    // The key the run is known by; the store records the result under the context's key, so the
+    // two must be the same key.
+    if !valid_key(idempotency_key) {
+        return Err(refusal(
+            evidence,
+            ErrorKind::InvalidIntent,
+            format!("{at}:idempotency_key"),
+            format!("an idempotency key is 1 to {MAX_KEY_BYTES} visible ASCII characters"),
+        ));
+    }
+    if ctx
+        .idempotency_key
+        .as_deref()
+        .is_some_and(|given| given != idempotency_key)
+    {
+        return Err(refusal(
+            evidence,
+            ErrorKind::InvalidIntent,
+            format!("{at}:idempotency_key"),
+            "the context carries another idempotency key than the invocation".into(),
+        ));
+    }
+    Ok(Invoker {
+        user: invoker.clone(),
+        roles,
+    })
+}
+
+/// Stage 2: the inputs are declared, present when required, and of their field type (OPR-1540).
+/// They are read as `param.<name>`.
+fn stage_inputs(
+    operation: &TenantOperationId,
+    op: &TenantOperationDef,
+    inputs: &BTreeMap<String, Value>,
+    evidence: &mut Vec<Check>,
+) -> Result<BTreeMap<String, Value>, DomainError> {
+    for name in inputs.keys() {
+        if !op.inputs.iter().any(|input| &input.name == name) {
+            return Err(refusal(
+                evidence,
+                ErrorKind::UnknownField,
+                format!("input:{operation}.{name}"),
+                format!("operation {operation} has no input {name}"),
+            ));
+        }
+    }
+    let mut params: BTreeMap<String, Value> = BTreeMap::new();
+    for input in &op.inputs {
+        let rule = format!("input:{operation}.{}", input.name);
+        let value = inputs.get(&input.name).cloned().unwrap_or(Value::Null);
+        if value.is_null() {
+            if input.required {
+                return Err(refusal(
+                    evidence,
+                    ErrorKind::MissingRequired,
+                    rule,
+                    format!("the input {} is required", input.name),
+                ));
+            }
+            params.insert(input.name.clone(), Value::Null);
+            continue;
+        }
+        if let Some(problem) = limits::value_problem(&value) {
+            return Err(refusal(evidence, ErrorKind::LimitExceeded, rule, problem));
+        }
+        if !input.ty.admits(&value) {
+            return Err(refusal(
+                evidence,
+                ErrorKind::TypeMismatch,
+                rule,
+                format!(
+                    "the input {} expects {}, found {}",
+                    input.name,
+                    input.ty.name(),
+                    value.kind()
+                ),
+            ));
+        }
+        evidence.push(Check::pass(rule, input.ty.name()));
+        params.insert(input.name.clone(), value);
+    }
+    Ok(params)
+}
+
+/// Stage 3: the subject, when the operation has one, is a record the invoker may read. One that
+/// does not exist, or that the invoker may not read, is refused as a record that does not exist,
+/// so the invoker cannot tell the two apart.
+fn stage_subject(
+    lookup: Lookup<'_>,
+    ctx: &Context,
+    operation: &TenantOperationId,
+    op: &TenantOperationDef,
+    params: &BTreeMap<String, Value>,
+    evidence: &mut Vec<Check>,
+) -> Result<Option<Arc<Record>>, DomainError> {
+    let at = format!("operation:{operation}");
+    let Some(def) = &op.subject else {
+        return Ok(None);
+    };
+    let rule = format!("{at}:subject");
+    let Some(Value::Ref(id)) = params.get(&def.input) else {
+        return Err(refusal(
+            evidence,
+            ErrorKind::UnknownRecord,
+            rule,
+            format!("no {} named by the input {}", def.object, def.input),
+        ));
+    };
+    let id = *id;
+    let found = lookup.record(&def.object, id)?;
+    let readable = match found {
+        Some(record) => visible_in(lookup, &ctx.principal, record, ctx.now)?,
+        None => false,
+    };
+    if !readable {
+        return Err(refusal(
+            evidence,
+            ErrorKind::UnknownRecord,
+            rule,
+            format!("no {} {id}", def.object),
+        ));
+    }
+    evidence.push(Check::pass(
+        rule,
+        format!("{} {id} is readable by the invoker", def.object),
+    ));
+    Ok(found.cloned())
+}
+
+/// Stage 4: every condition holds on the state before any step; false or null refuses the
+/// invocation with the condition's code (OPR-1542, OPR-1543).
+#[allow(clippy::too_many_arguments)]
+fn stage_conditions(
+    lookup: Lookup<'_>,
+    ctx: &Context,
+    operation: &TenantOperationId,
+    op: &TenantOperationDef,
+    roles: &BTreeSet<RoleId>,
+    params: &BTreeMap<String, Value>,
+    subject: Option<&Record>,
+    evidence: &mut Vec<Check>,
+) -> Result<(), DomainError> {
+    let at = format!("operation:{operation}");
+    let env = Env {
+        record: subject,
+        old: subject,
+        new: subject,
+        params,
+        now: ctx.now,
+        principal: &ctx.principal,
+        roles,
+        lookup: Some(lookup),
+    };
+    for condition in &op.conditions {
+        let rule = format!("{at}:condition:{}", condition.id);
+        match expr::holds(&condition.expr, &env) {
+            Ok(true) => evidence.push(Check::pass(rule, condition.expr.to_string())),
+            Ok(false) => {
+                return Err(refusal(
+                    evidence,
+                    ErrorKind::ConstraintViolated,
+                    rule,
+                    format!("{}: {}", condition.error, condition.message),
+                ))
+            }
+            Err(e) => {
+                if let Some(missing) = missing_error(&condition.expr, &env) {
+                    return Err(missing);
+                }
+                return Err(refusal(
+                    evidence,
+                    ErrorKind::Evaluation,
+                    rule,
+                    format!("{}: {e}", condition.expr),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The direct sub-expressions of an expression.
+fn children(e: &Expr) -> Vec<&Expr> {
+    match e {
+        Expr::Lit(_)
+        | Expr::Var(..)
+        | Expr::Through(..)
+        | Expr::Param(_)
+        | Expr::Now
+        | Expr::Principal
+        | Expr::HasRole(_) => Vec::new(),
+        Expr::Not(a)
+        | Expr::IsNull(a)
+        | Expr::Len(a)
+        | Expr::Lower(a)
+        | Expr::IsSlug(a)
+        | Expr::Duration(_, a)
+        | Expr::Text(a) => vec![a.as_ref()],
+        Expr::And(items) | Expr::Or(items) => items.iter().collect(),
+        Expr::Cmp(_, a, b)
+        | Expr::In(a, b)
+        | Expr::Contains(a, b)
+        | Expr::StartsWith(a, b)
+        | Expr::Arith(_, a, b)
+        | Expr::MsBetween(a, b)
+        | Expr::Concat(a, b) => vec![a.as_ref(), b.as_ref()],
+        Expr::If(a, b, c) => vec![a.as_ref(), b.as_ref(), c.as_ref()],
+    }
+}
+
+/// The record a scope names in an environment.
+fn scope_record<'a>(env: &Env<'a>, scope: &Scope) -> Option<&'a Record> {
+    match scope {
+        Scope::Record => env.record,
+        Scope::Old => env.old,
+        Scope::New => env.new,
+    }
+}
+
+/// Whether a field of `record` has a read rule the principal of `env` does not satisfy (or that
+/// cannot be evaluated for them).
+fn field_withheld(lookup: Lookup<'_>, env: &Env<'_>, record: &Record, name: &str) -> bool {
+    let Ok(id) = FieldId::new(name) else {
+        return false;
+    };
+    let Some(rule) = lookup
+        .tenant
+        .schema
+        .objects
+        .get(&record.object)
+        .and_then(|object| object.fields.get(&id))
+        .and_then(|def| def.read.as_ref())
+    else {
+        return false;
+    };
+    let scoped = Env {
+        record: Some(record),
+        old: Some(record),
+        new: Some(record),
+        params: env.params,
+        now: env.now,
+        principal: env.principal,
+        roles: env.roles,
+        lookup: env.lookup,
+    };
+    !matches!(expr::holds(rule, &scoped), Ok(true))
+}
+
+/// The record a reference field of the scope's record points at, when the snapshot holds it.
+fn through_target(
+    lookup: Lookup<'_>,
+    env: &Env<'_>,
+    scope: &Scope,
+    field: &str,
+) -> Option<Arc<Record>> {
+    let record = scope_record(env, scope)?;
+    let id = FieldId::new(field).ok()?;
+    let Value::Ref(target) = record.get(&id) else {
+        return None;
+    };
+    let reference = lookup
+        .tenant
+        .schema
+        .objects
+        .get(&record.object)
+        .and_then(|object| object.fields.get(&id))
+        .and_then(|def| def.ty.ref_target());
+    let Some((object, _, false)) = reference else {
+        return None;
+    };
+    lookup.record(object, *target).ok().flatten().cloned()
+}
+
+/// Whether an expression reads a record or a field the viewer may not read: a field of the
+/// subject with a read rule the viewer fails, or a followed reference whose record is not
+/// visible to the viewer, or whose attribute has a read rule the viewer fails.
+fn reads_withheld(e: &Expr, env: &Env<'_>, lookup: Lookup<'_>, ctx: &Context) -> bool {
+    let here = match e {
+        Expr::Var(scope, name) => {
+            scope_record(env, scope).is_some_and(|record| field_withheld(lookup, env, record, name))
+        }
+        Expr::Through(scope, field, attribute) => match through_target(lookup, env, scope, field) {
+            Some(target) => {
+                !matches!(
+                    visible_in(lookup, &ctx.principal, &target, ctx.now),
+                    Ok(true)
+                ) || field_withheld(lookup, env, &target, attribute)
+            }
+            None => false,
+        },
+        _ => false,
+    };
+    here || children(e)
+        .into_iter()
+        .any(|child| reads_withheld(child, env, lookup, ctx))
 }
 
 /// One invocation in progress: the working copy of the state its steps change, and what they
