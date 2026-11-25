@@ -363,7 +363,8 @@ function clearUserState(state) {
     factors: factorsInit(),
     lab: { ...labInit(), timer: state.lab.timer + 1 },
     settings: settingsInit(),
-    forms: { ...state.forms, login: { ...login, values: { ...login.values, password: '' } }, editor: null, settings: null },
+    // The sign-in form is cleared whole, its typed name included: it was typed for the former person (F6).
+    forms: { ...state.forms, login: { ...login, values: forms.initialValues(SIGN_IN, {}), error: '' }, editor: null, settings: null },
     optimistic: {},
     confirmDelete: null,
     view: { status: 'loading', model: null, error: null, request: 0 },

@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { prose } from '../src/components/parts.js';
 import { explain } from '../src/generated/errors.js';
+import * as forms from '../src/generated/forms.js';
 import { initialState, parseHref, slugify, update } from '../src/kernel/update.js';
 import { view } from '../src/kernel/view.js';
 
@@ -386,4 +387,15 @@ test('a cold start holds no view that answers before the session does, and reads
   const learned = update(early.state, { type: 'http_result', id: session.id, ok: true, status: 200, body: { session: anonymous }, ...stamp });
   assert.equal(learned.state.view.model, null, 'and nothing is drawn while the view is read again');
   assert.ok(learned.effects.some((e) => e.type === 'http' && e.path.startsWith('/api/view')), 'the view is read again');
+});
+
+// F6: a change of person kept the login name typed into the sign-in form (only the password was cleared). The
+// spec's switched clears the whole form: its values and its refusal.
+test('a change of person clears the sign-in form, the typed name too', () => {
+  const start = boot({ path: '/', session: { session: member }, view: homeModel() }).state;
+  const typed = update(start, { type: 'input', form: 'login', name: 'login', value: 'ines', ...stamp }).state;
+  assert.equal(typed.forms.login.values.login, 'ines', 'the name is typed in');
+  const ended = update(typed, { type: 'ws_message', message: { type: 'session', state: 'expired' }, ...stamp }).state;
+  assert.deepEqual(ended.forms.login.values, forms.initialValues('form-sign-in', {}), 'the sign-in form is cleared');
+  assert.equal(ended.forms.login.error, '');
 });
