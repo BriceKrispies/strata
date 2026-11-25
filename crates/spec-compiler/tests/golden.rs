@@ -225,20 +225,14 @@ fn functions_golden_output_matches_its_fixture_crate() {
     );
 }
 
+/// One fresh generation of the full fixture, in this process, against the one the other tests
+/// share. The machines and wiring fixtures are compared byte for byte with their committed crates
+/// by their golden tests above, so a difference between runs would fail them.
 #[test]
 fn generation_is_deterministic() {
-    // A fresh generation against the one the other tests share.
     assert_eq!(
         generated(FIXTURE_SPEC, &fixture_text(), FIXTURE_CRATE),
         fixture_files()
-    );
-    assert_eq!(
-        generated(MACHINES_SPEC, &machines_text(), MACHINES_CRATE),
-        machines_files()
-    );
-    assert_eq!(
-        generated(WIRING_SPEC, &wiring_text(), WIRING_CRATE),
-        wiring_files()
     );
 }
 

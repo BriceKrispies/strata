@@ -130,9 +130,8 @@
       "package": "strata-spec-compiler",
       "target": "spec_compiler_slow",
       "tier": "full",
-      "seconds": 1051.92,
-      "unmeasured": true,
-      "reason": "bundle: Not yet measured: loads the platform specification and runs specc; full tier until it is measured; conformance: Loads the platform specification and formats its whole generated conformance suite with rustfmt; not yet measured; golden: Regenerates three fixture crates and compares them byte for byte; scoped runs include it when the specc crate changed; layers: Validates the whole specification with Exegra three times (the platform alone, the accepted products together, two refused products) and runs specc over the whole specification twice per generated tree; strata_differential: Steps every generated machine, Rust and JavaScript, through every scenario trace from Exegra",
+      "seconds": 92.0,
+      "reason": "bundle: Not yet measured: loads the platform specification and runs specc; full tier until it is measured; conformance: Loads the platform specification and formats its whole generated conformance suite with rustfmt; not yet measured; golden: Regenerates three fixture crates and compares them byte for byte; scoped runs include it when the specc crate changed; layers: Validates the whole specification with Exegra three times (the accepted products together in one project, and each of two refused products) and runs specc over the whole specification twice per generated tree; strata_differential: Steps every generated machine, Rust and JavaScript, through every scenario trace from Exegra",
       "slow": true
     },
     {
