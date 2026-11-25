@@ -1664,3 +1664,31 @@ fn a_scoped_assignment_is_not_a_way_around_a_hold_rule() {
         scoped("stranger", "regional_edit", slug_is("north")),
     );
 }
+
+/// Verifies: ADM-1644
+///
+/// A person who holds a role only through a scope is admitted to what the role gives, as the
+/// delivery of events and the offers of an interface ask (`may_attempt`), on the object type the
+/// scope names and on no other, and not for an action the role does not give.
+#[test]
+fn a_role_held_through_a_scope_may_be_attempted_on_its_object_type_only() {
+    let world = must(
+        &base(),
+        "owner",
+        NOW + 70,
+        scoped("stranger", "regional_edit", slug_is("north")),
+    );
+    let tenant = tenant(&world);
+    let attempt = |who: &str, action: Action, on: &str| {
+        strata_kernel::rules::may_attempt(
+            tenant,
+            &user(&format!("alpha:{who}")),
+            action,
+            &Resource::Object(object(on)),
+        )
+    };
+    assert!(attempt("stranger", Action::Update, "note"));
+    assert!(!attempt("stranger", Action::Delete, "note"));
+    assert!(!attempt("stranger", Action::Update, "person"));
+    assert!(!attempt("nobody", Action::Update, "note"));
+}

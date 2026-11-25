@@ -367,7 +367,7 @@
     },
     {
       "id": "may-attempt",
-      "description": "crates/kernel/src/rules.rs may_attempt: whether some policy of the tenant schema could grant the action, conditions aside, or whether a permission of one of its roles grants the verb on the object type; the owner may do anything. For user interfaces; the decision is authorize.",
+      "description": "crates/kernel/src/rules.rs may_attempt: whether some policy of the tenant schema could grant the action, conditions aside, or whether a permission of one of its roles grants the verb on the object type; the owner may do anything, and so may a role the principal holds through a scope on the object type (may-attempt-through-scope). For user interfaces; the decision is authorize.",
       "params": [
         {
           "name": "tenant",
@@ -393,7 +393,7 @@
           "expr": "call roles-of(tenant, principal)"
         }
       ],
-      "body": "any(r in roles, r == 'owner') || any(g in call effective-permissions(tenant, principal), call grant-allows(g, action, resource)) || any(p in values(tenant.schema.policies), call policy-applies(p, roles, action, resource))",
+      "body": "any(r in roles, r == 'owner') || any(g in call effective-permissions(tenant, principal), call grant-allows(g, action, resource)) || any(p in values(tenant.schema.policies), call policy-applies(p, roles, action, resource)) || call may-attempt-through-scope(tenant, principal, action, resource)",
       "examples": [
         {
           "description": "The owner may manage the schema.",
@@ -57709,6 +57709,62 @@
           "result": [
             "separation a: capability shop__tier is neither a platform capability nor declared in the tenant"
           ]
+        }
+      ]
+    },
+    {
+      "id": "may-attempt-through-scope",
+      "description": "rules.rs may_attempt_through_a_scope (D-8403): whether a role the principal holds only through a scope on this object type could grant the action on some record of it, the scope and the conditions aside: a permission of the role for the verb of the action, or a policy of the role that names the action and the resource. The real decision on each record is authorize-needing.",
+      "params": [
+        {
+          "name": "tenant",
+          "type": "tenant-state"
+        },
+        {
+          "name": "principal",
+          "type": "principal"
+        },
+        {
+          "name": "action",
+          "type": "action"
+        },
+        {
+          "name": "resource",
+          "type": "resource"
+        }
+      ],
+      "returns": "bool",
+      "body": "match principal { user(id) => match resource { object(o) => any(s in filter(x in call scoped-of(tenant.schema, id), x.object == o), any(g in call grants-of(tenant.schema, s.role), call grant-allows(g, action, resource)) || any(p in values(tenant.schema.policies), call policy-applies(p, [s.role], action, resource))), _ => false }, _ => false }",
+      "examples": [
+        {
+          "description": "No scoped assignment, nothing to attempt through one.",
+          "args": {
+            "tenant": {
+              "fixture": "fx-tenant-state-1"
+            },
+            "principal": {
+              "user": "user:ann"
+            },
+            "action": "read",
+            "resource": {
+              "object": "post"
+            }
+          },
+          "result": false
+        },
+        {
+          "description": "A system principal holds no role through a scope.",
+          "args": {
+            "tenant": {
+              "fixture": "fx-tenant-state-1"
+            },
+            "principal": "system",
+            "action": "read",
+            "resource": {
+              "object": "post"
+            }
+          },
+          "result": false
         }
       ]
     },
