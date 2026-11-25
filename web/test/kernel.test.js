@@ -299,6 +299,22 @@ test('a guarded page shows a sign-in prompt to a visitor, whatever the server se
   assert.equal(view(state).page.kind, 'signin_required');
 });
 
+test('a signed-out visit to a guarded page whose view is refused for want of a session shows the sign-in prompt', () => {
+  const started = boot({ path: '/', session: { session: anonymous }, view: homeModel() }).state;
+  const visit = update(started, { type: 'navigate', href: '/desk', ...stamp });
+  const request = visit.effects.find((e) => e.type === 'http' && e.path.startsWith('/api/view'));
+  const refused = update(visit.state, { type: 'http_result', id: request.id, ok: false, status: 401, body: { code: 'unauthenticated', message: 'Sign in to do this.' }, ...stamp });
+  assert.deepEqual(view(refused.state).page, { kind: 'signin_required', next: '/desk' });
+});
+
+test('a server failure on a guarded page is still drawn as an error', () => {
+  const started = boot({ path: '/', session: { session: anonymous }, view: homeModel() }).state;
+  const visit = update(started, { type: 'navigate', href: '/desk', ...stamp });
+  const request = visit.effects.find((e) => e.type === 'http' && e.path.startsWith('/api/view'));
+  const failed = update(visit.state, { type: 'http_result', id: request.id, ok: false, status: 500, body: { code: 'internal', message: 'Something broke.' }, ...stamp });
+  assert.equal(view(failed.state).page.kind, 'error');
+});
+
 test('a message on screen is given a timer and leaves when it fires', () => {
   const { state } = boot({ path: '/', session: { session: anonymous }, view: homeModel() });
   const shown = update(state, { type: 'action', name: 'logout', ...stamp });

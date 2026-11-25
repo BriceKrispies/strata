@@ -35,6 +35,11 @@ function page(state) {
     return { kind: 'loading' };
   }
   if (view.status === 'missing') return { kind: 'missing', path: state.route.path };
+  // The gateway refuses a view that needs a session before it is read (unauthenticated, 401): a
+  // visitor without one is asked to sign in, as a guarded page is, and that is not a failure.
+  if (view.status === 'error' && view.error?.code === 'unauthenticated' && session?.authenticated !== true) {
+    return { kind: 'signin_required', next: hrefOf(state.route) };
+  }
   if (view.status === 'error') return { kind: 'error', message: view.error?.message ?? 'The page could not be loaded.' };
   const model = view.model;
   const d = model.data;
