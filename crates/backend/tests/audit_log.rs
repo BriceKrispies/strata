@@ -355,32 +355,11 @@ fn with_append_only_type() -> (Shared, Arc<MemoryStore>, TenantId) {
             object: strata_kernel::ObjectTypeId::new("event").expect("object"),
         },
     ];
-
-// Verifies: ADM-1643
-// Verifies: ADM-1648
-#[test]
-fn a_scoped_role_is_assigned_and_taken_away_by_the_route_and_every_refusal_is_an_entry() {
-    use strata_kernel::testkit::{eq, field_def, lit, object, var};
-    use strata_kernel::{FieldType, Scope};
-
-    let (app, _memory, site) = started();
-    let owner = identity(&app, &site, "alpha:owner", "t-note");
     ops::run_intent(
         &app,
         &owner.context(&app),
         &Intent::ChangeSchema {
             changes,
-
-            changes: vec![
-                SchemaChange::DefineObject {
-                    id: object("note"),
-                    label: "Note".into(),
-                },
-                SchemaChange::DefineField {
-                    object: object("note"),
-                    field: field_def("slug", FieldType::Str, false),
-                },
-            ],
             expected_version: None,
             existing: ExistingData::Reject,
         },
@@ -474,7 +453,36 @@ fn an_update_a_delete_and_a_restore_of_an_append_only_record_are_refused_and_aud
         matches!(&restore, Err(strata_storage_api::StoreError::Invalid(m)) if m.starts_with("AppendOnly")),
         "{restore:?}"
     );
+}
 
+// Verifies: ADM-1643
+// Verifies: ADM-1648
+#[test]
+fn a_scoped_role_is_assigned_and_taken_away_by_the_route_and_every_refusal_is_an_entry() {
+    use strata_kernel::testkit::{eq, field_def, lit, object, var};
+    use strata_kernel::{FieldType, Scope};
+
+    let (app, _memory, site) = started();
+    let owner = identity(&app, &site, "alpha:owner", "t-note");
+    ops::run_intent(
+        &app,
+        &owner.context(&app),
+        &Intent::ChangeSchema {
+            changes: vec![
+                SchemaChange::DefineObject {
+                    id: object("note"),
+                    label: "Note".into(),
+                },
+                SchemaChange::DefineField {
+                    object: object("note"),
+                    field: field_def("slug", FieldType::Str, false),
+                },
+            ],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+        false,
+    )
     .expect("the object type is defined");
     let scope = |field: &str| {
         serde_json::to_value(eq(var(Scope::Record, field), lit("north"))).expect("an expression")

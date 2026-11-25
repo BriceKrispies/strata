@@ -1667,6 +1667,7 @@ fn anyone_signed_in() -> TenantOperationInvokers {
 /// An operation that awards ten points from the pool to writer1 in one transaction.
 fn award_op(id: &str, legs: Vec<TenantOperationLeg>) -> TenantOperationDef {
     TenantOperationDef {
+        agent_policy: None,
         id: ledger_op_id(id),
         label: "Award".into(),
         inputs: vec![],
@@ -1690,6 +1691,7 @@ fn ten_from_the_pool() -> Vec<TenantOperationLeg> {
 /// `order`, or, with `refund`, reverses the whole charge with the reason `refund_reason`.
 fn order_op(refund_reason: &str) -> TenantOperationDef {
     TenantOperationDef {
+        agent_policy: None,
         id: ledger_op_id("order"),
         label: "Charge or refund an order".into(),
         inputs: vec![

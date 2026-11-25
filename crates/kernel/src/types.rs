@@ -69,8 +69,6 @@ pub use strata_model_core::types::{
     EntityKind, EntityRef, InstalledProduct, MailTemplateDecl, NoticeTemplateDecl, PlatformCompat,
     ProductId, PublicationDef, StructuredBlocks, TemplateId, TokenDecl,
 };
-/// The separations of duty a tenant declares ([`crate::duties`]).
-pub use strata_model_core::types::{SeparationDef, SeparationId};
 /// The tenant ledger of [`crate::ledger`]: declarations in the tenant schema, accounts and
 /// entries in the tenant state, its needs, delta operations, requests and answers.
 pub use strata_model_core::types::{
@@ -83,6 +81,8 @@ pub use strata_model_core::types::{
 pub use strata_model_core::types::{
     LedgerJournalBreak, LedgerJournalCheck, LedgerLeg, LedgerTransaction, LedgerTransferLimits,
 };
+/// The separations of duty a tenant declares ([`crate::duties`]).
+pub use strata_model_core::types::{SeparationDef, SeparationId};
 /// The interface elements of [`crate::ui`]: the screens, forms, actions, live bindings and error
 /// messages a tenant's products installed, held in the schema (D-8250).
 pub use strata_model_core::types::{
