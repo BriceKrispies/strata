@@ -13,7 +13,7 @@ namespace Strata
 
 /-- An accepted create writes the record its defaults give, the structural checks and the
     constraints pass on it, and the tenant has it under the next id with the counter one on. -/
-theorem create_ok_parts {t t' : Tenant} {p : PrincipalId} {ty : TypeId} {fs : Fields}
+theorem create_ok_parts {t t' : Tenant} {p : Principal} {ty : TypeId} {fs : Fields}
     {o : ObjType} (ho : t.typ? ty = some o) (h : stepTenant t p (.create ty fs) = .ok t') :
     ∃ r, newRecord o.schema p fs = .ok r ∧
       problem t.limits o.schema o.uniques true t.env o.records t.nextId r = none ∧
@@ -39,7 +39,7 @@ theorem create_ok_parts {t t' : Tenant} {p : PrincipalId} {ty : TypeId} {fs : Fi
 
 /-- An accepted update writes the stored record patched, the structural checks and the constraints
     pass on it, and the tenant has it in place of the stored one. -/
-theorem update_ok_parts {t t' : Tenant} {p : PrincipalId} {ty : TypeId} {id : RecordId}
+theorem update_ok_parts {t t' : Tenant} {p : Principal} {ty : TypeId} {id : RecordId}
     {fs : Fields} {ev : Option Nat} {o : ObjType} {old : Record} (ho : t.typ? ty = some o)
     (hl : o.records.lookup id = some old) (h : stepTenant t p (.update ty id fs ev) = .ok t') :
     problem t.limits o.schema o.uniques true t.env o.records id (patched old fs) = none ∧
@@ -108,12 +108,12 @@ theorem defaultsOf_mem (env : ExprEnv) (fs : Fields) :
 
 /-- What an accepted create's record is, read off the schema's defaults: the named fields, then
     the defaults. -/
-theorem newRecord_parts {schema : Schema} {p : PrincipalId} {fs : Fields} {r : Record}
+theorem newRecord_parts {schema : Schema} {p : Principal} {fs : Fields} {r : Record}
     (h : newRecord schema p fs = .ok r) :
-    ∃ ds, defaultsOf { principal := some p } schema fs = .ok ds ∧
-      r = { owner := p, version := 1, fields := normalise fs ++ ds } := by
+    ∃ ds, defaultsOf { principal := p.userId? } schema fs = .ok ds ∧
+      r = { owner := p.userId?, version := 1, fields := normalise fs ++ ds } := by
   unfold newRecord withDefaults at h
-  cases hD : defaultsOf { principal := some p } schema fs with
+  cases hD : defaultsOf { principal := p.userId? } schema fs with
   | error x => simp [hD, Except.map] at h
   | ok ds =>
     refine ⟨ds, rfl, ?_⟩

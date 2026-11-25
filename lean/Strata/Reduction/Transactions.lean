@@ -73,23 +73,23 @@ theorem upd_ne (f : TxnId → TPhase) (i : TxnId) (x : TPhase) (j : TxnId) (h : 
   simp [upd, h]
 
 /-- One step of the serial reference: the verdict on the state applied, or no change. -/
-def serialStep (K : Kernel) (st : Option Tenant) (q : PrincipalId × Intent) : Option Tenant :=
+def serialStep (K : Kernel) (st : Option Tenant) (q : Principal × Intent) : Option Tenant :=
   match verdict K st q.1 q.2 with
   | .ok t => some t
   | .error _ => st
 
 /-- The serial execution of a list of intents from the initial tenant. -/
-def serialRun (K : Kernel) (w0 : Option Tenant) (xs : List (PrincipalId × Intent)) :
+def serialRun (K : Kernel) (w0 : Option Tenant) (xs : List (Principal × Intent)) :
     Option Tenant :=
   xs.foldl (serialStep K) w0
 
-theorem serialRun_append (K : Kernel) (w0 : Option Tenant) (xs ys : List (PrincipalId × Intent)) :
+theorem serialRun_append (K : Kernel) (w0 : Option Tenant) (xs ys : List (Principal × Intent)) :
     serialRun K w0 (xs ++ ys) = serialRun K (serialRun K w0 xs) ys := by
   simp [serialRun, List.foldl_append]
 
 /-- The intents of the committed transactions, in revision order. -/
-def committedReqs (req : TxnId → PrincipalId × Intent) (ds : List Dec) :
-    List (PrincipalId × Intent) :=
+def committedReqs (req : TxnId → Principal × Intent) (ds : List Dec) :
+    List (Principal × Intent) :=
   (ds.filter accepted).map (fun d => req d.txn)
 
 /-- The start: revision 0 holds the initial tenant, nothing is decided, nothing is loading. -/
@@ -99,7 +99,7 @@ def TInit (w0 : Option Tenant) (S : TState) : Prop :=
 /-- One step of the transactions and the store. A transaction loads the current revision, computes
     the verdict on its snapshot, and is decided only if its revision is still current; a stale
     commit is a conflict and the transaction goes back to loading. -/
-inductive TNext (K : Kernel) (req : TxnId → PrincipalId × Intent) (w0 : Option Tenant) :
+inductive TNext (K : Kernel) (req : TxnId → Principal × Intent) (w0 : Option Tenant) :
     TState → TState → Prop
   /-- A transaction loads the tenant at the current revision. -/
   | load (S : TState) (i : TxnId) (h : S.ph i = .idle) :
@@ -127,12 +127,12 @@ inductive TNext (K : Kernel) (req : TxnId → PrincipalId × Intent) (w0 : Optio
       TNext K req w0 S { S with ph := upd S.ph i .idle }
 
 /-- The reachable states of one tenant's transactions. -/
-def TReachable (K : Kernel) (req : TxnId → PrincipalId × Intent) (w0 : Option Tenant)
+def TReachable (K : Kernel) (req : TxnId → Principal × Intent) (w0 : Option Tenant)
     (S : TState) : Prop :=
   ∃ S0, TInit w0 S0 ∧ Steps (TNext K req w0) S0 S
 
 /-- The invariant of reachable states. -/
-structure TInv (K : Kernel) (req : TxnId → PrincipalId × Intent) (w0 : Option Tenant)
+structure TInv (K : Kernel) (req : TxnId → Principal × Intent) (w0 : Option Tenant)
     (S : TState) : Prop where
   /-- The committed decisions are numbered by revision: the k-th one was made at revision k. -/
   bases : (S.decs.filter accepted).map Dec.base = List.range S.rev
@@ -154,7 +154,7 @@ structure TInv (K : Kernel) (req : TxnId → PrincipalId × Intent) (w0 : Option
   /-- A committed result is the tenant at the revision after the one it was decided at. -/
   accHist : ∀ d ∈ S.decs, ∀ u, d.res = .ok u → S.hist (d.base + 1) = some u
 
-theorem committedReqs_length (req : TxnId → PrincipalId × Intent) (S : TState)
+theorem committedReqs_length (req : TxnId → Principal × Intent) (S : TState)
     (hb : (S.decs.filter accepted).map Dec.base = List.range S.rev) :
     (committedReqs req S.decs).length = S.rev := by
   have h1 := congrArg List.length hb
@@ -168,7 +168,7 @@ theorem filter_snoc_rej (ds : List Dec) (d : Dec) (h : accepted d = false) :
     (ds ++ [d]).filter accepted = ds.filter accepted := by
   simp [List.filter_append, h]
 
-theorem tinv_init (K : Kernel) (req : TxnId → PrincipalId × Intent) (w0 : Option Tenant)
+theorem tinv_init (K : Kernel) (req : TxnId → Principal × Intent) (w0 : Option Tenant)
     (S : TState) (h : TInit w0 S) : TInv K req w0 S := by
   obtain ⟨hr, hh, hd, hp⟩ := h
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -195,7 +195,7 @@ theorem mem_accepted_base {S : TState} {d : Dec} (hI : (S.decs.filter accepted).
   exact List.mem_range.mp hm
 
 /-- The invariant is preserved by every step. -/
-theorem tinv_step {K : Kernel} {req : TxnId → PrincipalId × Intent} {w0 : Option Tenant}
+theorem tinv_step {K : Kernel} {req : TxnId → Principal × Intent} {w0 : Option Tenant}
     {S S' : TState} (hI : TInv K req w0 S) (h : TNext K req w0 S S') : TInv K req w0 S' := by
   cases h with
   | load i hi =>
@@ -462,7 +462,7 @@ theorem tinv_step {K : Kernel} {req : TxnId → PrincipalId × Intent} {w0 : Opt
         exact hI.finIff j
     · exact fun d hd u hu => hI.accHist d hd u hu
 
-theorem tinv_of_reach {K : Kernel} {req : TxnId → PrincipalId × Intent} {w0 : Option Tenant}
+theorem tinv_of_reach {K : Kernel} {req : TxnId → Principal × Intent} {w0 : Option Tenant}
     {S : TState} (h : TReachable K req w0 S) : TInv K req w0 S := by
   obtain ⟨S0, hi, hs⟩ := h
   induction hs with
@@ -475,7 +475,7 @@ theorem tinv_of_reach {K : Kernel} {req : TxnId → PrincipalId × Intent} {w0 :
     committed transactions before it; every decision's result is the kernel's verdict on the serial
     state at its revision (the state after the previous commit); a committed result is the tenant
     at the next revision; and a transaction is decided at most once. -/
-theorem serial_equivalence {K : Kernel} {req : TxnId → PrincipalId × Intent} {w0 : Option Tenant}
+theorem serial_equivalence {K : Kernel} {req : TxnId → Principal × Intent} {w0 : Option Tenant}
     {S : TState} (h : TReachable K req w0 S) :
     (∀ k, k ≤ S.rev → S.hist k = serialRun K w0 ((committedReqs req S.decs).take k)) ∧
     (∀ d ∈ S.decs, d.base ≤ S.rev ∧
@@ -491,7 +491,7 @@ theorem serial_equivalence {K : Kernel} {req : TxnId → PrincipalId × Intent} 
   exact hres
 
 /-- A conflicting attempt leaves the tenant, its history and the decisions unchanged. -/
-theorem conflict_no_effect (K : Kernel) (req : TxnId → PrincipalId × Intent) (w0 : Option Tenant)
+theorem conflict_no_effect (K : Kernel) (req : TxnId → Principal × Intent) (w0 : Option Tenant)
     (S : TState) (i : TxnId) (b : Nat) (res : Except Err Tenant)
     (h : S.ph i = .computed b res) (hb : b ≠ S.rev) :
     ∃ S', TNext K req w0 S S' ∧ S'.rev = S.rev ∧ S'.hist = S.hist ∧ S'.decs = S.decs :=
@@ -499,7 +499,7 @@ theorem conflict_no_effect (K : Kernel) (req : TxnId → PrincipalId × Intent) 
 
 /-- A refused decision leaves the tenant's history and revision unchanged, and the accepted
     decisions unchanged: it is recorded, and changes nothing else. -/
-theorem refusal_no_effect (K : Kernel) (req : TxnId → PrincipalId × Intent) (w0 : Option Tenant)
+theorem refusal_no_effect (K : Kernel) (req : TxnId → Principal × Intent) (w0 : Option Tenant)
     (S : TState) (i : TxnId) (b : Nat) (e : Err)
     (h : S.ph i = .computed b (.error e)) (hb : b = S.rev) :
     ∃ S', TNext K req w0 S S' ∧ S'.rev = S.rev ∧ S'.hist = S.hist ∧
@@ -551,7 +551,7 @@ theorem find_snoc (ds : List Dec) (d : Dec) (r : TxnId) (hn : ∀ e ∈ ds, e.tx
     simp [List.find?_append, hnone, h]
 
 theorem decideOk_refines_store (K : Kernel) (C : Config) (Wd : TenantId → Option Tenant)
-    (req : TxnId → PrincipalId × Intent) (w0 : Option Tenant) (S : TState)
+    (req : TxnId → Principal × Intent) (w0 : Option Tenant) (S : TState)
     (hI : TInv K req w0 S) (i : TxnId) (b : Nat) (t' : Tenant)
     (h : S.ph i = .computed b (.ok t')) (hb : b = S.rev)
     (s : PState) (hs : s.store = storeOf Wd S)
@@ -590,7 +590,7 @@ theorem decideOk_refines_store (K : Kernel) (C : Config) (Wd : TenantId → Opti
     · simp [hr, Ne.symm hr, outcomeOf]
 
 theorem decideErr_refines_store (K : Kernel) (C : Config) (Wd : TenantId → Option Tenant)
-    (req : TxnId → PrincipalId × Intent) (w0 : Option Tenant) (S : TState)
+    (req : TxnId → Principal × Intent) (w0 : Option Tenant) (S : TState)
     (hI : TInv K req w0 S) (i : TxnId) (b : Nat) (e : Err)
     (h : S.ph i = .computed b (.error e)) (hb : b = S.rev)
     (s : PState) (hs : s.store = storeOf Wd S)
@@ -625,7 +625,7 @@ theorem decideErr_refines_store (K : Kernel) (C : Config) (Wd : TenantId → Opt
     · simp [hr, Ne.symm hr, outcomeOf]
 
 theorem conflict_refines_store (K : Kernel) (C : Config) (Wd : TenantId → Option Tenant)
-    (req : TxnId → PrincipalId × Intent) (w0 : Option Tenant) (S : TState)
+    (req : TxnId → Principal × Intent) (w0 : Option Tenant) (S : TState)
     (hI : TInv K req w0 S) (i : TxnId) (b : Nat) (res : Except Err Tenant)
     (h : S.ph i = .computed b res) (hb : b ≠ S.rev)
     (s : PState) (hs : s.store = storeOf Wd S)
@@ -651,7 +651,7 @@ theorem conflict_refines_store (K : Kernel) (C : Config) (Wd : TenantId → Opti
     store's conflict. `hnet` says each computed transaction's commit has been sent, which the
     backend's commit step does. -/
 theorem step_refines_store (K : Kernel) (C : Config) (Wd : TenantId → Option Tenant)
-    (req : TxnId → PrincipalId × Intent) (w0 : Option Tenant) {S S' : TState}
+    (req : TxnId → Principal × Intent) (w0 : Option Tenant) {S S' : TState}
     (hI : TInv K req w0 S) (h : TNext K req w0 S S') (s : PState)
     (hs : s.store = storeOf Wd S)
     (hnet : ∀ i b res, S.ph i = .computed b res → s.net (.commit i 0 0 (req i).1 (req i).2 b res)) :

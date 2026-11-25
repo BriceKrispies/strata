@@ -25,14 +25,14 @@ abbrev SubId := Nat
     against one tenant state; `readable` says whether the principal may read the tenant's
     records in that state. -/
 structure Kernel where
-  step : Tenant → PrincipalId → Intent → Except Err Tenant
-  readable : Tenant → PrincipalId → Prop
+  step : Tenant → Principal → Intent → Except Err Tenant
+  readable : Tenant → Principal → Prop
 
 /-- The static configuration: which principal each session token belongs to, and which tenant and
     principal each subscriber reads for. -/
 structure Config where
-  sessions : Token → Option (TenantId × PrincipalId)
-  subs : SubId → Option (TenantId × PrincipalId)
+  sessions : Token → Option (TenantId × Principal)
+  subs : SubId → Option (TenantId × Principal)
 
 /-- A committed change: the tenant, the request that made it, and the tenant's state after it. -/
 structure Event where
@@ -48,7 +48,7 @@ inductive Outcome where
   deriving DecidableEq
 
 /-- The kernel's verdict on an intent against a tenant state. No tenant is an error. -/
-def verdict (K : Kernel) (t : Option Tenant) (p : PrincipalId) (i : Intent) : Except Err Tenant :=
+def verdict (K : Kernel) (t : Option Tenant) (p : Principal) (i : Intent) : Except Err Tenant :=
   match t with
   | none => .error .noTenant
   | some tn => K.step tn p i
@@ -70,7 +70,7 @@ def SysInit (w0 : World) (s : SysState) : Prop :=
 
 /-- Serve one request: the verdict of the intent on the tenant at its turn becomes the reply, and
     an accepted verdict becomes the tenant's new state and an event. -/
-def serveState (K : Kernel) (s : SysState) (rid : RequestId) (t : TenantId) (p : PrincipalId)
+def serveState (K : Kernel) (s : SysState) (rid : RequestId) (t : TenantId) (p : Principal)
     (i : Intent) : SysState :=
   { world := fun x => match verdict K (s.world t) p i with
       | .ok t' => if x = t then some t' else s.world x
@@ -84,7 +84,7 @@ def serveState (K : Kernel) (s : SysState) (rid : RequestId) (t : TenantId) (p :
 
 /-- Serving a request never forgets a committed event. -/
 theorem serve_log_sub (K : Kernel) (s : SysState) (rid : RequestId) (t : TenantId)
-    (p : PrincipalId) (i : Intent) (e : Event) (he : e ∈ s.log) :
+    (p : Principal) (i : Intent) (e : Event) (he : e ∈ s.log) :
     e ∈ (serveState K s rid t p i).log := by
   show e ∈ (match verdict K (s.world t) p i with
     | .ok t' => s.log ++ [Event.mk t rid t']
@@ -95,7 +95,7 @@ theorem serve_log_sub (K : Kernel) (s : SysState) (rid : RequestId) (t : TenantI
 
 inductive SpecNext (K : Kernel) (C : Config) : SysState → SysState → Prop
   /-- A request with a session is served: one reply, the verdict at its turn. -/
-  | serve (s : SysState) (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId)
+  | serve (s : SysState) (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal)
       (i : Intent) (hs : C.sessions tok = some (t, p)) (hr : s.replies rid = none) :
       SpecNext K C s (serveState K s rid t p i)
   /-- A request with no session is answered without touching any tenant. -/
@@ -104,7 +104,7 @@ inductive SpecNext (K : Kernel) (C : Config) : SysState → SysState → Prop
       SpecNext K C s { s with replies := fun r => if r = rid then some .noSession else s.replies r }
   /-- A subscriber observes a committed event of its tenant, if its principal may read the
       tenant after the change. -/
-  | frame (s : SysState) (sid : SubId) (e : Event) (t : TenantId) (p : PrincipalId)
+  | frame (s : SysState) (sid : SubId) (e : Event) (t : TenantId) (p : Principal)
       (hs : C.subs sid = some (t, p)) (he : e ∈ s.log) (ht : e.tenant = t)
       (hr : K.readable e.post p) :
       SpecNext K C s { s with frames := fun f => s.frames f ∨ f = (sid, e) }
@@ -155,7 +155,7 @@ def LogUnique (s : SysState) : Prop :=
 
 /-- An event in a served state is an old event, or the one this request committed. -/
 theorem serve_log_mem (K : Kernel) (s : SysState) (rid : RequestId) (t : TenantId)
-    (p : PrincipalId) (i : Intent) (e : Event)
+    (p : Principal) (i : Intent) (e : Event)
     (he : e ∈ (serveState K s rid t p i).log) :
     e ∈ s.log ∨ ∃ t', verdict K (s.world t) p i = .ok t' ∧ e = Event.mk t rid t' := by
   have he' : e ∈ (match verdict K (s.world t) p i with

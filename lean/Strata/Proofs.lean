@@ -83,13 +83,15 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
       | none => simp [stepTenant, hT] at hs
       | some o =>
         simp only [stepTenant, hT] at hs
-        split at hs
-        · cases hs
-        · split at hs
+        cases hN : newRecord o.schema c.principal fs with
+        | error e => simp [hN] at hs
+        | ok r =>
+          simp only [hN] at hs
+          split at hs
           · cases hs
           · rename_i hc
-            have hc' : canCreate t c.principal = true := by simpa using hc
-            simp [authorized, hT, hc']
+            have hc' : canCreate t c.principal ty r = true := by simpa using hc
+            simp [authorized, hT, hN, hc']
     | update ty id fs ev =>
       cases hT : t.typ? ty with
       | none => simp [stepTenant, hT] at hs
@@ -103,7 +105,8 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
           split at hs
           · cases hs
           · rename_i hc
-            have hc' : canEdit t c.principal old = true := by simpa using hc
+            have hc' : canUpdate t c.principal ty old (patched old fs) = true := by
+              simpa using hc
             simp [authorized, hr, hc']
     | delete ty id ev =>
       cases hT : t.typ? ty with
@@ -118,14 +121,14 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
           split at hs
           · cases hs
           · rename_i hc
-            have hc' : canEdit t c.principal old = true := by simpa using hc
+            have hc' : canDelete t c.principal ty old = true := by simpa using hc
             simp [authorized, hr, hc']
     | setRequired ty f strict =>
       simp only [stepTenant] at hs
       split at hs
       · cases hs
       · rename_i hp
-        have hp' : c.principal = t.owner := by simpa using hp
+        have hp' : canManage t c.principal = true := by simpa using hp
         cases hT : t.typ? ty with
         | none => simp [hT] at hs
         | some o => simp [authorized, hT, hp']
@@ -134,7 +137,7 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
       split at hs
       · cases hs
       · rename_i hp
-        have hp' : c.principal = t.owner := by simpa using hp
+        have hp' : canManage t c.principal = true := by simpa using hp
         cases hT : t.typ? ty with
         | none => simp [hT] at hs
         | some o => simp [authorized, hT, hp']
@@ -143,42 +146,44 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
       split at hs
       · cases hs
       · rename_i hp
-        have hp' : c.principal = t.owner := by simpa using hp
+        have hp' : canManage t c.principal = true := by simpa using hp
         cases hT : t.typ? ty with
         | none => simp [hT] at hs
         | some o => simp [authorized, hT, hp']
 
-/-- A principal who may not edit a record cannot change it: the step is refused, so no new
-    world exists in which the record differs. -/
+/-- A principal who may not update a record cannot change it: the step is refused, so no new
+    world exists in which the record differs. The permission is the one for the record as it would
+    be written, whatever the expected version. -/
 theorem unauthorized_cannot_update (w : World) (c : Ctx) (t : Tenant) (ty : TypeId) (id : RecordId)
     (o : ObjType) (old : Record) (fs : Fields) (ev : Option Nat)
     (ht : w c.tenant = some t) (hty : t.typ? ty = some o) (hl : o.records.lookup id = some old)
-    (hno : canEdit t c.principal old = false) :
+    (hno : canUpdate t c.principal ty old (patched old fs) = false) :
     step w (.update ty id fs ev) c = .error .unauthorized := by
   simp [step, ht, stepTenant, hty, hl, hno]
 
 theorem unauthorized_cannot_delete (w : World) (c : Ctx) (t : Tenant) (ty : TypeId) (id : RecordId)
     (o : ObjType) (old : Record) (ev : Option Nat)
     (ht : w c.tenant = some t) (hty : t.typ? ty = some o) (hl : o.records.lookup id = some old)
-    (hno : canEdit t c.principal old = false) :
+    (hno : canDelete t c.principal ty old = false) :
     step w (.delete ty id ev) c = .error .unauthorized := by
   simp [step, ht, stepTenant, hty, hl, hno]
 
-/-- The refusal does not reveal whether a record exists: a principal who could act on no record
-    it did not create (neither the owner nor an editor) is refused an update of a record that does
-    not exist with `unauthorized`, the refusal it gets for an existing record it may not edit, so
-    it cannot probe which ids exist (the kernel's KRN-1080). -/
+/-- The refusal does not reveal whether a record exists: a principal who may not update any record
+    of the type (with no record to test, as the kernel asks it) is refused an update of a record that
+    does not exist with `unauthorized`, the refusal it gets for an existing record it may not edit,
+    so it cannot probe which ids exist (the kernel's KRN-1080). The permission is asked before the
+    record is looked up. -/
 theorem missing_record_hidden_on_update (w : World) (c : Ctx) (t : Tenant) (ty : TypeId)
     (id : RecordId) (o : ObjType) (fs : Fields) (ev : Option Nat)
     (ht : w c.tenant = some t) (hty : t.typ? ty = some o) (hl : o.records.lookup id = none)
-    (hno : canEditAny t c.principal = false) :
+    (hno : canWithoutRecord t c.principal ty .update = false) :
     step w (.update ty id fs ev) c = .error .unauthorized := by
   simp [step, ht, stepTenant, hty, hl, missingRecord, hno]
 
 theorem missing_record_hidden_on_delete (w : World) (c : Ctx) (t : Tenant) (ty : TypeId)
     (id : RecordId) (o : ObjType) (ev : Option Nat)
     (ht : w c.tenant = some t) (hty : t.typ? ty = some o) (hl : o.records.lookup id = none)
-    (hno : canEditAny t c.principal = false) :
+    (hno : canWithoutRecord t c.principal ty .delete = false) :
     step w (.delete ty id ev) c = .error .unauthorized := by
   simp [step, ht, stepTenant, hty, hl, missingRecord, hno]
 
@@ -192,6 +197,42 @@ theorem unauthorized_cannot_mutate (w : World) (i : Intent) (c : Ctx) (t : Tenan
   have := step_ok_authorized w w' i c t ht h
   rw [hno] at this
   cases this
+
+/-- Default deny: a principal that no role of it permits is refused the action. -/
+theorem default_deny (t : Tenant) (p : Principal) (a : Action) (r : Resource) (env : ExprEnv)
+    (h : ¬ t.Permits p a r env) : t.allows p a r env = false := by
+  cases hb : t.allows p a r env with
+  | false => rfl
+  | true => exact absurd ((Tenant.allows_iff t p a r env).mp hb) h
+
+/-- Default deny at the step: an update that no role of the principal permits, on a record that
+    exists, is refused with `unauthorized` whatever it changes and whatever version it names. -/
+theorem default_deny_update (t : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
+    (fs : Fields) (ev : Option Nat) (o : ObjType) (old : Record)
+    (hT : t.typ? ty = some o) (hL : o.records.lookup id = some old)
+    (h : ¬ t.Permits p .update (.object ty) (subjectEnv p (some old) (some (patched old fs)))) :
+    stepTenant t p (.update ty id fs ev) = .error .unauthorized := by
+  have hf : canUpdate t p ty old (patched old fs) = false := default_deny _ _ _ _ _ h
+  simp [stepTenant, hT, hL, hf]
+
+/-- Default deny at the step: a delete that no role of the principal permits is refused. -/
+theorem default_deny_delete (t : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
+    (ev : Option Nat) (o : ObjType) (old : Record)
+    (hT : t.typ? ty = some o) (hL : o.records.lookup id = some old)
+    (h : ¬ t.Permits p .delete (.object ty) (subjectEnv p (some old) (some old))) :
+    stepTenant t p (.delete ty id ev) = .error .unauthorized := by
+  have hf : canDelete t p ty old = false := default_deny _ _ _ _ _ h
+  simp [stepTenant, hT, hL, hf]
+
+/-- Default deny at the step: a create that no role of the principal permits, for the record it
+    would write, is refused with `unauthorized`, and no state follows. -/
+theorem default_deny_create (t : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
+    (o : ObjType) (r : Record) (hT : t.typ? ty = some o)
+    (hN : newRecord o.schema p fs = .ok r)
+    (h : ¬ t.Permits p .create (.object ty) (subjectEnv p none (some r))) :
+    stepTenant t p (.create ty fs) = .error .unauthorized := by
+  have hf : canCreate t p ty r = false := default_deny _ _ _ _ _ h
+  simp [stepTenant, hT, hN, hf]
 
 /-! ## Property 1: accepted transitions preserve the invariant -/
 
@@ -212,7 +253,7 @@ theorem idsBelow_of_putType_schema {t : Tenant} {ty : TypeId} {o o' : ObjType}
 
 /-- A strict, accepted step on one well-formed tenant keeps every record conforming, and every
     record id below the counter. -/
-theorem stepTenant_conform_ids (t t' : Tenant) (p : PrincipalId) (i : Intent)
+theorem stepTenant_conform_ids (t t' : Tenant) (p : Principal) (i : Intent)
     (hconf : t.Conform) (hids : t.IdsBelow) (hstrict : i.strict = true)
     (h : stepTenant t p i = .ok t') :
     t'.Conform ∧ t'.IdsBelow := by
@@ -383,7 +424,7 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : PrincipalId) (i : Intent)
       exact idsBelow_of_putType_schema hT rfl hids
 
 /-- A strict, accepted step on one well-formed tenant yields a well-formed tenant. -/
-theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
+theorem stepTenant_preserves_wf (t t' : Tenant) (p : Principal) (i : Intent)
     (hwf : t.WF) (hstrict : i.strict = true) (h : stepTenant t p i = .ok t') : t'.WF := by
   obtain ⟨hconf, hids, hrefs, hd, hu⟩ := hwf
   obtain ⟨hc, hi⟩ := stepTenant_conform_ids t t' p i hconf hids hstrict h
@@ -427,10 +468,10 @@ theorem step_preserves_unique (w w' : World) (i : Intent) (c : Ctx)
     it. -/
 def laxReqObj : ObjType :=
   { schema := [(1, { ty := .int, required := false })],
-    records := [(0, { owner := 0, version := 1, fields := [] })] }
+    records := [(0, { owner := some 0, version := 1, fields := [] })] }
 
 def laxReqTenant : Tenant :=
-  { types := [(1, laxReqObj)], owner := 0, editors := [], writers := [], nextId := 1 }
+  { types := [(1, laxReqObj)], members := [(0, [ownerRole])], grants := [], policies := [], nextId := 1 }
 
 theorem laxReqTenant_typ (T : TypeId) (o : ObjType) (h : laxReqTenant.typ? T = some o) :
     T = 1 ∧ o = laxReqObj := by
@@ -471,14 +512,14 @@ theorem laxReqTenant_wf : laxReqTenant.WF := by
 /-- The exclusion in A4 is necessary, not cautious: a non-strict schema change can leave a
     well-formed tenant with a record that no longer conforms. -/
 theorem lax_change_can_break_wf :
-    ∃ (t t' : Tenant) (p : PrincipalId),
+    ∃ (t t' : Tenant) (p : Principal),
       t.WF ∧ stepTenant t p (.setRequired 1 1 false) = .ok t' ∧ ¬ t'.WF := by
   refine ⟨laxReqTenant, laxReqTenant.putType 1 { laxReqObj with
-    schema := makeRequired laxReqObj.schema 1 }, 0, laxReqTenant_wf, rfl, ?_⟩
+    schema := makeRequired laxReqObj.schema 1 }, .user 0, laxReqTenant_wf, rfl, ?_⟩
   intro hw
   have hT1 := typ?_putType_self laxReqTenant 1 laxReqObj
     { laxReqObj with schema := makeRequired laxReqObj.schema 1 } rfl
-  have h1 := hw.1 1 _ hT1 (0, { owner := 0, version := 1, fields := [] }) (by decide)
+  have h1 := hw.1 1 _ hT1 (0, { owner := some 0, version := 1, fields := [] }) (by decide)
   revert h1
   decide
 

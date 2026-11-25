@@ -431,7 +431,7 @@ theorem defaultsOf_nodup (env : ExprEnv) (fs : Fields) : ∀ (schema : Schema) (
               exact ⟨List.mem_cons_of_mem _ a, b⟩
 
 /-- The fields of a new record name each field once, when the schema names each field once. -/
-theorem newRecord_nodup (schema : Schema) (p : PrincipalId) (fs : Fields) (r : Record)
+theorem newRecord_nodup (schema : Schema) (p : Principal) (fs : Fields) (r : Record)
     (hN : newRecord schema p fs = .ok r) (hs : (schema.map Prod.fst).Nodup) :
     (r.fields.map Prod.fst).Nodup := by
   obtain ⟨ds, hD, rfl⟩ := newRecord_parts hN
@@ -698,7 +698,7 @@ theorem types_keys_afterDelete (t : Tenant) (ty id : TypeId) :
 /-! ## Lemmas: a schema change that is accepted leaves the tables conforming -/
 
 /-- An accepted schema change writes the entry of one object type, and that type is one it touches. -/
-theorem schema_step_putType (t t' : Tenant) (p : PrincipalId) (i : Intent)
+theorem schema_step_putType (t t' : Tenant) (p : Principal) (i : Intent)
     (hi : i.isSchema = true) (h : stepTenant t p i = .ok t') :
     ∃ ty o', t' = t.putType ty o' ∧ ty ∈ i.touched t := by
   cases i with
@@ -723,7 +723,7 @@ theorem schema_step_putType (t t' : Tenant) (p : PrincipalId) (i : Intent)
 
 /-- A strict schema change that is accepted leaves every object type it touches (`Intent.touched`)
     passing the check, where the check is over those types alone. -/
-theorem schemaViolated_of_strict (t t' : Tenant) (p : PrincipalId) (i : Intent)
+theorem schemaViolated_of_strict (t t' : Tenant) (p : Principal) (i : Intent)
     (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t') :
     schemaViolated t.limits (scopedTypes t'.types (i.touched t)) = false := by
   cases i with
@@ -789,7 +789,7 @@ theorem schemaViolated_of_strict (t t' : Tenant) (p : PrincipalId) (i : Intent)
     (`Intent.touched`) holds its records conforming and its constraints after it, and every other
     type's records are as they were. The check is over the touched types only, so a grandfathered
     record of an untouched type does not refuse the change. -/
-theorem strict_schema_change_scoped (t t' : Tenant) (p : PrincipalId) (i : Intent)
+theorem strict_schema_change_scoped (t t' : Tenant) (p : Principal) (i : Intent)
     (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t') :
     (∀ T o, t'.typ? T = some o → T ∈ i.touched t →
       (∀ q ∈ o.records, conforms o.schema q.2 = true) ∧
@@ -818,7 +818,7 @@ theorem strict_schema_change_scoped (t t' : Tenant) (p : PrincipalId) (i : Inten
 /-- An accepted strict schema change on a tenant whose records conform: the records of each touched
     object type conform after it, the records of every other type are as they were (see
     `strict_schema_change_scoped`), and the tenant conforms. -/
-theorem strict_schema_change_conforms (t t' : Tenant) (p : PrincipalId) (i : Intent)
+theorem strict_schema_change_conforms (t t' : Tenant) (p : Principal) (i : Intent)
     (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t')
     (hconf : t.Conform) :
     (∀ T o, t'.typ? T = some o → T ∈ i.touched t →
@@ -838,7 +838,7 @@ theorem strict_schema_change_conforms (t t' : Tenant) (p : PrincipalId) (i : Int
 
 /-- An accepted strict schema change leaves the unique constraints of every table holding, on a
     tenant whose constraints hold: the touched types are checked, the others are as they were. -/
-theorem strict_schema_change_unique (t t' : Tenant) (p : PrincipalId) (i : Intent)
+theorem strict_schema_change_unique (t t' : Tenant) (p : Principal) (i : Intent)
     (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t')
     (hu : t.UniqueRecords) : t'.UniqueRecords := by
   obtain ⟨hT, hU⟩ := strict_schema_change_scoped t t' p i hi hs h
@@ -854,7 +854,7 @@ theorem strict_schema_change_unique (t t' : Tenant) (p : PrincipalId) (i : Inten
 
 /-- The names an accepted step leaves distinct: the object types, each schema, and each record's
     fields. -/
-theorem stepTenant_preserves_distinct (t t' : Tenant) (p : PrincipalId) (i : Intent)
+theorem stepTenant_preserves_distinct (t t' : Tenant) (p : Principal) (i : Intent)
     (hd : t.Distinct) (h : stepTenant t p i = .ok t') : t'.Distinct := by
   obtain ⟨hkeys, hD⟩ := hd
   cases i with
@@ -1064,7 +1064,7 @@ theorem uniqOn_delClear (schema : Schema) (us : List (List FieldId)) (ty : TypeI
 /-! ## The uniqueness invariant through accepted steps -/
 
 /-- An accepted strict step keeps every object type's records unique under its constraints. -/
-theorem stepTenant_preserves_unique (t t' : Tenant) (p : PrincipalId) (i : Intent)
+theorem stepTenant_preserves_unique (t t' : Tenant) (p : Principal) (i : Intent)
     (hwf : t.WF) (hstrict : i.strict = true) (h : stepTenant t p i = .ok t') :
     t'.UniqueRecords := by
   obtain ⟨-, hids, -, hd, hu⟩ := hwf
@@ -1133,7 +1133,7 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : PrincipalId) (i : Inten
 
 theorem create_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId) (o : ObjType)
     (fs : Fields) (ht : w c.tenant = some t) (ho : t.typ? ty = some o)
-    (hc : canCreate t c.principal = true) (r : Record)
+    (r : Record) (hc : canCreate t c.principal ty r = true)
     (hN : newRecord o.schema c.principal fs = .ok r)
     (hfree : problem t.limits o.schema o.uniques false t.env o.records t.nextId
       r = none)
@@ -1150,7 +1150,7 @@ theorem create_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId
 theorem update_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId) (o : ObjType)
     (id : RecordId) (fs : Fields) (old : Record) (ev : Option Nat)
     (ht : w c.tenant = some t) (ho : t.typ? ty = some o) (hl : o.records.lookup id = some old)
-    (hcan : canEdit t c.principal old = true) (hv : versionClash ev old = false)
+    (hcan : canUpdate t c.principal ty old (patched old fs) = true) (hv : versionClash ev old = false)
     (hfree : problem t.limits o.schema o.uniques false t.env o.records id (patched old fs) = none)
     (hclash : (∃ fd ∈ o.schema, fd.2.unique = true ∧ ∃ q ∈ o.records, q.1 ≠ id ∧
         agreeOn [fd.1] (patched old fs).fields q.2.fields = true) ∨
@@ -1164,7 +1164,7 @@ theorem update_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId
 
 theorem define_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (ty : TypeId)
     (o : ObjType) (fs : List FieldId) (ht : w c.tenant = some t) (ho : t.typ? ty = some o)
-    (hp : c.principal = t.owner) (hok : uniqueFieldsOk o.schema fs = true)
+    (hp : canManage t c.principal = true) (hok : uniqueFieldsOk o.schema fs = true)
     (hdup : dupFields o.records fs = true) :
     step w (.defineUnique ty fs) c = .error .uniqueViolated ∧
       ∀ w', step w (.defineUnique ty fs) c ≠ .ok w' := by
@@ -1175,7 +1175,7 @@ theorem define_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx)
 
 theorem set_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (ty : TypeId)
     (o : ObjType) (f : FieldId) (d : FieldDef) (ht : w c.tenant = some t)
-    (ho : t.typ? ty = some o) (hp : c.principal = t.owner) (hd : o.schema.lookup f = some d)
+    (ho : t.typ? ty = some o) (hp : canManage t c.principal = true) (hd : o.schema.lookup f = some d)
     (hl : d.ty.isList = false) (hdup : dupFields o.records [f] = true) :
     step w (.setUnique ty f true) c = .error .migrationRejected ∧
       ∀ w', step w (.setUnique ty f true) c ≠ .ok w' := by
@@ -1204,11 +1204,11 @@ theorem set_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (t
 /-- A table of one integer field, with two records that agree on it. -/
 def laxObj : ObjType :=
   { schema := [(1, { ty := .int, required := false })],
-    records := [(0, { owner := 0, version := 1, fields := [(1, .int 5)] }),
-                (1, { owner := 0, version := 1, fields := [(1, .int 5)] })] }
+    records := [(0, { owner := some 0, version := 1, fields := [(1, .int 5)] }),
+                (1, { owner := some 0, version := 1, fields := [(1, .int 5)] })] }
 
 def laxUniqueTenant : Tenant :=
-  { types := [(1, laxObj)], owner := 0, editors := [], writers := [], nextId := 2 }
+  { types := [(1, laxObj)], members := [(0, [ownerRole])], grants := [], policies := [], nextId := 2 }
 
 theorem laxUniqueTenant_typ (T : TypeId) (o : ObjType) (h : laxUniqueTenant.typ? T = some o) :
     T = 1 ∧ o = laxObj := by
@@ -1250,15 +1250,15 @@ theorem laxUniqueTenant_wf : laxUniqueTenant.WF := by
     conformance: a lax `setUnique` over two records that agree on the field leaves a tenant that is
     not well formed. -/
 theorem lax_unique_change_can_break_wf :
-    ∃ (t t' : Tenant) (p : PrincipalId),
+    ∃ (t t' : Tenant) (p : Principal),
       t.WF ∧ stepTenant t p (.setUnique 1 1 false) = .ok t' ∧ ¬ t'.UniqueRecords := by
   refine ⟨laxUniqueTenant, laxUniqueTenant.putType 1 { laxObj with
-    schema := makeUnique laxObj.schema 1 }, 0, laxUniqueTenant_wf, rfl, ?_⟩
+    schema := makeUnique laxObj.schema 1 }, .user 0, laxUniqueTenant_wf, rfl, ?_⟩
   intro hU
   have hT1 := typ?_putType_self laxUniqueTenant 1 laxObj
     { laxObj with schema := makeUnique laxObj.schema 1 } rfl
-  have h1 := hU 1 _ hT1 (0, { owner := 0, version := 1, fields := [(1, .int 5)] }) (by decide)
-    (1, { owner := 0, version := 1, fields := [(1, .int 5)] }) (by decide) (by decide)
+  have h1 := hU 1 _ hT1 (0, { owner := some 0, version := 1, fields := [(1, .int 5)] }) (by decide)
+    (1, { owner := some 0, version := 1, fields := [(1, .int 5)] }) (by decide) (by decide)
   have h2 := h1.1 (1, { ty := .int, required := false, unique := true }) (by decide) rfl
   revert h2
   decide
@@ -1293,14 +1293,14 @@ theorem schemaViolated_false {L : Limits} {types : List (TypeId × ObjType)}
   exact ⟨h1, h2, h3⟩
 
 /-- A field made required changes the counter and the records of no type. -/
-theorem setRequired_spec (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (f : FieldId) (s : Bool)
+theorem setRequired_spec (t t' : Tenant) (p : Principal) (ty : TypeId) (f : FieldId) (s : Bool)
     (h : stepTenant t p (.setRequired ty f s) = .ok t') :
     t'.nextId = t.nextId ∧ ∀ T, t'.env T = t.env T :=
   setRequired_records t t' p ty f s h
 
 /-- A field made unique changes the counter, the records of no type, and the one type's schema
     and only that. -/
-theorem setUnique_spec (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (f : FieldId) (s : Bool)
+theorem setUnique_spec (t t' : Tenant) (p : Principal) (ty : TypeId) (f : FieldId) (s : Bool)
     (h : stepTenant t p (.setUnique ty f s) = .ok t') :
     t'.nextId = t.nextId ∧ (∀ T, t'.env T = t.env T) ∧
       ∀ o, t.typ? ty = some o → t'.typ? ty = some { o with schema := makeUnique o.schema f } := by
@@ -1312,7 +1312,7 @@ theorem setUnique_spec (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (f : Fiel
 
 /-- A composite constraint changes the counter, the records of no type, and the one type's
     constraints and only that. -/
-theorem defineUnique_spec (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (fs : List FieldId)
+theorem defineUnique_spec (t t' : Tenant) (p : Principal) (ty : TypeId) (fs : List FieldId)
     (h : stepTenant t p (.defineUnique ty fs) = .ok t') :
     t'.nextId = t.nextId ∧ (∀ T, t'.env T = t.env T) ∧
       ∀ o, t.typ? ty = some o → t'.typ? ty = some { o with uniques := o.uniques ++ [fs] } := by

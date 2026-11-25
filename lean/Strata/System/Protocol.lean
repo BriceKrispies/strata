@@ -45,7 +45,7 @@ inductive Packet where
   /-- store to backend: the tenant's state at revision `base` -/
   | snap (rid : RequestId) (t : TenantId) (v : Option Tenant) (base : Nat) (a : Nat)
   /-- backend to store: the verdict computed on the snapshot at revision `base` -/
-  | commit (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId) (i : Intent)
+  | commit (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal) (i : Intent)
       (base : Nat) (res : Except Err Tenant)
   /-- store to backend: the request's decision -/
   | done (rid : RequestId) (o : Outcome)
@@ -67,7 +67,7 @@ inductive Phase where
 structure Txn where
   tok : Token
   tenant : TenantId
-  principal : PrincipalId
+  principal : Principal
   intent : Intent
   phase : Phase
 
@@ -135,7 +135,7 @@ inductive PNext (K : Kernel) (C : Config) : PState → PState → Prop
   /-- The backend starts a transaction for a request with a session, and asks the store for the
       tenant. A repeated forward changes nothing (the request already has a transaction). -/
   | begin (s : PState) (rid : RequestId) (tok : Token) (i : Intent) (t : TenantId)
-      (p : PrincipalId) (h : s.net (.fwd rid tok i)) (hx : s.txns rid = none)
+      (p : Principal) (h : s.net (.fwd rid tok i)) (hx : s.txns rid = none)
       (hn : s.noSession rid = false) (hs : C.sessions tok = some (t, p)) :
       PNext K C s { sendOne s (.load rid t (s.attempt rid)) with
         txns := updTxn s.txns rid ⟨tok, t, p, i, .loading⟩ }
@@ -172,19 +172,19 @@ inductive PNext (K : Kernel) (C : Config) : PState → PState → Prop
   | load (s : PState) (rid : RequestId) (t : TenantId) (a : Nat) (h : s.net (.load rid t a)) :
       PNext K C s (sendOne s (.snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t) a))
   /-- A commit for a request the store has decided: the decision is sent again, nothing changes. -/
-  | storeDecided (s : PState) (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId)
+  | storeDecided (s : PState) (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal)
       (i : Intent) (base : Nat) (res : Except Err Tenant) (o : Outcome)
       (h : s.net (.commit rid tok t p i base res)) (hd : s.store.decided rid = some o) :
       PNext K C s (sendOne s (.done rid o))
   /-- A commit for an undecided request whose revision is no longer current: a conflict. -/
-  | storeConflict (s : PState) (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId)
+  | storeConflict (s : PState) (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal)
       (i : Intent) (base : Nat) (res : Except Err Tenant)
       (h : s.net (.commit rid tok t p i base res)) (hd : s.store.decided rid = none)
       (hb : base ≠ s.store.rev t) :
       PNext K C s (sendOne s (.conflict rid base))
   /-- A commit of an accepted verdict on the current revision: the tenant moves to revision
       `base + 1`, the event is written to the outbox, and the request is decided. -/
-  | storeAccept (s : PState) (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId)
+  | storeAccept (s : PState) (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal)
       (i : Intent) (base : Nat) (res : Except Err Tenant) (t' : Tenant)
       (h : s.net (.commit rid tok t p i base res)) (hd : s.store.decided rid = none)
       (hb : base = s.store.rev t) (hr : res = .ok t') :
@@ -199,7 +199,7 @@ inductive PNext (K : Kernel) (C : Config) : PState → PState → Prop
               evs := s.store.evs ++ [Event.mk t rid t']
               decided := fun r => if r = rid then some .accepted else s.store.decided r } }
   /-- A commit of a refusal on the current revision: nothing changes but the decision. -/
-  | storeRefuse (s : PState) (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId)
+  | storeRefuse (s : PState) (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal)
       (i : Intent) (base : Nat) (res : Except Err Tenant) (e : Err)
       (h : s.net (.commit rid tok t p i base res)) (hd : s.store.decided rid = none)
       (hb : base = s.store.rev t) (hr : res = .error e) :
@@ -211,7 +211,7 @@ inductive PNext (K : Kernel) (C : Config) : PState → PState → Prop
           store := { s.store with
             decided := fun r => if r = rid then some (.refused e) else s.store.decided r } }
   /-- The publisher sends a committed event to a subscriber whose principal may read it. -/
-  | publish (s : PState) (sid : SubId) (e : Event) (t : TenantId) (p : PrincipalId)
+  | publish (s : PState) (sid : SubId) (e : Event) (t : TenantId) (p : Principal)
       (h : s.net (.committed e)) (hs : C.subs sid = some (t, p)) (ht : e.tenant = t)
       (hr : K.readable e.post p) :
       PNext K C s (sendOne s (.frame sid e))
@@ -313,7 +313,7 @@ theorem good_inert {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s) (
 
 
 theorem good_begin {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
-    (rid : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : PrincipalId)
+    (rid : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : Principal)
     (hx : s.txns rid = none) (hn : s.noSession rid = false)
     (hs : C.sessions tok = some (t, p))
     (hnet : ∀ y, s'.net y ↔ (s.net y ∨ y = .load rid t (s.attempt rid)))
@@ -467,7 +467,7 @@ theorem commit_transfer {s s' : PState} {rid : RequestId} {x y : Txn}
     (hx : s.txns rid = some x)
     (hf : y.tok = x.tok ∧ y.tenant = x.tenant ∧ y.principal = x.principal ∧ y.intent = x.intent)
     (htx : s'.txns = updTxn s.txns rid y) {r : RequestId} {tok : Token} {t : TenantId}
-    {p : PrincipalId} {i : Intent}
+    {p : Principal} {i : Intent}
     (hz : ∃ z, s.txns r = some z ∧ z.tok = tok ∧ z.tenant = t ∧ z.principal = p ∧ z.intent = i) :
     ∃ w, s'.txns r = some w ∧ w.tok = tok ∧ w.tenant = t ∧ w.principal = p ∧ w.intent = i := by
   obtain ⟨z, hzr, h1, h2, h3, h4⟩ := hz
@@ -836,7 +836,7 @@ theorem good_load {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
     exact ⟨y, by rw [htx]; exact hy⟩
 
 theorem good_storeDecided {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
-    (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId) (i : Intent)
+    (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal) (i : Intent)
     (base : Nat) (res : Except Err Tenant) (o : Outcome)
     (h : s.net (.commit rid tok t p i base res)) (hd : s.store.decided rid = some o)
     (hnet : ∀ y, s'.net y ↔ (s.net y ∨ y = .done rid o))
@@ -892,7 +892,7 @@ theorem good_storeDecided {K : Kernel} {C : Config} {s s' : PState} (hg : Good K
 
 
 theorem good_storeAccept {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
-    (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId) (i : Intent)
+    (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal) (i : Intent)
     (base : Nat) (res : Except Err Tenant) (t1 : Tenant)
     (h : s.net (.commit rid tok t p i base res)) (hd : s.store.decided rid = none)
     (hb : base = s.store.rev t) (hr : res = .ok t1)
@@ -978,7 +978,7 @@ theorem good_storeAccept {K : Kernel} {C : Config} {s s' : PState} (hg : Good K 
       exact ⟨y, by rw [htx]; exact hy⟩
 
 theorem good_storeRefuse {K : Kernel} {C : Config} {s s' : PState} (hg : Good K C s)
-    (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId) (i : Intent)
+    (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal) (i : Intent)
     (base : Nat) (res : Except Err Tenant) (e : Err)
     (h : s.net (.commit rid tok t p i base res)) (hd : s.store.decided rid = none)
     (hb : base = s.store.rev t) (hr : res = .error e)
@@ -1255,7 +1255,7 @@ theorem star_noSession {K : Kernel} {C : Config} (s s' : PState) (rid : RequestI
   exact star_one (SpecNext.noSession (absState s) rid tok hs hr0)
 
 theorem star_accept {K : Kernel} {C : Config} (s s' : PState) (rid : RequestId) (tok : Token)
-    (t : TenantId) (p : PrincipalId) (i : Intent) (t1 : Tenant) (base : Nat)
+    (t : TenantId) (p : Principal) (i : Intent) (t1 : Tenant) (base : Nat)
     (hsess : C.sessions tok = some (t, p)) (hr0 : (absState s).replies rid = none)
     (hvw : verdict K ((absState s).world t) p i = .ok t1)
     (hnet : ∀ y, s'.net y ↔
@@ -1314,7 +1314,7 @@ theorem star_accept {K : Kernel} {C : Config} (s s' : PState) (rid : RequestId) 
   exact star_one (SpecNext.serve (absState s) rid tok t p i hsess hr0)
 
 theorem star_refuse {K : Kernel} {C : Config} (s s' : PState) (rid : RequestId) (tok : Token)
-    (t : TenantId) (p : PrincipalId) (i : Intent) (e : Err) (base : Nat)
+    (t : TenantId) (p : Principal) (i : Intent) (e : Err) (base : Nat)
     (hsess : C.sessions tok = some (t, p)) (hr0 : (absState s).replies rid = none)
     (hvw : verdict K ((absState s).world t) p i = .error e)
     (hnet : ∀ y, s'.net y ↔ (s.net y ∨ y = .done rid (.refused e)))
@@ -1361,7 +1361,7 @@ theorem star_refuse {K : Kernel} {C : Config} (s s' : PState) (rid : RequestId) 
   exact star_one (SpecNext.serve (absState s) rid tok t p i hsess hr0)
 
 theorem star_frame {K : Kernel} {C : Config} (s s' : PState) (sid : SubId) (e : Event)
-    (t : TenantId) (p : PrincipalId)
+    (t : TenantId) (p : Principal)
     (hs : C.subs sid = some (t, p)) (he : e ∈ (absState s).log) (ht : e.tenant = t)
     (hr : K.readable e.post p)
     (hnet : ∀ y, s'.net y ↔ (s.net y ∨ y = .frame sid e))
@@ -1600,7 +1600,7 @@ theorem commit_once {K : Kernel} {C : Config} {w0 : World} {s : PState}
     revision is no later than the current one. -/
 theorem commit_is_verdict {K : Kernel} {C : Config} {w0 : World} {s : PState}
     (h : ProtoReachable K C w0 s) (rid : RequestId) (tok : Token) (t : TenantId)
-    (p : PrincipalId) (i : Intent) (base : Nat) (res : Except Err Tenant)
+    (p : Principal) (i : Intent) (base : Nat) (res : Except Err Tenant)
     (hc : s.net (.commit rid tok t p i base res)) :
     base ≤ s.store.rev t ∧ res = verdict K (s.store.hist t base) p i := by
   obtain ⟨hg, -, -⟩ := protocol_refines h
@@ -1624,7 +1624,7 @@ theorem rev_step {K : Kernel} {C : Config} {s s' : PState} (h : PNext K C s s')
 
 /-- A commit for a request the store has already decided changes nothing in the store. -/
 theorem duplicate_commit_inert {K : Kernel} {C : Config} (s : PState) (rid : RequestId)
-    (tok : Token) (t : TenantId) (p : PrincipalId) (i : Intent) (base : Nat)
+    (tok : Token) (t : TenantId) (p : Principal) (i : Intent) (base : Nat)
     (res : Except Err Tenant) (o : Outcome)
     (h : s.net (.commit rid tok t p i base res)) (hd : s.store.decided rid = some o) :
     PNext K C s (sendOne s (.done rid o)) ∧ (sendOne s (.done rid o)).store = s.store :=
@@ -1634,16 +1634,16 @@ theorem duplicate_commit_inert {K : Kernel} {C : Config} (s : PState) (rid : Req
 
 /-- One tenant, owned by principal 7, with no records. -/
 def wTenant : Tenant :=
-  { types := [(1, { schema := [] })], owner := 7, editors := [], writers := [], nextId := 0 }
+  { types := [(1, { schema := [] })], members := [(7, [ownerRole])], grants := [], policies := [], nextId := 0 }
 
 /-- The kernel: the step of the kernel's transition function, and a principal reads the tenant when
     it may create records in it. -/
 def wKernel : Kernel :=
-  { step := stepTenant, readable := fun t p => canCreate t p = true }
+  { step := stepTenant, readable := fun t p => canWithoutRecord t p 1 .create = true }
 
 /-- Token 0 belongs to principal 9, a stranger to the tenant. -/
 def wConfig : Config :=
-  { sessions := fun tok => if tok = 0 then some (0, 9) else none, subs := fun _ => none }
+  { sessions := fun tok => if tok = 0 then some (0, .user 9) else none, subs := fun _ => none }
 
 def wWorld : World := fun t => if t = 0 then some wTenant else none
 
@@ -1666,11 +1666,11 @@ theorem refusal_reachable : ∃ s, ProtoReachable wKernel wConfig wWorld s ∧
       (Star.tail (Star.tail (Star.tail (Star.refl wInit)
         (PNext.clientReq _ 1 0 (.create 1 [])))
         (PNext.bffForward _ 1 0 (.create 1 []) (Or.inr rfl)))
-        (PNext.begin _ 1 0 (.create 1 []) 0 9 (Or.inr rfl) rfl rfl rfl))
+        (PNext.begin _ 1 0 (.create 1 []) 0 (.user 9) (Or.inr rfl) rfl rfl rfl))
         (PNext.load _ 1 0 0 (Or.inr rfl)))
         (PNext.snap _ 1 _ _ 0 _ _ (Or.inr rfl) rfl rfl rfl rfl))
         (PNext.commit _ 1 _ _ 0 rfl rfl))
-        (PNext.storeRefuse _ 1 0 0 9 (.create 1 []) 0 _ .unauthorized (Or.inr rfl) rfl rfl rfl))
+        (PNext.storeRefuse _ 1 0 0 (.user 9) (.create 1 []) 0 _ .unauthorized (Or.inr rfl) rfl rfl rfl))
         (PNext.done _ 1 (.refused .unauthorized) _ (Or.inr rfl) rfl))
         (PNext.bffRelay _ 1 (.refused .unauthorized) (Or.inr rfl))⟩,
     Or.inr rfl⟩

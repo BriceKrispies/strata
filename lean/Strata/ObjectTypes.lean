@@ -18,23 +18,23 @@ namespace Strata
 
 /-- An intent naming an object type the tenant does not have is refused with the same error for
     every record intent. -/
-theorem unknown_type_refused (t : Tenant) (p : PrincipalId) (ty : TypeId) (h : t.typ? ty = none) :
-    (∀ fs, stepTenant t p (.create ty fs) = .error (unknownType t p)) ∧
-    (∀ id fs ev, stepTenant t p (.update ty id fs ev) = .error (unknownType t p)) ∧
-    (∀ id ev, stepTenant t p (.delete ty id ev) = .error (unknownType t p)) :=
+theorem unknown_type_refused (t : Tenant) (p : Principal) (ty : TypeId) (h : t.typ? ty = none) :
+    (∀ fs, stepTenant t p (.create ty fs) = .error (unknownType t p ty .create)) ∧
+    (∀ id fs ev, stepTenant t p (.update ty id fs ev) = .error (unknownType t p ty .update)) ∧
+    (∀ id ev, stepTenant t p (.delete ty id ev) = .error (unknownType t p ty .delete)) :=
   ⟨fun fs => by simp [stepTenant, h], fun id fs ev => by simp [stepTenant, h],
     fun id ev => by simp [stepTenant, h]⟩
 
 /-- A schema change naming an object type the tenant does not have. The kernel checks that the
-    caller may manage the schema first (`unauthorized`, as for anyone who is not the owner), then
-    finds no such type when it applies the change (`invalid_schema`, for the owner). -/
-theorem unknown_type_schema_refused (t : Tenant) (p : PrincipalId) (ty : TypeId)
+    caller may manage the schema first (`unauthorized` for one who may not), then finds no such type
+    when it applies the change (`invalid_schema`). -/
+theorem unknown_type_schema_refused (t : Tenant) (p : Principal) (ty : TypeId)
     (h : t.typ? ty = none) :
-    (p = t.owner →
+    (canManage t p = true →
       (∀ f s, stepTenant t p (.setRequired ty f s) = .error .invalidSchema) ∧
       (∀ f s, stepTenant t p (.setUnique ty f s) = .error .invalidSchema) ∧
       (∀ fs, stepTenant t p (.defineUnique ty fs) = .error .invalidSchema)) ∧
-    (p ≠ t.owner →
+    (canManage t p = false →
       (∀ f s, stepTenant t p (.setRequired ty f s) = .error .unauthorized) ∧
       (∀ f s, stepTenant t p (.setUnique ty f s) = .error .unauthorized) ∧
       (∀ fs, stepTenant t p (.defineUnique ty fs) = .error .unauthorized)) := by
@@ -42,38 +42,44 @@ theorem unknown_type_schema_refused (t : Tenant) (p : PrincipalId) (ty : TypeId)
     fun hp => ⟨fun f s => ?_, fun f s => ?_, fun fs => ?_⟩⟩ <;>
     simp [stepTenant, h, hp]
 
-/-- For the owner the refusal of an unknown type is `unknownObject`. -/
-theorem unknown_type_owner (t : Tenant) : unknownType t t.owner = .unknownObject := by
-  simp [unknownType]
+/-- A holder of the owner role is refused an unknown type with `unknownObject`: it may act on every
+    type. -/
+theorem unknown_type_owner (t : Tenant) (p : Principal) (ty : TypeId) (a : Action)
+    (hown : ownerRole ∈ t.rolesOf p) :
+    unknownType t p ty a = .unknownObject := by
+  have h : canWithoutRecord t p ty a = true :=
+    (Tenant.allows_iff t p a (.object ty) (subjectEnv p none none)).mpr (Or.inl hown)
+  simp [unknownType, h]
 
-/-- For anyone else the refusal of an unknown type is `unauthorized`. -/
-theorem unknown_type_other (t : Tenant) (p : PrincipalId) (hp : p ≠ t.owner) :
-    unknownType t p = .unauthorized := by
-  simp [unknownType, hp]
+/-- Anyone who may not act on a type with the action is refused an unknown type with
+    `unauthorized`, whether or not the type exists. -/
+theorem unknown_type_other (t : Tenant) (p : Principal) (ty : TypeId) (a : Action)
+    (hn : canWithoutRecord t p ty a = false) : unknownType t p ty a = .unauthorized := by
+  simp [unknownType, hn]
 
 /-- A caller who may neither create nor edit learns nothing about the object types: an unknown
     type and an existing one both refuse a create with `unauthorized`, and an update of a missing
     record in an existing type is refused with the same error as one in an unknown type. -/
-theorem unknown_type_hidden (t : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
-    (id : RecordId) (ev : Option Nat) (hc : canCreate t p = false) (he : canEditAny t p = false) :
+theorem unknown_type_hidden (t : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
+    (id : RecordId) (ev : Option Nat)
+    (hc : ∀ r, canCreate t p ty r = false) (hn : canWithoutRecord t p ty .create = false)
+    (he : canWithoutRecord t p ty .update = false) :
     (t.typ? ty = none → stepTenant t p (.create ty fs) = .error .unauthorized) ∧
     (∀ o, t.typ? ty = some o → (∃ r, newRecord o.schema p fs = .ok r) →
       stepTenant t p (.create ty fs) = .error .unauthorized) ∧
     (t.typ? ty = none → stepTenant t p (.update ty id fs ev) = .error .unauthorized) ∧
     (∀ o, t.typ? ty = some o → o.records.lookup id = none →
       stepTenant t p (.update ty id fs ev) = .error .unauthorized) := by
-  have hp : p ≠ t.owner := by
-    intro hpo; subst hpo; simp [canEditAny] at he
-  refine ⟨fun h => ?_, fun o ho hn => ?_, fun h => ?_, fun o ho hl => ?_⟩
-  · simp [stepTenant, h, unknownType, hp]
-  · obtain ⟨r, hr⟩ := hn
+  refine ⟨fun h => ?_, fun o ho hn' => ?_, fun h => ?_, fun o ho hl => ?_⟩
+  · simp [stepTenant, h, unknownType, hn]
+  · obtain ⟨r, hr⟩ := hn'
     simp [stepTenant, ho, hr, hc]
-  · simp [stepTenant, h, unknownType, hp]
+  · simp [stepTenant, h, unknownType, he]
   · simp [stepTenant, ho, hl, missingRecord, he]
 
 /-- The references of a record created in a tenant resolve in the types they name, if the
     create is accepted. -/
-theorem create_refs_resolve (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
+theorem create_refs_resolve (t t' : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
     (o : ObjType) (ho : t.typ? ty = some o) (h : stepTenant t p (.create ty fs) = .ok t') :
     ∃ r, newRecord o.schema p fs = .ok r ∧ refsOk t.env o.schema r = true := by
   obtain ⟨r, hN, hP, -, -⟩ := create_ok_parts ho h
@@ -81,7 +87,7 @@ theorem create_refs_resolve (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (fs 
 
 /-- The references of a record updated in a tenant resolve in the types they name, if the update
     is accepted. -/
-theorem update_refs_resolve (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (id : RecordId)
+theorem update_refs_resolve (t t' : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
     (fs : Fields) (ev : Option Nat) (o : ObjType) (old : Record) (ho : t.typ? ty = some o)
     (hl : o.records.lookup id = some old)
     (h : stepTenant t p (.update ty id fs ev) = .ok t') :
@@ -91,7 +97,7 @@ theorem update_refs_resolve (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (id 
 
 /-- **Dangling writes are refused across types.** A create whose record holds a reference that
     does not name a record of the type its field names is never accepted. -/
-theorem write_refused_dangling_across_types (t : Tenant) (p : PrincipalId) (ty : TypeId)
+theorem write_refused_dangling_across_types (t : Tenant) (p : Principal) (ty : TypeId)
     (fs : Fields) (o : ObjType) (ho : t.typ? ty = some o) (r : Record)
     (hN : newRecord o.schema p fs = .ok r)
     (fv : FieldId × Val) (hfv : fv ∈ r.fields) (d : FieldDef)
@@ -107,7 +113,7 @@ theorem write_refused_dangling_across_types (t : Tenant) (p : PrincipalId) (ty :
   simp [hbad] at this
 /-- **Dangling updates are refused across types.** An update whose patched record holds a
     reference that does not name a record of the type its field names is never accepted. -/
-theorem update_refused_dangling_across_types (t : Tenant) (p : PrincipalId) (ty : TypeId)
+theorem update_refused_dangling_across_types (t : Tenant) (p : Principal) (ty : TypeId)
     (id : RecordId) (fs : Fields) (ev : Option Nat) (o : ObjType) (old : Record)
     (ho : t.typ? ty = some o) (hl : o.records.lookup id = some old)
     (fv : FieldId × Val) (hfv : fv ∈ (patched old fs).fields) (d : FieldDef)

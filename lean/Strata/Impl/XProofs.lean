@@ -23,7 +23,7 @@ theorem good_error (x : XTenant) (e : Err) : Good x (.error (e, x)) (.error e) :
 
 theorem create_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
-    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : PrincipalId) (ty : TypeId) (fs : Fields) :
+    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : Principal) (ty : TypeId) (fs : Fields) :
     Good ⟨core, ux, cx, rx⟩ (stepParts core ux cx rx p (.create ty fs)) (stepTenantI core p (.create ty fs)) := by
   have hok' := hok
   obtain ⟨hinv, hnd, hu, hc, hr⟩ := hok'
@@ -37,7 +37,7 @@ theorem create_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     | error u => simp only [hr]; exact good_error _ _
     | ok r =>
       simp only [hr]
-      by_cases hca : canCreateI core p = true
+      by_cases hca : canCreateI core p ty r = true
       · simp only [hca, Bool.not_true, if_false, Bool.false_eq_true]
         have hp := problemX_eq ⟨core, ux, cx, rx⟩ hok ty o hty core.limits true core.nextId r
         dsimp only at hp
@@ -70,13 +70,13 @@ theorem create_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
                   (by rw [getRec_push_padTo _ _ _ hsz]; simp only [if_true])) _
               · exact inv_putType core ty _ (core.nextId + 1) (by omega)
                   (by simp [size_padTo _ _ hsz]) hinv
-      · have : canCreateI core p = false := by simpa using hca
+      · have : canCreateI core p ty r = false := by simpa using hca
         simp only [this, Bool.not_false, if_true]
         exact good_error _ _
 
 theorem update_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
-    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : PrincipalId) (ty : TypeId) (id : RecordId)
+    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : Principal) (ty : TypeId) (id : RecordId)
     (fs : Fields) (ev : Option Nat) :
     Good ⟨core, ux, cx, rx⟩ (stepParts core ux cx rx p (.update ty id fs ev))
       (stepTenantI core p (.update ty id fs ev)) := by
@@ -92,7 +92,7 @@ theorem update_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     | none => exact good_error _ _
     | some old =>
       simp only [hg]
-      by_cases hca : canEditI core p old = true
+      by_cases hca : canUpdateI core p ty old (patched old fs) = true
       · simp only [hca, Bool.not_true, if_false, Bool.false_eq_true]
         by_cases hv : versionClash ev old = true
         · simp only [hv, if_true]
@@ -129,7 +129,7 @@ theorem update_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
                   (by rw [getRec_setSlot _ _ _ hlt]; simp only [if_true])
               · exact inv_putType core ty _ core.nextId (Nat.le_refl _)
                   (by simp [size_setSlot, hsz]) hinv
-      · have : canEditI core p old = false := by simpa using hca
+      · have : canUpdateI core p ty old (patched old fs) = false := by simpa using hca
         simp only [this, Bool.not_false, if_true]
         exact good_error _ _
 

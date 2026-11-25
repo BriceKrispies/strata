@@ -19,7 +19,7 @@ namespace Strata
 namespace Impl
 
 /-- A step keeps every slot array within the counter. -/
-theorem stepTenantI_inv (t : ITenant) (p : PrincipalId) (i : Intent) (t' : ITenant)
+theorem stepTenantI_inv (t : ITenant) (p : Principal) (i : Intent) (t' : ITenant)
     (hinv : t.Inv) (h : stepTenantI t p i = .ok t') : t'.Inv := by
   cases i with
   | create ty fs =>
@@ -191,13 +191,13 @@ def IObj.ofEmpty (o : ObjType) : IObj :=
 
 /-- A tenant with no records, as the implementation starts it: every slot array empty. -/
 def ITenant.ofEmpty (t : Tenant) : ITenant :=
-  { types := t.types.map (fun e => (e.1, IObj.ofEmpty e.2)), owner := t.owner,
-    editors := t.editors, writers := t.writers, nextId := t.nextId, limits := t.limits }
+  { types := t.types.map (fun e => (e.1, IObj.ofEmpty e.2)), members := t.members,
+    grants := t.grants, policies := t.policies, nextId := t.nextId, limits := t.limits }
 
 theorem ofEmpty_abs (t : Tenant) (h : ∀ e ∈ t.types, e.2.records = []) :
     (ITenant.ofEmpty t).abs = t := by
   cases t with
-  | mk types owner editors writers nextId limits =>
+  | mk types members grants policies nextId limits =>
     simp only [ITenant.abs, ITenant.ofEmpty, List.map_map]
     congr 1
     conv => rhs; rw [← List.map_id types]

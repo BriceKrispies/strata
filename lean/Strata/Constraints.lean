@@ -129,9 +129,9 @@ theorem constraint_first_failure (env : ExprEnv) (c : Expr) (cs : List Expr)
 
 /-- A create whose structural checks pass is refused by a constraint that fails on the record it
     writes, and no state follows. -/
-theorem create_constraint_refused (t : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
-    (o : ObjType) (ho : t.typ? ty = some o) (hc : canCreate t p = true) (r : Record)
-    (hN : newRecord o.schema p fs = .ok r)
+theorem create_constraint_refused (t : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
+    (o : ObjType) (ho : t.typ? ty = some o) (r : Record)
+    (hN : newRecord o.schema p fs = .ok r) (hc : canCreate t p ty r = true)
     (hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId r = none)
     (e : Err) (he : constraintProblem (writeEnv p r none) o.constraints = some e) :
     stepTenant t p (.create ty fs) = .error e ∧ ∀ t', stepTenant t p (.create ty fs) ≠ .ok t' := by
@@ -141,9 +141,9 @@ theorem create_constraint_refused (t : Tenant) (p : PrincipalId) (ty : TypeId) (
 
 /-- An update whose structural checks pass is refused by a constraint that fails on the record it
     writes, and no state follows. -/
-theorem update_constraint_refused (t : Tenant) (p : PrincipalId) (ty : TypeId) (id : RecordId)
+theorem update_constraint_refused (t : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
     (fs : Fields) (ev : Option Nat) (o : ObjType) (old : Record) (ho : t.typ? ty = some o)
-    (hl : o.records.lookup id = some old) (hcan : canEdit t p old = true)
+    (hl : o.records.lookup id = some old) (hcan : canUpdate t p ty old (patched old fs) = true)
     (hv : versionClash ev old = false) (hP : problem t.limits o.schema o.uniques true t.env
       o.records id (patched old fs) = none)
     (e : Err) (he : constraintProblem (writeEnv p (patched old fs) (some old)) o.constraints = some e) :
@@ -156,7 +156,7 @@ theorem update_constraint_refused (t : Tenant) (p : PrincipalId) (ty : TypeId) (
 /-- A create whose default evaluation fails is refused with `evaluation` whether or not the caller
     may create: the defaults are evaluated before the permission is asked (the kernel's
     `create_record`). -/
-theorem create_default_error_first (t : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
+theorem create_default_error_first (t : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
     (o : ObjType) (ho : t.typ? ty = some o) (hN : newRecord o.schema p fs = .error ()) :
     stepTenant t p (.create ty fs) = .error .evaluation := by
   simp [stepTenant, ho, hN]
@@ -164,7 +164,7 @@ theorem create_default_error_first (t : Tenant) (p : PrincipalId) (ty : TypeId) 
 /-- A create whose structural checks pass and whose defaults are written is accepted only when the
     constraints hold of the record with those defaults in it: the defaults are applied before the
     constraints are checked. -/
-theorem create_checks_defaulted_record (t t' : Tenant) (p : PrincipalId) (ty : TypeId)
+theorem create_checks_defaulted_record (t t' : Tenant) (p : Principal) (ty : TypeId)
     (fs : Fields) (o : ObjType) (ho : t.typ? ty = some o)
     (h : stepTenant t p (.create ty fs) = .ok t') :
     ∃ r, newRecord o.schema p fs = .ok r ∧
@@ -181,15 +181,15 @@ def dfltObj : ObjType :=
     constraints := [.or (.isNull (.field .record 1)) (.cmp .ge (.field .record 1) (.lit (.int 0)))] }
 
 def dfltTenant : Tenant :=
-  { types := [(1, dfltObj)], owner := 0, editors := [], writers := [], nextId := 1 }
+  { types := [(1, dfltObj)], members := [(0, [ownerRole])], grants := [], policies := [], nextId := 1 }
 
 /-- A create that leaves field `1` to its default writes `-1`, which the constraint refuses. -/
 theorem default_refused_by_constraint :
-    stepTenant dfltTenant 0 (.create 1 []) = .error .constraintViolated := rfl
+    stepTenant dfltTenant (.user 0) (.create 1 []) = .error .constraintViolated := rfl
 
 /-- A create that names field `1` with a value that satisfies the constraint is accepted. -/
 theorem named_value_accepted :
-    ∃ t', stepTenant dfltTenant 0 (.create 1 [(1, .int 5)]) = .ok t' := ⟨_, rfl⟩
+    ∃ t', stepTenant dfltTenant (.user 0) (.create 1 [(1, .int 5)]) = .ok t' := ⟨_, rfl⟩
 
 /-- A tenant with a field defaulting to an expression that fails: the caller is not a member, and the
     refusal is `evaluation` and not `unauthorized`, because the defaults come first. -/
@@ -197,10 +197,10 @@ def badDfltObj : ObjType :=
   { schema := [(1, { ty := .bool, required := false, default := .cmp .eq .principal (.lit (.int 1)) })] }
 
 def badDfltTenant : Tenant :=
-  { types := [(1, badDfltObj)], owner := 0, editors := [], writers := [], nextId := 1 }
+  { types := [(1, badDfltObj)], members := [(0, [ownerRole])], grants := [], policies := [], nextId := 1 }
 
 theorem default_error_before_permission :
-    stepTenant badDfltTenant 9 (.create 1 []) = .error .evaluation := rfl
+    stepTenant badDfltTenant (.user 9) (.create 1 []) = .error .evaluation := rfl
 
 /-! ## The constraint invariant -/
 
@@ -215,6 +215,11 @@ theorem evalExpr_congr (env env' : ExprEnv) (hr : env.record = env'.record)
     (hn : env.new = env'.new) : ∀ (e : Expr), e.stateOnly = true → evalExpr env e = evalExpr env' e
   | .lit _, _ => rfl
   | .field s f, hs => by
+    cases s with
+    | record => simp [evalExpr, ExprEnv.scoped, hr]
+    | old => simp [Expr.stateOnly] at hs
+    | new => simp [evalExpr, ExprEnv.scoped, hn]
+  | .createdBy s, hs => by
     cases s with
     | record => simp [evalExpr, ExprEnv.scoped, hr]
     | old => simp [Expr.stateOnly] at hs
@@ -264,7 +269,7 @@ theorem satisfied_of_putType {t : Tenant} {ty : TypeId} {o o' : ObjType}
 
 /-- An accepted, non-delete step keeps every stored record satisfying the constraints of its type,
     given that the constraints are the state-only kind. -/
-theorem stepTenant_preserves_satisfied (t t' : Tenant) (p : PrincipalId) (i : Intent)
+theorem stepTenant_preserves_satisfied (t t' : Tenant) (p : Principal) (i : Intent)
     (hs : t.Satisfied) (hst : t.StateConstraints) (hnd : i.noDelete = true)
     (h : stepTenant t p i = .ok t') : t'.Satisfied := by
   cases i with
@@ -379,19 +384,19 @@ the same, so the invariant of the previous section does not survive a delete. -/
 def brkObj : ObjType :=
   { schema := [(1, { ty := .ref 1 .setNull, required := false })],
     constraints := [.not (.isNull (.field .record 1))],
-    records := [(1, { owner := 0, version := 1, fields := [(1, .ref 2)] }),
-                (2, { owner := 0, version := 1, fields := [(1, .ref 1)] })] }
+    records := [(1, { owner := some 0, version := 1, fields := [(1, .ref 2)] }),
+                (2, { owner := some 0, version := 1, fields := [(1, .ref 1)] })] }
 
 def brkTenant : Tenant :=
-  { types := [(1, brkObj)], owner := 0, editors := [], writers := [], nextId := 3 }
+  { types := [(1, brkObj)], members := [(0, [ownerRole])], grants := [], policies := [], nextId := 3 }
 
 /-- The object type of `brkTenant` after the delete of record `2`: record `1` has lost its field. -/
 def brkAfterObj : ObjType :=
   { schema := brkObj.schema, constraints := brkObj.constraints,
-    records := [(1, { owner := 0, version := 2, fields := [] })] }
+    records := [(1, { owner := some 0, version := 2, fields := [] })] }
 
 def brkAfter : Tenant :=
-  { types := [(1, brkAfterObj)], owner := 0, editors := [], writers := [], nextId := 3 }
+  { types := [(1, brkAfterObj)], members := [(0, [ownerRole])], grants := [], policies := [], nextId := 3 }
 
 theorem brkTenant_typ (T : TypeId) (o : ObjType) (h : brkTenant.typ? T = some o) :
     T = 1 ∧ o = brkObj := by
@@ -417,19 +422,19 @@ theorem brkTenant_stateConstraints : brkTenant.StateConstraints := by
   subst hc
   decide
 
-theorem brk_delete_result : stepTenant brkTenant 0 (.delete 1 2 none) = .ok brkAfter := rfl
+theorem brk_delete_result : stepTenant brkTenant (.user 0) (.delete 1 2 none) = .ok brkAfter := rfl
 
 theorem brkAfter_not_satisfied : ¬ brkAfter.Satisfied := by
   intro h
-  have hq := h 1 brkAfterObj rfl (1, { owner := 0, version := 2, fields := [] })
+  have hq := h 1 brkAfterObj rfl (1, { owner := some 0, version := 2, fields := [] })
     (by simp [brkAfterObj])
   exact absurd hq (by decide)
 
 /-- A delete by the owner of an accepted state can leave a stored record violating a constraint. -/
 theorem delete_breaks_satisfied :
-    ∃ (t t' : Tenant) (p : PrincipalId) (i : Intent), t.Satisfied ∧ t.StateConstraints ∧
+    ∃ (t t' : Tenant) (p : Principal) (i : Intent), t.Satisfied ∧ t.StateConstraints ∧
       i.noDelete = false ∧ stepTenant t p i = .ok t' ∧ ¬ t'.Satisfied :=
-  ⟨brkTenant, brkAfter, 0, .delete 1 2 none, brkTenant_satisfied, brkTenant_stateConstraints,
+  ⟨brkTenant, brkAfter, .user 0, .delete 1 2 none, brkTenant_satisfied, brkTenant_stateConstraints,
     rfl, brk_delete_result, brkAfter_not_satisfied⟩
 
 end Strata

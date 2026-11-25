@@ -124,7 +124,7 @@ theorem MM.inv_putSlots {K : Type} [BEq K] [Hashable K] [LawfulBEq K] [LawfulHas
 
 theorem setRequired_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
-    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : PrincipalId) (ty : TypeId) (f : FieldId)
+    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : Principal) (ty : TypeId) (f : FieldId)
     (strict : Bool) :
     Good ⟨core, ux, cx, rx⟩ (stepParts core ux cx rx p (.setRequired ty f strict))
       (stepTenantI core p (.setRequired ty f strict)) := by
@@ -132,7 +132,7 @@ theorem setRequired_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
   obtain ⟨hinv, hnd, hu, hc, hr⟩ := hok'
   dsimp only at hinv hnd hu hc hr
   simp only [stepParts, stepTenantI]
-  by_cases ho : (p != core.owner) = true
+  by_cases ho : (!canManage core.header p) = true
   · simp only [ho, if_true]; exact good_error _ _
   · simp only [ho, if_false, Bool.false_eq_true]
     cases hty : core.typ? ty with
@@ -162,7 +162,7 @@ theorem setRequired_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
 
 theorem setUnique_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
-    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : PrincipalId) (ty : TypeId) (f : FieldId)
+    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : Principal) (ty : TypeId) (f : FieldId)
     (strict : Bool) :
     Good ⟨core, ux, cx, rx⟩ (stepParts core ux cx rx p (.setUnique ty f strict))
       (stepTenantI core p (.setUnique ty f strict)) := by
@@ -170,7 +170,7 @@ theorem setUnique_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
   obtain ⟨hinv, hnd, hu, hc, hr⟩ := hok'
   dsimp only at hinv hnd hu hc hr
   simp only [stepParts, stepTenantI]
-  by_cases ho : (p != core.owner) = true
+  by_cases ho : (!canManage core.header p) = true
   · simp only [ho, if_true]; exact good_error _ _
   · simp only [ho, if_false, Bool.false_eq_true]
     cases hty : core.typ? ty with
@@ -233,14 +233,14 @@ theorem setUnique_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
 
 theorem defineUnique_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
-    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : PrincipalId) (ty : TypeId) (fs : List FieldId) :
+    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : Principal) (ty : TypeId) (fs : List FieldId) :
     Good ⟨core, ux, cx, rx⟩ (stepParts core ux cx rx p (.defineUnique ty fs))
       (stepTenantI core p (.defineUnique ty fs)) := by
   have hok' := hok
   obtain ⟨hinv, hnd, hu, hc, hr⟩ := hok'
   dsimp only at hinv hnd hu hc hr
   simp only [stepParts, stepTenantI]
-  by_cases ho : (p != core.owner) = true
+  by_cases ho : (!canManage core.header p) = true
   · simp only [ho, if_true]; exact good_error _ _
   · simp only [ho, if_false, Bool.false_eq_true]
     cases hty : core.typ? ty with

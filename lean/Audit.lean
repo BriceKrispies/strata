@@ -705,12 +705,13 @@ import Strata
 #print axioms Strata.Impl.compositeProblem_eq
 #print axioms Strata.Impl.problem_eq
 #print axioms Strata.Impl.canCreateI_eq
-#print axioms Strata.Impl.canEditI_eq
+#print axioms Strata.Impl.canUpdateI_eq
+#print axioms Strata.Impl.canDeleteI_eq
 #print axioms Strata.Impl.missingRecordI_eq
 #print axioms Strata.Impl.unknownTypeI_eq
 #print axioms Strata.Impl.problemI_abs
 #print axioms Strata.Impl.blocked_eq
-#print axioms Strata.Impl.abs_owner
+#print axioms Strata.Impl.abs_members
 #print axioms Strata.Impl.abs_limits
 #print axioms Strata.Impl.abs_nextId
 #print axioms Strata.Impl.abs_types

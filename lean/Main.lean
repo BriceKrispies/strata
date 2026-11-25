@@ -95,10 +95,16 @@ def splitType : List String → Option (TypeId × List String)
   | "type" :: n :: rest => n.toNat?.map (fun k => (k, rest))
   | rest => some (1, rest)
 
+/-- A principal token: a number is that user, `system` the system and `anon` an anonymous caller. -/
+def parsePrincipal (s : String) : Option Principal :=
+  if s = "system" then some .system
+  else if s = "anon" then some .anonymous
+  else (s.toNat?).map Principal.user
+
 def parseOp (tokens : List String) : Option (Ctx × Intent) :=
   match tokens with
   | "op" :: t :: p :: rest0 => do
-    let c : Ctx := { tenant := ← t.toNat?, principal := ← p.toNat? }
+    let c : Ctx := { tenant := ← t.toNat?, principal := ← parsePrincipal p }
     let (ty, rest) ← splitType rest0
     match rest with
     | "create" :: fields => pure (c, .create ty (← parseFields fields))
@@ -178,11 +184,16 @@ def requiredOf (o : ObjType) : String :=
   ",".intercalate ((sortBy (fun (fd : FieldId × FieldDef) => fd.1) (o.schema.filter (fun fd => fd.2.required))).map
     (fun fd => toString fd.1))
 
+/-- The creator of a record as the scenario output names it: its user id, or `-` when no user created it. -/
+def ownerText : Option PrincipalId → String
+  | some n => toString n
+  | none => "-"
+
 /-- The records of an object type, one line each; `pre` marks the type on a non-default type. -/
 def recordLines (pre : String) (o : ObjType) : List String :=
   (sortBy (fun (q : RecordId × Record) => q.1) o.records).map fun q =>
     let fields := (sortBy (fun (fv : FieldId × Val) => fv.1) q.2.fields).map fun fv => s!"{fv.1}={showVal fv.2}"
-    trimEnd s!"{pre}record {q.1} owner={q.2.owner} v={q.2.version} {" ".intercalate fields}"
+    trimEnd s!"{pre}record {q.1} owner={ownerText q.2.owner} v={q.2.version} {" ".intercalate fields}"
 
 /-- The tenant: its counter and the default type's required fields and records, then each other
     object type's required fields and records, marked with its id. -/

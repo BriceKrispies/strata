@@ -1,12 +1,13 @@
 /-
 The executable kernel, stage 1: one intent against one tenant, and against the world.
 
-`stepTenantI` is the spec's `stepTenant` (`Strata/Model.lean`) on slots. The permission tests and
-the versions are the spec's functions on the same fields, restated on `ITenant` only where the
-spec's takes a `Tenant` (they read no records, so each restatement is `rfl` on the abstraction).
-Record lookups, the write checks and the scans go through `Strata/Impl/Store.lean` and
-`Strata/Impl/Problem.lean`. The schema changes check the types they touch; they call the spec's
-`schemaChangeRefused` and `dupFields` on the abstraction, once per change.
+`stepTenantI` is the spec's `stepTenant` (`Strata/Model.lean`) on slots. The permission tests are
+the spec's functions (`canCreate`, `canUpdate`, `canDelete`, `canManage`, `missingRecord`,
+`unknownType`), taken on the tenant's header (`ITenant.header`): its members, grants and policies,
+which is the part of a tenant those functions read. Record lookups, the write checks and the scans
+go through `Strata/Impl/Store.lean` and `Strata/Impl/Problem.lean`. The schema changes check the
+types they touch; they call the spec's `schemaChangeRefused` and `dupFields` on the abstraction,
+once per change.
 
 The refinement theorems say that the implementation's result, read through `ITenant.abs` and
 `absW`, is the spec's result for the abstracted state, outcome for outcome, and that an accepted
@@ -18,27 +19,34 @@ import Strata.Impl.Problem
 namespace Strata
 namespace Impl
 
-/-- May `p` create a record in the tenant (the spec's `canCreate`). -/
-def canCreateI (t : ITenant) (p : PrincipalId) : Bool :=
-  p == t.owner || t.editors.contains p || t.writers.contains p
+/-- The part of an implementation tenant that the permission tests read: its members, grants and
+    policies, with no object types. The spec's decisions take a tenant and read no object type of it
+    to decide, so they are taken on this header. -/
+def ITenant.header (t : ITenant) : Tenant :=
+  { types := [], members := t.members, grants := t.grants, policies := t.policies,
+    nextId := t.nextId, limits := t.limits }
 
-/-- May `p` change or delete record `r` (the spec's `canEdit`). -/
-def canEditI (t : ITenant) (p : PrincipalId) (r : Record) : Bool :=
-  p == t.owner || t.editors.contains p || (t.writers.contains p && r.owner == p)
+/-- May `p` create a record of type `ty` that would be `r` (the spec's `canCreate`). -/
+def canCreateI (t : ITenant) (p : Principal) (ty : TypeId) (r : Record) : Bool :=
+  canCreate t.header p ty r
 
-/-- May `p` act on a record when there is no record to test (the spec's `canEditAny`). -/
-def canEditAnyI (t : ITenant) (p : PrincipalId) : Bool :=
-  p == t.owner || t.editors.contains p
+/-- May `p` update record `old` of type `ty`, which would become `new` (the spec's `canUpdate`). -/
+def canUpdateI (t : ITenant) (p : Principal) (ty : TypeId) (old new : Record) : Bool :=
+  canUpdate t.header p ty old new
+
+/-- May `p` delete record `old` of type `ty` (the spec's `canDelete`). -/
+def canDeleteI (t : ITenant) (p : Principal) (ty : TypeId) (old : Record) : Bool :=
+  canDelete t.header p ty old
 
 /-- The refusal for an update or delete of a record that does not exist (the spec's
     `missingRecord`). -/
-def missingRecordI (t : ITenant) (p : PrincipalId) : Err :=
-  if canEditAnyI t p then .notFound else .unauthorized
+def missingRecordI (t : ITenant) (p : Principal) (ty : TypeId) (a : Action) : Err :=
+  missingRecord t.header p ty a
 
 /-- The refusal for an intent that names an object type the tenant does not have (the spec's
     `unknownType`). -/
-def unknownTypeI (t : ITenant) (p : PrincipalId) : Err :=
-  if p == t.owner then .unknownObject else .unauthorized
+def unknownTypeI (t : ITenant) (p : Principal) (ty : TypeId) (a : Action) : Err :=
+  unknownType t.header p ty a
 
 /-- Some record of any type refers to record `id` of type `ty` through a field that forbids its
     deletion (the spec's `blockedDelete`): a scan of every slot. -/
@@ -52,15 +60,15 @@ def delObjI (ty : TypeId) (id : RecordId) (j : TypeId) (o : IObj) : IObj :=
   { o with slots := if j == ty then setSlot cleared id none else cleared }
 
 /-- One intent against one tenant, on slots. -/
-def stepTenantI (t : ITenant) (p : PrincipalId) : Intent → Except Err ITenant
+def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
   | .create ty fs =>
     match t.typ? ty with
-    | none => .error (unknownTypeI t p)
+    | none => .error (unknownTypeI t p ty .create)
     | some o =>
       match newRecord o.schema p fs with
       | .error _ => .error .evaluation
       | .ok r =>
-        if !canCreateI t p then .error .unauthorized
+        if !canCreateI t p ty r then .error .unauthorized
         else
           match problemI t.limits o.schema o.uniques true t.slotsOf o.slots t.nextId r with
           | some e => .error e
@@ -72,15 +80,15 @@ def stepTenantI (t : ITenant) (p : PrincipalId) : Intent → Except Err ITenant
               .ok { t.putType ty o' with nextId := t.nextId + 1 }
   | .update ty id fs ev =>
     match t.typ? ty with
-    | none => .error (unknownTypeI t p)
+    | none => .error (unknownTypeI t p ty .update)
     | some o =>
       match getRec o.slots id with
-      | none => .error (missingRecordI t p)
+      | none => .error (missingRecordI t p ty .update)
       | some old =>
-        if !canEditI t p old then .error .unauthorized
+        let r := patched old fs
+        if !canUpdateI t p ty old r then .error .unauthorized
         else if versionClash ev old then .error .versionConflict
         else
-          let r := patched old fs
           match problemI t.limits o.schema o.uniques true t.slotsOf o.slots id r with
           | some e => .error e
           | none =>
@@ -89,17 +97,17 @@ def stepTenantI (t : ITenant) (p : PrincipalId) : Intent → Except Err ITenant
             | none => .ok (t.putType ty { o with slots := setSlot o.slots id (some r) })
   | .delete ty id ev =>
     match t.typ? ty with
-    | none => .error (unknownTypeI t p)
+    | none => .error (unknownTypeI t p ty .delete)
     | some o =>
       match getRec o.slots id with
-      | none => .error (missingRecordI t p)
+      | none => .error (missingRecordI t p ty .delete)
       | some old =>
-        if !canEditI t p old then .error .unauthorized
+        if !canDeleteI t p ty old then .error .unauthorized
         else if versionClash ev old then .error .versionConflict
         else if blockedI t ty id then .error .stillReferenced
         else .ok { t with types := t.types.map (fun e => (e.1, delObjI ty id e.1 e.2)) }
   | .setRequired ty f strict =>
-    if p != t.owner then .error .unauthorized
+    if !canManage t.header p then .error .unauthorized
     else
       match t.typ? ty with
       | none => .error .invalidSchema
@@ -109,7 +117,7 @@ def stepTenantI (t : ITenant) (p : PrincipalId) : Intent → Except Err ITenant
             strict then .error .migrationRejected
         else .ok t'
   | .setUnique ty f strict =>
-    if p != t.owner then .error .unauthorized
+    if !canManage t.header p then .error .unauthorized
     else
       match t.typ? ty with
       | none => .error .invalidSchema
@@ -125,7 +133,7 @@ def stepTenantI (t : ITenant) (p : PrincipalId) : Intent → Except Err ITenant
               .error .migrationRejected
             else .ok t'
   | .defineUnique ty fs =>
-    if p != t.owner then .error .unauthorized
+    if !canManage t.header p then .error .unauthorized
     else
       match t.typ? ty with
       | none => .error .invalidSchema
@@ -149,16 +157,23 @@ def stepI (w : IWorld) (i : Intent) (c : Ctx) : Except Err IWorld :=
 
 /-! ## Agreement of the restated functions -/
 
-theorem canCreateI_eq (t : ITenant) (p : PrincipalId) : canCreateI t p = canCreate t.abs p := rfl
+theorem canCreateI_eq (t : ITenant) (p : Principal) (ty : TypeId) (r : Record) :
+    canCreateI t p ty r = canCreate t.abs p ty r := rfl
 
-theorem canEditI_eq (t : ITenant) (p : PrincipalId) (r : Record) :
-    canEditI t p r = canEdit t.abs p r := rfl
+theorem canUpdateI_eq (t : ITenant) (p : Principal) (ty : TypeId) (old new : Record) :
+    canUpdateI t p ty old new = canUpdate t.abs p ty old new := rfl
 
-theorem missingRecordI_eq (t : ITenant) (p : PrincipalId) :
-    missingRecordI t p = missingRecord t.abs p := rfl
+theorem canDeleteI_eq (t : ITenant) (p : Principal) (ty : TypeId) (old : Record) :
+    canDeleteI t p ty old = canDelete t.abs p ty old := rfl
 
-theorem unknownTypeI_eq (t : ITenant) (p : PrincipalId) :
-    unknownTypeI t p = unknownType t.abs p := rfl
+theorem canManage_header (t : ITenant) (p : Principal) :
+    canManage t.header p = canManage t.abs p := rfl
+
+theorem missingRecordI_eq (t : ITenant) (p : Principal) (ty : TypeId) (a : Action) :
+    missingRecordI t p ty a = missingRecord t.abs p ty a := rfl
+
+theorem unknownTypeI_eq (t : ITenant) (p : Principal) (ty : TypeId) (a : Action) :
+    unknownTypeI t p ty a = unknownType t.abs p ty a := rfl
 
 theorem problemI_abs (t : ITenant) (o : IObj) (self : RecordId) (r : Record) :
     problem t.limits o.schema o.uniques true t.abs.env (absSlots o.slots) self r =
@@ -174,13 +189,15 @@ theorem blocked_eq (t : ITenant) (ty : TypeId) (id : RecordId) :
   funext e
   simp only [Function.comp, absEntry, IObj.abs, any_absSlots]
 
-@[simp] theorem abs_owner (t : ITenant) : t.abs.owner = t.owner := rfl
+@[simp] theorem abs_members (t : ITenant) : t.abs.members = t.members := rfl
+@[simp] theorem abs_grants (t : ITenant) : t.abs.grants = t.grants := rfl
+@[simp] theorem abs_policies (t : ITenant) : t.abs.policies = t.policies := rfl
 @[simp] theorem abs_limits (t : ITenant) : t.abs.limits = t.limits := rfl
 @[simp] theorem abs_nextId (t : ITenant) : t.abs.nextId = t.nextId := rfl
 @[simp] theorem abs_types (t : ITenant) : t.abs.types = t.types.map absEntry := rfl
 
 theorem afterDelete_abs (t : ITenant) (ty : TypeId) (id : RecordId) :
-    (ITenant.mk (t.types.map (fun e => (e.1, delObjI ty id e.1 e.2))) t.owner t.editors t.writers
+    (ITenant.mk (t.types.map (fun e => (e.1, delObjI ty id e.1 e.2))) t.members t.grants t.policies
       t.nextId t.limits).abs = t.abs.afterDelete ty id := by
   unfold ITenant.abs Tenant.afterDelete
   simp only [List.map_map]
@@ -204,7 +221,7 @@ theorem except_map_ite (f : ITenant → Tenant) {c : Prop} [Decidable c] (a b : 
 /-- The implementation's result, read through the abstraction, is the spec's result on the
     abstracted state: the same refusal, or the abstraction of the accepted tenant. No type's slot
     array is longer than the counter (`hinv`), so a created record gets the spec's id. -/
-theorem stepTenantI_refines (t : ITenant) (p : PrincipalId) (i : Intent) (hinv : t.Inv) :
+theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t.Inv) :
     (stepTenantI t p i).map ITenant.abs = stepTenant t.abs p i := by
   cases i with
   | create ty fs =>
@@ -227,7 +244,7 @@ theorem stepTenantI_refines (t : ITenant) (p : PrincipalId) (i : Intent) (hinv :
             problemI t.limits o.schema o.uniques true t.slotsOf o.slots t.nextId r :=
           problemI_abs t o t.nextId r
         simp only [stepTenantI, stepTenant, hty, hty', hr, hr', canCreateI_eq]
-        by_cases hc : (!canCreate t.abs p) = true
+        by_cases hc : (!canCreate t.abs p ty r) = true
         · simp [hc, Except.map]
         · simp only [hc, if_false, Bool.false_eq_true, hp]
           cases hq : problemI t.limits o.schema o.uniques true t.slotsOf o.slots t.nextId r with
@@ -262,8 +279,8 @@ theorem stepTenantI_refines (t : ITenant) (p : PrincipalId) (i : Intent) (hinv :
             id (patched old fs) =
             problemI t.limits o.schema o.uniques true t.slotsOf o.slots id (patched old fs) :=
           problemI_abs t o id (patched old fs)
-        simp only [stepTenantI, stepTenant, hty, hty', hg, hl, canEditI_eq]
-        by_cases hc : (!canEdit t.abs p old) = true
+        simp only [stepTenantI, stepTenant, hty, hty', hg, hl, canUpdateI_eq]
+        by_cases hc : (!canUpdate t.abs p ty old (patched old fs)) = true
         · simp [hc, Except.map]
         · by_cases hv : versionClash ev old = true
           · simp [hc, hv, Except.map]
@@ -298,8 +315,8 @@ theorem stepTenantI_refines (t : ITenant) (p : PrincipalId) (i : Intent) (hinv :
         simp only [stepTenantI, stepTenant, hty, hty', hg, hl, missingRecordI_eq]
         rfl
       | some old =>
-        simp only [stepTenantI, stepTenant, hty, hty', hg, hl, canEditI_eq, blocked_eq]
-        by_cases hc : (!canEdit t.abs p old) = true
+        simp only [stepTenantI, stepTenant, hty, hty', hg, hl, canDeleteI_eq, blocked_eq]
+        by_cases hc : (!canDelete t.abs p ty old) = true
         · simp [hc, Except.map]
         · by_cases hv : versionClash ev old = true
           · simp [hc, hv, Except.map]
@@ -309,33 +326,37 @@ theorem stepTenantI_refines (t : ITenant) (p : PrincipalId) (i : Intent) (hinv :
               congr 1
               exact afterDelete_abs t ty id
   | setRequired ty f strict =>
-    by_cases ho : (p != t.owner) = true
-    · simp [stepTenantI, stepTenant, ho, Except.map]
-    · have ho' : (p != t.abs.owner) = false := by simpa using ho
+    by_cases ho : (!canManage t.header p) = true
+    · have ho2 : canManage t.abs p = false := by rw [← canManage_header]; simpa using ho
+      simp [stepTenantI, stepTenant, canManage_header, ho2, Except.map]
+    · have ho' : (!canManage t.abs p) = false := by rw [← canManage_header]; simpa using ho
       cases hty : t.typ? ty with
       | none =>
         have hty' : t.abs.typ? ty = none := by rw [typ?_abs, hty]; rfl
-        simp [stepTenantI, stepTenant, hty, hty', ho, ho', Except.map]
+        simp [stepTenantI, stepTenant, hty, hty', ho, ho', canManage_header, Except.map]
       | some o =>
         have hty' : t.abs.typ? ty = some o.abs := by rw [typ?_abs, hty]; rfl
         have hpt := putType_abs t ty { o with schema := makeRequired o.schema f }
-        simp only [stepTenantI, stepTenant, hty, hty', ho, ho', if_false, Bool.false_eq_true]
-        simp only [hpt, IObj.abs_schema, IObj.abs, abs_owner, abs_limits, ho, ho', if_false,
+        simp only [stepTenantI, stepTenant, hty, hty', ho, ho', canManage_header, if_false,
           Bool.false_eq_true]
+        simp only [hpt, IObj.abs_schema, IObj.abs, abs_members, abs_grants, abs_policies,
+          abs_limits, ho, ho', if_false, Bool.false_eq_true]
         split <;> simp_all [Except.map] <;> rfl
   | setUnique ty f strict =>
-    by_cases ho : (p != t.owner) = true
-    · simp [stepTenantI, stepTenant, ho, Except.map]
-    · have ho' : (p != t.abs.owner) = false := by simpa using ho
+    by_cases ho : (!canManage t.header p) = true
+    · have ho2 : canManage t.abs p = false := by rw [← canManage_header]; simpa using ho
+      simp [stepTenantI, stepTenant, canManage_header, ho2, Except.map]
+    · have ho' : (!canManage t.abs p) = false := by rw [← canManage_header]; simpa using ho
       cases hty : t.typ? ty with
       | none =>
         have hty' : t.abs.typ? ty = none := by rw [typ?_abs, hty]; rfl
-        simp [stepTenantI, stepTenant, hty, hty', ho, ho', Except.map]
+        simp [stepTenantI, stepTenant, hty, hty', ho, ho', canManage_header, Except.map]
       | some o =>
         have hty' : t.abs.typ? ty = some o.abs := by rw [typ?_abs, hty]; rfl
         have hpt := putType_abs t ty { o with schema := makeUnique o.schema f }
         have hl : o.abs.schema.lookup f = o.schema.lookup f := rfl
-        simp only [stepTenantI, stepTenant, hty, hty', ho, ho', if_false, Bool.false_eq_true, hl]
+        simp only [stepTenantI, stepTenant, hty, hty', ho, ho', canManage_header, if_false,
+          Bool.false_eq_true, hl]
         cases o.schema.lookup f with
         | none => simp [Except.map]
         | some d =>
@@ -343,20 +364,23 @@ theorem stepTenantI_refines (t : ITenant) (p : PrincipalId) (i : Intent) (hinv :
           by_cases hd : d.ty.isList = true
           · simp [hd, Except.map]
           · simp only [hd, if_false, Bool.false_eq_true]
-            simp only [hpt, IObj.abs_schema, IObj.abs, abs_owner, abs_limits]
+            simp only [hpt, IObj.abs_schema, IObj.abs, abs_members, abs_grants, abs_policies,
+              abs_limits]
             split <;> simp_all [Except.map] <;> rfl
   | defineUnique ty fs =>
-    by_cases ho : (p != t.owner) = true
-    · simp [stepTenantI, stepTenant, ho, Except.map]
-    · have ho' : (p != t.abs.owner) = false := by simpa using ho
+    by_cases ho : (!canManage t.header p) = true
+    · have ho2 : canManage t.abs p = false := by rw [← canManage_header]; simpa using ho
+      simp [stepTenantI, stepTenant, canManage_header, ho2, Except.map]
+    · have ho' : (!canManage t.abs p) = false := by rw [← canManage_header]; simpa using ho
       cases hty : t.typ? ty with
       | none =>
         have hty' : t.abs.typ? ty = none := by rw [typ?_abs, hty]; rfl
-        simp [stepTenantI, stepTenant, hty, hty', ho, ho', Except.map]
+        simp [stepTenantI, stepTenant, hty, hty', ho, ho', canManage_header, Except.map]
       | some o =>
         have hty' : t.abs.typ? ty = some o.abs := by rw [typ?_abs, hty]; rfl
         have hpt := putType_abs t ty { o with uniques := o.uniques ++ [fs] }
-        simp only [stepTenantI, stepTenant, hty, hty', ho, ho', if_false, Bool.false_eq_true]
+        simp only [stepTenantI, stepTenant, hty, hty', ho, ho', canManage_header, if_false,
+          Bool.false_eq_true]
         by_cases hu : (!uniqueFieldsOk o.schema fs) = true
         · simp [hu, Except.map, IObj.abs]
         · by_cases hd : dupFields (absSlots o.slots) fs = true

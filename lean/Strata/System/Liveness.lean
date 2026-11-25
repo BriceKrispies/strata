@@ -133,7 +133,7 @@ def actPublish (K : Kernel) (C : Config) (sid : SubId) (e : Event) (s s' : PStat
     again; an undecided commit on an old revision is a conflict; on the current revision it is
     accepted or refused. -/
 inductive StoreStep (K : Kernel) (C : Config) (rid : RequestId) (tok : Token) (t : TenantId)
-    (p : PrincipalId) (i : Intent) (base : Nat) (res : Except Err Tenant) :
+    (p : Principal) (i : Intent) (base : Nat) (res : Except Err Tenant) :
     PState → PState → Prop
   | decided (s : PState) (o : Outcome) (h : s.net (.commit rid tok t p i base res))
       (hd : s.store.decided rid = some o) :
@@ -1307,7 +1307,7 @@ theorem txn_tenant_const {K : Kernel} {C : Config} {b : Behaviour PState} (r : R
 
 /-- A commit packet is always met by one of the store's steps. -/
 theorem store_enabled {K : Kernel} {C : Config} {rid : RequestId} {tok : Token} {t : TenantId}
-    {p : PrincipalId} {i : Intent} {base : Nat} {res : Except Err Tenant} {s : PState}
+    {p : Principal} {i : Intent} {base : Nat} {res : Except Err Tenant} {s : PState}
     (hc : s.net (.commit rid tok t p i base res)) :
     ∃ s', StoreStep K C rid tok t p i base res s s' := by
   cases hd : s.store.decided rid with
@@ -1321,7 +1321,7 @@ theorem store_enabled {K : Kernel} {C : Config} {rid : RequestId} {tok : Token} 
 
 /-- A store step on an undecided request that leaves it undecided is a conflict. -/
 theorem store_conflict_only {K : Kernel} {C : Config} {rid : RequestId} {tok : Token}
-    {t : TenantId} {p : PrincipalId} {i : Intent} {base : Nat} {res : Except Err Tenant}
+    {t : TenantId} {p : Principal} {i : Intent} {base : Nat} {res : Except Err Tenant}
     {s s' : PState} (h : StoreStep K C rid tok t p i base res s s')
     (h0 : s.store.decided rid = none) (h1 : s'.store.decided rid = none) :
     s'.net (.conflict rid base) := by
@@ -1422,7 +1422,7 @@ theorem committing_keep {K : Kernel} {C : Config} {r : RequestId} {s s' : PState
 /-! ## The reply argument: lemmas along a fair behaviour -/
 
 theorem storeStep_net {K : Kernel} {C : Config} {rid : RequestId} {tok : Token} {t : TenantId}
-    {p : PrincipalId} {i : Intent} {base : Nat} {res : Except Err Tenant} {s s' : PState}
+    {p : Principal} {i : Intent} {base : Nat} {res : Except Err Tenant} {s s' : PState}
     (h : StoreStep K C rid tok t p i base res s s') : s.net (.commit rid tok t p i base res) := by
   cases h with
   | decided o hc hd => exact hc
@@ -1431,7 +1431,7 @@ theorem storeStep_net {K : Kernel} {C : Config} {rid : RequestId} {tok : Token} 
   | refuse e2 hc hd hb hr => exact hc
 
 theorem store_step_undecided {K : Kernel} {C : Config} {rid : RequestId} {tok : Token}
-    {t : TenantId} {p : PrincipalId} {i : Intent} {base : Nat} {res : Except Err Tenant}
+    {t : TenantId} {p : Principal} {i : Intent} {base : Nat} {res : Except Err Tenant}
     {s s' : PState} (h : StoreStep K C rid tok t p i base res s s')
     (h0 : s.store.decided rid = none) (h1 : s'.store.decided rid = none) :
     base ≠ s.store.rev t := by
@@ -1555,7 +1555,7 @@ theorem txn_exists {K : Kernel} {C : Config} {b : Behaviour PState}
     (hstep : ∀ n, PNext K C (b n) (b (n+1)) ∨ b (n+1) = b n)
     (hFwd : ∀ rid tok i, weakFair (actFwd rid tok i) b)
     (hBeg : ∀ rid tok i, weakFair (actBegin C rid tok i) b)
-    (r : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : PrincipalId)
+    (r : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : Principal)
     (hs : C.sessions tok = some (t, p)) (k : Nat) (hreq : (b k).net (.req r tok i))
     (hnsF : ∀ n, (b n).noSession r = false) :
     ∃ n x, (b n).txns r = some x := by
@@ -1620,7 +1620,7 @@ theorem protoSpec_parts {K : Kernel} {C : Config} {w0 : World} {b : Behaviour PS
     committing, which the argument excludes. Only weak fairness is used. -/
 theorem reply_core {K : Kernel} {C : Config} {w0 : World} {N : Nat} {b : Behaviour PState}
     (hspec : protoSpec K C w0 b) (hN : ∀ n rid tok i, (b n).net (.req rid tok i) → rid < N)
-    (r : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : PrincipalId)
+    (r : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : Principal)
     (hs : C.sessions tok = some (t, p)) (k : Nat) (hreq : (b k).net (.req r tok i)) :
     ∃ m o, (b m).net (.clientReply r o) := by
   obtain ⟨hinit, hstep, hF⟩ := protoSpec_parts hspec
@@ -1799,7 +1799,7 @@ theorem reply_core {K : Kernel} {C : Config} {w0 : World} {N : Nat} {b : Behavio
 /-- A request with a valid session is eventually answered. -/
 theorem reply_leadsTo {K : Kernel} {C : Config} {w0 : World} {N : Nat} {b : Behaviour PState}
     (hspec : protoSpec K C w0 b) (hN : ∀ n rid tok i, (b n).net (.req rid tok i) → rid < N)
-    (r : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : PrincipalId)
+    (r : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : Principal)
     (hs : C.sessions tok = some (t, p)) :
     leadsTo (lift (fun s => s.net (.req r tok i)))
       (lift (fun s => ∃ o, s.net (.clientReply r o))) b := by
@@ -1818,7 +1818,7 @@ theorem reply_leadsTo {K : Kernel} {C : Config} {w0 : World} {N : Nat} {b : Beha
 /-- A committed event is delivered as a frame to every subscriber whose principal may read it. -/
 theorem publish_leadsTo {K : Kernel} {C : Config} {w0 : World} {N : Nat} {b : Behaviour PState}
     (hspec : protoSpec K C w0 b) (hN : ∀ n rid tok i, (b n).net (.req rid tok i) → rid < N)
-    (e : Event) (sid : SubId) (t : TenantId) (p : PrincipalId) (hsub : C.subs sid = some (t, p))
+    (e : Event) (sid : SubId) (t : TenantId) (p : Principal) (hsub : C.subs sid = some (t, p))
     (htn : e.tenant = t) (hread : K.readable e.post p) :
     leadsTo (lift (fun s => e ∈ s.store.evs)) (lift (fun s => s.net (.frame sid e))) b := by
   obtain ⟨hinit, hstep, hF⟩ := protoSpec_parts hspec
@@ -1909,19 +1909,19 @@ theorem tail_weak {A : PState → PState → Prop} {b : Behaviour PState} {S : P
 
 /-- The tenant after the accepted create of request 1 (the kernel's verdict on the empty create). -/
 def aT1 : Tenant :=
-  { wTenant with types := [(1, { schema := [], records := [(0, { owner := 7, version := 1, fields := [] })] })], nextId := 1 }
+  { wTenant with types := [(1, { schema := [], records := [(0, { owner := some 7, version := 1, fields := [] })] })], nextId := 1 }
 
-theorem aT1_spec : stepTenant wTenant 7 (.create 1 []) = .ok aT1 := rfl
+theorem aT1_spec : stepTenant wTenant (.user 7) (.create 1 []) = .ok aT1 := rfl
 
-theorem aT1_owner : aT1.owner = 7 := rfl
+theorem aT1_owner : aT1.members = [(7, [ownerRole])] := rfl
 
-theorem aT1_can : canCreate aT1 7 = true := rfl
+theorem aT1_can : canCreate aT1 (.user 7) 1 { owner := some 7, version := 1, fields := [] } = true := rfl
 
 /-- Token 0 belongs to principal 9 (refused); token 1 to principal 7 (the owner); subscriber 0 reads
     tenant 0 as principal 7. -/
 def aConfig : Config :=
-  { sessions := fun tok => if tok = 0 then some (0, 9) else if tok = 1 then some (0, 7) else none
-    subs := fun sid => if sid = 0 then some (0, 7) else none }
+  { sessions := fun tok => if tok = 0 then some (0, .user 9) else if tok = 1 then some (0, .user 7) else none
+    subs := fun sid => if sid = 0 then some (0, .user 7) else none }
 
 /-- The committed event of request 1. -/
 def aEv : Event := { tenant := 0, rid := 1, post := aT1 }
@@ -1929,12 +1929,12 @@ def aEv : Event := { tenant := 0, rid := 1, post := aT1 }
 def a1 : PState := sendOne wInit (.req 1 1 (.create 1 []))
 def a2 : PState := sendOne a1 (.fwd 1 1 (.create 1 []))
 def a3 : PState := { sendOne a2 (.load 1 0 0) with
-  txns := updTxn a2.txns 1 ⟨1, 0, 7, .create 1 [], .loading⟩ }
+  txns := updTxn a2.txns 1 ⟨1, 0, .user 7, .create 1 [], .loading⟩ }
 def a4 : PState := sendOne a3 (.snap 1 0 (wWorld 0) 0 0)
-def a5 : PState := { a4 with txns := updTxn a4.txns 1 ⟨1, 0, 7, .create 1 [], .ready (wWorld 0) 0⟩ }
-def a6 : PState := { sendOne a5 (.commit 1 1 0 7 (.create 1 []) 0
-    (verdict wKernel (wWorld 0) 7 (.create 1 []))) with
-  txns := updTxn a5.txns 1 ⟨1, 0, 7, .create 1 [], .committing (wWorld 0) 0⟩ }
+def a5 : PState := { a4 with txns := updTxn a4.txns 1 ⟨1, 0, .user 7, .create 1 [], .ready (wWorld 0) 0⟩ }
+def a6 : PState := { sendOne a5 (.commit 1 1 0 (.user 7) (.create 1 []) 0
+    (verdict wKernel (wWorld 0) (.user 7) (.create 1 []))) with
+  txns := updTxn a5.txns 1 ⟨1, 0, .user 7, .create 1 [], .committing (wWorld 0) 0⟩ }
 def a7 : PState :=
   { net := fun x => a6.net x ∨ x = .done 1 .accepted ∨ x = .committed aEv
     txns := a6.txns
@@ -1945,7 +1945,7 @@ def a7 : PState :=
                evs := a6.store.evs ++ [aEv]
                decided := fun r => if r = 1 then some .accepted else a6.store.decided r } }
 def a8 : PState := { sendOne a7 (.reply 1 .accepted) with
-  txns := updTxn a7.txns 1 ⟨1, 0, 7, .create 1 [], .finished .accepted⟩ }
+  txns := updTxn a7.txns 1 ⟨1, 0, .user 7, .create 1 [], .finished .accepted⟩ }
 def a9 : PState := sendOne a8 (.clientReply 1 .accepted)
 def a10 : PState := sendOne a9 (.snap 1 0 (some aT1) 1 0)
 def a11 : PState := sendOne a10 (.frame 0 aEv)
@@ -1955,22 +1955,22 @@ theorem a1_step : PNext wKernel aConfig wInit a1 := PNext.clientReq wInit 1 1 (.
 theorem a2_step : PNext wKernel aConfig a1 a2 := PNext.bffForward a1 1 1 (.create 1 []) (Or.inr rfl)
 
 theorem a3_step : PNext wKernel aConfig a2 a3 :=
-  PNext.begin a2 1 1 (.create 1 []) 0 7 (Or.inr rfl) rfl rfl rfl
+  PNext.begin a2 1 1 (.create 1 []) 0 (.user 7) (Or.inr rfl) rfl rfl rfl
 
 theorem a4_step : PNext wKernel aConfig a3 a4 := PNext.load a3 1 0 0 (Or.inr rfl)
 
 theorem a5_step : PNext wKernel aConfig a4 a5 :=
-  PNext.snap a4 1 0 (wWorld 0) 0 0 ⟨1, 0, 7, .create 1 [], .loading⟩ (Or.inr rfl) rfl rfl rfl rfl
+  PNext.snap a4 1 0 (wWorld 0) 0 0 ⟨1, 0, .user 7, .create 1 [], .loading⟩ (Or.inr rfl) rfl rfl rfl rfl
 
 theorem a6_step : PNext wKernel aConfig a5 a6 :=
-  PNext.commit a5 1 ⟨1, 0, 7, .create 1 [], .ready (wWorld 0) 0⟩ (wWorld 0) 0 rfl rfl
+  PNext.commit a5 1 ⟨1, 0, .user 7, .create 1 [], .ready (wWorld 0) 0⟩ (wWorld 0) 0 rfl rfl
 
 theorem a7_step : PNext wKernel aConfig a6 a7 :=
-  PNext.storeAccept a6 1 1 0 7 (.create 1 []) 0 (verdict wKernel (wWorld 0) 7 (.create 1 [])) aT1
+  PNext.storeAccept a6 1 1 0 (.user 7) (.create 1 []) 0 (verdict wKernel (wWorld 0) (.user 7) (.create 1 [])) aT1
     (Or.inr rfl) rfl rfl aT1_spec
 
 theorem a8_step : PNext wKernel aConfig a7 a8 :=
-  PNext.done a7 1 .accepted ⟨1, 0, 7, .create 1 [], .committing (wWorld 0) 0⟩ (Or.inr (Or.inl rfl)) rfl
+  PNext.done a7 1 .accepted ⟨1, 0, .user 7, .create 1 [], .committing (wWorld 0) 0⟩ (Or.inr (Or.inl rfl)) rfl
 
 theorem a9_step : PNext wKernel aConfig a8 a9 := PNext.bffRelay a8 1 .accepted (Or.inr rfl)
 
@@ -1983,7 +1983,7 @@ theorem a10_committed : a10.net (.committed aEv) := by
   simp [a10, a9, a8, a7, sendOne]
 
 theorem a11_step : PNext wKernel aConfig a10 a11 :=
-  PNext.publish a10 0 aEv 0 7 a10_committed rfl rfl rfl
+  PNext.publish a10 0 aEv 0 (.user 7) a10_committed rfl rfl rfl
 
 /-- The accepted run, then its last state forever. -/
 def atr : Nat → PState
@@ -2024,12 +2024,12 @@ theorem atr_ge (m : Nat) (h : 11 ≤ m) : atr m = a11 := by
 theorem a11_net (p : Packet) : a11.net p ↔
     (p = .req 1 1 (.create 1 []) ∨ p = .fwd 1 1 (.create 1 []) ∨ p = .load 1 0 0 ∨
      p = .snap 1 0 (wWorld 0) 0 0 ∨
-     p = .commit 1 1 0 7 (.create 1 []) 0 (verdict wKernel (wWorld 0) 7 (.create 1 [])) ∨
+     p = .commit 1 1 0 (.user 7) (.create 1 []) 0 (verdict wKernel (wWorld 0) (.user 7) (.create 1 [])) ∨
      p = .done 1 .accepted ∨ p = .committed aEv ∨ p = .reply 1 .accepted ∨
      p = .clientReply 1 .accepted ∨ p = .snap 1 0 (some aT1) 1 0 ∨ p = .frame 0 aEv) := by
   simp only [a11, a10, a9, a8, a7, a6, a5, a4, a3, a2, a1, sendOne, wInit, or_assoc, false_or]
 
-theorem a11_txn1 : a11.txns 1 = some ⟨1, 0, 7, .create 1 [], .finished .accepted⟩ := rfl
+theorem a11_txn1 : a11.txns 1 = some ⟨1, 0, .user 7, .create 1 [], .finished .accepted⟩ := rfl
 
 theorem a11_txne (r : RequestId) (hr : r ≠ 1) : a11.txns r = none := by
   simp [a11, a10, a9, a8, a7, a6, a5, a4, a3, a2, a1, sendOne, wInit, updTxn, hr]
@@ -2048,7 +2048,7 @@ theorem a11_attempt (r : RequestId) : a11.attempt r = 0 := rfl
 theorem a11_done : a11.net (.done 1 .accepted) := (a11_net _).2 (by simp)
 theorem a11_reply : a11.net (.reply 1 .accepted) := (a11_net _).2 (by simp)
 theorem a11_clientReply : a11.net (.clientReply 1 .accepted) := (a11_net _).2 (by simp)
-theorem a11_commit : a11.net (.commit 1 1 0 7 (.create 1 []) 0 (verdict wKernel (wWorld 0) 7 (.create 1 []))) :=
+theorem a11_commit : a11.net (.commit 1 1 0 (.user 7) (.create 1 []) 0 (verdict wKernel (wWorld 0) (.user 7) (.create 1 []))) :=
   (a11_net _).2 (by simp)
 theorem a11_fwd : a11.net (.fwd 1 1 (.create 1 [])) := (a11_net _).2 (by simp)
 theorem a11_load : a11.net (.load 1 0 0) := (a11_net _).2 (by simp)
@@ -2083,7 +2083,7 @@ theorem done_self (rid : RequestId) (o : Outcome) (hen : enabled (actDone rid o)
   obtain ⟨_, x, hx, hdn, _⟩ := hen
   have hh : rid = 1 ∧ o = .accepted := by simpa using (a11_net _).1 hdn
   obtain ⟨rfl, rfl⟩ := hh
-  have hx' : x = ⟨1, 0, 7, .create 1 [], .finished .accepted⟩ :=
+  have hx' : x = ⟨1, 0, .user 7, .create 1 [], .finished .accepted⟩ :=
     Option.some.inj (hx.symm.trans a11_txn1)
   subst hx'
   refine ⟨_, a11_txn1, a11_done, ?_⟩
@@ -2138,16 +2138,16 @@ theorem publish_self (sid : SubId) (e : Event) (hen : enabled (actPublish wKerne
     simp [aConfig, hne] at hsub
   subst he
   subst hs0
-  exact ⟨a11_committed, ⟨0, 7, rfl, rfl, aT1_can⟩, (sendOne_self a11 _ a11_frame).symm⟩
+  exact ⟨a11_committed, ⟨0, .user 7, rfl, rfl, aT1_can⟩, (sendOne_self a11 _ a11_frame).symm⟩
 
-theorem store_self (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId) (i : Intent)
+theorem store_self (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal) (i : Intent)
     (base : Nat) (res : Except Err Tenant)
     (hen : enabled (StoreStep wKernel aConfig rid tok t p i base res) a11) :
     StoreStep wKernel aConfig rid tok t p i base res a11 a11 := by
   obtain ⟨_, hs⟩ := hen
   have hc : a11.net (.commit rid tok t p i base res) := storeStep_net hs
-  have hh : rid = 1 ∧ tok = 1 ∧ t = 0 ∧ p = 7 ∧ i = .create 1 [] ∧ base = 0 ∧
-      res = verdict wKernel (wWorld 0) 7 (.create 1 []) := by
+  have hh : rid = 1 ∧ tok = 1 ∧ t = 0 ∧ p = .user 7 ∧ i = .create 1 [] ∧ base = 0 ∧
+      res = verdict wKernel (wWorld 0) (.user 7) (.create 1 []) := by
     simpa using (a11_net _).1 hc
   obtain ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩ := hh
   have hs' := StoreStep.decided (K := wKernel) (C := aConfig) a11 .accepted hc a11_decided

@@ -92,18 +92,19 @@ def ckeysUnder (ty : TypeId) (o : IObj) (fs : List FieldId) (c : Cell) :
 
 /-- One intent against one indexed tenant, in pieces. A refusal hands the tenant back untouched,
     built from the pieces the step was given, so a caller that keeps no other reference to the
-    tenant lets the compiled code update it in place, accepted or not. -/
+    tenant lets the compiled code update it in place, accepted or not. The permission tests are the
+    stage-1 ones (`canCreateI`, `canUpdateI`, `canDeleteI`, `canManage` on the header). -/
 def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
-    (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell) (p : PrincipalId) :
+    (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell) (p : Principal) :
     Intent → Except (Err × XTenant) XTenant
   | .create ty fs =>
     match core.typ? ty with
-    | none => .error (unknownTypeI core p, ⟨core, ux, cx, rx⟩)
+    | none => .error (unknownTypeI core p ty .create, ⟨core, ux, cx, rx⟩)
     | some o =>
       match newRecord o.schema p fs with
       | .error _ => .error (.evaluation, ⟨core, ux, cx, rx⟩)
       | .ok r =>
-        if !canCreateI core p then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
+        if !canCreateI core p ty r then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
         else
           match problemX core.limits o.schema o.uniques true core.slotsOf ux cx ty core.nextId r with
           | some e => .error (e, ⟨core, ux, cx, rx⟩)
@@ -121,15 +122,15 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
                 ux cx rx ty id sch us none (some r))
   | .update ty id fs ev =>
     match core.typ? ty with
-    | none => .error (unknownTypeI core p, ⟨core, ux, cx, rx⟩)
+    | none => .error (unknownTypeI core p ty .update, ⟨core, ux, cx, rx⟩)
     | some o =>
       match getRec o.slots id with
-      | none => .error (missingRecordI core p, ⟨core, ux, cx, rx⟩)
+      | none => .error (missingRecordI core p ty .update, ⟨core, ux, cx, rx⟩)
       | some old =>
-        if !canEditI core p old then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
+        let r := patched old fs
+        if !canUpdateI core p ty old r then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
         else if versionClash ev old then .error (.versionConflict, ⟨core, ux, cx, rx⟩)
         else
-          let r := patched old fs
           match problemX core.limits o.schema o.uniques true core.slotsOf ux cx ty id r with
           | some e => .error (e, ⟨core, ux, cx, rx⟩)
           | none =>
@@ -143,17 +144,17 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
                 ux cx rx ty id sch us (some old) (some r))
   | .delete ty id ev =>
     match core.typ? ty with
-    | none => .error (unknownTypeI core p, ⟨core, ux, cx, rx⟩)
+    | none => .error (unknownTypeI core p ty .delete, ⟨core, ux, cx, rx⟩)
     | some o =>
       match getRec o.slots id with
-      | none => .error (missingRecordI core p, ⟨core, ux, cx, rx⟩)
+      | none => .error (missingRecordI core p ty .delete, ⟨core, ux, cx, rx⟩)
       | some old =>
-        if !canEditI core p old then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
+        if !canDeleteI core p ty old then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
         else if versionClash ev old then .error (.versionConflict, ⟨core, ux, cx, rx⟩)
         else if blockedX core rx ty id then .error (.stillReferenced, ⟨core, ux, cx, rx⟩)
         else .ok (XTenant.deleteX core ux cx rx ty id o.schema o.uniques old)
   | .setRequired ty f strict =>
-    if p != core.owner then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
+    if !canManage core.header p then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
     else
       match core.typ? ty with
       | none => .error (.invalidSchema, ⟨core, ux, cx, rx⟩)
@@ -163,7 +164,7 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
             strict then .error (.migrationRejected, ⟨core, ux, cx, rx⟩)
         else .ok ⟨t', ux, cx, rx⟩
   | .setUnique ty f strict =>
-    if p != core.owner then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
+    if !canManage core.header p then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
     else
       match core.typ? ty with
       | none => .error (.invalidSchema, ⟨core, ux, cx, rx⟩)
@@ -180,7 +181,7 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
             else .ok ⟨t', ux.addCells (cellsOf ty o.slots.size)
               (ukeysUnder ty o (makeUnique o.schema f)), cx, rx⟩
   | .defineUnique ty fs =>
-    if p != core.owner then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
+    if !canManage core.header p then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
     else
       match core.typ? ty with
       | none => .error (.invalidSchema, ⟨core, ux, cx, rx⟩)
@@ -194,12 +195,12 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
           else .ok ⟨t', ux, cx.addCells (cellsOf ty o.slots.size) (ckeysUnder ty o fs), rx⟩
 
 /-- One intent against one indexed tenant; a refusal hands the tenant back. -/
-def stepTenantXL (x : XTenant) (p : PrincipalId) (i : Intent) : Except (Err × XTenant) XTenant :=
+def stepTenantXL (x : XTenant) (p : Principal) (i : Intent) : Except (Err × XTenant) XTenant :=
   match x with
   | ⟨core, ux, cx, rx⟩ => stepParts core ux cx rx p i
 
 /-- One intent against one indexed tenant. -/
-def stepTenantX (x : XTenant) (p : PrincipalId) (i : Intent) : Except Err XTenant :=
+def stepTenantX (x : XTenant) (p : Principal) (i : Intent) : Except Err XTenant :=
   (stepTenantXL x p i).mapError Prod.fst
 
 end Impl

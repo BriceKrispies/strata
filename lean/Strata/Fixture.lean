@@ -55,14 +55,38 @@ def partSchema : Schema :=
    (5, { ty := .bool, required := false,
          default := .cmp .eq .principal (.lit (.str "p100")) })]
 
+/-- The role of an editor in the fixture (the kernel's `editor`). -/
+def editorRole : RoleId := 2
+
+/-- The role of a writer in the fixture (the kernel's `writer`). -/
+def writerRole : RoleId := 3
+
+/-- A writer may change or delete a record it created: `record.$created_by == principal`. -/
+def ownRecord : Expr := .cmp .eq (.createdBy .record) .principal
+
+/-- The policies of the fixture, for each of its object types (slice 6). An editor may do everything
+    to the records of each type; a writer may read and create them and change or delete the ones it
+    created. The public role, which every user holds too, may create a part only when there is no
+    user, that is for an anonymous caller (`isNull principal`); the system holds no role. -/
+def fixturePolicies : List Policy :=
+  [ { role := editorRole, resource := .object 1, actions := [.read, .create, .update, .delete] },
+    { role := writerRole, resource := .object 1, actions := [.read, .create] },
+    { role := writerRole, resource := .object 1, actions := [.update, .delete], condition := some ownRecord },
+    { role := editorRole, resource := .object 2, actions := [.read, .create, .update, .delete] },
+    { role := writerRole, resource := .object 2, actions := [.read, .create] },
+    { role := writerRole, resource := .object 2, actions := [.update, .delete], condition := some ownRecord },
+    { role := publicRole, resource := .object 2, actions := [.create],
+      condition := some (.isNull .principal) } ]
+
 /-- The two object types every scenario starts from, each tenant with an owner, an editor and two
     writers. The size limits are the kernel's. -/
 def initialTenant (n : Nat) : Tenant :=
   { types := [(1, { schema := itemSchema, constraints := itemConstraints }),
                (2, { schema := partSchema })],
-    owner := n * 100,
-    editors := [n * 100 + 1],
-    writers := [n * 100 + 2, n * 100 + 3],
+    members := [(n * 100, [ownerRole]), (n * 100 + 1, [editorRole]),
+                (n * 100 + 2, [writerRole]), (n * 100 + 3, [writerRole])],
+    grants := [],
+    policies := fixturePolicies,
     nextId := 1,
     limits := Limits.kernel }
 

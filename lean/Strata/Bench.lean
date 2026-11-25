@@ -85,7 +85,7 @@ def genWorkload (n : Nat) : Array Intent := Id.run do
     seed := seed'
     ops := ops.push op
     let id := x.core.nextId
-    match stepTenantXL x 100 op with
+    match stepTenantXL x (.user 100) op with
     | .error (_, x') => x := x'
     | .ok x' =>
       x := x'
@@ -100,7 +100,7 @@ def genWorkload (n : Nat) : Array Intent := Id.run do
 /-- A number summarising the records of a tenant: the sum over records of a function of id,
     version, owner and field count and size, so it does not depend on the order. -/
 def recSum (q : RecordId × Record) : Nat :=
-  (q.1 * 7919 + q.2.version * 31 + q.2.fields.length * 17 + q.2.size + q.2.owner) % 1000000007
+  (q.1 * 7919 + q.2.version * 31 + q.2.fields.length * 17 + q.2.size + (q.2.owner.getD 0)) % 1000000007
 
 def checksum (t : Tenant) : Nat :=
   t.types.foldl (fun acc e => (acc + e.1 + e.2.records.foldl (fun a q => a + recSum q) 0) % 1000000007)
@@ -135,7 +135,7 @@ def runIndexed (init : XTenant) (ops : Array Intent) : XTenant × Nat := Id.run 
   let mut t := init
   let mut ok := 0
   for op in ops do
-    match stepTenantXL t 100 op with
+    match stepTenantXL t (.user 100) op with
     | .ok t' => t := t'; ok := ok + 1
     | .error (_, t') => t := t'
   return (t, ok)
@@ -167,7 +167,7 @@ def bench (n specMax stage1Max : Nat) : IO Bool := do
   let r1 := (okx, csx)
   let mut good := true
   if n ≤ stage1Max then
-    let r2 ← timeKernel "slots   (stage 1)" (fun t op => stepTenantI t 100 op)
+    let r2 ← timeKernel "slots   (stage 1)" (fun t op => stepTenantI t (.user 100) op)
       (ITenant.ofEmpty spec) checksumX ops
     if r2 != r1 then
       IO.println "MISMATCH: stage 1 and the indexed kernel end differently"
@@ -175,7 +175,7 @@ def bench (n specMax stage1Max : Nat) : IO Bool := do
   else
     IO.println s!"slots   (stage 1): skipped (n > {stage1Max})"
   if n ≤ specMax then
-    let r3 ← timeKernel "spec            " (fun t op => stepTenant t 100 op) spec checksum ops
+    let r3 ← timeKernel "spec            " (fun t op => stepTenant t (.user 100) op) spec checksum ops
     if r3 != r1 then
       IO.println "MISMATCH: the spec and the indexed kernel end differently"
       good := false

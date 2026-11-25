@@ -72,7 +72,7 @@ inductive RStep (K : Kernel) (C : Config) :
   | bffRelay (s : Own) (rid : RequestId) (o : Outcome) :
       RStep K C .bff s [.reply rid o] none s [.clientReply rid o]
   /-- The backend starts a transaction for a request with a session. -/
-  | begin (s : Own) (rid : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : PrincipalId)
+  | begin (s : Own) (rid : RequestId) (tok : Token) (i : Intent) (t : TenantId) (p : Principal)
       (hx : s.txns rid = none) (hn : s.noS rid = false) (hs : C.sessions tok = some (t, p)) :
       RStep K C .backend s [.fwd rid tok i] none
         { s with txns := updTxn s.txns rid ⟨tok, t, p, i, .loading⟩ } [.load rid t (s.att rid)]
@@ -108,17 +108,17 @@ inductive RStep (K : Kernel) (C : Config) :
       RStep K C .store s [.load rid t a] none s
         [.snap rid t (s.store.hist t (s.store.rev t)) (s.store.rev t) a]
   /-- A commit for a request the store has decided: the decision is sent again. -/
-  | storeDecided (s : Own) (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId)
+  | storeDecided (s : Own) (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal)
       (i : Intent) (base : Nat) (res : Except Err Tenant) (o : Outcome)
       (hd : s.store.decided rid = some o) :
       RStep K C .store s [.commit rid tok t p i base res] none s [.done rid o]
   /-- A commit on an old revision: a conflict. -/
-  | storeConflict (s : Own) (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId)
+  | storeConflict (s : Own) (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal)
       (i : Intent) (base : Nat) (res : Except Err Tenant)
       (hd : s.store.decided rid = none) (hb : base ≠ s.store.rev t) :
       RStep K C .store s [.commit rid tok t p i base res] none s [.conflict rid base]
   /-- A commit of an accepted verdict on the current revision: the tenant moves on. -/
-  | storeAccept (s : Own) (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId)
+  | storeAccept (s : Own) (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal)
       (i : Intent) (base : Nat) (res : Except Err Tenant) (t' : Tenant)
       (hd : s.store.decided rid = none) (hb : base = s.store.rev t) (hr : res = .ok t') :
       RStep K C .store s [.commit rid tok t p i base res] none
@@ -129,7 +129,7 @@ inductive RStep (K : Kernel) (C : Config) :
               decided := fun r => if r = rid then some .accepted else s.store.decided r } }
         [.done rid .accepted, .committed (Event.mk t rid t')]
   /-- A commit of a refusal on the current revision: only the decision changes. -/
-  | storeRefuse (s : Own) (rid : RequestId) (tok : Token) (t : TenantId) (p : PrincipalId)
+  | storeRefuse (s : Own) (rid : RequestId) (tok : Token) (t : TenantId) (p : Principal)
       (i : Intent) (base : Nat) (res : Except Err Tenant) (e : Err)
       (hd : s.store.decided rid = none) (hb : base = s.store.rev t) (hr : res = .error e) :
       RStep K C .store s [.commit rid tok t p i base res] none
@@ -137,7 +137,7 @@ inductive RStep (K : Kernel) (C : Config) :
             decided := fun r => if r = rid then some (.refused e) else s.store.decided r } }
         [.done rid (.refused e)]
   /-- The publisher sends a committed event to a subscriber whose principal may read it. -/
-  | publish (s : Own) (sid : SubId) (e : Event) (t : TenantId) (p : PrincipalId)
+  | publish (s : Own) (sid : SubId) (e : Event) (t : TenantId) (p : Principal)
       (hs : C.subs sid = some (t, p)) (ht : e.tenant = t) (hr : K.readable e.post p) :
       RStep K C .publisher s [.committed e] none s [.frame sid e]
 

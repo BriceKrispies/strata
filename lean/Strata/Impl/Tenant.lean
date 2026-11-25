@@ -27,9 +27,9 @@ structure IObj where
 /-- One tenant, each type's records held in slots. -/
 structure ITenant where
   types : List (TypeId × IObj)
-  owner : PrincipalId
-  editors : List PrincipalId
-  writers : List PrincipalId
+  members : List (PrincipalId × List RoleId)
+  grants : List (RoleId × Grant)
+  policies : List Policy
   nextId : Nat
   limits : Limits := Limits.kernel
 
@@ -52,7 +52,7 @@ def absEntry (e : TypeId × IObj) : TypeId × ObjType := (e.1, e.2.abs)
 
 /-- The spec's tenant that an implementation tenant stands for. -/
 def ITenant.abs (t : ITenant) : Tenant :=
-  { types := t.types.map absEntry, owner := t.owner, editors := t.editors, writers := t.writers,
+  { types := t.types.map absEntry, members := t.members, grants := t.grants, policies := t.policies,
     nextId := t.nextId, limits := t.limits }
 
 /-- The spec's world for an implementation world. -/

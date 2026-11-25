@@ -82,9 +82,9 @@ structure TypeHead where
     The records and the counter are keys of their own, because every commit changes them. -/
 structure Header where
   types : List (TypeId × TypeHead)
-  owner : PrincipalId
-  editors : List PrincipalId
-  writers : List PrincipalId
+  members : List (PrincipalId × List RoleId)
+  grants : List (RoleId × Grant)
+  policies : List Policy
   limits : Limits := Limits.kernel
 
 def TypeHead.ofObj (o : ObjType) : TypeHead :=
@@ -95,14 +95,15 @@ def TypeHead.withRecords (hh : TypeHead) (rs : Records) : ObjType :=
   { schema := hh.schema, uniques := hh.uniques, constraints := hh.constraints, records := rs }
 
 def _root_.Strata.Tenant.header (t : Tenant) : Header :=
-  { types := t.types.map (fun e => (e.1, TypeHead.ofObj e.2)), owner := t.owner,
-    editors := t.editors, writers := t.writers, limits := t.limits }
+  { types := t.types.map (fun e => (e.1, TypeHead.ofObj e.2)), members := t.members,
+    grants := t.grants, policies := t.policies, limits := t.limits }
 
 /-- A header as a tenant with no records, so the model's permission functions apply to it. They
     read neither records nor the counter. -/
 def Header.asTenant (h : Header) : Tenant :=
   { types := h.types.map (fun e => (e.1, TypeHead.withRecords e.2 [])),
-    owner := h.owner, editors := h.editors, writers := h.writers, nextId := 0, limits := h.limits }
+    members := h.members, grants := h.grants, policies := h.policies, nextId := 0,
+    limits := h.limits }
 
 /-- The records of each object type of a tenant, in the tenant's type order. -/
 def _root_.Strata.Tenant.tables (t : Tenant) : List (TypeId × Records) :=
@@ -327,15 +328,15 @@ def Store.applyDelta (s : Store) (x : TenantId) (d : Delta) : Store :=
       the records that forbid the delete and the records whose references to it are cleared);
     - a schema change: the header and every object type's records (the strict check). -/
 def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option Record)
-    (all : List (TypeId × Records)) (p : PrincipalId) : Intent → Except Err Delta
+    (all : List (TypeId × Records)) (p : Principal) : Intent → Except Err Delta
   | .create ty fs =>
     match h.types.lookup ty with
-    | none => .error (unknownType h.asTenant p)
+    | none => .error (unknownType h.asTenant p ty .create)
     | some o =>
       match newRecord o.schema p fs with
       | .error _ => .error .evaluation
       | .ok r =>
-        if !canCreate h.asTenant p then .error .unauthorized
+        if !canCreate h.asTenant p ty r then .error .unauthorized
         else
           match problemVia h.limits o.schema o.uniques true (fun T id => (look T id).isSome)
               (tableOf all ty) n r with
@@ -346,15 +347,15 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
             | none => .ok (.create ty n r)
   | .update ty id fs ev =>
     match h.types.lookup ty with
-    | none => .error (unknownType h.asTenant p)
+    | none => .error (unknownType h.asTenant p ty .update)
     | some o =>
       match look ty id with
-      | none => .error (missingRecord h.asTenant p)
+      | none => .error (missingRecord h.asTenant p ty .update)
       | some old =>
-        if !canEdit h.asTenant p old then .error .unauthorized
+        let r := patched old fs
+        if !canUpdate h.asTenant p ty old r then .error .unauthorized
         else if versionClash ev old then .error .versionConflict
         else
-          let r := patched old fs
           match problemVia h.limits o.schema o.uniques true (fun T id => (look T id).isSome)
               (tableOf all ty) id r with
           | some e => .error e
@@ -364,18 +365,18 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
             | none => .ok (.replace ty id r)
   | .delete ty id ev =>
     match h.types.lookup ty with
-    | none => .error (unknownType h.asTenant p)
+    | none => .error (unknownType h.asTenant p ty .delete)
     | some _ =>
       match look ty id with
-      | none => .error (missingRecord h.asTenant p)
+      | none => .error (missingRecord h.asTenant p ty .delete)
       | some old =>
-        if !canEdit h.asTenant p old then .error .unauthorized
+        if !canDelete h.asTenant p ty old then .error .unauthorized
         else if versionClash ev old then .error .versionConflict
         else if (assembleTypes h all).any (fun e => e.2.records.any (blocks e.1 e.2.schema ty id))
           then .error .stillReferenced
         else .ok (.remove ty id (referrers h all ty id))
   | .setRequired ty f strict =>
-    if p != h.owner then .error .unauthorized
+    if !canManage h.asTenant p then .error .unauthorized
     else
       match h.types.lookup ty with
       | none => .error .invalidSchema
@@ -386,7 +387,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
         if schemaChangeRefused h.limits (scopedTypes types' (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
         else .ok (.schema ty { schema := makeRequired o.schema f, uniques := o.uniques })
   | .setUnique ty f strict =>
-    if p != h.owner then .error .unauthorized
+    if !canManage h.asTenant p then .error .unauthorized
     else
       match h.types.lookup ty with
       | none => .error .invalidSchema
@@ -402,7 +403,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
             if schemaChangeRefused h.limits (scopedTypes types' (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
             else .ok (.schema ty { schema := makeUnique o.schema f, uniques := o.uniques })
   | .defineUnique ty fs =>
-    if p != h.owner then .error .unauthorized
+    if !canManage h.asTenant p then .error .unauthorized
     else
       match h.types.lookup ty with
       | none => .error .invalidSchema
@@ -417,7 +418,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
           else .ok (.schema ty { schema := o.schema, uniques := o.uniques ++ [fs] })
 
 /-- A decision made through any source of key values. It reads keys of tenant `x` only. -/
-def decideOn (get : Key → Payload) (x : TenantId) (p : PrincipalId) (i : Intent) :
+def decideOn (get : Key → Payload) (x : TenantId) (p : Principal) (i : Intent) :
     Except Err Delta :=
   match get (.header x), get (.counters x) with
   | .header (some h), .counters (some n) =>
@@ -431,7 +432,7 @@ def decideOn (get : Key → Payload) (x : TenantId) (p : PrincipalId) (i : Inten
       p i
   | _, _ => .error .noTenant
 
-theorem decideOn_congr (get get' : Key → Payload) (x : TenantId) (p : PrincipalId) (i : Intent)
+theorem decideOn_congr (get get' : Key → Payload) (x : TenantId) (p : Principal) (i : Intent)
     (h : ∀ k, k.tenant = x → get k = get' k) : decideOn get x p i = decideOn get' x p i := by
   have hh := h (.header x) rfl
   have hc := h (.counters x) rfl
@@ -487,24 +488,30 @@ theorem recordAt_has (t : Tenant) (ty : TypeId) (id : RecordId) :
   | none => rfl
   | some o => rfl
 
-theorem canCreate_header (t : Tenant) (p : PrincipalId) :
-    canCreate t.header.asTenant p = canCreate t p := rfl
+theorem canCreate_header (t : Tenant) (p : Principal) (ty : TypeId) (r : Record) :
+    canCreate t.header.asTenant p ty r = canCreate t p ty r := rfl
 
-theorem canEdit_header (t : Tenant) (p : PrincipalId) (r : Record) :
-    canEdit t.header.asTenant p r = canEdit t p r := rfl
+theorem canUpdate_header (t : Tenant) (p : Principal) (ty : TypeId) (old new : Record) :
+    canUpdate t.header.asTenant p ty old new = canUpdate t p ty old new := rfl
 
-theorem missingRecord_header (t : Tenant) (p : PrincipalId) :
-    missingRecord t.header.asTenant p = missingRecord t p := rfl
+theorem canDelete_header (t : Tenant) (p : Principal) (ty : TypeId) (old : Record) :
+    canDelete t.header.asTenant p ty old = canDelete t p ty old := rfl
 
-theorem unknownType_header (t : Tenant) (p : PrincipalId) :
-    unknownType t.header.asTenant p = unknownType t p := rfl
+theorem canManage_header (t : Tenant) (p : Principal) :
+    canManage t.header.asTenant p = canManage t p := rfl
+
+theorem missingRecord_header (t : Tenant) (p : Principal) (ty : TypeId) (a : Action) :
+    missingRecord t.header.asTenant p ty a = missingRecord t p ty a := rfl
+
+theorem unknownType_header (t : Tenant) (p : Principal) (ty : TypeId) (a : Action) :
+    unknownType t.header.asTenant p ty a = unknownType t p ty a := rfl
 
 theorem except_map_match {α β ε : Type} (x : Except ε α) (f : α → β) :
     x.map f = (match x with | .ok a => .ok (f a) | .error e => .error e) := by
   cases x <;> rfl
 
 @[simp] theorem header_limits (t : Tenant) : t.header.limits = t.limits := rfl
-@[simp] theorem header_owner (t : Tenant) : t.header.owner = t.owner := rfl
+@[simp] theorem header_members (t : Tenant) : t.header.members = t.members := rfl
 
 theorem referrers_types (t : Tenant) (ty : TypeId) (id : RecordId) :
     referrers t.header t.tables ty id =
@@ -549,7 +556,7 @@ theorem removeAt_referrers (t : Tenant) (ty : TypeId) (id : RecordId) :
 
 /-- A decision from the header, the counter, the tenant's own lookup and record tables, applied as
     a delta, is the kernel's step. -/
-theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
+theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
     (decideTenant t.header t.nextId (fun T id => t.recordAt T id) t.tables p i).map
       (Delta.apply t) = stepTenant t p i := by
   have hhas : (fun T id => (t.recordAt T id).isSome) = (fun T id => Records.has (t.env T) id) := by
@@ -564,7 +571,7 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
       cases hN : newRecord o.schema p fs with
       | error e => simp [TypeHead.ofObj, hT, hN, Except.map]
       | ok r =>
-        by_cases hc : canCreate t p = true
+        by_cases hc : canCreate t p ty r = true
         · cases hk : problemVia t.limits o.schema o.uniques true
               (fun T id => Records.has (t.env T) id) o.records t.nextId r with
           | none =>
@@ -575,7 +582,7 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
         · simp [TypeHead.ofObj, hT, hN, hc, Except.map]
   | update ty id fs ev =>
     simp only [TypeHead.ofObj, decideTenant, stepTenant, header_types_lookup, tables_lookup, unknownType_header,
-      canEdit_header, missingRecord_header, hhas, problem_eq_via]
+      canUpdate_header, missingRecord_header, hhas, problem_eq_via]
     cases hT : t.typ? ty with
     | none => simp [TypeHead.ofObj, Except.map]
     | some o =>
@@ -583,7 +590,7 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
       | none => simp [TypeHead.ofObj, hT, hl, Except.map, Tenant.recordAt]
       | some old =>
         have hrec : t.recordAt ty id = some old := by simp [Tenant.recordAt, hT, hl]
-        by_cases hc : canEdit t p old = true
+        by_cases hc : canUpdate t p ty old (patched old fs) = true
         · by_cases hv : versionClash ev old = true
           · simp [TypeHead.ofObj, hT, hl, hc, hv, Except.map, Tenant.recordAt]
           · have hv' : versionClash ev old = false := by simpa using hv
@@ -598,14 +605,14 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
         · simp [TypeHead.ofObj, hT, hl, hc, Except.map, Tenant.recordAt]
   | delete ty id ev =>
     simp only [decideTenant, stepTenant, header_types_lookup, unknownType_header,
-      canEdit_header, missingRecord_header, assemble_header]
+      canDelete_header, missingRecord_header, assemble_header]
     cases hT : t.typ? ty with
     | none => simp [TypeHead.ofObj, Except.map]
     | some o =>
       cases hl : o.records.lookup id with
       | none => simp [TypeHead.ofObj, hT, hl, Except.map, Tenant.recordAt, missingRecord_header]
       | some old =>
-        by_cases hc : canEdit t p old = true
+        by_cases hc : canDelete t p ty old = true
         · by_cases hv : versionClash ev old = true
           · simp [TypeHead.ofObj, hT, hl, hc, hv, Except.map, Tenant.recordAt]
           · have hv' : versionClash ev old = false := by simpa using hv
@@ -617,12 +624,12 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
                 Tenant.afterDelete, removeAt_referrers]
         · simp [TypeHead.ofObj, hT, hl, hc, Except.map, Tenant.recordAt]
   | setRequired ty f strict =>
-    simp only [decideTenant, stepTenant, header_types_lookup, assemble_header]
+    simp only [decideTenant, stepTenant, header_types_lookup, assemble_header, canManage_header]
     cases hT : t.typ? ty with
-    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map]
+    | none => by_cases ho : canManage t p = true <;> simp [ho, hT, Except.map, canManage_header]
     | some o =>
-      by_cases ho : p = t.owner
-      · simp only [tables_lookup, hT, Option.map_some, Option.getD_some, header_owner, header_limits,
+      by_cases ho : canManage t p = true
+      · simp only [tables_lookup, hT, Option.map_some, Option.getD_some, canManage_header, header_limits,
           Tenant.putType, ho, bne_self_eq_false, Bool.false_eq_true, ite_false,
           if_false, TypeHead.ofObj]
         repeat' split
@@ -630,17 +637,17 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
         all_goals simp_all [Except.map, Delta.apply, Tenant.modType, hT, Tenant.putType]
       · simp [ho, Except.map]
   | setUnique ty f strict =>
-    simp only [decideTenant, stepTenant, header_types_lookup, assemble_header]
+    simp only [decideTenant, stepTenant, header_types_lookup, assemble_header, canManage_header]
     cases hT : t.typ? ty with
-    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map]
+    | none => by_cases ho : canManage t p = true <;> simp [ho, hT, Except.map, canManage_header]
     | some o =>
-      by_cases ho : p = t.owner
+      by_cases ho : canManage t p = true
       · cases hl : o.schema.lookup f with
         | none => simp [ho, hT, hl, TypeHead.ofObj, Except.map]
         | some d =>
           by_cases hd : d.ty.isList = true
           · simp [ho, hT, hl, hd, TypeHead.ofObj, Except.map]
-          · simp only [tables_lookup, hT, Option.map_some, Option.getD_some, header_owner,
+          · simp only [tables_lookup, hT, Option.map_some, Option.getD_some, canManage_header,
               header_limits, Tenant.putType, ho, hl, hd, TypeHead.ofObj, bne_self_eq_false,
               Bool.false_eq_true, ite_false, if_false, Bool.not_true]
             by_cases hs : schemaChangeRefused t.limits (scopedTypes (putTypeList t.types ty
@@ -652,11 +659,11 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
             · simp [hs, Except.map, Delta.apply, Tenant.modType, hT, Tenant.putType]
       · simp [ho, Except.map]
   | defineUnique ty fs =>
-    simp only [decideTenant, stepTenant, header_types_lookup, assemble_header]
+    simp only [decideTenant, stepTenant, header_types_lookup, assemble_header, canManage_header]
     cases hT : t.typ? ty with
-    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map]
+    | none => by_cases ho : canManage t p = true <;> simp [ho, hT, Except.map, canManage_header]
     | some o =>
-      by_cases ho : p = t.owner
+      by_cases ho : canManage t p = true
       · by_cases hok : uniqueFieldsOk o.schema fs = true
         · simp only [tables_lookup, hT, Option.map_some, Option.getD_some, ho, hok,
             TypeHead.ofObj, Bool.true_and, Bool.not_true, bne_self_eq_false, Bool.false_eq_true,
@@ -1488,7 +1495,7 @@ inductive Op where
   | decide (j : Slot) (i : Intent) (c : Ctx)
   /-- Decide an intent on what the slot's request has read over its rounds (a multi-round
       decision), reading the keys the rounds did not read in a last round. -/
-  | decideReq (j : Slot) (i : Intent) (pr : PrincipalId)
+  | decideReq (j : Slot) (i : Intent) (pr : Principal)
   /-- Send the slot's pending decision to the store, guarded by the generation it was decided at. -/
   | submit (j : Slot)
   /-- The same, when the receipt is lost: the store does what it does, the runtime learns nothing. -/
@@ -1554,7 +1561,7 @@ def reqGet (s : Store) (r : Req) (k : Key) : Payload :=
     round read. An acceptance carries that generation to the guarded commit. A refusal is returned
     only if a generation read confirms the tenant is still at that generation; otherwise the
     caller is told to retry. -/
-def decideReqWS (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) : Sys σ × Outcome :=
+def decideReqWS (sys : Sys σ) (j : Slot) (i : Intent) (pr : Principal) : Sys σ × Outcome :=
   match sys.req j with
   | none => (sys, .done)
   | some r =>
@@ -2019,7 +2026,7 @@ theorem pendingOk_upd (pd : Slot → Option Pending) (s : Store) (j : Slot) (o :
   · simp only [upd_other _ _ _ _ hj] at hp'; exact hp j' p hp'
 
 theorem serve_decide_current (es : List Entry) (known : TenantId → Nat) (s : Store) (x : TenantId)
-    (p : PrincipalId) (i : Intent) (hs : Sound es s) (hk : known x = s.gen x) :
+    (p : Principal) (i : Intent) (hs : Sound es s) (hk : known x = s.gen x) :
     decideOn (serve es known s) x p i = decideOn (fetch s.world) x p i :=
   decideOn_congr _ _ _ _ _ (fun k hkx =>
     serve_eq_fetch _ _ _ _ (by rw [hkx]; exact safe_of_current _ _ _ _ hs hk))
@@ -2413,7 +2420,7 @@ theorem reqGet_eq_fetch (s : Store) (r : Req)
   | none => rfl
   | some v => simpa using hv hg (k, v) (lookup_mem _ _ _ hl)
 
-theorem decideReqWS_parts (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) :
+theorem decideReqWS_parts (sys : Sys σ) (j : Slot) (i : Intent) (pr : Principal) :
     (decideReqWS sys j i pr).1.store = sys.store ∧ (decideReqWS sys j i pr).1.cache = sys.cache ∧
     (decideReqWS sys j i pr).1.known = sys.known := by
   unfold decideReqWS; split
@@ -2422,7 +2429,7 @@ theorem decideReqWS_parts (sys : Sys σ) (j : Slot) (i : Intent) (pr : Principal
     · exact ⟨rfl, rfl, rfl⟩
     · split <;> exact ⟨rfl, rfl, rfl⟩
 
-theorem decideReqWS_pendingOk (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId)
+theorem decideReqWS_pendingOk (sys : Sys σ) (j : Slot) (i : Intent) (pr : Principal)
     (h : Inv sys) (hr : ReqOk sys.req sys.store) :
     PendingOk (decideReqWS sys j i pr).1.pending sys.store := by
   unfold decideReqWS
@@ -2441,7 +2448,7 @@ theorem decideReqWS_pendingOk (sys : Sys σ) (j : Slot) (i : Intent) (pr : Princ
       exact decideOn_congr _ _ _ _ _ (fun k _ => (reqGet_eq_fetch _ _ hv heq k).symm)
     · split <;> exact pendingOk_upd _ _ _ _ h.2.2 (fun p hp => by simp at hp)
 
-theorem decideReqWS_inv (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) (h : Inv sys)
+theorem decideReqWS_inv (sys : Sys σ) (j : Slot) (i : Intent) (pr : Principal) (h : Inv sys)
     (hr : ReqOk sys.req sys.store) : Inv (decideReqWS sys j i pr).1 := by
   obtain ⟨hst, hc, hk⟩ := decideReqWS_parts sys j i pr
   refine ⟨?_, ?_, ?_⟩
@@ -2452,7 +2459,7 @@ theorem decideReqWS_inv (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId
 /-- **The first-round rule.** A refusal a multi-round decision returns is the kernel's refusal at
     the state the confirmation read, and that state is still the one the request's first round
     read. -/
-theorem decideReq_refusal (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) (e : Err)
+theorem decideReq_refusal (sys : Sys σ) (j : Slot) (i : Intent) (pr : Principal) (e : Err)
     (hr : ReqOk sys.req sys.store) (hres : (decideReqWS sys j i pr).2 = .result (.error e)) :
     ∃ r, sys.req j = some r ∧ sys.store.gen r.tenant = r.gen ∧
       step sys.store.world i ⟨r.tenant, pr⟩ = .error e := by
@@ -2476,7 +2483,7 @@ theorem decideReq_refusal (sys : Sys σ) (j : Slot) (i : Intent) (pr : Principal
       · simp at hres
 
 /-- The generation a multi-round decision carries to its commit is the one its first round read. -/
-theorem decideReq_expected (sys : Sys σ) (j : Slot) (i : Intent) (pr : PrincipalId) (r : Req)
+theorem decideReq_expected (sys : Sys σ) (j : Slot) (i : Intent) (pr : Principal) (r : Req)
     (p : Pending) (hrq : sys.req j = some r)
     (hp : (decideReqWS sys j i pr).1.pending j = some p) :
     p.expected = r.gen ∧ p.ctx.tenant = r.tenant := by
@@ -3068,7 +3075,7 @@ theorem decideWS_pending_other (sys : Sys σ) (j j' : Slot) (i : Intent) (c : Ct
       · simp [upd_other _ _ _ _ h]
       · simp [upd_other _ _ _ _ h]
 
-theorem decideReqWS_pending_other (sys : Sys σ) (j j' : Slot) (i : Intent) (pr : PrincipalId)
+theorem decideReqWS_pending_other (sys : Sys σ) (j j' : Slot) (i : Intent) (pr : Principal)
     (h : j ≠ j') : (decideReqWS sys j' i pr).1.pending j = sys.pending j := by
   unfold decideReqWS; split
   · rfl
@@ -3195,7 +3202,7 @@ theorem resubmit_no_conflict (sys : Sys σ) (j : Slot) (p : Pending) (ops : List
 
 /-- The world of the counterexamples: tenant 1 exists, empty. -/
 def cexTenant : Tenant :=
-  { types := [], owner := 0, editors := [], writers := [], nextId := 1 }
+  { types := [], members := [(0, [ownerRole])], grants := [], policies := [], nextId := 1 }
 
 def cexWorld : World := fun x => if x = 1 then some cexTenant else none
 

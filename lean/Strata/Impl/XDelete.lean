@@ -89,9 +89,9 @@ structure ClearedFrom (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y : 
   ok : y.Ok
   keys : y.core.types.map Prod.fst = y0.core.types.map Prod.fst
   nextId : y.core.nextId = y0.core.nextId
-  owner : y.core.owner = y0.core.owner
-  editors : y.core.editors = y0.core.editors
-  writers : y.core.writers = y0.core.writers
+  members : y.core.members = y0.core.members
+  grants : y.core.grants = y0.core.grants
+  policies : y.core.policies = y0.core.policies
   limits : y.core.limits = y0.core.limits
   isSome : ∀ T, (y.core.typ? T).isSome = (y0.core.typ? T).isSome
   typ : ∀ T o0, y0.core.typ? T = some o0 → ∃ o, y.core.typ? T = some o ∧ o.schema = o0.schema ∧
@@ -115,7 +115,7 @@ theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y
   have unchanged : (core.typ? c.1 = none ∨ ∃ o, core.typ? c.1 = some o ∧ getRec o.slots c.2 = none) →
       ClearedFrom ty id (fun c' => S c' ∨ c' = c) y0 ⟨core, ux, cx, rx⟩ := by
     intro hcase
-    refine ⟨h.ok, h.keys, h.nextId, h.owner, h.editors, h.writers, h.limits, h.isSome, ?_⟩
+    refine ⟨h.ok, h.keys, h.nextId, h.members, h.grants, h.policies, h.limits, h.isSome, ?_⟩
     intro T o0 ho0
     obtain ⟨o, hT, hs, hu', hcn, hsz, hi⟩ := h.typ T o0 ho0
     refine ⟨o, hT, hs, hu', hcn, hsz, fun i => ⟨?_, ?_⟩⟩
@@ -180,9 +180,9 @@ theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y
       · show (putTypeI core.types c.1 _).map Prod.fst = _
         rw [putTypeI_keys]; exact h.keys
       · exact h.nextId
-      · exact h.owner
-      · exact h.editors
-      · exact h.writers
+      · exact h.members
+      · exact h.grants
+      · exact h.policies
       · exact h.limits
       · intro T
         by_cases hT : T = c.1
@@ -246,7 +246,7 @@ theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y
 
 theorem ClearedFrom.congr {ty : TypeId} {id : RecordId} {S S' : Cell → Prop} {y0 y : XTenant}
     (hS : ∀ c, S c ↔ S' c) (h : ClearedFrom ty id S y0 y) : ClearedFrom ty id S' y0 y := by
-  refine ⟨h.ok, h.keys, h.nextId, h.owner, h.editors, h.writers, h.limits, h.isSome, ?_⟩
+  refine ⟨h.ok, h.keys, h.nextId, h.members, h.grants, h.policies, h.limits, h.isSome, ?_⟩
   intro T o0 ho0
   obtain ⟨o, hT, hs, hu, hcn, hsz, hi⟩ := h.typ T o0 ho0
   exact ⟨o, hT, hs, hu, hcn, hsz, fun i => ⟨fun h' => (hi i).1 ((hS _).mpr h'),
@@ -333,8 +333,8 @@ theorem IObj.ext' (a b : IObj) (h1 : a.schema = b.schema) (h2 : a.uniques = b.un
     (h3 : a.slots = b.slots) (h4 : a.constraints = b.constraints) : a = b := by
   cases a; cases b; simp_all
 
-theorem ITenant.ext' (a b : ITenant) (h1 : a.types = b.types) (h2 : a.owner = b.owner)
-    (h3 : a.editors = b.editors) (h4 : a.writers = b.writers) (h5 : a.nextId = b.nextId)
+theorem ITenant.ext' (a b : ITenant) (h1 : a.types = b.types) (h2 : a.members = b.members)
+    (h3 : a.grants = b.grants) (h4 : a.policies = b.policies) (h5 : a.nextId = b.nextId)
     (h6 : a.limits = b.limits) : a = b := by
   cases a; cases b; simp_all
 
@@ -476,15 +476,15 @@ theorem deleteX_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
             · simp [hh]
             · simp [hh]
         · rw [hcn, hcn0]; rfl
-  · exact hcl.owner.trans (by rw [hx1core]; rfl)
-  · exact hcl.editors.trans (by rw [hx1core]; rfl)
-  · exact hcl.writers.trans (by rw [hx1core]; rfl)
+  · exact hcl.members.trans (by rw [hx1core]; rfl)
+  · exact hcl.grants.trans (by rw [hx1core]; rfl)
+  · exact hcl.policies.trans (by rw [hx1core]; rfl)
   · exact hcl.nextId.trans (by rw [hx1core]; rfl)
   · exact hcl.limits.trans (by rw [hx1core]; rfl)
 
 theorem delete_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
-    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : PrincipalId) (ty : TypeId) (id : RecordId)
+    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : Principal) (ty : TypeId) (id : RecordId)
     (ev : Option Nat) :
     Good ⟨core, ux, cx, rx⟩ (stepParts core ux cx rx p (.delete ty id ev))
       (stepTenantI core p (.delete ty id ev)) := by
@@ -497,7 +497,7 @@ theorem delete_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     | none => exact good_error _ _
     | some old =>
       simp only [hg]
-      by_cases hca : canEditI core p old = true
+      by_cases hca : canDeleteI core p ty old = true
       · simp only [hca, Bool.not_true, if_false, Bool.false_eq_true]
         by_cases hv : versionClash ev old = true
         · simp only [hv, if_true]
@@ -516,7 +516,7 @@ theorem delete_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
               simp only [Except.ok.injEq] at hy
               subst hy
               exact hok2
-      · have : canEditI core p old = false := by simpa using hca
+      · have : canDeleteI core p ty old = false := by simpa using hca
         simp only [this, Bool.not_false, if_true]
         exact good_error _ _
 

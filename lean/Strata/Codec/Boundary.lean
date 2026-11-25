@@ -440,7 +440,7 @@ theorem lawful_val : Lawful encVal decVal := by
 An expression is encoded in prefix order: a tag byte, then its parts. The tags are `0` for a
 literal (its value follows), `1` for a field (its scope byte, then the field id), `2` for the
 principal, `3` for a comparison (its operator byte, then its two operands), `4` and `5` for `and`
-and `or` (two operands each), `6` for `not` and `7` for `isNull` (one operand). A scope is `0` for
+and `or` (two operands each), `6` for `not`, `7` for `isNull` (one operand) and `8` for `$created_by` (its scope byte). A scope is `0` for
 the record, `1` for old, `2` for new; a comparison operator is `0`..`5` for `eq`, `ne`, `lt`, `le`,
 `gt`, `ge`.
 
@@ -551,6 +551,7 @@ def _root_.Strata.Expr.nodes : Expr → Nat
   | .or a b => 1 + a.nodes + b.nodes
   | .not a => 1 + a.nodes
   | .isNull a => 1 + a.nodes
+  | .createdBy _ => 1
 
 def encExpr : Expr → Bytes
   | .lit v => tag 0 :: encVal v
@@ -561,6 +562,7 @@ def encExpr : Expr → Bytes
   | .or a b => tag 5 :: (encExpr a ++ encExpr b)
   | .not a => tag 6 :: encExpr a
   | .isNull a => tag 7 :: encExpr a
+  | .createdBy s => tag 8 :: encScope s
 
 /-- The decoder with fuel `n`: each nested expression read spends one unit of fuel. -/
 def decExprN : Nat → Dec Expr
@@ -602,6 +604,9 @@ def decExprN : Nat → Dec Expr
       | 7 => match decExprN n r with
         | some (a, r') => some (.isNull a, r')
         | none => none
+      | 8 => match decScope r with
+        | some (s, r') => some (.createdBy s, r')
+        | none => none
       | _ => none
 
 def decExpr : Dec Expr := fun bs => decExprN bs.length bs
@@ -638,6 +643,8 @@ theorem nodes_le_length : ∀ (e : Expr), e.nodes ≤ (encExpr e).length
     have ha := nodes_le_length a
     simp only [Strata.Expr.nodes, encExpr, List.length_cons]
     omega
+  | .createdBy s => by
+    cases s <;> simp [Strata.Expr.nodes, encExpr, encScope]
 
 /-- The round trip, for any fuel that covers the nodes of the expression. -/
 theorem decExprN_encExpr : ∀ (e : Expr) (rest : Bytes) (n : Nat), e.nodes ≤ n →
@@ -680,6 +687,9 @@ theorem decExprN_encExpr : ∀ (e : Expr) (rest : Bytes) (n : Nat), e.nodes ≤ 
     obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
     have ha := decExprN_encExpr a rest m (by simp [Strata.Expr.nodes] at hn; omega)
     simp [encExpr, decExprN, tag, ha]
+  | .createdBy s, rest, n, hn => by
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
+    simp [encExpr, decExprN, tag, lawful_scope.1 s]
 
 /-- Every decoding with fuel `n` is canonical. -/
 theorem decExprN_canon : ∀ (n : Nat) (bs : Bytes) (e : Expr) (rest : Bytes),
@@ -693,8 +703,8 @@ theorem decExprN_canon : ∀ (n : Nat) (bs : Bytes) (e : Expr) (rest : Bytes),
     | nil => simp [decExprN] at h
     | cons b r =>
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
-          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ 8 ≤ b.toNat by omega)
-        with hk | hk | hk | hk | hk | hk | hk | hk | hk
+          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ 9 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
       · simp only [decExprN, hk] at h
         cases hv : decVal r with
         | none => simp [hv] at h
@@ -794,6 +804,15 @@ theorem decExprN_canon : ∀ (n : Nat) (bs : Bytes) (e : Expr) (rest : Bytes),
           obtain ⟨rfl, rfl⟩ := h
           have ha' := ih r a r' ha
           simp [encExpr, byte_eq_tag b 7 hk, ha']
+      · simp only [decExprN, hk] at h
+        cases hs : decScope r with
+        | none => simp [hs] at h
+        | some p =>
+          obtain ⟨s, r'⟩ := p
+          simp only [hs, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hs' := lawful_scope.2 r s r' hs
+          simp [encExpr, byte_eq_tag b 8 hk, hs']
       · simp only [decExprN] at h
         repeat' split at h
         all_goals first | omega | simp at h
@@ -808,6 +827,250 @@ theorem lawful_expr : Lawful encExpr decExpr := by
     omega
   · intro bs e rest h
     exact decExprN_canon _ bs e rest h
+
+/-! ## Principals, roles and policies (slice 6)
+
+An action is one byte: `0` read, `1` create, `2` update, `3` delete, `4` manage. A principal is a tag
+then its id for a user (`0`), or the tag alone for the system (`1`) and an anonymous caller (`2`). A
+resource is `0` and its object type for an object type, `1` for every object type and `2` for the
+schema. A grant is `0` and a capability id, or `1`, an object type and an action. A policy is its
+role, its resource, its actions and its optional condition (`encOpt`). -/
+
+def encAction : Action → Bytes
+  | .read => [tag 0]
+  | .create => [tag 1]
+  | .update => [tag 2]
+  | .delete => [tag 3]
+  | .manage => [tag 4]
+
+def decAction : Dec Action := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.read, r)
+    | 1 => some (.create, r)
+    | 2 => some (.update, r)
+    | 3 => some (.delete, r)
+    | 4 => some (.manage, r)
+    | _ => none
+
+theorem lawful_action : Lawful encAction decAction := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x <;> simp [encAction, decAction, tag]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decAction] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
+          5 ≤ b.toNat by omega) with hk | hk | hk | hk | hk | hk
+      · simp only [decAction, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encAction, byte_eq_tag b 0 hk]
+      · simp only [decAction, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encAction, byte_eq_tag b 1 hk]
+      · simp only [decAction, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encAction, byte_eq_tag b 2 hk]
+      · simp only [decAction, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encAction, byte_eq_tag b 3 hk]
+      · simp only [decAction, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encAction, byte_eq_tag b 4 hk]
+      · simp only [decAction] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+def encPrincipal : Principal → Bytes
+  | .user p => tag 0 :: encNat p
+  | .system => [tag 1]
+  | .anonymous => [tag 2]
+
+def decPrincipal : Dec Principal := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => match decNat r with
+      | some (p, r') => some (.user p, r')
+      | none => none
+    | 1 => some (.system, r)
+    | 2 => some (.anonymous, r)
+    | _ => none
+
+theorem lawful_principal : Lawful encPrincipal decPrincipal := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | user p => simp [encPrincipal, decPrincipal, tag, lawful_nat.1 p rest]
+    | system => simp [encPrincipal, decPrincipal, tag]
+    | anonymous => simp [encPrincipal, decPrincipal, tag]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decPrincipal] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ 3 ≤ b.toNat by omega)
+        with hk | hk | hk | hk
+      · simp only [decPrincipal, hk] at h
+        cases hn : decNat r with
+        | none => simp [hn] at h
+        | some q =>
+          obtain ⟨p, r'⟩ := q
+          simp only [hn, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hr := lawful_nat.2 r p r' hn
+          simp [encPrincipal, byte_eq_tag b 0 hk, hr]
+      · simp only [decPrincipal, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encPrincipal, byte_eq_tag b 1 hk]
+      · simp only [decPrincipal, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encPrincipal, byte_eq_tag b 2 hk]
+      · simp only [decPrincipal] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+def encResource : Resource → Bytes
+  | .object ty => tag 0 :: encNat ty
+  | .anyObject => [tag 1]
+  | .schema => [tag 2]
+
+def decResource : Dec Resource := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => match decNat r with
+      | some (ty, r') => some (.object ty, r')
+      | none => none
+    | 1 => some (.anyObject, r)
+    | 2 => some (.schema, r)
+    | _ => none
+
+theorem lawful_resource : Lawful encResource decResource := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | object ty => simp [encResource, decResource, tag, lawful_nat.1 ty rest]
+    | anyObject => simp [encResource, decResource, tag]
+    | schema => simp [encResource, decResource, tag]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decResource] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ 3 ≤ b.toNat by omega)
+        with hk | hk | hk | hk
+      · simp only [decResource, hk] at h
+        cases hn : decNat r with
+        | none => simp [hn] at h
+        | some q =>
+          obtain ⟨ty, r'⟩ := q
+          simp only [hn, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hr := lawful_nat.2 r ty r' hn
+          simp [encResource, byte_eq_tag b 0 hk, hr]
+      · simp only [decResource, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encResource, byte_eq_tag b 1 hk]
+      · simp only [decResource, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encResource, byte_eq_tag b 2 hk]
+      · simp only [decResource] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+def encGrant : Grant → Bytes
+  | .capability c => tag 0 :: encNat c
+  | .object ty a => tag 1 :: (encNat ty ++ encAction a)
+
+def decGrant : Dec Grant := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => match decNat r with
+      | some (c, r') => some (.capability c, r')
+      | none => none
+    | 1 => match decNat r with
+      | some (ty, r1) => match decAction r1 with
+        | some (a, r2) => some (.object ty a, r2)
+        | none => none
+      | none => none
+    | _ => none
+
+theorem lawful_grant : Lawful encGrant decGrant := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | capability c => simp [encGrant, decGrant, tag, lawful_nat.1 c rest]
+    | object ty a =>
+      simp [encGrant, decGrant, tag, lawful_nat.1 ty (encAction a ++ rest),
+        lawful_action.1 a rest, List.append_assoc]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decGrant] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ 2 ≤ b.toNat by omega) with hk | hk | hk
+      · simp only [decGrant, hk] at h
+        cases hn : decNat r with
+        | none => simp [hn] at h
+        | some q =>
+          obtain ⟨c, r'⟩ := q
+          simp only [hn, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hr := lawful_nat.2 r c r' hn
+          simp [encGrant, byte_eq_tag b 0 hk, hr]
+      · simp only [decGrant, hk] at h
+        cases hn : decNat r with
+        | none => simp [hn] at h
+        | some q =>
+          obtain ⟨ty, r1⟩ := q
+          simp only [hn] at h
+          cases ha : decAction r1 with
+          | none => simp [ha] at h
+          | some q2 =>
+            obtain ⟨a, r2⟩ := q2
+            simp only [ha, Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            have hr := lawful_nat.2 r ty r1 hn
+            have ha' := lawful_action.2 r1 a r2 ha
+            simp [encGrant, byte_eq_tag b 1 hk, hr, ha', List.append_assoc]
+      · simp only [decGrant] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+/-- A policy: its role, its resource, its actions, its condition. -/
+def encPolicy : Policy → Bytes :=
+  encIso (encPair encNat (encPair encResource (encPair (encList encAction) (encOpt encExpr))))
+    (fun pl => (pl.role, pl.resource, pl.actions, pl.condition))
+
+def decPolicy : Dec Policy :=
+  decIso (decPair decNat (decPair decResource (decPair (decList decAction) (decOpt decExpr))))
+    (fun p => { role := p.1, resource := p.2.1, actions := p.2.2.1, condition := p.2.2.2 })
+
+theorem lawful_policy : Lawful encPolicy decPolicy :=
+  lawful_iso (lawful_pair lawful_nat (lawful_pair lawful_resource
+      (lawful_pair (lawful_list lawful_action) (lawful_opt lawful_expr))))
+    (fun pl => by cases pl; rfl) (fun _ => rfl)
+
+/-- A member: a user, then its roles. -/
+def encMember : PrincipalId × List RoleId → Bytes := encPair encNat (encList encNat)
+
+def decMember : Dec (PrincipalId × List RoleId) := decPair decNat (decList decNat)
+
+theorem lawful_member : Lawful encMember decMember :=
+  lawful_pair lawful_nat (lawful_list lawful_nat)
+
+/-- A grant entry: a role, then what it grants. -/
+def encGrantEntry : RoleId × Grant → Bytes := encPair encNat encGrant
+
+def decGrantEntry : Dec (RoleId × Grant) := decPair decNat decGrant
+
+theorem lawful_grantEntry : Lawful encGrantEntry decGrantEntry :=
+  lawful_pair lawful_nat lawful_grant
 
 /-! ## Fields, limits, records, schemas, tenants
 
@@ -857,15 +1120,15 @@ theorem lawful_schemaEntry : Lawful encSchemaEntry decSchemaEntry :=
 
 /-- A record: its owner, its version, then its fields. -/
 def encRecord : Record → Bytes :=
-  encIso (encPair encNat (encPair encNat (encList encFieldVal)))
+  encIso (encPair (encOpt encNat) (encPair encNat (encList encFieldVal)))
     (fun r => (r.owner, r.version, r.fields))
 
 def decRecord : Dec Record :=
-  decIso (decPair decNat (decPair decNat (decList decFieldVal)))
+  decIso (decPair (decOpt decNat) (decPair decNat (decList decFieldVal)))
     (fun p => { owner := p.1, version := p.2.1, fields := p.2.2 })
 
 theorem lawful_record : Lawful encRecord decRecord :=
-  lawful_iso (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_list lawful_fieldVal)))
+  lawful_iso (lawful_pair (lawful_opt lawful_nat) (lawful_pair lawful_nat (lawful_list lawful_fieldVal)))
     (fun r => by cases r; rfl) (fun _ => rfl)
 
 /-- A record of the tenant: the record id, then the record. -/
@@ -901,33 +1164,35 @@ def decTypeEntry : Dec (TypeId × ObjType) := decPair decNat decObjType
 theorem lawful_typeEntry : Lawful encTypeEntry decTypeEntry :=
   lawful_pair lawful_nat lawful_objType
 
-/-- The tenant's fields as one nested product: its object types, owner, editors, writers, next id,
+/-- The tenant's fields as one nested product: its object types, members, grants, policies, next id,
     limits. -/
-def encTenantBody : List (TypeId × ObjType) × Nat × List Nat × List Nat × Nat × Limits → Bytes :=
+def encTenantBody : List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
+    List (RoleId × Grant) × List Policy × Nat × Limits → Bytes :=
   encPair (encList encTypeEntry)
-    (encPair encNat
-      (encPair (encList encNat)
-        (encPair (encList encNat)
+    (encPair (encList encMember)
+      (encPair (encList encGrantEntry)
+        (encPair (encList encPolicy)
           (encPair encNat encLimits))))
 
 def decTenantBody :
-    Dec (List (TypeId × ObjType) × Nat × List Nat × List Nat × Nat × Limits) :=
+    Dec (List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
+      List (RoleId × Grant) × List Policy × Nat × Limits) :=
   decPair (decList decTypeEntry)
-    (decPair decNat
-      (decPair (decList decNat)
-        (decPair (decList decNat)
+    (decPair (decList decMember)
+      (decPair (decList decGrantEntry)
+        (decPair (decList decPolicy)
           (decPair decNat decLimits))))
 
 theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
   lawful_pair (lawful_list lawful_typeEntry)
-    (lawful_pair lawful_nat
-      (lawful_pair (lawful_list lawful_nat)
-        (lawful_pair (lawful_list lawful_nat)
+    (lawful_pair (lawful_list lawful_member)
+      (lawful_pair (lawful_list lawful_grantEntry)
+        (lawful_pair (lawful_list lawful_policy)
           (lawful_pair lawful_nat lawful_limits))))
 
 def encTenant : Tenant → Bytes :=
   encIso encTenantBody
-    (fun t => (t.types, t.owner, t.editors, t.writers, t.nextId, t.limits))
+    (fun t => (t.types, t.members, t.grants, t.policies, t.nextId, t.limits))
 
 def decTenant : Dec Tenant :=
   decIso decTenantBody fun p =>
@@ -1134,13 +1399,13 @@ theorem lawful_intent : Lawful encIntent decIntent := by
         all_goals first | omega | simp at h
 
 /-- The context of a step: the tenant and the acting principal. -/
-def encCtx : Ctx → Bytes := encIso (encPair encNat encNat) (fun c => (c.tenant, c.principal))
+def encCtx : Ctx → Bytes := encIso (encPair encNat encPrincipal) (fun c => (c.tenant, c.principal))
 
 def decCtx : Dec Ctx :=
-  decIso (decPair decNat decNat) (fun p => { tenant := p.1, principal := p.2 })
+  decIso (decPair decNat decPrincipal) (fun p => { tenant := p.1, principal := p.2 })
 
 theorem lawful_ctx : Lawful encCtx decCtx :=
-  lawful_iso (lawful_pair lawful_nat lawful_nat) (fun c => by cases c; rfl) (fun _ => rfl)
+  lawful_iso (lawful_pair lawful_nat lawful_principal) (fun c => by cases c; rfl) (fun _ => rfl)
 
 /-- The result of a step: tag `0` a refusal, `1` the tenant after the change. -/
 def encResult : Except Err Tenant → Bytes

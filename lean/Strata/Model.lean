@@ -94,8 +94,13 @@ inductive Expr where
   | lit (v : Val)
   /-- A field of the record in the scope; `null` when there is no such record or it lacks the field. -/
   | field (s : Scope) (f : FieldId)
+  /-- The system attribute `$created_by` of a record in the scope: the string `p<n>` of the user
+      who created it, `null` when no user did (the system or an anonymous caller) or there is no
+      record (slice 6). -/
+  | createdBy (s : Scope)
   /-- The acting principal, as the kernel names it: the string `p<n>` for the principal `n` (the
-      fixtures name principals so); `null` for the system, which the schema-change checks run as. -/
+      fixtures name principals so); `null` for the system and for an anonymous caller, which name
+      no user. -/
   | principal
   | cmp (op : CmpOp) (a b : Expr)
   /-- Kleene `and`: `false` if either operand is `false`, `null` if one is `null`, else `true`. -/
@@ -105,6 +110,82 @@ inductive Expr where
   | not (a : Expr)
   | isNull (a : Expr)
   deriving DecidableEq, Repr
+
+/-! ## Principals, roles and policies (slice 6)
+
+Authorization is data. A principal is a user, the system or an anonymous caller. Principals hold
+roles directly (`Tenant.members`). A role grants an action on the records of one object type, or
+a capability (`Tenant.grants`), and a policy grants actions on a resource under a condition
+(`Tenant.policies`). `Tenant.allows` is the decision, mirroring the kernel's `rules::authorize`
+without its scopes, clock and lookups. -/
+
+/-- Who acts. A user is named by its id; the system holds no role; an anonymous caller holds the
+    built-in `public` role and nothing else (the kernel's `Principal`). -/
+inductive Principal where
+  | user (id : PrincipalId)
+  | system
+  | anonymous
+  deriving DecidableEq, Repr
+
+/-- The user a principal is, if it is one: the principal an expression reads as `principal` and the
+    creator a record is given. -/
+def Principal.userId? : Principal → Option PrincipalId
+  | .user p => some p
+  | _ => none
+
+/-- A role, by id (the kernel's `RoleId`). -/
+abbrev RoleId := Nat
+
+/-- A capability, by id (the kernel's `Grant::Capability`). -/
+abbrev CapabilityId := Nat
+
+/-- The built-in role of the owner, which may do anything in its tenant. -/
+def ownerRole : RoleId := 0
+
+/-- The built-in role every principal but the system holds. -/
+def publicRole : RoleId := 1
+
+/-- An action (the kernel's `Action`). Manage is the schema's; the others are the actions on the
+    records of an object type. -/
+inductive Action where
+  | read
+  | create
+  | update
+  | delete
+  | manage
+  deriving DecidableEq, Repr
+
+/-- What a policy names (the kernel's `Resource`): the records of one object type, the records of
+    every type, or the schema. -/
+inductive Resource where
+  | object (ty : TypeId)
+  | anyObject
+  | schema
+  deriving DecidableEq, Repr
+
+/-- What a role grants: a capability, or an action on the records of an object type (the kernel's
+    `Grant`). A manage action is never granted on an object type. -/
+inductive Grant where
+  | capability (c : CapabilityId)
+  | object (ty : TypeId) (a : Action)
+  deriving DecidableEq, Repr
+
+/-- A policy: a role holds the actions it names on the resource, when its condition holds. A policy
+    with no condition holds unconditionally. Its condition is an expression of the slice 5 language,
+    evaluated over the record and the principal (the kernel's `PolicyDef`, whose id is left out: it
+    names the policy in a refusal and decides nothing). -/
+structure Policy where
+  role : RoleId
+  resource : Resource
+  actions : List Action
+  condition : Option Expr := none
+  deriving Repr
+
+/-- The resource a policy's resource reaches: the same resource, or every object type for
+    `anyObject`. -/
+def Resource.covers : Resource → Resource → Bool
+  | .anyObject, .object _ => true
+  | a, b => a == b
 
 structure FieldDef where
   ty : Ty
@@ -205,8 +286,9 @@ abbrev Fields := List (FieldId × Val)
 abbrev Schema := List (FieldId × FieldDef)
 
 structure Record where
-  /-- The principal who created the record. -/
-  owner : PrincipalId
+  /-- The user who created the record (the kernel's `created_by`): `none` when the creator is the
+      system or an anonymous caller, which name no user (slice 6). -/
+  owner : Option PrincipalId
   /-- 1 when created, raised by one by every accepted update of the record and by every delete
       that clears a reference it holds. -/
   version : Nat
@@ -322,6 +404,11 @@ def evalExpr (env : ExprEnv) : Expr → EvalResult
   | .field s f => .ok (match env.scoped s with
       | some r => r.fields.get f
       | none => .null)
+  | .createdBy s => .ok (match env.scoped s with
+      | some r => match r.owner with
+        | some n => .str ("p" ++ toString n)
+        | none => .null
+      | none => .null)
   | .principal => .ok (match env.principal with
       | some p => .str ("p" ++ toString p)
       | none => .null)
@@ -339,10 +426,10 @@ def evalExpr (env : ExprEnv) : Expr → EvalResult
     | .ok _ => .ok (.bool false)
     | .error _ => .error ()
 
-/-- The environment a write's constraints and defaults are checked in: the candidate record (as
-    `record` and as `new`), the stored record it replaces (none on a create), and the caller. -/
-def writeEnv (p : PrincipalId) (candidate : Record) (old : Option Record) : ExprEnv :=
-  { record := some candidate, old := old, new := some candidate, principal := some p }
+/-- The environment a write's constraints are checked in: the candidate record (as `record` and as
+    `new`), the stored record it replaces (none on a create), and the caller. -/
+def writeEnv (p : Principal) (candidate : Record) (old : Option Record) : ExprEnv :=
+  { record := some candidate, old := old, new := some candidate, principal := p.userId? }
 
 /-- The environment a stored record is checked in when a schema change re-validates it: the record
     as `record` and `new`, no old record, and the system as principal (as the kernel's `Reject`
@@ -617,12 +704,14 @@ structure ObjType where
 structure Tenant where
   /-- The object types, by id. Each id occurs once. -/
   types : List (TypeId × ObjType)
-  /-- May do anything in the tenant, including changing its schema. -/
-  owner : PrincipalId
-  /-- May create, and may change or delete any record of any type. -/
-  editors : List PrincipalId
-  /-- May create, and may change or delete the records they created. -/
-  writers : List PrincipalId
+  /-- The users holding roles directly (the kernel's `members`), each with its roles. The owner is a
+      member holding `ownerRole`; the editors and writers of the fixture hold their roles so. -/
+  members : List (PrincipalId × List RoleId)
+  /-- What each role grants: a capability, or an action on the records of an object type (the
+      kernel's role permissions). -/
+  grants : List (RoleId × Grant)
+  /-- The policies of the tenant (the kernel's `policies`). -/
+  policies : List Policy
   /-- The id the next created record receives, whatever its type. -/
   nextId : Nat
   /-- The size bounds. The kernel's are constants (`Limits.kernel`). -/
@@ -671,34 +760,96 @@ def delObj (ty : TypeId) (id : RecordId) (j : TypeId) (o : ObjType) : ObjType :=
 def Tenant.afterDelete (t : Tenant) (ty : TypeId) (id : RecordId) : Tenant :=
   { t with types := t.types.map (fun e => (e.1, delObj ty id e.1 e.2)) }
 
-/-- Member of the owner, editors and writers: may create. -/
-def canCreate (t : Tenant) (p : PrincipalId) : Bool :=
-  p == t.owner || t.editors.contains p || t.writers.contains p
+/-- The roles a principal holds (the kernel's `roles_of`): none for the system, `public` for an
+    anonymous caller, and for a user its direct roles and `public`. -/
+def Tenant.rolesOf (t : Tenant) : Principal → List RoleId
+  | .system => []
+  | .anonymous => [publicRole]
+  | .user p => publicRole :: (t.members.lookup p).getD []
 
-/-- May `p` change or delete record `r`? -/
-def canEdit (t : Tenant) (p : PrincipalId) (r : Record) : Bool :=
-  p == t.owner || t.editors.contains p || (t.writers.contains p && r.owner == p)
+/-- A policy's condition holds on the environment: absent, or an expression that is exactly `true`.
+    `false`, `null` and an evaluation error do not (the kernel's `authorize`). -/
+def condHolds (env : ExprEnv) : Option Expr → Bool
+  | none => true
+  | some c => match evalExpr env c with
+    | .ok (.bool true) => true
+    | _ => false
 
-/-- May `p` change or delete a record when there is no record to test the permission against?
-    Only those whose permission does not depend on the record: the owner and the editors. A writer
-    may act only on a record it created, so with no record it may not. -/
-def canEditAny (t : Tenant) (p : PrincipalId) : Bool :=
-  p == t.owner || t.editors.contains p
+/-- The decision of the kernel's `authorize`, without scopes: the owner may do anything; otherwise
+    a role the principal holds grants the action on the object type, or a policy of such a role
+    names the action on the resource and its condition holds. Default deny. -/
+def Tenant.allows (t : Tenant) (p : Principal) (a : Action) (r : Resource) (env : ExprEnv) : Bool :=
+  let roles := t.rolesOf p
+  roles.contains ownerRole ||
+    (match r with
+     | .object ty => a != .manage &&
+         t.grants.any (fun g => roles.contains g.1 && g.2 == .object ty a)
+     | _ => false) ||
+    t.policies.any (fun pol => roles.contains pol.role && pol.actions.contains a &&
+      pol.resource.covers r && condHolds env pol.condition)
+
+/-- A principal is permitted an action on a resource in an environment: the owner role, a grant of a role it
+    holds that names the action on the object type (never a manage action), or a policy of such a role
+    that names the action, reaches the resource and has a holding condition. -/
+def Tenant.Permits (t : Tenant) (p : Principal) (a : Action) (r : Resource) (env : ExprEnv) : Prop :=
+  ownerRole ∈ t.rolesOf p ∨
+  (∃ ty, r = .object ty ∧ a ≠ .manage ∧ ∃ g ∈ t.grants, g.1 ∈ t.rolesOf p ∧ g.2 = .object ty a) ∨
+  ∃ pol ∈ t.policies, pol.role ∈ t.rolesOf p ∧ a ∈ pol.actions ∧ pol.resource.covers r = true ∧
+    condHolds env pol.condition = true
+
+/-- A policy's resource reaches the one a decision names: the same resource, or every object type
+    for `anyObject` when the decision names an object type. -/
+theorem Resource.covers_iff (x r : Resource) :
+    x.covers r = true ↔ x = r ∨ (x = .anyObject ∧ ∃ ty, r = .object ty) := by
+  cases x <;> cases r <;> simp [Resource.covers]
+
+/-- The decision is the permission: the Bool decision holds exactly when the principal is permitted
+    the action on the resource (`Tenant.Permits`). -/
+theorem Tenant.allows_iff (t : Tenant) (p : Principal) (a : Action) (r : Resource) (env : ExprEnv) :
+    t.allows p a r env = true ↔ t.Permits p a r env := by
+  unfold Tenant.allows Tenant.Permits
+  cases r <;> simp [Bool.or_eq_true, Bool.and_eq_true, List.any_eq_true, Resource.covers_iff,
+    condHolds, bne_iff_ne, beq_iff_eq, or_assoc, and_assoc]
+
+/-- The environment an authorization decision is made in (the kernel's `Subject`): the record it
+    tests (the stored one, else the new one), the stored record and the new one, and the user. -/
+def subjectEnv (p : Principal) (old new : Option Record) : ExprEnv :=
+  { record := old.or new, old := old, new := new, principal := p.userId? }
+
+/-- May `p` create a record of type `ty` that would be `r`? -/
+def canCreate (t : Tenant) (p : Principal) (ty : TypeId) (r : Record) : Bool :=
+  t.allows p .create (.object ty) (subjectEnv p none (some r))
+
+/-- May `p` update record `old` of type `ty`, which would become `new`? -/
+def canUpdate (t : Tenant) (p : Principal) (ty : TypeId) (old new : Record) : Bool :=
+  t.allows p .update (.object ty) (subjectEnv p (some old) (some new))
+
+/-- May `p` delete record `old` of type `ty`? -/
+def canDelete (t : Tenant) (p : Principal) (ty : TypeId) (old : Record) : Bool :=
+  t.allows p .delete (.object ty) (subjectEnv p (some old) (some old))
+
+/-- May `p` perform `a` on type `ty` when there is no record to test the permission against? Only
+    what does not depend on a record: a grant, or a policy with no condition. The kernel asks this
+    of a record intent whose record is missing (`stored`), and of an unknown type (`object_def`). -/
+def canWithoutRecord (t : Tenant) (p : Principal) (ty : TypeId) (a : Action) : Bool :=
+  t.allows p a (.object ty) (subjectEnv p none none)
+
+/-- May `p` change the schema (the kernel's `Manage` on the schema)? -/
+def canManage (t : Tenant) (p : Principal) : Bool :=
+  t.allows p .manage .schema (subjectEnv p none none)
 
 /-- The refusal for an update or delete of a record that does not exist. The permission is asked
-    first: one who could not act on a record gets `unauthorized`, the same as for a record that
-    exists, and only one who could act on any record learns that this one is missing (KRN-1080). -/
-def missingRecord (t : Tenant) (p : PrincipalId) : Err :=
-  if canEditAny t p then .notFound else .unauthorized
+    first: one who could not act on a record of the type gets `unauthorized`, the same as for a
+    record that exists, and only one who could learns that this one is missing (KRN-1080). -/
+def missingRecord (t : Tenant) (p : Principal) (ty : TypeId) (a : Action) : Err :=
+  if canWithoutRecord t p ty a then .notFound else .unauthorized
 
-/-- The refusal for an intent that names an object type the tenant does not have. The kernel
-    asks whether the caller could act on that type before it says the type is missing, so only
-    the refusal of the owner, who may act on any type, is the missing type's; everyone else gets
-    `unauthorized`, whether or not the type exists. The owner is the only principal that could
-    act on a type the tenant does not have: the editor and writer permissions name the types they
-    were defined for. -/
-def unknownType (t : Tenant) (p : PrincipalId) : Err :=
-  if p == t.owner then .unknownObject else .unauthorized
+/-- The refusal for an intent that names an object type the tenant does not have. The kernel asks
+    whether the caller could act on that type with the action before it says the type is missing:
+    one who could gets `unknownObject`, anyone else `unauthorized`, whether or not the type exists
+    (`object_def`). -/
+def unknownType (t : Tenant) (p : Principal) (ty : TypeId) (a : Action) : Err :=
+  if canWithoutRecord t p ty a then .unknownObject else .unauthorized
 
 /-- One entry of a patch: field `fv.1` takes value `fv.2`, or is removed if that is `null`. -/
 def Fields.set (fs : Fields) (fv : FieldId × Val) : Fields :=
@@ -721,9 +872,9 @@ def withDefaults (env : ExprEnv) (schema : Schema) (fs : Fields) : Except Unit F
   (defaultsOf env schema fs).map (fun ds => normalise fs ++ ds)
 
 /-- The record a create by `p` writes, at version 1, or the error of its defaults. -/
-def newRecord (schema : Schema) (p : PrincipalId) (fs : Fields) : Except Unit Record :=
-  (withDefaults { principal := some p } schema fs).map
-    (fun fs' => { owner := p, version := 1, fields := fs' })
+def newRecord (schema : Schema) (p : Principal) (fs : Fields) : Except Unit Record :=
+  (withDefaults { principal := p.userId? } schema fs).map
+    (fun fs' => { owner := p.userId?, version := 1, fields := fs' })
 
 /-- The record an accepted update writes: patched, one version on. -/
 def patched (old : Record) (ps : Fields) : Record :=
@@ -806,7 +957,7 @@ inductive Intent where
 /-- The explicit environment of a step: which tenant, and who is acting. -/
 structure Ctx where
   tenant : TenantId
-  principal : PrincipalId
+  principal : Principal
   deriving Repr
 
 /-- One intent against one tenant. An expected version is checked after the permission, so only
@@ -815,16 +966,16 @@ structure Ctx where
     with `unauthorized` for everyone else (`unknownType`), before the record is looked up. A schema
     change that names such a type is refused with `invalidSchema` for the owner and with
     `unauthorized` for everyone else. -/
-def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
+def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
   | .create ty fs =>
     match t.typ? ty with
-    | none => .error (unknownType t p)
+    | none => .error (unknownType t p ty .create)
     | some o =>
       -- The defaults are evaluated before the permission is asked (the kernel's `create_record`).
       match newRecord o.schema p fs with
       | .error _ => .error .evaluation
       | .ok r =>
-        if !canCreate t p then .error .unauthorized
+        if !canCreate t p ty r then .error .unauthorized
         else
           match problem t.limits o.schema o.uniques true t.env o.records t.nextId r with
           | some e => .error e
@@ -836,15 +987,15 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
               .ok { t.putType ty o' with nextId := t.nextId + 1 }
   | .update ty id fs ev =>
     match t.typ? ty with
-    | none => .error (unknownType t p)
+    | none => .error (unknownType t p ty .update)
     | some o =>
       match o.records.lookup id with
-      | none => .error (missingRecord t p)
+      | none => .error (missingRecord t p ty .update)
       | some old =>
-        if !canEdit t p old then .error .unauthorized
+        let r := patched old fs
+        if !canUpdate t p ty old r then .error .unauthorized
         else if versionClash ev old then .error .versionConflict
         else
-          let r := patched old fs
           match problem t.limits o.schema o.uniques true t.env o.records id r with
           | some e => .error e
           | none =>
@@ -855,17 +1006,17 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
               .ok (t.putType ty { o with records := rs' })
   | .delete ty id ev =>
     match t.typ? ty with
-    | none => .error (unknownType t p)
+    | none => .error (unknownType t p ty .delete)
     | some o =>
       match o.records.lookup id with
-      | none => .error (missingRecord t p)
+      | none => .error (missingRecord t p ty .delete)
       | some old =>
-        if !canEdit t p old then .error .unauthorized
+        if !canDelete t p ty old then .error .unauthorized
         else if versionClash ev old then .error .versionConflict
         else if t.blockedDelete ty id then .error .stillReferenced
         else .ok (t.afterDelete ty id)
   | .setRequired ty f strict =>
-    if p != t.owner then .error .unauthorized
+    if !canManage t p then .error .unauthorized
     else
       match t.typ? ty with
       | none => .error .invalidSchema
@@ -874,7 +1025,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
         if schemaChangeRefused t.limits (scopedTypes t'.types (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
         else .ok t'
   | .setUnique ty f strict =>
-    if p != t.owner then .error .unauthorized
+    if !canManage t p then .error .unauthorized
     else
       match t.typ? ty with
       | none => .error .invalidSchema
@@ -888,7 +1039,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
             if schemaChangeRefused t.limits (scopedTypes t'.types (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
             else .ok t'
   | .defineUnique ty fs =>
-    if p != t.owner then .error .unauthorized
+    if !canManage t p then .error .unauthorized
     else
       match t.typ? ty with
       | none => .error .invalidSchema
@@ -911,17 +1062,21 @@ def step (w : World) (i : Intent) (c : Ctx) : Except Err World :=
 
 /-- Whether the acting principal is allowed to make this intent at all: the object type exists,
     and the permission holds on the record (or, for a schema change, the owner). -/
-def authorized (t : Tenant) (p : PrincipalId) : Intent → Bool
-  | .create ty _ => (t.typ? ty).isSome && canCreate t p
-  | .update ty id _ _ => match t.recordAt ty id with
-    | some old => canEdit t p old
+def authorized (t : Tenant) (p : Principal) : Intent → Bool
+  | .create ty fs => match t.typ? ty with
+    | none => false
+    | some o => match newRecord o.schema p fs with
+      | .ok r => canCreate t p ty r
+      | .error _ => false
+  | .update ty id fs _ => match t.recordAt ty id with
+    | some old => canUpdate t p ty old (patched old fs)
     | none => false
   | .delete ty id _ => match t.recordAt ty id with
-    | some old => canEdit t p old
+    | some old => canDelete t p ty old
     | none => false
-  | .setRequired ty _ _ => p == t.owner && (t.typ? ty).isSome
-  | .setUnique ty _ _ => p == t.owner && (t.typ? ty).isSome
-  | .defineUnique ty _ => p == t.owner && (t.typ? ty).isSome
+  | .setRequired ty _ _ => canManage t p && (t.typ? ty).isSome
+  | .setUnique ty _ _ => canManage t p && (t.typ? ty).isSome
+  | .defineUnique ty _ => canManage t p && (t.typ? ty).isSome
 
 /-- The object types a schema intent re-validates, as the kernel's `touched_objects` gives them: the
     type it names, and, for a field, the types the field refers to. Other intents touch none. -/
@@ -996,6 +1151,7 @@ def World.RefsOk (w : World) : Prop :=
 def Expr.stateOnly : Expr → Bool
   | .lit _ => true
   | .field s _ => s != .old
+  | .createdBy s => s != .old
   | .principal => false
   | .cmp _ a b => a.stateOnly && b.stateOnly
   | .and a b => a.stateOnly && b.stateOnly

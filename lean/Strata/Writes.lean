@@ -117,7 +117,7 @@ theorem lookup_map_replace (rs : Records) (id : RecordId) (r : Record) :
 /-! ## The records after a write -/
 
 /-- The record an accepted update writes is the stored one patched, one version on. -/
-theorem update_writes_patched (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (id : RecordId)
+theorem update_writes_patched (t t' : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
     (ps : Fields) (ev : Option Nat) (old : Record) (hl : t.recordAt ty id = some old)
     (h : stepTenant t p (.update ty id ps ev) = .ok t') :
     t'.recordAt ty id = some (patched old ps) := by
@@ -136,14 +136,14 @@ theorem update_writes_patched (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (i
     rfl
 
 /-- A field an accepted update does not name keeps its values. -/
-theorem update_keeps_unnamed (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (id : RecordId)
+theorem update_keeps_unnamed (t t' : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
     (ps : Fields) (ev : Option Nat) (old : Record) (f : FieldId) (hl : t.recordAt ty id = some old)
     (hf : f ∉ ps.map Prod.fst) (h : stepTenant t p (.update ty id ps ev) = .ok t') :
     ∃ r, t'.recordAt ty id = some r ∧ r.fields.valuesOf f = old.fields.valuesOf f :=
   ⟨_, update_writes_patched t t' p ty id ps ev old hl h, patch_keeps_unnamed f ps old.fields hf⟩
 
 /-- An accepted update raises the record's version by exactly one: versions strictly increase. -/
-theorem update_raises_version (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (id : RecordId)
+theorem update_raises_version (t t' : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
     (ps : Fields) (ev : Option Nat) (old : Record) (hl : t.recordAt ty id = some old)
     (h : stepTenant t p (.update ty id ps ev) = .ok t') :
     ∃ r, t'.recordAt ty id = some r ∧ r.version = old.version + 1 ∧ old.version < r.version :=
@@ -151,7 +151,7 @@ theorem update_raises_version (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (i
 
 /-- An accepted delete rewrites every other record that refers to the deleted one, of any type: the
     references cleared and the version one on. -/
-theorem delete_raises_referrer_version (t t' : Tenant) (p : PrincipalId) (ty : TypeId)
+theorem delete_raises_referrer_version (t t' : Tenant) (p : Principal) (ty : TypeId)
     (id : RecordId) (ev : Option Nat) (S : TypeId) (o : ObjType) (x : RecordId) (q : Record)
     (hS : t.typ? S = some o) (hq : (x, q) ∈ o.records) (hne : S = ty → x ≠ id)
     (hr : recRefers o.schema ty id q = true) (h : stepTenant t p (.delete ty id ev) = .ok t') :
@@ -181,7 +181,7 @@ theorem delete_raises_referrer_version (t t' : Tenant) (p : PrincipalId) (ty : T
 theorem version_conflict_on_update (w : World) (c : Ctx) (t : Tenant) (ty : TypeId) (id : RecordId)
     (old : Record) (ps : Fields) (v : Nat)
     (ht : w c.tenant = some t) (hl : t.recordAt ty id = some old)
-    (hcan : canEdit t c.principal old = true) (hv : v ≠ old.version) :
+    (hcan : canUpdate t c.principal ty old (patched old ps) = true) (hv : v ≠ old.version) :
     step w (.update ty id ps (some v)) c = .error .versionConflict ∧
       ∀ w', step w (.update ty id ps (some v)) c ≠ .ok w' := by
   have hc : versionClash (some v) old = true := by simpa [versionClash] using hv
@@ -200,7 +200,7 @@ theorem version_conflict_on_update (w : World) (c : Ctx) (t : Tenant) (ty : Type
 theorem version_conflict_on_delete (w : World) (c : Ctx) (t : Tenant) (ty : TypeId) (id : RecordId)
     (old : Record) (v : Nat)
     (ht : w c.tenant = some t) (hl : t.recordAt ty id = some old)
-    (hcan : canEdit t c.principal old = true) (hv : v ≠ old.version) :
+    (hcan : canDelete t c.principal ty old = true) (hv : v ≠ old.version) :
     step w (.delete ty id (some v)) c = .error .versionConflict ∧
       ∀ w', step w (.delete ty id (some v)) c ≠ .ok w' := by
   have hc : versionClash (some v) old = true := by simpa [versionClash] using hv
@@ -220,7 +220,7 @@ theorem version_conflict_on_delete (w : World) (c : Ctx) (t : Tenant) (ty : Type
 
 /-- An accepted create writes, under the next id and at version 1, the default of every field of
     the schema of its type the intent does not name, when the default is the constant `v`. -/
-theorem create_fills_default (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
+theorem create_fills_default (t t' : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
     (o : ObjType) (f : FieldId) (d : FieldDef) (v : Val)
     (ho : t.typ? ty = some o) (hd : (f, d) ∈ o.schema) (hdef : d.default = .lit v) (hv : v ≠ .null)
     (hn : fs.any (fun fv => fv.1 == f) = false) (h : stepTenant t p (.create ty fs) = .ok t') :
@@ -256,22 +256,22 @@ theorem problem_none_within {L : Limits} {schema : Schema} {us : List (List Fiel
 
 /-- A create whose record is over the record bound is refused with `limitExceeded`, before its
     fields are checked. -/
-theorem create_refused_over_record_bound (t : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
-    (o : ObjType) (ho : t.typ? ty = some o) (hc : canCreate t p = true) (r : Record)
-    (hN : newRecord o.schema p fs = .ok r) (hs : t.limits.maxRecord < r.size) :
+theorem create_refused_over_record_bound (t : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
+    (o : ObjType) (ho : t.typ? ty = some o) (r : Record)
+    (hN : newRecord o.schema p fs = .ok r) (hc : canCreate t p ty r = true) (hs : t.limits.maxRecord < r.size) :
     stepTenant t p (.create ty fs) = .error .limitExceeded := by
   simp [stepTenant, ho, hN, hc, problem, hs]
 
 /-- Every record an accepted create writes is within the record bound and holds no value over the
     string or list bound. -/
-theorem create_within_limits (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (fs : Fields)
+theorem create_within_limits (t t' : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
     (o : ObjType) (ho : t.typ? ty = some o) (h : stepTenant t p (.create ty fs) = .ok t') :
     ∃ r, newRecord o.schema p fs = .ok r ∧ r.size ≤ t.limits.maxRecord ∧
       ∀ fv ∈ r.fields, fv.2.overLimit t.limits = false := by
   obtain ⟨r, hN, hP, -, -⟩ := create_ok_parts ho h
   exact ⟨r, hN, problem_none_within hP⟩
 
-theorem update_within_limits (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (id : RecordId)
+theorem update_within_limits (t t' : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
     (ps : Fields) (ev : Option Nat) (o : ObjType) (old : Record) (ho : t.typ? ty = some o)
     (hl : o.records.lookup id = some old)
     (h : stepTenant t p (.update ty id ps ev) = .ok t') :

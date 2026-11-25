@@ -21,7 +21,7 @@ namespace Impl
 
 /-- The indexed outcome of one intent against one tenant agrees with stage 1's, and keeps the
     indexes consistent. -/
-theorem stepTenantXL_good (x : XTenant) (hok : x.Ok) (p : PrincipalId) (i : Intent) :
+theorem stepTenantXL_good (x : XTenant) (hok : x.Ok) (p : Principal) (i : Intent) :
     Good x (stepTenantXL x p i) (stepTenantI x.core p i) := by
   obtain ⟨core, ux, cx, rx⟩ := x
   cases i with
@@ -34,7 +34,7 @@ theorem stepTenantXL_good (x : XTenant) (hok : x.Ok) (p : PrincipalId) (i : Inte
 
 /-- The indexed outcome (refusals without the tenant handed back) agrees with stage 1's, and an
     accepted indexed tenant is consistent. -/
-theorem stepTenantX_good (x : XTenant) (hok : x.Ok) (p : PrincipalId) (i : Intent) :
+theorem stepTenantX_good (x : XTenant) (hok : x.Ok) (p : Principal) (i : Intent) :
     (stepTenantX x p i).map XTenant.core = stepTenantI x.core p i ∧
       ∀ y, stepTenantX x p i = .ok y → y.Ok := by
   have h := stepTenantXL_good x hok p i
@@ -52,7 +52,7 @@ def XTenant.abs (x : XTenant) : Tenant := x.core.abs
 
 /-- One intent against one tenant: the indexed kernel's outcome, read through the abstraction, is
     the spec's. -/
-theorem stepTenantX_refines (x : XTenant) (hok : x.Ok) (p : PrincipalId) (i : Intent) :
+theorem stepTenantX_refines (x : XTenant) (hok : x.Ok) (p : Principal) (i : Intent) :
     (stepTenantX x p i).map XTenant.abs = stepTenant x.abs p i := by
   have hg := (stepTenantX_good x hok p i).1
   have hs := stepTenantI_refines x.core p i hok.1
@@ -61,7 +61,7 @@ theorem stepTenantX_refines (x : XTenant) (hok : x.Ok) (p : PrincipalId) (i : In
   cases stepTenantX x p i <;> rfl
 
 /-- An accepted indexed step keeps the indexes consistent. -/
-theorem stepTenantX_ok (x : XTenant) (hok : x.Ok) (p : PrincipalId) (i : Intent) (y : XTenant)
+theorem stepTenantX_ok (x : XTenant) (hok : x.Ok) (p : Principal) (i : Intent) (y : XTenant)
     (h : stepTenantX x p i = .ok y) : y.Ok :=
   (stepTenantX_good x hok p i).2 y h
 

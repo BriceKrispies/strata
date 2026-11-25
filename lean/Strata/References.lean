@@ -850,7 +850,7 @@ theorem conforms_afterDelete (t : Tenant) (ty : TypeId) (id : RecordId) (k : Typ
 
 /-- An accepted delete leaves the tenant it computes: the record gone from its table, and every
     reference to it cleared. -/
-theorem stepTenant_delete_eq {t t' : Tenant} {p : PrincipalId} {ty : TypeId} {id : RecordId}
+theorem stepTenant_delete_eq {t t' : Tenant} {p : Principal} {ty : TypeId} {id : RecordId}
     {ev : Option Nat} (h : stepTenant t p (.delete ty id ev) = .ok t') :
     t' = t.afterDelete ty id := by
   simp only [stepTenant] at h
@@ -865,7 +865,7 @@ theorem stepTenant_delete_eq {t t' : Tenant} {p : PrincipalId} {ty : TypeId} {id
     only existing records of the types its fields name, single or in a list; a delete is refused or
     clears what named the deleted record in every type; and a schema change touches no record and
     changes no reference's type. -/
-theorem stepTenant_preserves_refs (t t' : Tenant) (p : PrincipalId) (i : Intent)
+theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
     (hrefs : t.RefsOk) (h : stepTenant t p i = .ok t') : t'.RefsOk := by
   cases i with
   | create ty fs =>
@@ -1005,10 +1005,10 @@ theorem step_preserves_refs (w w' : World) (i : Intent) (c : Ctx)
 /-- A record that another record names through a field that restricts deletion, or through a
     required single reference, cannot be deleted: one who may delete it, naming no version or the
     record's version, is refused with `stillReferenced`. The referring record may be of any type. -/
-theorem delete_refused_while_referenced (t : Tenant) (p : PrincipalId) (ty : TypeId)
+theorem delete_refused_while_referenced (t : Tenant) (p : Principal) (ty : TypeId)
     (id : RecordId) (ev : Option Nat) (o : ObjType) (old : Record) (S : TypeId) (so : ObjType)
     (q : RecordId × Record)
-    (ho : t.typ? ty = some o) (hl : o.records.lookup id = some old) (hcan : canEdit t p old = true)
+    (ho : t.typ? ty = some o) (hl : o.records.lookup id = some old) (hcan : canDelete t p ty old = true)
     (hv : versionClash ev old = false)
     (hS : t.typ? S = some so) (hq : q ∈ so.records) (hb : blocks S so.schema ty id q = true) :
     stepTenant t p (.delete ty id ev) = .error .stillReferenced := by
@@ -1019,7 +1019,7 @@ theorem delete_refused_while_referenced (t : Tenant) (p : PrincipalId) (ty : Typ
 
 /-- An accepted delete removes the record and leaves no record of any type naming it, through a
     field of the type it names, whatever the state was. -/
-theorem delete_leaves_no_reference (t t' : Tenant) (p : PrincipalId) (ty : TypeId)
+theorem delete_leaves_no_reference (t t' : Tenant) (p : Principal) (ty : TypeId)
     (id : RecordId) (ev : Option Nat) (h : stepTenant t p (.delete ty id ev) = .ok t') :
     (∀ o', t'.typ? ty = some o' → Records.has o'.records id = false) ∧
       ∀ k o', t'.typ? k = some o' → ∀ q ∈ o'.records, ∀ fv ∈ q.2.fields,
@@ -1068,7 +1068,7 @@ theorem env_putType_records (t : Tenant) (ty : TypeId) (o o' : ObjType) (h : t.t
   · rw [if_neg hk]
 
 /-- A field made required leaves the counter and every type's records as they are. -/
-theorem setRequired_records (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (f : FieldId)
+theorem setRequired_records (t t' : Tenant) (p : Principal) (ty : TypeId) (f : FieldId)
     (s : Bool) (h : stepTenant t p (.setRequired ty f s) = .ok t') :
     t'.nextId = t.nextId ∧ ∀ T, t'.env T = t.env T := by
   constructor
@@ -1086,7 +1086,7 @@ theorem setRequired_records (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (f :
       all_goals exact env_putType_records t ty o { o with schema := makeRequired o.schema f } hT rfl T
 
 /-- A field made unique leaves the counter and every type's records as they are. -/
-theorem setUnique_records (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (f : FieldId)
+theorem setUnique_records (t t' : Tenant) (p : Principal) (ty : TypeId) (f : FieldId)
     (s : Bool) (h : stepTenant t p (.setUnique ty f s) = .ok t') :
     t'.nextId = t.nextId ∧ ∀ T, t'.env T = t.env T := by
   constructor
@@ -1104,7 +1104,7 @@ theorem setUnique_records (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (f : F
       all_goals exact env_putType_records t ty o { o with schema := makeUnique o.schema f } hT rfl T
 
 /-- A composite unique constraint leaves the counter and every type's records as they are. -/
-theorem defineUnique_records (t t' : Tenant) (p : PrincipalId) (ty : TypeId) (fs : List FieldId)
+theorem defineUnique_records (t t' : Tenant) (p : Principal) (ty : TypeId) (fs : List FieldId)
     (h : stepTenant t p (.defineUnique ty fs) = .ok t') :
     t'.nextId = t.nextId ∧ ∀ T, t'.env T = t.env T := by
   constructor
