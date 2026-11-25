@@ -1,0 +1,18 @@
+{
+  // Refused: a computed field that declares a default (layer.computed-default, D-8307, KRN-2924). The
+  // kernel derives the value from the record, so a default could hold a value the derivation would
+  // never give. The field "tier" is otherwise a valid computed field.
+  "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "member_tiers__member",
+      "label": "Member",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false },
+        "points": { "id": "points", "label": "Points", "ty": "Int", "required": true, "unique": false },
+        "tier": { "id": "tier", "label": "Tier", "ty": "Bool", "required": false, "unique": false, "computed": "record.points > 10", "default": "record.points > 20" }
+      },
+      "constraints": {}
+    }
+  ]
+}

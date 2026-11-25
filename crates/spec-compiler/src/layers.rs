@@ -46,6 +46,9 @@
 //! - `layer.retention-missing`: an object type with a personal field and no retention (D-6584);
 //! - `layer.balance-outside-ledger`: a step or transition that writes a record field from its own
 //!   current value, a mutable balance outside the ledger (WG-4998);
+//! - `layer.computed-default`, `layer.computed-declaration`, `layer.computed-written`: a computed
+//!   field that declares a default, that is unique or required, or that an operation, workflow or
+//!   automation writes (D-8307, KRN-2924);
 //! - `layer.configuration-outside-setting`: an expression that names a record by a literal id,
 //!   `ref(3)`, the singleton record of a configuration kept outside a declared setting (WG-5000);
 //! - `layer.reference-unknown`, `layer.cross-product-reference`: a name in a typed section, or a
@@ -169,6 +172,12 @@ pub const PLATFORM_REFERENCES_PRODUCT: &str = "layer.platform-references-product
 /// An entity that keeps a mutable balance outside the ledger: a step or transition that writes a
 /// field of a record from that field's own value (WG-4998, LDG-001).
 pub const BALANCE_OUTSIDE_LEDGER: &str = "layer.balance-outside-ledger";
+/// A computed field that declares a default (D-8307, KRN-2924).
+pub const COMPUTED_DEFAULT: &str = "layer.computed-default";
+/// A computed field that is unique or required (D-8307, KRN-2924).
+pub const COMPUTED_DECLARATION: &str = "layer.computed-declaration";
+/// An operation, workflow or automation that writes a computed field (D-8307, KRN-2924).
+pub const COMPUTED_WRITTEN: &str = "layer.computed-written";
 /// An expression of a product that names a record by a literal id: the singleton record of a
 /// configuration kept outside a declared setting (WG-5000, SET-001).
 pub const CONFIGURATION_OUTSIDE_SETTING: &str = "layer.configuration-outside-setting";
@@ -584,6 +593,7 @@ fn check_product(
         }
     };
     let parsed = header.and_then(|h| check_header(&file, h, product, platform_file, out));
+    check_computed(&file, top, out);
     let imports: Vec<String> = parsed
         .as_ref()
         .map(|(_, _, imports)| imports.clone())
@@ -1240,6 +1250,119 @@ fn check_retention(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic>
             if personal.len() == 1 { "" } else { "s" }
         ),
     ));
+}
+
+/// The computed fields of a product's record types, and what may write them (D-8307, KRN-2924). A
+/// computed field declares no default, is neither unique nor required, and no operation, workflow or
+/// automation of the product writes it. The kernel refuses the same declarations of a tenant schema.
+fn check_computed(file: &str, top: &Map<String, Value>, out: &mut Vec<Diagnostic>) {
+    let mut computed: BTreeSet<(String, String)> = BTreeSet::new();
+    for item in top
+        .get("objects")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        for (name, field) in item
+            .get("fields")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if field.get("computed").is_none_or(Value::is_null) {
+                continue;
+            }
+            computed.insert((id.to_string(), name.clone()));
+            if field.get("default").is_some_and(|d| !d.is_null()) {
+                out.push(Diagnostic::new(
+                    COMPUTED_DEFAULT,
+                    id,
+                    format!("The computed field \"{name}\" of \"{id}\" in {file} declares a default. A computed field is derived by the kernel from its record and the record it refers to, so a default could hold a value the derivation would never give (D-8307). Remove the default."),
+                ));
+            }
+            let flag = |key: &str| field.get(key).and_then(Value::as_bool) == Some(true);
+            if flag("unique") || flag("required") {
+                out.push(Diagnostic::new(
+                    COMPUTED_DECLARATION,
+                    id,
+                    format!("The computed field \"{name}\" of \"{id}\" in {file} is unique or required. A computed value changes when its inputs change, so no commit can check it as a unique key or a required value (D-8307). Remove \"unique\" and \"required\"."),
+                ));
+            }
+        }
+    }
+    if computed.is_empty() {
+        return;
+    }
+    for section in ["operations", "automations", "workflows"] {
+        for item in top
+            .get(section)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(id) = item.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let item_object = item.get("object").and_then(Value::as_str);
+            let mut writes = Vec::new();
+            collect_record_writes(item, item_object, &mut writes);
+            for (object, field) in writes {
+                if computed.contains(&(object.clone(), field.clone())) {
+                    out.push(Diagnostic::new(
+                        COMPUTED_WRITTEN,
+                        id,
+                        format!("\"{id}\" in {file} writes the computed field \"{field}\" of \"{object}\". The kernel computes that field from the record and the record it refers to, so a step may not write it (D-8307). Remove the write, and derive the value in the field's expression instead."),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// The (object, field) pairs a step or transition of a product writes: the fields of a create or
+/// update step, and the fields a workflow transition sets on its own object.
+fn collect_record_writes(
+    value: &Value,
+    item_object: Option<&str>,
+    out: &mut Vec<(String, String)>,
+) {
+    match value {
+        Value::Object(map) => {
+            for (key, inner) in map {
+                match key.as_str() {
+                    "CreateRecord" | "UpdateRecord" => {
+                        if let Some(object) = inner.get("object").and_then(Value::as_str) {
+                            for field in inner
+                                .get("fields")
+                                .and_then(Value::as_object)
+                                .into_iter()
+                                .flatten()
+                                .map(|(f, _)| f)
+                            {
+                                out.push((object.to_string(), field.clone()));
+                            }
+                        }
+                    }
+                    "set" => {
+                        if let (Some(object), Value::Object(fields)) = (item_object, inner) {
+                            for field in fields.keys() {
+                                out.push((object.to_string(), field.clone()));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                collect_record_writes(inner, item_object, out);
+            }
+        }
+        Value::Array(items) => items
+            .iter()
+            .for_each(|i| collect_record_writes(i, item_object, out)),
+        _ => {}
+    }
 }
 
 /// The step of an operation or automation, or the transition of a workflow, that writes a field of a
