@@ -204,6 +204,35 @@ pub async fn start_target() -> Target {
     panic!("the BFF and backend did not start");
 }
 
+/// The target the checks of a contract run on: one development stack for the whole binary,
+/// started on the first call on a thread and runtime of its own (the test that asks first would
+/// otherwise take the stack down with its runtime when it ends). Each test keeps to its own
+/// data by what its contract does, not by a stack of its own; the checks that need a stack no
+/// other test has touched (a quota exhausted) start one with [`start_target`].
+pub async fn target() -> Target {
+    static SHARED: std::sync::OnceLock<Target> = std::sync::OnceLock::new();
+    tokio::task::spawn_blocking(|| {
+        SHARED
+            .get_or_init(|| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let runtime = tokio::runtime::Builder::new_multi_thread()
+                        .worker_threads(2)
+                        .enable_all()
+                        .build()
+                        .expect("a runtime for the shared stack");
+                    let target = runtime.block_on(start_target());
+                    tx.send(target).expect("the shared stack's first user");
+                    runtime.block_on(std::future::pending::<()>());
+                });
+                rx.recv().expect("the shared stack started")
+            })
+            .for_test()
+    })
+    .await
+    .expect("the shared stack")
+}
+
 /// Every contract the generated suite covers is shipped and has a route, and the suite has the
 /// tables the harness reads.
 #[test]
