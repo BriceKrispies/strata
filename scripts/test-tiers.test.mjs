@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { join, resolve } from 'node:path';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { applyTimes, main, measuredRecord, parseCargoLog, readTiers, routineArgs, routineSeconds, suiteVerdict, tierProblems } from './test-tiers.mjs';
+import { applyTimes, gateWallVerdict, main, measuredRecord, parseCargoLog, readTiers, routineArgs, routineSeconds, suiteVerdict, tierProblems } from './test-tiers.mjs';
 import { readWorkspace } from './test-select.mjs';
 
 const GRAPH = {
@@ -149,21 +149,21 @@ function checkOutput(path) {
 }
 
 test('check refuses a tier file whose recorded suite total is over the full budget', () => {
-  const { code, text } = checkOutput(tierFile(fixtureRecord(700, [['fast', 1]])));
+  const { code, text } = checkOutput(tierFile(fixtureRecord(400, [['fast', 1]])));
   assert.equal(code, 1);
-  assert.match(text, /FAIL {2}the test suite fits its budget: suite 700 s of 600 s/);
+  assert.match(text, /FAIL {2}the test suite fits its budget: suite 400 s of 300 s/);
 });
 
 test('check refuses a tier file with a recorded binary over the per-binary cap', () => {
-  const { code, text } = checkOutput(tierFile(fixtureRecord(300, [['spec_compiler_slow', 91]])));
+  const { code, text } = checkOutput(tierFile(fixtureRecord(200, [['spec_compiler_slow', 91]])));
   assert.equal(code, 1);
   assert.match(text, /binary over the 90 s cap: spec_compiler_slow  91 s/);
 });
 
 test('check passes a tier file whose recorded suite fits both budgets', () => {
-  const { code, text } = checkOutput(tierFile(fixtureRecord(500, [['fast', 30], ['slow', 89]])));
+  const { code, text } = checkOutput(tierFile(fixtureRecord(250, [['fast', 30], ['slow', 89]])));
   assert.equal(code, 0);
-  assert.match(text, /pass {2}the test suite fits its budget: suite 500 s of 600 s/);
+  assert.match(text, /pass {2}the test suite fits its budget: suite 250 s of 300 s/);
 });
 
 test('times --write records the measured run, and its steps and total, in the tier file', () => {
@@ -180,4 +180,23 @@ test('times --write records the measured run, and its steps and total, in the ti
   assert.equal(written.measured.machine, 'fixture');
   assert.equal(written.measured.binaries.find((b) => b.name === 'slow').seconds, 700);
   assert.equal(checkOutput(path).code, 1, 'a 700 s binary is over the 90 s cap, so the recorded run is refused');
+});
+
+test('the gate run is judged on wall time, with the browser suites left out, against fullBudgetSeconds of the committed list', () => {
+  assert.equal(readTiers().fullBudgetSeconds, 300);
+  const budget = { fullBudgetSeconds: 300 };
+  assert.equal(gateWallVerdict(budget, 299.4).ok, true);
+  const over = gateWallVerdict(budget, 301);
+  assert.equal(over.ok, false);
+  assert.match(over.detail, /301 s of 300 s/);
+  const withBrowser = gateWallVerdict(budget, 900, 650);
+  assert.equal(withBrowser.ok, true);
+  assert.match(withBrowser.detail, /browser suites 650 s left out/);
+  assert.equal(gateWallVerdict({}, 10).ok, false);
+});
+
+test('a cargo log without a Doc-tests section reads the same', () => {
+  const rows = parseCargoLog(LOG.slice(0, LOG.indexOf('   Doc-tests')));
+  assert.equal(rows.some((r) => r.name === 'doc'), false);
+  assert.equal(applyTimes(tiers([routine('fast')]), rows).doctestSeconds, 0);
 });

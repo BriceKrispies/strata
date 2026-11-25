@@ -8,7 +8,8 @@
 // crashes, prints nothing parseable, or cannot be found is a failed check.
 //
 // Steps, in order:
-//   0. specc check: crates/model and its pure crate crates/model-core are exactly what the compiler
+//   0. specc check-all runs every check below in one process and reports each apart (scripts/gate-specc.mjs).
+//      specc check: crates/model and its pure crate crates/model-core are exactly what the compiler
 //      writes from the specification; check-web and check-e2e do the same for web/src/generated,
 //      tests/e2e/generated (the journeys) and tests/e2e/step-checks (the step fixtures). The product
 //      specifications in specifications/products go with --product to every check of the platform
@@ -17,19 +18,23 @@
 //      contract conformance suite (crates/bff/tests/conformance/generated) and its fixtures.
 //      specc lint applies the requirement wording rules to every requirement; any finding fails the step.
 //   0b. The test tiers (scripts/test-tiers.json): a test binary in neither tier fails. Runs with --no-test too.
-//   1. cargo test --workspace, lake build, node --test (web kernel and client tests), the generated
+//   1. cargo test --workspace --lib --bins --tests (no doctest pass), lake build, node --test (web kernel and client tests), the generated
 //      share tests (scripts/generated-share.test.mjs), tsc, cargo fmt --check, cargo clippy with
 //      warnings denied on the hand-written crates, cargo audit and npm audit, recorded under
 //      var/test-results (at most two jobs). Not run with --no-test.
 //      The test phase is timed by step and by test binary, from the run it makes. "The test suite fits
 //      its budget" fails when the phase passes fullBudgetSeconds or a binary passes binaryCapSeconds
 //      (scripts/test-tiers.json). No flag waives it; --no-test judges the recorded measurement.
-//   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata), reading this checkout's
+//      "The gate fits its wall-time budget" fails when the whole run (the `time: N s in all` line, the
+//      --browser suites left out) passes fullBudgetSeconds.
+//   2. Exegra (claims and validate run alongside the tests, started before them and awaited before step 3;
+//      EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata), reading this checkout's
 //      specification (spec-hash.mjs: the gate fails when Exegra reads another one): validate the
 //      specification, evaluate its claims.
-//   3. Evidence (scripts/gate-evidence.mjs): every requirement of a started milestone (gate.json) has a
-//      passing proof: a Rust test or Lean theorem with a `Verifies: <REF>` line that the recorded results show
-//      as passed, or, for a construction requirement, verified Exegra claims that model it. A `Verifies:` line
+//   3. Evidence (scripts/gate-evidence.mjs): every requirement of a started milestone, or held by a started
+//      scope (gate.json startedScopes), has a passing proof: a Rust test or Lean theorem with a `Verifies: <REF>`
+//      line that the recorded results show as passed, or, for a construction requirement, verified Exegra claims
+//      that model it. A `Verifies:` line
 //      naming a ref the specification does not have fails too.
 //   4. Counts read from the specification itself, compared with the last successful gate record.
 //   4b. The specification and the code agree (scripts/gate-audit-checks.mjs, nothing compiled): every
@@ -58,12 +63,13 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { auditChecks } from './gate-audit-checks.mjs';
-import { runCommand } from './gate-run.mjs';
+import { runCommand, startCommand } from './gate-run.mjs';
+import { splitPasses } from './gate-specc.mjs';
 import { GENERATED as CONFORMANCE_SUITE, conformanceCoverage, conformanceVerdict } from './gate-conformance.mjs';
 import { evidenceSources, realisationReport, realisationVerdict } from './gate-realisation.mjs';
 import { readGateConfig, reportLines, runEvidence } from './gate-evidence.mjs';
 import { readWorkspace } from './test-select.mjs';
-import { measuredRecord, parseCargoLog, readTiers, routineSeconds, suiteVerdict, tierProblems } from './test-tiers.mjs';
+import { gateWallVerdict, measuredRecord, parseCargoLog, readTiers, routineSeconds, suiteVerdict, tierProblems } from './test-tiers.mjs';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
 import { readSpecValue, specSha256 } from './spec-parts.mjs';
 import { checkoutHash, checkoutSpecs, envelopeProblems, productArgs, savedTraces, traceFreshness } from './spec-hash.mjs';
@@ -258,8 +264,11 @@ const documentationCount = allRequirements.length - requirements.length;
 const modelClaims = spec.claims.filter((claim) => String(claim.id).startsWith('m-'));
 const requirementIds = new Set(allRequirements.map((claim) => claim.id));
 let startedList = [];
+let startedScopes = [];
 try {
-  startedList = readGateConfig(root).startedMilestones;
+  const gateConfig = readGateConfig(root);
+  startedList = gateConfig.startedMilestones;
+  startedScopes = gateConfig.startedScopes ?? [];
 } catch (error) {
   check('gate.json names started milestones', false, error.message);
 }
@@ -270,6 +279,8 @@ const danglingLinks = modelClaims.filter((claim) => !requirementIds.has(claim.mo
 
 console.log(`specification: ${requirements.length} requirements (${documentationCount} more are documentation, outside the counts), ${modelClaims.length} model claims; started milestones: ${[...started].sort((a, b) => a - b).join(', ') || 'none'}`);
 if (started.size === 0) check('gate.json names started milestones', false, 'startedMilestones is empty');
+
+let speccPasses = null;
 
 // ---------------------------------------------------------------------------------------------
 // 0. Generated code: crates/model and crates/model-core are what specc writes from the
@@ -292,18 +303,17 @@ if (started.size === 0) check('gate.json names started milestones', false, 'star
   }
   const hashArgs = hash ? ['--spec-hash', hash] : [];
   const products = productArgs(root);
-  const specc = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check', '--spec', 'specifications/spec.jsonc', '--out', 'crates/model', '--crate-name', 'strata-model', '--runtime', 'crates/runtime',
-    '--core-out', 'crates/model-core', '--core-crate-name', 'strata-model-core', ...hashArgs, ...products], {
+  // One specc process runs every freshness check (`specc check-all`) and reports each pass apart;
+  // each pass is printed below as the check it stands for.
+  const speccAll = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--', 'check-all', ...hashArgs, ...products], {
     env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
   });
+  speccPasses = splitPasses(speccAll, ['check', 'web', 'e2e', 'steps', 'catalogue', 'conformance', 'conformance-fixtures', 'lint', 'deploy']);
+  const specc = speccPasses.get('check');
   check('specc check (crates/model and crates/model-core are generated from the specification at its semantic hash)', specc.ok,
     specc.ok ? 'up to date' : `${exitText(specc)}: ${lastLine(specc.out)}; run npm run generate and commit`);
 
-  const web = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check-web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated', ...hashArgs, ...products], {
-    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
-  });
+  const web = speccPasses.get('web');
   check('specc check-web (web/src/generated is generated from the specification at its semantic hash)', web.ok,
     web.ok ? 'up to date' : `${exitText(web)}: ${lastLine(web.out)}; run npm run generate and commit`);
 
@@ -318,46 +328,28 @@ if (started.size === 0) check('gate.json names started milestones', false, 'star
     check('saved traces are current', false, 'no Exegra checkout to compare them with');
   }
 
-  const e2e = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check-e2e', '--spec', 'specifications/spec.jsonc', '--out', 'tests/e2e/generated', '--origin', 'http://127.0.0.1:4200', ...products], {
-    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
-  });
+  const e2e = speccPasses.get('e2e');
   check('specc check-e2e (tests/e2e/generated is generated from the specification)', e2e.ok,
     e2e.ok ? 'up to date' : `${exitText(e2e)}: ${lastLine(e2e.out)}; run npm run generate and commit`);
 
-  const steps = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check-e2e', '--spec', 'tests/e2e/step-fixtures/spec.jsonc', '--out', 'tests/e2e/step-checks', '--expect-fail-prefix', 'violates-'], {
-    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
-  });
+  const steps = speccPasses.get('steps');
   check('specc check-e2e (tests/e2e/step-checks is generated from the step fixtures)', steps.ok,
     steps.ok ? 'up to date' : `${exitText(steps)}: ${lastLine(steps.out)}; run npm run generate and commit`);
 
-  const catalogue = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check-catalogue', '--spec', 'specifications/spec.jsonc', '--out', 'specifications', ...hashArgs], {
-    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
-  });
+  const catalogue = speccPasses.get('catalogue');
   check('specc check-catalogue (specifications/catalogue.md is generated from the specification at its semantic hash)', catalogue.ok,
     catalogue.ok ? 'up to date' : `${exitText(catalogue)}: ${lastLine(catalogue.out)}; run npm run generate and commit`);
 
-  const conformance = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check-conformance', '--spec', 'specifications/spec.jsonc', '--out', 'crates/bff/tests/conformance/generated', ...products], {
-    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
-  });
+  const conformance = speccPasses.get('conformance');
   check('specc check-conformance (crates/bff/tests/conformance/generated is generated from the specification)', conformance.ok,
     conformance.ok ? 'up to date' : `${exitText(conformance)}: ${lastLine(conformance.out)}; run npm run generate and commit`);
 
-  const conformanceFixtures = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check-conformance', '--spec', 'crates/bff/tests/conformance/fixtures/spec.jsonc', '--out', 'crates/bff/tests/conformance/fixtures/generated', '--expect-fail-prefix', 'violates-'], {
-    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
-  });
+  const conformanceFixtures = speccPasses.get('conformance-fixtures');
   check('specc check-conformance (crates/bff/tests/conformance/fixtures/generated is generated from the conformance fixtures)', conformanceFixtures.ok,
     conformanceFixtures.ok ? 'up to date' : `${exitText(conformanceFixtures)}: ${lastLine(conformanceFixtures.out)}; run npm run generate and commit`);
 
   // The requirement wording lint: any finding fails.
-  const lint = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'lint', '--spec', 'specifications/spec.jsonc'], {
-    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
-  });
+  const lint = speccPasses.get('lint');
   check('specc lint (requirements follow the wording rules)', lint.ok,
     lint.ok ? lastLine(lint.out) : `${exitText(lint)}: ${lastLine(lint.out)}`);
   if (!lint.ok) detail(lint.stdout.split(/\r?\n/).filter(Boolean).slice(0, 40));
@@ -374,10 +366,7 @@ if (started.size === 0) check('gate.json names started milestones', false, 'star
     problems.length ? `${problems.length} problem(s)` : `routine tier ${routineSeconds(tiers).toFixed(1)} s of ${tiers.budgetSeconds} s`);
   detail(problems);
 
-  const deploy = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check-deploy', '--spec', 'specifications/spec.jsonc', '--out', 'deploy'], {
-    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
-  });
+  const deploy = speccPasses.get('deploy');
   check('specc check-deploy (deploy/ compose and Kubernetes files are generated from the specification)', deploy.ok,
     deploy.ok ? 'up to date' : `${exitText(deploy)}: ${lastLine(deploy.out)}; run npm run generate and commit`);
 }
@@ -413,11 +402,29 @@ const timedStep = (name, action) => {
 };
 let suiteMeasured = null;
 
+// Exegra's `claims` and `validate` are not tests and do not compete for the test run's two jobs:
+// they start here, alongside the tests, and are awaited before the evidence and Exegra steps that
+// read them. Their output goes to files, so a long run of cargo test does not hold them up.
+const exegraPending = [];
+if (existsSync(resolve(exegraHome, 'cli/exegra.js'))) {
+  for (const command of ['claims', 'validate']) {
+    exegraPending.push(
+      startCommand(process.execPath, [resolve(exegraHome, 'cli/exegra.js'), command, '--project', exegraProject, '--specs', exegraSpecs], {
+        cwd: exegraHome,
+        env: { ...process.env },
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+      }).then((result) => exegraRuns.set(command, result)),
+    );
+  }
+}
+
 if (!noTest) {
   console.log('running tests (--no-test would reuse the recorded results instead)');
   // The build and the run are separate steps, so each has its own time. The run's output keeps the
   // `Running` lines (stderr) in order with the results (stdout): that is what gives each binary its time.
-  const testArgs = ['test', '--workspace', '--features', 'strata-backend/development'];
+  // Unit tests, binaries' own tests and integration tests only: no doctest pass (rustdoc runs once per crate, and the
+  // 33 crates hold no doctest that is a test; a code example is `text` or an ordinary test).
+  const testArgs = ['test', '--workspace', '--lib', '--bins', '--tests', '--features', 'strata-backend/development'];
   // A private build directory, so a running development stack does not hold the binaries.
   const build = timedStep('cargo build of the test binaries', () => run('cargo', [...testArgs, '--no-run'], { env: cargoEnv, timeoutMs: LONG_TIMEOUT_MS, interleaved: true }));
   const cargo = build.ok ? timedStep('cargo test run', () => run('cargo', [...testArgs, '--no-fail-fast'], { env: cargoEnv, timeoutMs: LONG_TIMEOUT_MS, interleaved: true })) : build;
@@ -543,11 +550,13 @@ if (!noTest) {
 //    run against (scripts/dev.mjs without --no-build) and fail when those are older than the sources.
 //    A skipped test is a failure here, not a pass.
 // ---------------------------------------------------------------------------------------------
+let browserSeconds = 0;
 if (withBrowser) {
   const playwright = join(root, 'node_modules', '@playwright', 'test', 'cli.js');
   if (!existsSync(playwright)) {
     check('browser suites', false, 'node_modules/@playwright/test is not installed (npm ci; npx playwright install chromium)');
   } else {
+    const browserBegan = Date.now();
     for (const [name, file, config] of [
       ['hand-written browser tests (npm run e2e)', 'browser-e2e.txt', 'tests/e2e/playwright.config.js'],
       ['generated journeys (npm run e2e:generated)', 'browser-generated.txt', 'tests/e2e/generated/playwright.generated.config.js'],
@@ -558,6 +567,7 @@ if (withBrowser) {
       const read = readPlaywright(done.out, done.ok);
       check(name, read.ok, read.ok ? `${read.passed} passed` : `${exitText(done)}, ${read.passed} passed, ${read.failed} failed, ${read.skipped} skipped`);
     }
+    browserSeconds = (Date.now() - browserBegan) / 1000;
   }
 } else {
   skipCheck('browser suites (e2e, generated journeys, step fixtures)', 'pass --browser; they build the binaries and the frontend, then run Chromium');
@@ -570,6 +580,7 @@ if (withBrowser) {
 // read first and written to var/exegra-verdicts.json, where the evidence check and anyone reading
 // the gate's output can see them.
 {
+  await Promise.all(exegraPending);
   const cli = resolve(exegraHome, 'cli/exegra.js');
   const verdicts = existsSync(cli) ? runExegra('claims') : null;
   let claims = null;
@@ -584,13 +595,14 @@ if (withBrowser) {
 
   let evidence = null;
   try {
-    evidence = runEvidence({ root, spec, resultsDir, verdicts: written ? claims : null, started: startedList });
+    evidence = runEvidence({ root, spec, resultsDir, verdicts: written ? claims : null, started: startedList, scopes: startedScopes });
   } catch (error) {
     check('requirement evidence', false, `unreadable: ${error.message}`);
   }
   if (evidence) {
     const lines = reportLines(evidence);
-    check('every started requirement has a passing proof, and every Verifies line names a known ref', evidence.ok, `${lines[0]} (milestones ${startedList.join(', ')})`);
+    const scopeNote = startedScopes.length > 0 ? `; scopes ${startedScopes.map((s) => s?.name).join(', ')}` : '';
+    check('every started requirement has a passing proof, and every Verifies line names a known ref', evidence.ok, `${lines[0]} (milestones ${startedList.join(', ')}${scopeNote})`);
     detail(lines.slice(1));
   }
 }
@@ -682,6 +694,11 @@ if (previous?.counts) {
 // ---------------------------------------------------------------------------------------------
 // Verdict
 // ---------------------------------------------------------------------------------------------
+// The whole gate fits fullBudgetSeconds of wall time; the browser suites (--browser) are not counted.
+const gateSeconds = process.uptime();
+const wall = gateWallVerdict(testBudget, gateSeconds, browserSeconds);
+check('the gate fits its wall-time budget (scripts/test-tiers.json)', wall.ok, wall.detail);
+detail(wall.lines);
 if (requireAll && notRun.length) check('every check ran (--require-all)', false, `${notRun.length} not run`);
 const passed = failures.length === 0 && (!noTest || allowRecorded) && (noTest || testsPassed);
 const heldPct = requirements.length ? ((gated.length / requirements.length) * 100).toFixed(1) : '0.0';
@@ -714,7 +731,7 @@ if (noTest) console.log('RECORDED TEST RESULTS, NOT A RUN OF THE TESTS ON THIS C
 for (const note of notes) console.log(`note: ${note}`);
 if (notRun.length) console.log(`NOT RUN: ${notRun.length} check${notRun.length === 1 ? '' : 's'} did not run (${notRun.join('; ')}). A pass below does not cover them.`);
 const timed = [...timings].sort((a, b) => b.seconds - a.seconds).filter((t) => t.seconds >= 1);
-console.log(`time: ${process.uptime().toFixed(0)} s in all; commands of a second or more:`);
+console.log(`time: ${gateSeconds.toFixed(0)} s in all; commands of a second or more:`);
 for (const t of timed) console.log(`  ${t.seconds.toFixed(1).padStart(7)} s  ${t.what}`);
 console.log(passed ? (notRun.length ? `GATE PASSED, with ${notRun.length} not run` : 'GATE PASSED') : `GATE FAILED: ${failures.join('; ') || 'recorded test results not accepted'}`);
 

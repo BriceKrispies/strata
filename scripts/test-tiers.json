@@ -1,7 +1,7 @@
 {
   "description": "Tiers of the Rust test binaries. See scripts/test-tiers.mjs and docs/development.md.",
   "budgetSeconds": 120,
-  "fullBudgetSeconds": 600,
+  "fullBudgetSeconds": 300,
   "binaryCapSeconds": 90,
   "measuredFrom": "cargo test --workspace on the integration stack, one build job, two test threads (the coordinator's run of 2026-11-20); a binary with \"unmeasured\" was added after it. Binaries that failed in that run are timed as they ran; record again after a green run with: node scripts/test-tiers.mjs times <log> --write",
   "unitSeconds": 0.55,

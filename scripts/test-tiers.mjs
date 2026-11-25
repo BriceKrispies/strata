@@ -17,9 +17,11 @@
 // includes the routine ones. A test binary that is in neither tier fails `check`, which the gate runs.
 //
 // Unit tests (the `lib` and `bin` targets of every package) are always in the routine tier; their
-// measured sum is `unitSeconds` in the list. Doctests are in the full tier (`doctestSeconds`).
+// measured sum is `unitSeconds` in the list. The gate runs no doctests (`--lib --bins --tests`), so a log
+// has no `Doc-tests` section; the reader still takes one from an older log.
 //
-// The full test phase has its own budget: `fullBudgetSeconds` for the whole phase and `binaryCapSeconds`
+// The gate has a wall-time budget: `fullBudgetSeconds` for the whole gate run (browser suites left out; the
+// test phase is held to it too) and `binaryCapSeconds`
 // for any one test binary's run. The gate measures both from the run it makes and fails over either;
 // `measured` in the tier list is the last recorded run (`times --write`), which `check` judges too.
 import { spawnSync } from 'node:child_process';
@@ -200,6 +202,22 @@ export function suiteVerdict(tiers, measured) {
         overBinaries.length ? `${overBinaries.length} binar${overBinaries.length === 1 ? 'y' : 'ies'} over the ${cap} s cap` : null,
       ].filter(Boolean).join('; ');
   return { ok, detail, lines };
+}
+
+/**
+ * The wall-time verdict on one gate run: the gate's own seconds, less the browser suites (`--browser`
+ * builds the binaries and runs Chromium, which the budget leaves out), against `fullBudgetSeconds`.
+ * The per-step and per-binary verdict is `suiteVerdict`; this is the whole run.
+ */
+export function gateWallVerdict(tiers, gateSeconds, browserSeconds = 0) {
+  const budget = tiers.fullBudgetSeconds;
+  if (!Number.isFinite(budget) || !Number.isFinite(gateSeconds)) {
+    return { ok: false, detail: 'scripts/test-tiers.json has no fullBudgetSeconds, or the gate time is not a number', lines: [] };
+  }
+  const counted = gateSeconds - (Number.isFinite(browserSeconds) ? browserSeconds : 0);
+  const ok = counted <= budget;
+  const browser = browserSeconds > 0 ? `, browser suites ${browserSeconds.toFixed(0)} s left out` : '';
+  return { ok, detail: `${counted.toFixed(0)} s of ${budget} s${browser}`, lines: ok ? [] : [`the gate took ${counted.toFixed(0)} s, over the ${budget} s budget; the slowest commands are listed under "time:" below`] };
 }
 
 function run(command, args, env = {}) {

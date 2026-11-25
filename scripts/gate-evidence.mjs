@@ -1,6 +1,7 @@
 // The requirement-to-evidence check of the specification gate.
 //
-// A requirement of a started milestone must have a passing proof. A proof is one of:
+// A requirement of a started milestone, or held by a started scope (gate.json `startedScopes`: requirements
+// chosen by ref prefix, by ref and by milestone exclusion), must have a passing proof. A proof is one of:
 //   - a Rust `#[test]` whose doc comment holds a `Verifies: <REF>` line, and that the recorded
 //     `cargo test` output (var/test-results/cargo-test.txt) shows as passed;
 //   - a Lean theorem whose doc comment holds a `Verifies: <REF>` line, whose module the recorded
@@ -14,9 +15,9 @@
 // for the requirement, an m- claim it names must model the requirement, a contract it names must exist. A statement
 // declared `documentation` is outside the counts.
 //
-// The check fails when a requirement of a started milestone has no passing proof, when a declared check does not
-// stand, and when a `Verifies:` line names a ref the specification does not have. A requirement of a milestone that is not started is
-// counted as planned and is not held to the code.
+// The check fails when a requirement held by a started milestone or scope has no passing proof, when a declared
+// check does not stand, when a scope is malformed, and when a `Verifies:` line names a ref the specification does
+// not have. A requirement that no started milestone or scope holds is counted as planned and is not held to the code.
 //
 // Only the pure functions below read nothing from disk; `collectEvidence` and the command line do.
 //
@@ -501,6 +502,77 @@ export function leanOutcome(site, lake, leanRoot = 'lean') {
 // The check
 // ---------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------
+// Scopes: `startedScopes` in gate.json hold requirements by ref prefix and ref, not only by milestone
+// ---------------------------------------------------------------------------------------------
+
+const SCOPE_KEYS = new Set(['name', 'prefixes', 'refs', 'excludeMilestones']);
+const nonEmptyStrings = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x.trim() !== '');
+const isScopeObject = (s) => s !== null && typeof s === 'object' && !Array.isArray(s);
+
+/**
+ * The problems in `startedScopes` of gate.json, as messages: an unknown key, a missing name or a repeated one,
+ * a scope with neither prefixes nor refs, a prefix that matches no requirement, a ref that is not a requirement.
+ * `requirements` is every requirement claim of the specification, documentation ones included.
+ */
+export function scopeProblems(scopes, requirements) {
+  if (scopes === undefined) return [];
+  if (!Array.isArray(scopes)) return ['gate.json: startedScopes must be an array of scopes'];
+  const refs = requirements.map((r) => String(r.ref ?? '').toUpperCase()).filter((x) => x !== '');
+  const refSet = new Set(refs);
+  const prefixMatches = (p) => refs.some((ref) => ref.startsWith(p.toUpperCase()));
+  const names = new Set();
+  const problems = [];
+  scopes.forEach((scope, i) => {
+    if (!isScopeObject(scope)) {
+      problems.push(`startedScopes[${i}]: a scope must be an object`);
+      return;
+    }
+    const label = typeof scope.name === 'string' && scope.name.trim() !== '' ? `scope ${scope.name}` : `startedScopes[${i}]`;
+    for (const key of Object.keys(scope)) {
+      if (!SCOPE_KEYS.has(key)) problems.push(`${label}: unknown key "${key}" (the keys are name, prefixes, refs, excludeMilestones)`);
+    }
+    if (typeof scope.name !== 'string' || scope.name.trim() === '') problems.push(`${label}: name must be a non-empty string`);
+    else if (names.has(scope.name)) problems.push(`${label}: the name is given to two scopes`);
+    else names.add(scope.name);
+    if (scope.prefixes !== undefined && !nonEmptyStrings(scope.prefixes)) problems.push(`${label}: prefixes must be an array of non-empty strings`);
+    if (scope.refs !== undefined && !nonEmptyStrings(scope.refs)) problems.push(`${label}: refs must be an array of non-empty strings`);
+    if (scope.excludeMilestones !== undefined && !(Array.isArray(scope.excludeMilestones) && scope.excludeMilestones.every(Number.isInteger))) {
+      problems.push(`${label}: excludeMilestones must be an array of milestone numbers`);
+    }
+    const prefixes = nonEmptyStrings(scope.prefixes) ? scope.prefixes : [];
+    const listed = nonEmptyStrings(scope.refs) ? scope.refs : [];
+    if (prefixes.length === 0 && listed.length === 0) problems.push(`${label}: neither prefixes nor refs, so it holds no requirement`);
+    for (const p of prefixes) if (!prefixMatches(p)) problems.push(`${label}: prefix "${p}" matches no requirement`);
+    for (const x of listed) if (!refSet.has(x.toUpperCase())) problems.push(`${label}: ref "${x}" is not a requirement of the specification`);
+  });
+  return problems;
+}
+
+/**
+ * The scopes as they hold requirements: `{name, prefixes, refs, excludeMilestones}`, the refs and prefixes upper-cased.
+ * An entry without a name is left out here; `scopeProblems` reports it.
+ */
+export function normaliseScopes(scopes) {
+  if (!Array.isArray(scopes)) return [];
+  const upper = (v) => (nonEmptyStrings(v) ? v.map((x) => x.toUpperCase()) : []);
+  return scopes
+    .filter((s) => isScopeObject(s) && typeof s.name === 'string' && s.name.trim() !== '')
+    .map((s) => ({
+      name: s.name,
+      prefixes: upper(s.prefixes),
+      refs: upper(s.refs),
+      excludeMilestones: Array.isArray(s.excludeMilestones) ? s.excludeMilestones.filter(Number.isInteger) : [],
+    }));
+}
+
+/** Whether a normalised scope holds a requirement: its ref has a listed prefix or is listed, and its milestone is not excluded. */
+export function scopeMatches(scope, requirement) {
+  const ref = String(requirement.ref ?? '').toUpperCase();
+  if (ref === '' || scope.excludeMilestones.includes(requirement.milestone)) return false;
+  return scope.prefixes.some((p) => ref.startsWith(p)) || scope.refs.includes(ref);
+}
+
 /**
  * Judge every requirement.
  *   requirements  claims of kind requirement: `{id, ref, milestone, realisation, check, checkedBy}`; those with check `documentation` are left out of every count
@@ -514,7 +586,7 @@ export function leanOutcome(site, lake, leanRoot = 'lean') {
  *   started       the started milestone numbers
  * Returns `{ok, proven, unproven, unknownRefs, checkProblems, trivial, counts}`. `unproven` lists the started requirements with no passing proof.
  */
-export function evaluateEvidence({ requirements: allRequirements, knownRefs = null, modelClaims = [], verdicts = null, rustTests = [], rustResults = [], leanTheorems = [], lake = null, started }) {
+export function evaluateEvidence({ requirements: allRequirements, knownRefs = null, modelClaims = [], verdicts = null, rustTests = [], rustResults = [], leanTheorems = [], lake = null, started, scopes = [] }) {
   const startedSet = new Set(started);
   let requirements = allRequirements;
   const byRef = new Map();
@@ -596,33 +668,67 @@ export function evaluateEvidence({ requirements: allRequirements, knownRefs = nu
     if (passed.length === 0) return { ok: false, reason: `named by ${list.map((p) => `${p.where} (${p.outcome})`).join(', ')}, none passing` };
     return { ok: true, by: passed.map((p) => p.where).join(', ') };
   };
+  // A requirement is held when its milestone is started or a started scope holds it; planned requirements are not held to the code.
+  const scopeList = normaliseScopes(scopes);
+  const scopeProblemList = scopeProblems(scopes, allRequirements);
   let planned = 0;
   let startedCount = 0;
   let startedProven = 0;
+  let scopeOnly = 0;
+  let scopeOnlyProven = 0;
   for (const r of requirements) {
     const isStarted = startedSet.has(r.milestone);
-    if (!isStarted) planned += 1;
-    else startedCount += 1;
+    const holders = scopeList.filter((s) => scopeMatches(s, r)).map((s) => s.name);
+    const held = isStarted || holders.length > 0;
+    if (!held) planned += 1;
+    else if (isStarted) startedCount += 1;
+    else scopeOnly += 1;
     const verdict = judge(r);
     if (verdict.ok) {
       proven.push({ id: r.id, ref: r.ref, milestone: r.milestone, by: verdict.by });
       if (isStarted) startedProven += 1;
-    } else if (isStarted) {
-      unproven.push({ id: r.id, ref: r.ref, milestone: r.milestone, reason: verdict.reason });
+      else if (holders.length > 0) scopeOnlyProven += 1;
+    } else if (held) {
+      const holder = isStarted ? `milestone ${r.milestone}` : `scope ${holders.join(', ')}`;
+      unproven.push({ id: r.id, ref: r.ref, milestone: r.milestone, holder, scopes: holders, reason: verdict.reason });
     }
   }
+  const provenIds = new Set(proven.map((p) => p.id));
+  const unprovenIds = new Set(unproven.map((u) => u.id));
+  const scopeReport = scopeList.map((s) => {
+    const matched = requirements.filter((r) => scopeMatches(s, r)).map((r) => r.id);
+    return { name: s.name, matched, proven: matched.filter((id) => provenIds.has(id)), unproven: matched.filter((id) => unprovenIds.has(id)) };
+  });
   const counts = { requirements: requirements.length, documentation, proven: proven.length, started: startedCount, startedProven, planned, sites };
-  return { ok: unproven.length === 0 && unknownRefs.length === 0 && checkProblems.length === 0, proven, unproven, unknownRefs, checkProblems, trivial, counts };
+  const ok = unproven.length === 0 && unknownRefs.length === 0 && checkProblems.length === 0 && scopeProblemList.length === 0;
+  return {
+    ok,
+    proven,
+    unproven,
+    unknownRefs,
+    checkProblems,
+    scopeProblems: scopeProblemList,
+    scopes: scopeReport,
+    scopeOnly: { held: scopeOnly, proven: scopeOnlyProven },
+    trivial,
+    counts,
+  };
 }
 
 /** The report as lines, for the gate's output: the counts first, then each problem. */
 export function reportLines(report, limit = 30) {
   const { counts } = report;
+  const scopes = report.scopes ?? [];
+  const head = scopes.length === 0
+    ? `${counts.startedProven} of ${counts.started} started requirements proven; ${counts.proven} proven in all; ${counts.planned} planned (not held to the code)`
+    : `${counts.startedProven} of ${counts.started} started requirements proven, and scopes ${scopes.map((s) => s.name).join(', ')} hold ${report.scopeOnly.held} more, ${report.scopeOnly.proven} of them proven; ${counts.proven} proven in all; ${counts.planned} planned (not held to the code)`;
   const lines = [
-    `${counts.startedProven} of ${counts.started} started requirements proven; ${counts.proven} proven in all; ${counts.planned} planned (not held to the code)`,
+    head,
     `proofs indexed: ${counts.sites.rustPassed} of ${counts.sites.rust} Rust tests passed, ${counts.sites.leanPassed} of ${counts.sites.lean} Lean theorems built`,
   ];
-  for (const u of report.unproven.slice(0, limit)) lines.push(`unproven: ${u.ref ?? u.id} (${u.id}, milestone ${u.milestone}): ${u.reason}`);
+  for (const s of scopes) lines.push(`scope ${s.name}: ${s.matched.length} matched, ${s.proven.length} proven, ${s.unproven.length} unproven`);
+  for (const p of report.scopeProblems ?? []) lines.push(`scope problem: ${p}`);
+  for (const u of report.unproven.slice(0, limit)) lines.push(`unproven: ${u.ref ?? u.id} (${u.id}, ${u.holder ?? `milestone ${u.milestone}`}): ${u.reason}`);
   if (report.unproven.length > limit) lines.push(`... and ${report.unproven.length - limit} more unproven`);
   for (const u of report.unknownRefs.slice(0, limit)) lines.push(`unknown ref: ${u.ref} in ${u.where}`);
   if (report.unknownRefs.length > limit) lines.push(`... and ${report.unknownRefs.length - limit} more unknown refs`);
@@ -694,13 +800,27 @@ export function collectEvidence(root) {
 }
 
 /**
- * The whole check on a checkout. `spec` is the parsed specification, `resultsDir` holds cargo-test.txt and
- * lake-build.txt, `verdicts` is the parsed `exegra claims` list (or null).
+ * The recorded results of the last test run: `{cargoText, lakeText, rustResults, lake}`, the texts null when the file is
+ * missing. `rustResults` and `lake` are parsed from them (empty and null when missing).
  */
-export function runEvidence({ root, spec, resultsDir, verdicts, started }) {
+export function readEvidenceResults(resultsDir) {
   const read = (name) => (existsSync(join(resultsDir, name)) ? readFileSync(join(resultsDir, name), 'utf8') : null);
   const cargoText = read('cargo-test.txt');
   const lakeText = read('lake-build.txt');
+  return {
+    cargoText,
+    lakeText,
+    rustResults: cargoText === null ? [] : parseCargo(cargoText),
+    lake: lakeText === null ? null : parseLake(lakeText),
+  };
+}
+
+/**
+ * The whole check on a checkout. `spec` is the parsed specification, `resultsDir` holds cargo-test.txt and
+ * lake-build.txt, `verdicts` is the parsed `exegra claims` list (or null), `scopes` is gate.json's `startedScopes`.
+ */
+export function runEvidence({ root, spec, resultsDir, verdicts, started, scopes = [] }) {
+  const results = readEvidenceResults(resultsDir);
   const claims = spec.claims ?? [];
   const evidence = collectEvidence(root);
   return evaluateEvidence({
@@ -709,10 +829,11 @@ export function runEvidence({ root, spec, resultsDir, verdicts, started }) {
     modelClaims: claims.filter((c) => String(c.id).startsWith('m-')),
     verdicts,
     rustTests: evidence.rustTests,
-    rustResults: cargoText === null ? [] : parseCargo(cargoText),
+    rustResults: results.rustResults,
     leanTheorems: evidence.leanTheorems,
-    lake: lakeText === null ? null : parseLake(lakeText),
+    lake: results.lake,
     started,
+    scopes,
   });
 }
 
@@ -752,8 +873,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const verdictsPath = resolve(flag('--verdicts', join(root, 'var/exegra-verdicts.json')));
   const spec = readSpecValue(flag('--spec', join(root, 'specifications/spec.jsonc')));
   const verdicts = existsSync(verdictsPath) ? JSON.parse(readFileSync(verdictsPath, 'utf8')).results ?? null : null;
-  const started = readGateConfig(root, flag('--config', 'gate.json')).startedMilestones;
-  const report = runEvidence({ root, spec, resultsDir, verdicts, started });
+  const gateConfig = readGateConfig(root, flag('--config', 'gate.json'));
+  const report = runEvidence({ root, spec, resultsDir, verdicts, started: gateConfig.startedMilestones, scopes: gateConfig.startedScopes ?? [] });
   for (const line of reportLines(report)) console.log(line);
   process.exit(report.ok ? 0 : 1);
 }

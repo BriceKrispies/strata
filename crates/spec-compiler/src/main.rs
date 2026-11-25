@@ -16,6 +16,7 @@
 //! specc conformance  --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
 //! specc check-conformance --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
 //! specc lint         --spec <file> [--gate <gate.json>]
+//! specc check-all    [--spec-hash <hash>] [--product <file>]...
 //! specc bundle       --spec <file> --product <file> --out <dir>
 //! ```
 //!
@@ -68,6 +69,15 @@
 //! the readiness check of the Rust generation, so that its small fixture specification needs none of
 //! what the backends ask for. The platform specification passes that check in `specc check` of the
 //! same gate step.
+//!
+//! `check-all` runs, in one process, every freshness check of the specification gate (`check`,
+//! `check-web`, `check-e2e` twice, `check-catalogue`, `check-deploy`, `check-conformance` twice and
+//! `lint`), each exactly as the separate command with the arguments the gate gives it, from the
+//! repository root, and reads and readiness-checks each specification once. Each pass is
+//! bracketed on both standard output and standard error by `specc-pass <id> begin` and
+//! `specc-pass <id> end <exit code>` lines, so a caller reads each pass's own output and result;
+//! the exit code is 1 when any pass failed. It takes `--spec-hash <hash>` (for the passes the gate
+//! gives one) and `--product <file>` (repeatable, for the passes the gate gives them).
 //!
 //! `lint` is the requirement wording lint (`strata_spec_compiler::lint`): `specc lint --spec <file>`
 //! prints one `error[lint.<rule>] <entity>: <what to change> (<file>:<line>)` line per finding and
@@ -122,6 +132,7 @@ const USAGE: &str = "usage:
   specc check-conformance --spec <file> --out <dir> [--spec-hash <hash>] [--expect-fail-prefix <id prefix>]
   specc bundle       --spec <file> --product <file> --out <dir>
   specc lint         --spec <file> [--gate <gate.json>]
+  specc check-all    [--spec-hash <hash>] [--product <file>]...
 every command also takes --product <file>, repeatable: a product file layered on the specification (bundle takes exactly one)";
 
 /// The runtime crate of the checkout specc was built from.
@@ -366,7 +377,16 @@ fn main() -> ExitCode {
 /// The shared readiness check, run before any command emits from the raw specification: the
 /// refusal (exit code 1) when the Rust backends would refuse it, `None` when it is ready.
 fn refuse_unready(args: &Args, text: &str) -> Option<ExitCode> {
-    let Err(diagnostics) = strata_spec_compiler::check_ready(&args.header_source(), text) else {
+    thread_local! {
+        static READY: std::cell::RefCell<std::collections::HashSet<(String, String)>> =
+            std::cell::RefCell::new(std::collections::HashSet::new());
+    }
+    let key = (args.header_source(), text.to_string());
+    if READY.with(|ready| ready.borrow().contains(&key)) {
+        return None;
+    }
+    let Err(diagnostics) = strata_spec_compiler::check_ready(&key.0, text) else {
+        READY.with(|ready| ready.borrow_mut().insert(key));
         return None;
     };
     for d in &diagnostics {
@@ -383,15 +403,189 @@ fn refuse_unready(args: &Args, text: &str) -> Option<ExitCode> {
 /// The text of the specification at `path`. `specifications/spec.jsonc` is a manifest of part files
 /// (WG-5386); it is resolved to the one document the parts make, so every command reads the same.
 fn read_spec(path: &str) -> Result<String, String> {
-    strata_spec_parts::read_spec_text(Path::new(path)).map_err(|e| e.to_string())
+    thread_local! {
+        static READ: std::cell::RefCell<std::collections::HashMap<String, Result<String, String>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    READ.with(|read| {
+        read.borrow_mut()
+            .entry(path.to_string())
+            .or_insert_with(|| {
+                strata_spec_parts::read_spec_text(Path::new(path)).map_err(|e| e.to_string())
+            })
+            .clone()
+    })
 }
 
 fn run() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    run_args(&raw)
+}
+
+/// One pass of `check-all`: its id, and the arguments of the separate command it stands for.
+fn check_all_passes(hash: &[String], products: &[String]) -> Vec<(&'static str, Vec<String>)> {
+    let list = |parts: &[&str]| -> Vec<String> { parts.iter().map(|p| p.to_string()).collect() };
+    let with = |mut base: Vec<String>, extra: &[String]| {
+        base.extend(extra.iter().cloned());
+        base
+    };
+    let spec = "specifications/spec.jsonc";
+    vec![
+        (
+            "check",
+            with(
+                with(
+                    list(&[
+                        "check",
+                        "--spec",
+                        spec,
+                        "--out",
+                        "crates/model",
+                        "--crate-name",
+                        "strata-model",
+                        "--runtime",
+                        "crates/runtime",
+                        "--core-out",
+                        "crates/model-core",
+                        "--core-crate-name",
+                        "strata-model-core",
+                    ]),
+                    hash,
+                ),
+                products,
+            ),
+        ),
+        (
+            "web",
+            with(
+                with(
+                    list(&["check-web", "--spec", spec, "--out", "web/src/generated"]),
+                    hash,
+                ),
+                products,
+            ),
+        ),
+        (
+            "e2e",
+            with(
+                list(&[
+                    "check-e2e",
+                    "--spec",
+                    spec,
+                    "--out",
+                    "tests/e2e/generated",
+                    "--origin",
+                    "http://127.0.0.1:4200",
+                ]),
+                products,
+            ),
+        ),
+        (
+            "steps",
+            list(&[
+                "check-e2e",
+                "--spec",
+                "tests/e2e/step-fixtures/spec.jsonc",
+                "--out",
+                "tests/e2e/step-checks",
+                "--expect-fail-prefix",
+                "violates-",
+            ]),
+        ),
+        (
+            "catalogue",
+            with(
+                list(&["check-catalogue", "--spec", spec, "--out", "specifications"]),
+                hash,
+            ),
+        ),
+        (
+            "conformance",
+            with(
+                list(&[
+                    "check-conformance",
+                    "--spec",
+                    spec,
+                    "--out",
+                    "crates/bff/tests/conformance/generated",
+                ]),
+                products,
+            ),
+        ),
+        (
+            "conformance-fixtures",
+            list(&[
+                "check-conformance",
+                "--spec",
+                "crates/bff/tests/conformance/fixtures/spec.jsonc",
+                "--out",
+                "crates/bff/tests/conformance/fixtures/generated",
+                "--expect-fail-prefix",
+                "violates-",
+            ]),
+        ),
+        ("lint", list(&["lint", "--spec", spec])),
+        (
+            "deploy",
+            list(&["check-deploy", "--spec", spec, "--out", "deploy"]),
+        ),
+    ]
+}
+
+/// `check-all`: every check pass of the gate in this process; see the module documentation.
+fn run_check_all(rest: &[String]) -> ExitCode {
+    let mut hash = Vec::new();
+    let mut products = Vec::new();
+    let mut iter = rest.iter();
+    while let Some(flag) = iter.next() {
+        let Some(value) = iter.next() else {
+            eprintln!("specc: {flag} needs a value\n{USAGE}");
+            return ExitCode::from(2);
+        };
+        match flag.as_str() {
+            "--spec-hash" if hash.is_empty() => {
+                hash = vec![flag.clone(), value.clone()];
+            }
+            "--product" => products.extend([flag.clone(), value.clone()]),
+            other => {
+                eprintln!("specc: unknown or repeated argument \"{other}\"\n{USAGE}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let mut failed = false;
+    for (id, args) in check_all_passes(&hash, &products) {
+        use std::io::Write;
+        println!("specc-pass {id} begin");
+        eprintln!("specc-pass {id} begin");
+        let code = run_args(&args);
+        let number = if code == ExitCode::SUCCESS {
+            0
+        } else if code == ExitCode::from(2) {
+            2
+        } else {
+            1
+        };
+        failed |= number != 0;
+        println!("specc-pass {id} end {number}");
+        eprintln!("specc-pass {id} end {number}");
+        let _ = std::io::stdout().flush();
+    }
+    if failed {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn run_args(raw: &[String]) -> ExitCode {
+    if raw.first().map(String::as_str) == Some("check-all") {
+        return run_check_all(&raw[1..]);
+    }
     if raw.first().map(String::as_str) == Some("lint") {
         return run_lint(&raw[1..]);
     }
-    let args = match parse_args(&raw) {
+    let args = match parse_args(raw) {
         Ok(args) => args,
         Err(message) => {
             eprintln!("specc: {message}\n{USAGE}");

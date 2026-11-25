@@ -118,7 +118,7 @@ store's own integrity check.
 | `npm run e2e` | The Playwright tests (`tests/e2e/site.spec.js`, `hmr.spec.js`) on two private stacks (ports 4200/4201 and 4210/4211/5183). The stacks build the backend, the BFF and the frontend first. The Lean test fails when Lean is missing unless `STRATA_E2E_SKIP_LEAN=1` |
 | `npm run e2e:generated`, `npm run e2e:steps` | The generated journeys, and the step fixtures against their own server |
 | `STRATA_BLESS=1 cargo test -p strata-verification` | Regenerate the Lean correspondence fixtures after an intended change |
-| `npm run spec` | The specification gate: `cargo test --workspace`, `lake build`, the web and script tests, the type check, `cargo fmt --check`, `cargo clippy -D warnings`, `cargo audit` and `npm audit`, then Exegra against `specifications/spec.jsonc` and the requirement-to-evidence check (`scripts/gate-evidence.mjs`). A tool that is missing is printed as NOT RUN and counted; `--require-all` fails on it. `npm run spec:browser` adds the three browser suites. `node scripts/spec-gate.mjs --no-test --allow-recorded` re-reads the recorded results. See `specifications/README.md` |
+| `npm run spec` | The specification gate: `cargo test --workspace --lib --bins --tests` (no doctest pass), `lake build`, the web and script tests, the type check, `cargo fmt --check`, `cargo clippy -D warnings`, `cargo audit` and `npm audit`, then Exegra against `specifications/spec.jsonc` (its `claims` and `validate` run alongside the tests) and the requirement-to-evidence check (`scripts/gate-evidence.mjs`). A tool that is missing is printed as NOT RUN and counted; `--require-all` fails on it. `npm run spec:browser` adds the three browser suites. `node scripts/spec-gate.mjs --no-test --allow-recorded` re-reads the recorded results. See `specifications/README.md` |
 
 ### Tiers
 
@@ -138,13 +138,25 @@ not, so a new test file has to be given a tier in the same change. Run builds wi
 
 ### The test suite budget
 
-The whole test phase of the gate (`cargo test --workspace` build and run, `lake build`, the web and script
-node tests, `tsc`) has a budget of `fullBudgetSeconds` (600) in `scripts/test-tiers.json`, and every test
-binary's run has a cap of `binaryCapSeconds` (90). The gate times each step by wall clock and each binary
-from cargo's `finished in` line, from the run it makes. The check "the test suite fits its budget" fails when
-the phase total passes the budget or any binary passes the cap, and it names the steps and binaries over.
-No flag skips or waives it. `--no-test --allow-recorded` judges the measurement stored in the gate record,
-and fails if there is none. `node scripts/test-tiers.mjs check` judges the `measured` record in the tier list.
+The gate has a wall-time budget of `fullBudgetSeconds` (300) in `scripts/test-tiers.json`: the whole run, the
+`time: N s in all` line, with the `--browser` suites left out. "The gate fits its wall-time budget" fails when it
+passes. The test phase (`cargo test --workspace --lib --bins --tests` build and run, `lake build`, the web and
+script node tests, `tsc`) is held to the same number, and every test binary's run has a cap of
+`binaryCapSeconds` (90). The gate times each step by wall clock and each binary from cargo's `finished in` line,
+from the run it makes. The check "the test suite fits its budget" fails when the phase total passes the budget or
+any binary passes the cap, and it names the steps and binaries over. No flag skips or waives it.
+`--no-test --allow-recorded` judges the measurement stored in the gate record, and fails if there is none.
+`node scripts/test-tiers.mjs check` judges the `measured` record in the tier list.
+
+What keeps the gate inside it besides fast tests:
+
+- One `specc check-all` process runs every freshness check (`check`, `check-web`, `check-e2e` twice,
+  `check-catalogue`, `check-conformance` twice, `check-deploy`, `lint`) and reports each apart; the gate prints
+  one line per check as before. The separate `specc` commands still work.
+- Exegra `claims` and `validate` are started before the tests and awaited before the evidence step. They are the
+  only work run beside the tests, which keep `CARGO_BUILD_JOBS=2` and `RUST_TEST_THREADS=2`.
+- There is no doctest pass (rustdoc runs once per crate). A code example in a doc comment is a `text` block, or an
+  ordinary test when it is a check.
 
 The way under the budget is to make tests faster, fold test binaries together, or remove tests that do not
 prove a requirement. Raising `fullBudgetSeconds` or `binaryCapSeconds` needs a recorded owner decision, written
