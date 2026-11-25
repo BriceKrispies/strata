@@ -253,5 +253,36 @@
         }
       }
     }
+  ],
+  "bindings": [
+    {
+      "id": "setting", "since": "1.0",
+      "summary": {"en": "A setting of the tenant or the platform, by its id, and the level the viewer writes (tenant or person). Shows the value the viewer reads and where it comes from, in words; writes through the setting contract of that level and reads the setting again on each notice of its change."},
+      "binds": ["setting"],
+      "states": ["loading", "ready", "error"],
+      "props": {
+        "setting": {"type": "setting-id"},
+        "level": {"enum": ["tenant", "person"]}
+      },
+      "control": {
+        "closed-list": "select",
+        "reference": "text (the record id, until the records of the object type are served)",
+        "range": "number",
+        "bool": "switch",
+        "other": "text"
+      },
+      "readOnlyWhen": "the viewer may not write the level, or a lock closes it; the reason is said in words"
+    }
+  ],
+  "templates": [
+    {
+      "id": "settings", "since": "1.0", "layout": "settings",
+      "summary": {"en": "The Settings screen: one section per product area, each setting with its value, its source and the controls of the levels the viewer may write. Every tenant has it at /settings for a signed-in person."},
+      "regions": ["main"],
+      "bindsEach": "setting",
+      "sectionTitle": "area",
+      "states": ["loading", "ready", "error"],
+      "emptyWords": {"title": "No settings yet", "text": "When your organisation or the platform defines a setting, it appears here."}
+    }
   ]
 }
