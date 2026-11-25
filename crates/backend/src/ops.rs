@@ -169,6 +169,10 @@ fn run_intent_unaudited_at(
                 "correlation": ctx.correlation,
             });
             LOG.info("kernel.rejected", &ctx.correlation, line.clone());
+            // A write to a view is refused and audited (D-8404, ADM-1612).
+            if error.kind == ErrorKind::ViewReadOnly {
+                app.audit("view.write_refused", &ctx.correlation, line.clone());
+            }
             app.stats.recent_rejections.push(line);
         }
         Err(ExecuteError::Store(error)) => {
@@ -204,9 +208,18 @@ pub fn mutate(
 ) -> Result<MutationReply, ApiError> {
     let tenant = header(app, identity)?;
     let fields_of = |object: &ObjectTypeId, fields: &serde_json::Map<String, Json>| {
-        let def = tenant.schema.objects.get(object).ok_or_else(|| {
-            ApiError::new(ErrorCode::NotFound, format!("no object type {object}"))
-        })?;
+        let Some(def) = tenant.schema.objects.get(object) else {
+            // A write that names a view is the kernel's to refuse with `ViewReadOnly` (ADM-1612).
+            if strata_kernel::ViewId::new(object.as_str())
+                .is_ok_and(|view| tenant.schema.views.contains_key(&view))
+            {
+                return Ok(BTreeMap::new());
+            }
+            return Err(ApiError::new(
+                ErrorCode::NotFound,
+                format!("no object type {object}"),
+            ));
+        };
         coerce_fields(def, fields, &|_| None).map_err(|problem| {
             let mut error = ApiError::new(ErrorCode::Invalid, problem.clone());
             let field = problem.split(':').next().unwrap_or("").trim().to_string();

@@ -18,3 +18,6 @@ mod hot_reload_fixtures;
 
 #[path = "thread_descendants.rs"]
 mod thread_descendants;
+
+#[path = "visibility.rs"]
+mod visibility;

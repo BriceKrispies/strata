@@ -13,6 +13,7 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use strata_kernel::rules::may_attempt;
 use strata_kernel::{Action, EventBody, Principal, Resource};
@@ -21,7 +22,7 @@ use strata_protocol::ws::{
     parse_client, ClientMessage, ServerMessage, SessionState, HEARTBEAT_MS, MAX_REPLAY,
     MAX_UNACKED, VERSION,
 };
-use strata_substrate::subscribe::{notice, segment_notice, Selector, SelectorExt};
+use strata_substrate::subscribe::{admit, notice_in, segment_notice, Selector, SelectorExt};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 
@@ -168,8 +169,8 @@ impl Conn {
                 continue;
             }
             sub.cursor = seq;
-            if let Some(found) = notice(
-                &published.tenant,
+            if let Some(found) = notice_in(
+                &published.state,
                 &self.identity.principal,
                 &sub.selector,
                 &published.event,
@@ -315,25 +316,57 @@ impl Conn {
         let loaded = self
             .app
             .blocking(move |app: &App| {
-                let header = app.store.load(&tenant, &[])?.tenant;
-                let missed = match (from, &header) {
-                    (Some(after), Some(_)) => {
-                        app.store.events_after(&tenant, after, MAX_REPLAY + 1)?
-                    }
+                let header = Arc::new(app.store.load(&tenant, &[])?);
+                let missed = match (from, &header.tenant) {
+                    (Some(after), Some(_)) => app
+                        .store
+                        .events_after(&tenant, after, MAX_REPLAY + 1)?
+                        .into_iter()
+                        .map(|event| Published {
+                            state: crate::hub::published_state(app.store.as_ref(), &header, &event),
+                            event,
+                        })
+                        .collect(),
                     _ => Vec::new(),
                 };
                 Ok::<_, strata_storage_api::StoreError>((header, missed))
             })
             .await;
-        let (Ok(Ok((Some(header), missed))),) = (loaded,) else {
+        let (Ok(Ok((header, missed))),) = (loaded,) else {
             return self.send(ServerMessage::Error {
                 req: Some(req),
                 code: "unavailable".into(),
                 message: "the site's state could not be read".into(),
             });
         };
+        let Some(tenant_state) = header.tenant.clone() else {
+            return self.send(ServerMessage::Error {
+                req: Some(req),
+                code: "unavailable".into(),
+                message: "the site's state could not be read".into(),
+            });
+        };
+        // A subscription to events the subscriber has no audience for is refused and audited
+        // (D-8402, ADM-1632); it never reaches the delivery path.
+        if let Err(refusal) = admit(&tenant_state, &self.identity.principal, &selector) {
+            self.app.audit(
+                "subscription.refused",
+                &self.id,
+                json!({
+                    "tenant": self.identity.tenant.as_str(),
+                    "principal": self.principal_name(),
+                    "subscription": name,
+                    "kind": format!("{:?}", refusal.kind),
+                }),
+            );
+            return self.send(ServerMessage::Error {
+                req: Some(req),
+                code: "audience_not_permitted".into(),
+                message: refusal.message,
+            });
+        }
         self.send(ServerMessage::Ok { req })?;
-        let head = header.event_seq;
+        let head = tenant_state.event_seq;
         let cursor = after.unwrap_or(head).min(head);
         self.subs
             .insert(name.clone(), Subscription { selector, cursor });
@@ -346,13 +379,10 @@ impl Conn {
                 head,
             })?;
         } else {
-            for event in missed {
+            for published in missed {
                 // Replay never overflows the queue: it waits for the writer to make room.
                 wait_for_room(&self.out, REPLAY_ROOM, REPLAY_PATIENCE).await?;
-                self.deliver(&Published {
-                    event,
-                    tenant: header.clone(),
-                })?;
+                self.deliver(&published)?;
             }
         }
         self.register();
