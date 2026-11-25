@@ -1119,6 +1119,7 @@ fn ledger_limit(
         period_cap: period.map(|(cap, _)| cap),
         period: period.map(|(_, period)| period),
         scope: scope.map(|text| LedgerScope(text.to_string())),
+        additions_only: None,
     }
 }
 

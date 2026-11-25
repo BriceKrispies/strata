@@ -44,6 +44,7 @@ fn unit_limit(
         period_cap: period.map(|p| p.0),
         period: period.map(|p| p.1),
         scope: None,
+        additions_only: None,
     }
 }
 
@@ -228,6 +229,7 @@ fn a_cap_per_day_counts_the_credits_of_the_utc_day_and_starts_again_the_next() {
 fn an_account_limit_replaces_the_unit_limit_limit_by_limit_and_each_scope_counts_alone() {
     let account_cap = LedgerLimit {
         owner: Some(person("writer1")),
+        additions_only: None,
         ..unit_limit(None, Some(200), None)
     };
     let world = ledger_world(vec![unit_limit(Some(0), Some(100), None), account_cap]);
@@ -416,6 +418,7 @@ fn an_entry_records_who_and_when_and_each_posting_has_one_event() {
 fn a_transfer_is_two_postings_committed_together_or_not_at_all() {
     let cap = LedgerLimit {
         owner: Some(pool()),
+        additions_only: None,
         ..unit_limit(None, Some(40), None)
     };
     let world = ledger_world(vec![unit_limit(Some(0), None, None), cap]);
@@ -779,6 +782,7 @@ fn declarations_are_checked_and_a_unit_or_pool_in_use_is_not_removed() {
     // period.
     let stamps = LedgerLimit {
         unit: LedgerUnit::new("stamps").unwrap(),
+        additions_only: None,
         ..unit_limit(Some(0), None, None)
     };
     for bad in [
@@ -786,6 +790,7 @@ fn declarations_are_checked_and_a_unit_or_pool_in_use_is_not_removed() {
         unit_limit(Some(10), Some(5), None),
         LedgerLimit {
             period_cap: Some(5),
+            additions_only: None,
             ..unit_limit(None, None, None)
         },
         unit_limit(None, None, None),
@@ -952,4 +957,75 @@ fn erasure_clears_the_principal_and_keeps_every_amount_and_balance() {
             assert_eq!(new.caused_by, None);
         }
     }
+}
+
+// ------------------------------------------------------------------------------------------------
+// A cap per period that counts additions only (WG-5598)
+
+/// The unit limit of a cap of `cap` points a day, counting additions only or every credit.
+fn daily_cap(cap: u64, additions_only: Option<bool>) -> LedgerLimit {
+    LedgerLimit {
+        additions_only,
+        ..unit_limit(None, None, Some((cap, LedgerPeriod::Day)))
+    }
+}
+
+/// A reversal of `entry` as the owner: the negated amount, naming the entry it corrects.
+fn reversal_of(entry: u64, amount: i64, key: &str) -> LedgerPostingRequest {
+    LedgerPostingRequest {
+        corrects: Some(entry),
+        ..request(person("writer1"), amount, key)
+    }
+}
+
+/// Verifies: LDG-2902
+/// A debit of five and its reversal, under a daily cap of ten that counts additions only: the
+/// reversal counts nothing, so ten more points still fit the day and one more does not.
+#[test]
+fn a_reversal_under_a_cap_that_counts_additions_only_neither_counts_nor_frees() {
+    let world = ledger_world(vec![daily_cap(10, Some(true))]);
+    let world = posted(&world, T0, person("writer1"), -5, "spend");
+    let world = post_as(
+        &world,
+        "owner",
+        T0 + 1,
+        vec![reversal_of(1, 5, "spend-back")],
+    )
+    .expect("the reversal is accepted")
+    .0;
+    assert_eq!(balance(&world, &person("writer1")), 0);
+    let world = posted(&world, T0 + 2, person("writer1"), 10, "credit-ten");
+    assert_eq!(
+        failed_rule(&refused(&world, T0 + 3, person("writer1"), 1, "one-more")),
+        "ledger:above-period-cap"
+    );
+}
+
+/// Verifies: LDG-2902
+/// The same postings under a cap that counts every credit: the reversal of the debit is a credit
+/// of five, so ten more points do not fit the day.
+#[test]
+fn a_reversal_under_a_cap_that_counts_every_credit_counts_as_one() {
+    let world = ledger_world(vec![daily_cap(10, None)]);
+    let world = posted(&world, T0, person("writer1"), -5, "spend");
+    let world = post_as(
+        &world,
+        "owner",
+        T0 + 1,
+        vec![reversal_of(1, 5, "spend-back")],
+    )
+    .expect("the reversal is accepted")
+    .0;
+    assert_eq!(
+        failed_rule(&refused(
+            &world,
+            T0 + 2,
+            person("writer1"),
+            10,
+            "credit-ten"
+        )),
+        "ledger:above-period-cap"
+    );
+    let world = posted(&world, T0 + 3, person("writer1"), 5, "credit-five");
+    assert_eq!(balance(&world, &person("writer1")), 5);
 }

@@ -3,6 +3,7 @@
 //! The repeat of a key is the store's (crates/backend/tests/operations.rs).
 
 use std::collections::{BTreeMap, BTreeSet};
+use strata_kernel::ledger;
 use strata_kernel::operations::posting_key;
 use strata_kernel::testkit::*;
 use strata_kernel::*;
@@ -143,6 +144,7 @@ fn count() -> TenantOperationDef {
             scope: None,
             amount: int(1),
             reason: "counted".into(),
+            reference: None,
         }],
     }
 }
@@ -653,4 +655,326 @@ fn two_readable_matches_refuse_with_the_steps_error_code() {
         refused.message
     );
     assert_eq!(note(&world, 2).map(|n| n.version), rank_before);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reversals of ledger postings (WG-5598): a toggle that reverses what its add posted, and the
+// refusals of a reversal that has nothing to reverse.
+
+fn given_unit() -> LedgerUnit {
+    LedgerUnit::new("reactions_given").expect("unit")
+}
+
+fn received_unit() -> LedgerUnit {
+    LedgerUnit::new("reactions_received").expect("unit")
+}
+
+/// The toggle of a reaction that posts what it gives and receives on add, and reverses both on
+/// remove. The postings are keyed by the reaction they are for, so the remove finds them again.
+fn counted_react_op() -> TenantOperationDef {
+    let mut steps = react_op().steps;
+    let Some(TenantOperationStep::Branch {
+        matched, unmatched, ..
+    }) = steps.last_mut()
+    else {
+        panic!("the toggle ends with a branch");
+    };
+    *matched = vec![
+        TenantOperationStep::DeleteRecord {
+            id: "removed".into(),
+            object: object("reaction"),
+            record: param("mine"),
+        },
+        TenantOperationStep::ReverseLedger {
+            id: "given_back".into(),
+            posting: "given".into(),
+            reference: param("mine"),
+            reason: "reaction-taken-back".into(),
+        },
+        TenantOperationStep::ReverseLedger {
+            id: "received_back".into(),
+            posting: "received".into(),
+            reference: param("mine"),
+            reason: "reaction-taken-back".into(),
+        },
+    ];
+    *unmatched = vec![
+        TenantOperationStep::CreateRecord {
+            id: "added".into(),
+            object: object("reaction"),
+            fields: BTreeMap::from([
+                (field("message"), param("note")),
+                (field("reactor"), Expr::Principal),
+                (field("kind"), param("kind")),
+            ]),
+        },
+        TenantOperationStep::PostLedger {
+            id: "given".into(),
+            owner: TenantOperationPostingOwner::Invoker,
+            unit: given_unit(),
+            scope: None,
+            amount: int(1),
+            reason: "reaction-given".into(),
+            reference: Some(param("added")),
+        },
+        TenantOperationStep::PostLedger {
+            id: "received".into(),
+            owner: TenantOperationPostingOwner::Principal {
+                principal: lit("alpha:writer1"),
+            },
+            unit: received_unit(),
+            scope: None,
+            amount: int(1),
+            reason: "reaction-received".into(),
+            reference: Some(param("added")),
+        },
+    ];
+    TenantOperationDef {
+        id: op_id("react_counted"),
+        steps,
+        ..react_op()
+    }
+}
+
+/// An operation with the given steps, invoked with a note as its input.
+fn ledger_op(id: &str, steps: Vec<TenantOperationStep>) -> TenantOperationDef {
+    TenantOperationDef {
+        id: op_id(id),
+        label: id.into(),
+        inputs: vec![input("note", note_ref())],
+        invokers: TenantOperationInvokers {
+            signed_in: true,
+            roles: BTreeSet::new(),
+        },
+        subject: None,
+        conditions: Vec::new(),
+        steps,
+    }
+}
+
+/// A posting of one point under the note it is for, as the invoker.
+fn given_posting() -> TenantOperationStep {
+    TenantOperationStep::PostLedger {
+        id: "given".into(),
+        owner: TenantOperationPostingOwner::Invoker,
+        unit: given_unit(),
+        scope: None,
+        amount: int(1),
+        reason: "reaction-given".into(),
+        reference: Some(param("note")),
+    }
+}
+
+/// The reversal of the posting `given` made under the note.
+fn given_back(id: &str) -> TenantOperationStep {
+    TenantOperationStep::ReverseLedger {
+        id: id.into(),
+        posting: "given".into(),
+        reference: param("note"),
+        reason: "undo".into(),
+    }
+}
+
+/// The notes world with the reactions, two ledger units, a cap of two additions a day on the
+/// reactions given (which counts additions only), and the operations of the reversal tests.
+fn reversal_world() -> World {
+    let world = must(
+        &reactions_world(),
+        "owner",
+        5_100,
+        Intent::ChangeSchema {
+            changes: vec![
+                SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+                    unit: given_unit(),
+                    description: "Reactions given".into(),
+                    expiry: None,
+                }),
+                SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+                    unit: received_unit(),
+                    description: "Reactions received".into(),
+                    expiry: None,
+                }),
+                SchemaChange::SetLedgerLimit(LedgerLimit {
+                    unit: given_unit(),
+                    owner: None,
+                    floor: None,
+                    cap: None,
+                    period_cap: Some(2),
+                    period: Some(LedgerPeriod::Day),
+                    scope: None,
+                    additions_only: Some(true),
+                }),
+                SchemaChange::DefineOperation(counted_react_op()),
+                SchemaChange::DefineOperation(ledger_op(
+                    "post_then_undo",
+                    vec![given_posting(), given_back("undo")],
+                )),
+                SchemaChange::DefineOperation(ledger_op(
+                    "post_twice_undo",
+                    vec![given_posting(), given_back("undo"), given_back("again")],
+                )),
+                SchemaChange::DefineOperation(ledger_op(
+                    "undo_only",
+                    vec![TenantOperationStep::Branch {
+                        id: "gate".into(),
+                        test: BranchTest::Condition {
+                            expr: Expr::Lit(Value::Bool(false)),
+                        },
+                        matched: vec![given_posting()],
+                        unmatched: vec![given_back("undo")],
+                    }],
+                )),
+            ],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    );
+    must(
+        &world,
+        "writer1",
+        5_101,
+        new_note("Second note", "second-note"),
+    )
+}
+
+/// The balance of a unit of the account of a principal, zero before it has an entry.
+fn unit_balance(world: &World, who: &str, unit: &LedgerUnit) -> i64 {
+    let tenant = tenant(world);
+    let owner = LedgerOwner::Principal {
+        principal: principal_id(&format!("alpha:{who}")),
+    };
+    let id = ledger::account_id(&tenant.id, &owner, unit, "");
+    tenant
+        .ledger
+        .as_ref()
+        .and_then(|l| l.accounts.get(&ledger::account_key(&id)))
+        .map_or(0, |account| account.balance.0)
+}
+
+/// The entries of the account of a unit of a principal, in order.
+fn unit_entries(world: &World, who: &str, unit: &LedgerUnit) -> Vec<LedgerEntry> {
+    let tenant = tenant(world);
+    let owner = LedgerOwner::Principal {
+        principal: principal_id(&format!("alpha:{who}")),
+    };
+    let id = ledger::account_id(&tenant.id, &owner, unit, "");
+    tenant
+        .ledger
+        .as_ref()
+        .and_then(|l| l.entries.get(&ledger::account_key(&id)).cloned())
+        .unwrap_or_default()
+}
+
+/// Verifies: LDG-2900, LDG-2902
+/// Add, remove, add: the toggle posts what it gives and receives on add and reverses both on remove.
+/// The balances return to zero on remove, and the daily cap counts the two additions only, so a
+/// third addition of the day is refused although the removal came first.
+#[test]
+fn a_toggle_that_reverses_its_postings_on_remove_leaves_balances_and_the_cap_count_of_additions() {
+    let base = reversal_world();
+    let added = must(&base, "writer1", 5_200, react(1, "love", "k-add"));
+    assert_eq!(unit_balance(&added, "writer1", &given_unit()), 1);
+    assert_eq!(unit_balance(&added, "writer1", &received_unit()), 1);
+
+    let removed = must(&added, "writer1", 5_201, react(1, "love", "k-remove"));
+    assert!(reactions(&removed).is_empty());
+    assert_eq!(unit_balance(&removed, "writer1", &given_unit()), 0);
+    assert_eq!(unit_balance(&removed, "writer1", &received_unit()), 0);
+    let given = unit_entries(&removed, "writer1", &given_unit());
+    assert_eq!(given.len(), 2, "the add and its reversal are both entries");
+    assert_eq!(given[1].amount, LedgerAmount(-1));
+    assert_eq!(given[1].corrects, Some(given[0].sequence));
+
+    // The second add is the second addition of the day, still within the cap of two.
+    let again = must(&removed, "writer1", 5_202, react(1, "love", "k-again"));
+    assert_eq!(unit_balance(&again, "writer1", &given_unit()), 1);
+    let removed_again = must(&again, "writer1", 5_203, react(1, "love", "k-remove-again"));
+
+    // Removing freed no capacity, so a third addition of the day is over the cap.
+    let error = run(
+        &removed_again,
+        as_user("writer1"),
+        5_204,
+        &react(1, "love", "k-third"),
+    )
+    .expect_err("the third addition of the day is over the cap");
+    assert!(
+        error
+            .evidence
+            .iter()
+            .any(|check| check.rule == "ledger:above-period-cap"),
+        "the refusal names the cap: {}",
+        error.message
+    );
+    assert!(reactions(&removed_again).is_empty());
+    assert_eq!(unit_balance(&removed_again, "writer1", &given_unit()), 0);
+}
+
+/// Verifies: LDG-2900
+/// A posting and its reversal in one operation: the balance returns to its value before the posting.
+#[test]
+fn a_reversal_in_the_same_operation_returns_the_balance_to_what_it_was() {
+    let base = reversal_world();
+    let done = must(
+        &base,
+        "writer1",
+        5_300,
+        invoke(
+            "post_then_undo",
+            &[("note", Value::Ref(RecordId(1)))],
+            "k-undo",
+        ),
+    );
+    assert_eq!(unit_balance(&done, "writer1", &given_unit()), 0);
+    let entries = unit_entries(&done, "writer1", &given_unit());
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1].amount, LedgerAmount(-1));
+    assert_eq!(entries[1].corrects, Some(entries[0].sequence));
+}
+
+/// Verifies: LDG-2901
+/// A reversal of a posting that was reversed already in the same change is refused, and nothing is
+/// committed.
+#[test]
+fn a_posting_reversed_twice_is_refused_the_second_time() {
+    let base = reversal_world();
+    let error = refused(
+        &base,
+        as_user("writer1"),
+        &invoke(
+            "post_twice_undo",
+            &[("note", Value::Ref(RecordId(1)))],
+            "k-twice",
+        ),
+    );
+    assert!(
+        error
+            .evidence
+            .iter()
+            .any(|check| check.rule == "ledger:already-reversed"),
+        "the refusal names the reversal: {}",
+        error.message
+    );
+    assert_eq!(unit_balance(&base, "writer1", &given_unit()), 0);
+}
+
+/// Verifies: LDG-2901
+/// A reversal of a posting that was never made is refused.
+#[test]
+fn a_reversal_of_a_posting_that_was_never_made_is_refused() {
+    let base = reversal_world();
+    let error = refused(
+        &base,
+        as_user("writer1"),
+        &invoke("undo_only", &[("note", Value::Ref(RecordId(1)))], "k-none"),
+    );
+    assert!(
+        error
+            .evidence
+            .iter()
+            .any(|check| check.rule == "ledger:no-such-posting"),
+        "the refusal names the missing posting: {}",
+        error.message
+    );
+    assert!(unit_entries(&base, "writer1", &given_unit()).is_empty());
 }

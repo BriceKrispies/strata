@@ -134,6 +134,7 @@ fn member_only() -> TenantOperationDef {
             scope: None,
             amount: Expr::Lit(Value::Int(1)),
             reason: "counted".into(),
+            reference: None,
         }],
     }
 }
