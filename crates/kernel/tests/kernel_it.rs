@@ -65,3 +65,6 @@ mod ancestry;
 
 #[path = "computed.rs"]
 mod computed;
+
+#[path = "role_widening.rs"]
+mod role_widening;
