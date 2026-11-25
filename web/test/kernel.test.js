@@ -373,3 +373,17 @@ test('a view asked for before the person changed is not applied after the change
   assert.equal(late.state.view.model, null, 'the reply for the former person\'s view is not held');
   assert.equal(late.state.view.status, 'loading', 'the page waits for the view it reads again');
 });
+
+// F4: a cold start held a view that answered before the session was known, and never read the view again once the
+// session answered. The spec holds no view until the session is known: an early answer is dropped, and the view is
+// read again when the session answers.
+test('a cold start holds no view that answers before the session does, and reads it again once the session is known', () => {
+  const cold = boot(null);
+  const session = cold.effects.find((e) => e.type === 'http' && e.path === '/api/session');
+  const asked = cold.effects.find((e) => e.type === 'http' && e.path.startsWith('/api/view'));
+  const early = update(cold.state, { type: 'http_result', id: asked.id, ok: true, status: 200, body: homeModel(), ...stamp });
+  assert.equal(early.state.view.model, null, 'the view is not held before the session is known');
+  const learned = update(early.state, { type: 'http_result', id: session.id, ok: true, status: 200, body: { session: anonymous }, ...stamp });
+  assert.equal(learned.state.view.model, null, 'and nothing is drawn while the view is read again');
+  assert.ok(learned.effects.some((e) => e.type === 'http' && e.path.startsWith('/api/view')), 'the view is read again');
+});

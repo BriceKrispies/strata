@@ -90,6 +90,9 @@ function isUserKind(kind) {
 export function initialState() {
   return {
     ready: false,
+    // Whether the session is known. A cold start does not know it until the session read answers; a view that
+    // answers before then is not held (F4). A page that starts with a bootstrapped session knows it at once.
+    sessionKnown: false,
     route: { path: '/', query: {} },
     /** @type {import('./types.js').Session | null} */
     session: null,
@@ -353,6 +356,8 @@ function clearUserState(state) {
     ...state,
     generation: (state.generation ?? 0) + 1,
     latest,
+    // The person is now the one the session names (the specification's switched), so the session is known.
+    sessionKnown: true,
     sessions: sessionsInit(),
     passkeys: { ...passkeysInit(), supported: state.passkeys.supported },
     factors: factorsInit(),
@@ -817,16 +822,20 @@ function onHttp(state, msg) {
       if (!msg.ok) return { state, effects: [] };
       // A session that names another person, or nobody, is a change of person: what the former person
       // held is dropped and the view is read again (the specification's sessionChanged).
-      const changed = personOf(state.session) !== personOf(outputs.session);
+      // A cold page learns the session with this reply: the view it was read without is not held, so it
+      // is read again for the person the session names (F4; the specification's learnSession).
+      const learned = state.sessionKnown === false;
+      const changed = !learned && personOf(state.session) !== personOf(outputs.session);
       let known = sessionRead({ ...state, session: outputs.session }, outputs.session.authenticated === true, msg.at);
       /** @type {Effect[]} */
       const reread = [];
-      if (changed) {
-        known = clearUserState(known);
-        const fetched = fetchView(known, msg, true);
+      if (changed) known = clearUserState(known);
+      if (changed || learned) {
+        const fetched = fetchView({ ...known, view: { status: 'loading', model: null, error: null, request: 0 } }, msg, true);
         known = fetched.state;
         reread.push(...fetched.effects);
       }
+      known = { ...known, sessionKnown: true };
       // The session was read because the socket upgrade was refused and the server answered: that
       // is a refusal, not an outage. After enough of them live updates stop, visibly.
       if (pending.refusal) {
@@ -845,6 +854,9 @@ function onHttp(state, msg) {
     }
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
+      // A view that answers before the session is known is not held: it may be the view of someone else.
+      // The session read answers with the person, and the view is read again then (F4).
+      if (state.sessionKnown === false) return { state: { ...state, view: { ...state.view, request: 0 } }, effects: [] };
       if (msg.ok) {
         const accepted = acceptView(state, decodeView(state, msg.body), msg.body?.next, msg.at);
         return enterScreen(accepted, msg, msg.body.view);
@@ -1338,7 +1350,7 @@ function step(state, msg) {
       const effects = [];
       const boot = msg.bootstrap;
       if (boot?.session?.session) {
-        next = sessionRead({ ...next, session: boot.session.session }, boot.session.session.authenticated === true, msg.at);
+        next = { ...sessionRead({ ...next, session: boot.session.session }, boot.session.session.authenticated === true, msg.at), sessionKnown: true };
       } else {
         const [withRequest, effect] = readSession(next, msg);
         next = withRequest;
