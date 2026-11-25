@@ -488,6 +488,52 @@ export function isSlug(s) {
   return s !== '' && s.split('-').every((part) => /^[a-z0-9]+$/.test(part));
 }"####;
 
+pub(crate) const J_GRAPHEMES: &str = r####"/**
+ * The number of extended grapheme clusters of a string (UAX #29): the characters a reader sees.
+ * @param {string} s
+ * @returns {number}
+ */
+function graphemeCount(s) {
+  let count = 0;
+  for (const _ of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)) count += 1;
+  return count;
+}"####;
+
+pub(crate) const J_IS_EMOJI: &str = r####"/**
+ * Whether a string is exactly one emoji grapheme (WG-5597), by the same rule as the Rust crate.
+ * @param {string} s
+ * @returns {boolean}
+ */
+export function isEmoji(s) {
+  const graphemes = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)].map((g) => g.segment);
+  return graphemes.length === 1 && isEmojiGrapheme(graphemes[0]);
+}
+
+/** Whether one grapheme is an emoji: a keycap, a flag, a subdivision tag sequence, or ZWJ-joined parts. */
+function isEmojiGrapheme(g) {
+  const s = Array.from(g);
+  const inRange = (c, lo, hi) => c.codePointAt(0) >= lo && c.codePointAt(0) <= hi;
+  const regional = (c) => inRange(c, 0x1f1e6, 0x1f1ff);
+  const keycapBase = (c) => /^[0-9#*]$/.test(c);
+  const isEmojiChar = (c) => /^\p{Emoji}$/u.test(c);
+  const isPresentation = (c) => /^\p{Emoji_Presentation}$/u.test(c);
+  const isModifier = (c) => /^\p{Emoji_Modifier}$/u.test(c);
+  const isModifierBase = (c) => /^\p{Emoji_Modifier_Base}$/u.test(c);
+  const keycap = (s.length === 2 || (s.length === 3 && s[1] === '\ufe0f')) && s[s.length - 1] === '\u20e3' && keycapBase(s[0]);
+  if (keycap || (s.length === 2 && regional(s[0]) && regional(s[1]))) return true;
+  if (s.length >= 3 && s[0] === '\u{1f3f4}' && s[s.length - 1] === '\u{e007f}' && s.slice(1, -1).every((c) => inRange(c, 0xe0020, 0xe007e))) return true;
+  return g.split('\u200d').every((part) => {
+    const p = Array.from(part);
+    if (p.length === 0) return false;
+    const [base, ...rest] = p;
+    if (!isEmojiChar(base) || regional(base) || keycapBase(base)) return false;
+    const modifier = rest.length > 0 && isModifier(rest[0]) && isModifierBase(base);
+    const tail = modifier ? rest.slice(1) : rest;
+    const vs16 = tail.length === 1 && tail[0] === '\ufe0f';
+    return (tail.length === 0 || vs16) && (isPresentation(base) || modifier || vs16);
+  });
+}"####;
+
 pub(crate) const J_SAFE: &str = r####"/** The largest magnitude of an integer of checked arithmetic, 2^53-1: what Rust and JavaScript both hold exactly. */
 const SAFE_INT = 9007199254740991;
 

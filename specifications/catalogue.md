@@ -570,7 +570,7 @@ id: limit per window, on exceed
 - event-kind: id string
 - event-stream: {tenant:tenant-id, position:u64}
 - exception-action: release|drop
-- expr: lit(value)|var{scope:scope, field:string}|through{scope:scope, reference:string, field:string}|param(string)|now|principal|has-role(role-id)|not(expr)|and(list\<expr\>)|or(list\<expr\>)|cmp{op:cmp-op, left:expr, right:expr}|in{item:expr, list:expr}|is-null(expr)|len(expr)|lower(expr)|contains{haystack:expr, needle:expr}|starts-with{text:expr, prefix:expr}|is-slug(expr)|if{condition:expr, then:expr, else:expr}|arith{op:arith-op, left:expr, right:expr}|ms-between{from:expr, to:expr}|duration{unit:duration-unit, amount:expr}|concat{left:expr, right:expr}|text(expr)
+- expr: lit(value)|var{scope:scope, field:string}|through{scope:scope, reference:string, field:string}|param(string)|now|principal|has-role(role-id)|not(expr)|and(list\<expr\>)|or(list\<expr\>)|cmp{op:cmp-op, left:expr, right:expr}|in{item:expr, list:expr}|is-null(expr)|len(expr)|lower(expr)|contains{haystack:expr, needle:expr}|starts-with{text:expr, prefix:expr}|is-slug(expr)|graphemes(expr)|is-emoji(expr)|if{condition:expr, then:expr, else:expr}|arith{op:arith-op, left:expr, right:expr}|ms-between{from:expr, to:expr}|duration{unit:duration-unit, amount:expr}|concat{left:expr, right:expr}|text(expr)
 - expression: scalar string
 - external-subject: scalar string
 - field-difference: {field:string, draft:string, published:string}

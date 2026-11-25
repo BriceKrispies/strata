@@ -4870,6 +4870,20 @@ pub enum Scope {
     New,
 }
 
+/// Normalisation
+///
+/// strata_kernel::Normalisation: how a field stores a text value written to it. nfc stores the value in Unicode Normalization Form C. emoji stores an emoji value in its emoji form: a text-default emoji character (one with Emoji=Yes and Emoji_Presentation=No, such as U+2764) followed by U+FE0F (VS16) where the value is an emoji, so that the bare and the VS16 spellings store one value (WG-5597).
+///
+/// Specification type `normalisation`: a union, externally tagged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+pub enum Normalisation {
+    /// The variant `nfc`.
+    Nfc,
+    /// The variant `emoji`.
+    Emoji,
+}
+
 /// Cmp Op
 ///
 /// strata_kernel::CmpOp.
@@ -4935,6 +4949,10 @@ pub enum Expr {
     StartsWith(Box<Expr>, Box<Expr>),
     /// The variant `is-slug`.
     IsSlug(Box<Expr>),
+    /// The variant `graphemes`.
+    Graphemes(Box<Expr>),
+    /// The variant `is-emoji`.
+    IsEmoji(Box<Expr>),
     /// The variant `if`.
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// The variant `arith`.
@@ -4974,6 +4992,9 @@ pub struct FieldDef {
     /// Field `personal`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personal: Option<PersonalDeclaration>,
+    /// Field `normalise`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalise: Option<Normalisation>,
 }
 
 /// Constraint Def

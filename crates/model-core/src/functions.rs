@@ -3750,6 +3750,7 @@ pub fn apply_change(
                                 default: None,
                                 read: None,
                                 personal: None,
+                                normalise: None,
                             },
                         );
                         map_

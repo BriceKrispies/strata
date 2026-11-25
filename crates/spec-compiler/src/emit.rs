@@ -19,6 +19,10 @@ pub const SERDE_VERSION: &str = "1.0.228";
 pub const UUID_VERSION: &str = "1.24.0";
 /// The regex version the generated crate depends on (the workspace's).
 pub const REGEX_VERSION: &str = "1.13.1";
+/// The unicode-segmentation version the generated crate depends on for graphemes (WG-5597).
+pub const UNICODE_SEGMENTATION_VERSION: &str = "1.13.3";
+/// The unicode-properties version the generated crate depends on for the emoji properties (WG-5597).
+pub const UNICODE_PROPERTIES_VERSION: &str = "0.1.5";
 /// The sha2 version a generated crate with a hash-chained audit depends on (the workspace's).
 pub const SHA2_VERSION: &str = "0.10.9";
 /// The serde_json version the generated crate depends on (the workspace's): `json` values are
