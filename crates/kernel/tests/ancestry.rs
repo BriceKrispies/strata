@@ -154,7 +154,10 @@ fn a_record_is_its_own_ancestor_and_the_ancestors_of_its_chain_are_found() {
     let world = comment_world();
     let (world, nodes) = chain(&world, 3);
     let (world, outside) = comment(&world, None);
-    let world = define(&world, vec![query("below_root", Some(in_subtree_of(nodes[0])))]);
+    let world = define(
+        &world,
+        vec![query("below_root", Some(in_subtree_of(nodes[0])))],
+    );
     let found = ids(&world, owner(), "below_root").expect("the walk answers");
     let expected: BTreeSet<u64> = nodes.iter().map(|id| id.0).collect();
     assert_eq!(found, expected);
@@ -167,14 +170,20 @@ fn a_walk_of_exactly_the_limit_answers_and_a_longer_one_is_refused() {
     // The deepest record of a chain of limit + 1 comments is limit hops below the root.
     let world = comment_world();
     let (world, nodes) = chain(&world, limit + 1);
-    let world = define(&world, vec![query("below_root", Some(in_subtree_of(nodes[0])))]);
+    let world = define(
+        &world,
+        vec![query("below_root", Some(in_subtree_of(nodes[0])))],
+    );
     let found = ids(&world, owner(), "below_root").expect("a walk of the limit answers");
     assert_eq!(found.len(), limit + 1);
 
     // One more hop than the limit: the walk from the deepest record is refused, naming the limit.
     let world = comment_world();
     let (world, nodes) = chain(&world, limit + 2);
-    let world = define(&world, vec![query("below_root", Some(in_subtree_of(nodes[0])))]);
+    let world = define(
+        &world,
+        vec![query("below_root", Some(in_subtree_of(nodes[0])))],
+    );
     let refused = ids(&world, owner(), "below_root").expect_err("a longer walk is refused");
     assert!(
         refused.message.contains("longer than"),
@@ -201,7 +210,10 @@ fn a_cycle_through_the_reference_is_refused_and_not_answered_as_false() {
     )
     .expect("the update is accepted: the schema does not refuse cycles");
     let (world, unrelated) = comment(&world, None);
-    let world = define(&world, vec![query("below_unrelated", Some(in_subtree_of(unrelated)))]);
+    let world = define(
+        &world,
+        vec![query("below_unrelated", Some(in_subtree_of(unrelated)))],
+    );
     let refused = ids(&world, owner(), "below_unrelated").expect_err("the cycle is refused");
     assert!(
         refused.message.contains("cycle"),
@@ -290,13 +302,11 @@ fn levels(
         cursor: None,
     };
     let result = read(&world.state(&tid()), &request, &ctx("alpha", who, NOW))?;
-    let depths = result.depths.clone().expect("a descendants read gives depths");
-    Ok(result
-        .rows
-        .iter()
-        .map(|row| row.id.0)
-        .zip(depths)
-        .collect())
+    let depths = result
+        .depths
+        .clone()
+        .expect("a descendants read gives depths");
+    Ok(result.rows.iter().map(|row| row.id.0).zip(depths).collect())
 }
 
 /// A manager of `a` reads the comments under it, and the condition also says a hidden comment is not
@@ -314,7 +324,10 @@ fn manager_of(a: RecordId) -> PolicyDef {
                 Box::new(lit("comment")),
                 Box::new(lit("parent")),
             ),
-            Expr::Not(Box::new(eq(var(Scope::Record, "hidden"), Expr::Lit(Value::Bool(true))))),
+            Expr::Not(Box::new(eq(
+                var(Scope::Record, "hidden"),
+                Expr::Lit(Value::Bool(true)),
+            ))),
         ])),
     }
 }
