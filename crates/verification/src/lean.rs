@@ -12,15 +12,18 @@
 //! | Lean model | Rust kernel in these fixtures |
 //! |---|---|
 //! | tenant `n` | tenant `t<n>` with one object type `item` |
-//! | fields 0 to 8 | `f0: list of ref item, restrict`, `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict`, `f6: int, default 7`, `f7: list of string`, `f8: list of ref item, set-null` |
+//! | fields 0 to 8 and 10 | `f0: list of ref item, restrict`, `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict`, `f6: int, default 7`, `f7: list of string`, `f8: list of ref item, set-null`, `f10: string, unique` |
 //! | owner, editors, writers | the `owner` role; an `editor` role allowed everything on `item`; a `writer` role allowed to create, and to update or delete where `record.$created_by == principal` |
 //! | `create fs` | `CreateRecord` |
-//! | `update id [v=n] fs` | `UpdateRecord` naming fields `f0` to `f8`, absent ones as `null` |
+//! | `update id [v=n] fs` | `UpdateRecord` naming fields `f0` to `f8` and `f10`, absent ones as `null` |
 //! | `patch id [v=n] fs` | `UpdateRecord` naming only the fields given, `n` removing one |
 //! | `delete id [v=n]` | `DeleteRecord` |
 //! | `setRequired f strict` | `ChangeSchema [DefineField f required]` with `Reject` or `Grandfather` |
+//! | `setUnique f strict` | `ChangeSchema [DefineField f unique]`, the field's other attributes kept, with `Reject` or `Grandfather` |
+//! | `defineUnique fs` | `ChangeSchema [DefineUnique]`, a composite constraint named `u<fields>` |
 //! | `Err.danglingReference`, `Err.stillReferenced` | `DanglingReference`, `StillReferenced` |
 //! | `Err.invalid` | `TypeMismatch`, `MissingRequired`, `UnknownField` |
+//! | `Err.uniqueViolated`, `Err.invalidSchema` | `UniqueViolated`, `InvalidSchema` |
 //! | `Err.versionConflict`, `Err.limitExceeded` | `VersionConflict`, `LimitExceeded` |
 //!
 //! # The Main.lean protocol
@@ -34,6 +37,7 @@
 //!                              one intent, as `create f=v ..`, `update <id> [v=n] f=v ..`,
 //!                              `patch <id> [v=n] f=v ..`, `delete <id> [v=n]`,
 //!                              `require <field> strict|lax`
+//!                              `unique <field> strict|lax`, `composite <field> ..`
 //! end                          prints the final state and returns to the initial world
 //! ```
 //!
@@ -187,6 +191,7 @@ fn field_type(n: u64) -> FieldType {
         7 => FieldType::List(Box::new(FieldType::Str)),
         // Field 8 loses an element when that element's record is deleted.
         8 => FieldType::List(Box::new(reference(OnDelete::SetNull))),
+        10 => FieldType::Str,
         _ => FieldType::Bool,
     }
 }
@@ -197,7 +202,8 @@ fn field_def(n: u64, required: bool) -> FieldDef {
         label: format!("f{n}"),
         ty: field_type(n),
         required,
-        unique: false,
+        // Field 10 is unique: no two records hold the same value in it.
+        unique: n == 10,
         // Field 6 has the constant default 7.
         default: (n == 6).then_some(Expr::Lit(Value::Int(7))),
         read: None,
@@ -277,7 +283,7 @@ fn initial_world() -> World {
         ];
         let mut changes = changes;
         changes.extend(
-            [0u64, 2, 3, 4, 5, 6, 7, 8].map(|n| SchemaChange::DefineField {
+            [0u64, 2, 3, 4, 5, 6, 7, 8, 10].map(|n| SchemaChange::DefineField {
                 object: item(),
                 field: field_def(n, false),
             }),
@@ -431,6 +437,8 @@ fn show_error(kind: ErrorKind) -> &'static str {
         ErrorKind::StillReferenced => "still_referenced",
         ErrorKind::VersionConflict => "version_conflict",
         ErrorKind::LimitExceeded => "limit_exceeded",
+        ErrorKind::UniqueViolated => "unique_violated",
+        ErrorKind::InvalidSchema => "invalid_schema",
         _ => "unmodelled",
     }
 }
@@ -479,6 +487,13 @@ fn show_world(world: &World) -> Vec<String> {
     out
 }
 
+/// The definition of field `n` as the tenant's schema holds it now. The kernel's `DefineField`
+/// replaces the whole definition, so a change to one attribute starts from this one.
+fn current_field(world: &World, tenant: &TenantId, n: u64) -> Option<FieldDef> {
+    let state = world.tenants.get(tenant)?;
+    state.schema.objects.get(&item())?.fields.get(&field_id(n)).cloned()
+}
+
 /// Run a scenario file through the Rust kernel and print what the Lean program prints.
 pub fn kernel_output(scenarios: &str) -> String {
     let initial = initial_world();
@@ -522,7 +537,10 @@ pub fn kernel_output(scenarios: &str) -> String {
                         // The model replaces a record; a patch that names every field does too.
                         let (expected_version, fields) = split_expected_version(after_id);
                         let mut all: BTreeMap<FieldId, Value> =
-                            (0..=8).map(|n| (field_id(n), Value::Null)).collect();
+                            [0u64, 1, 2, 3, 4, 5, 6, 7, 8, 10]
+                                .into_iter()
+                                .map(|n| (field_id(n), Value::Null))
+                                .collect();
                         all.extend(parse_fields(fields));
                         Intent::UpdateRecord {
                             object: item(),
@@ -554,10 +572,15 @@ pub fn kernel_output(scenarios: &str) -> String {
                     }
                     ["require", field, mode] => {
                         let n: u64 = field.parse().expect("field");
+                        let Some(mut def) = current_field(&world, &ctx.tenant, n) else {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        };
+                        def.required = true;
                         Intent::ChangeSchema {
                             changes: vec![SchemaChange::DefineField {
                                 object: item(),
-                                field: field_def(n, true),
+                                field: def,
                             }],
                             expected_version: None,
                             existing: if *mode == "strict" {
@@ -565,6 +588,49 @@ pub fn kernel_output(scenarios: &str) -> String {
                             } else {
                                 ExistingData::Grandfather
                             },
+                        }
+                    }
+                    ["unique", field, mode] => {
+                        let n: u64 = field.parse().expect("field");
+                        let Some(mut def) = current_field(&world, &ctx.tenant, n) else {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        };
+                        def.unique = true;
+                        Intent::ChangeSchema {
+                            changes: vec![SchemaChange::DefineField {
+                                object: item(),
+                                field: def,
+                            }],
+                            expected_version: None,
+                            existing: if *mode == "strict" {
+                                ExistingData::Reject
+                            } else {
+                                ExistingData::Grandfather
+                            },
+                        }
+                    }
+                    ["composite", fields @ ..] => {
+                        let Some(ids) = fields
+                            .iter()
+                            .map(|f| f.parse::<u64>().ok().map(field_id))
+                            .collect::<Option<Vec<FieldId>>>()
+                        else {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        };
+                        let unique = UniqueDef {
+                            id: id(format!("u{}", fields.join("_"))),
+                            fields: ids,
+                            message: "unique".to_string(),
+                        };
+                        Intent::ChangeSchema {
+                            changes: vec![SchemaChange::DefineUnique {
+                                object: item(),
+                                unique,
+                            }],
+                            expected_version: None,
+                            existing: ExistingData::Reject,
                         }
                     }
                     _ => {

@@ -25,7 +25,8 @@ use crate::lean::{build_model, kernel_output, run_model};
 use std::path::Path;
 
 /// The intent kinds the generator produces; each is the word after the principal in an `op` line.
-pub const GENERATED_INTENTS: [&str; 5] = ["create", "update", "patch", "delete", "require"];
+pub const GENERATED_INTENTS: [&str; 7] =
+    ["create", "update", "patch", "delete", "require", "unique", "composite"];
 
 /// Known differences between the model and the kernel that are intended, each with its reason.
 /// A differing pair of lines is accepted only if an entry explains it. Empty means the two agree
@@ -59,6 +60,10 @@ pub enum OpKind {
     Patch(u64, Option<u64>, Vec<(u64, String)>),
     Delete(u64, Option<u64>),
     Require(u64, bool),
+    /// A unique field: the field number, and whether the change is strict.
+    Unique(u64, bool),
+    /// A composite unique constraint over these fields.
+    Composite(Vec<u64>),
 }
 
 pub type Scenario = Vec<Op>;
@@ -92,6 +97,16 @@ impl Op {
                     if *strict { "strict" } else { "lax" }
                 )
             }
+            OpKind::Unique(f, strict) => {
+                format!(
+                    "{head} unique {f} {}",
+                    if *strict { "strict" } else { "lax" }
+                )
+            }
+            OpKind::Composite(fs) => format!(
+                "{head} composite{}",
+                fs.iter().map(|f| format!(" {f}")).collect::<String>()
+            ),
         }
     }
 }
@@ -196,6 +211,7 @@ fn value_token(rng: &mut Lcg, field: u64) -> String {
         (_, 2) | (_, 6) => 1,
         (_, 3) => 2,
         (_, 7) => 6,
+        (_, 10) => 0,
         _ => 4,
     };
     match kind {
@@ -222,7 +238,7 @@ fn field_list(rng: &mut Lcg) -> Vec<(u64, String)> {
             out.push((field, value_token(rng, field)));
         }
     }
-    for (field, odds) in [(0u64, 4), (4, 3), (5, 4), (7, 4), (8, 4)] {
+    for (field, odds) in [(0u64, 4), (4, 3), (5, 4), (7, 4), (8, 4), (10, 3)] {
         if rng.below(odds) == 0 {
             out.push((field, value_token(rng, field)));
         }
@@ -259,6 +275,31 @@ fn patch_fields(rng: &mut Lcg) -> Vec<(u64, String)> {
     }
     out.sort_by_key(|(f, _)| *f);
     out
+}
+
+/// The field of a `unique`: a scalar, sometimes a list (refused), sometimes a field whose
+/// default makes every record without a value agree.
+fn unique_field(rng: &mut Lcg) -> u64 {
+    match rng.below(8) {
+        0 => rng.pick(&[0u64, 7]),
+        1..=3 => rng.pick(&[1u64, 2, 3]),
+        _ => rng.pick(&[10u64, 4, 6]),
+    }
+}
+
+/// The fields of a composite constraint: usually two or three declared scalars, sometimes a list,
+/// a repeated field, an undeclared one, or too few.
+fn composite_fields(rng: &mut Lcg) -> Vec<u64> {
+    match rng.below(10) {
+        0 => vec![2, 0],
+        1 => vec![2, 2],
+        2 => vec![1, 9],
+        3 => vec![2],
+        4 | 5 => vec![2, 3],
+        6 => vec![1, 10],
+        7 => vec![2, 3, 10],
+        _ => vec![3, 10, 4, 6],
+    }
 }
 
 /// The field of a `require`: half the time one of the reference fields, sometimes a list.
@@ -512,7 +553,7 @@ pub fn generate(seed: u64) -> Scenario {
         let aimed = tenant != 3 && rng.below(2) == 0;
         let mut principal = principal;
         // An aimed update, patch or delete names a record the sequence probably made.
-        let kind = match rng.below(20) {
+        let kind = match rng.below(22) {
             0..=6 => {
                 let mut fields = field_list(&mut rng);
                 if aimed {
@@ -606,10 +647,16 @@ pub fn generate(seed: u64) -> Scenario {
                 OpKind::Delete(id, expected)
             }
             18 => OpKind::Require(require_field(&mut rng), true),
+            19 => OpKind::Unique(unique_field(&mut rng), rng.below(3) != 0),
+            20 => OpKind::Composite(composite_fields(&mut rng)),
             _ => OpKind::Require(require_field(&mut rng), false),
         };
         // Schema changes are mostly attempted by the owner, so both strict outcomes occur.
-        let principal = if matches!(kind, OpKind::Require(..)) && rng.below(4) != 0 {
+        let principal = if matches!(
+            kind,
+            OpKind::Require(..) | OpKind::Unique(..) | OpKind::Composite(..)
+        ) && rng.below(4) != 0
+        {
             home
         } else {
             principal
@@ -726,6 +773,9 @@ fn intent_name(op: &Op) -> &'static str {
         OpKind::Delete(..) => "delete",
         OpKind::Require(_, true) => "require-strict",
         OpKind::Require(_, false) => "require-lax",
+        OpKind::Unique(_, true) => "unique-strict",
+        OpKind::Unique(_, false) => "unique-lax",
+        OpKind::Composite(_) => "composite",
     }
 }
 
@@ -787,7 +837,7 @@ pub fn diff_batch_counted(
 fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
     match kind {
         OpKind::Create(f) | OpKind::Update(_, _, f) | OpKind::Patch(_, _, f) => Some(f),
-        OpKind::Delete(..) | OpKind::Require(..) => None,
+        OpKind::Delete(..) | OpKind::Require(..) | OpKind::Unique(..) | OpKind::Composite(..) => None,
     }
 }
 

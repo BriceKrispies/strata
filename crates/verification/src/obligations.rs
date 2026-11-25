@@ -44,7 +44,7 @@ pub fn all() -> Vec<Obligation> {
         obligation(
             "invariant_preservation",
             "Accepted transitions preserve the state invariant",
-            "If every record of every tenant conforms to its schema, has an id below the counter and refers only to existing records, then after any accepted strict step the same is true. Referential integrity holds after every accepted step, strict or not, and a delete leaves no record naming the deleted one.",
+            "If every record of every tenant conforms to its schema, has an id below the counter, refers only to existing records, and no two records agree on a unique field or a composite constraint, then after any accepted strict step the same is true. Referential integrity holds after every accepted step, strict or not, and a delete leaves no record naming the deleted one.",
             &[
                 "step_preserves_wf",
                 "stepTenant_preserves_wf",
@@ -53,12 +53,19 @@ pub fn all() -> Vec<Obligation> {
                 "stepTenant_preserves_refs",
                 "delete_refused_while_referenced",
                 "delete_leaves_no_reference",
+                "stepTenant_preserves_unique",
+                "step_preserves_unique",
+                "stepTenant_preserves_distinct",
+                "create_duplicate_refused",
+                "update_duplicate_refused",
+                "define_unique_refused_over_duplicates",
+                "set_unique_refused_over_duplicates",
             ],
             &[
                 "strata-verification::state_machine::every_accepted_state_satisfies_every_invariant",
                 "strata-kernel::behaviour::a_strict_migration_is_rejected_when_existing_records_would_not_conform",
             ],
-            "The model's invariant is conformance to field types and required fields, an id below the counter, and single references within the one object type. Constraints, uniqueness, lists of references, references between types and workflow states are part of the Rust invariant and are covered only by the Rust property test. A grandfathered schema change is excluded on purpose, and `lax_change_can_break_wf` shows the exclusion is necessary.",
+            "The model's invariant is conformance to field types and required fields, an id below the counter, and single references within the one object type. Constraints, lists of references, references between types and workflow states are part of the Rust invariant and are covered only by the Rust property test. Unique fields and composite constraints are in the model (slice 3): their invariant is proved for the model, and the refusals are compared with the kernel on the fixtures. A grandfathered schema change is excluded on purpose, and `lax_change_can_break_wf` shows the exclusion is necessary.",
         ),
         obligation(
             "authorization",
@@ -103,7 +110,7 @@ pub fn all() -> Vec<Obligation> {
 pub fn assumptions() -> Vec<&'static str> {
     vec![
         "The object of every theorem is the abstract model in lean/Strata/Model.lean, not the Rust source.",
-        "The model has one object type per tenant, three scalar value kinds, no constraints, workflows, references, uniqueness, queries or events.",
+        "The model has one object type per tenant, three scalar value kinds, references between records of that type, unique fields and composite constraints, and no constraints, workflows, queries or events.",
         "The model's update replaces a record's fields; the kernel's update is a patch. They coincide when the patch names every field, which is how the fixtures use it.",
         "Correspondence between model and kernel is supported by running both on the same generated scenarios, and by review. It is evidence, not proof.",
         "Lean's own kernel and its three standard axioms (propext, Classical.choice, Quot.sound) are trusted.",
