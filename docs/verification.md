@@ -20,8 +20,9 @@ delete (both naming an expected version or not), and make a field required (stri
 Fields may be references to records of the same type, which a delete either refuses to break or
 clears (slice 1, below), and lists of scalars or of references, whose elements a delete removes
 (slice 2). Written values and records are held to the kernel's size limits, as an abstract bound
-(slice 2). `step` is a total, computable function. It has no constraints,
-workflows, uniqueness, queries, events or policy conditions: the assumptions below list each
+(slice 2). `step` is a total, computable function. Slice 3 adds unique fields and composite unique constraints, checked on a write and when a
+constraint is defined over existing data. It has no constraints,
+workflows, queries, events or policy conditions: the assumptions below list each
 omission, and the gap analysis further down says which slice will add each. The theorems are
 about this model. The Rust kernel is compared with it on generated scenarios, which is evidence and
 not a proof.
@@ -33,7 +34,7 @@ builds their module, without reading the statements (`specifications/README.md`)
 
 | Property | Theorems | Statement |
 |---|---|---|
-| Accepted transitions preserve the invariant | `step_preserves_wf`, `stepTenant_preserves_wf` | If every record conforms to its schema, has an id below the counter and refers only to existing records, the same holds after any accepted strict step |
+| Accepted transitions preserve the invariant | `step_preserves_wf`, `stepTenant_preserves_wf` | If every record conforms to its schema, has an id below the counter, refers only to existing records, and no two records agree on a unique field or composite constraint, the same holds after any accepted strict step |
 | | `lax_change_can_break_wf` | The exclusion of the non-strict schema change is necessary: there is a well-formed state it breaks |
 | An unauthorized principal cannot mutate | `step_ok_authorized`, `unauthorized_cannot_mutate`, `unauthorized_cannot_update`, `unauthorized_cannot_delete` | A step is accepted only if its principal is authorized for it; otherwise no new state exists |
 | | `missing_record_hidden_on_update`, `missing_record_hidden_on_delete` | The permission is asked before the record is looked up: one who could edit no record it did not create is refused a missing record with `unauthorized`, as for an existing one, and cannot probe which ids exist |
@@ -51,6 +52,12 @@ builds their module, without reading the statements (`specifications/README.md`)
 | Defaults (slice 2) | `create_fills_default` | An accepted create writes, at version 1 under the next id, the constant default of every field of the schema the intent does not name |
 | Size limits (slice 2) | `create_refused_over_record_bound` | A record over the record bound is refused with `limitExceeded` before its fields are checked |
 | | `create_within_limits`, `update_within_limits`, `problem_none_within` | Every record an accepted create or update writes is within the record bound and holds no value over the string or list bound |
+| Uniqueness (slice 3) | `stepTenant_preserves_unique`, `step_preserves_unique` | An accepted strict step keeps every unique field and every composite constraint unique: no two distinct records agree on one (agreeing needs a present, non-list value in each field) |
+| | `stepTenant_preserves_distinct` | An accepted step keeps the schema's names distinct and each record's field names distinct, so a delete's clearing of references keeps them so |
+| | `create_duplicate_refused`, `update_duplicate_refused` | A write that is otherwise valid and duplicates another record's unique value, or agrees with another record on a composite constraint, is refused with `uniqueViolated`, and no state follows |
+| | `define_unique_refused_over_duplicates`, `set_unique_refused_over_duplicates` | A composite constraint that existing records already violate is refused with `uniqueViolated`; a strict unique field over records that agree on it is refused with `migrationRejected`; no state follows |
+| | `lax_unique_change_can_break_wf` | The exclusion of the non-strict unique change is necessary: a lax `setUnique` over two records that agree leaves a tenant that is not well formed |
+| | `setUnique_records`, `defineUnique_records`, `stepTenant_conform_ids` | A schema change leaves the records as they are, and every accepted step keeps them conforming and their ids below the counter |
 
 `lake build` checks them. `lake env lean Audit.lean` prints the axioms each depends on: only
 Lean's standard `propext`, `Classical.choice` and `Quot.sound`. There is no `sorry`, no `admit`
@@ -59,7 +66,10 @@ and no added axiom; a test fails if the sources contain one or the audit reports
 ### Assumptions
 
 1. The object of every theorem is the model, not the Rust source.
-2. The model has no constraints, workflows, uniqueness, queries or events. Its references are
+2. The model has no constraints, workflows, queries or events. Its unique fields and composite
+   constraints are checked on written values only; the kernel's schema rules for them (a list
+   field cannot be unique, a composite names two to four distinct fields of the object) are the
+   model's `invalidSchema` refusals and nothing more. Its references are
    references, single or in lists, to records of the tenant's one object type; references between
    types are not modelled (see the review notes of slices 1 and 2).
 3. Its authorization is owner, editors, and writers on their own records. The kernel's policies
@@ -176,18 +186,22 @@ and `Quot.sound`.
 | `Val` | `Value` restricted to `Null`, `Int`, `Str`, `Bool`, `Ref` and `List` of those (`Elem`) |
 | `Record { owner, version, fields }` | `Record { created_by, version, fields, .. }` |
 | `Limits`, `Limits.kernel` | the constants of `limits.rs` |
+| `Tenant.uniques` | `ObjectTypeDef.unique`, the composite constraints of the object type (`UniqueDef`, by its fields) |
 | `Tenant.owner`, `editors`, `writers` | members holding `owner`; a role with an unconditional policy; a role with a policy conditioned on `record.$created_by == principal` |
 | `Ctx { tenant, principal }` | `Context { tenant, principal, .. }` |
 | `Intent.create / update / delete` | `Intent::CreateRecord / UpdateRecord / DeleteRecord`, with `expected_version` |
 | `Intent.setRequired f strict` | `Intent::ChangeSchema` with `Reject` or `Grandfather` |
+| `Intent.setUnique f strict` | `Intent::ChangeSchema` with `DefineField` of the field with `unique` set and the rest of its definition kept, `Reject` or `Grandfather` |
+| `Intent.defineUnique fs` | `Intent::ChangeSchema` with `DefineUnique` over the same fields |
 | `step` | `World::step`, that is `apply_delta ∘ transition` |
-| `problem` | `rules::validate_record`, restricted to the record bound, unknown-field, required, value bound, unique-value bound, type and reference checks; the first failure names the refusal |
+| `problem` | `rules::validate_record`, restricted to the record bound, unknown-field, required, value bound, unique-value bound, type, unique-value clash and reference checks per field, then the composite constraints; the first failure names the refusal |
 | `conforms` | the type and required checks of `rules::validate_record` |
 | `blocks`, `clearRef` | the referrer scan of `transition::delete_record` |
 | `Tenant.WF` | the `records_conform` and `records_placed` invariants of `verification::invariants`, and referential integrity |
 | `Err.invalid` | `TypeMismatch`, `MissingRequired`, `UnknownField` |
 | `Err.danglingReference`, `Err.stillReferenced` | `DanglingReference`, `StillReferenced` |
 | `Err.versionConflict`, `Err.limitExceeded` | `VersionConflict` (from `check_version`, not from `apply_delta`), `LimitExceeded` |
+| `Err.uniqueViolated`, `Err.invalidSchema` | `UniqueViolated`, `InvalidSchema` (the schema refusals of a change, as the model names them) |
 
 The two are different programs, so the correspondence is exercised rather than assumed.
 `strata_verification::lean::scenarios` generates 60 scenarios (over a thousand operations: valid
@@ -200,12 +214,13 @@ side runs everywhere; the Lean side runs wherever `lake` is installed.
 This is evidence that the kernel behaves like the model on the modelled fragment. It is not a
 proof, and a passing run says nothing about the parts of the kernel the model leaves out.
 
-The fixture tenants of `lean/Main.lean` declare nine fields, in id order: `0` an optional list of
+The fixture tenants of `lean/Main.lean` declare ten fields, in id order: `0` an optional list of
 references that restricts the delete of an element's target, `1` a required string, `2` an
 optional integer, `3` an optional boolean, `4` an optional reference to the tenant's own records
 that a delete clears (`set-null`), `5` an optional reference that restricts the delete
 (`restrict`), `6` an optional integer whose default is the constant `7`, `7` an optional list of
-strings, and `8` an optional list of references whose elements a delete removes (`set-null`).
+strings, `8` an optional list of references whose elements a delete removes (`set-null`), and `10` an
+optional string that is unique (slice 3).
 Field `9` is undeclared. A reference value is written `r:<id>` in the scenario format; the
 refusals of slice 1 print as `err dangling_reference` and `err still_referenced`, those of slice 2
 as `err version_conflict` and `err limit_exceeded`.
@@ -222,6 +237,11 @@ Slice 2's additions to the scenario format:
   fields `0` to `8`, absent ones as `null`. `patch <id> [v=<n>] <fields>` is a patch: only the
   named fields change, `n` removing one. `delete <id> [v=<n>]` deletes. `v=<n>`, only directly
   after the id, is the expected version.
+- Slice 3's additions: `unique <f> strict|lax` makes field `f` unique (`strict` refuses a change
+  over existing records that already agree on `f`, `lax` leaves them as they are), and
+  `composite <f> <f> ..` defines a composite unique constraint over the named fields. The
+  refusals print as `err unique_violated`, `err invalid_schema`, and `err migration_rejected`
+  for a strict change over duplicate data.
 - A record prints its version after its owner: `record 1 owner=102 v=2 1=s:oak 6=i:7`. A string of
   at least 100 characters that repeats one character prints as `s*<n>:<c>`, a list of at least
   100 equal elements as `l*<n>:<element>`; other lists as `l:` and their elements joined by
@@ -285,10 +305,10 @@ From `transition::create_record`, `update_record`, `delete_record` and `rules::v
 | Validation; the first failure names the refusal, in this order: | | | |
 | 1. the record is larger than `MAX_RECORD_BYTES` | `LimitExceeded` | partly: over an abstract size that bounds the encoding below (slice 2's note) | 2 |
 | 2. a field the type does not declare | `UnknownField` | covered (`invalid`) | 0 |
-| 3. per field in id order: required and absent; a value over the string or list limits; a unique value over `MAX_UNIQUE_BYTES`; the wrong type | `MissingRequired`, `LimitExceeded`, `TypeMismatch` | covered for required, type (lists elementwise) and the string and list limits; partly for the unique-value limit (abstract size; no fixture field is unique until slice 3) | 0, 2 |
-| 4. per field in id order, after its type: a unique value another record holds | `UniqueViolated` | not covered | 3 |
+| 3. per field in id order: required and absent; a value over the string or list limits; a unique value over `MAX_UNIQUE_BYTES`; the wrong type | `MissingRequired`, `LimitExceeded`, `TypeMismatch` | covered for required, type (lists elementwise) and the string and list limits; partly for the unique-value limit (abstract size, not the encoding; field `10` is unique in the fixtures) | 0, 2, 3 |
+| 4. per field in id order, after its type: a unique value another record holds | `UniqueViolated` | covered (`valueProblem`, before the reference check of the same field) | 3 |
 | 5. per field in id order, after its type: a reference to a record that does not exist | `DanglingReference` | covered for single references and list elements within the one type | 1, 2 (across types 4) |
-| 6. composite unique constraints whose fields all have values, held by another record | `UniqueViolated` | not covered | 3 |
+| 6. composite unique constraints whose fields all have values, held by another record | `UniqueViolated` | covered (`compositeProblem`, after every field) | 3 |
 | 7. a workflow field holding a value that is not one of its states | `WorkflowViolation` | not covered | 8 |
 | 8. only if nothing above failed: constraints, failing on `false`; `Evaluation` when one cannot be evaluated | `ConstraintViolated`, `Evaluation` | not covered | 5 |
 | Accepted create: the record under the next id, `created_by` the caller (none for the system), counter + 1 | | covered (owner = caller) | 0 |
@@ -308,8 +328,8 @@ From `transition::change_schema`, `plan_migration`, `apply_change` and `schema::
 | Definition authority: trigger and automation changes need `automations-define` and conferrable run-as roles; settings `setting-define`; separations of duties `separations-define`; ledger `ledger-configure`; products `bundle-install`; an operation's definer must hold the powers its steps use | `Unauthorized` | not covered | 11 (with 12 to 15) |
 | A change to an entity an installed product owns, outside its upgrade or removal | `InvalidSchema` | not covered | 11 |
 | A change that does not apply: its object, field, constraint, role, policy, workflow, query, view, trigger, automation, operation, unique, setting, capability, template, token, product or UI element is missing; an automation still named by a trigger; a built-in role redefined | `InvalidSchema` | not covered | 11 |
-| The resulting schema has a problem (`schema::problems`: counts, unknown references between definitions, expressions that do not check as truth values, retention for personal fields, and the workflow, query, view, trigger, automation, operation, unique, capability, template, product and UI rules) | `InvalidSchema` | not covered; the model will take an abstract validity predicate rather than each rule | 11 |
-| A new unique constraint that existing records already violate | `UniqueViolated` | not covered | 3 |
+| The resulting schema has a problem (`schema::problems`: counts, unknown references between definitions, expressions that do not check as truth values, retention for personal fields, and the workflow, query, view, trigger, automation, operation, unique, capability, template, product and UI rules) | `InvalidSchema` | partly: the unique rules (a list field unique, an unknown field, a composite of the wrong size or with a repeated field, a list field in a composite) are covered by `invalidSchema`; the others are not, and the model will take an abstract validity predicate | 3, 11 |
+| A new unique constraint that existing records already violate | `UniqueViolated` (a composite constraint), `MigrationRejected` (a strict unique field) | covered for a composite constraint (`defineUnique`) and for a strict unique field (`setUnique`); a lax change is kept, its count not modelled | 3 |
 | A breaking change that reaches dependents not all pinned at the version in force, or past their window, or that is not a retype; a retype whose stored values do not round-trip | `InvalidSchema` | not covered in `step`; modelled in `Strata.Evolution` (`accepted`) | 11 |
 | A field change whose stored values cannot be carried | `MigrationRejected` | not covered | 11 |
 | Settings effects, such as a setting retyped while overrides exist | `InvalidSchema` | not covered | 12 |
@@ -441,7 +461,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | 0 (before WG-5373) | One object type, scalar fields, the type, required and unknown-field checks, owner, editors and writers, create, update as replacement, delete, making a field required strictly or not, the missing-record rule | |
 | **1 (done)** | Single references within the one type: `DanglingReference` on write in field order, `StillReferenced` for restricting or required fields, clearing on delete; referential integrity as an invariant | 0 |
 | **2 (done)** | Record writes in full: patch updates, versions and `expected_version`, constant defaults, lists (of scalars and of references: element removal on delete, a required list never blocks), the size limits as an abstract bound | 1 |
-| 3 | Uniqueness: single-field and composite (only when every field has a value), on write and on defining a constraint over existing data | 2 |
+| **3 (done)** | Uniqueness: single-field and composite (only when every field has a value), on write and on defining a constraint over existing data | 2 |
 | 4 | Several object types: `UnknownObject` with its hiding rule, references and referrers across types | 1 |
 | 5 | Expressions as an abstract three-valued language over record, old, new, principal, roles and `now`, with evaluation errors; constraints (checked last); expression defaults | 2, 4 |
 | 6 | Roles and policies as data, replacing the fixed tiers: the owner role, role permissions, policies with conditions, capabilities, the system and anonymous principals | 5 |
@@ -528,6 +548,52 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
   and a hypothesis that it does not clash; `delete_leaves_no_reference` states that no field
   `refersTo` the deleted record, which covers list elements and implies the slice-1 statement; the
   authorization theorems take any expected version. No statement was weakened.
+
+### Slice 3 review note: what was abstracted
+
+- **Unique values are keyed scalars.** A value clashes on a unique field or in a composite
+  constraint only when it is present and not a list (`Val.keyed`). The kernel refuses a list field
+  as unique, so no reachable state has a unique list. Because a list is never a key, a delete's
+  clearing of references cannot make two values equal: a single reference becomes absent, and a
+  list loses elements without ever becoming a key.
+- **Composites are sets of field ids.** The kernel's `UniqueDef` also carries an id and a message.
+  The id is the constraint's name; the model needs neither, and the message is not an outcome.
+  `uniqueFieldsOk` refuses what the kernel's `unique_problems` refuses for the object's fields: a
+  count outside two to four, an unknown field, a list field, a repeated field (`invalidSchema`).
+  The kernel's check of the message, which is never empty in the fixtures, is not modelled. A
+  composite defined again under the same id overwrites the kernel's entry; the model appends a
+  second copy, which checks the same thing, so the outcomes agree.
+- **The check order is the kernel's.** Per field in schema order: required, the value bound, the
+  unique bound, the type, the unique clash, the reference; then the composite constraints. The
+  clash is checked after the type, as in `validate_record`. `valueProblem` and `problem` take a flag
+  `uniq` that switches the unique checks on, so the theorems can say what the refusal is when the
+  write passes everything else (`problem_uniq_dichotomy`, `problem_uniq_refusal`).
+- **Existing records are checked by the same rule.** A strict `setUnique` is refused with
+  `migrationRejected` when two records agree on the field or hold a value over the unique bound,
+  because the kernel's `Reject` reports any violation of an existing record that way. A lax change
+  keeps the records and does not count them. A composite definition is refused with `uniqueViolated`
+  when two records agree on every field, and that check runs before the record checks of the
+  migration, as in the kernel's `plan_migration`. A composite is always strict in the kernel.
+- **Names stay distinct, and `normalise` keeps the last value.** The kernel's records are maps, so
+  a name occurs once in a record and once in the schema. The model needed that as the invariant
+  `Tenant.Distinct`, since the delete proof reads each record's value by name. `normalise` now keeps
+  the last of a name given twice, as the kernel's map insertion does. Before this slice a create
+  naming a field twice kept both entries; no scenario does that (the one that names a field twice
+  is a `patch`, which already used `Fields.set`), so no existing output changed.
+- **The unique bound is abstract, as in slice 2.** A unique value's encoded size is measured by
+  `Val.size`, which is never more than the kernel's encoding. The fixture's unique field holds short
+  strings, `s*201` is refused by both sides, and no scenario puts a unique value between 196 and 200
+  bytes, where the two encodings disagree on the bound.
+- **The working set reads the whole record list for a write with unique checks.** The decision
+  for a create or update reads the clash from the record list it is given, which is the list a delete
+  and a strict schema change already read. `decideTenant_faithful` still holds. Whether the runtime
+  should answer the clash from an index instead is a question for the working-set coverage, not for
+  the model; the model's decision is the kernel's.
+- **Not modelled.** Workflow and constraint checks; the kernel's value normalisation
+  (`normalise`, a field's `Normalisation`); the lookup index (`by_field`, `by_fields`), which the
+  model answers by scanning the records; the explanation of a refusal, which names the clashing
+  record only to a reader who may see it (the model gives the kind only); and the kernel's count of
+  grandfathered records.
 
 ## What covers the rest
 
