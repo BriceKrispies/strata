@@ -665,8 +665,7 @@ fn the_transaction_product_installs_and_its_operations_post_and_reverse_transact
         );
     }
     let to_self = transfer(&world, "user:ana", "t-self", "user:ana", 10)
-        .err()
-        .expect("a transfer to oneself was accepted");
+        .expect_err("a transfer to oneself was accepted");
     assert!(to_self
         .evidence
         .iter()
@@ -730,8 +729,7 @@ fn the_transaction_product_installs_and_its_operations_post_and_reverse_transact
             ("refund", Value::Bool(true)),
         ],
     )
-    .err()
-    .expect("a refund of nothing was accepted");
+    .expect_err("a refund of nothing was accepted");
     assert!(
         missing
             .evidence
