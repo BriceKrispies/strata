@@ -1,0 +1,35 @@
+{
+  "scopes": [
+    {
+      "name": "ledger",
+      "prefixes": ["LDG-"],
+      "excludeMilestones": [13]
+    },
+    {
+      "name": "security",
+      "prefixes": ["IDN-", "FED-", "TOK-", "ADM-", "TEN-", "SEC-", "THR-", "PRV-"],
+      "refs": [
+        "OBS-006", "OBS-007", "OBS-008",
+        "OBS-1215", "OBS-1216", "OBS-1217", "OBS-1218", "OBS-1219", "OBS-1220", "OBS-1221", "OBS-1222",
+        "OBS-3121", "OBS-3122", "OBS-3123",
+        "OPS-329", "OPS-3120", "OPS-3128",
+        "RUN-1380", "RUN-3070", "RUN-3071",
+        "AGS-413", "AGS-425", "AGT-412", "AGT-413", "AGT-1209"
+      ],
+      "excludeMilestones": [13]
+    },
+    {
+      "name": "a11y",
+      "refs": [
+        "IDN-023",
+        "CMS-012",
+        "CNV-237", "CNV-238", "CNV-239", "CNV-240", "CNV-241", "CNV-243", "CNV-244", "CNV-246",
+        "DS-005", "DS-006",
+        "DS-024", "DS-025", "DS-026", "DS-027", "DS-028", "DS-029", "DS-030", "DS-031", "DS-032", "DS-033",
+        "DS-034", "DS-035", "DS-036", "DS-037", "DS-038", "DS-039", "DS-040", "DS-041", "DS-042", "DS-043",
+        "DS-044", "DS-045", "DS-046", "DS-047", "DS-048", "DS-049", "DS-050", "DS-051", "DS-052", "DS-053"
+      ],
+      "excludeMilestones": [13]
+    }
+  ]
+}
