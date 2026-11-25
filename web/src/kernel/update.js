@@ -73,6 +73,9 @@ const LATEST_ONLY = ['session', 'sessions.list', 'passkeys.list', 'factors.summa
 const REQUEST_TIMEOUT_MS = 30000;
 const USER_KIND_PREFIXES = ['sessions.', 'lab.', 'editor.', 'post.', 'settings.', 'tenant.'];
 const USER_KINDS = [
+  // The view is read for the person signed in (a guarded page, or the model's principal), so a reply to a
+  // view asked for before the person changed belongs to the former person (F2).
+  'view',
   'passkeys.list', 'passkeys.register_start', 'passkeys.register_finish', 'passkeys.remove',
   'factors.summary', 'factors.enrol_start', 'factors.enrol_finish', 'factors.remove_totp', 'factors.new_codes', 'factors.stepup',
 ];
@@ -87,6 +90,9 @@ function isUserKind(kind) {
 export function initialState() {
   return {
     ready: false,
+    // Whether the session is known. A cold start does not know it until the session read answers; a view that
+    // answers before then is not held (F4). A page that starts with a bootstrapped session knows it at once.
+    sessionKnown: false,
     route: { path: '/', query: {} },
     /** @type {import('./types.js').Session | null} */
     session: null,
@@ -291,6 +297,11 @@ export function principalOf(session) {
   return { id: session.principal, tenant: session.tenant, kind: 'member', roles };
 }
 
+/** The person a session names: its principal when it is signed in, null for a visitor. @param {any} session */
+function personOf(session) {
+  return session?.authenticated === true ? session.principal ?? null : null;
+}
+
 /** The scope the generated expressions read on the current screen. */
 function scopeOf(state, extra = {}) {
   const screen = screenOf(state);
@@ -330,19 +341,11 @@ function readSession(state, msg, meta = {}) {
   return call(state, 'session', 'read-session-view', {}, msg, meta);
 }
 
-/** True when the screen the address opens needs a signed-in person. */
-function guardedScreen(state) {
-  const screen = screenOf(state);
-  if (screen?.tenant) return screen.tenant.auth === 'session';
-  return routeOf(screen?.screen ?? '')?.auth === 'session';
-}
-
 /**
  * Forget everything that belongs to the person who was signed in: recovery codes, the enrolment
  * secret, the lists of sessions and passkeys, the Lab's overview and results, the editor and
- * settings forms with their drafts, and (on a guarded page) that person's view model. Replies to
- * requests made before this are dropped when they arrive. The caller reads the view again, since
- * a guarded page's model is gone.
+ * settings forms with their drafts, and the view model read for that person, on every page. Replies
+ * to requests made before this are dropped when they arrive. The caller reads the view again.
  * @param {any} state
  */
 function clearUserState(state) {
@@ -353,15 +356,18 @@ function clearUserState(state) {
     ...state,
     generation: (state.generation ?? 0) + 1,
     latest,
+    // The person is now the one the session names (the specification's switched), so the session is known.
+    sessionKnown: true,
     sessions: sessionsInit(),
     passkeys: { ...passkeysInit(), supported: state.passkeys.supported },
     factors: factorsInit(),
     lab: { ...labInit(), timer: state.lab.timer + 1 },
     settings: settingsInit(),
-    forms: { ...state.forms, login: { ...login, values: { ...login.values, password: '' } }, editor: null, settings: null },
+    // The sign-in form is cleared whole, its typed name included: it was typed for the former person (F6).
+    forms: { ...state.forms, login: { ...login, values: forms.initialValues(SIGN_IN, {}), error: '' }, editor: null, settings: null },
     optimistic: {},
     confirmDelete: null,
-    view: guardedScreen(state) ? { status: 'loading', model: null, error: null, request: 0 } : state.view,
+    view: { status: 'loading', model: null, error: null, request: 0 },
   };
 }
 
@@ -654,11 +660,9 @@ function onSocket(state, frame, msg) {
         effects.push(effect);
       }
       next = { ...next, session: { ...state.session, authenticated: false, csrf_token: undefined, roles: ['public'], may: {}, may_manage_schema: false } };
-      // A guarded page's model was cleared with the person's state, so it is always read again.
-      const shown = tenantOnShow(state);
-      const refresh = guardedScreen(state)
-        || (shown.entry ? liveRefreshes(shown.part, 'session-ended', {}, state.view.model) : live.refreshes(screenOf(state)?.screen ?? '', 'ui-session-ended', {}, state.view.model));
-      return refresh ? refreshAfter({ state: next, effects }, msg) : { state: next, effects };
+      // The model read for the person is dropped with their state, on every page, so the view is read
+      // again on every page (the specification's `sessionEnded` always reads it).
+      return refreshAfter({ state: next, effects }, msg);
     }
     case 'run':
       return labUpdate(state, { ...msg, type: 'lab_run', frame }, { request, toast }) ?? { state, effects: [] };
@@ -817,13 +821,22 @@ function onHttp(state, msg) {
   switch (pending.kind) {
     case 'session': {
       if (!msg.ok) return { state, effects: [] };
+      // A session that names another person, or nobody, is a change of person: what the former person
+      // held is dropped and the view is read again (the specification's sessionChanged).
+      // A cold page learns the session with this reply: the view it was read without is not held, so it
+      // is read again for the person the session names (F4; the specification's learnSession).
+      const learned = state.sessionKnown === false;
+      const changed = !learned && personOf(state.session) !== personOf(outputs.session);
       let known = sessionRead({ ...state, session: outputs.session }, outputs.session.authenticated === true, msg.at);
-      // The session was read because the socket upgrade was refused and the server answered: that
-      // is a refusal, not an outage. After enough of them live updates stop, visibly.
-      if (pending.refusal) {
-        const refusals = (known.wsRefusals ?? 0) + 1;
-        known = { ...known, wsRefusals: refusals, wsStopped: refusals >= WS_REFUSAL_LIMIT };
+      /** @type {Effect[]} */
+      const reread = [];
+      if (changed) known = clearUserState(known);
+      if (changed || learned) {
+        const fetched = fetchView({ ...known, view: { status: 'loading', model: null, error: null, request: 0 } }, msg, true);
+        known = fetched.state;
+        reread.push(...fetched.effects);
       }
+      known = { ...known, sessionKnown: true };
       // A cold start could not open the socket before it knew the request token the gateway
       // issued, so it opens it now.
       /** @type {Effect[]} */
@@ -831,11 +844,14 @@ function onHttp(state, msg) {
       // A link the page was opened with waits for the request token that this reply brings.
       const linked = linksLand(known, msg, { request });
       const landed = oidcLand(linked.state, msg, { request });
-      const entered = enterScreen(landed.state, msg, state.view.model?.view, { afterSession: true });
-      return { state: entered.state, effects: [...open, ...linked.effects, ...landed.effects, ...entered.effects] };
+      const entered = enterScreen(landed.state, msg, landed.state.view.model?.view, { afterSession: true });
+      return { state: entered.state, effects: [...open, ...reread, ...linked.effects, ...landed.effects, ...entered.effects] };
     }
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
+      // A view that answers before the session is known is not held: it may be the view of someone else.
+      // The session read answers with the person, and the view is read again then (F4).
+      if (state.sessionKnown === false) return { state: { ...state, view: { ...state.view, request: 0 } }, effects: [] };
       if (msg.ok) {
         const accepted = acceptView(state, decodeView(state, msg.body), msg.body?.next, msg.at);
         return enterScreen(accepted, msg, msg.body.view);
@@ -1329,7 +1345,7 @@ function step(state, msg) {
       const effects = [];
       const boot = msg.bootstrap;
       if (boot?.session?.session) {
-        next = sessionRead({ ...next, session: boot.session.session }, boot.session.session.authenticated === true, msg.at);
+        next = { ...sessionRead({ ...next, session: boot.session.session }, boot.session.session.authenticated === true, msg.at), sessionKnown: true };
       } else {
         const [withRequest, effect] = readSession(next, msg);
         next = withRequest;
@@ -1402,15 +1418,20 @@ function step(state, msg) {
       return onSocket(state, msg.message, msg);
     case 'ws_closed': {
       // The socket never opened although the network is up: the upgrade was refused, most likely
-      // for an expired request token. Read the session again, so the next attempt carries the
-      // current token; the reply counts the refusal (`wsRefusals`).
+      // for an expired request token. The refusal is counted now, at the close, and the refusals
+      // that reach the limit stop live updates, visibly (the specification's wsRefusedKeep and
+      // wsRefusedStop). The session is read again, so the next attempt carries the current token.
       /** @type {Effect[]} */
       const lead = [];
       let base = state;
-      if (msg.refused && !Object.values(state.pending).some((p) => p.kind === 'session')) {
-        const [withRequest, effect] = readSession(state, msg, { refusal: true });
-        base = withRequest;
-        lead.push(effect);
+      if (msg.refused) {
+        const refusals = (state.wsRefusals ?? 0) + 1;
+        base = { ...state, wsRefusals: refusals, wsStopped: refusals >= WS_REFUSAL_LIMIT };
+        if (!Object.values(state.pending).some((p) => p.kind === 'session')) {
+          const [withRequest, effect] = readSession(base, msg);
+          base = withRequest;
+          lead.push(effect);
+        }
       }
       // A close while waiting to reconnect is an attempt that failed: it counts as one.
       const waiting = base.ws.status === 'waiting' ? liveStep(base, 'ui-live-reconnect-due', {}, msg) : null;
