@@ -661,6 +661,15 @@ fn two_readable_matches_refuse_with_the_steps_error_code() {
 // Reversals of ledger postings (WG-5598): a toggle that reverses what its add posted, and the
 // refusals of a reversal that has nothing to reverse.
 
+/// A toggle of the counted operation, which posts on add and reverses on remove.
+fn counted(note: u64, kind: &str, key: &str) -> Intent {
+    invoke(
+        "react_counted",
+        &[("note", Value::Ref(RecordId(note))), ("kind", text(kind))],
+        key,
+    )
+}
+
 fn given_unit() -> LedgerUnit {
     LedgerUnit::new("reactions_given").expect("unit")
 }
@@ -872,11 +881,11 @@ fn unit_entries(world: &World, who: &str, unit: &LedgerUnit) -> Vec<LedgerEntry>
 #[test]
 fn a_toggle_that_reverses_its_postings_on_remove_leaves_balances_and_the_cap_count_of_additions() {
     let base = reversal_world();
-    let added = must(&base, "writer1", 5_200, react(1, "love", "k-add"));
+    let added = must(&base, "writer1", 5_200, counted(1, "love", "k-add"));
     assert_eq!(unit_balance(&added, "writer1", &given_unit()), 1);
     assert_eq!(unit_balance(&added, "writer1", &received_unit()), 1);
 
-    let removed = must(&added, "writer1", 5_201, react(1, "love", "k-remove"));
+    let removed = must(&added, "writer1", 5_201, counted(1, "love", "k-remove"));
     assert!(reactions(&removed).is_empty());
     assert_eq!(unit_balance(&removed, "writer1", &given_unit()), 0);
     assert_eq!(unit_balance(&removed, "writer1", &received_unit()), 0);
@@ -886,16 +895,21 @@ fn a_toggle_that_reverses_its_postings_on_remove_leaves_balances_and_the_cap_cou
     assert_eq!(given[1].corrects, Some(given[0].sequence));
 
     // The second add is the second addition of the day, still within the cap of two.
-    let again = must(&removed, "writer1", 5_202, react(1, "love", "k-again"));
+    let again = must(&removed, "writer1", 5_202, counted(1, "love", "k-again"));
     assert_eq!(unit_balance(&again, "writer1", &given_unit()), 1);
-    let removed_again = must(&again, "writer1", 5_203, react(1, "love", "k-remove-again"));
+    let removed_again = must(
+        &again,
+        "writer1",
+        5_203,
+        counted(1, "love", "k-remove-again"),
+    );
 
     // Removing freed no capacity, so a third addition of the day is over the cap.
     let error = run(
         &removed_again,
         as_user("writer1"),
         5_204,
-        &react(1, "love", "k-third"),
+        &counted(1, "love", "k-third"),
     )
     .expect_err("the third addition of the day is over the cap");
     assert!(
