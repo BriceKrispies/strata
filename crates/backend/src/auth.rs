@@ -7,7 +7,7 @@ use crate::app::{ApiError, App, Shared};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use axum::http::HeaderMap;
-use serde_json::json;
+use serde_json::{json, Map};
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use strata_kernel::rules::{may_attempt, roles_of};
@@ -37,6 +37,10 @@ pub struct Caller {
     /// The caller's key for the change this request makes, as the BFF passed it on, already checked
     /// by [`caller`]: a repeat with the same key changes the tenant once (OPS-318).
     pub idempotency_key: Option<String>,
+    /// The id of the provisioning token an identity provider presented, once its request has been
+    /// checked: the changes the request makes are attributed to the provider and this token
+    /// (OBS-3127).
+    pub provisioning_token: Option<String>,
 }
 
 impl Caller {
@@ -149,6 +153,7 @@ pub fn caller(headers: &HeaderMap) -> Result<Caller, ApiError> {
             .filter(|origin| origin.len() <= 255)
             .map(str::to_string),
         correlation,
+        provisioning_token: None,
     })
 }
 
@@ -400,7 +405,7 @@ pub(crate) fn start_session(
     refuse_reserved(&account.principal)?;
     let now = app.now();
     if let Some(previous) = &caller.token {
-        end_session(app, previous, &caller.correlation)?;
+        end_session_for(app, previous, &caller.correlation, "replaced")?;
     }
     let token = random_hex(32)?;
     let session = SessionRecord {
@@ -419,6 +424,7 @@ pub(crate) fn start_session(
         network: network_hash(app, caller),
     };
     app.store.put_session(&session)?;
+    crate::authz_audit::session_started(app, &session, method, &caller.correlation);
     telemetry::session_started(
         &telemetry::BACKEND,
         &telemetry::SessionStarted {
@@ -445,10 +451,25 @@ pub(crate) fn start_session(
 }
 
 /// End one session: mark it revoked, log it, and tell the connections it has open, which close.
-/// When it had ended already, only the notice is sent again.
-pub fn revoke(app: &App, mut session: SessionRecord, correlation: &str) -> Result<(), ApiError> {
+/// When it had ended already, only the notice is sent again. The end is an audit entry with no
+/// actor named (`revoked`); [`revoke_by`] names why and who.
+pub fn revoke(app: &App, session: SessionRecord, correlation: &str) -> Result<(), ApiError> {
+    revoke_by(app, session, correlation, "revoked", Map::new())
+}
+
+/// [`revoke`] with the reason the session ended and the members that name who ended it
+/// ([`crate::authz_audit::actor_fields`], [`crate::authz_audit::Attribution::fields`]): the end
+/// of a session is an audit entry of the tenant (OBS-3126), not a telemetry line only.
+pub fn revoke_by(
+    app: &App,
+    mut session: SessionRecord,
+    correlation: &str,
+    reason: &str,
+    by: Map<String, serde_json::Value>,
+) -> Result<(), ApiError> {
     if mark_revoked(&mut session, app.now()) {
         app.store.put_session(&session)?;
+        crate::authz_audit::session_ended(app, &session, correlation, reason, by);
         log_end(&session, correlation);
     }
     let _ = app.hub.sessions.send((session.id, SessionState::Revoked));
@@ -469,8 +490,19 @@ fn log_end(session: &SessionRecord, correlation: &str) {
 
 /// End the session behind a token, if there is one, and tell its connections (IDN-263).
 pub fn end_session(app: &App, token: &str, correlation: &str) -> Result<(), ApiError> {
+    end_session_for(app, token, correlation, "sign_out")
+}
+
+/// [`end_session`] for `reason`: the person whose session it is ended it.
+fn end_session_for(
+    app: &App,
+    token: &str,
+    correlation: &str,
+    reason: &str,
+) -> Result<(), ApiError> {
     if let Some(session) = app.store.session_by_token(&token_hash(token))? {
-        revoke(app, session, correlation)?;
+        let by = Map::from_iter([("actor".to_string(), json!(session.principal.as_str()))]);
+        revoke_by(app, session, correlation, reason, by)?;
     }
     Ok(())
 }
@@ -525,7 +557,8 @@ pub fn revoke_own_session(app: &App, identity: &Identity, id: &str) -> Result<()
     if target.tenant != current.tenant || target.principal != current.principal {
         return Err(not_found());
     }
-    revoke(app, target, &identity.correlation)
+    let by = crate::authz_audit::actor_fields(&identity.principal);
+    revoke_by(app, target, &identity.correlation, "revoked", by)
 }
 
 /// End every live session of a person in a tenant. Returns how many (IDN-020).
@@ -534,6 +567,19 @@ pub fn revoke_all_of(
     tenant: &TenantId,
     principal: &PrincipalId,
     correlation: &str,
+) -> Result<usize, ApiError> {
+    let by = Map::from_iter([("actor".to_string(), json!(principal.as_str()))]);
+    revoke_all_for(app, tenant, principal, correlation, "recovery", by)
+}
+
+/// [`revoke_all_of`] for `reason`, by the actor `by` names (OBS-3126).
+pub fn revoke_all_for(
+    app: &App,
+    tenant: &TenantId,
+    principal: &PrincipalId,
+    correlation: &str,
+    reason: &str,
+    by: Map<String, serde_json::Value>,
 ) -> Result<usize, ApiError> {
     let now = app.now().0;
     let live: Vec<SessionRecord> = app
@@ -544,7 +590,7 @@ pub fn revoke_all_of(
         .collect();
     let count = live.len();
     for session in live {
-        revoke(app, session, correlation)?;
+        revoke_by(app, session, correlation, reason, by.clone())?;
     }
     Ok(count)
 }
@@ -560,7 +606,8 @@ pub fn revoke_other_sessions(app: &App, identity: &Identity) -> Result<usize, Ap
         .collect();
     let count = others.len();
     for session in others {
-        revoke(app, session, &identity.correlation)?;
+        let by = crate::authz_audit::actor_fields(&identity.principal);
+        revoke_by(app, session, &identity.correlation, "revoked_others", by)?;
     }
     Ok(count)
 }
@@ -568,13 +615,25 @@ pub fn revoke_other_sessions(app: &App, identity: &Identity) -> Result<usize, Ap
 /// Tell the world about sessions that a commit ended in the store, such as those of a person
 /// whose roles changed: log each, and close its connections. `sessions` were live before the
 /// commit.
-pub fn announce_ended(app: &App, sessions: Vec<SessionRecord>, correlation: &str) {
+pub fn announce_ended(
+    app: &App,
+    sessions: Vec<SessionRecord>,
+    correlation: &str,
+    by: &Map<String, serde_json::Value>,
+) {
     for session in sessions {
         match app.store.session(&session.id) {
             Ok(Some(now)) if now.revoked_at.is_none() => {
-                let _ = revoke(app, now, correlation);
+                let _ = revoke_by(app, now, correlation, "roles_changed", by.clone());
             }
             _ => {
+                crate::authz_audit::session_ended(
+                    app,
+                    &session,
+                    correlation,
+                    "roles_changed",
+                    by.clone(),
+                );
                 log_end(&session, correlation);
                 let _ = app.hub.sessions.send((session.id, SessionState::Revoked));
             }

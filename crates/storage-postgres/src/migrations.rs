@@ -155,6 +155,18 @@ pub(crate) const CONTROL_MIGRATIONS: &[Migration] = &[
     );
     "#,
     },
+    Migration {
+        version: 6,
+        name: "audit chain anchors",
+        sql: r#"
+    CREATE TABLE audit_anchors (
+        tenant TEXT COLLATE "C" PRIMARY KEY,
+        seq    BIGINT NOT NULL,
+        chain  TEXT NOT NULL,
+        at     BIGINT NOT NULL
+    );
+    "#,
+    },
 ];
 
 /// A tenant schema's layout.

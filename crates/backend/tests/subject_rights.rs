@@ -111,6 +111,7 @@ fn record_type(
 ) -> ObjectTypeDef {
     ObjectTypeDef {
         searchable: None,
+        append_only: None,
         id: ObjectTypeId::new(id).expect("object id"),
         label: id.to_string(),
         fields: fields.into_iter().collect(),
@@ -424,6 +425,7 @@ fn caller(site: &TenantId, correlation: &str) -> Caller {
         source: "127.0.0.1".into(),
         origin: None,
         idempotency_key: None,
+        provisioning_token: None,
     }
 }
 

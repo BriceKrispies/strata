@@ -44,6 +44,7 @@
 //! no earlier configuration to change.
 
 use crate::app::App;
+use crate::authz_audit::{actor_fields, Attribution};
 use serde_json::{json, Map, Value as Json};
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -55,6 +56,12 @@ use strata_kernel::{
 };
 use strata_storage_api::Executed;
 use strata_substrate::plain::to_plain;
+
+/// A definition as the audit records it: its plain value, or `null` where the schema holds none.
+fn plain<T: serde::Serialize>(held: Option<&T>) -> Json {
+    held.and_then(|value| serde_json::to_value(value).ok())
+        .unwrap_or(Json::Null)
+}
 
 /// The tenant as it was before the commit.
 pub struct Prior {
@@ -177,18 +184,98 @@ fn value_in(intent: &Intent, ctx: &Context, state: &TenantState) -> Json {
         }
         Intent::ChangeSchema { changes, .. } => {
             let mut permissions = Map::new();
+            // The rest of what decides who may do what: the roles, the policies, the capabilities
+            // and the hold rules a change defines or removes, each as the schema holds it (`null`
+            // where it holds none), so that the entry shows the definition before and after
+            // (ADM-1631, OBS-3126).
+            let mut roles = Map::new();
+            let mut policies = Map::new();
+            let mut capabilities = Map::new();
+            let mut hold_rules = Map::new();
             for change in changes {
-                if let SchemaChange::DefineRolePermissions { role, .. } = change {
-                    permissions.insert(
-                        role.as_str().to_string(),
-                        serde_json::to_value(state.schema.grants_of(role)).unwrap_or(Json::Null),
-                    );
+                match change {
+                    SchemaChange::DefineRolePermissions { role, .. } => {
+                        permissions.insert(
+                            role.as_str().to_string(),
+                            serde_json::to_value(state.schema.grants_of(role))
+                                .unwrap_or(Json::Null),
+                        );
+                    }
+                    SchemaChange::DefineRole(def) => {
+                        roles.insert(
+                            def.id.as_str().to_string(),
+                            plain(state.schema.roles.get(&def.id)),
+                        );
+                    }
+                    SchemaChange::RemoveRole(id) => {
+                        roles.insert(id.as_str().to_string(), plain(state.schema.roles.get(id)));
+                    }
+                    SchemaChange::DefinePolicy(def) => {
+                        policies.insert(
+                            def.id.as_str().to_string(),
+                            plain(state.schema.policies.get(&def.id)),
+                        );
+                    }
+                    SchemaChange::RemovePolicy(id) => {
+                        policies.insert(
+                            id.as_str().to_string(),
+                            plain(state.schema.policies.get(id)),
+                        );
+                    }
+                    SchemaChange::DefineCapability(def) => {
+                        capabilities.insert(
+                            def.id.as_str().to_string(),
+                            plain(
+                                state
+                                    .schema
+                                    .capabilities
+                                    .as_ref()
+                                    .and_then(|m| m.get(&def.id)),
+                            ),
+                        );
+                    }
+                    SchemaChange::RemoveCapability(name) => {
+                        capabilities.insert(
+                            name.as_str().to_string(),
+                            plain(state.schema.capabilities.as_ref().and_then(|m| m.get(name))),
+                        );
+                    }
+                    SchemaChange::DefineHoldRule(rule) => {
+                        hold_rules.insert(
+                            rule.id.as_str().to_string(),
+                            plain(
+                                state
+                                    .schema
+                                    .hold_rules
+                                    .as_ref()
+                                    .and_then(|m| m.get(&rule.id)),
+                            ),
+                        );
+                    }
+                    SchemaChange::RemoveHoldRule(id) => {
+                        hold_rules.insert(
+                            id.as_str().to_string(),
+                            plain(state.schema.hold_rules.as_ref().and_then(|m| m.get(id))),
+                        );
+                    }
+                    _ => {}
                 }
             }
-            json!({
+            let mut value = json!({
                 "version": state.schema.version.0,
                 "role_permissions": permissions,
-            })
+            });
+            for (name, table) in [
+                ("roles", roles),
+                ("policies", policies),
+                ("capabilities", capabilities),
+                ("hold_rules", hold_rules),
+            ] {
+                if !table.is_empty() {
+                    value[name] = Json::Object(table);
+                }
+            }
+            value
         }
         _ => Json::Null,
     }
@@ -204,7 +291,14 @@ pub fn before(app: &App, ctx: &Context, intent: &Intent) -> Option<Prior> {
 }
 
 /// Append the audit entry of a committed `intent`.
-pub fn record(app: &App, ctx: &Context, intent: &Intent, prior: Option<Prior>, done: &Executed) {
+pub fn record(
+    app: &App,
+    ctx: &Context,
+    intent: &Intent,
+    prior: Option<Prior>,
+    done: &Executed,
+    by: Option<&Attribution>,
+) {
     if done.replayed {
         return;
     }
@@ -223,7 +317,7 @@ pub fn record(app: &App, ctx: &Context, intent: &Intent, prior: Option<Prior>, d
     let Some(after) = header(app, ctx) else {
         return;
     };
-    write_entry(app, ctx, event, intent, &prior, &after, done, None);
+    write_entry(app, ctx, event, intent, &prior, &after, done, None, by);
 }
 
 /// The entry of an accepted change of configuration or roles, with the principal of `ctx` as its
@@ -238,6 +332,7 @@ fn write_entry(
     after: &Arc<TenantState>,
     done: &Executed,
     extra: Option<Map<String, Json>>,
+    by: Option<&Attribution>,
 ) {
     let previous = value_in(intent, ctx, &prior.state);
     let now = value_in(intent, ctx, after);
@@ -245,11 +340,12 @@ fn write_entry(
     fields.insert("tenant".into(), json!(ctx.tenant.as_str()));
     fields.insert("intent".into(), json!(intent.name()));
     fields.insert("revision".into(), json!(done.receipt.revision.0));
-    match &ctx.principal {
-        Principal::User(actor) => fields.insert("actor".into(), json!(actor.as_str())),
-        Principal::System => fields.insert("actor_kind".into(), json!("system")),
-        Principal::Anonymous => fields.insert("actor_kind".into(), json!("anonymous")),
-    };
+    // A change an identity provider made names the provider and its token, never the owner the
+    // platform acted as (OBS-3127).
+    match by {
+        Some(provider) => fields.extend(provider.fields()),
+        None => fields.extend(actor_fields(&ctx.principal)),
+    }
     match person_of(intent, ctx) {
         Some(person) => {
             fields.insert("principal".into(), json!(person.as_str()));
@@ -388,6 +484,7 @@ fn record_decided(
         &after,
         done,
         Some(extra),
+        None,
     );
 }
 

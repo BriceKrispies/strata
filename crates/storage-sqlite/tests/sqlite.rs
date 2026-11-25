@@ -968,3 +968,61 @@ fn a_restore_to_a_truncated_journal_is_refused_behind_the_anchor() {
         "{refused:?}"
     );
 }
+
+/// Verifies: OBS-3129
+///
+/// The anchor of the audit chain is held in the control database, not in the tenant's file: a
+/// chain whose newest lines are deleted from the file is refused against it, and the anchor is not
+/// moved over the cut.
+#[test]
+fn the_audit_anchor_is_kept_outside_the_tenant_file() {
+    use strata_storage_api::audit_chain::{verify_audit_chain, ANCHOR_MISMATCH};
+    use strata_storage_api::AuditEntry;
+    let path = fresh_path("anchor");
+    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    let alpha = tenant_id("alpha");
+    execute(
+        &store,
+        &Intent::CreateTenant {
+            name: "alpha".into(),
+            owner: principal_id("alpha:owner"),
+        },
+        &ctx("alpha", Principal::System, 10),
+    )
+    .unwrap();
+    let line = |n: i64| AuditEntry {
+        at: n,
+        kind: "audit".into(),
+        event: "role.changed".into(),
+        correlation: format!("c-{n}"),
+        data: "{}".into(),
+    };
+    assert_eq!(store.audit_anchor(&alpha).unwrap(), None);
+    for n in 1..=3 {
+        store.audit_append(&alpha, &line(n)).unwrap();
+    }
+    let anchor = store
+        .audit_anchor_advance(&alpha, 100)
+        .unwrap()
+        .expect("a head");
+    assert_eq!(anchor.seq, 3);
+    assert_eq!(store.audit_anchor(&alpha).unwrap(), Some(anchor.clone()));
+
+    // The newest line is deleted from the tenant's file: what is left still chains.
+    let file = store.tenant_file(&alpha).unwrap().unwrap();
+    rusqlite::Connection::open(&file)
+        .unwrap()
+        .execute("DELETE FROM audit_log WHERE seq = 3", [])
+        .unwrap();
+    let lines = store.audit_chain(&alpha, 0, 100).unwrap();
+    assert!(verify_audit_chain(&lines, None).ok);
+    let report = verify_audit_chain(&lines, Some(&anchor));
+    assert_eq!(report.code.as_deref(), Some(ANCHOR_MISMATCH), "{report:?}");
+    assert_eq!(report.first_break.map(|(seq, _)| seq), Some(3));
+    // A line appended after the cut does not move the anchor over it.
+    store.audit_append(&alpha, &line(4)).unwrap();
+    assert_eq!(
+        store.audit_anchor_advance(&alpha, 200).unwrap(),
+        Some(anchor)
+    );
+}

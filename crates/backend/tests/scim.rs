@@ -756,3 +756,119 @@ async fn a_provider_cannot_deactivate_or_delete_the_last_owner() {
         .await;
     assert_eq!(status, 204);
 }
+
+/// Verifies: OBS-3126
+/// Verifies: OBS-3127
+///
+/// A role an identity provider gives or takes is an audit entry whose actor is the provider and
+/// its provisioning token, never the owner the platform acted as, and the sessions its
+/// deactivation ends are entries that name the same provider.
+#[tokio::test]
+async fn a_provider_role_change_names_the_provider_and_its_token_not_an_owner() {
+    use strata_storage_api::Store;
+    let backend = start().await;
+    let owner = backend.owner().await;
+    let (status, made) = backend
+        .call(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/provisioning/tokens/create",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{made}");
+    let (token, token_id) = (
+        made["token"].as_str().unwrap().to_string(),
+        made["id"].as_str().unwrap().to_string(),
+    );
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/provisioning/groups/set",
+            json!({ "group": "writers", "role": "author" }),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let (_, user) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "POST",
+            "Users",
+            person("kit@acme.example"),
+        )
+        .await;
+    let id = user["id"].as_str().unwrap().to_string();
+    let tenant = TenantId::new("fieldnotes").unwrap();
+    let session = SessionRecord {
+        id: SessionId::new("s_kit").unwrap(),
+        token_hash: token_hash("kit-secret"),
+        csrf_token: "csrf".into(),
+        tenant: tenant.clone(),
+        principal: PrincipalId::new(id.clone()).unwrap(),
+        display_name: "Kit".into(),
+        created_at: Timestamp(now_ms()),
+        last_seen_at: Timestamp(now_ms()),
+        expires_at: Timestamp(now_ms() + 3_600_000),
+        revoked_at: None,
+        authenticated_at: Timestamp(now_ms()),
+        network: None,
+    };
+    backend.store.put_session(&session).unwrap();
+
+    // The role is given: that ends the person's session, on the provider's word.
+    let add =
+        json!({ "Operations": [{ "op": "add", "path": "members", "value": [{ "value": id }] }] });
+    let (status, _) = backend
+        .scim("fieldnotes", Some(&token), "PATCH", "Groups/writers", add)
+        .await;
+    assert_eq!(status, 200);
+    // A new session ends when the provider deactivates the person.
+    let second = SessionRecord {
+        id: SessionId::new("s_kit_2").unwrap(),
+        token_hash: token_hash("kit-secret-2"),
+        ..session.clone()
+    };
+    backend.store.put_session(&second).unwrap();
+    let deactivate = json!({ "Operations": [{ "op": "replace", "value": { "active": false } }] });
+    let (status, _) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "PATCH",
+            &format!("Users/{id}"),
+            deactivate,
+        )
+        .await;
+    assert_eq!(status, 200);
+
+    let audit_of = |event: &str| -> Vec<Json> {
+        backend
+            .store
+            .audit_list(&tenant, Some("audit"), 10_000)
+            .unwrap()
+            .into_iter()
+            .filter(|line| line.event == event)
+            .map(|line| serde_json::from_str(&line.data).unwrap())
+            .collect()
+    };
+    let changed = audit_of("member.roles_changed");
+    assert_eq!(changed.len(), 1, "{changed:?}");
+    let entry = &changed[0];
+    assert_eq!(entry["actor_kind"], "provider", "{entry}");
+    assert_eq!(entry["provider"], "scim");
+    assert_eq!(entry["provisioning_token"], token_id.as_str());
+    assert!(
+        entry.get("actor").is_none(),
+        "no owner is named as the actor: {entry}"
+    );
+    let ended = audit_of("session.ended");
+    let reasons: Vec<&str> = ended.iter().filter_map(|e| e["reason"].as_str()).collect();
+    assert_eq!(reasons, ["roles_changed", "deactivated"], "{ended:?}");
+    for end in &ended {
+        assert_eq!(end["provider"], "scim", "{end}");
+        assert_eq!(end["provisioning_token"], token_id.as_str(), "{end}");
+        assert!(end.get("actor").is_none(), "{end}");
+    }
+}

@@ -128,6 +128,10 @@ pub struct ObjectSpec {
     /// The text fields the search index holds (D-7780); each is a field of the type.
     #[serde(default)]
     pub searchable: Vec<FieldId>,
+    /// Declares the type append-only: no record of it is updated or deleted by any path, and the
+    /// declaration is never cleared (D-8422).
+    #[serde(default)]
+    pub append_only: bool,
 }
 
 /// A composite unique constraint of an object type, as a bundle writes it.
@@ -567,6 +571,11 @@ impl Bundle {
                     fields: object.searchable.clone(),
                 });
             }
+            if object.append_only {
+                changes.push(SchemaChange::SetAppendOnly {
+                    object: object.id.clone(),
+                });
+            }
         }
         for workflow in &self.workflows {
             let mut transitions = Vec::new();
@@ -914,6 +923,7 @@ pub fn install<E>(
                         translation_group: None,
                         unique: None,
                         searchable: None,
+                        append_only: None,
                     },
                 );
             }

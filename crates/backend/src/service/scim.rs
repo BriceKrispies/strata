@@ -18,11 +18,12 @@
 //! Implements: FED-014, FED-015, FED-259, FED-260
 
 use super::{get, list, owner_context, put, require_owner, text};
-use crate::app::{ApiError, App, LOG};
+use crate::app::{ApiError, App};
 use crate::auth::{random_hex, token_hash, Caller, Identity};
+use crate::authz_audit::Attribution;
 use crate::signin::{normalise_login, start_rules, throttled};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value as Json};
+use serde_json::{json, Map, Value as Json};
 use std::collections::BTreeSet;
 use strata_kernel::{owner_role, public_role, Intent, PrincipalId, RoleId, TenantId};
 use strata_protocol::api::ErrorCode;
@@ -258,6 +259,7 @@ pub fn remove_group_role(app: &App, identity: &Identity, body: &Json) -> Result<
                 app,
                 &identity.tenant,
                 &identity.correlation,
+                &realm_rule_of(identity, group),
                 &principal,
                 &mapping.role,
             )?;
@@ -285,20 +287,21 @@ fn give_role(
     app: &App,
     tenant: &TenantId,
     correlation: &str,
+    by: &Attribution,
     principal: &PrincipalId,
     role: &str,
 ) -> Result<(), ApiError> {
     let role = RoleId::new(role.to_string())
         .map_err(|e| ApiError::hidden(ErrorCode::Internal, e.to_string()))?;
     let ctx = owner_context(app, tenant, correlation)?;
-    crate::ops::run_intent(
+    crate::ops::run_intent_attributed(
         app,
         &ctx,
         &Intent::AssignRole {
             principal: principal.clone(),
             role,
         },
-        false,
+        by,
     )?;
     Ok(())
 }
@@ -308,6 +311,7 @@ fn take_role(
     app: &App,
     tenant: &TenantId,
     correlation: &str,
+    by: &Attribution,
     principal: &PrincipalId,
     role: &str,
 ) -> Result<(), ApiError> {
@@ -320,14 +324,14 @@ fn take_role(
     let role = RoleId::new(role.to_string())
         .map_err(|e| ApiError::hidden(ErrorCode::Internal, e.to_string()))?;
     let ctx = owner_context(app, tenant, correlation)?;
-    crate::ops::run_intent(
+    crate::ops::run_intent_attributed(
         app,
         &ctx,
         &Intent::RevokeRole {
             principal: principal.clone(),
             role,
         },
-        false,
+        by,
     )?;
     Ok(())
 }
@@ -352,21 +356,78 @@ fn render(user: &ScimUser) -> Json {
     body
 }
 
-/// End every live session of a person (FED-015).
+/// End every live session of a person (FED-015), as the platform does when a person is erased.
 pub fn end_sessions(
     app: &App,
     tenant: &TenantId,
     principal: &PrincipalId,
     correlation: &str,
 ) -> Result<usize, ApiError> {
+    let by = Map::from_iter([("actor_kind".to_string(), json!("system"))]);
+    end_sessions_with(app, tenant, principal, correlation, "erased", by)
+}
+
+/// End every live session of a person on the word of an identity provider: the entry of each end
+/// names the provider and its token (OBS-3126, OBS-3127).
+pub fn end_sessions_by(
+    app: &App,
+    tenant: &TenantId,
+    principal: &PrincipalId,
+    correlation: &str,
+    by: &Attribution,
+) -> Result<usize, ApiError> {
+    end_sessions_with(
+        app,
+        tenant,
+        principal,
+        correlation,
+        "deactivated",
+        by.fields(),
+    )
+}
+
+fn end_sessions_with(
+    app: &App,
+    tenant: &TenantId,
+    principal: &PrincipalId,
+    correlation: &str,
+    reason: &str,
+    by: Map<String, Json>,
+) -> Result<usize, ApiError> {
     let sessions: Vec<_> = app
         .store
         .live_sessions_of(tenant, Some(principal), app.now())?;
     let count = sessions.len();
     for session in sessions {
-        crate::auth::revoke(app, session, correlation)?;
+        crate::auth::revoke_by(app, session, correlation, reason, by.clone())?;
     }
     Ok(count)
+}
+
+/// The identity provider a request of the provisioning endpoint comes from, for the audit.
+fn provider_of(caller: &Caller) -> Attribution {
+    match &caller.provisioning_token {
+        Some(token) => Attribution::scim(token),
+        None => Attribution {
+            provider: "scim".into(),
+            provisioning_token: None,
+            rule: None,
+            actor: None,
+        },
+    }
+}
+
+/// The realm rule that maps `group`, set off by the owner who removed it.
+fn realm_rule_of(identity: &Identity, group: &str) -> Attribution {
+    Attribution {
+        provider: "realm-rule".into(),
+        provisioning_token: None,
+        rule: Some(group.to_string()),
+        actor: match &identity.principal {
+            strata_kernel::Principal::User(person) => Some(person.as_str().to_string()),
+            _ => None,
+        },
+    }
 }
 
 fn user_of(app: &App, tenant: &TenantId, id: &str) -> Result<Option<ScimUser>, ApiError> {
@@ -440,6 +501,7 @@ fn set_active(
     app: &App,
     tenant: &TenantId,
     correlation: &str,
+    by: &Attribution,
     user: &mut ScimUser,
     active: bool,
 ) -> Result<(), ApiError> {
@@ -459,7 +521,7 @@ fn set_active(
             &json!({ "at": app.now().0 }),
             false,
         )?;
-        end_sessions(app, tenant, &principal, correlation)?;
+        end_sessions_by(app, tenant, &principal, correlation, by)?;
     }
     user.active = active;
     app.audit(
@@ -552,7 +614,14 @@ fn create_user(app: &App, caller: &Caller, body: &Json) -> Result<Answer, ApiErr
     }
     let mut user = user;
     if !active {
-        set_active(app, &caller.site, &caller.correlation, &mut user, false)?;
+        set_active(
+            app,
+            &caller.site,
+            &caller.correlation,
+            &provider_of(caller),
+            &mut user,
+            false,
+        )?;
     }
     put(app, &caller.site, USER, principal.as_str(), &user, false)?;
     app.audit(
@@ -687,7 +756,14 @@ fn replace_user(app: &App, caller: &Caller, id: &str, body: &Json) -> Result<Ans
                 return Ok(refusal);
             }
         }
-        set_active(app, &caller.site, &caller.correlation, &mut user, active)?;
+        set_active(
+            app,
+            &caller.site,
+            &caller.correlation,
+            &provider_of(caller),
+            &mut user,
+            active,
+        )?;
     }
     save_user(app, &caller.site, &user)?;
     Ok((200, render(&user)))
@@ -793,7 +869,14 @@ fn patch_user(app: &App, caller: &Caller, id: &str, body: &Json) -> Result<Answe
                 return Ok(refusal);
             }
         }
-        set_active(app, &caller.site, &caller.correlation, &mut user, active)?;
+        set_active(
+            app,
+            &caller.site,
+            &caller.correlation,
+            &provider_of(caller),
+            &mut user,
+            active,
+        )?;
     }
     save_user(app, &caller.site, &user)?;
     Ok((200, render(&user)))
@@ -818,7 +901,13 @@ fn delete_user(app: &App, caller: &Caller, id: &str) -> Result<Answer, ApiError>
         &json!({ "at": app.now().0 }),
         false,
     )?;
-    end_sessions(app, &caller.site, &principal, &caller.correlation)?;
+    end_sessions_by(
+        app,
+        &caller.site,
+        &principal,
+        &caller.correlation,
+        &provider_of(caller),
+    )?;
     // Out of every group, which takes back the roles the groups gave.
     let mappings: Vec<GroupRole> = list(app, &caller.site, GROUP_ROLE)?;
     for mapping in &mappings {
@@ -836,6 +925,7 @@ fn delete_user(app: &App, caller: &Caller, id: &str) -> Result<Answer, ApiError>
                 app,
                 &caller.site,
                 &caller.correlation,
+                &provider_of(caller),
                 &principal,
                 &mapping.role,
             )?;
@@ -855,6 +945,7 @@ fn delete_user(app: &App, caller: &Caller, id: &str) -> Result<Answer, ApiError>
             app,
             &caller.site,
             &caller.correlation,
+            &provider_of(caller),
             &principal,
             role.as_str(),
         )?;
@@ -997,6 +1088,7 @@ fn patch_group(app: &App, caller: &Caller, group: &str, body: &Json) -> Result<A
                 app,
                 &caller.site,
                 &caller.correlation,
+                &provider_of(caller),
                 &principal,
                 &mapping.role,
             )?;
@@ -1008,6 +1100,7 @@ fn patch_group(app: &App, caller: &Caller, group: &str, body: &Json) -> Result<A
                 app,
                 &caller.site,
                 &caller.correlation,
+                &provider_of(caller),
                 &principal,
                 &mapping.role,
             )?;
@@ -1033,7 +1126,7 @@ pub fn handle(app: &App, caller: &Caller, request: &Json) -> Result<Json, ApiErr
     // The token is checked before any slot is reserved: a request with a right token costs the
     // limits nothing, so a flood of wrong ones cannot throttle the provider. A wrong one is
     // counted, and not given back.
-    if presented_token(app, &caller.site, request)?.is_none() {
+    let Some(presented) = presented_token(app, &caller.site, request)? else {
         let limits = start_rules(app, "scim", &caller.source);
         if let ThrottleVerdict::Refused { .. } =
             app.store
@@ -1041,14 +1134,19 @@ pub fn handle(app: &App, caller: &Caller, request: &Json) -> Result<Json, ApiErr
         {
             return Err(throttled());
         }
-        LOG.warn(
+        app.audit(
             "scim.refused",
             &caller.correlation,
-            json!({ "tenant": caller.site.as_str() }),
+            json!({ "tenant": caller.site.as_str(), "actor_kind": "provider", "provider": "scim" }),
         );
         let (status, body) = error(401, "A provisioning token is required.", None);
         return Ok(json!({ "status": status, "body": body }));
-    }
+    };
+    // What the request changes is attributed to the provider and the token it presented.
+    let caller = &Caller {
+        provisioning_token: Some(presented.id),
+        ..caller.clone()
+    };
 
     let method = request
         .get("method")

@@ -74,6 +74,19 @@ fn decide_intent(
     pins: &PinBook,
     holding: bool,
 ) -> Result<(Transition, PinBook), DomainError> {
+    let (transition, pins) = decide_unguarded(state, intent, ctx, pins, holding)?;
+    // No path updates or deletes a record of an append-only type (D-8422, OBS-3128).
+    crate::append_only::guard(state, intent, &transition)?;
+    Ok((transition, pins))
+}
+
+fn decide_unguarded(
+    state: &State,
+    intent: &Intent,
+    ctx: &Context,
+    pins: &PinBook,
+    holding: bool,
+) -> Result<(Transition, PinBook), DomainError> {
     if state.tenant_id != ctx.tenant {
         return Err(refuse(
             ErrorKind::TenantMismatch,
@@ -1904,6 +1917,7 @@ pub(crate) fn apply_change(
                     translation_group: None,
                     unique: None,
                     searchable: None,
+                    append_only: None,
                 });
             format!("define object {id}")
         }
@@ -2160,6 +2174,7 @@ pub(crate) fn apply_change(
         | SchemaChange::ClearLanguageField { .. }
         | SchemaChange::SetTranslationGroup { .. }
         | SchemaChange::ClearTranslationGroup { .. }
+        | SchemaChange::SetAppendOnly { .. }
         | SchemaChange::RemoveObject { .. }
         | SchemaChange::RemoveRole(_) => crate::object_meta::apply(schema, change)?,
         SchemaChange::SetSearchable { .. } | SchemaChange::ClearSearchable { .. } => {

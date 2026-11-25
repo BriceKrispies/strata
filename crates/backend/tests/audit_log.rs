@@ -266,3 +266,189 @@ fn the_route_reports_a_removed_entry() {
     assert_eq!(cut["intact"], false, "{cut}");
     assert_eq!(cut["first_break"], 2, "{cut}");
 }
+
+// Verifies: OBS-3129
+#[test]
+fn a_chain_cut_short_of_its_anchor_is_refused_naming_the_lost_line() {
+    let (app, memory, site) = started();
+    for (correlation, to) in [("t-1", "editor"), ("t-2", "viewer"), ("t-3", "editor")] {
+        members(
+            &app,
+            &site,
+            correlation,
+            MembersRequest::AssignRole {
+                principal: format!("alpha:{correlation}"),
+                role: to.into(),
+            },
+        )
+        .expect("assigned");
+    }
+    let anchor = app
+        .anchor_audit_head(&site)
+        .expect("anchored")
+        .expect("the trail has a head");
+    let owner = identity(&app, &site, "alpha:owner", "t-verify");
+    let whole = audit_log::verify(&app, &owner, &json!({})).expect("verified");
+    assert_eq!(whole["intact"], true, "{whole}");
+
+    // The newest line is removed: every remaining line still chains, and only the anchor, which
+    // the tenant's own storage does not hold, shows what was lost.
+    assert!(memory.remove_audit_line(&site, anchor.seq as usize - 1));
+    let cut = audit_log::verify(&app, &owner, &json!({})).expect("verified");
+    assert_eq!(cut["intact"], false, "{cut}");
+    assert_eq!(cut["code"], "AnchorMismatch", "{cut}");
+    assert_eq!(cut["first_break"].as_u64(), Some(anchor.seq), "{cut}");
+
+    // Anchoring again does not anchor over the cut.
+    let held = app
+        .anchor_audit_head(&site)
+        .expect("anchored")
+        .expect("held");
+    assert_eq!(held, anchor);
+}
+
+// Verifies: OBS-3129
+#[test]
+fn a_restore_does_not_drop_audit_entries() {
+    let (app, memory, site) = started();
+    let snapshot = memory
+        .create_snapshot(&site, "before", Timestamp(1_500))
+        .expect("snapshot");
+    for correlation in ["t-1", "t-2"] {
+        members(
+            &app,
+            &site,
+            correlation,
+            MembersRequest::AssignRole {
+                principal: format!("alpha:{correlation}"),
+                role: "editor".into(),
+            },
+        )
+        .expect("assigned");
+    }
+    let before = memory.audit_list(&site, None, 1_000).expect("trail").len();
+    memory
+        .restore_snapshot(&site, snapshot.id, None)
+        .expect("restored");
+    let after = memory.audit_list(&site, None, 1_000).expect("trail").len();
+    assert_eq!(before, after, "a restore leaves the audit trail whole");
+    let report = app.verify_audit_chain(&site).expect("chain");
+    assert!(report.ok, "{report:?}");
+}
+
+/// A tenant whose type `event` is append-only, with one record `1`, ready to be changed.
+fn with_append_only_type() -> (Shared, Arc<MemoryStore>, TenantId) {
+    let (app, memory, site) = started();
+    let owner = identity(&app, &site, "alpha:owner", "t-declare");
+    let changes = vec![
+        SchemaChange::DefineObject {
+            id: strata_kernel::ObjectTypeId::new("event").expect("object"),
+            label: "Event".into(),
+        },
+        SchemaChange::DefineField {
+            object: strata_kernel::ObjectTypeId::new("event").expect("object"),
+            field: strata_kernel::testkit::field_def("name", strata_kernel::FieldType::Str, true),
+        },
+        SchemaChange::SetAppendOnly {
+            object: strata_kernel::ObjectTypeId::new("event").expect("object"),
+        },
+    ];
+    ops::run_intent(
+        &app,
+        &owner.context(&app),
+        &Intent::ChangeSchema {
+            changes,
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+        false,
+    )
+    .expect("the type is declared append-only");
+    let created = ops::run_intent(
+        &app,
+        &identity(&app, &site, "alpha:owner", "t-create").context(&app),
+        &Intent::CreateRecord {
+            object: strata_kernel::ObjectTypeId::new("event").expect("object"),
+            fields: std::collections::BTreeMap::from([(
+                strata_kernel::FieldId::new("name").expect("field"),
+                strata_kernel::Value::Str("first".into()),
+            )]),
+        },
+        false,
+    );
+    created.expect("a record is appended");
+    (app, memory, site)
+}
+
+// Verifies: OBS-3128
+#[test]
+fn an_update_a_delete_and_a_restore_of_an_append_only_record_are_refused_and_audited() {
+    let (app, memory, site) = with_append_only_type();
+    let event = || strata_kernel::ObjectTypeId::new("event").expect("object");
+    let owner = || identity(&app, &site, "alpha:owner", "t-attempt");
+
+    // The owner may neither update nor delete it.
+    let updated = ops::run_intent(
+        &app,
+        &owner().context(&app),
+        &Intent::UpdateRecord {
+            object: event(),
+            id: strata_kernel::RecordId(1),
+            fields: std::collections::BTreeMap::from([(
+                strata_kernel::FieldId::new("name").expect("field"),
+                strata_kernel::Value::Str("rewritten".into()),
+            )]),
+            expected_version: None,
+        },
+        false,
+    )
+    .expect_err("an update is refused");
+    assert_eq!(updated.0.kind.as_deref(), Some("AppendOnly"));
+    let deleted = ops::run_intent(
+        &app,
+        &owner().context(&app),
+        &Intent::DeleteRecord {
+            object: event(),
+            id: strata_kernel::RecordId(1),
+            expected_version: None,
+        },
+        false,
+    )
+    .expect_err("a delete is refused");
+    assert_eq!(deleted.0.kind.as_deref(), Some("AppendOnly"));
+
+    // Each refusal is an audit entry that names the intent and the actor.
+    let refused = entries(&app, &site, "refused.append_only");
+    let intents: Vec<&str> = refused
+        .iter()
+        .map(|(_, data)| data["intent"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(intents, ["update_record", "delete_record"], "{refused:?}");
+    assert_eq!(refused[0].1["actor"], "alpha:owner");
+
+    // A restore to a state before the record is refused too, and changes nothing.
+    let before = memory
+        .create_snapshot(&site, "empty", Timestamp(1_500))
+        .expect("snapshot");
+    let _ = before;
+    let snapshots = memory.snapshots(&site).expect("snapshots");
+    assert_eq!(snapshots.len(), 1);
+    ops::run_intent(
+        &app,
+        &owner().context(&app),
+        &Intent::CreateRecord {
+            object: event(),
+            fields: std::collections::BTreeMap::from([(
+                strata_kernel::FieldId::new("name").expect("field"),
+                strata_kernel::Value::Str("second".into()),
+            )]),
+        },
+        false,
+    )
+    .expect("a second record is appended");
+    let restore = memory.restore_snapshot(&site, snapshots[0].id, None);
+    assert!(
+        matches!(&restore, Err(strata_storage_api::StoreError::Invalid(m)) if m.starts_with("AppendOnly")),
+        "{restore:?}"
+    );
+}

@@ -1030,6 +1030,7 @@ mod people_and_refs {
             translation_group: None,
             unique: None,
             searchable: None,
+            append_only: None,
         };
         let slug_and_title = def(vec![
             field_def("slug", FieldType::Str, true),

@@ -137,6 +137,7 @@ fn field(id: &str, ty: FieldType, read: Option<Expr>, personal: Option<DataSubje
 fn record_type(id: &str, fields: Vec<FieldDef>) -> ObjectTypeDef {
     ObjectTypeDef {
         searchable: None,
+        append_only: None,
         id: ObjectTypeId::new(id).expect("object id"),
         label: id.to_string(),
         fields: fields.into_iter().map(|f| (f.id.clone(), f)).collect(),

@@ -1297,6 +1297,18 @@ impl Store for ResidentStore {
         self.inner.audit_append(tenant, entry)
     }
 
+    fn audit_anchor(&self, tenant: &TenantId) -> StoreResult<Option<audit_chain::AuditAnchor>> {
+        self.inner.audit_anchor(tenant)
+    }
+
+    fn audit_anchor_advance(
+        &self,
+        tenant: &TenantId,
+        at: i64,
+    ) -> StoreResult<Option<audit_chain::AuditAnchor>> {
+        self.inner.audit_anchor_advance(tenant, at)
+    }
+
     fn audit_list(
         &self,
         tenant: &TenantId,
