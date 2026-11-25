@@ -237,6 +237,23 @@ pub fn override_of<'a>(
         .get(&override_key(setting, level, subject))
 }
 
+/// The revision a write of a setting at a level must name now: the revision of the override the
+/// caller would change, or zero for an override that does not exist (WG-5606). A tenant operation
+/// step writes the value the state holds when it runs, so it names this revision itself.
+pub fn held_revision(
+    tenant: &TenantState,
+    setting: &SettingId,
+    level: SettingLevel,
+    caller: &PrincipalId,
+) -> u64 {
+    let subject = match level {
+        SettingLevel::Tenant => tenant.id.as_str().to_string(),
+        SettingLevel::Person => caller.as_str().to_string(),
+        SettingLevel::Platform | SettingLevel::Team => return 0,
+    };
+    override_of(tenant, setting, level, &subject).map_or(0, |held| held.revision)
+}
+
 /// The revision of a setting at the tenant (SET-051): zero until its first change.
 pub fn tenant_revision(tenant: &TenantState, setting: &SettingId) -> u64 {
     tenant

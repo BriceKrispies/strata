@@ -184,6 +184,11 @@ pub const CONFIGURATION_OUTSIDE_SETTING: &str = "layer.configuration-outside-set
 /// A product's setting whose `area` names another product, or is not a product's id at all: a
 /// product owns the settings it declares (WG-5600, SET-001).
 pub const SETTING_AREA_OTHER_PRODUCT: &str = "layer.setting-area-other-product";
+/// A write-setting step of an operation that names a setting the product does not own, that is, one it
+/// does not declare under its own "settings" (WG-5606, SET-001).
+pub const WRITE_SETTING_NOT_OWNED: &str = "layer.write-setting-not-owned";
+/// A write-setting step of an operation at a level the setting's definition does not allow (WG-5606).
+pub const WRITE_SETTING_LEVEL_NOT_ALLOWED: &str = "layer.write-setting-level-not-allowed";
 
 /// Stands for "any section": a key listing it accepts any platform entity.
 const ANY: &[&str] = &[];
@@ -647,6 +652,7 @@ fn check_product(
     // What the expressions of the typed sections may name: the object types and roles of the file and
     // the platform's roles.
     let context = ProductContext::of(platform_ids, top);
+    let own_settings = setting_levels_of(top, header_product_id(&parsed));
     let own: BTreeSet<String> = sections
         .iter()
         .filter_map(|(s, _)| top.get(*s).and_then(Value::as_array))
@@ -754,6 +760,7 @@ fn check_product(
                         }
                         if *section == "operations" {
                             check_operation_bindings(&file, id, item, out);
+                            check_write_settings(&file, id, item, &own_settings, out);
                         }
                         if *section == "eventKinds" {
                             check_event_kind(&file, id, item, out);
@@ -1532,6 +1539,105 @@ fn check_event_kind(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic
             id,
             format!("The event kind \"{kind}\" of \"{id}\" in {file} has {fields} fields, and a declared kind has at most {MOST_FIELDS} (SCH-1576). Remove some, or carry them in a record the event names."),
         ));
+    }
+}
+
+/// The settings a product owns, each with the levels its definition allows: the entries of its
+/// "settings" section whose area is the product's own id or is left out (WG-5606).
+fn setting_levels_of(
+    top: &serde_json::Map<String, Value>,
+    product_id: &str,
+) -> BTreeMap<String, Vec<String>> {
+    let mut out = BTreeMap::new();
+    for item in top
+        .get("settings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if item
+            .get("area")
+            .and_then(Value::as_str)
+            .is_some_and(|area| area != product_id)
+        {
+            continue;
+        }
+        let levels = item
+            .get("levels")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        out.insert(id.to_string(), levels);
+    }
+    out
+}
+
+/// The write-setting steps of an operation (WG-5606): the setting is one the product owns, and the
+/// level is one the setting's definition allows. The steps a branch holds are checked too.
+fn check_write_settings(
+    file: &str,
+    id: &str,
+    item: &Value,
+    own: &BTreeMap<String, Vec<String>>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let Some(steps) = item.get("steps").and_then(Value::as_array) else {
+        return;
+    };
+    walk_write_settings(file, id, steps, own, out);
+}
+
+fn walk_write_settings(
+    file: &str,
+    id: &str,
+    steps: &[Value],
+    own: &BTreeMap<String, Vec<String>>,
+    out: &mut Vec<Diagnostic>,
+) {
+    for step in steps {
+        for (kind, body) in step.as_object().into_iter().flatten() {
+            match kind.as_str() {
+                "WriteSetting" => {
+                    let step_id = body.get("id").and_then(Value::as_str).unwrap_or("");
+                    let setting = body.get("setting").and_then(Value::as_str).unwrap_or("");
+                    let level = body.get("level").and_then(Value::as_str).unwrap_or("");
+                    match own.get(setting) {
+                        None => out.push(Diagnostic::new(
+                            WRITE_SETTING_NOT_OWNED,
+                            id,
+                            format!("\"{id}\" in {file}: the step \"{step_id}\" writes the setting \"{setting}\", which the product does not declare under \"settings\". A product writes only the settings it owns (SET-001): declare \"{setting}\" in this file, or remove the step."),
+                        )),
+                        Some(levels) if !levels.iter().any(|allowed| allowed == level) => {
+                            out.push(Diagnostic::new(
+                                WRITE_SETTING_LEVEL_NOT_ALLOWED,
+                                id,
+                                format!("\"{id}\" in {file}: the step \"{step_id}\" writes the setting \"{setting}\" at the level \"{level}\", which its definition does not allow ({}). Write at a level the definition lists under \"levels\".", levels.join(", ")),
+                            ));
+                        }
+                        Some(_) => {}
+                    }
+                }
+                "Branch" => {
+                    for side in ["matched", "unmatched"] {
+                        let list = body.get(side).and_then(Value::as_array);
+                        walk_write_settings(
+                            file,
+                            id,
+                            list.map_or(&[][..], Vec::as_slice),
+                            own,
+                            out,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 

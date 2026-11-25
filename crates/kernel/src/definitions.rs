@@ -23,11 +23,12 @@
 use crate::expr::{self, Expr, Shape, TypeEnv};
 use crate::limits;
 use crate::schema::{Action, FieldDef, FieldType, ObjectTypeDef, Resource, TenantSchema};
+use crate::settings;
 use crate::types::{
     public_role, AutomationDef, AutomationStep, AutomationStepDef, BranchTest, FieldId,
-    FieldTypeExt, LedgerUnit, ObjectTypeId, RoleId, SettingId, StepName, TemplateId,
-    TenantOperationDef, TenantOperationPostingOwner, TenantOperationStep, TriggerDef, TriggerEvent,
-    UniqueDef,
+    FieldTypeExt, LedgerUnit, ObjectTypeId, OperationSettingLevel, RoleId, SettingId, SettingLevel,
+    StepName, TemplateId, TenantOperationDef, TenantOperationPostingOwner, TenantOperationStep,
+    TriggerDef, TriggerEvent, UniqueDef,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -345,8 +346,11 @@ pub fn operation_powers(op: &TenantOperationDef) -> (Vec<(Action, Resource)>, BT
                 capabilities.insert(LEDGER_POST.to_string());
                 None
             }
-            // A find reads under the invoker's own rights, not a power of the operation.
-            TenantOperationStep::FindRecord { .. } | TenantOperationStep::Branch { .. } => None,
+            // A find reads under the invoker's own rights, and a setting is written under the rights
+            // the settings route asks of the invoker (WG-5606), not a power of the operation.
+            TenantOperationStep::FindRecord { .. }
+            | TenantOperationStep::Branch { .. }
+            | TenantOperationStep::WriteSetting { .. } => None,
         };
         if let Some(wanted) = wanted {
             if !actions.contains(&wanted) {
@@ -1045,7 +1049,8 @@ fn steps_problems(
             TenantOperationStep::PostLedger { .. }
             | TenantOperationStep::ReverseLedger { .. }
             | TenantOperationStep::FindRecord { .. }
-            | TenantOperationStep::Branch { .. } => {}
+            | TenantOperationStep::Branch { .. }
+            | TenantOperationStep::WriteSetting { .. } => {}
         }
         match step {
             TenantOperationStep::UpdateRecord { record, .. }
@@ -1126,6 +1131,15 @@ fn steps_problems(
                     steps_problems(check, side, &mut inner, &mut inner_finds, problems);
                 }
             }
+            TenantOperationStep::WriteSetting {
+                setting,
+                level,
+                value,
+                ..
+            } => {
+                check_expr(problems, &sat, "value", value, &env, false);
+                setting_write_problems(schema, &sat, setting, *level, problems);
+            }
             TenantOperationStep::CreateRecord { .. } => {}
         }
         match step {
@@ -1138,6 +1152,31 @@ fn steps_problems(
             }
             _ => {}
         }
+    }
+}
+
+/// The problems of a write-setting step (WG-5606): the setting is one the tenant defines, and the level
+/// the step writes at is one its definition allows, as the settings route reads the definition.
+fn setting_write_problems(
+    schema: &TenantSchema,
+    sat: &str,
+    setting: &SettingId,
+    level: OperationSettingLevel,
+    problems: &mut Vec<String>,
+) {
+    let level = match level {
+        OperationSettingLevel::Person => SettingLevel::Person,
+        OperationSettingLevel::Tenant => SettingLevel::Tenant,
+    };
+    match settings::definition(schema, setting) {
+        None => problems.push(format!(
+            "{sat}: writes {setting}, which the tenant does not define"
+        )),
+        Some(def) if !settings::is_open(&def, level) => problems.push(format!(
+            "{sat}: writes {setting} at the {} level, which its definition does not allow",
+            level.as_str()
+        )),
+        Some(_) => {}
     }
 }
 
@@ -1186,7 +1225,8 @@ pub fn step_id(step: &TenantOperationStep) -> &str {
         | TenantOperationStep::PostLedger { id, .. }
         | TenantOperationStep::ReverseLedger { id, .. }
         | TenantOperationStep::FindRecord { id, .. }
-        | TenantOperationStep::Branch { id, .. } => id,
+        | TenantOperationStep::Branch { id, .. }
+        | TenantOperationStep::WriteSetting { id, .. } => id,
     }
 }
 

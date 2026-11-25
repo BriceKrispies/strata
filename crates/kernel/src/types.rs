@@ -36,10 +36,11 @@ pub use strata_model_core::types::{ArithOp, DurationUnit};
 /// The definitions of [`crate::definitions`]: triggers, automations, tenant operations and
 /// composite unique constraints, held in the tenant schema.
 pub use strata_model_core::types::{
-    AutomationDef, AutomationState, AutomationStep, AutomationStepDef, BranchTest, RunAs, StepName,
-    StepRetry, TenantOperationCondition, TenantOperationDef, TenantOperationId,
-    TenantOperationInput, TenantOperationInvokers, TenantOperationPostingOwner,
-    TenantOperationStep, TenantOperationSubject, TriggerDef, TriggerEvent, TriggerId, UniqueDef,
+    AutomationDef, AutomationState, AutomationStep, AutomationStepDef, BranchTest,
+    OperationSettingLevel, RunAs, StepName, StepRetry, TenantOperationCondition,
+    TenantOperationDef, TenantOperationId, TenantOperationInput, TenantOperationInvokers,
+    TenantOperationPostingOwner, TenantOperationStep, TenantOperationSubject, TriggerDef,
+    TriggerEvent, TriggerId, UniqueDef,
 };
 
 /// The aggregates of named queries of [`crate::aggregates`] (D-5060).
