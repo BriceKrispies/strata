@@ -458,3 +458,103 @@ fn the_toggle_product_installs_and_its_operation_adds_then_removes_a_reaction() 
     let removed = run(&added, toggle("k-remove"));
     assert_eq!(reactions(&removed), 0, "the second toggle removes it");
 }
+
+/// WG-5606: a product whose operations write its own settings compiles into a bundle that installs
+/// into a tenant. Its person-level operation writes the invoker's own value of its setting, and its
+/// tenant-level operation, which the owner may invoke, writes the value the tenant holds for everyone.
+#[test]
+fn the_write_setting_product_installs_and_its_operations_write_its_settings() {
+    use strata_kernel::testkit::ctx;
+    use strata_kernel::{
+        settings, DomainError, Intent, Output, Principal, PrincipalId, SettingId, TenantId,
+        TenantOperationId, Value, World,
+    };
+    use strata_substrate::bundle::{
+        install_into, install_product, Bundle, ProductBundle, ProductInstall, ProductTarget,
+    };
+
+    let output = bundle_of(&product("operation-write-setting.jsonc"));
+    let bundle = ProductBundle::from_json(&output.files[0].contents)
+        .unwrap_or_else(|e| panic!("the bundle is refused: {e}"));
+
+    let tenant = TenantId::new("acme").expect("tenant id");
+    let admin = Principal::User(PrincipalId::new("user:admin").expect("principal id"));
+    let doc = json!({
+        "id": "acme",
+        "name": "Acme",
+        "owner": "user:admin",
+        "created_at": "2026-01-01T00:00:00Z"
+    });
+    let mut world = install_into(
+        &World::default(),
+        &Bundle::from_json(&doc.to_string()).expect("tenant bundle"),
+    )
+    .unwrap_or_else(|e| panic!("{e:?}"));
+
+    let schema = world.tenants[&tenant].schema.clone();
+    let target = ProductTarget {
+        tenant: &tenant,
+        principal: admin.clone(),
+        now: 1_800_000_000_000,
+        release: "0.2",
+        schema: &schema,
+        installed: None,
+        expected_version: None,
+        idempotency_key: None,
+    };
+    let answer = install_product(&bundle, &target, &mut |ctx: strata_kernel::Context,
+                                                         intent: Intent|
+     -> Result<Output, DomainError> {
+        let (next, outcome) = world.step(&intent, &ctx)?;
+        world = next;
+        Ok(outcome.output)
+    });
+    match answer {
+        Ok(ProductInstall::Applied { .. }) => {}
+        other => panic!("the write-setting product was not installed: {other:?}"),
+    }
+
+    let run = |world: &World, intent: Intent| -> World {
+        world
+            .step(&intent, &ctx("acme", admin.clone(), 1_800_000_000_100))
+            .unwrap_or_else(|e| panic!("{e:?}"))
+            .0
+    };
+    let value_of = |world: &World, setting: &str| -> Value {
+        settings::resolve(
+            &world.tenants[&tenant],
+            &admin,
+            &SettingId::new(setting).expect("setting id"),
+        )
+        .expect("the setting is installed")
+        .value
+    };
+
+    let choose = Intent::InvokeOperation {
+        operation: TenantOperationId::new("channel_prefs__choose_home_channel")
+            .expect("operation id"),
+        inputs: std::collections::BTreeMap::from([(
+            "channel".to_string(),
+            Value::Str("random".into()),
+        )]),
+        idempotency_key: "k-choose".into(),
+    };
+    let chosen = run(&world, choose);
+    assert_eq!(
+        value_of(&chosen, "channel_prefs__home_channel"),
+        Value::Str("random".into()),
+        "the operation writes the invoker's own home channel"
+    );
+
+    let set_hour = Intent::InvokeOperation {
+        operation: TenantOperationId::new("channel_prefs__set_digest_hour").expect("operation id"),
+        inputs: std::collections::BTreeMap::from([("hour".to_string(), Value::Int(7))]),
+        idempotency_key: "k-hour".into(),
+    };
+    let hour = run(&chosen, set_hour);
+    assert_eq!(
+        value_of(&hour, "channel_prefs__digest_hour"),
+        Value::Int(7),
+        "the tenant operation writes the tenant's digest hour"
+    );
+}

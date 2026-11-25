@@ -1,0 +1,36 @@
+{
+  // Refused: a write-setting step writes a setting at the person level, which the setting's definition does
+  // not allow (layer.write-setting-level-not-allowed, WG-5606). The definition lists only the tenant level.
+  "product": { "id": "channel-prefs", "name": "Channel preferences", "version": "1.0.0", "platform": { "min": "0.2" }, "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "settings": [
+    {
+      "id": "channel_prefs__digest_hour",
+      "label": "Digest hour",
+      "type": "i64",
+      "default": { "Int": 9 },
+      "levels": ["tenant"],
+      "allowed": { "range": { "min": 0, "max": 23 } }
+    }
+  ],
+  "operations": [
+    {
+      "id": "channel_prefs__set_my_digest_hour",
+      "label": "Set your digest hour",
+      "inputs": [
+        { "name": "hour", "ty": "Int", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [
+        {
+          "WriteSetting": {
+            "id": "mine",
+            "setting": "channel_prefs__digest_hour",
+            "level": "person",
+            "value": "param.hour"
+          }
+        }
+      ]
+    }
+  ]
+}

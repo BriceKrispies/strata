@@ -63481,7 +63481,7 @@
         }
       ],
       "returns": "string",
-      "body": "match step { create-record{id} => id, update-record{id} => id, delete-record{id} => id, post-ledger{id} => id, find-record{id} => id, branch{id} => id }",
+      "body": "match step { create-record{id} => id, update-record{id} => id, delete-record{id} => id, post-ledger{id} => id, find-record{id} => id, branch{id} => id, write-setting{id} => id }",
       "examples": [
         {
           "args": {
@@ -63582,7 +63582,7 @@
           "expr": "concat(if call is-param-name(id) then [] else [format('{}: step {:?} is not a name', at, id)], if any(i in inputs, i == id) then [format('{}: step {} has the name of an input', at, id)] else [])"
         }
       ],
-      "body": "concat(p1, match step { create-record{object, fields} => call written-problems(schema, sat, object, fields, env), update-record{object, record, fields} => concat(call written-problems(schema, sat, object, fields, env), call expr-problem(sat, 'record', record, env)), delete-record{object, record} => concat(call written-problems(schema, sat, object, {}, env), call expr-problem(sat, 'record', record, env)), post-ledger{owner, scope, amount, unit} => concat(concat(concat(match owner { principal{principal: who} => call expr-problem(sat, 'owner', who, env), _ => [] }, match scope { Some(x) => call expr-problem(sat, 'scope', x, env), None => [] }), call expr-problem(sat, 'amount', amount, env)), if get(call ledger-of(schema).units, unit) == null then [format('{}: names ledger unit {}, which the tenant does not declare', sat, unit)] else []), find-record => [], branch{test} => match test { found{binding} => [], condition{expr} => call expr-problem(sat, 'condition', expr, env) } })",
+      "body": "concat(p1, match step { create-record{object, fields} => call written-problems(schema, sat, object, fields, env), update-record{object, record, fields} => concat(call written-problems(schema, sat, object, fields, env), call expr-problem(sat, 'record', record, env)), delete-record{object, record} => concat(call written-problems(schema, sat, object, {}, env), call expr-problem(sat, 'record', record, env)), post-ledger{owner, scope, amount, unit} => concat(concat(concat(match owner { principal{principal: who} => call expr-problem(sat, 'owner', who, env), _ => [] }, match scope { Some(x) => call expr-problem(sat, 'scope', x, env), None => [] }), call expr-problem(sat, 'amount', amount, env)), if get(call ledger-of(schema).units, unit) == null then [format('{}: names ledger unit {}, which the tenant does not declare', sat, unit)] else []), find-record => [], branch{test} => match test { found{binding} => [], condition{expr} => call expr-problem(sat, 'condition', expr, env) }, write-setting{value} => call expr-problem(sat, 'value', value, env) })",
       "examples": [
         {
           "args": {
@@ -64700,7 +64700,7 @@
         },
         {
           "name": "actions",
-          "expr": "fold(s in steps-all, acc = [], let one = match s { create-record{object} => if call holds-power(tenant, principal, action.create, resource.object(object)) then [] else [format('{} on {}', call action-debug(action.create), call resource-debug(resource.object(object)))], update-record{object} => if call holds-power(tenant, principal, action.update, resource.object(object)) then [] else [format('{} on {}', call action-debug(action.update), call resource-debug(resource.object(object)))], delete-record{object} => if call holds-power(tenant, principal, action.delete, resource.object(object)) then [] else [format('{} on {}', call action-debug(action.delete), call resource-debug(resource.object(object)))], post-ledger => [], find-record => [], branch => [] } in fold(x in one, acc2 = acc, if any(y in acc2, y == x) then acc2 else concat(acc2, [x])))"
+          "expr": "fold(s in steps-all, acc = [], let one = match s { create-record{object} => if call holds-power(tenant, principal, action.create, resource.object(object)) then [] else [format('{} on {}', call action-debug(action.create), call resource-debug(resource.object(object)))], update-record{object} => if call holds-power(tenant, principal, action.update, resource.object(object)) then [] else [format('{} on {}', call action-debug(action.update), call resource-debug(resource.object(object)))], delete-record{object} => if call holds-power(tenant, principal, action.delete, resource.object(object)) then [] else [format('{} on {}', call action-debug(action.delete), call resource-debug(resource.object(object)))], post-ledger => [], find-record => [], branch => [], write-setting => [] } in fold(x in one, acc2 = acc, if any(y in acc2, y == x) then acc2 else concat(acc2, [x])))"
         },
         {
           "name": "posts",

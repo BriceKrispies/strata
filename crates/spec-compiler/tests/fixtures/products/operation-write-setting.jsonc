@@ -1,0 +1,65 @@
+{
+  // A product whose operations write its own settings (WG-5606). A person's home channel is a setting at
+  // the person level, written from a form by an operation that takes the invoker's own value; the digest
+  // hour is a setting the tenant sets for everyone, which needs setting-write-tenant. Both settings are
+  // declared in this file under its namespace channel_prefs__ (D-6582), so the product owns them.
+  "product": { "id": "channel-prefs", "name": "Channel preferences", "version": "1.0.0", "platform": { "min": "0.2" }, "imports": { "spec": "../../../../../specifications/spec.jsonc", "entities": [] } },
+  "settings": [
+    {
+      "id": "channel_prefs__home_channel",
+      "label": "Home channel",
+      "type": "string",
+      "default": { "Str": "general" },
+      "levels": ["person"],
+      "allowed": { "closed": { "values": [{ "Str": "general" }, { "Str": "random" }, { "Str": "announcements" }] } }
+    },
+    {
+      "id": "channel_prefs__digest_hour",
+      "label": "Digest hour",
+      "type": "i64",
+      "default": { "Int": 9 },
+      "levels": ["tenant", "person"],
+      "allowed": { "range": { "min": 0, "max": 23 } }
+    }
+  ],
+  "operations": [
+    {
+      "id": "channel_prefs__choose_home_channel",
+      "label": "Choose your home channel",
+      "inputs": [
+        { "name": "channel", "ty": "Str", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [
+        {
+          "WriteSetting": {
+            "id": "home",
+            "setting": "channel_prefs__home_channel",
+            "level": "person",
+            "value": "param.channel"
+          }
+        }
+      ]
+    },
+    {
+      "id": "channel_prefs__set_digest_hour",
+      "label": "Set the digest hour for the tenant",
+      "inputs": [
+        { "name": "hour", "ty": "Int", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [
+        {
+          "WriteSetting": {
+            "id": "digest",
+            "setting": "channel_prefs__digest_hour",
+            "level": "tenant",
+            "value": "param.hour"
+          }
+        }
+      ]
+    }
+  ]
+}

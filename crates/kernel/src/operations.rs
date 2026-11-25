@@ -45,14 +45,15 @@ use crate::limits;
 use crate::read::visible_in;
 use crate::rules::{missing_error, roles_of, validate_record, Lookup};
 use crate::schema::{Action, Resource, TenantSchema, TenantSchemaExt};
+use crate::settings;
 use crate::state::{
     Coverage, Need, Principal, Record, RecordExt, State, TenantState, TenantStateExt,
 };
 use crate::transition::field_needs;
 use crate::types::{
-    BranchTest, Expr, FieldId, FieldTypeExt, ObjectTypeId, OnDelete, PrincipalId, RecordId, RoleId,
-    StateRevision, TenantOperationDef, TenantOperationId, TenantOperationPostingOwner,
-    TenantOperationStep, Value, ValueExt,
+    BranchTest, Expr, FieldId, FieldTypeExt, ObjectTypeId, OnDelete, OperationSettingLevel,
+    PrincipalId, RecordId, RoleId, SettingId, SettingLevel, StateRevision, TenantOperationDef,
+    TenantOperationId, TenantOperationPostingOwner, TenantOperationStep, Value, ValueExt,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -896,6 +897,12 @@ impl Run<'_> {
                 matched,
                 unmatched,
             } => self.branch(id, test, matched, unmatched),
+            TenantOperationStep::WriteSetting {
+                id,
+                setting,
+                level,
+                value,
+            } => self.write_setting(id, setting, *level, value),
         }
     }
 
@@ -1037,6 +1044,42 @@ impl Run<'_> {
             }
         }
         self.params.retain(|name, _| bound.contains(name));
+        Ok(())
+    }
+
+    /// A write-setting step (WG-5606): the value its expression gives is written at its level by the
+    /// settings route's own rule (`settings::write_setting`): the invoker's own value at the person
+    /// level, the tenant's value with setting-write-tenant at the tenant level, the definition's type
+    /// and allowed values, the revision the state holds now, and one setting-changed event. The
+    /// write joins the invocation's changes, so it commits with the steps around it or not at all.
+    fn write_setting(
+        &mut self,
+        step: &str,
+        setting: &SettingId,
+        level: OperationSettingLevel,
+        value: &Expr,
+    ) -> Result<(), DomainError> {
+        let value = self.eval(&format!("{step}.value"), value)?;
+        let level = match level {
+            OperationSettingLevel::Person => SettingLevel::Person,
+            OperationSettingLevel::Tenant => SettingLevel::Tenant,
+        };
+        let expected = settings::held_revision(&self.work, setting, level, &self.invoker);
+        let decision = settings::write_setting(
+            &self.work,
+            self.ctx,
+            setting,
+            level,
+            None,
+            Some(&value),
+            expected,
+        )?;
+        for op in &decision.ops {
+            settings::apply_op(&mut self.work, op);
+        }
+        self.ops.extend(decision.ops);
+        self.events.extend(decision.events);
+        self.evidence.extend(decision.evidence);
         Ok(())
     }
 
@@ -1617,7 +1660,7 @@ fn plan(
             TenantOperationStep::FindRecord { object, .. } => {
                 out.insert(Need::AllOf(object.clone()));
             }
-            TenantOperationStep::Branch { .. } => {}
+            TenantOperationStep::Branch { .. } | TenantOperationStep::WriteSetting { .. } => {}
             TenantOperationStep::UpdateRecord {
                 object,
                 record,

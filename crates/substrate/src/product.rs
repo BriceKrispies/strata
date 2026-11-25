@@ -525,6 +525,8 @@ fn expressions_of_action(action: &mut Json, at: &str, operation: bool) -> Result
             "UpdateRecord" => (&["record"], &["fields"]),
             "DeleteRecord" => (&["record"], &[]),
             "PostLedger" => (&["owner", "scope", "amount"], &[]),
+            // The value a setting takes; its setting and level are names, not expressions (WG-5606).
+            "WriteSetting" => (&["value"], &[]),
             "SendMail" => (&["to", "address"], &[]),
             "CreateNotice" => (&["to", "record"], &[]),
             "CallWebhook" => (&[], &["body"]),
