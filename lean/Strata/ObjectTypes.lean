@@ -2,9 +2,12 @@ import Strata.Model
 import Strata.References
 
 /-!
-Several object types per tenant (slice 4). An intent that names an object type the tenant does not
-have is refused: `unknownObject` for the owner, who may act on every type, and `unauthorized` for
-anyone else, so a caller who may not act on a type cannot tell whether it exists. A write whose
+Several object types per tenant (slice 4). A record intent that names an object type the tenant
+does not have is refused: `unknownObject` for the owner, who may act on every type, and
+`unauthorized` for anyone else, so a caller who may not act on a type cannot tell whether it
+exists. A schema change that names such a type is refused with `invalidSchema` for the owner (the
+kernel finds no type when it applies the change) and `unauthorized` for anyone else (the kernel
+requires the schema permission first). A write whose
 reference names a record that is not in the type the field names is never accepted; cross-type
 integrity of stored records is `stepTenant_preserves_refs` and `step_preserves_refs` in
 `Strata.References`, and cross-type deletes are `delete_refused_while_referenced` and
@@ -22,15 +25,22 @@ theorem unknown_type_refused (t : Tenant) (p : PrincipalId) (ty : TypeId) (h : t
   ⟨fun fs => by simp [stepTenant, h], fun id fs ev => by simp [stepTenant, h],
     fun id ev => by simp [stepTenant, h]⟩
 
-/-- A schema change naming an object type the tenant does not have is refused the same way: the
-    owner learns `unknownObject`, anyone else `unauthorized`. -/
+/-- A schema change naming an object type the tenant does not have. The kernel checks that the
+    caller may manage the schema first (`unauthorized`, as for anyone who is not the owner), then
+    finds no such type when it applies the change (`invalid_schema`, for the owner). -/
 theorem unknown_type_schema_refused (t : Tenant) (p : PrincipalId) (ty : TypeId)
     (h : t.typ? ty = none) :
-    (∀ f s, stepTenant t p (.setRequired ty f s) = .error (unknownType t p)) ∧
-    (∀ f s, stepTenant t p (.setUnique ty f s) = .error (unknownType t p)) ∧
-    (∀ fs, stepTenant t p (.defineUnique ty fs) = .error (unknownType t p)) := by
-  refine ⟨fun f s => ?_, fun f s => ?_, fun fs => ?_⟩ <;>
-    (by_cases hp : p = t.owner <;> simp [stepTenant, h, hp, unknownType])
+    (p = t.owner →
+      (∀ f s, stepTenant t p (.setRequired ty f s) = .error .invalidSchema) ∧
+      (∀ f s, stepTenant t p (.setUnique ty f s) = .error .invalidSchema) ∧
+      (∀ fs, stepTenant t p (.defineUnique ty fs) = .error .invalidSchema)) ∧
+    (p ≠ t.owner →
+      (∀ f s, stepTenant t p (.setRequired ty f s) = .error .unauthorized) ∧
+      (∀ f s, stepTenant t p (.setUnique ty f s) = .error .unauthorized) ∧
+      (∀ fs, stepTenant t p (.defineUnique ty fs) = .error .unauthorized)) := by
+  refine ⟨fun hp => ⟨fun f s => ?_, fun f s => ?_, fun fs => ?_⟩,
+    fun hp => ⟨fun f s => ?_, fun f s => ?_, fun fs => ?_⟩⟩ <;>
+    simp [stepTenant, h, hp]
 
 /-- For the owner the refusal of an unknown type is `unknownObject`. -/
 theorem unknown_type_owner (t : Tenant) : unknownType t t.owner = .unknownObject := by

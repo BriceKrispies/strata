@@ -597,9 +597,11 @@ structure Ctx where
   deriving Repr
 
 /-- One intent against one tenant. An expected version is checked after the permission, so only
-    one who may act on the record learns that it is at another version. An intent that names an
-    object type the tenant does not have is refused with `unknownObject` for the owner and with
-    `unauthorized` for everyone else (`unknownType`), before the record is looked up. -/
+    one who may act on the record learns that it is at another version. A record intent that
+    names an object type the tenant does not have is refused with `unknownObject` for the owner and
+    with `unauthorized` for everyone else (`unknownType`), before the record is looked up. A schema
+    change that names such a type is refused with `invalidSchema` for the owner and with
+    `unauthorized` for everyone else. -/
 def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
   | .create ty fs =>
     match t.typ? ty with
@@ -644,7 +646,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
     if p != t.owner then .error .unauthorized
     else
       match t.typ? ty with
-      | none => .error (unknownType t p)
+      | none => .error .invalidSchema
       | some o =>
         let t' := t.putType ty { o with schema := makeRequired o.schema f }
         if schemaChangeRefused t.limits t'.types strict then .error .migrationRejected
@@ -653,7 +655,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
     if p != t.owner then .error .unauthorized
     else
       match t.typ? ty with
-      | none => .error (unknownType t p)
+      | none => .error .invalidSchema
       | some o =>
         match o.schema.lookup f with
         | none => .error .invalidSchema
@@ -667,7 +669,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
     if p != t.owner then .error .unauthorized
     else
       match t.typ? ty with
-      | none => .error (unknownType t p)
+      | none => .error .invalidSchema
       | some o =>
         if !uniqueFieldsOk o.schema fs then .error .invalidSchema
         else if dupFields o.records fs then .error .uniqueViolated

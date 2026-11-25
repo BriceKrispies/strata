@@ -368,7 +368,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
     if p != h.owner then .error .unauthorized
     else
       match h.types.lookup ty with
-      | none => .error (unknownType h.asTenant p)
+      | none => .error .invalidSchema
       | some o =>
         let types' := putTypeList (assembleTypes h all) ty
           { schema := makeRequired o.schema f, uniques := o.uniques, records := tableOf all ty }
@@ -378,7 +378,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
     if p != h.owner then .error .unauthorized
     else
       match h.types.lookup ty with
-      | none => .error (unknownType h.asTenant p)
+      | none => .error .invalidSchema
       | some o =>
         match o.schema.lookup f with
         | none => .error .invalidSchema
@@ -393,7 +393,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
     if p != h.owner then .error .unauthorized
     else
       match h.types.lookup ty with
-      | none => .error (unknownType h.asTenant p)
+      | none => .error .invalidSchema
       | some o =>
         if !uniqueFieldsOk o.schema fs then .error .invalidSchema
         else if dupFields (tableOf all ty) fs then .error .uniqueViolated
@@ -597,7 +597,7 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
   | setRequired ty f strict =>
     simp only [decideTenant, stepTenant, header_types_lookup, assemble_header]
     cases hT : t.typ? ty with
-    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map, unknownType_header]
+    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map]
     | some o =>
       by_cases ho : p = t.owner
       · simp only [tables_lookup, hT, Option.map_some, Option.getD_some, header_owner, header_limits,
@@ -610,7 +610,7 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
   | setUnique ty f strict =>
     simp only [decideTenant, stepTenant, header_types_lookup, assemble_header]
     cases hT : t.typ? ty with
-    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map, unknownType_header]
+    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map]
     | some o =>
       by_cases ho : p = t.owner
       · cases hl : o.schema.lookup f with
@@ -630,7 +630,7 @@ theorem decideTenant_faithful (t : Tenant) (p : PrincipalId) (i : Intent) :
   | defineUnique ty fs =>
     simp only [decideTenant, stepTenant, header_types_lookup, assemble_header]
     cases hT : t.typ? ty with
-    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map, unknownType_header]
+    | none => by_cases ho : p = t.owner <;> simp [ho, hT, Except.map]
     | some o =>
       by_cases ho : p = t.owner
       · by_cases hok : uniqueFieldsOk o.schema fs = true

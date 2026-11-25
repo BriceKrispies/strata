@@ -1573,3 +1573,9 @@ op 1 100 delete 1
 op 1 100 type 2 create 2=r:2 3=l:r:2
 op 1 100 delete 2
 end
+scenario h-unknown-type-schema-by-others
+op 1 101 type 9 composite 1 2
+op 1 100 type 9 composite 1 2
+op 1 100 type 9 unique 1 strict
+op 1 100 type 9 unique 1 lax
+end

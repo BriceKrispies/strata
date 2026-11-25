@@ -683,6 +683,14 @@ pub fn generate(seed: u64) -> Scenario {
             1..=3 => 2,
             _ => 1,
         };
+        // A `require` or `unique` names a field the object type declares. The kernel defines a
+        // field the type lacks when a change names it, and the model's intents name a field the
+        // type has (see the slice 4 review note); `part` declares fields 1 to 4 only.
+        let kind = match (object, kind) {
+            (2, OpKind::Require(f, strict)) => OpKind::Require(1 + f % 4, strict),
+            (2, OpKind::Unique(f, strict)) => OpKind::Unique(1 + f % 4, strict),
+            (_, kind) => kind,
+        };
         ops.push(Op {
             tenant,
             principal,

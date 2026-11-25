@@ -55,7 +55,7 @@ builds their module, without reading the statements (`specifications/README.md`)
 | Size limits (slice 2) | `create_refused_over_record_bound` | A record over the record bound is refused with `limitExceeded` before its fields are checked |
 | | `create_within_limits`, `update_within_limits`, `problem_none_within` | Every record an accepted create or update writes is within the record bound and holds no value over the string or list bound |
 | Uniqueness (slice 3) | `stepTenant_preserves_unique`, `step_preserves_unique` | An accepted strict step keeps every unique field and every composite constraint unique: no two distinct records agree on one (agreeing needs a present, non-list value in each field) |
-| Several object types (slice 4) | `unknown_type_refused`, `unknown_type_owner`, `unknown_type_other`, `unknown_type_schema_refused`, `unknown_type_hidden` | An intent naming an object type the tenant does not have is refused with `unknownObject` for the owner and `unauthorized` for anyone else, for a record intent and for a schema change; a caller who may neither create nor edit gets `unauthorized` whether or not the type exists |
+| Several object types (slice 4) | `unknown_type_refused`, `unknown_type_owner`, `unknown_type_other`, `unknown_type_schema_refused`, `unknown_type_hidden` | A record intent naming an object type the tenant does not have is refused with `unknownObject` for the owner and `unauthorized` for anyone else; a schema change naming one is refused with `invalidSchema` for the owner and `unauthorized` for anyone else; a caller who may neither create nor edit gets `unauthorized` whether or not the type exists |
 | References across types (slice 4) | `create_refs_resolve`, `update_refs_resolve`, `write_refused_dangling_across_types`, `update_refused_dangling_across_types`, `stepTenant_preserves_refs` | A write whose reference names no record of the type its field names is never accepted, for a create or an update; an accepted step keeps every reference of every type resolving |
 | Deletes across types (slice 4) | `delete_refused_while_referenced`, `delete_leaves_no_reference` | Both quantify over every referring type: a record of any type naming the deleted one through a restricting or required field refuses the delete; after an accepted delete no record of any type names it |
 | | `stepTenant_preserves_distinct` | An accepted step keeps the schema's names distinct and each record's field names distinct, so a delete's clearing of references keeps them so |
@@ -309,7 +309,8 @@ From `transition::create_record`, `update_record`, `delete_record` and `rules::v
 
 | Decision | Refusal | Model | Slice |
 |---|---|---|---|
-| The object type does not exist; the refusal is `UnknownObject` for the owner, who may act on every type, and `Unauthorized` for anyone else, so a caller who may not act on a type cannot tell whether it exists | `UnknownObject` / `Unauthorized` | covered for records and schema changes (`unknown_type_refused`, `unknown_type_schema_refused`, `unknown_type_hidden`) | 4 |
+| The object type does not exist, for a record intent: the refusal is `UnknownObject` for the owner, who may act on every type, and `Unauthorized` for anyone else, so a caller who may not act on a type cannot tell whether it exists | `UnknownObject` / `Unauthorized` | covered (`unknown_type_refused`, `unknown_type_hidden`) | 4 |
+| The object type does not exist, for a schema change: the kernel requires the schema permission first, then finds no type when it applies the change | `Unauthorized` for anyone but the owner, `InvalidSchema` for the owner | covered (`unknown_type_schema_refused`) | 4 |
 | Update or delete of a record that does not exist; `Unauthorized` unless the caller could act on some record of the type | `UnknownRecord` / `Unauthorized` | covered (`missingRecord`) | 0 |
 | The caller may not create, update (judged on the old and the new record) or delete | `Unauthorized` | partly: owner, editors, writers on their own records | 6 |
 | `expected_version` given and not the stored version, checked after authorization | `VersionConflict` | covered (`versionClash`) | 2 |
@@ -627,10 +628,27 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 - **The hiding rule is the owner's alone.** An unknown type is `unknownObject` for the owner and
   `unauthorized` for anyone else. The model has no notion of a caller who may act on some types
   and not this one, so a caller in that position learns the same refusal as any other non-owner.
-- **Schema changes on an unknown type changed in this slice.** They were `invalidSchema`. They are
-  now `unknownObject` for the owner (`unknownType`), after the owner check, as record intents are.
-  No slice-1 to slice-3 scenario names a missing type in a schema change, so their outputs are
-  unchanged apart from the `type 2` lines of the state.
+- **Schema changes on an unknown type follow the kernel's ChangeSchema path, not the record path.**
+  `change_schema` requires `Manage` on the schema first (`unauthorized` for anyone but the owner),
+  then `apply_change` fails with `no object type` for a change naming a missing type, which
+  `plan_migration` reports as `InvalidSchema`. So the owner gets `invalid_schema`, whatever the
+  change (`require`, `unique`, `composite`). Record intents differ: `draft.require(action, object)`
+  passes for the owner, who then gets `UnknownObject` (`object_def` in `transition.rs`).
+- **Unique and required flags name fields the type declares.** The kernel's `DefineField` creates a
+  field the type lacks, which the model's `setRequired` and `setUnique` (naming an existing field)
+  cannot express without a field type in the intent. The model refuses `setUnique` on such a field
+  with `invalidSchema`, and `setRequired` leaves the schema as it is. The differential generator
+  therefore names only declared fields in `require` and `unique` lines on `part` (fields 1 to 4).
+  The gap is open: a model extension that carries the field's type would close it.
+- **Checked against the kernel for every schema intent** (`schema.rs` `problems`, `definitions.rs`
+  `unique_problems`, `transition.rs` `change_schema`, `plan_migration`, `apply_change`): an unknown
+  type (above); `setUnique` on a list field is refused by the kernel (`a list field cannot be
+  unique`), as the model's `isList` check; a composite constraint (`defineUnique`) is refused for
+  fewer than two or more than four fields, a repeated field, an undeclared field, a list field, or
+  an empty message, as `uniqueFieldsOk`; a strict change over records that do not conform or agree
+  is `MigrationRejected` in both (`schemaChangeRefused`, `Reject`). The kernel's other checks
+  (definition authority, last owner, products, ledger, pins) apply to change kinds the model does
+  not have.
 - **The check order is kept.** Object type first, then the record, the permission, the version, then
   the referrer scan or the validation. The referrer scan considers every type; the validation
   resolves a reference in the type its field names.
