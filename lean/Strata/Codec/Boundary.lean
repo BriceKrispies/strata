@@ -591,6 +591,7 @@ def _root_.Strata.Expr.nodes : Expr → Nat
   | .not a => 1 + a.nodes
   | .isNull a => 1 + a.nodes
   | .createdBy _ => 1
+  | .param _ => 1
 
 def encExpr : Expr → Bytes
   | .lit v => tag 0 :: encVal v
@@ -602,6 +603,7 @@ def encExpr : Expr → Bytes
   | .not a => tag 6 :: encExpr a
   | .isNull a => tag 7 :: encExpr a
   | .createdBy s => tag 8 :: encScope s
+  | .param n => tag 9 :: encStr n
 
 /-- The decoder with fuel `n`: each nested expression read spends one unit of fuel. -/
 def decExprN : Nat → Dec Expr
@@ -646,6 +648,9 @@ def decExprN : Nat → Dec Expr
       | 8 => match decScope r with
         | some (s, r') => some (.createdBy s, r')
         | none => none
+      | 9 => match decStr r with
+        | some (n, r') => some (.param n, r')
+        | none => none
       | _ => none
 
 def decExpr : Dec Expr := fun bs => decExprN bs.length bs
@@ -684,6 +689,9 @@ theorem nodes_le_length : ∀ (e : Expr), e.nodes ≤ (encExpr e).length
     omega
   | .createdBy s => by
     cases s <;> simp [Strata.Expr.nodes, encExpr, encScope]
+  | .param n => by
+    simp only [Strata.Expr.nodes, encExpr, List.length_cons]
+    omega
 
 /-- The round trip, for any fuel that covers the nodes of the expression. -/
 theorem decExprN_encExpr : ∀ (e : Expr) (rest : Bytes) (n : Nat), e.nodes ≤ n →
@@ -729,6 +737,9 @@ theorem decExprN_encExpr : ∀ (e : Expr) (rest : Bytes) (n : Nat), e.nodes ≤ 
   | .createdBy s, rest, n, hn => by
     obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
     simp [encExpr, decExprN, tag, lawful_scope.1 s]
+  | .param x, rest, n, hn => by
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [Strata.Expr.nodes] at hn; omega⟩
+    simp [encExpr, decExprN, tag, lawful_str.1 x rest]
 
 /-- Every decoding with fuel `n` is canonical. -/
 theorem decExprN_canon : ∀ (n : Nat) (bs : Bytes) (e : Expr) (rest : Bytes),
@@ -742,8 +753,8 @@ theorem decExprN_canon : ∀ (n : Nat) (bs : Bytes) (e : Expr) (rest : Bytes),
     | nil => simp [decExprN] at h
     | cons b r =>
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
-          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ 9 ≤ b.toNat by omega)
-        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
+          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨ 10 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
       · simp only [decExprN, hk] at h
         cases hv : decVal r with
         | none => simp [hv] at h
@@ -852,6 +863,15 @@ theorem decExprN_canon : ∀ (n : Nat) (bs : Bytes) (e : Expr) (rest : Bytes),
           obtain ⟨rfl, rfl⟩ := h
           have hs' := lawful_scope.2 r s r' hs
           simp [encExpr, byte_eq_tag b 8 hk, hs']
+      · simp only [decExprN, hk] at h
+        cases hs : decStr r with
+        | none => simp [hs] at h
+        | some p =>
+          obtain ⟨x, r'⟩ := p
+          simp only [hs, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hs' := lawful_str.2 r x r' hs
+          simp [encExpr, byte_eq_tag b 9 hk, hs']
       · simp only [decExprN] at h
         repeat' split at h
         all_goals first | omega | simp at h

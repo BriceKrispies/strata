@@ -111,6 +111,7 @@ def exprReadsRecord : Expr → Bool
   | .or a b => exprReadsRecord a || exprReadsRecord b
   | .not a => exprReadsRecord a
   | .isNull a => exprReadsRecord a
+  | .param _ => false
 
 /-- An empty record, for deciding a read rule that reads no record. -/
 def emptyRecord : Record := { owner := none, version := 0, fields := [] }

@@ -734,6 +734,7 @@ theorem evalExpr_storedEnv_congr (r r' : Record) (ho : r.owner = r'.owner) :
     intro _
     cases s <;> simp [evalExpr, storedEnv, ExprEnv.scoped, ho]
   | principal => intro _; rfl
+  | param n => intro _; rfl
   | cmp op a b iha ihb =>
     intro h
     simp only [evalExpr]

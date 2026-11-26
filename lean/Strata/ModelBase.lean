@@ -111,6 +111,9 @@ inductive Expr where
   | or (a b : Expr)
   | not (a : Expr)
   | isNull (a : Expr)
+  /-- An input of the operation being invoked, by name; `null` never: an unbound name is an error (slice 14).
+      The constraints and defaults of a schema are checked with no inputs, so a parameter there is unbound. -/
+  | param (name : String)
   deriving DecidableEq, Repr
 
 /-! ## Principals, roles and policies (slice 6)
@@ -338,6 +341,8 @@ structure ExprEnv where
   old : Option Record := none
   new : Option Record := none
   principal : Option PrincipalId := none
+  /-- The inputs of the operation an expression belongs to, by name (slice 14); empty outside an operation. -/
+  params : List (String × Val) := []
 
 /-- The record an expression reads from a scope, if there is one. -/
 def ExprEnv.scoped (env : ExprEnv) : Scope → Option Record
@@ -429,6 +434,9 @@ def evalExpr (env : ExprEnv) : Expr → EvalResult
     | .ok .null => .ok (.bool true)
     | .ok _ => .ok (.bool false)
     | .error _ => .error ()
+  | .param n => match env.params.find? (fun q => q.1 == n) with
+    | some q => .ok q.2
+    | none => .error ()
 
 /-- The environment a write's constraints are checked in: the candidate record (as `record` and as
     `new`), the stored record it replaces (none on a create), and the caller. -/

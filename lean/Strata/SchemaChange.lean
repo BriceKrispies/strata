@@ -84,6 +84,7 @@ def Expr.reads : Expr → List FieldId
   | .or a b => a.reads ++ b.reads
   | .not a => a.reads
   | .isNull a => a.reads
+  | .param _ => []
 
 /-- Whether the schema declares field `f`. -/
 def declaredIn (schema : Schema) (f : FieldId) : Bool := schema.any (fun fd => fd.1 == f)

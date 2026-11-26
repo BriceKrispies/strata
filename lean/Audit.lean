@@ -2261,6 +2261,7 @@ def fieldsRead : Expr → List FieldId
   | .or a b => fieldsRead a ++ fieldsRead b
   | .not a => fieldsRead a
   | .isNull a => fieldsRead a
+  | .param _ => []
 
 theorem lookup_filter (f : FieldId) (P : FieldId × Val → Bool) :
     ∀ (fs : Fields), (∀ fv ∈ fs, fv.1 = f → P fv = true) → (fs.filter P).lookup f = fs.lookup f
@@ -2320,6 +2321,7 @@ theorem evalExpr_redact (rs : FieldRules) (p : Principal) (ty : TypeId) (r : Rec
   | .isNull a, h => by
     have ha := evalExpr_redact rs p ty r a (fun f hf => h f (by simp [fieldsRead, hf]))
     simp only [evalExpr, ha]
+  | .param _, _ => rfl
 
 /-- A filter whose fields carry no read rule holds on a redacted record exactly when it holds on the stored
     one: the filter of a named query reads the same values in both. -/

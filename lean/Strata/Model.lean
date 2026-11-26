@@ -619,6 +619,8 @@ def Expr.stateOnly : Expr → Bool
   | .or a b => a.stateOnly && b.stateOnly
   | .not a => a.stateOnly
   | .isNull a => a.stateOnly
+  -- An input is not state: a constraint or default never has one (slice 14).
+  | .param _ => false
 
 /-- Every constraint of the tenant holds of every stored record: none is `false` or unevaluable. -/
 def Tenant.Satisfied (t : Tenant) : Prop :=
