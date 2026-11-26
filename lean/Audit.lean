@@ -1473,3 +1473,1004 @@ end Strata
 #print axioms Strata.Impl.queryPageI_abs
 #print axioms Strata.Impl.readI_refines
 #print axioms Strata.Impl.readX_refines
+
+/-! ## Slice 10, second half: search and aggregates (`Strata/Search.lean`, `Strata/Aggregates.lean`) -/
+
+namespace Strata
+
+/-- A hit is sound for a query and a reader: it is a stored record of its type that the reader may read, given
+    as the reader receives it (redacted), and its matched fields are shown ones that match every query word. -/
+def SoundHit (src : Src) (rs : FieldRules) (p : Principal) (q : List String) (h : SearchHit) : Prop :=
+  ∃ rec, (h.id, rec) ∈ src.recs h.ty ∧ src.canRead p h.ty rec = true ∧
+    h.record = redact rs p h.ty rec ∧ h.matched ≠ [] ∧
+    ∀ f ∈ h.matched, (∃ v, (f, v) ∈ h.record.fields) ∧
+      allMatch q (textTokens (Fields.get h.record.fields f)) = true
+
+theorem matchedIn_mem (q : List String) (fs : List FieldId) (r : Record) (f : FieldId)
+    (h : f ∈ matchedIn q fs r) : f ∈ fs := by
+  unfold matchedIn at h
+  exact (List.mem_filter.mp h).1
+
+theorem matchedIn_match (q : List String) (fs : List FieldId) (r : Record) (f : FieldId)
+    (h : f ∈ matchedIn q fs r) : allMatch q (textTokens (Fields.get r.fields f)) = true := by
+  unfold matchedIn at h
+  have := (List.mem_filter.mp h).2
+  simpa using this
+
+theorem candidatesOf_mem (src : Src) (ty : TypeId) (q : List String) (probes : List FieldId) (c : Cand)
+    (hc : c ∈ candidatesOf src ty q probes) : (c.id, c.record) ∈ src.recs ty := by
+  unfold candidatesOf at hc
+  obtain ⟨e, he, hf⟩ := List.mem_filterMap.mp hc
+  have he' : e ∈ src.recs ty := List.mem_mergeSort.mp he
+  by_cases hm : (matchedIn q probes e.2).isEmpty = true
+  · simp [hm] at hf
+  · simp only [hm, Bool.false_eq_true, if_false, Option.some.injEq] at hf
+    subst hf
+    exact he'
+
+theorem decideCand_sound (src : Src) (rs : FieldRules) (p : Principal) (ty : TypeId) (q : List String)
+    (probes : List FieldId) (c : Cand) (h : SearchHit) (hc : (c.id, c.record) ∈ src.recs ty)
+    (hd : decideCand src rs p ty q probes c = some h) : SoundHit src rs p q h := by
+  unfold decideCand at hd
+  dsimp only at hd
+  split at hd
+  · cases hd
+  · rename_i hcan
+    have hv : src.canRead p ty c.record = true := by simpa using hcan
+    split at hd
+    · cases hd
+    · rename_i hne
+      have hh := Option.some.inj hd
+      subst hh
+      refine ⟨c.record, ?_, hv, rfl, ?_, ?_⟩
+      · exact hc
+      · intro h0
+        apply hne
+        rw [List.isEmpty_iff]
+        exact h0
+      · intro f hf
+        refine ⟨?_, matchedIn_match _ _ _ _ hf⟩
+        have hmem := matchedIn_mem _ _ _ _ hf
+        have hfilt := (List.mem_filter.mp hmem).2
+        simp only [Bool.and_eq_true] at hfilt
+        obtain ⟨fv, hfv, hfe⟩ := List.any_eq_true.mp hfilt.2
+        have hfe' : fv.1 = f := beq_iff_eq.mp hfe
+        subst hfe'
+        exact ⟨fv.2, by simpa using hfv⟩
+
+theorem decideRun_sound (S : SearchHit → Prop) (ev : Cand → Option SearchHit) :
+    ∀ (cs : List Cand) (room : Nat), (∀ c ∈ cs, ∀ h, ev c = some h → S h) →
+      ∀ h ∈ (decideRun ev room cs).1, S h
+  | [], _, _, h, hh => by simp [decideRun] at hh
+  | c :: cs, room, hev, h, hh => by
+    unfold decideRun at hh
+    rcases hc : ev c with _ | h0
+    · simp only [hc] at hh
+      exact decideRun_sound S ev cs room (fun c' hc' h' he' => hev c' (List.mem_cons_of_mem _ hc') h' he') h hh
+    · simp only [hc] at hh
+      have hS := hev c List.mem_cons_self h0 hc
+      by_cases hr : room ≤ 1
+      · simp only [hr, ite_true] at hh
+        simp at hh
+        subst hh
+        exact hS
+      · simp only [hr, ite_false] at hh
+        rcases List.mem_cons.mp hh with h1 | h2
+        · subst h1; exact hS
+        · exact decideRun_sound S ev cs (room - 1)
+            (fun c' hc' h' he' => hev c' (List.mem_cons_of_mem _ hc') h' he') h h2
+
+theorem hits_append_sound (S : SearchHit → Prop) (acc hs : List SearchHit)
+    (h1 : ∀ h ∈ acc, S h) (h2 : ∀ h ∈ hs, S h) : ∀ h ∈ acc ++ hs, S h := by
+  intro h hh
+  rcases List.mem_append.mp hh with h' | h'
+  · exact h1 h h'
+  · exact h2 h h'
+
+theorem probeType_sound (S : SearchHit → Prop) (size : Nat) (ty : TypeId) (ev : Cand → Option SearchHit) :
+    ∀ (fuel : Nat) (acc : SearchAcc) (rest : List Cand),
+      (∀ h ∈ acc.hits, S h) → (∀ c ∈ rest, ∀ h, ev c = some h → S h) →
+      ∀ h ∈ (probeType size ty ev fuel acc rest).hits, S h
+  | 0, acc, rest, hacc, _, h, hh => by
+    simp only [probeType] at hh
+    exact hacc h hh
+  | fuel + 1, acc, rest, hacc, hrest, h, hh => by
+    unfold probeType at hh
+    dsimp only at hh
+    by_cases hs0 : acc.stop = true
+    · simp only [hs0, ite_true] at hh
+      exact hacc h hh
+    · simp only [hs0, Bool.false_eq_true, ite_false] at hh
+      by_cases hb : maxCandidates ≤ acc.examined
+      · simp only [hb, ite_true] at hh
+        exact hacc h hh
+      · simp only [hb, ite_false] at hh
+        by_cases hf : (rest.take (min candidatePage (maxCandidates - acc.examined))).isEmpty = true
+        · simp only [hf, ite_true] at hh
+          exact hacc h hh
+        · simp only [hf, Bool.false_eq_true, ite_false] at hh
+          have hfound : ∀ c ∈ rest.take (min candidatePage (maxCandidates - acc.examined)),
+              ∀ h', ev c = some h' → S h' :=
+            fun c hc h' he => hrest c (List.mem_of_mem_take hc) h' he
+          rcases hdr : decideRun ev (size - acc.hits.length)
+              (rest.take (min candidatePage (maxCandidates - acc.examined))) with ⟨hs, consumed⟩
+          have hsound : ∀ h' ∈ hs, S h' := by
+            intro h' hh'
+            have hm : h' ∈ (decideRun ev (size - acc.hits.length)
+                (rest.take (min candidatePage (maxCandidates - acc.examined)))).1 := by
+              rw [hdr]; exact hh'
+            exact decideRun_sound S ev _ _ hfound h' hm
+          rw [hdr] at hh
+          dsimp only at hh
+          by_cases hfull : size ≤ (acc.hits ++ hs).length
+          · simp only [hfull, ite_true] at hh
+            exact hits_append_sound S acc.hits hs hacc hsound h hh
+          · simp only [hfull, ite_false] at hh
+            by_cases hl : (rest.take (min candidatePage (maxCandidates - acc.examined))).length <
+                min candidatePage (maxCandidates - acc.examined)
+            · simp only [hl, ite_true] at hh
+              exact hits_append_sound S acc.hits hs hacc hsound h hh
+            · simp only [hl, ite_false] at hh
+              exact probeType_sound S size ty ev fuel _ _
+                (hits_append_sound S acc.hits hs hacc hsound)
+                (fun c hc => hrest c (List.mem_of_mem_drop hc)) h hh
+
+theorem searchTypes_sound (src : Src) (rs : FieldRules) (p : Principal) (q : List String) (size : Nat) :
+    ∀ (plan : List (TypeId × List FieldId)) (acc : SearchAcc),
+      (∀ h ∈ acc.hits, SoundHit src rs p q h) →
+      ∀ h ∈ (searchTypes src rs p q size plan acc).hits, SoundHit src rs p q h
+  | [], acc, hacc, h, hh => by
+    simp only [searchTypes] at hh
+    exact hacc h hh
+  | (ty, probes) :: more, acc, hacc, h, hh => by
+    unfold searchTypes at hh
+    dsimp only at hh
+    by_cases hs0 : acc.stop = true
+    · simp only [hs0, ite_true] at hh
+      exact hacc h hh
+    · simp only [hs0, Bool.false_eq_true, ite_false] at hh
+      have hacc' := probeType_sound (SoundHit src rs p q) size ty
+        (decideCand src rs p ty q probes) ((candidatesOf src ty q probes).length + 1) acc
+        (candidatesOf src ty q probes) hacc
+        (fun c hc h' hd => decideCand_sound src rs p ty q probes c h'
+          (candidatesOf_mem src ty q probes c hc) hd)
+      exact searchTypes_sound src rs p q size more _ hacc' h hh
+
+theorem searchOn_sound (src : Src) (rs : FieldRules) (p : Principal) (q : List String) (size : Nat)
+    (plan : List (TypeId × List FieldId)) :
+    ∀ h ∈ (searchOn src rs p q size plan).hits, SoundHit src rs p q h := by
+  intro h hh
+  unfold searchOn at hh
+  exact searchTypes_sound src rs p q size plan {} (fun h' hh' => by simp at hh') h hh
+
+theorem searchPlan_query (t : Tenant) (spec : ReadSpec) (p : Principal) (req : SearchReq)
+    (q : List String) (size : Nat) (plan : List (TypeId × List FieldId))
+    (h : searchPlan t spec p req = .ok (q, size, plan)) : q = tokensOf req.query := by
+  unfold searchPlan at h
+  dsimp only at h
+  repeat' (split at h)
+  all_goals (try simp_all)
+
+/-- Every hit of a search is sound: a stored record the reader may read, given redacted, whose matched fields
+    are shown and match the query. -/
+theorem search_sound (t : Tenant) (spec : ReadSpec) (p : Principal) (req : SearchReq) (r : SearchResult)
+    (hr : search t spec p req = .ok r) :
+    ∀ h ∈ r.hits, SoundHit (Src.ofTenant t) spec.rules p (tokensOf req.query) h := by
+  unfold search at hr
+  cases hpl : searchPlan t spec p req with
+  | error e => rw [hpl] at hr; cases hr
+  | ok v =>
+    rw [hpl] at hr
+    obtain ⟨q, size, plan⟩ := v
+    have hq := searchPlan_query t spec p req q size plan hpl
+    have hr' := Except.ok.inj hr
+    subst hr'
+    subst hq
+    exact searchOn_sound _ _ _ _ _ _
+
+/-! Refusals of a search, in the kernel's order -/
+
+theorem search_query_too_long (t : Tenant) (spec : ReadSpec) (p : Principal) (req : SearchReq)
+    (h : maxQueryBytes < req.query.utf8ByteSize) :
+    search t spec p req = .error .invalidIntent := by
+  unfold search searchPlan
+  simp [h]
+
+theorem search_query_no_word (t : Tenant) (spec : ReadSpec) (p : Principal) (req : SearchReq)
+    (h1 : ¬ maxQueryBytes < req.query.utf8ByteSize) (h2 : tokensOf req.query = []) :
+    search t spec p req = .error .invalidIntent := by
+  unfold search searchPlan
+  simp [h1, h2]
+
+theorem search_query_too_many_words (t : Tenant) (spec : ReadSpec) (p : Principal) (req : SearchReq)
+    (h1 : ¬ maxQueryBytes < req.query.utf8ByteSize) (h2 : ¬ tokensOf req.query = [])
+    (h3 : maxQueryTokens < (tokensOf req.query).length) :
+    search t spec p req = .error .invalidIntent := by
+  unfold search searchPlan
+  simp [h1, h2, h3]
+
+theorem search_page_out_of_range (t : Tenant) (spec : ReadSpec) (p : Principal) (req : SearchReq)
+    (h1 : ¬ maxQueryBytes < req.query.utf8ByteSize) (h2 : ¬ tokensOf req.query = [])
+    (h3 : ¬ maxQueryTokens < (tokensOf req.query).length)
+    (h4 : req.page.getD defaultPage = 0 ∨ maxPage < req.page.getD defaultPage) :
+    search t spec p req = .error .invalidIntent := by
+  unfold search searchPlan
+  simp [h1, h2, h3, h4]
+
+theorem search_unknown_object (t : Tenant) (spec : ReadSpec) (p : Principal) (req : SearchReq)
+    (h1 : ¬ maxQueryBytes < req.query.utf8ByteSize) (h2 : ¬ tokensOf req.query = [])
+    (h3 : ¬ maxQueryTokens < (tokensOf req.query).length)
+    (h4 : ¬ (req.page.getD defaultPage = 0 ∨ maxPage < req.page.getD defaultPage))
+    (h5 : req.objects.any (fun ty => (t.typ? ty).isNone) = true) :
+    search t spec p req = .error .unknownObject := by
+  unfold search searchPlan
+  simp [h1, h2, h3, h4, h5]
+
+/-! The candidates a search examines -/
+
+theorem decideRun_consumed_le (ev : Cand → Option SearchHit) :
+    ∀ (cs : List Cand) (room : Nat), (decideRun ev room cs).2 ≤ cs.length
+  | [], _ => by simp [decideRun]
+  | c :: cs, room => by
+    have ih := decideRun_consumed_le ev cs
+    unfold decideRun
+    rcases hc : ev c with _ | h0
+    · simp only [hc]
+      have := ih room
+      simp only [List.length_cons]
+      omega
+    · simp only [hc]
+      by_cases hr : room ≤ 1
+      · simp [hr]
+      · simp only [hr, ite_false]
+        have := ih (room - 1)
+        simp only [List.length_cons]
+        omega
+
+theorem probeType_examined_le (size : Nat) (ty : TypeId) (ev : Cand → Option SearchHit) :
+    ∀ (fuel : Nat) (acc : SearchAcc) (rest : List Cand), acc.examined ≤ maxCandidates →
+      (probeType size ty ev fuel acc rest).examined ≤ maxCandidates
+  | 0, acc, rest, hacc => by
+    simp only [probeType]
+    exact hacc
+  | fuel + 1, acc, rest, hacc => by
+    unfold probeType
+    dsimp only
+    by_cases hs0 : acc.stop = true
+    · simp only [hs0, ite_true]
+      exact hacc
+    · simp only [hs0, Bool.false_eq_true, ite_false]
+      by_cases hb : maxCandidates ≤ acc.examined
+      · simp only [hb, ite_true]
+        exact hacc
+      · simp only [hb, ite_false]
+        by_cases hf : (rest.take (min candidatePage (maxCandidates - acc.examined))).isEmpty = true
+        · simp only [hf, ite_true]
+          exact hacc
+        · simp only [hf, Bool.false_eq_true, ite_false]
+          have hlen := List.length_take_le (min candidatePage (maxCandidates - acc.examined)) rest
+          have hcons := decideRun_consumed_le ev (rest.take (min candidatePage (maxCandidates - acc.examined)))
+            (size - acc.hits.length)
+          have hmin := Nat.min_le_right candidatePage (maxCandidates - acc.examined)
+          rcases hdr : decideRun ev (size - acc.hits.length)
+              (rest.take (min candidatePage (maxCandidates - acc.examined))) with ⟨hs, consumed⟩
+          rw [hdr] at hcons
+          dsimp only at hcons ⊢
+          have hcon : consumed ≤ maxCandidates - acc.examined := by
+            have := hcons
+            omega
+          by_cases hfull : size ≤ (acc.hits ++ hs).length
+          · simp only [hfull, ite_true]
+            omega
+          · simp only [hfull, ite_false]
+            by_cases hl : (rest.take (min candidatePage (maxCandidates - acc.examined))).length <
+                min candidatePage (maxCandidates - acc.examined)
+            · simp only [hl, ite_true]
+              omega
+            · simp only [hl, ite_false]
+              exact probeType_examined_le size ty ev fuel _ _ (by
+                show acc.examined + consumed ≤ maxCandidates
+                omega)
+
+theorem searchTypes_examined_le (src : Src) (rs : FieldRules) (p : Principal) (q : List String) (size : Nat) :
+    ∀ (plan : List (TypeId × List FieldId)) (acc : SearchAcc), acc.examined ≤ maxCandidates →
+      (searchTypes src rs p q size plan acc).examined ≤ maxCandidates
+  | [], acc, hacc => by
+    simp only [searchTypes]
+    exact hacc
+  | (ty, probes) :: more, acc, hacc => by
+    unfold searchTypes
+    dsimp only
+    by_cases hs0 : acc.stop = true
+    · simp only [hs0, ite_true]
+      exact hacc
+    · simp only [hs0, Bool.false_eq_true, ite_false]
+      exact searchTypes_examined_le src rs p q size more _
+        (probeType_examined_le size ty (decideCand src rs p ty q probes)
+          ((candidatesOf src ty q probes).length + 1) acc (candidatesOf src ty q probes) hacc)
+
+/-- A search examines at most `maxCandidates` (1,000) candidates, whatever the reader may read of them. -/
+theorem search_examined_le (t : Tenant) (spec : ReadSpec) (p : Principal) (req : SearchReq) (r : SearchResult)
+    (hr : search t spec p req = .ok r) : r.examined ≤ maxCandidates := by
+  unfold search at hr
+  cases hpl : searchPlan t spec p req with
+  | error e => rw [hpl] at hr; cases hr
+  | ok v =>
+    rw [hpl] at hr
+    obtain ⟨q, size, plan⟩ := v
+    have hr' := Except.ok.inj hr
+    subst hr'
+    unfold searchOn
+    exact searchTypes_examined_le _ _ _ _ _ _ _ (by simp)
+
+/-- Hits in type order, then record id order. -/
+def hitLt (a b : SearchHit) : Prop := a.ty < b.ty ∨ (a.ty = b.ty ∧ a.id < b.id)
+
+theorem decideRun_none_eq (ev : Cand → Option SearchHit) (c : Cand) (cs : List Cand) (room : Nat)
+    (h : ev c = none) :
+    decideRun ev room (c :: cs) = ((decideRun ev room cs).1, (decideRun ev room cs).2 + 1) := by
+  rw [decideRun, h]
+
+theorem decideRun_some_last_eq (ev : Cand → Option SearchHit) (c : Cand) (cs : List Cand) (room : Nat)
+    (h0 : SearchHit) (h : ev c = some h0) (hr : room ≤ 1) :
+    decideRun ev room (c :: cs) = ([h0], 1) := by
+  rw [decideRun, h]
+  dsimp only
+  rw [if_pos hr]
+
+theorem decideRun_some_more_eq (ev : Cand → Option SearchHit) (c : Cand) (cs : List Cand) (room : Nat)
+    (h0 : SearchHit) (h : ev c = some h0) (hr : ¬ room ≤ 1) :
+    decideRun ev room (c :: cs) =
+      (h0 :: (decideRun ev (room - 1) cs).1, (decideRun ev (room - 1) cs).2 + 1) := by
+  rw [decideRun, h]
+  dsimp only
+  rw [if_neg hr]
+
+theorem decideRun_prefix (ev : Cand → Option SearchHit) :
+    ∀ (cs : List Cand) (room : Nat), ∀ h ∈ (decideRun ev room cs).1,
+      ∃ d ∈ cs.take (decideRun ev room cs).2, ev d = some h
+  | [], _, h, hh => by simp [decideRun] at hh
+  | c :: cs, room, h, hh => by
+    rcases hc : ev c with _ | h0
+    · rw [decideRun_none_eq ev c cs room hc] at hh ⊢
+      obtain ⟨d, hd, hed⟩ := decideRun_prefix ev cs room h hh
+      exact ⟨d, by simpa [List.take_succ_cons] using List.mem_cons_of_mem _ hd, hed⟩
+    · by_cases hr : room ≤ 1
+      · rw [decideRun_some_last_eq ev c cs room h0 hc hr] at hh ⊢
+        simp at hh
+        subst hh
+        exact ⟨c, by simp, hc⟩
+      · rw [decideRun_some_more_eq ev c cs room h0 hc hr] at hh ⊢
+        rcases List.mem_cons.mp hh with h1 | h2
+        · subst h1
+          exact ⟨c, by simp, hc⟩
+        · obtain ⟨d, hd, hed⟩ := decideRun_prefix ev cs (room - 1) h h2
+          exact ⟨d, by simpa [List.take_succ_cons] using List.mem_cons_of_mem _ hd, hed⟩
+
+theorem decideRun_order (ev : Cand → Option SearchHit) (ty : TypeId)
+    (hev : ∀ c h, ev c = some h → h.ty = ty ∧ h.id = c.id) :
+    ∀ (cs : List Cand) (room : Nat), cs.Pairwise (fun c d => c.id < d.id) →
+      (decideRun ev room cs).1.Pairwise hitLt
+  | [], _, _ => by simp [decideRun]
+  | c :: cs, room, hp => by
+    have hp' := List.pairwise_cons.mp hp
+    have ih := decideRun_order ev ty hev cs
+    rcases hc : ev c with _ | h0
+    · rw [decideRun_none_eq ev c cs room hc]
+      exact ih room hp'.2
+    · have hh0 := hev c h0 hc
+      by_cases hr : room ≤ 1
+      · rw [decideRun_some_last_eq ev c cs room h0 hc hr]
+        simp
+      · rw [decideRun_some_more_eq ev c cs room h0 hc hr]
+        apply List.Pairwise.cons
+        · intro h' hh'
+          obtain ⟨d, hd, hed⟩ := decideRun_prefix ev cs (room - 1) h' hh'
+          have hd2 := hev d h' hed
+          have hdc : c.id < d.id := hp'.1 d (List.mem_of_mem_take hd)
+          right
+          exact ⟨by rw [hh0.1, hd2.1], by rw [hh0.2, hd2.2]; exact hdc⟩
+        · exact ih (room - 1) hp'.2
+
+theorem decideCand_ty (src : Src) (rs : FieldRules) (p : Principal) (ty : TypeId) (q : List String)
+    (probes : List FieldId) (c : Cand) (h : SearchHit) (hd : decideCand src rs p ty q probes c = some h) :
+    h.ty = ty := by
+  unfold decideCand at hd
+  dsimp only at hd
+  split at hd
+  · cases hd
+  · split at hd
+    · cases hd
+    · have hh := Option.some.inj hd
+      subst hh
+      rfl
+
+theorem sorted_recs_strict (l : List (RecordId × Record)) (hnd : (l.map Prod.fst).Nodup)
+    (hle : l.Pairwise (fun a b => a.1 ≤ b.1)) : l.Pairwise (fun a b => a.1 < b.1) := by
+  have hne : l.Pairwise (fun a b => a.1 ≠ b.1) := List.pairwise_map.mp hnd
+  exact (List.Pairwise.and hle hne).imp (fun ⟨h1, h2⟩ => Nat.lt_of_le_of_ne h1 h2)
+
+/-- The records of a type, sorted by id, as a list with distinct ids: the order a search reads them in. -/
+theorem mergeSort_recs_sorted (l : Records) :
+    (l.mergeSort (fun a b => decide (a.1 ≤ b.1))).Pairwise (fun a b => a.1 ≤ b.1) := by
+  have key := List.pairwise_mergeSort (le := fun (a b : RecordId × Record) => decide (a.1 ≤ b.1))
+    (fun a b c h1 h2 => by
+      simp only [decide_eq_true_eq] at h1 h2 ⊢
+      exact Nat.le_trans h1 h2)
+    (fun a b => by
+      cases Nat.le_total a.1 b.1 <;> simp_all)
+    l
+  exact key.imp (fun h => by simpa using h)
+
+theorem candidatesOf_sorted (src : Src) (ty : TypeId) (q : List String) (probes : List FieldId)
+    (hnd : ((src.recs ty).map Prod.fst).Nodup) :
+    (candidatesOf src ty q probes).Pairwise (fun c d => c.id < d.id) := by
+  unfold candidatesOf
+  have hs : ((src.recs ty).mergeSort (fun a b => decide (a.1 ≤ b.1))).Pairwise (fun a b => a.1 < b.1) :=
+    sorted_recs_strict _ (((List.mergeSort_perm _ _).map Prod.fst).nodup_iff.mpr hnd)
+      (mergeSort_recs_sorted _)
+  refine List.Pairwise.filterMap _ (fun a b hab b' hb' b'' hb'' => ?_) hs
+  cases hfa : matchedIn q probes a.2 with
+  | nil => simp [hfa] at hb'
+  | cons _ _ =>
+    cases hfb : matchedIn q probes b.2 with
+    | nil => simp [hfb] at hb''
+    | cons _ _ =>
+      simp [hfa] at hb'
+      simp [hfb] at hb''
+      subst hb' hb''
+      exact hab
+
+theorem take_take_le {α : Type} (l : List α) (n m : Nat) (h : m ≤ n) :
+    (l.take n).take m = l.take m := by
+  rw [List.take_take, Nat.min_eq_left h]
+
+theorem take_lt_drop (rest : List Cand) (hs : rest.Pairwise (fun c d => c.id < d.id)) (n : Nat) :
+    ∀ d ∈ rest.take n, ∀ c ∈ rest.drop n, d.id < c.id := by
+  have hsplit : (rest.take n ++ rest.drop n).Pairwise (fun c d => c.id < d.id) := by
+    rw [List.take_append_drop]
+    exact hs
+  have hp := List.pairwise_append.mp hsplit
+  exact fun d hd c hc => hp.2.2 d hd c hc
+
+theorem probeType_order (size : Nat) (ty : TypeId) (ev : Cand → Option SearchHit)
+    (hev : ∀ c h, ev c = some h → h.ty = ty ∧ h.id = c.id) :
+    ∀ (fuel : Nat) (acc : SearchAcc) (rest : List Cand),
+      acc.hits.Pairwise hitLt →
+      (∀ h ∈ acc.hits, h.ty < ty ∨ (h.ty = ty ∧ ∀ c ∈ rest, h.id < c.id)) →
+      rest.Pairwise (fun c d => c.id < d.id) →
+      (probeType size ty ev fuel acc rest).hits.Pairwise hitLt := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro acc rest hacc _ _
+    simp only [probeType]
+    exact hacc
+  | succ fuel ih =>
+    intro acc rest hacc hbound hsorted
+    unfold probeType
+    dsimp only
+    by_cases hs0 : acc.stop = true
+    · simp only [hs0, ite_true]
+      exact hacc
+    · simp only [hs0, Bool.false_eq_true, ite_false]
+      by_cases hb : maxCandidates ≤ acc.examined
+      · simp only [hb, ite_true]
+        exact hacc
+      · simp only [hb, ite_false]
+        by_cases hf : (rest.take (min candidatePage (maxCandidates - acc.examined))).isEmpty = true
+        · simp only [hf, ite_true]
+          exact hacc
+        · simp only [hf, Bool.false_eq_true, ite_false]
+          have hfsorted : (rest.take (min candidatePage (maxCandidates - acc.examined))).Pairwise
+              (fun c d => c.id < d.id) := hsorted.sublist (List.take_sublist _ _)
+          rcases hdr : decideRun ev (size - acc.hits.length)
+              (rest.take (min candidatePage (maxCandidates - acc.examined))) with ⟨hs, consumed⟩
+          have hsp : hs.Pairwise hitLt := by
+            have := decideRun_order ev ty hev (rest.take (min candidatePage (maxCandidates - acc.examined)))
+              (size - acc.hits.length) hfsorted
+            rw [hdr] at this
+            exact this
+          have hcl : consumed ≤ min candidatePage (maxCandidates - acc.examined) := by
+            have := decideRun_consumed_le ev (rest.take (min candidatePage (maxCandidates - acc.examined)))
+              (size - acc.hits.length)
+            rw [hdr] at this
+            have hlen := List.length_take_le (min candidatePage (maxCandidates - acc.examined)) rest
+            simp only at this
+            omega
+          have hcross : ∀ a ∈ acc.hits, ∀ b ∈ hs, hitLt a b := by
+            intro a ha b hbm
+            have hbmem : b ∈ (decideRun ev (size - acc.hits.length)
+                (rest.take (min candidatePage (maxCandidates - acc.examined)))).1 := by
+              rw [hdr]
+              exact hbm
+            obtain ⟨d, hd, hed⟩ := decideRun_prefix ev _ _ b hbmem
+            have hdrest : d ∈ rest := List.mem_of_mem_take (List.mem_of_mem_take hd)
+            have hbt := hev d b hed
+            rcases hbound a ha with h | h
+            · left
+              rw [hbt.1]
+              exact h
+            · right
+              exact ⟨by rw [hbt.1, h.1], by rw [hbt.2]; exact h.2 d hdrest⟩
+          have hacc' : (acc.hits ++ hs).Pairwise hitLt := List.pairwise_append.mpr ⟨hacc, hsp, hcross⟩
+          by_cases hfull : size ≤ (acc.hits ++ hs).length
+          · dsimp only
+            simp only [hfull, ite_true]
+            exact hacc'
+          · dsimp only
+            simp only [hfull, ite_false]
+            by_cases hl : (rest.take (min candidatePage (maxCandidates - acc.examined))).length <
+                min candidatePage (maxCandidates - acc.examined)
+            · simp only [hl, ite_true]
+              exact hacc'
+            · simp only [hl, ite_false]
+              have hbound'' : ∀ h ∈ acc.hits ++ hs, h.ty < ty ∨
+                  (h.ty = ty ∧ ∀ c ∈ rest.drop consumed, h.id < c.id) := by
+                intro h hh
+                rcases List.mem_append.mp hh with ha | hbm
+                · rcases hbound h ha with h1 | h1
+                  · exact Or.inl h1
+                  · exact Or.inr ⟨h1.1, fun c hc => h1.2 c (List.mem_of_mem_drop hc)⟩
+                · have hbmem : h ∈ (decideRun ev (size - acc.hits.length)
+                      (rest.take (min candidatePage (maxCandidates - acc.examined)))).1 := by
+                    rw [hdr]
+                    exact hbm
+                  obtain ⟨d, hd, hed⟩ := decideRun_prefix ev _ _ h hbmem
+                  have hd2 : d ∈ (rest.take (min candidatePage (maxCandidates - acc.examined))).take consumed := by
+                    have hcopy := hd
+                    rw [hdr] at hcopy
+                    exact hcopy
+                  rw [take_take_le rest _ consumed hcl] at hd2
+                  have hbt := hev d h hed
+                  exact Or.inr ⟨hbt.1, fun c hc => by
+                    rw [hbt.2]
+                    exact take_lt_drop rest hsorted consumed d hd2 c hc⟩
+              exact ih _ (rest.drop consumed) hacc' hbound'' (hsorted.sublist (List.drop_sublist _ _))
+
+theorem decideCand_id (src : Src) (rs : FieldRules) (p : Principal) (ty : TypeId) (q : List String)
+    (probes : List FieldId) (c : Cand) (h : SearchHit) (hd : decideCand src rs p ty q probes c = some h) :
+    h.id = c.id := by
+  unfold decideCand at hd
+  dsimp only at hd
+  split at hd
+  · cases hd
+  · split at hd
+    · cases hd
+    · have hh := Option.some.inj hd
+      subst hh
+      rfl
+
+theorem searchTypes_order (src : Src) (rs : FieldRules) (p : Principal) (q : List String) (size : Nat)
+    (hnd : ∀ ty, ((src.recs ty).map Prod.fst).Nodup) :
+    ∀ (plan : List (TypeId × List FieldId)) (acc : SearchAcc),
+      plan.Pairwise (fun a b => a.1 < b.1) → acc.hits.Pairwise hitLt →
+      (∀ h ∈ acc.hits, ∀ e ∈ plan, h.ty < e.1) →
+      (searchTypes src rs p q size plan acc).hits.Pairwise hitLt
+  | [], acc, _, hacc, _ => by
+    simp only [searchTypes]
+    exact hacc
+  | (ty, probes) :: more, acc, hplan, hacc, hbound => by
+    have hpl := List.pairwise_cons.mp hplan
+    unfold searchTypes
+    dsimp only
+    by_cases hs0 : acc.stop = true
+    · simp only [hs0, ite_true]
+      exact hacc
+    · simp only [hs0, Bool.false_eq_true, ite_false]
+      have hpt := probeType_order size ty (decideCand src rs p ty q probes)
+        (fun c h hd => ⟨decideCand_ty src rs p ty q probes c h hd, decideCand_id src rs p ty q probes c h hd⟩)
+        ((candidatesOf src ty q probes).length + 1) acc (candidatesOf src ty q probes) hacc
+        (fun h hh => Or.inl (hbound h hh (ty, probes) List.mem_cons_self))
+        (candidatesOf_sorted src ty q probes (hnd ty))
+      have hsome : ∀ h ∈ (probeType size ty (decideCand src rs p ty q probes)
+          ((candidatesOf src ty q probes).length + 1) acc (candidatesOf src ty q probes)).hits,
+          h ∈ acc.hits ∨ h.ty = ty := by
+        intro h hh
+        exact probeType_sound (fun h => h ∈ acc.hits ∨ h.ty = ty) size ty _
+          ((candidatesOf src ty q probes).length + 1) acc (candidatesOf src ty q probes)
+          (fun h hh => Or.inl hh)
+          (fun c _ h hd => Or.inr (decideCand_ty src rs p ty q probes c h hd)) h hh
+      exact searchTypes_order src rs p q size hnd more _ hpl.2 hpt (by
+        intro h hh e he
+        rcases hsome h hh with h1 | h1
+        · exact Nat.lt_trans (hbound h h1 (ty, probes) List.mem_cons_self) (hpl.1 e he)
+        · rw [h1]
+          exact hpl.1 e he)
+
+/-- The object types of a plan are in ascending order, when their ids are distinct. -/
+theorem types_sorted_strict (types : List (TypeId × ObjType)) (hnd : (types.map Prod.fst).Nodup) :
+    (types.mergeSort (fun a b => decide (a.1 ≤ b.1))).Pairwise (fun a b => a.1 < b.1) := by
+  have hle : (types.mergeSort (fun a b => decide (a.1 ≤ b.1))).Pairwise (fun a b => a.1 ≤ b.1) := by
+    have key := List.pairwise_mergeSort (le := fun (a b : TypeId × ObjType) => decide (a.1 ≤ b.1))
+      (fun a b c h1 h2 => by
+        simp only [decide_eq_true_eq] at h1 h2 ⊢
+        exact Nat.le_trans h1 h2)
+      (fun a b => by
+        cases Nat.le_total a.1 b.1 <;> simp_all)
+      types
+    exact key.imp (fun h => by simpa using h)
+  have hne : (types.mergeSort (fun a b => decide (a.1 ≤ b.1))).Pairwise (fun a b => a.1 ≠ b.1) :=
+    List.pairwise_map.mp (((List.mergeSort_perm _ _).map Prod.fst).nodup_iff.mpr hnd)
+  exact (List.Pairwise.and hle hne).imp (fun ⟨h1, h2⟩ => Nat.lt_of_le_of_ne h1 h2)
+
+theorem searchPlan_sorted (t : Tenant) (spec : ReadSpec) (p : Principal) (req : SearchReq)
+    (q : List String) (size : Nat) (plan : List (TypeId × List FieldId))
+    (hkeys : (t.types.map Prod.fst).Nodup)
+    (h : searchPlan t spec p req = .ok (q, size, plan)) :
+    plan.Pairwise (fun a b => a.1 < b.1) := by
+  unfold searchPlan at h
+  dsimp only at h
+  by_cases c1 : maxQueryBytes < req.query.utf8ByteSize
+  · simp only [c1, ite_true] at h
+    cases h
+  simp only [c1, ite_false] at h
+  by_cases c2 : tokensOf req.query = []
+  · simp only [c2, ite_true] at h
+    cases h
+  simp only [c2, ite_false] at h
+  by_cases c3 : maxQueryTokens < (tokensOf req.query).length
+  · simp only [c3, ite_true] at h
+    cases h
+  simp only [c3, ite_false] at h
+  by_cases c4 : req.page.getD defaultPage = 0 ∨ maxPage < req.page.getD defaultPage
+  · simp only [c4, ite_true] at h
+    cases h
+  simp only [c4, ite_false] at h
+  by_cases c5 : req.objects.any (fun ty => (t.typ? ty).isNone) = true
+  · simp only [c5, ite_true] at h
+    cases h
+  simp only [c5, ite_false] at h
+  have hh := Except.ok.inj h
+  simp only [Prod.mk.injEq] at hh
+  rw [← hh.2.2]
+  refine List.Pairwise.filterMap _ (fun a b hab b' hb' b'' hb'' => ?_) (types_sorted_strict t.types hkeys)
+  repeat' (split at hb')
+  repeat' (split at hb'')
+  all_goals (try simp only [Option.mem_def, Option.some.injEq] at hb' hb'')
+  all_goals (try subst hb')
+  all_goals (try subst hb'')
+  all_goals (try exact hab)
+  all_goals (try simp_all)
+
+theorem searchOn_order (src : Src) (rs : FieldRules) (p : Principal) (q : List String) (size : Nat)
+    (plan : List (TypeId × List FieldId)) (hplan : plan.Pairwise (fun a b => a.1 < b.1))
+    (hnd : ∀ ty, ((src.recs ty).map Prod.fst).Nodup) :
+    (searchOn src rs p q size plan).hits.Pairwise hitLt := by
+  unfold searchOn
+  exact searchTypes_order src rs p q size hnd plan {} hplan List.Pairwise.nil
+    (fun h hh => absurd hh (by simp))
+
+/-- The hits of a search are in ascending type, then record id order. -/
+theorem search_order (t : Tenant) (spec : ReadSpec) (p : Principal) (req : SearchReq) (r : SearchResult)
+    (hkeys : (t.types.map Prod.fst).Nodup) (hids : ∀ ty, ((t.recordsOf ty).map Prod.fst).Nodup)
+    (hr : search t spec p req = .ok r) : r.hits.Pairwise hitLt := by
+  unfold search at hr
+  cases hpl : searchPlan t spec p req with
+  | error e =>
+    rw [hpl] at hr
+    cases hr
+  | ok v =>
+    rw [hpl] at hr
+    obtain ⟨q, size, plan⟩ := v
+    have hr' := Except.ok.inj hr
+    subst hr'
+    exact searchOn_order _ _ _ _ _ _ (searchPlan_sorted t spec p req q size plan hkeys hpl) hids
+
+/-- No record is a hit twice: the hits, as type and id pairs, have no repeats. -/
+theorem search_no_repeat (t : Tenant) (spec : ReadSpec) (p : Principal) (req : SearchReq) (r : SearchResult)
+    (hkeys : (t.types.map Prod.fst).Nodup) (hids : ∀ ty, ((t.recordsOf ty).map Prod.fst).Nodup)
+    (hr : search t spec p req = .ok r) : (r.hits.map (fun h => (h.ty, h.id))).Nodup := by
+  have hp := search_order t spec p req r hkeys hids hr
+  unfold List.Nodup
+  rw [List.pairwise_map]
+  refine hp.imp (fun {a b} hab heq => ?_)
+  have h1 := Prod.mk.inj heq
+  rcases hab with h2 | h2
+  · rw [h1.1] at h2
+    exact Nat.lt_irrefl _ h2
+  · rw [h1.2] at h2
+    exact Nat.lt_irrefl _ h2.2
+
+end Strata
+
+namespace Strata
+/-! ## Aggregate refusals -/
+
+theorem aggregate_unknown_query (t : Tenant) (spec : ReadSpec) (p : Principal) (req : AggReq)
+    (h : spec.queries.lookup req.query = none) :
+    aggregate t spec p req = .error .unknownQuery := by
+  unfold aggregate
+  simp only [h]
+
+theorem aggregate_unknown_aggregate (t : Tenant) (spec : ReadSpec) (p : Principal) (req : AggReq)
+    (q : QueryDef) (hq : spec.queries.lookup req.query = some q)
+    (ha : q.aggregates.lookup req.aggregate = none) :
+    aggregate t spec p req = .error .unknownQuery := by
+  unfold aggregate
+  simp only [hq, ha]
+
+theorem aggregate_undeclared_param (t : Tenant) (spec : ReadSpec) (p : Principal) (req : AggReq)
+    (q : QueryDef) (a : AggDef) (hq : spec.queries.lookup req.query = some q)
+    (ha : q.aggregates.lookup req.aggregate = some a)
+    (hp : req.params.any (fun kv => !(q.params.contains kv.1)) = true) :
+    aggregate t spec p req = .error .invalidIntent := by
+  unfold aggregate
+  simp only [hq, ha, hp, ite_true]
+
+theorem aggregate_unknown_object (t : Tenant) (spec : ReadSpec) (p : Principal) (req : AggReq)
+    (q : QueryDef) (a : AggDef) (hq : spec.queries.lookup req.query = some q)
+    (ha : q.aggregates.lookup req.aggregate = some a)
+    (hp : ¬ req.params.any (fun kv => !(q.params.contains kv.1)) = true)
+    (ht : t.typ? q.ty = none) :
+    aggregate t spec p req = .error .unknownObject := by
+  unfold aggregate
+  simp only [hq, ha, hp, ite_false, ht, Bool.false_eq_true, ↓reduceIte]
+
+theorem aggregate_undeclared_filter (t : Tenant) (spec : ReadSpec) (p : Principal) (req : AggReq)
+    (q : QueryDef) (a : AggDef) (o : ObjType) (hq : spec.queries.lookup req.query = some q)
+    (ha : q.aggregates.lookup req.aggregate = some a)
+    (hp : ¬ req.params.any (fun kv => !(q.params.contains kv.1)) = true)
+    (ht : t.typ? q.ty = some o)
+    (hf : req.filter.any (fun kv => !(q.declared.contains kv.1)) = true) :
+    aggregate t spec p req = .error .invalidIntent := by
+  unfold aggregate aggregateOn
+  simp only [hq, ha, hp, ite_false, ht, hf, ite_true, Bool.false_eq_true, ↓reduceIte]
+
+theorem aggregate_unknown_field (t : Tenant) (spec : ReadSpec) (p : Principal) (req : AggReq)
+    (q : QueryDef) (a : AggDef) (o : ObjType) (hq : spec.queries.lookup req.query = some q)
+    (ha : q.aggregates.lookup req.aggregate = some a)
+    (hp : ¬ req.params.any (fun kv => !(q.params.contains kv.1)) = true)
+    (ht : t.typ? q.ty = some o)
+    (hf : ¬ req.filter.any (fun kv => !(q.declared.contains kv.1)) = true)
+    (hn : ((req.filter.map Prod.fst) ++ a.field.toList ++ a.groupBy.toList).any
+      (fun f => (o.schema.lookup f).isNone) = true) :
+    aggregate t spec p req = .error .unknownField := by
+  unfold aggregate aggregateOn
+  simp only [hq, ha, hp, ite_false, ht, hf, hn, ite_true, Bool.false_eq_true, ↓reduceIte]
+
+theorem aggregate_scan_window (t : Tenant) (spec : ReadSpec) (p : Principal) (req : AggReq)
+    (q : QueryDef) (a : AggDef) (o : ObjType) (hq : spec.queries.lookup req.query = some q)
+    (ha : q.aggregates.lookup req.aggregate = some a)
+    (hp : ¬ req.params.any (fun kv => !(q.params.contains kv.1)) = true)
+    (ht : t.typ? q.ty = some o)
+    (hf : ¬ req.filter.any (fun kv => !(q.declared.contains kv.1)) = true)
+    (hn : ¬ ((req.filter.map Prod.fst) ++ a.field.toList ++ a.groupBy.toList).any
+      (fun f => (o.schema.lookup f).isNone) = true)
+    (hw : maxScan < (t.recordsOf q.ty).length) :
+    aggregate t spec p req = .error (.limitExceeded .scanBound) := by
+  unfold aggregate aggregateOn
+  simp only [hq, ha, hp, ite_false, ht, hf, hn, Src.ofTenant, Bool.false_eq_true, ↓reduceIte]
+  simp only [hw, ite_true, Bool.false_eq_true, ↓reduceIte]
+
+/-! ## Redaction and the filters of queries -/
+
+/-- The fields an expression reads from a record. -/
+def fieldsRead : Expr → List FieldId
+  | .lit _ => []
+  | .field _ f => [f]
+  | .createdBy _ => []
+  | .principal => []
+  | .cmp _ a b => fieldsRead a ++ fieldsRead b
+  | .and a b => fieldsRead a ++ fieldsRead b
+  | .or a b => fieldsRead a ++ fieldsRead b
+  | .not a => fieldsRead a
+  | .isNull a => fieldsRead a
+
+theorem lookup_filter (f : FieldId) (P : FieldId × Val → Bool) :
+    ∀ (fs : Fields), (∀ fv ∈ fs, fv.1 = f → P fv = true) → (fs.filter P).lookup f = fs.lookup f
+  | [], _ => rfl
+  | (a, b) :: rest, h => by
+    have ih := lookup_filter f P rest (fun fv hfv hf => h fv (List.mem_cons_of_mem _ hfv) hf)
+    by_cases hP : P (a, b) = true
+    · rw [List.filter_cons_of_pos hP]
+      by_cases ha : a = f
+      · subst ha
+        simp [List.lookup]
+      · have hne : (a == f) = false := by simpa using ha
+        have hne2 : (f == a) = false := by simpa [beq_iff_eq] using Ne.symm ha
+        simp [List.lookup, hne, hne2, ih]
+    · have hfa : a ≠ f := by
+        intro ha
+        subst ha
+        exact absurd (h (a, b) List.mem_cons_self rfl) (by simpa using hP)
+      have hne : (f == a) = false := by simpa [beq_iff_eq] using Ne.symm hfa
+      rw [List.filter_cons_of_neg (by simpa using hP)]
+      simp [List.lookup, hne, ih]
+
+theorem fields_get_redact (rs : FieldRules) (p : Principal) (ty : TypeId) (r : Record) (f : FieldId)
+    (hf : shownField rs p ty r f = true) :
+    Fields.get (redact rs p ty r).fields f = Fields.get r.fields f := by
+  unfold Fields.get redact
+  simp only
+  rw [lookup_filter f (fun fv => shownField rs p ty r fv.1)]
+  intro fv _ hfv
+  rw [hfv]
+  exact hf
+
+theorem evalExpr_redact (rs : FieldRules) (p : Principal) (ty : TypeId) (r : Record) :
+    ∀ (e : Expr), (∀ f ∈ fieldsRead e, shownField rs p ty r f = true) →
+      evalExpr (readEnv p (redact rs p ty r)) e = evalExpr (readEnv p r) e
+  | .lit _, _ => rfl
+  | .field s f, h => by
+    have hf : shownField rs p ty r f = true := h f (by simp [fieldsRead])
+    cases s <;> simp only [evalExpr, readEnv, ExprEnv.scoped, fields_get_redact rs p ty r f hf]
+  | .createdBy s, _ => by cases s <;> simp [evalExpr, readEnv, ExprEnv.scoped, redact]
+  | .principal, _ => rfl
+  | .cmp op a b, h => by
+    have ha := evalExpr_redact rs p ty r a (fun f hf => h f (by simp [fieldsRead, hf]))
+    have hb := evalExpr_redact rs p ty r b (fun f hf => h f (by simp [fieldsRead, hf]))
+    simp only [evalExpr, ha, hb]
+  | .and a b, h => by
+    have ha := evalExpr_redact rs p ty r a (fun f hf => h f (by simp [fieldsRead, hf]))
+    have hb := evalExpr_redact rs p ty r b (fun f hf => h f (by simp [fieldsRead, hf]))
+    simp only [evalExpr, ha, hb]
+  | .or a b, h => by
+    have ha := evalExpr_redact rs p ty r a (fun f hf => h f (by simp [fieldsRead, hf]))
+    have hb := evalExpr_redact rs p ty r b (fun f hf => h f (by simp [fieldsRead, hf]))
+    simp only [evalExpr, ha, hb]
+  | .not a, h => by
+    have ha := evalExpr_redact rs p ty r a (fun f hf => h f (by simp [fieldsRead, hf]))
+    simp only [evalExpr, ha]
+  | .isNull a, h => by
+    have ha := evalExpr_redact rs p ty r a (fun f hf => h f (by simp [fieldsRead, hf]))
+    simp only [evalExpr, ha]
+
+/-- A filter whose fields carry no read rule holds on a redacted record exactly when it holds on the stored
+    one: the filter of a named query reads the same values in both. -/
+theorem condHolds_redact (rs : FieldRules) (p : Principal) (ty : TypeId) (r : Record) (e : Expr)
+    (hf : ∀ f ∈ fieldsRead e, rs.rule ty f = none) :
+    condHolds (readEnv p (redact rs p ty r)) (some e) = condHolds (readEnv p r) (some e) := by
+  have hshown : ∀ f ∈ fieldsRead e, shownField rs p ty r f = true := by
+    intro f hfe
+    cases p with
+    | system => rfl
+    | user n => simp [shownField, hf f hfe]
+    | anonymous => simp [shownField, hf f hfe]
+  simp only [condHolds, evalExpr_redact rs p ty r e hshown]
+
+theorem length_filterMap_eq_filter {α β : Type} (f : α → Option β) (g : α → Bool) :
+    ∀ (L : List α), (∀ a ∈ L, (f a).isSome = g a) → (L.filterMap f).length = (L.filter g).length
+  | [], _ => rfl
+  | a :: L, h => by
+    have ih := length_filterMap_eq_filter f g L (fun x hx => h x (List.mem_cons_of_mem _ hx))
+    have ha := h a List.mem_cons_self
+    simp only [List.filterMap_cons, List.filter_cons]
+    cases hfa : f a <;> cases hga : g a <;> simp_all
+
+theorem selectedBy_plain (src : Src) (spec : ReadSpec) (p : Principal) (q : QueryDef) (req : AggReq)
+    (hf : req.filter = []) (e : RecordId × Record) :
+    selectedBy src spec p q req [] e = (src.canRead p q.ty e.2 && condHolds (readEnv p e.2) q.filter) := by
+  unfold selectedBy
+  cases p <;> simp [hf]
+
+/-- The records an aggregate with no named field and no request filter selects, in table order. -/
+def plainSelected (src : Src) (spec : ReadSpec) (p : Principal) (q : QueryDef) (req : AggReq) :
+    List (RecordId × Record) :=
+  (src.recs q.ty).filter (selectedBy src spec p q req [])
+
+theorem aggregateOn_count_form (src : Src) (spec : ReadSpec) (p : Principal) (req : AggReq)
+    (q : QueryDef) (a : AggDef) (o : ObjType)
+    (hk : a.kind = .count) (hfe : req.filter = []) (hfield : a.field = none) (hg : a.groupBy = none) :
+    aggregateOn src spec p req q a o =
+      (if maxScan < (src.recs q.ty).length then .error (.limitExceeded .scanBound)
+       else if min a.scanBound maxScan < (plainSelected src spec p q req).length
+         then .error (.limitExceeded .scanBound)
+       else .ok { groups := [{ key := none, value := some (.int ((plainSelected src spec p q req).length : Int)),
+                               rows := [] }],
+                  scanned := (plainSelected src spec p q req).length }) := by
+  unfold aggregateOn plainSelected
+  simp only [hfe, hfield, hg, List.map_nil, List.nil_append, Option.toList,
+    List.any_nil, Bool.false_eq_true, ite_false, hk, finish, Except.map, List.map_map,
+    List.length_map, List.length_singleton, maxAggGroups, Nat.reduceLT, ↓reduceIte]
+
+
+theorem queryAll_length_eq (t : Tenant) (spec : ReadSpec) (p : Principal) (q : QueryDef)
+    (hfilt : ∀ e, q.filter = some e → ∀ f ∈ fieldsRead e, spec.rules.rule q.ty f = none) :
+    (queryAll t spec p q).length =
+      ((t.recordsOf q.ty).filter (fun e => t.canRead p q.ty e.2 && condHolds (readEnv p e.2) q.filter)).length := by
+  unfold queryAll
+  rw [(List.mergeSort_perm _ _).length_eq]
+  unfold scanRows
+  apply length_filterMap_eq_filter
+  intro e _
+  by_cases hc : t.canRead p q.ty e.2 = true
+  · have hcond : condHolds (readEnv p (redact spec.rules p q.ty e.2)) q.filter =
+        condHolds (readEnv p e.2) q.filter := by
+      cases hq : q.filter with
+      | none => rfl
+      | some fe => exact condHolds_redact spec.rules p q.ty e.2 fe (hfilt fe hq)
+    cases hcc : condHolds (readEnv p e.2) q.filter <;> simp [hc, hcond, hcc]
+  · simp [hc]
+
+theorem aggregate_count_queryAll (t : Tenant) (spec : ReadSpec) (p : Principal) (req : AggReq)
+    (q : QueryDef) (a : AggDef) (o : ObjType) (r : AggResult)
+    (hq : spec.queries.lookup req.query = some q) (ha : q.aggregates.lookup req.aggregate = some a)
+    (hp : ¬ req.params.any (fun kv => !(q.params.contains kv.1)) = true) (ht : t.typ? q.ty = some o)
+    (hk : a.kind = .count) (hfe : req.filter = []) (hfield : a.field = none) (hg : a.groupBy = none)
+    (hfilt : ∀ e, q.filter = some e → ∀ f ∈ fieldsRead e, spec.rules.rule q.ty f = none)
+    (hr : aggregate t spec p req = .ok r) :
+    r.groups = [{ key := none, value := some (.int ((queryAll t spec p q).length : Int)), rows := [] }] ∧
+      r.scanned = (queryAll t spec p q).length := by
+  unfold aggregate at hr
+  simp only [hq, ha, hp, ite_false, ht] at hr
+  rw [aggregateOn_count_form (Src.ofTenant t) spec p req q a o hk hfe hfield hg] at hr
+  by_cases hW : maxScan < ((Src.ofTenant t).recs q.ty).length
+  · simp [hW] at hr
+  · by_cases hB : min a.scanBound maxScan < (plainSelected (Src.ofTenant t) spec p q req).length
+    · simp [hW, hB] at hr
+    · simp only [hW, hB, ite_false] at hr
+      have hr' := Except.ok.inj hr
+      subst hr'
+      have hsel : plainSelected (Src.ofTenant t) spec p q req =
+          (t.recordsOf q.ty).filter (fun e => t.canRead p q.ty e.2 && condHolds (readEnv p e.2) q.filter) := by
+        unfold plainSelected
+        apply List.filter_congr
+        intro e _
+        rw [selectedBy_plain _ _ _ _ _ hfe]
+        rfl
+      rw [queryAll_length_eq t spec p q hfilt, ← hsel]
+      exact ⟨rfl, rfl⟩
+
+end Strata
+
+-- Axioms of the slice 10 search and aggregate theorems
+#print axioms Strata.SoundHit
+#print axioms Strata.aggregateOn_count_form
+#print axioms Strata.aggregate_count_queryAll
+#print axioms Strata.aggregate_scan_window
+#print axioms Strata.aggregate_undeclared_filter
+#print axioms Strata.aggregate_undeclared_param
+#print axioms Strata.aggregate_unknown_aggregate
+#print axioms Strata.aggregate_unknown_field
+#print axioms Strata.aggregate_unknown_object
+#print axioms Strata.aggregate_unknown_query
+#print axioms Strata.candidatesOf_mem
+#print axioms Strata.candidatesOf_sorted
+#print axioms Strata.condHolds_redact
+#print axioms Strata.decideCand_id
+#print axioms Strata.decideCand_sound
+#print axioms Strata.decideCand_ty
+#print axioms Strata.decideRun_consumed_le
+#print axioms Strata.decideRun_none_eq
+#print axioms Strata.decideRun_order
+#print axioms Strata.decideRun_prefix
+#print axioms Strata.decideRun_some_last_eq
+#print axioms Strata.decideRun_some_more_eq
+#print axioms Strata.decideRun_sound
+#print axioms Strata.evalExpr_redact
+#print axioms Strata.fieldsRead
+#print axioms Strata.fields_get_redact
+#print axioms Strata.hitLt
+#print axioms Strata.hits_append_sound
+#print axioms Strata.length_filterMap_eq_filter
+#print axioms Strata.lookup_filter
+#print axioms Strata.matchedIn_match
+#print axioms Strata.matchedIn_mem
+#print axioms Strata.mergeSort_recs_sorted
+#print axioms Strata.plainSelected
+#print axioms Strata.probeType_examined_le
+#print axioms Strata.probeType_order
+#print axioms Strata.probeType_sound
+#print axioms Strata.queryAll_length_eq
+#print axioms Strata.searchOn_order
+#print axioms Strata.searchOn_sound
+#print axioms Strata.searchPlan_query
+#print axioms Strata.searchPlan_sorted
+#print axioms Strata.searchTypes_examined_le
+#print axioms Strata.searchTypes_order
+#print axioms Strata.searchTypes_sound
+#print axioms Strata.search_examined_le
+#print axioms Strata.search_no_repeat
+#print axioms Strata.search_order
+#print axioms Strata.search_page_out_of_range
+#print axioms Strata.search_query_no_word
+#print axioms Strata.search_query_too_long
+#print axioms Strata.search_query_too_many_words
+#print axioms Strata.search_sound
+#print axioms Strata.search_unknown_object
+#print axioms Strata.selectedBy_plain
+#print axioms Strata.sorted_recs_strict
+#print axioms Strata.take_lt_drop
+#print axioms Strata.take_take_le
+#print axioms Strata.types_sorted_strict
