@@ -24,7 +24,9 @@ constraint is defined over existing data. Slice 4 adds several object types per 
 may name any of them, a reference may name a record of another type, and an intent naming a type
 the tenant lacks is refused. Slice 5 adds expressions, constraints and expression defaults. Slice 6 replaces the fixed tiers by
 roles and policies as data (the owner role, role permissions, policies with conditions, capabilities,
-the system and the anonymous principal). The model has no workflows, queries, events or
+the system and the anonymous principal). Slice 7 adds members, teams and invitations, and slice 8 adds
+workflows: a workflow over a string field of an object type, with its initial states, its transitions
+and their guards and assignments, decided by the same `step`. The model has no queries, events or
 scopes: the assumptions below list each
 omission, and the gap analysis further down says which slice will add each. The theorems are
 about this model. The Rust kernel is compared with it on generated scenarios, which is evidence and
@@ -96,6 +98,18 @@ builds their module, without reading the statements (`specifications/README.md`)
 | | `reserved_refused`, `assign_reserved_refused`, `add_member_reserved_refused`, `create_reserved_refused` | A step that names a reserved principal, or whose caller is reserved, is refused `invalidIntent` before the tenant is looked at |
 | | `create_genesis`, `create_existing_refused`, `create_not_system_refused`, `genesis_owner_and_nodup` | A tenant is created only when it does not exist, by the system, with a name that is not blank; the genesis tenant has the owner, the built-in roles, no teams and no invitations |
 | | `directOf_setDirect`, `rolesOf_mono_setDirect`, `changeRole_nodup`, `stepMember_teamsNodup` | The member and team tables keep their meaning under the updates, and team ids stay distinct under every accepted step |
+| Workflows (slice 8, `lean/Strata/Workflows.lean`; the list lemmas in `lean/Strata/WorkflowLemmas.lean`) | `create_ok_initials`, `create_workflow_initial` | An accepted create writes a record whose workflow field holds one of the initial states of every workflow of its type |
+| | `create_non_initial_refused` | A permitted create whose record does not start in an initial state is refused with `workflowViolation`, and no state follows |
+| | `fireOne_declared` | A workflow that changes the state of its field takes a declared transition from the old state to the new one whose guard is `true` on the environment the step reads; its assignments give their fields the values of their expressions, when the assigned fields are distinct |
+| | `fireOne_keeps`, `applySets_get_mem`, `applySets_get_other`, `evalSets_keys`, `fireAll_nodup`, `fireAll_version` | An assignment changes only the fields it names, to the values they are given; the workflows keep the field names distinct and the version |
+| | `fireAll_fires` | Under `WfIndependent` (no transition assigns a workflow field), every workflow of the write whose field the patch changed took such a transition, and its guard held on the candidate the step read |
+| | `update_changed_fired` | An accepted update that changes a workflow field by its patch has, for that workflow, a declared transition from the stored state to the patched one whose guard held (the `WfIndependent` hypothesis) |
+| | `update_undeclared_refused` | Under `WfIndependent`, an update that changes a workflow field with no declared transition from the stored state to the patched one is never accepted |
+| | `update_writes_fired` | The record an accepted update writes is the patched record as the workflows leave it; a record the workflows changed is authorised again (`canUpdate` on the record written) |
+| | `stepTenant_preserves_states`, `step_preserves_states`, `clearRef_statesOk`, `str_of_clearFields`, `putType_statesOk` | Every accepted step keeps each stored record's workflow field one of its states, when it holds a string (`Tenant.StatesOk`); a delete's clearing of references keeps it so (the distinct field names of the records are assumed, `Tenant.Distinct`) |
+| | `update_raises_version` | Unchanged in statement; the version of the written record is the stored one plus one for every tenant, since the workflows change fields and never the version |
+| | `update_writes_patched`, `update_keeps_unnamed`, `update_ok_parts`, `update_refs_resolve`, `update_refused_dangling_across_types`, `update_within_limits` | Restated with the hypothesis `Tenant.Plain` (no transition assigns a field): these describe the patched record as the record written, which holds only when no assignment changes it (see the slice 8 review note) |
+| | `update_duplicate_refused`, `create_duplicate_refused`, `create_refused_over_record_bound`, `create_constraint_refused`, `update_constraint_refused` | Restated with the workflow checks an otherwise valid write must pass: `initialsOk` on a create, and for an update that the workflows leave the patched record as it is and its states hold |
 
 `lake build` checks them. `lake env lean Audit.lean` prints the axioms each depends on: only
 Lean's standard `propext`, `Classical.choice` and `Quot.sound`. There is no `sorry`, no `admit`
@@ -104,7 +118,7 @@ and no added axiom; a test fails if the sources contain one or the audit reports
 ### Assumptions
 
 1. The object of every theorem is the model, not the Rust source.
-2. The model has no workflows, queries or events. Its constraints are of the state-only kind
+2. The model has no queries or events. Its workflows (slice 8) are over a string field of an object type, with transitions whose guards and assignments are expressions of the slice 5 fragment; the kernel's static rules for them (the field is a string, the transitions name states, the expressions check) are the schema validity of slice 11 and are not part of the model. Its constraints are of the state-only kind
    (slice 5: they read neither the old record nor the principal). Its unique fields and composite
    constraints are checked on written values only; the kernel's schema rules for them (a list
    field cannot be unique, a composite names two to four distinct fields of the object) are the
@@ -356,8 +370,8 @@ From `transition::create_record`, `update_record`, `delete_record` and `rules::v
 | `expected_version` given and not the stored version, checked after authorization | `VersionConflict` | covered (`versionClash`) | 2 |
 | Update is a patch: named fields replaced, `null` removes, others kept; version + 1 | | covered (`patched`) | 2 |
 | Create fills absent fields from their defaults; a default that fails to evaluate | `Evaluation` | covered: constant and expression defaults (`withDefaults`, `defaultsOf`, a field named as `null` gets none); a failing default is refused before the permission | 2 (constant), 5 (expression) |
-| A new record's workflow field is not an initial state | `WorkflowViolation` | not covered | 8 |
-| An update that changes a workflow field needs a declared transition whose guard is true; its assignments apply; the update is authorized again if they changed the record | `WorkflowViolation`, `Evaluation`, `Unauthorized` | not covered | 8 |
+| A new record's workflow field is not an initial state | `WorkflowViolation` | covered (`create_non_initial_refused`, and `create_workflow_initial` for the stored record; the check comes after the permission and the defaults, before the other checks of the record) | 8 |
+| An update that changes a workflow field needs a declared transition whose guard is true; its assignments apply; the update is authorized again if they changed the record | `WorkflowViolation`, `Evaluation`, `Unauthorized` | covered (`fireOne`, `fireAll`, `update_changed_fired`, `update_undeclared_refused`, `update_writes_fired`, `update_reauthorized`), for a workflow field changed by the patch under `WfIndependent` (no transition assigns a workflow field); a guard that is not `true` or cannot be evaluated is not a transition, and an assignment whose value cannot be evaluated is `Evaluation` (in the model; no fixture reaches it, see the slice 8 review note) | 8 |
 | Validation; the first failure names the refusal, in this order: | | | |
 | 1. the record is larger than `MAX_RECORD_BYTES` | `LimitExceeded` | partly: over an abstract size that bounds the encoding below (slice 2's note) | 2 |
 | 2. a field the type does not declare | `UnknownField` | covered (`invalid`) | 0 |
@@ -365,7 +379,7 @@ From `transition::create_record`, `update_record`, `delete_record` and `rules::v
 | 4. per field in id order, after its type: a unique value another record holds | `UniqueViolated` | covered (`valueProblem`, before the reference check of the same field) | 3 |
 | 5. per field in id order, after its type: a reference to a record that does not exist | `DanglingReference` | covered for single references and list elements, across types too | 1, 2, 4 |
 | 6. composite unique constraints whose fields all have values, held by another record | `UniqueViolated` | covered (`compositeProblem`, after every field) | 3 |
-| 7. a workflow field holding a value that is not one of its states | `WorkflowViolation` | not covered | 8 |
+| 7. a workflow field holding a value that is not one of its states | `WorkflowViolation` | covered (`statesOk`, checked after the other structural checks and before the constraints; `step_preserves_states` is the invariant); an absent workflow field is not a state the check refuses (the kernel checks string values only) | 8 |
 | 8. only if nothing above failed: constraints, failing on `false`; `Evaluation` when one cannot be evaluated | `ConstraintViolated`, `Evaluation` | covered for the expression fragment of slice 5 (`constraintProblem`, after every other check); the kernel's static check of a schema is not modelled (slice 11) | 5 |
 | Accepted create: the record under the next id, `created_by` the caller (none for the system), counter + 1 | | covered (owner = caller) | 0 |
 | Delete: another record of any type referring through a `restrict` field, or through a required single reference, blocks it; a record referring to itself does not | `StillReferenced` | covered for references and lists, across types too (a required list never blocks) | 1, 2, 4 |
@@ -512,7 +526,7 @@ fields cleared or held, memberships, teams and invitations stripped, sessions re
 or more than 100 ids (`InvalidIntent`); records past their period that no record refers to are
 deleted, the others kept with a reason. Approvals (`approvals::decide`) are a pure decision on
 the approver (not a person, without `workflow-approve`, not named by the step's policy, the one
-who started it, past the deadline) and go with slice 8.
+who started it, past the deadline) and are not part of the workflow decision: slice 15 adds the automation steps they belong to.
 
 ### Expressions and constraints (slice 5)
 
@@ -549,7 +563,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **5 (done)** | Expressions: literals, field reads of the record, the old record and the new record, the principal, comparisons, the three-valued connectives, `isNull`, evaluation errors; constraints (checked last, state-only); expression defaults | 2, 4 |
 | **6 (done)** | Roles and policies as data, replacing the fixed tiers: the owner role, role permissions, policies with conditions, capabilities, the system and anonymous principals | 5 |
 | **7 (done)** | Tenants, members, teams, invitations, conferring, the owner rule, reserved principal ids. The decisions are in `Strata/Members.lean`, the theorems in `Strata/MembersProofs.lean`, and the intents are in `Intent` and decided by `step`; the executable kernels, the working set, the codec of tenants (Lean and Rust) and the differential harness, scenarios and generator cover them (see the slice 7 review note) | 6 |
-| 8 | Workflows: initial states, transitions with guards and assignments, re-authorization, state validity; approvals | 5, 6 |
+| **8 (done)** | Workflows: the workflow of an object type (field, initial states, transitions with guards and assignments), the create and update decisions, the state check and the invariant (`lean/Strata/Workflows.lean`); the executable kernels, the codec (Lean and Rust), the harness with the ticket type (id 4), the h- scenarios and the generator cover them (see the slice 8 review note). Approvals are not in this slice: they decide automation steps, which slice 15 adds | 5, 6 |
 | 9 | Events and revisions: event bodies, sequence numbers, the revision, `Publish` effects, the grandfathered count | 1 to 8, for their content |
 | 10 | Reads: visibility, field read rules, record reads, named queries (filter, order, pages), search, aggregates | 5, 6 |
 | 11 | Schema change in general: the change kinds, `SchemaConflict`, the abstract validity predicate, `Reject` and `Grandfather`, object and role removal, and the evolution model's acceptance as the rule for breaking changes | 3 to 8 |
@@ -920,6 +934,77 @@ the model's one `step` (`lean/Strata/Model.lean`). The state is in `lean/Strata/
   is `lean/fixtures/expected.txt`. The Rust sides (codec mirror, scenario mapping, generator) were
   written by reading and are compared with the model by `cargo test -p strata-verification` and the
   differential run.
+
+### Slice 8 review note: what was abstracted
+
+Slice 8 is workflows. The state is in `lean/Strata/ModelBase.lean` (`Workflow`, `WfTransition`, `ObjType.workflows`,
+`fireOne`, `fireAll`, `initialsOk`, `statesOk`), the decisions in `Strata/Model.lean` (the create and update branches of
+`stepTenant`, which follow `transition::create_record` and `update_record`), the theorems in `Strata/Workflows.lean`,
+their list lemmas in `Strata/WorkflowLemmas.lean`. The executable kernels, the working set, the codec and the harness
+cover the decisions.
+
+- **State.** An object type holds its workflows, in the kernel's order. A workflow names a field, its initial states (a
+  list; the kernel keeps a set) and its transitions. A transition has a source and a target state, an optional guard and
+  a list of assignments with distinct fields. The kernel's workflow id and transition names are not modelled (they name
+  events, slice 9). The states of a workflow are its initial states and the ends of its transitions (`Workflow.states`).
+- **Create.** After the permission and the defaults, and before the other checks of the record, every workflow's field
+  must hold one of its initial states (`initialsOk`). Any other value, an absent field included, is `workflowViolation`.
+- **Update.** The order is the kernel's: the permission on the patched record, the expected version, then the workflows in
+  order. A workflow whose field keeps its state does nothing. Otherwise the first transition from the old state to the new
+  one whose guard is `true` is taken (`findTransition`); a guard that is `false`, `null` or cannot be evaluated is not a
+  match. Its assignments are all evaluated against the stored record (as `record` and `old`) and the candidate (as `new`);
+  the first evaluation error is `evaluation`, otherwise they are written in order, and a `null` removes the field. No match
+  is `workflowViolation`. When the workflows changed the record, the permission is asked again for the record as it now
+  is. Then come the structural checks, the state check (a string in a workflow field must be a state, else
+  `workflowViolation`) and the constraints.
+- **Abstractions.** Guards and assignments are the slice 5 fragment, evaluated over the record only (no clock, parameters,
+  lookups or `through`). Approvals are not in this slice: `approvals::decide` decides a waiting automation step, a separate
+  feature that slice 15 adds. Computed fields, events and the kernel's refresh of computed referrers are not modelled. The
+  kernel's static checks of a workflow (its field is a string, its transitions name states, its expressions check) are the
+  schema validity of slice 11 and are not part of the model; the fixture's workflow satisfies them. Schema changes do not
+  define or remove workflows (slice 11).
+- **Findings.** Three things the kernel does, which the model reproduces and the theorems state.
+  1. A transition may assign the workflow field itself, or another workflow's field, so a field can change without that
+     workflow's transition: the kernel checks that the field holds a state after the assignments, not that a transition
+     reached it. `WfIndependent` (no transition assigns a workflow field) is the hypothesis of the theorems that need the
+     transition to be the cause (`update_changed_fired`, `update_undeclared_refused`).
+  2. A transition may assign `null` to the workflow field. The kernel's state check looks only at string values, so the
+     stored record can then have no state. `statesOk` is stated the same way, so the invariant is that a string state is
+     one of the states. Whether a record without a state is wanted is for the schema's owner to decide.
+  3. In a statically checked workflow, an assignment cannot raise an evaluation error: the kernel refuses at definition an
+     assignment that compares a string with an integer, and the fragment has no other runtime error. The model keeps the
+     `evaluation` refusal (`evalSets`); the fixture, which must satisfy the kernel's checks, has no scenario that reaches it.
+- **Statements that changed shape.** Each change is a hypothesis or a stronger refusal; the meaning of each earlier
+  theorem is kept for the write it describes. These theorems describe the patched record as the record an update writes
+  (`update_writes_patched`, `update_keeps_unnamed`, `update_ok_parts`, `update_refs_resolve`,
+  `update_refused_dangling_across_types`, `update_within_limits`). They gain the hypothesis `Tenant.Plain` (no transition
+  assigns a field): an assignment makes the written record differ from the patch, so the statement is false without it.
+  The general statements use the record the workflows leave (`update_ok_parts_gen`). The refusal theorems of an otherwise
+  valid write gain the workflow checks the write must pass: `create_refused_over_record_bound`, `create_duplicate_refused`
+  and `create_constraint_refused` take `initialsOk`; `update_duplicate_refused` and `update_constraint_refused` take that
+  the workflows leave the patched record as it is and its states hold. `update_raises_version` keeps its statement for every
+  tenant. `Err` gains `workflowViolation` (codec tag 18).
+- **Invariant.** `Tenant.StatesOk` is separate from `Tenant.WF`, so `WF` and its theorems keep their statements.
+  `step_preserves_states` takes the distinct field names of the stored records (`Tenant.Distinct`, part of `WF`), which the
+  clearing of references in a delete needs (`get_clearFields_eq`).
+- **Executable kernels.** `stepTenantI` and `stepTenantX` decide the same checks with the spec's functions on the records
+  (`fireAll`, `initialsOk`, `statesOk`). The workflows ride in the object type of the implementation (`IObj`), and no index
+  covers a workflow field, so the indexes are untouched. `stepParts` in `XStep` and the working set's `decideTenant` take
+  the same decision.
+- **Harness.** The fixture gains a ticket type, id `4` (`3` names an unknown type in an existing scenario). Its fields are a
+  state (`1`, default `open`), a vote count (`2`) and a note (`3`). Its workflow is in `lean/Strata/Fixture.lean` and in
+  `crates/verification/src/lean.rs`; its policies let a writer change only its own tickets with at most five votes.
+  `strata_model` prints the type's block only while it holds a record, so the existing scenarios print as before. The
+  generator (`lean_diff::generate`) emits ticket operations in one iteration of six. Thirteen h- scenarios cover the
+  decisions, from `h-a-new-ticket-starts-open` to `h-deleting-a-ticket-needs-no-transition`. `expected.txt` is not edited.
+- **Checks.** `lake build` builds. `lake env lean Audit.lean` prints only `propext`, `Classical.choice` and `Quot.sound` for
+  the new theorems and finds no `sorryAx`. `strata_model`, `--impl` and `--indexed` print the same text on
+  `fixtures/scenarios.txt`, and the scenarios that existed before print the lines of `expected.txt`. The Rust sides (codec,
+  fixtures, harness, generator) were written by reading and are not compiled or run here.
+- **Not covered.** Approvals (slice 15); events and transition names (slice 9); the schema changes that define or remove
+  workflows, and the static validity of a workflow (slice 11); computed fields (slice 10). A later assignment overwriting an
+  earlier workflow's assignment is the record the step writes, stated by `update_writes_fired`, not as a theorem about
+  each field.
 
 ### Slice 6 review note: what was abstracted
 
