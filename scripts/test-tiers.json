@@ -235,6 +235,13 @@
       "tier": "routine",
       "seconds": null,
       "unmeasured": true
+    },
+    {
+      "package": "strata-lean-kernel-ffi",
+      "target": "lean_kernel_ffi_it",
+      "tier": "routine",
+      "seconds": 0.5,
+      "unmeasured": true
     }
   ]
 }
