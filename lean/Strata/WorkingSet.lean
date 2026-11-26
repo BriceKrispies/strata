@@ -99,6 +99,11 @@ structure Header where
   settingDefs : List SettingDef := []
   overrides : List SettingOverride := []
   settingRevs : List (String × Nat) := []
+  /-- The ledger (slice 13): a ledger intent decides from the header, and writes the ledger part of it
+      (`Delta.ledger`). The ledger's declarations, its state and its read policies. -/
+  ledgerDecls : Option LedgerDecls := none
+  ledger : LedgerState := {}
+  ledgerPolicies : List LedgerPolicy := []
 
 def TypeHead.ofObj (o : ObjType) : TypeHead :=
   { schema := o.schema, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows }
@@ -112,7 +117,8 @@ def _root_.Strata.Tenant.header (t : Tenant) : Header :=
   { types := t.types.map (fun e => (e.1, TypeHead.ofObj e.2)), members := t.members,
     grants := t.grants, policies := t.policies, limits := t.limits, roles := t.roles,
     teams := t.teams, invitations := t.invitations, schemaVersion := t.schemaVersion,
-    settingDefs := t.settingDefs, overrides := t.overrides, settingRevs := t.settingRevs }
+    settingDefs := t.settingDefs, overrides := t.overrides, settingRevs := t.settingRevs,
+    ledgerDecls := t.ledgerDecls, ledger := t.ledger, ledgerPolicies := t.ledgerPolicies }
 
 /-- A header as a tenant with no records, so the model's permission functions apply to it. They
     read neither records nor the counter. -/
@@ -121,7 +127,8 @@ def Header.asTenant (h : Header) : Tenant :=
     members := h.members, grants := h.grants, policies := h.policies, nextId := 0,
     limits := h.limits, roles := h.roles, teams := h.teams, invitations := h.invitations,
     schemaVersion := h.schemaVersion, settingDefs := h.settingDefs, overrides := h.overrides,
-    settingRevs := h.settingRevs }
+    settingRevs := h.settingRevs, ledgerDecls := h.ledgerDecls, ledger := h.ledger,
+    ledgerPolicies := h.ledgerPolicies }
 
 /-- The records of each object type of a tenant, in the tenant's type order. -/
 def _root_.Strata.Tenant.tables (t : Tenant) : List (TypeId × Records) :=
@@ -234,6 +241,9 @@ inductive Delta where
   /-- Replace the tenant's overrides of settings and the revisions of its settings (slice 12). The header
       carries them, and no record, counter or table is touched. -/
   | settings (ov : List SettingOverride) (rv : List (String × Nat))
+  /-- Replace the ledger of the tenant: its accounts, journal and account limits (slice 13). The header
+      carries the ledger, and no record, counter or table is touched. -/
+  | ledger (L : LedgerState)
   /-- Make the tenant that a system `CreateTenant` creates, the genesis tenant of this owner, when it
       does not exist (slice 7). Against a tenant that exists it changes nothing. -/
   | genesis (owner : PrincipalId)
@@ -271,6 +281,7 @@ def Delta.apply (t : Tenant) : Delta → Tenant
   | .types ts => { t with types := ts }
   | .members m => t.withM m
   | .settings ov rv => { t with overrides := ov, settingRevs := rv }
+  | .ledger L => { t with ledger := L }
   | .genesis _ => t
 
 /-! ### Validity read through single records
@@ -358,6 +369,7 @@ def applyWorld (w : World) (x : TenantId) (d : Delta) : World :=
   | .types ts => upd w x ((w x).map (fun t => (Delta.types ts).apply t))
   | .members m => upd w x ((w x).map (fun t => (Delta.members m).apply t))
   | .settings ov rv => upd w x ((w x).map (fun t => (Delta.settings ov rv).apply t))
+  | .ledger L => upd w x ((w x).map (fun t => (Delta.ledger L).apply t))
 
 def Store.applyDelta (s : Store) (x : TenantId) (d : Delta) : Store :=
   { world := applyWorld s.world x d, gen := upd s.gen x (s.gen x + 1) }
@@ -487,6 +499,14 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
     match writeSettingT h.asTenant p n lvl team v ev with
     | .error e => .error e
     | .ok t' => .ok (.settings t'.overrides t'.settingRevs)
+  | .postLedger now ps =>
+    match postLedgerCore h.asTenant p now ps with
+    | .error e => .error e
+    | .ok r => .ok (.ledger r.1)
+  | .expireLedger now u c =>
+    match expireCore h.asTenant p now u c with
+    | .error e => .error e
+    | .ok r => .ok (.ledger r.1)
 
 /-- A decision made through any source of key values. It reads keys of tenant `x` only. -/
 def decideOn (get : Key → Payload) (x : TenantId) (p : Principal) (i : Intent) :
@@ -655,6 +675,14 @@ theorem writeSettingT_header (t : Tenant) (p : Principal) (n : String) (lvl : Se
   | error x => rfl
   | ok a => rfl
 
+/-- The ledger decisions do not read the object types, the counter, the revision or the sequence, so on the
+    header's tenant view they are the decisions on the tenant (slice 13). -/
+theorem postLedgerCore_header (t : Tenant) (p : Principal) (now : Int) (ps : List LedgerPosting) :
+    postLedgerCore t.header.asTenant p now ps = postLedgerCore t p now ps := rfl
+
+theorem expireCore_header (t : Tenant) (p : Principal) (now : Int) (u : Nat) (c : Int) :
+    expireCore t.header.asTenant p now u c = expireCore t p now u c := rfl
+
 /-- A decision from the header, the counter, the tenant's own lookup and record tables, applied as
     a delta, is the kernel's step. -/
 theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
@@ -708,6 +736,18 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
     | ok a =>
       obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape hW
       simp [Except.map, Delta.apply, Tenant.withM, Tenant.mt]
+  | postLedger now ps =>
+    simp only [decideTenant, stepTenant, postLedgerCore_header]
+    unfold postLedgerT
+    cases hW : postLedgerCore t p now ps with
+    | error e => simp [hW, Except.map]
+    | ok r => simp [hW, Except.map, Delta.apply]
+  | expireLedger now u c =>
+    simp only [decideTenant, stepTenant, expireCore_header]
+    unfold expireLedgerT
+    cases hW : expireCore t p now u c with
+    | error e => simp [hW, Except.map]
+    | ok r => simp [hW, Except.map, Delta.apply]
   | create ty fs =>
     simp only [TypeHead.ofObj, decideTenant, stepTenant, header_types_lookup, tables_lookup, unknownType_header,
       canCreate_header, canAttemptCreate_header, hhas, problem_eq_via]
@@ -925,6 +965,7 @@ def touchedIn : Delta → Key → Bool
   | .schema _ _, .header _ => true
   | .members _, .header _ => true
   | .settings _ _, .header _ => true
+  | .ledger _, .header _ => true
   | .genesis _, .header _ => true
   | _, .header _ => false
   | .create _ _ _, .counters _ => true
@@ -936,14 +977,17 @@ def touchedIn : Delta → Key → Bool
   | .schema _ _, .record _ _ _ => false
   | .members _, .record _ _ _ => false
   | .settings _ _, .record _ _ _ => false
+  | .ledger _, .record _ _ _ => false
   | .genesis _, .record _ _ _ => false
   | .schema _ _, .all _ => false
   | .members _, .all _ => false
   | .settings _ _, .all _ => false
+  | .ledger _, .all _ => false
   | _, .all _ => true
   | .schema _ _, .answer _ _ _ _ => false
   | .members _, .answer _ _ _ _ => false
   | .settings _ _, .answer _ _ _ _ => false
+  | .ledger _, .answer _ _ _ _ => false
   | .genesis _, .answer _ _ _ _ => false
   | .create _ _ _, .answer _ _ _ _ => true
   | .replace _ _ _, .answer _ _ _ _ => true
@@ -1424,19 +1468,49 @@ theorem sound_genesis (w : World) (x : TenantId) (o : PrincipalId) (k : Key) (hx
     | none => simp [genesisTenant, Tenant.typ?]
     | some tn => rfl
 
+/-- A change of the ledger changes the header (the ledger is part of it) and nothing else a key reads (slice 13). -/
+theorem sound_ledger (w : World) (x : TenantId) (L : LedgerState)
+    (k : Key) (hx : k.tenant = x) (hin : touchedIn (.ledger L) k = false) :
+    fetch (applyWorld w x (.ledger L)) k = fetch w k := by
+  cases k with
+  | header t => simp [touchedIn] at hin
+  | counters t =>
+    simp only [Key.tenant] at hx; subst hx
+    simp only [fetch, applyWorld, upd_same]
+    cases hw : w t <;> rfl
+  | record t ty id =>
+    simp only [Key.tenant] at hx; subst hx
+    simp only [fetch, applyWorld, upd_same]
+    cases hw : w t <;> rfl
+  | all t =>
+    simp only [Key.tenant] at hx; subst hx
+    simp only [fetch, applyWorld, upd_same]
+    cases hw : w t <;> rfl
+  | answer t ty f v =>
+    simp only [Key.tenant] at hx; subst hx
+    simp only [fetch, applyWorld, upd_same]
+    cases hw : w t <;> rfl
+  | page t ty a l =>
+    simp only [Key.tenant] at hx; subst hx
+    simp only [fetch, applyWorld, upd_same]
+    cases hw : w t <;> rfl
+
 theorem touchedIn_sound : InvSound touchedIn := by
   intro w x d k hx hin
   by_cases hnm : ∃ m, d = .members m
   · obtain ⟨m, rfl⟩ := hnm; exact sound_members w x m k hx hin
   by_cases hns : ∃ ov rv, d = .settings ov rv
   · obtain ⟨ov, rv, rfl⟩ := hns; exact sound_settings w x ov rv k hx hin
+  by_cases hnl : ∃ L, d = .ledger L
+  · obtain ⟨L, rfl⟩ := hnl; exact sound_ledger w x L k hx hin
   by_cases hng : ∃ o, d = .genesis o
   · obtain ⟨o, rfl⟩ := hng; exact sound_genesis w x o k hx hin
   by_cases hnt : ∃ ts, d = .types ts
   · obtain ⟨ts, rfl⟩ := hnt; simp [touchedIn] at hin
   have hnm' : ∀ m, d ≠ .members m := fun m h => hnm ⟨m, h⟩
   have hns' : ∀ ov rv, d ≠ .settings ov rv := fun ov rv h => hns ⟨ov, rv, h⟩
-  have hng' : ∀ o, d ≠ .genesis o := fun o h => hng ⟨o, h⟩
+  have hnl' : ∀ L, d ≠ .ledger L := fun L h => hnl ⟨L, h⟩
+  have hng': ∀ o, d ≠ .genesis o := fun o h => hng ⟨o, h⟩
   have hnt' : ∀ ts, d ≠ .types ts := fun ts h => hnt ⟨ts, h⟩
   cases k with
   | header t =>
@@ -1444,6 +1518,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | schema ty' h' => simp [touchedIn] at hin
@@ -1467,6 +1542,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | create ty' id' r => simp [touchedIn] at hin
@@ -1492,6 +1568,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | create ty' id' r =>
@@ -1535,6 +1612,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | schema ty' h' =>
@@ -1553,6 +1631,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | schema ty' h' =>
@@ -1571,6 +1650,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | create ty' id' r =>

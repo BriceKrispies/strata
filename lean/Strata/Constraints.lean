@@ -313,6 +313,8 @@ theorem stepTenant_preserves_satisfied (t t' : Tenant) (p : Principal) (i : Inte
   | changeSchema ev strict cs => exact changeSchema_satisfied hs h
   | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact hs
   | writeSetting n lvl team v ev => obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h; exact hs
+  | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; exact hs
+  | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; exact hs
   | create ty fs =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h

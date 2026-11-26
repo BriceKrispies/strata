@@ -83,13 +83,16 @@ theorem fix_record : encRecord { owner := some 4, version := 1, fields := [(2, .
     limits. Its bytes are the type list (one entry: id `1`, then schema (one field: id `1`, string,
     required, not unique, null default), no uniques, no records, no constraints), then the members
     (one: user 7 with role 0), the grants (none), the policies (none), next id, limits, then (slice 7)
-    the roles (two: `owner` and `public`), the teams (none) and the invitations (none). -/
+    the roles (two: `owner` and `public`), the teams (none) and the invitations (none), the settings
+    (none, with their overrides and revisions), then (slice 13) the ledger declarations (none), the ledger
+    (no accounts, no journal, no limits) and the ledger policies (none). -/
 theorem fix_tenant : encTenant fxTenant =
     [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
-      2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0] := by
+      2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0] := by
   simp +decide only [fxTenant, encTenant, encTenantBody, encIso, encPair, encList, encTypeEntry,
     encMember, encGrantEntry, encPolicy, encOpt, encTeamEntry, encInvitationEntry, ownerRole, publicRole,
     encObjType, encWorkflow, encSchemaEntry, encFieldDef, encTy, encBool, encExpr, encVal, encLimits, encNat_small,
+    encLedgerDecls, encLedgerState, encLedgerPolicy, if_true, ite_true,
     encNat_big, tag, List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil,
     List.cons_append, List.nil_append, Nat.reduceMod, Nat.reduceAdd, Nat.reduceDiv, Nat.reduceLT]
 
@@ -116,11 +119,12 @@ def fxTenantM : Tenant :=
     expiry 300 as two bytes, no redeemer, revoker 7). -/
 theorem fix_tenant_members : encTenant fxTenantM =
     [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
-      3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1, 7, 0, 0, 1, 0, 0, 0] := by
+      3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1, 7, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0] := by
   simp +decide only [fxTenantM, fxTenant, encTenant, encTenantBody, encIso, encPair, encList, encTypeEntry,
     encMember, encGrantEntry, encPolicy, encOpt, encTeamEntry, encInvitationEntry, encTeamDef,
     encInvitationDef, encStr, ownerRole, publicRole,
     encObjType, encWorkflow, encSchemaEntry, encFieldDef, encTy, encBool, encExpr, encVal, encLimits, encNat_small,
+    encLedgerDecls, encLedgerState, encLedgerPolicy, if_true, ite_true,
     encNat_big, tag, List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil,
     List.cons_append, List.nil_append, Nat.reduceMod, Nat.reduceAdd, Nat.reduceDiv, Nat.reduceLT,
     String.toUTF8_eq_toByteArray, String.size_toByteArray]
@@ -235,7 +239,7 @@ theorem fix_result_error : encResult (.error .unauthorized) = [0, 1] := by
 
 theorem fix_result_ok : encResult (.ok fxTenant) =
     [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
-      2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0] := by
+      2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0] := by
   simp +decide only [encResult, fix_tenant, tag, List.cons_append]
 
 /-! ## Decoding the fixtures

@@ -140,6 +140,13 @@ def fixtureSettings : List SettingDef :=
     { name := "mode", ty := .str, levels := [.tenant, .team], default := .str "plain",
       allowed := some (.closed [.str "plain", .str "bold"]) } ]
 
+/-- The ledger declarations of every fixture tenant (slice 13): units 1 to 3 (unit 3 expires monthly after two
+    periods), pool 1, a cap on unit 1 and a floor of zero on unit 2. No account limits and no ledger policies. -/
+def fixtureLedgerDecls : LedgerDecls :=
+  { units := [{ unit := 1 }, { unit := 2 }, { unit := 3, expiry := some { period := .month, periods := 2 } }],
+    pools := [1],
+    limits := [{ unit := 1, cap := some 1000 }, { unit := 2, floor := some 0 }] }
+
 /-- The object types every scenario starts from, each tenant with an owner, an editor and two writers.
     Type `4` (the tickets, with the workflow) is part of the fixture too. The size limits are the kernel's. -/
 def initialTenant (n : Nat) : Tenant :=
@@ -158,7 +165,7 @@ def initialTenant (n : Nat) : Tenant :=
     -- schema change also defines the five settings, whose definitions emit one setting event each and set each
     -- setting's revision to one (the kernel's schema_change_effects), so the event sequence is 6 + 5 = 11.
     revision := 6, eventSeq := 11, schemaVersion := 3, settingDefs := fixtureSettings,
-    settingRevs := fixtureSettings.map (fun d => (d.name, 1)) }
+    settingRevs := fixtureSettings.map (fun d => (d.name, 1)), ledgerDecls := some fixtureLedgerDecls }
 
 /-- The fields an `update` line names for each object type: the item's fields, or the part's.
     A line that does not name one of them gives it `null`, so it replaces the record (`patch`

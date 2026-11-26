@@ -17,6 +17,8 @@ names a record by its type and its id: a field whose type targets type `T` holds
 and a record of any other type is not one it can name (the kernel's `lookup.record(target, id)`).
 -/
 
+import Strata.LedgerTypes
+
 namespace Strata
 
 abbrev TenantId := Nat
@@ -515,6 +517,9 @@ inductive Err where
   | workflowViolation
   /-- A schema change names an expected version that is not the schema version (slice 11). -/
   | schemaConflict
+  /-- A ledger posting by an adjustment or a reversal to one's own account, which the kernel refuses whatever
+      the actor's roles (slice 13, ADM-1629). -/
+  | selfAction
   deriving DecidableEq, Repr
 
 /-- The first constraint that fails on the record, in the order given: `false` is
@@ -969,6 +974,13 @@ structure Tenant where
   overrides : List SettingOverride := []
   /-- The revision of each setting, by name, raised by each change of it (slice 12, never reused). -/
   settingRevs : List (String × Nat) := []
+  /-- The ledger declarations of the schema: its units, pools and unit limits; `none` when it declares none
+      (slice 13). -/
+  ledgerDecls : Option LedgerDecls := none
+  /-- The ledger's accounts, journal and account limits (slice 13). -/
+  ledger : LedgerState := {}
+  /-- The policies that bound reads of the ledger (slice 13). -/
+  ledgerPolicies : List LedgerPolicy := []
   deriving Repr
 
 /-- The part of a tenant the membership intents see. -/

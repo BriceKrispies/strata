@@ -232,6 +232,16 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     match stepTenantI core p (.writeSetting n lvl team v ev) with
     | .error e => .error (e, ⟨core, ux, cx, rx⟩)
     | .ok core' => .ok ⟨core', ux, cx, rx⟩
+  | .postLedger now ps =>
+    -- A posting changes no record, so the indexes are as they were.
+    match stepTenantI core p (.postLedger now ps) with
+    | .error e => .error (e, ⟨core, ux, cx, rx⟩)
+    | .ok core' => .ok ⟨core', ux, cx, rx⟩
+  | .expireLedger now u c =>
+    -- An expiry changes no record, so the indexes are as they were.
+    match stepTenantI core p (.expireLedger now u c) with
+    | .error e => .error (e, ⟨core, ux, cx, rx⟩)
+    | .ok core' => .ok ⟨core', ux, cx, rx⟩
 
 /-- One intent against one indexed tenant; a refusal hands the tenant back. -/
 def stepTenantXL (x : XTenant) (p : Principal) (i : Intent) : Except (Err × XTenant) XTenant :=

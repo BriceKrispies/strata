@@ -10,6 +10,8 @@ import Strata.Roles
 import Strata.Writes
 import Strata.Constraints
 import Strata.Ledger
+import Strata.LedgerTypes
+import Strata.LedgerModel
 import Strata.Evolution.Model
 import Strata.Evolution.Lemmas
 import Strata.Evolution.Rewrite

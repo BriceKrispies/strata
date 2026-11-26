@@ -42,6 +42,22 @@ theorem stepTenantI_inv (t : ITenant) (p : Principal) (i : Intent) (t' : ITenant
       simp only [hs, Except.map, Except.ok.injEq] at h
       subst h
       exact hinv
+  | postLedger now ps =>
+    simp only [stepTenantI] at h
+    cases hs : postLedgerT t.abs p now ps with
+    | error e => simp [hs, Except.map] at h
+    | ok s =>
+      simp only [hs, Except.map, Except.ok.injEq] at h
+      subst h
+      exact hinv
+  | expireLedger now u c =>
+    simp only [stepTenantI] at h
+    cases hs : expireLedgerT t.abs p now u c with
+    | error e => simp [hs, Except.map] at h
+    | ok s =>
+      simp only [hs, Except.map, Except.ok.injEq] at h
+      subst h
+      exact hinv
   | create ty fs =>
     simp only [stepTenantI] at h
     cases hty : t.typ? ty with
@@ -280,13 +296,14 @@ def ITenant.ofEmpty (t : Tenant) : ITenant :=
     grants := t.grants, policies := t.policies, nextId := t.nextId, limits := t.limits,
     roles := t.roles, teams := t.teams, invitations := t.invitations, revision := t.revision,
     eventSeq := t.eventSeq, schemaVersion := t.schemaVersion, settingDefs := t.settingDefs,
-    overrides := t.overrides, settingRevs := t.settingRevs }
+    overrides := t.overrides, settingRevs := t.settingRevs, ledgerDecls := t.ledgerDecls,
+    ledger := t.ledger, ledgerPolicies := t.ledgerPolicies }
 
 theorem ofEmpty_abs (t : Tenant) (h : ∀ e ∈ t.types, e.2.records = []) :
     (ITenant.ofEmpty t).abs = t := by
   cases t with
   | mk types members grants policies nextId limits roles revision eventSeq schemaVersion teams invitations
-      settingDefs overrides settingRevs =>
+      settingDefs overrides settingRevs ledgerDecls ledger ledgerPolicies =>
     simp only [ITenant.abs, ITenant.ofEmpty, List.map_map]
     congr 1
     conv => rhs; rw [← List.map_id types]

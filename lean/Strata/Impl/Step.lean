@@ -179,6 +179,8 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
   | .writeSetting n lvl team v ev =>
     (writeSettingT t.abs p n lvl team v ev).map (fun s =>
       { t with overrides := s.overrides, settingRevs := s.settingRevs })
+  | .postLedger now ps => (postLedgerT t.abs p now ps).map (fun s => { t with ledger := s.ledger })
+  | .expireLedger now u c => (expireLedgerT t.abs p now u c).map (fun s => { t with ledger := s.ledger })
 
 /-- The tenant a `CreateTenant` makes, as the implementation holds it: no object types, the genesis
     membership, a counter that starts at 1, and the revision and event sequence of its one event (slice 9). -/
@@ -316,6 +318,20 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
     | error e => rfl
     | ok s =>
       obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h
+      rfl
+  | postLedger now ps =>
+    simp only [stepTenantI, stepTenant]
+    cases h : postLedgerT t.abs p now ps with
+    | error e => rfl
+    | ok s =>
+      obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h
+      rfl
+  | expireLedger now u c =>
+    simp only [stepTenantI, stepTenant]
+    cases h : expireLedgerT t.abs p now u c with
+    | error e => rfl
+    | ok s =>
+      obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h
       rfl
   | create ty fs =>
     cases hty : t.typ? ty with

@@ -705,6 +705,8 @@ theorem schema_step_putType (t t' : Tenant) (p : Principal) (i : Intent)
   | createTenant owner name => simp [Intent.isSchema] at hi
   | member j => simp [Intent.isSchema] at hi
   | writeSetting _ _ _ _ _ => simp [Intent.isSchema] at hi
+  | postLedger _ _ => simp [Intent.isSchema] at hi
+  | expireLedger _ _ _ => simp [Intent.isSchema] at hi
   | create ty fs => simp [Intent.isSchema] at hi
   | update ty id fs ev => simp [Intent.isSchema] at hi
   | delete ty id ev => simp [Intent.isSchema] at hi
@@ -734,6 +736,8 @@ theorem schemaViolated_of_strict (t t' : Tenant) (p : Principal) (i : Intent)
   | createTenant owner name => simp [Intent.isSchema] at hi
   | member j => simp [Intent.isSchema] at hi
   | writeSetting _ _ _ _ _ => simp [Intent.isSchema] at hi
+  | postLedger _ _ => simp [Intent.isSchema] at hi
+  | expireLedger _ _ _ => simp [Intent.isSchema] at hi
   | create ty fs => simp [Intent.isSchema] at hi
   | update ty id fs ev => simp [Intent.isSchema] at hi
   | delete ty id ev => simp [Intent.isSchema] at hi
@@ -870,6 +874,8 @@ theorem stepTenant_preserves_distinct (t t' : Tenant) (p : Principal) (i : Inten
   | createTenant owner name => simp [stepTenant] at h
   | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact ⟨hkeys, hD⟩
   | writeSetting n lvl team v ev => obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h; exact ⟨hkeys, hD⟩
+  | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; exact ⟨hkeys, hD⟩
+  | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; exact ⟨hkeys, hD⟩
   | create ty fs =>
     cases hty : t.typ? ty with
     | none => simp [stepTenant, hty] at h
@@ -1096,6 +1102,8 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : Principal) (i : Intent)
   | createTenant owner name => simp [stepTenant] at h
   | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact hu
   | writeSetting n lvl team v ev => obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h; exact hu
+  | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; exact hu
+  | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; exact hu
   | create ty fs =>
     cases hty : t.typ? ty with
     | none => simp [stepTenant, hty] at h

@@ -83,6 +83,7 @@ def encErr : Err → Bytes
   | .tenantExists => [tag 17]
   | .workflowViolation => [tag 18]
   | .schemaConflict => [tag 19]
+  | .selfAction => [tag 20]
 
 def decErr : Dec Err := fun bs =>
   match bs with
@@ -109,6 +110,7 @@ def decErr : Dec Err := fun bs =>
     | 17 => some (.tenantExists, r)
     | 18 => some (.workflowViolation, r)
     | 19 => some (.schemaConflict, r)
+    | 20 => some (.selfAction, r)
     | _ => none
 
 theorem lawful_err : Lawful encErr decErr := by
@@ -122,9 +124,10 @@ theorem lawful_err : Lawful encErr decErr := by
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
           b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨
           b.toNat = 10 ∨ b.toNat = 11 ∨ b.toNat = 12 ∨ b.toNat = 13 ∨ b.toNat = 14 ∨
-          b.toNat = 15 ∨ b.toNat = 16 ∨ b.toNat = 17 ∨ b.toNat = 18 ∨ b.toNat = 19 ∨ 20 ≤ b.toNat by omega)
+          b.toNat = 15 ∨ b.toNat = 16 ∨ b.toNat = 17 ∨ b.toNat = 18 ∨ b.toNat = 19 ∨ b.toNat = 20 ∨
+          21 ≤ b.toNat by omega)
         with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk |
-          hk | hk | hk | hk
+          hk | hk | hk | hk | hk
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 0 hk]
@@ -185,6 +188,9 @@ theorem lawful_err : Lawful encErr decErr := by
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 19 hk]
+      · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encErr, byte_eq_tag b 20 hk]
       · simp only [decErr] at h
         repeat' split at h
         all_goals first | omega | simp at h
@@ -1540,68 +1546,348 @@ def decSettingRev : Dec (String × Nat) := decPair decStr decNat
 theorem lawful_settingRev : Lawful encSettingRev decSettingRev :=
   lawful_pair lawful_str lawful_nat
 
+/-! ## The ledger (slice 13)
+
+A period is one tag byte; an owner and an atom of a policy's condition are a tag and their payload; the records
+are nested products of their fields, as the tenant's, with the options and lists of the codec's combinators. The
+ledger's state is the last component of a tenant, after its settings. -/
+
+/-- The period codec: one tag byte, `hour` 0 to `month` 3. -/
+def encLedgerPeriod : LedgerPeriod → Bytes
+  | .hour => [tag 0]
+  | .day => [tag 1]
+  | .week => [tag 2]
+  | .month => [tag 3]
+
+def decLedgerPeriod : Dec LedgerPeriod := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.hour, r)
+    | 1 => some (.day, r)
+    | 2 => some (.week, r)
+    | 3 => some (.month, r)
+    | _ => none
+
+theorem lawful_ledgerPeriod : Lawful encLedgerPeriod decLedgerPeriod := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x <;> simp [encLedgerPeriod, decLedgerPeriod, tag]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decLedgerPeriod] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ 4 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk
+      · simp only [decLedgerPeriod, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encLedgerPeriod, byte_eq_tag b 0 hk]
+      · simp only [decLedgerPeriod, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encLedgerPeriod, byte_eq_tag b 1 hk]
+      · simp only [decLedgerPeriod, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encLedgerPeriod, byte_eq_tag b 2 hk]
+      · simp only [decLedgerPeriod, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encLedgerPeriod, byte_eq_tag b 3 hk]
+      · simp only [decLedgerPeriod] at h
+        exfalso
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+/-- An owner: a person (tag 0) or a pool (tag 1), each followed by its number. -/
+def encLedgerOwner : LedgerOwner → Bytes
+  | .person p => tag 0 :: encNat p
+  | .pool n => tag 1 :: encNat n
+
+def decLedgerOwner : Dec LedgerOwner := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => match decNat r with
+      | some (p, r1) => some (.person p, r1)
+      | none => none
+    | 1 => match decNat r with
+      | some (n, r1) => some (.pool n, r1)
+      | none => none
+    | _ => none
+
+theorem lawful_ledgerOwner : Lawful encLedgerOwner decLedgerOwner := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | person p => simp [encLedgerOwner, decLedgerOwner, tag, lawful_nat.1, List.append_assoc]
+    | pool n => simp [encLedgerOwner, decLedgerOwner, tag, lawful_nat.1, List.append_assoc]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decLedgerOwner] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ 2 ≤ b.toNat by omega) with hk | hk | hk
+      · simp only [decLedgerOwner, hk] at h
+        cases hd : decNat r with
+        | none => simp [hd] at h
+        | some p1 =>
+          obtain ⟨p, r1⟩ := p1
+          simp only [hd, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have e := lawful_nat.2 r p r1 hd
+          simp [encLedgerOwner, byte_eq_tag b 0 hk, e, List.append_assoc]
+      · simp only [decLedgerOwner, hk] at h
+        cases hd : decNat r with
+        | none => simp [hd] at h
+        | some p1 =>
+          obtain ⟨n, r1⟩ := p1
+          simp only [hd, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have e := lawful_nat.2 r n r1 hd
+          simp [encLedgerOwner, byte_eq_tag b 1 hk, e, List.append_assoc]
+      · simp only [decLedgerOwner] at h
+        exfalso
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+/-- An atom of a policy's condition: the owner is the reader (tag 0), the unit is a number (tag 1), the scope is
+    a text (tag 2). -/
+def encLedgerAtom : LedgerAtom → Bytes
+  | .ownerIsCaller => [tag 0]
+  | .unitIs n => tag 1 :: encNat n
+  | .scopeIs s => tag 2 :: encStr s
+
+def decLedgerAtom : Dec LedgerAtom := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.ownerIsCaller, r)
+    | 1 => match decNat r with
+      | some (n, r1) => some (.unitIs n, r1)
+      | none => none
+    | 2 => match decStr r with
+      | some (s, r1) => some (.scopeIs s, r1)
+      | none => none
+    | _ => none
+
+theorem lawful_ledgerAtom : Lawful encLedgerAtom decLedgerAtom := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | ownerIsCaller => simp [encLedgerAtom, decLedgerAtom, tag]
+    | unitIs n => simp [encLedgerAtom, decLedgerAtom, tag, lawful_nat.1, List.append_assoc]
+    | scopeIs s => simp [encLedgerAtom, decLedgerAtom, tag, lawful_str.1, List.append_assoc]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decLedgerAtom] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ 3 ≤ b.toNat by omega) with hk | hk | hk | hk
+      · simp only [decLedgerAtom, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encLedgerAtom, byte_eq_tag b 0 hk]
+      · simp only [decLedgerAtom, hk] at h
+        cases hd : decNat r with
+        | none => simp [hd] at h
+        | some p1 =>
+          obtain ⟨n, r1⟩ := p1
+          simp only [hd, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have e := lawful_nat.2 r n r1 hd
+          simp [encLedgerAtom, byte_eq_tag b 1 hk, e, List.append_assoc]
+      · simp only [decLedgerAtom, hk] at h
+        cases hd : decStr r with
+        | none => simp [hd] at h
+        | some p1 =>
+          obtain ⟨s, r1⟩ := p1
+          simp only [hd, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have e := lawful_str.2 r s r1 hd
+          simp [encLedgerAtom, byte_eq_tag b 2 hk, e, List.append_assoc]
+      · simp only [decLedgerAtom] at h
+        exfalso
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+/-- An expiry: its period and its number of periods. -/
+def encLedgerExpiry : LedgerExpiry → Bytes :=
+  encIso (encPair encLedgerPeriod encNat) (fun e => (e.period, e.periods))
+
+def decLedgerExpiry : Dec LedgerExpiry :=
+  decIso (decPair decLedgerPeriod decNat) (fun p => { period := p.1, periods := p.2 })
+
+theorem lawful_ledgerExpiry : Lawful encLedgerExpiry decLedgerExpiry :=
+  lawful_iso (lawful_pair lawful_ledgerPeriod lawful_nat) (fun e => by cases e; rfl) (fun _ => rfl)
+
+/-- A unit declaration: its number and its expiry. -/
+def encLedgerUnitDecl : LedgerUnitDecl → Bytes :=
+  encIso (encPair encNat (encOpt encLedgerExpiry)) (fun u => (u.unit, u.expiry))
+
+def decLedgerUnitDecl : Dec LedgerUnitDecl :=
+  decIso (decPair decNat (decOpt decLedgerExpiry)) (fun p => { unit := p.1, expiry := p.2 })
+
+theorem lawful_ledgerUnitDecl : Lawful encLedgerUnitDecl decLedgerUnitDecl :=
+  lawful_iso (lawful_pair lawful_nat (lawful_opt lawful_ledgerExpiry)) (fun u => by cases u; rfl) (fun _ => rfl)
+
+/-- A limit: its unit, its owner, its scope, the floor, the cap, the cap per period with its period, and whether the
+    cap counts additions only. -/
+def encLedgerLimit : LedgerLimit → Bytes :=
+  encIso (encPair encNat (encPair (encOpt encLedgerOwner) (encPair encStr (encPair (encOpt encInt)
+      (encPair (encOpt encInt) (encPair (encOpt (encPair encNat encLedgerPeriod)) (encOpt encBool)))))))
+    (fun l => (l.unit, l.owner, l.scope, l.floor, l.cap, l.periodCap, l.additionsOnly))
+
+def decLedgerLimit : Dec LedgerLimit :=
+  decIso (decPair decNat (decPair (decOpt decLedgerOwner) (decPair decStr (decPair (decOpt decInt)
+      (decPair (decOpt decInt) (decPair (decOpt (decPair decNat decLedgerPeriod)) (decOpt decBool)))))))
+    (fun p =>
+      { unit := p.1, owner := p.2.1, scope := p.2.2.1, floor := p.2.2.2.1, cap := p.2.2.2.2.1,
+        periodCap := p.2.2.2.2.2.1, additionsOnly := p.2.2.2.2.2.2 })
+
+theorem lawful_ledgerLimit : Lawful encLedgerLimit decLedgerLimit :=
+  lawful_iso (lawful_pair lawful_nat (lawful_pair (lawful_opt lawful_ledgerOwner) (lawful_pair lawful_str
+      (lawful_pair (lawful_opt lawful_int) (lawful_pair (lawful_opt lawful_int)
+        (lawful_pair (lawful_opt (lawful_pair lawful_nat lawful_ledgerPeriod)) (lawful_opt lawful_bool)))))))
+    (fun l => by cases l; rfl) (fun _ => rfl)
+
+/-- The declarations of a ledger: its units, its pools and its unit limits. -/
+def encLedgerDecls : LedgerDecls → Bytes :=
+  encIso (encPair (encList encLedgerUnitDecl) (encPair (encList encNat) (encList encLedgerLimit)))
+    (fun d => (d.units, d.pools, d.limits))
+
+def decLedgerDecls : Dec LedgerDecls :=
+  decIso (decPair (decList decLedgerUnitDecl) (decPair (decList decNat) (decList decLedgerLimit)))
+    (fun p => { units := p.1, pools := p.2.1, limits := p.2.2 })
+
+theorem lawful_ledgerDecls : Lawful encLedgerDecls decLedgerDecls :=
+  lawful_iso (lawful_pair (lawful_list lawful_ledgerUnitDecl) (lawful_pair (lawful_list lawful_nat)
+      (lawful_list lawful_ledgerLimit)))
+    (fun d => by cases d; rfl) (fun _ => rfl)
+
+/-- A bucket of expiring credit: its period's start and the credit left in it. -/
+def encLedgerBucket : LedgerBucket → Bytes :=
+  encIso (encPair encInt encNat) (fun b => (b.periodStart, b.remaining))
+
+def decLedgerBucket : Dec LedgerBucket :=
+  decIso (decPair decInt decNat) (fun p => { periodStart := p.1, remaining := p.2 })
+
+theorem lawful_ledgerBucket : Lawful encLedgerBucket decLedgerBucket :=
+  lawful_iso (lawful_pair lawful_int lawful_nat) (fun b => by cases b; rfl) (fun _ => rfl)
+
+/-- The credits of one period of a header: the period, the start of the period and the credits. -/
+def encLedgerPeriodTotal : LedgerPeriodTotal → Bytes :=
+  encIso (encPair encLedgerPeriod (encPair encInt encNat)) (fun x => (x.period, x.start, x.credits))
+
+def decLedgerPeriodTotal : Dec LedgerPeriodTotal :=
+  decIso (decPair decLedgerPeriod (decPair decInt decNat)) (fun p =>
+    { period := p.1, start := p.2.1, credits := p.2.2 })
+
+theorem lawful_ledgerPeriodTotal : Lawful encLedgerPeriodTotal decLedgerPeriodTotal :=
+  lawful_iso (lawful_pair lawful_ledgerPeriod (lawful_pair lawful_int lawful_nat))
+    (fun x => by cases x; rfl) (fun _ => rfl)
+
+/-- An account's header: its owner, unit and scope, its balance, its last sequence number, the credits of its
+    periods and its buckets. -/
+def encLedgerAccount : LedgerAccount → Bytes :=
+  encIso (encPair encLedgerOwner (encPair encNat (encPair encStr (encPair encInt (encPair encNat
+      (encPair (encList encLedgerPeriodTotal) (encList encLedgerBucket))))))) (fun a =>
+    (a.owner, a.unit, a.scope, a.balance, a.lastSeq, a.periods, a.buckets))
+
+def decLedgerAccount : Dec LedgerAccount :=
+  decIso (decPair decLedgerOwner (decPair decNat (decPair decStr (decPair decInt (decPair decNat
+      (decPair (decList decLedgerPeriodTotal) (decList decLedgerBucket))))))) (fun p =>
+    { owner := p.1, unit := p.2.1, scope := p.2.2.1, balance := p.2.2.2.1, lastSeq := p.2.2.2.2.1,
+      periods := p.2.2.2.2.2.1, buckets := p.2.2.2.2.2.2 })
+
+theorem lawful_ledgerAccount : Lawful encLedgerAccount decLedgerAccount :=
+  lawful_iso (lawful_pair lawful_ledgerOwner (lawful_pair lawful_nat (lawful_pair lawful_str
+      (lawful_pair lawful_int (lawful_pair lawful_nat (lawful_pair (lawful_list lawful_ledgerPeriodTotal)
+        (lawful_list lawful_ledgerBucket)))))))
+    (fun a => by cases a; rfl) (fun _ => rfl)
+
+/-- A journal entry: its account (owner, unit, scope), its number, its amount, its key, its reason, the principal
+    that caused it, its time and the entry it corrects. -/
+def encLedgerEntry : LedgerEntry → Bytes :=
+  encIso (encPair encLedgerOwner (encPair encNat (encPair encStr (encPair encNat (encPair encInt (encPair encStr (encPair encStr (encPair (encOpt encNat) (encPair encInt ((encOpt encNat))))))))))) (fun e =>
+    (e.owner, e.unit, e.scope, e.sequence, e.amount, e.key, e.reason, e.causedBy, e.time, e.corrects))
+
+def decLedgerEntry : Dec LedgerEntry :=
+  decIso (decPair decLedgerOwner (decPair decNat (decPair decStr (decPair decNat (decPair decInt (decPair decStr (decPair decStr (decPair (decOpt decNat) (decPair decInt ((decOpt decNat))))))))))) (fun p =>
+    { owner := p.1, unit := p.2.1, scope := p.2.2.1, sequence := p.2.2.2.1, amount := p.2.2.2.2.1,
+      key := p.2.2.2.2.2.1, reason := p.2.2.2.2.2.2.1, causedBy := p.2.2.2.2.2.2.2.1,
+      time := p.2.2.2.2.2.2.2.2.1, corrects := p.2.2.2.2.2.2.2.2.2 })
+
+theorem lawful_ledgerEntry : Lawful encLedgerEntry decLedgerEntry :=
+  lawful_iso (lawful_pair lawful_ledgerOwner (lawful_pair lawful_nat (lawful_pair lawful_str (lawful_pair lawful_nat (lawful_pair lawful_int (lawful_pair lawful_str (lawful_pair lawful_str (lawful_pair (lawful_opt lawful_nat) (lawful_pair lawful_int ((lawful_opt lawful_nat)))))))))))
+    (fun e => by cases e; rfl) (fun _ => rfl)
+
+/-- The ledger's state: its accounts, its journal and its account limits. -/
+def encLedgerState : LedgerState → Bytes :=
+  encIso (encPair (encList encLedgerAccount) (encPair (encList encLedgerEntry) (encList encLedgerLimit)))
+    (fun s => (s.accounts, s.journal, s.limits))
+
+def decLedgerState : Dec LedgerState :=
+  decIso (decPair (decList decLedgerAccount) (decPair (decList decLedgerEntry) (decList decLedgerLimit)))
+    (fun p => { accounts := p.1, journal := p.2.1, limits := p.2.2 })
+
+theorem lawful_ledgerState : Lawful encLedgerState decLedgerState :=
+  lawful_iso (lawful_pair (lawful_list lawful_ledgerAccount) (lawful_pair (lawful_list lawful_ledgerEntry)
+      (lawful_list lawful_ledgerLimit)))
+    (fun s => by cases s; rfl) (fun _ => rfl)
+
+/-- A policy over the ledger: its role, its unit (or none) and its atoms. -/
+def encLedgerPolicy : LedgerPolicy → Bytes :=
+  encIso (encPair encNat (encPair (encOpt encNat) (encList encLedgerAtom))) (fun l => (l.role, l.unit, l.conds))
+
+def decLedgerPolicy : Dec LedgerPolicy :=
+  decIso (decPair decNat (decPair (decOpt decNat) (decList decLedgerAtom))) (fun p =>
+    { role := p.1, unit := p.2.1, conds := p.2.2 })
+
+theorem lawful_ledgerPolicy : Lawful encLedgerPolicy decLedgerPolicy :=
+  lawful_iso (lawful_pair lawful_nat (lawful_pair (lawful_opt lawful_nat) (lawful_list lawful_ledgerAtom)))
+    (fun l => by cases l; rfl) (fun _ => rfl)
+
+/-- A posting of a `PostLedger` intent: its owner, unit, amount, key, reason, the entry it corrects and its scope. -/
+def encLedgerPosting : LedgerPosting → Bytes :=
+  encIso (encPair encLedgerOwner (encPair encNat (encPair encInt (encPair encStr (encPair encStr
+      (encPair (encOpt encNat) encStr))))))
+    (fun q => (q.owner, q.unit, q.amount, q.key, q.reason, q.corrects, q.scope))
+
+def decLedgerPosting : Dec LedgerPosting :=
+  decIso (decPair decLedgerOwner (decPair decNat (decPair decInt (decPair decStr (decPair decStr
+      (decPair (decOpt decNat) decStr)))))) (fun p =>
+    { owner := p.1, unit := p.2.1, amount := p.2.2.1, key := p.2.2.2.1, reason := p.2.2.2.2.1,
+      corrects := p.2.2.2.2.2.1, scope := p.2.2.2.2.2.2 })
+
+theorem lawful_ledgerPosting : Lawful encLedgerPosting decLedgerPosting :=
+  lawful_iso (lawful_pair lawful_ledgerOwner (lawful_pair lawful_nat (lawful_pair lawful_int (lawful_pair lawful_str
+      (lawful_pair lawful_str (lawful_pair (lawful_opt lawful_nat) lawful_str))))))
+    (fun q => by cases q; rfl) (fun _ => rfl)
+
 /-- The tenant's fields as one nested product: its object types, members, grants, policies, next id,
     limits, the roles its schema defines (slice 7), its teams and its invitations, then (slice 9) its
     revision, its event sequence and its schema version. -/
 def encTenantBody : List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
     List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
     List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat ×
-    List SettingDef × List SettingOverride × List (String × Nat) → Bytes :=
-  encPair (encList encTypeEntry)
-    (encPair (encList encMember)
-      (encPair (encList encGrantEntry)
-        (encPair (encList encPolicy)
-          (encPair encNat
-            (encPair encLimits
-              (encPair (encList encNat)
-                (encPair (encList encTeamEntry)
-                  (encPair (encList encInvitationEntry)
-                    (encPair encNat
-                      (encPair encNat
-                        (encPair encNat
-                          (encPair (encList encSettingDef)
-                            (encPair (encList encOverride) (encList encSettingRev))))))))))))))
+    List SettingDef × List SettingOverride × List (String × Nat) ×
+    Option LedgerDecls × LedgerState × List LedgerPolicy → Bytes :=
+  encPair (encList encTypeEntry) (encPair (encList encMember) (encPair (encList encGrantEntry) (encPair (encList encPolicy) (encPair encNat (encPair encLimits (encPair (encList encNat) (encPair (encList encTeamEntry) (encPair (encList encInvitationEntry) (encPair encNat (encPair encNat (encPair encNat (encPair (encList encSettingDef) (encPair (encList encOverride) (encPair (encList encSettingRev) (encPair (encOpt encLedgerDecls) (encPair encLedgerState ((encList encLedgerPolicy))))))))))))))))))
 
 def decTenantBody :
     Dec (List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
       List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
       List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat ×
-      List SettingDef × List SettingOverride × List (String × Nat)) :=
-  decPair (decList decTypeEntry)
-    (decPair (decList decMember)
-      (decPair (decList decGrantEntry)
-        (decPair (decList decPolicy)
-          (decPair decNat
-            (decPair decLimits
-              (decPair (decList decNat)
-                (decPair (decList decTeamEntry)
-                  (decPair (decList decInvitationEntry)
-                    (decPair decNat
-                      (decPair decNat
-                        (decPair decNat
-                          (decPair (decList decSettingDef)
-                            (decPair (decList decOverride) (decList decSettingRev))))))))))))))
+      List SettingDef × List SettingOverride × List (String × Nat) ×
+      Option LedgerDecls × LedgerState × List LedgerPolicy) :=
+  decPair (decList decTypeEntry) (decPair (decList decMember) (decPair (decList decGrantEntry) (decPair (decList decPolicy) (decPair decNat (decPair decLimits (decPair (decList decNat) (decPair (decList decTeamEntry) (decPair (decList decInvitationEntry) (decPair decNat (decPair decNat (decPair decNat (decPair (decList decSettingDef) (decPair (decList decOverride) (decPair (decList decSettingRev) (decPair (decOpt decLedgerDecls) (decPair decLedgerState ((decList decLedgerPolicy))))))))))))))))))
 
 theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
-  lawful_pair (lawful_list lawful_typeEntry)
-    (lawful_pair (lawful_list lawful_member)
-      (lawful_pair (lawful_list lawful_grantEntry)
-        (lawful_pair (lawful_list lawful_policy)
-          (lawful_pair lawful_nat
-            (lawful_pair lawful_limits
-              (lawful_pair (lawful_list lawful_nat)
-                (lawful_pair (lawful_list lawful_teamEntry)
-                  (lawful_pair (lawful_list lawful_invitationEntry)
-                    (lawful_pair lawful_nat
-                      (lawful_pair lawful_nat
-                        (lawful_pair lawful_nat
-                          (lawful_pair (lawful_list lawful_settingDef)
-                            (lawful_pair (lawful_list lawful_override) (lawful_list lawful_settingRev))))))))))))))
+  lawful_pair (lawful_list lawful_typeEntry) (lawful_pair (lawful_list lawful_member) (lawful_pair (lawful_list lawful_grantEntry) (lawful_pair (lawful_list lawful_policy) (lawful_pair lawful_nat (lawful_pair lawful_limits (lawful_pair (lawful_list lawful_nat) (lawful_pair (lawful_list lawful_teamEntry) (lawful_pair (lawful_list lawful_invitationEntry) (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair (lawful_list lawful_settingDef) (lawful_pair (lawful_list lawful_override) (lawful_pair (lawful_list lawful_settingRev) (lawful_pair (lawful_opt lawful_ledgerDecls) (lawful_pair lawful_ledgerState ((lawful_list lawful_ledgerPolicy))))))))))))))))))
 
 def encTenant : Tenant → Bytes :=
   encIso encTenantBody
     (fun t => (t.types, t.members, t.grants, t.policies, t.nextId, t.limits, t.roles, t.teams,
-      t.invitations, t.revision, t.eventSeq, t.schemaVersion, t.settingDefs, t.overrides, t.settingRevs))
+      t.invitations, t.revision, t.eventSeq, t.schemaVersion, t.settingDefs, t.overrides, t.settingRevs,
+      t.ledgerDecls, t.ledger, t.ledgerPolicies))
 
 def decTenant : Dec Tenant :=
   decIso decTenantBody fun p =>
@@ -1610,7 +1896,10 @@ def decTenant : Dec Tenant :=
       invitations := p.2.2.2.2.2.2.2.2.1, revision := p.2.2.2.2.2.2.2.2.2.1,
       eventSeq := p.2.2.2.2.2.2.2.2.2.2.1, schemaVersion := p.2.2.2.2.2.2.2.2.2.2.2.1,
       settingDefs := p.2.2.2.2.2.2.2.2.2.2.2.2.1, overrides := p.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
-      settingRevs := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2 }
+      settingRevs := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      ledgerDecls := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      ledger := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      ledgerPolicies := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2 }
 
 theorem lawful_tenant : Lawful encTenant decTenant :=
   lawful_iso lawful_tenantBody (fun t => by cases t; rfl) (fun _ => rfl)
@@ -1808,6 +2097,8 @@ def encIntent : Intent → Bytes
   | .changeSchema ev s cs => tag 8 :: (encOpt encNat ev ++ encBool s ++ encList encChange cs)
   | .writeSetting n lvl team v ev =>
     tag 9 :: (encStr n ++ encLevel lvl ++ encOpt encNat team ++ encOpt encVal v ++ encNat ev)
+  | .postLedger now ps => tag 10 :: (encInt now ++ encList encLedgerPosting ps)
+  | .expireLedger now u c => tag 11 :: (encInt now ++ encNat u ++ encInt c)
 
 def decIntent : Dec Intent := fun bs =>
   match bs with
@@ -1880,6 +2171,18 @@ def decIntent : Dec Intent := fun bs =>
           | none => none
         | none => none
       | none => none
+    | 10 => match decInt r with
+      | some (now, r1) => match decList decLedgerPosting r1 with
+        | some (ps, r2) => some (.postLedger now ps, r2)
+        | none => none
+      | none => none
+    | 11 => match decInt r with
+      | some (now, r1) => match decNat r1 with
+        | some (u, r2) => match decInt r2 with
+          | some (c, r3) => some (.expireLedger now u c, r3)
+          | none => none
+        | none => none
+      | none => none
     | _ => none
 
 theorem lawful_intent : Lawful encIntent decIntent := by
@@ -1909,13 +2212,18 @@ theorem lawful_intent : Lawful encIntent decIntent := by
     | writeSetting n lvl team v ev =>
       simp [encIntent, decIntent, tag, lawful_str.1, lawful_level.1, (lawful_opt lawful_nat).1,
         (lawful_opt lawful_val).1, lawful_nat.1, List.append_assoc]
+    | postLedger now ps =>
+      simp [encIntent, decIntent, tag, lawful_int.1, (lawful_list lawful_ledgerPosting).1, List.append_assoc]
+    | expireLedger now u c =>
+      simp [encIntent, decIntent, tag, lawful_int.1, lawful_nat.1, List.append_assoc]
   · intro bs x rest h
     cases bs with
     | nil => simp [decIntent] at h
     | cons b r =>
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
-          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨ 10 ≤ b.toNat by omega)
-        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
+          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨ b.toNat = 10 ∨
+          b.toNat = 11 ∨ 12 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
       · simp only [decIntent, hk] at h
         cases hd1 : decNat r with
         | none => simp [hd1] at h
@@ -2096,6 +2404,39 @@ theorem lawful_intent : Lawful encIntent decIntent := by
                   have e4 := (lawful_opt lawful_val).2 r3 v r4 hd4
                   have e5 := lawful_nat.2 r4 ev r5 hd5
                   simp [encIntent, byte_eq_tag b 9 hk, e1, e2, e3, e4, e5, List.append_assoc]
+      · simp only [decIntent, hk] at h
+        cases hd1 : decInt r with
+        | none => simp [hd1] at h
+        | some p1 =>
+          obtain ⟨now, r1⟩ := p1
+          cases hd2 : decList decLedgerPosting r1 with
+          | none => simp [hd1, hd2] at h
+          | some p2 =>
+            obtain ⟨ps, r2⟩ := p2
+            simp only [hd1, hd2, Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            have e1 := lawful_int.2 r now r1 hd1
+            have e2 := (lawful_list lawful_ledgerPosting).2 r1 ps r2 hd2
+            simp [encIntent, byte_eq_tag b 10 hk, e1, e2, List.append_assoc]
+      · simp only [decIntent, hk] at h
+        cases hd1 : decInt r with
+        | none => simp [hd1] at h
+        | some p1 =>
+          obtain ⟨now, r1⟩ := p1
+          cases hd2 : decNat r1 with
+          | none => simp [hd1, hd2] at h
+          | some p2 =>
+            obtain ⟨u, r2⟩ := p2
+            cases hd3 : decInt r2 with
+            | none => simp [hd1, hd2, hd3] at h
+            | some p3 =>
+              obtain ⟨c, r3⟩ := p3
+              simp only [hd1, hd2, hd3, Option.some.injEq, Prod.mk.injEq] at h
+              obtain ⟨rfl, rfl⟩ := h
+              have e1 := lawful_int.2 r now r1 hd1
+              have e2 := lawful_nat.2 r1 u r2 hd2
+              have e3 := lawful_int.2 r2 c r3 hd3
+              simp [encIntent, byte_eq_tag b 11 hk, e1, e2, e3, List.append_assoc]
       · simp only [decIntent] at h
         exfalso
         repeat' split at h

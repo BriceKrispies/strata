@@ -95,6 +95,8 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
     cases i with
     | createTenant owner name => simp [stepTenant] at hs
     | writeSetting n lvl team v ev => simpa [authorized] using writeSettingT_ok_auth hs
+    | postLedger now ps => simpa [authorized] using postLedgerT_ok_auth hs
+    | expireLedger now u c => simpa [authorized] using expireLedgerT_ok_auth hs
     | member j =>
       cases j with
       | redeemInvitation inv now verified =>
@@ -320,6 +322,8 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : Principal) (i : Intent)
   | createTenant owner name => simp [stepTenant] at h
   | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact ⟨hconf, hids⟩
   | writeSetting n lvl team v ev => obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h; exact ⟨hconf, hids⟩
+  | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; exact ⟨hconf, hids⟩
+  | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; exact ⟨hconf, hids⟩
   | create ty fs =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h

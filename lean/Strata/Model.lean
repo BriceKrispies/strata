@@ -11,6 +11,7 @@ that decides an outcome, the executable kernels, the working set and the harness
 import Strata.Members
 import Strata.SchemaChange
 import Strata.Settings
+import Strata.LedgerModel
 
 namespace Strata
 
@@ -46,6 +47,12 @@ inductive Intent where
       override the caller read, zero for none. -/
   | writeSetting (name : String) (level : SettingLevel) (team : Option TeamId) (value : Option Val)
       (expected : Nat)
+  /-- Post one to eight entries to the ledger, each on the state the earlier ones leave; one refusal refuses all
+      (slice 13). `now` is the time of the request, as the member intents carry theirs. -/
+  | postLedger (now : Int) (postings : List LedgerPosting)
+  /-- Expire the credit of a unit whose buckets started at or before `cutoff`, in at most one batch of accounts
+      (slice 13). -/
+  | expireLedger (now : Int) (unit : Nat) (cutoff : Int)
   deriving Repr
 
 /-- The user an intent names, if it names one: the owner of a new tenant, the user a role is assigned
@@ -179,6 +186,8 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
   | .createTenant _ _ => .error .tenantExists
   | .member j => stepMemberT t p j
   | .writeSetting n lvl team v ev => writeSettingT t p n lvl team v ev
+  | .postLedger now ps => postLedgerT t p now ps
+  | .expireLedger now u c => expireLedgerT t p now u c
 /-- Whether the acting principal is allowed to make this intent at all: the object type exists,
     and the permission holds on the record (or, for a schema change, the owner). -/
 def authorized (t : Tenant) (p : Principal) : Intent → Bool
@@ -207,6 +216,9 @@ def authorized (t : Tenant) (p : Principal) : Intent → Bool
   | .writeSetting _ lvl _ _ _ =>
     p.userId?.isSome && (lvl == .person || (lvl == .tenant && t.holdsCap p capWriteTenant)
       || (lvl == .team && t.holdsCap p capWriteTeam))
+  -- A posting needs `ledger-post`; an expiry is the system's or one with `ledger-configure`'s.
+  | .postLedger _ _ => t.holdsCap p ledgerCapPost
+  | .expireLedger _ _ _ => p == .system || t.holdsCap p ledgerCapConfigure
 
 /-- The object types a schema intent re-validates, as the kernel's `touched_objects` gives them: the
     type it names, and, for a field, the types the field refers to. Other intents touch none. -/
@@ -279,6 +291,9 @@ inductive EventBody where
   /-- An override of a setting was set or removed, naming the setting and its subject and carrying no value
       (slice 12, the kernel's `SettingChanged`: a person's value can be personal data). -/
   | settingChanged (name : String) (subject : SettingSubject)
+  /-- An entry was posted to a ledger account, or an expiry debited one: the account, the amount, the balances
+      around it and the entry's number (slice 13, the kernel's `LedgerEntryPosted`). -/
+  | ledgerEntryPosted (e : LedgerPosted)
   deriving Repr
 
 /-- A domain event: its sequence number (gapless per tenant), the revision it was committed at, the principal
@@ -393,6 +408,8 @@ def eventBodies (t : Tenant) (p : Principal) : Intent → Tenant → List EventB
     | none => []
   | .member j, t' => memberBodies p j t'.mt
   | .writeSetting n lvl team _ _, _ => [.settingChanged n (settingSubjectOf p lvl team)]
+  | .postLedger now ps, _ => (postLedgerEvents t p now ps).map EventBody.ledgerEntryPosted
+  | .expireLedger now u c, _ => (expireLedgerEvents t p now u c).map EventBody.ledgerEntryPosted
   | .changeSchema _ _ cs, t' =>
     .schemaChanged (t.schemaVersion + 1) (cs.map Change.line) (changeGrandfathered t.limits t'.types cs) ::
       (rewrittenEvents t t' (cs.flatMap Change.touched) ++ removedEvents t cs)

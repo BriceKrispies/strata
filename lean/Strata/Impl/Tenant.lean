@@ -42,6 +42,10 @@ structure ITenant where
   settingDefs : List SettingDef := []
   overrides : List SettingOverride := []
   settingRevs : List (String × Nat) := []
+  /-- The ledger of slice 13, held as the spec holds it: its declarations, its state and its read policies. -/
+  ledgerDecls : Option LedgerDecls := none
+  ledger : LedgerState := {}
+  ledgerPolicies : List LedgerPolicy := []
   /-- The revision, the event sequence and the schema version, as the spec holds them (slice 9). -/
   revision : Nat := 0
   eventSeq : Nat := 0
@@ -70,7 +74,8 @@ def ITenant.abs (t : ITenant) : Tenant :=
     nextId := t.nextId, limits := t.limits, roles := t.roles, teams := t.teams,
     invitations := t.invitations, revision := t.revision, eventSeq := t.eventSeq,
     schemaVersion := t.schemaVersion, settingDefs := t.settingDefs, overrides := t.overrides,
-    settingRevs := t.settingRevs }
+    settingRevs := t.settingRevs, ledgerDecls := t.ledgerDecls, ledger := t.ledger,
+    ledgerPolicies := t.ledgerPolicies }
 
 /-- The part of an implementation tenant the membership intents see. -/
 def ITenant.mt (t : ITenant) : MTenant :=
