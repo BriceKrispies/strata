@@ -179,7 +179,7 @@ pub struct Policy {
 
 /// An expression of a constraint or of a field default (slice 5). Lean's `Expr`: a literal (tag
 /// `0`), a field read (`1`, the scope and the field id), the principal (`2`), a comparison (`3`),
-/// `and` (`4`), `or` (`5`), `not` (`6`), `isNull` (`7`) and `$created_by` (`8`, the scope).
+/// `and` (`4`), `or` (`5`), `not` (`6`), `isNull` (`7`) and `$created_by` (`8`, the scope) and `param` (`9`, an input of an operation by name).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
     Lit(Val),
@@ -191,6 +191,8 @@ pub enum Expr {
     Not(Box<Expr>),
     IsNull(Box<Expr>),
     CreatedBy(Scope),
+    /// An input of the running operation, by name (tag `9`; slice 14). Unbound outside an operation.
+    Param(String),
 }
 
 /// The definition of a field of the schema. `default` is the expression a create fills the field
@@ -497,6 +499,71 @@ pub struct LedgerTx {
     pub legs: Vec<LedgerLeg>,
 }
 
+/// One input of an operation (slice 14; the Lean `OpInput`): its name, its type and whether it must be given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpInput {
+    pub name: String,
+    pub ty: Ty,
+    pub required: bool,
+}
+
+/// Whose account a posting step of an operation posts to (slice 14; the Lean `OpOwner`): tag `0` the invoker, tag
+/// `1` a pool (its natural).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpOwner {
+    Invoker,
+    Pool(u64),
+}
+
+/// One step of an operation (slice 14; the Lean `OpStep`): `0` create, `1` update, `2` delete, `3` post.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpStep {
+    Create {
+        id: String,
+        ty: u64,
+        fields: Vec<(u64, Expr)>,
+    },
+    Update {
+        id: String,
+        ty: u64,
+        record: Expr,
+        fields: Vec<(u64, Expr)>,
+    },
+    Delete {
+        id: String,
+        ty: u64,
+        record: Expr,
+    },
+    Post {
+        id: String,
+        owner: OpOwner,
+        unit: u64,
+        amount: Expr,
+        reason: String,
+    },
+}
+
+/// A condition of an operation (slice 14; the Lean `OpCond`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpCond {
+    pub id: String,
+    pub expr: Expr,
+}
+
+/// An operation of a schema (slice 14; the Lean `OpDef`): its id, inputs, whether every signed-in person may invoke
+/// it, the roles that may, its optional subject (an object type and the input that names the record), its conditions
+/// and its steps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpDef {
+    pub id: String,
+    pub inputs: Vec<OpInput>,
+    pub signed_in: bool,
+    pub roles: Vec<u64>,
+    pub subject: Option<(u64, String)>,
+    pub conditions: Vec<OpCond>,
+    pub steps: Vec<OpStep>,
+}
+
 /// Everything one tenant owns, as the boundary carries it: its object types by id, its members
 /// (each user with its roles), what each role grants, its policies, the next record id, the size
 /// bounds, (slice 7) the roles its schema defines, its teams and its invitations, (slice 9) its
@@ -523,6 +590,8 @@ pub struct Tenant {
     pub ledger_decls: Option<LedgerDecls>,
     pub ledger: LedgerState,
     pub ledger_policies: Vec<LedgerPolicy>,
+    /// The operations of the schema (slice 14), each with its name.
+    pub operations: Vec<(String, OpDef)>,
 }
 
 /// The acting context of a step: which tenant, and who is acting.
@@ -677,6 +746,14 @@ pub enum Intent {
     PostLedger {
         now: i64,
         postings: Vec<LedgerPosting>,
+    },
+    /// An `InvokeOperation` intent (slice 14; tag `13`): the time, the operation's name, its inputs by name and the
+    /// idempotency key.
+    InvokeOperation {
+        now: i64,
+        operation: String,
+        inputs: Vec<(String, Val)>,
+        key: String,
     },
     /// An `ExpireLedger` intent (slice 13; tag `11`): the time, the unit and the cutoff.
     ExpireLedger {
@@ -893,6 +970,10 @@ fn put_expr(out: &mut Vec<u8>, e: &Expr) {
         Expr::CreatedBy(s) => {
             out.push(8);
             put_scope(out, s);
+        }
+        Expr::Param(n) => {
+            out.push(9);
+            put_str(out, n);
         }
     }
 }
@@ -1114,6 +1195,104 @@ fn put_tenant(out: &mut Vec<u8>, t: &Tenant) {
     put_opt(out, &t.ledger_decls, put_ledger_decls);
     put_ledger_state(out, &t.ledger);
     put_list(out, t.ledger_policies.as_slice(), put_ledger_policy);
+    put_list(out, t.operations.as_slice(), put_op_entry);
+}
+
+/// An input of an operation (`encOpInput`).
+fn put_op_input(out: &mut Vec<u8>, i: &OpInput) {
+    put_str(out, &i.name);
+    put_ty(out, &i.ty);
+    put_bool(out, i.required);
+}
+
+/// The owner of a posting step (`encOpOwner`).
+fn put_op_owner(out: &mut Vec<u8>, o: &OpOwner) {
+    match o {
+        OpOwner::Invoker => out.push(0),
+        OpOwner::Pool(n) => {
+            out.push(1);
+            put_nat(out, *n);
+        }
+    }
+}
+
+/// A step of an operation (`encOpStep`).
+fn put_op_step(out: &mut Vec<u8>, s: &OpStep) {
+    match s {
+        OpStep::Create { id, ty, fields } => {
+            out.push(0);
+            put_str(out, id);
+            put_nat(out, *ty);
+            put_list(out, fields.as_slice(), put_field_expr);
+        }
+        OpStep::Update {
+            id,
+            ty,
+            record,
+            fields,
+        } => {
+            out.push(1);
+            put_str(out, id);
+            put_nat(out, *ty);
+            put_expr(out, record);
+            put_list(out, fields.as_slice(), put_field_expr);
+        }
+        OpStep::Delete { id, ty, record } => {
+            out.push(2);
+            put_str(out, id);
+            put_nat(out, *ty);
+            put_expr(out, record);
+        }
+        OpStep::Post {
+            id,
+            owner,
+            unit,
+            amount,
+            reason,
+        } => {
+            out.push(3);
+            put_str(out, id);
+            put_op_owner(out, owner);
+            put_nat(out, *unit);
+            put_expr(out, amount);
+            put_str(out, reason);
+        }
+    }
+}
+
+/// A condition of an operation (`encOpCond`).
+fn put_op_cond(out: &mut Vec<u8>, c: &OpCond) {
+    put_str(out, &c.id);
+    put_expr(out, &c.expr);
+}
+
+/// The subject of an operation: an object type and the name of the input (`encPair encNat encStr`).
+fn put_op_subject(out: &mut Vec<u8>, s: &(u64, String)) {
+    put_nat(out, s.0);
+    put_str(out, &s.1);
+}
+
+/// An operation (`encOpDef`): its id, inputs, signed-in flag, roles, subject, conditions and steps.
+fn put_op_def(out: &mut Vec<u8>, d: &OpDef) {
+    put_str(out, &d.id);
+    put_list(out, d.inputs.as_slice(), put_op_input);
+    put_bool(out, d.signed_in);
+    put_u64_list(out, &d.roles);
+    put_opt(out, &d.subject, put_op_subject);
+    put_list(out, d.conditions.as_slice(), put_op_cond);
+    put_list(out, d.steps.as_slice(), put_op_step);
+}
+
+/// An operation with its name, as the tenant holds it (`encOpEntry`).
+fn put_op_entry(out: &mut Vec<u8>, e: &(String, OpDef)) {
+    put_str(out, &e.0);
+    put_op_def(out, &e.1);
+}
+
+/// An input of an invocation: its name, then its value (`encPair encStr encVal`).
+fn put_invoke_input(out: &mut Vec<u8>, e: &(String, Val)) {
+    put_str(out, &e.0);
+    put_val(out, &e.1);
 }
 
 /// A membership intent: its tag, then its fields (`encMemberIntent`).
@@ -1555,6 +1734,18 @@ fn put_intent(out: &mut Vec<u8>, i: &Intent) {
             put_int(out, *now);
             put_list(out, postings.as_slice(), put_ledger_posting);
         }
+        Intent::InvokeOperation {
+            now,
+            operation,
+            inputs,
+            key,
+        } => {
+            out.push(13);
+            put_int(out, *now);
+            put_str(out, operation);
+            put_list(out, inputs.as_slice(), put_invoke_input);
+            put_str(out, key);
+        }
         Intent::ExpireLedger { now, unit, cutoff } => {
             out.push(11);
             put_int(out, *now);
@@ -1914,6 +2105,7 @@ fn get_expr(r: &mut Reader<'_>, depth: usize) -> Option<Expr> {
         6 => Some(Expr::Not(Box::new(get_expr(r, depth + 1)?))),
         7 => Some(Expr::IsNull(Box::new(get_expr(r, depth + 1)?))),
         8 => Some(Expr::CreatedBy(get_scope(r)?)),
+        9 => Some(Expr::Param(get_str(r)?)),
         _ => None,
     }
 }
@@ -2167,6 +2359,7 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
     let ledger_decls = get_opt(r, get_ledger_decls)?;
     let ledger = get_ledger_state(r)?;
     let ledger_policies = get_list(r, get_ledger_policy)?;
+    let operations = get_list(r, get_op_entry)?;
     Some(Tenant {
         types,
         members,
@@ -2186,7 +2379,110 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
         ledger_decls,
         ledger,
         ledger_policies,
+        operations,
     })
+}
+
+fn get_op_input(r: &mut Reader<'_>) -> Option<OpInput> {
+    let name = get_str(r)?;
+    let ty = get_ty(r, 0)?;
+    let required = get_bool(r)?;
+    Some(OpInput { name, ty, required })
+}
+
+fn get_op_owner(r: &mut Reader<'_>) -> Option<OpOwner> {
+    match r.byte()? {
+        0 => Some(OpOwner::Invoker),
+        1 => Some(OpOwner::Pool(get_nat(r)?)),
+        _ => None,
+    }
+}
+
+fn get_op_step(r: &mut Reader<'_>) -> Option<OpStep> {
+    match r.byte()? {
+        0 => {
+            let id = get_str(r)?;
+            let ty = get_nat(r)?;
+            let fields = get_list(r, get_field_expr)?;
+            Some(OpStep::Create { id, ty, fields })
+        }
+        1 => {
+            let id = get_str(r)?;
+            let ty = get_nat(r)?;
+            let record = get_expr_root(r)?;
+            let fields = get_list(r, get_field_expr)?;
+            Some(OpStep::Update {
+                id,
+                ty,
+                record,
+                fields,
+            })
+        }
+        2 => {
+            let id = get_str(r)?;
+            let ty = get_nat(r)?;
+            let record = get_expr_root(r)?;
+            Some(OpStep::Delete { id, ty, record })
+        }
+        3 => {
+            let id = get_str(r)?;
+            let owner = get_op_owner(r)?;
+            let unit = get_nat(r)?;
+            let amount = get_expr_root(r)?;
+            let reason = get_str(r)?;
+            Some(OpStep::Post {
+                id,
+                owner,
+                unit,
+                amount,
+                reason,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn get_op_cond(r: &mut Reader<'_>) -> Option<OpCond> {
+    let id = get_str(r)?;
+    let expr = get_expr_root(r)?;
+    Some(OpCond { id, expr })
+}
+
+fn get_op_subject(r: &mut Reader<'_>) -> Option<(u64, String)> {
+    let ty = get_nat(r)?;
+    let input = get_str(r)?;
+    Some((ty, input))
+}
+
+fn get_op_def(r: &mut Reader<'_>) -> Option<OpDef> {
+    let id = get_str(r)?;
+    let inputs = get_list(r, get_op_input)?;
+    let signed_in = get_bool(r)?;
+    let roles = get_u64_list(r)?;
+    let subject = get_opt(r, get_op_subject)?;
+    let conditions = get_list(r, get_op_cond)?;
+    let steps = get_list(r, get_op_step)?;
+    Some(OpDef {
+        id,
+        inputs,
+        signed_in,
+        roles,
+        subject,
+        conditions,
+        steps,
+    })
+}
+
+fn get_op_entry(r: &mut Reader<'_>) -> Option<(String, OpDef)> {
+    let name = get_str(r)?;
+    let def = get_op_def(r)?;
+    Some((name, def))
+}
+
+fn get_invoke_input(r: &mut Reader<'_>) -> Option<(String, Val)> {
+    let name = get_str(r)?;
+    let val = get_val(r)?;
+    Some((name, val))
 }
 
 fn get_member_intent(r: &mut Reader<'_>) -> Option<MemberIntent> {
@@ -2665,6 +2961,18 @@ fn get_intent(r: &mut Reader<'_>) -> Option<Intent> {
             let now = get_int(r)?;
             let tx = get_ledger_tx(r)?;
             Some(Intent::PostLedgerTx { now, tx })
+        }
+        13 => {
+            let now = get_int(r)?;
+            let operation = get_str(r)?;
+            let inputs = get_list(r, get_invoke_input)?;
+            let key = get_str(r)?;
+            Some(Intent::InvokeOperation {
+                now,
+                operation,
+                inputs,
+                key,
+            })
         }
         _ => None,
     }

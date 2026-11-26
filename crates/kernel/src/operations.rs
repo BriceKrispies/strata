@@ -43,7 +43,7 @@ use crate::intent::{
 };
 use crate::limits;
 use crate::read::visible_in;
-use crate::rules::{missing_error, roles_of, validate_record, Lookup};
+use crate::rules::{constraint_breaks, missing_error, roles_of, validate_record, Lookup};
 use crate::schema::{Action, Resource, TenantSchema, TenantSchemaExt};
 use crate::settings;
 use crate::state::{
@@ -1444,6 +1444,29 @@ impl Run<'_> {
                     rule,
                     format!("cleared on {} {}", from.id, referrer.id),
                 ));
+            }
+        }
+        // WG-5664: the referrer's constraints must hold on the record the clearing leaves. A delete
+        // that would leave one false or unevaluable is refused with the constraint error, as a direct
+        // delete refuses it, rather than store the violating record.
+        for (before, rewrite) in cleared.values() {
+            if let Some(referrer_def) = schema.objects.get(&before.object) {
+                if constraint_breaks(
+                    self.lookup(),
+                    referrer_def,
+                    rewrite,
+                    &self.ctx.principal,
+                    now,
+                )? {
+                    return Err(self.fail(
+                        ErrorKind::ConstraintViolated,
+                        format!("constraint:{}", before.object),
+                        format!(
+                            "{} {} would violate a constraint when {object} {id} is deleted",
+                            before.object, rewrite.id
+                        ),
+                    ));
+                }
             }
         }
         for (before, mut rewrite) in cleared.into_values() {

@@ -58,6 +58,8 @@
 //! | `ledger expire @<now> <unit> <cutoff>` (slice 13) | `Intent::ExpireLedger` in a context whose `now` is `<now>` |
 //! | `ledger tx @<now> op=<operation> key=<k> [reason=<r>] <unit> <owner> <amount> [scope=<s>] [; ..]` (slice 13) | `Intent::PostLedgerTransaction` in a context whose `now` is `<now>`; each `;`-separated group is one leg, written as a posting without a key, a reason or a correction |
 //! | `read <t> <p> ledger <unit> <owner> [scope=<s>] [own]` (slice 13) | `ledger::read_balance`; `err <kind>`, or `ok`, the balance and the sequence number |
+//! | `invoke @<now> <operation> [key=<k>] [<input>=<value> ..]` after `op <t> <p>` (slice 14) | `Intent::InvokeOperation` in a context whose `now` is `<now>` and whose `idempotency_key` stays none; `key=<k>` is the intent's idempotency key (empty when absent) and each other token an input, its value read as a field value is |
+//! | the fixture operations (slice 14) | `fixture_operations`: `note`, `note_count`, `retag`, `drop`, `grant` and `note_grant`, defined on tenants `t1` and `t2` in the fixture batch that defines the settings (so no further revision or event) |
 //! | the fixture ledger (slice 13) | `fixture_ledger_decls` on tenants `t1` and `t2`, set on the schema after the fixture batch (no event) |
 //!
 //! # The Main.lean protocol
@@ -1526,6 +1528,41 @@ fn parse_ledger_op(tokens: &[&str]) -> Option<(i64, Intent)> {
     }
 }
 
+/// An invocation of an operation and its time: `invoke @<now> <operation> [key=<k>] [<input>=<value> ..]` (slice 14;
+/// the model's `parseInvoke`). The time becomes the context's `now`; `key=<k>` is the idempotency key of the intent
+/// (the first one written, empty when there is none), and every other token is an input, read as a field value. A token
+/// that is not `<name>=<value>` does not parse.
+fn parse_invoke_op(tokens: &[&str]) -> Option<(i64, Intent)> {
+    let ["invoke", now, operation, args @ ..] = tokens else {
+        return None;
+    };
+    let now = parse_ledger_now(now)?;
+    let operation = TenantOperationId::new(*operation).ok()?;
+    let mut key: Option<String> = None;
+    let mut inputs: BTreeMap<String, Value> = BTreeMap::new();
+    for arg in args {
+        if let Some(written) = arg.strip_prefix("key=") {
+            key.get_or_insert_with(|| written.to_string());
+            continue;
+        }
+        let parts: Vec<&str> = arg.split('=').collect();
+        let [name, value] = parts.as_slice() else {
+            return None;
+        };
+        inputs
+            .entry((*name).to_string())
+            .or_insert_with(|| parse_value(value));
+    }
+    Some((
+        now,
+        Intent::InvokeOperation {
+            operation,
+            inputs,
+            idempotency_key: key.unwrap_or_default(),
+        },
+    ))
+}
+
 /// A ledger balance read after `read <t> <p>`: `ledger <unit> <owner> [scope=<s>] [own]` (slice 13; the model's
 /// `parseLedgerRead`). Returns the unit, the owner, the scope and whether the read is one's own.
 fn parse_ledger_read(tokens: &[&str]) -> Option<(LedgerUnit, LedgerOwner, String, bool)> {
@@ -1615,6 +1652,161 @@ fn fixture_ledger_decls() -> LedgerDeclarations {
     }
 }
 
+/// One input of a fixture operation, with no label.
+fn operation_input(name: &str, ty: FieldType, required: bool) -> TenantOperationInput {
+    TenantOperationInput {
+        name: name.to_string(),
+        ty,
+        required,
+        label: None,
+    }
+}
+
+/// A fixture operation: its id and label are `name`, with no agent policy.
+fn operation_def(
+    name: &str,
+    inputs: Vec<TenantOperationInput>,
+    invokers: TenantOperationInvokers,
+    subject: Option<TenantOperationSubject>,
+    conditions: Vec<TenantOperationCondition>,
+    steps: Vec<TenantOperationStep>,
+) -> SchemaChange {
+    SchemaChange::DefineOperation(TenantOperationDef {
+        id: id(name.to_string()),
+        label: name.to_string(),
+        inputs,
+        invokers,
+        subject,
+        conditions,
+        steps,
+        agent_policy: None,
+    })
+}
+
+/// The fixture's operations (slice 14; the model's `fixtureOperations`): `note` creates an item from its text,
+/// `note_count` does so under a condition on an optional count, `retag` and `drop` update and delete the item they
+/// are about (an editor only, not every signed-in person), and `grant` and `note_grant` post to unit `1` for the
+/// invoker, the latter after creating an item. Defined in the fixture batch that defines the settings, so they raise
+/// neither the revision nor the event sequence.
+fn fixture_operations() -> Vec<SchemaChange> {
+    let signed_in = TenantOperationInvokers {
+        signed_in: true,
+        roles: BTreeSet::new(),
+    };
+    let editors = TenantOperationInvokers {
+        signed_in: false,
+        roles: BTreeSet::from([role_id(2)]),
+    };
+    let item_input = || {
+        operation_input(
+            "item",
+            FieldType::Ref {
+                target: item(),
+                on_delete: OnDelete::Restrict,
+            },
+            true,
+        )
+    };
+    let subject = || {
+        Some(TenantOperationSubject {
+            object: item(),
+            input: "item".to_string(),
+            self_action: None,
+        })
+    };
+    let create_note = |fields: Vec<(u64, &str)>| TenantOperationStep::CreateRecord {
+        id: "n".to_string(),
+        object: item(),
+        fields: fields
+            .into_iter()
+            .map(|(n, input)| (field_id(n), Expr::Param(input.to_string())))
+            .collect(),
+    };
+    let grant_step = || TenantOperationStep::PostLedger {
+        id: "p".to_string(),
+        owner: TenantOperationPostingOwner::Invoker,
+        unit: ledger_unit(1),
+        scope: None,
+        amount: Expr::Param("amt".to_string()),
+        reason: "grant".to_string(),
+        reference: None,
+    };
+    vec![
+        operation_def(
+            "note",
+            vec![operation_input("text", FieldType::Str, true)],
+            signed_in.clone(),
+            None,
+            vec![],
+            vec![create_note(vec![(1, "text")])],
+        ),
+        operation_def(
+            "note_count",
+            vec![
+                operation_input("text", FieldType::Str, true),
+                operation_input("count", FieldType::Int, false),
+            ],
+            signed_in.clone(),
+            None,
+            vec![TenantOperationCondition {
+                id: "count_ok".to_string(),
+                expr: Expr::Cmp(
+                    CmpOp::Ge,
+                    Box::new(Expr::Param("count".to_string())),
+                    Box::new(Expr::Lit(Value::Int(0))),
+                ),
+                error: "count_negative".to_string(),
+                message: "the count is negative".to_string(),
+            }],
+            vec![create_note(vec![(1, "text"), (2, "count")])],
+        ),
+        operation_def(
+            "retag",
+            vec![item_input(), operation_input("text", FieldType::Str, true)],
+            editors.clone(),
+            subject(),
+            vec![],
+            vec![TenantOperationStep::UpdateRecord {
+                id: "u".to_string(),
+                object: item(),
+                record: Expr::Param("item".to_string()),
+                fields: BTreeMap::from([(field_id(1), Expr::Param("text".to_string()))]),
+            }],
+        ),
+        operation_def(
+            "drop",
+            vec![item_input()],
+            editors,
+            subject(),
+            vec![],
+            vec![TenantOperationStep::DeleteRecord {
+                id: "d".to_string(),
+                object: item(),
+                record: Expr::Param("item".to_string()),
+            }],
+        ),
+        operation_def(
+            "grant",
+            vec![operation_input("amt", FieldType::Int, true)],
+            signed_in.clone(),
+            None,
+            vec![],
+            vec![grant_step()],
+        ),
+        operation_def(
+            "note_grant",
+            vec![
+                operation_input("text", FieldType::Str, true),
+                operation_input("amt", FieldType::Int, true),
+            ],
+            signed_in,
+            None,
+            vec![],
+            vec![create_note(vec![(1, "text")]), grant_step()],
+        ),
+    ]
+}
+
 /// Declares the fixture ledger on a fixture tenant's schema, directly: no schema event is emitted, so the
 /// revision and the event sequence stay the fixture's (slice 13).
 fn set_fixture_ledger(world: &mut World, tenant: &TenantId) {
@@ -1660,6 +1852,7 @@ fn initial_world() -> World {
                 owner: id(format!("p{owner}")),
             },
         );
+        set_fixture_ledger(&mut world, &tenant);
         let role = |name: &str| RoleDef {
             id: id(name.to_string()),
             label: name.to_string(),
@@ -1828,6 +2021,9 @@ fn initial_world() -> World {
         });
         // The setting definitions (slice 12), in the same batch, so the revision and schema version stay as they were.
         changes.extend(fixture_settings());
+        // The operations (slice 14), in the same batch too. Their posting steps name ledger unit `1`, which the batch is
+        // checked against, so the ledger is declared before it (and again after it, below).
+        changes.extend(fixture_operations());
         world = run(
             &world,
             principal(owner),
@@ -2962,6 +3158,17 @@ pub fn kernel_output(scenarios: &str) -> String {
                     }
                     ["setting", ..] => match parse_setting_op(rest) {
                         Some(intent) => intent,
+                        None => {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        }
+                    },
+                    ["invoke", ..] => match parse_invoke_op(rest) {
+                        Some((now, intent)) => {
+                            // An invocation is decided at the time the scenario gives, not the fixture's clock.
+                            ctx.now = Timestamp(now);
+                            intent
+                        }
                         None => {
                             out.push(format!("unparsed {line}"));
                             continue;

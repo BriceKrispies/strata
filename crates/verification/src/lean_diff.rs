@@ -30,7 +30,7 @@ use crate::lean::{build_model, kernel_output, read_shapes, run_model};
 use std::path::Path;
 
 /// The intent kinds the generator produces; each is the word after the principal in an `op` line.
-pub const GENERATED_INTENTS: [&str; 21] = [
+pub const GENERATED_INTENTS: [&str; 22] = [
     "create",
     "update",
     "patch",
@@ -52,6 +52,7 @@ pub const GENERATED_INTENTS: [&str; 21] = [
     "schema",
     "setting",
     "ledger",
+    "invoke",
 ];
 
 /// Known differences between the model and the kernel that are intended, each with its reason.
@@ -160,6 +161,9 @@ pub enum OpKind {
     /// A balance read of a ledger account (slice 13): the unit, the owner token (a person's number or `pool<n>`),
     /// the scope (empty for none) and whether the read is one's own.
     LedgerRead(u64, String, String, bool),
+    /// An invocation of an operation (slice 14): the time, the operation's name, the idempotency key token (the text
+    /// after `key=`; none writes no `key=`) and the inputs, each as its name and value token.
+    Invoke(i64, String, Option<String>, Vec<(String, String)>),
 }
 
 pub type Scenario = Vec<Op>;
@@ -312,6 +316,14 @@ impl Op {
                     .map(|l| format!(" {l}"))
                     .collect::<Vec<String>>()
                     .join(" ;")
+            ),
+            OpKind::Invoke(now, operation, key, inputs) => format!(
+                "{head} invoke @{now} {operation}{}{}",
+                key.as_ref().map_or(String::new(), |k| format!(" key={k}")),
+                inputs
+                    .iter()
+                    .map(|(name, value)| format!(" {name}={value}"))
+                    .collect::<String>()
             ),
             OpKind::LedgerRead(unit, owner, scope, own) => format!(
                 "read {} {} ledger {unit} {owner}{}{}",
@@ -2560,6 +2572,127 @@ fn with_ledger(seed: u64, mut ops: Scenario) -> Scenario {
     ops
 }
 
+/// One input value of an invocation (slice 14): mostly well formed for `kind` (`text`, `item`, `count` or `amt`), and
+/// now and then missing a value (`n`), of the wrong type, or past a bound (a string one byte over the string limit, an
+/// amount over the unit's cap, a record that does not exist).
+fn invoke_value(rng: &mut Lcg, kind: &str) -> String {
+    match kind {
+        "text" => match rng.below(40) {
+            0 => "s*65537:x".to_string(),
+            1..=2 => "n".to_string(),
+            3..=4 => format!("i:{}", rng.below(9)),
+            5 => "b:1".to_string(),
+            _ => format!("s:{}", word(rng)),
+        },
+        "item" => match rng.below(20) {
+            0 => "s:1".to_string(),
+            1 => "i:1".to_string(),
+            2 => "n".to_string(),
+            3..=4 => format!("r:{}", 90 + rng.below(5)),
+            _ => format!("r:{}", 1 + rng.below(6)),
+        },
+        "count" => match rng.below(10) {
+            0..=1 => "i:-1".to_string(),
+            2 => "n".to_string(),
+            3 => "s:x".to_string(),
+            _ => format!("i:{}", rng.below(5)),
+        },
+        _ => match rng.below(30) {
+            0 => "i:5000".to_string(),
+            1 => "s:x".to_string(),
+            2 => "i:0".to_string(),
+            3..=5 => format!("i:-{}", 1 + rng.below(50)),
+            _ => format!("i:{}", rng.below(400)),
+        },
+    }
+}
+
+/// An invocation (slice 14), by one of the callers a fixture operation distinguishes: the owner, an editor, a writer,
+/// the system, an anonymous caller, a user that is no member. The operation is one of the six the fixture defines,
+/// or now and then one it does not; its inputs are drawn as for a valid call, then one is now and then left out and
+/// one the operation does not declare is now and then added; the key is mostly one of a few names (so that a
+/// posting is replayed under it), and now and then empty, malformed or absent.
+fn invoke_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(20) {
+        0 => 3,
+        1..=3 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0..=1 => Caller::System,
+        2 => Caller::Anonymous,
+        3 => Caller::User(999),
+        4..=7 => Caller::User(home + 1),
+        8..=10 => Caller::User(home + 2),
+        11 => Caller::User(home + 3),
+        _ => Caller::User(home),
+    };
+    let (operation, declared): (&str, &[(&str, &str)]) = match rng.below(25) {
+        0..=3 => ("note", &[("text", "text")]),
+        4..=7 => ("note_count", &[("text", "text"), ("count", "count")]),
+        8..=11 => ("retag", &[("item", "item"), ("text", "text")]),
+        12..=16 => ("drop", &[("item", "item")]),
+        17..=20 => ("grant", &[("amt", "amt")]),
+        21..=23 => ("note_grant", &[("text", "text"), ("amt", "amt")]),
+        _ => ("nope", &[]),
+    };
+    let mut inputs: Vec<(String, String)> = declared
+        .iter()
+        .map(|(name, kind)| (name.to_string(), invoke_value(rng, kind)))
+        .collect();
+    if !inputs.is_empty() && rng.below(12) == 0 {
+        let gone = rng.below(inputs.len() as u64) as usize;
+        inputs.remove(gone);
+    }
+    if rng.below(12) == 0 {
+        inputs.push(("extra".to_string(), "i:1".to_string()));
+    }
+    let key = match rng.below(24) {
+        0 => None,
+        1 => Some("bad".to_string()),
+        2 => Some(String::new()),
+        _ => Some(format!("k{}", rng.below(6))),
+    };
+    let month = rng.below(12);
+    let now = ledger_time(rng, month);
+    Op {
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::Invoke(now, operation.to_string(), key, inputs),
+    }
+}
+
+/// The invocations placed among the operations of a scenario (slice 14), from a stream of their own, after the first
+/// third of the scenario so that the records they name may exist. An invocation is now and then followed by the same
+/// one an hour later, so that a key is used twice.
+fn with_invokes(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x696e_766f_6b65_3134);
+    for _ in 0..6 + rng.below(10) {
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let op = invoke_op(&mut rng);
+        let again = match &op.kind {
+            OpKind::Invoke(now, operation, key, inputs) if rng.below(4) == 0 => Some(Op {
+                kind: OpKind::Invoke(
+                    *now + 3_600_000,
+                    operation.clone(),
+                    key.clone(),
+                    inputs.clone(),
+                ),
+                ..op.clone()
+            }),
+            _ => None,
+        };
+        ops.insert(at, op);
+        if let Some(again) = again {
+            ops.insert(at + 1, again);
+        }
+    }
+    ops
+}
+
 /// The shapes of a ledger operation's accepted answer as the coverage counts them (slice 13). A posting that
 /// emitted no event changed nothing (`replay`); a correction, and several postings, are counted when they emitted
 /// events. An expiry is `entries>0` when it debited an entry. A read is counted by the reach it was made with: the
@@ -2618,6 +2751,22 @@ pub fn ledger_shapes<S: AsRef<str>>(rendered: &str, group: &[S]) -> Vec<String> 
     }
 }
 
+/// The invocation outcomes a run must reach (slice 14): an accepted invocation and each refusal the checks of an
+/// invocation can give (the invoker, the key, the inputs, a bound, the subject, a condition, a delete of a
+/// record that is still referred to, and a posting replayed under a key with other content). Counted by intent, as
+/// the other `REQUIRED_PER_INTENT` entries are.
+pub const INVOKE_KINDS: &[&str] = &[
+    "invoke ok",
+    "invoke err unauthorized",
+    "invoke err invalid_intent",
+    "invoke err invalid",
+    "invoke err limit_exceeded",
+    "invoke err not_found",
+    "invoke err constraint_violated",
+    "invoke err still_referenced",
+    "invoke err version_conflict",
+];
+
 /// The ledger outcomes a run must reach (slice 13): each refusal the ledger intents can give, an accepted posting, a
 /// replay, a correction, several postings, an expiry that debits, and each reach of a balance read, with the refusals
 /// a read can give. Counted by intent, as the other `REQUIRED_PER_INTENT` entries are.
@@ -2651,9 +2800,12 @@ pub const LEDGER_KINDS: &[&str] = &[
 /// `with_queries`, `with_settings` and `with_ledger`). `generate` alone is what the fixture scenarios are made of, so
 /// the fixture does not change.
 pub fn generate_reads(seed: u64) -> Scenario {
-    with_ledger(
+    with_invokes(
         seed,
-        with_settings(seed, with_queries(seed, generate(seed))),
+        with_ledger(
+            seed,
+            with_settings(seed, with_queries(seed, generate(seed))),
+        ),
     )
 }
 
@@ -2786,6 +2938,7 @@ fn intent_name(op: &Op) -> &'static str {
         OpKind::LedgerExpire(..) => "ledger-expire",
         OpKind::LedgerTx(..) => "ledger-tx",
         OpKind::LedgerRead(..) => "read-ledger",
+        OpKind::Invoke(..) => "invoke",
     }
 }
 
@@ -2900,7 +3053,8 @@ fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
         | OpKind::LedgerPost(..)
         | OpKind::LedgerExpire(..)
         | OpKind::LedgerTx(..)
-        | OpKind::LedgerRead(..) => None,
+        | OpKind::LedgerRead(..)
+        | OpKind::Invoke(..) => None,
     }
 }
 
@@ -2922,6 +3076,15 @@ fn reductions(ops: &Scenario) -> Vec<Scenario> {
                 f.remove(j);
             }
             out.push(smaller);
+        }
+        if let OpKind::Invoke(_, _, _, inputs) = &ops[i].kind {
+            for j in 0..inputs.len() {
+                let mut smaller = ops.clone();
+                if let OpKind::Invoke(_, _, _, kept) = &mut smaller[i].kind {
+                    kept.remove(j);
+                }
+                out.push(smaller);
+            }
         }
         if let OpKind::Schema(_, _, changes) = &ops[i].kind {
             if changes.len() > 1 {
@@ -3110,6 +3273,7 @@ pub fn check_coverage(outcomes: &Outcomes, main_source: &str) -> Result<(), Stri
     );
     wanted.extend(REQUIRED_PER_INTENT.iter().map(|s| s.to_string()));
     wanted.extend(LEDGER_KINDS.iter().map(|s| s.to_string()));
+    wanted.extend(INVOKE_KINDS.iter().map(|s| s.to_string()));
     let seen = |k: &str| outcomes.get(k).copied().unwrap_or(0);
     let thin: Vec<String> = wanted
         .iter()

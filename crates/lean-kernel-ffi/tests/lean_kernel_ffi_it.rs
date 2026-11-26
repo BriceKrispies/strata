@@ -88,12 +88,13 @@ fn fixture_tenant() -> Tenant {
         ledger_decls: None,
         ledger: LedgerState::default(),
         ledger_policies: vec![],
+        operations: vec![],
     }
 }
 
 const FIXTURE_TENANT: &[u8] = &[
     1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
-    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 /// The fixture tenant with a role `2`, a team and an invitation (`fxTenantM` in
@@ -128,7 +129,7 @@ fn fixture_tenant_members() -> Tenant {
 const FIXTURE_TENANT_MEMBERS: &[u8] = &[
     1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
     128, 16, 3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1,
-    7, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    7, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 /// The fixture tenant with one workflow on its object type `1` (slice 9): id `""`, field 1, initial
@@ -166,7 +167,7 @@ const FIXTURE_TENANT_WORKFLOW: &[u8] = &[
     6, 99, 108, 111, 115, 101, 100, // to "closed"
     0, 0, // no guard, no assignments
     1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0,
-    0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0,
 ];
 
 #[test]
@@ -820,6 +821,7 @@ fn gen_tenant(rng: &mut Rng) -> Tenant {
         ledger_decls: None,
         ledger: LedgerState::default(),
         ledger_policies: vec![],
+        operations: vec![],
     }
 }
 
@@ -1207,4 +1209,72 @@ fn decode_expr_bytes(expr: &[u8]) -> Option<FieldDef> {
     let mut bytes = vec![2u8, 0, 0];
     bytes.extend_from_slice(expr);
     decode_field_def(&bytes)
+}
+
+/// An operation of the schema, an invocation of it and a `param` expression round-trip through the codec, and the
+/// invocation is tag `13` (slice 14).
+#[test]
+fn operations_and_invocations_round_trip() {
+    use strata_lean_kernel_ffi::codec::{OpCond, OpDef, OpInput, OpOwner, OpStep};
+    let op = OpDef {
+        id: "note".into(),
+        inputs: vec![OpInput {
+            name: "text".into(),
+            ty: Ty::Str,
+            required: true,
+        }],
+        signed_in: true,
+        roles: vec![2],
+        subject: Some((1, "item".into())),
+        conditions: vec![OpCond {
+            id: "ok".into(),
+            expr: Expr::IsNull(Box::new(Expr::Param("text".into()))),
+        }],
+        steps: vec![
+            OpStep::Create {
+                id: "c".into(),
+                ty: 1,
+                fields: vec![(1, Expr::Param("text".into()))],
+            },
+            OpStep::Update {
+                id: "u".into(),
+                ty: 1,
+                record: Expr::Param("item".into()),
+                fields: vec![(1, Expr::Lit(Val::Null))],
+            },
+            OpStep::Delete {
+                id: "d".into(),
+                ty: 1,
+                record: Expr::Param("item".into()),
+            },
+            OpStep::Post {
+                id: "p".into(),
+                owner: OpOwner::Pool(3),
+                unit: 1,
+                amount: Expr::Param("amt".into()),
+                reason: "grant".into(),
+            },
+            OpStep::Post {
+                id: "q".into(),
+                owner: OpOwner::Invoker,
+                unit: 1,
+                amount: Expr::Lit(Val::Int(1)),
+                reason: String::new(),
+            },
+        ],
+    };
+    let tenant = Tenant {
+        operations: vec![("note".into(), op)],
+        ..fixture_tenant()
+    };
+    assert_eq!(decode_tenant(&encode_tenant(&tenant)), Some(tenant));
+    let invoke = Intent::InvokeOperation {
+        now: 5,
+        operation: "o".into(),
+        inputs: vec![("a".into(), Val::Int(1))],
+        key: "k".into(),
+    };
+    let bytes = encode_intent(&invoke);
+    assert_eq!(bytes[0], 13);
+    assert_eq!(decode_intent(&bytes), Some(invoke));
 }

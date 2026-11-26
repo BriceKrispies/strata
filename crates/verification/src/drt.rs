@@ -16,7 +16,9 @@ use crate::lean::op_outcomes;
 use crate::lean::{
     build_model, compare_outputs, kernel_output, read_shapes, run_model, Generator, ScenarioStream,
 };
-use crate::lean_diff::{lean_error_names, ledger_shapes, setting_shapes, LEDGER_KINDS};
+use crate::lean_diff::{
+    lean_error_names, ledger_shapes, setting_shapes, INVOKE_KINDS, LEDGER_KINDS,
+};
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -227,7 +229,7 @@ fn minimise_disagreement(
 /// The accepted outcome kinds, one per intent kind of the scenario format: the intent's name
 /// followed by `ok`. `require` and `unique` are split by their mode, as the model's strict and lax
 /// schema outcomes differ.
-pub const ACCEPTED_KINDS: [&str; 29] = [
+pub const ACCEPTED_KINDS: [&str; 30] = [
     "create ok",
     "update ok",
     "patch ok",
@@ -257,6 +259,7 @@ pub const ACCEPTED_KINDS: [&str; 29] = [
     "ledger-tx ok",
     "ledger-expire ok",
     "read-ledger ok",
+    "invoke ok",
 ];
 
 /// The outcome kinds of reads that a run must also reach: the shapes of an accepted read (with rows and
@@ -404,6 +407,8 @@ fn intent_of(op: &str) -> &'static str {
         Some("ledger") if tokens.get(4).copied() == Some("post") => "ledger-post",
         Some("ledger") if tokens.get(4).copied() == Some("tx") => "ledger-tx",
         Some("ledger") => "ledger-expire",
+        // An invocation of an operation (slice 14).
+        Some("invoke") => "invoke",
         _ => "unknown",
     }
 }
@@ -427,8 +432,9 @@ fn count_outcomes(
                 "unparsed".to_string()
             };
             *coverage.entry(kind).or_insert(0) += 1;
-            // A refusal of a setting or ledger intent or read, by the intent that made it (slices 12 and 13).
-            if (intent.contains("setting") || intent.contains("ledger")) && line.starts_with("err ")
+            // A refusal of a setting, ledger or invoke intent or read, by the intent that made it (slices 12 to 14).
+            if (intent.contains("setting") || intent.contains("ledger") || intent == "invoke")
+                && line.starts_with("err ")
             {
                 *coverage.entry(format!("{intent} {line}")).or_insert(0) += 1;
             }
@@ -472,6 +478,7 @@ pub fn run(
     required.extend(READ_KINDS.iter().map(|kind| kind.to_string()));
     required.extend(SETTING_KINDS.iter().map(|kind| kind.to_string()));
     required.extend(LEDGER_KINDS.iter().map(|kind| kind.to_string()));
+    required.extend(INVOKE_KINDS.iter().map(|kind| kind.to_string()));
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
     // `lake exe` runs in `lean_dir`, so a relative batch path would be read from the wrong place.
