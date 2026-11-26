@@ -38,6 +38,10 @@ structure ITenant where
   roles : List RoleId := [ownerRole, publicRole]
   teams : List (TeamId × TeamDef) := []
   invitations : List (InvitationId × InvitationDef) := []
+  /-- The revision, the event sequence and the schema version, as the spec holds them (slice 9). -/
+  revision : Nat := 0
+  eventSeq : Nat := 0
+  schemaVersion : Nat := 1
 
 /-- The whole implementation state: each tenant id has a tenant or does not. -/
 abbrev IWorld := TenantId → Option ITenant
@@ -60,7 +64,8 @@ def absEntry (e : TypeId × IObj) : TypeId × ObjType := (e.1, e.2.abs)
 def ITenant.abs (t : ITenant) : Tenant :=
   { types := t.types.map absEntry, members := t.members, grants := t.grants, policies := t.policies,
     nextId := t.nextId, limits := t.limits, roles := t.roles, teams := t.teams,
-    invitations := t.invitations }
+    invitations := t.invitations, revision := t.revision, eventSeq := t.eventSeq,
+    schemaVersion := t.schemaVersion }
 
 /-- The part of an implementation tenant the membership intents see. -/
 def ITenant.mt (t : ITenant) : MTenant :=

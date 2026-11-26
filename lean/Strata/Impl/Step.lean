@@ -174,9 +174,22 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
   | .member j => (stepMember t.mt (j.ctxOf p) j).map t.withM
 
 /-- The tenant a `CreateTenant` makes, as the implementation holds it: no object types, the genesis
-    membership, and a counter that starts at 1. -/
+    membership, a counter that starts at 1, and the revision and event sequence of its one event (slice 9). -/
 def ITenant.genesis (owner : PrincipalId) : ITenant :=
-  { types := [], members := [(owner, [ownerRole])], grants := [], policies := [], nextId := 1 }
+  { types := [], members := [(owner, [ownerRole])], grants := [], policies := [], nextId := 1,
+    revision := 1, eventSeq := 1 }
+
+/-- The implementation's commit of an accepted step (the spec's `commitT`): the decision's tenant with its
+    revision raised, its event sequence raised by the events the spec derives for the step, and its schema
+    version raised by a schema change. The events are read through the abstraction, so the implementation
+    emits the spec's events for the tenant it decided on (see the slice 9 review note). -/
+def commitI (t t' : ITenant) (p : Principal) (i : Intent) : ITenant :=
+  { t' with revision := t.revision + 1,
+            eventSeq := t.eventSeq + (eventBodies t.abs p i t'.abs).length,
+            schemaVersion := if i.isSchema then t.schemaVersion + 1 else t.schemaVersion }
+
+theorem commitI_abs (t t' : ITenant) (p : Principal) (i : Intent) :
+    (commitI t t' p i).abs = commitT t.abs t'.abs p i := rfl
 
 /-- The tenant a `CreateTenant` makes (the spec's `createdTenant`). -/
 def createdTenantI (p : Principal) (owner : PrincipalId) (name : String) : Except Err ITenant :=
@@ -254,8 +267,8 @@ theorem clearBreaks_eq (t : ITenant) (ty : TypeId) (id : RecordId) :
 @[simp] theorem abs_types (t : ITenant) : t.abs.types = t.types.map absEntry := rfl
 
 theorem afterDelete_abs (t : ITenant) (ty : TypeId) (id : RecordId) :
-    (ITenant.mk (t.types.map (fun e => (e.1, delObjI ty id e.1 e.2))) t.members t.grants t.policies
-      t.nextId t.limits t.roles t.teams t.invitations).abs = t.abs.afterDelete ty id := by
+    ({ t with types := t.types.map (fun (e : TypeId × IObj) => (e.1, delObjI ty id e.1 e.2)) }).abs =
+      t.abs.afterDelete ty id := by
   unfold ITenant.abs Tenant.afterDelete
   simp only [List.map_map]
   congr 1

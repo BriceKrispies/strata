@@ -1181,33 +1181,33 @@ def decFieldExpr : Dec (FieldId × Expr) := decPair decNat decExpr
 theorem lawful_fieldExpr : Lawful encFieldExpr decFieldExpr :=
   lawful_pair lawful_nat lawful_expr
 
-/-- A transition of a workflow (slice 8): its source state, its target state, its guard (an option), then
-    its assignments. -/
+/-- A transition of a workflow (slice 8, its name slice 9): its name, its source state, its target state, its
+    guard (an option), then its assignments. -/
 def encWfTransition : WfTransition → Bytes :=
-  encIso (encPair encStr (encPair encStr (encPair (encOpt encExpr) (encList encFieldExpr))))
-    (fun tr => (tr.source, tr.target, tr.guard, tr.set))
+  encIso (encPair encStr (encPair encStr (encPair encStr (encPair (encOpt encExpr) (encList encFieldExpr)))))
+    (fun tr => (tr.name, tr.source, tr.target, tr.guard, tr.set))
 
 def decWfTransition : Dec WfTransition :=
-  decIso (decPair decStr (decPair decStr (decPair (decOpt decExpr) (decList decFieldExpr))))
-    (fun p => { source := p.1, target := p.2.1, guard := p.2.2.1, set := p.2.2.2 })
+  decIso (decPair decStr (decPair decStr (decPair decStr (decPair (decOpt decExpr) (decList decFieldExpr)))))
+    (fun p => { name := p.1, source := p.2.1, target := p.2.2.1, guard := p.2.2.2.1, set := p.2.2.2.2 })
 
 theorem lawful_wfTransition : Lawful encWfTransition decWfTransition :=
-  lawful_iso (lawful_pair lawful_str (lawful_pair lawful_str
-      (lawful_pair (lawful_opt lawful_expr) (lawful_list lawful_fieldExpr))))
+  lawful_iso (lawful_pair lawful_str (lawful_pair lawful_str (lawful_pair lawful_str
+      (lawful_pair (lawful_opt lawful_expr) (lawful_list lawful_fieldExpr)))))
     (fun tr => by cases tr; rfl) (fun _ => rfl)
 
-/-- A workflow (slice 8): its field, its initial states, then its transitions. -/
+/-- A workflow (slice 8, its id slice 9): its id, its field, its initial states, then its transitions. -/
 def encWorkflow : Workflow → Bytes :=
-  encIso (encPair encNat (encPair (encList encStr) (encList encWfTransition)))
-    (fun w => (w.field, w.initial, w.transitions))
+  encIso (encPair encStr (encPair encNat (encPair (encList encStr) (encList encWfTransition))))
+    (fun w => (w.id, w.field, w.initial, w.transitions))
 
 def decWorkflow : Dec Workflow :=
-  decIso (decPair decNat (decPair (decList decStr) (decList decWfTransition)))
-    (fun p => { field := p.1, initial := p.2.1, transitions := p.2.2 })
+  decIso (decPair decStr (decPair decNat (decPair (decList decStr) (decList decWfTransition))))
+    (fun p => { id := p.1, field := p.2.1, initial := p.2.2.1, transitions := p.2.2.2 })
 
 theorem lawful_workflow : Lawful encWorkflow decWorkflow :=
-  lawful_iso (lawful_pair lawful_nat (lawful_pair (lawful_list lawful_str)
-      (lawful_list lawful_wfTransition)))
+  lawful_iso (lawful_pair lawful_str (lawful_pair lawful_nat (lawful_pair (lawful_list lawful_str)
+      (lawful_list lawful_wfTransition))))
     (fun w => by cases w; rfl) (fun _ => rfl)
 
 /-- An object type: its schema, its composite constraints, its records, its constraints, then its
@@ -1289,10 +1289,11 @@ theorem lawful_invitationEntry : Lawful encInvitationEntry decInvitationEntry :=
   lawful_pair lawful_nat lawful_invitationDef
 
 /-- The tenant's fields as one nested product: its object types, members, grants, policies, next id,
-    limits, then (slice 7) the roles its schema defines, its teams and its invitations. -/
+    limits, the roles its schema defines (slice 7), its teams and its invitations, then (slice 9) its
+    revision, its event sequence and its schema version. -/
 def encTenantBody : List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
     List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
-    List (TeamId × TeamDef) × List (InvitationId × InvitationDef) → Bytes :=
+    List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat → Bytes :=
   encPair (encList encTypeEntry)
     (encPair (encList encMember)
       (encPair (encList encGrantEntry)
@@ -1300,12 +1301,14 @@ def encTenantBody : List (TypeId × ObjType) × List (PrincipalId × List RoleId
           (encPair encNat
             (encPair encLimits
               (encPair (encList encNat)
-                (encPair (encList encTeamEntry) (encList encInvitationEntry))))))))
+                (encPair (encList encTeamEntry)
+                  (encPair (encList encInvitationEntry)
+                    (encPair encNat (encPair encNat encNat))))))))))
 
 def decTenantBody :
     Dec (List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
       List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
-      List (TeamId × TeamDef) × List (InvitationId × InvitationDef)) :=
+      List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat) :=
   decPair (decList decTypeEntry)
     (decPair (decList decMember)
       (decPair (decList decGrantEntry)
@@ -1313,7 +1316,9 @@ def decTenantBody :
           (decPair decNat
             (decPair decLimits
               (decPair (decList decNat)
-                (decPair (decList decTeamEntry) (decList decInvitationEntry))))))))
+                (decPair (decList decTeamEntry)
+                  (decPair (decList decInvitationEntry)
+                    (decPair decNat (decPair decNat decNat))))))))))
 
 theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
   lawful_pair (lawful_list lawful_typeEntry)
@@ -1323,17 +1328,21 @@ theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
           (lawful_pair lawful_nat
             (lawful_pair lawful_limits
               (lawful_pair (lawful_list lawful_nat)
-                (lawful_pair (lawful_list lawful_teamEntry) (lawful_list lawful_invitationEntry))))))))
+                (lawful_pair (lawful_list lawful_teamEntry)
+                  (lawful_pair (lawful_list lawful_invitationEntry)
+                    (lawful_pair lawful_nat (lawful_pair lawful_nat lawful_nat))))))))))
 
 def encTenant : Tenant → Bytes :=
   encIso encTenantBody
     (fun t => (t.types, t.members, t.grants, t.policies, t.nextId, t.limits, t.roles, t.teams,
-      t.invitations))
+      t.invitations, t.revision, t.eventSeq, t.schemaVersion))
 
 def decTenant : Dec Tenant :=
   decIso decTenantBody fun p =>
-    ⟨p.1, p.2.1, p.2.2.1, p.2.2.2.1, p.2.2.2.2.1, p.2.2.2.2.2.1, p.2.2.2.2.2.2.1,
-      p.2.2.2.2.2.2.2.1, p.2.2.2.2.2.2.2.2⟩
+    { types := p.1, members := p.2.1, grants := p.2.2.1, policies := p.2.2.2.1, nextId := p.2.2.2.2.1,
+      limits := p.2.2.2.2.2.1, roles := p.2.2.2.2.2.2.1, teams := p.2.2.2.2.2.2.2.1,
+      invitations := p.2.2.2.2.2.2.2.2.1, revision := p.2.2.2.2.2.2.2.2.2.1,
+      eventSeq := p.2.2.2.2.2.2.2.2.2.2.1, schemaVersion := p.2.2.2.2.2.2.2.2.2.2.2 }
 
 theorem lawful_tenant : Lawful encTenant decTenant :=
   lawful_iso lawful_tenantBody (fun t => by cases t; rfl) (fun _ => rfl)

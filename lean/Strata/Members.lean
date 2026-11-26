@@ -313,10 +313,11 @@ def stepMember (m : MTenant) (c : MCtx) : MemberIntent → Except Err MTenant
 def genesisM (owner : PrincipalId) : MTenant :=
   { members := [(owner, [ownerRole])], grants := [], policies := [] }
 
-/-- The tenant a system `CreateTenant` makes: no object types, the genesis membership, and a record
-    counter that starts at 1. -/
+/-- The tenant a system `CreateTenant` makes: no object types, the genesis membership, a record counter that
+    starts at 1, and the revision and event sequence the creation's one event leaves (slice 9). -/
 def genesisTenant (owner : PrincipalId) : Tenant :=
-  { types := [], members := [(owner, [ownerRole])], grants := [], policies := [], nextId := 1 }
+  { types := [], members := [(owner, [ownerRole])], grants := [], policies := [], nextId := 1,
+    revision := 1, eventSeq := 1 }
 
 /-- The decision of a membership intent in a tenant that exists, as `stepTenant` takes it: the tenant's
     membership is decided on and written back; its object types, records and counter are kept. -/

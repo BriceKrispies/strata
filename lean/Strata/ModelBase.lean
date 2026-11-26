@@ -716,6 +716,8 @@ decisions are the kernel's `transition::create_record` and `update_record`, and 
     assignments that give fields of the record new values, each an expression read in the environment
     of the update. A `null` removes the field. The fields assigned are distinct. -/
 structure WfTransition where
+  /-- The transition's name, which an update event names (the kernel's transition name, slice 9). -/
+  name : String := ""
   source : String
   target : String
   guard : Option Expr := none
@@ -724,6 +726,8 @@ structure WfTransition where
 
 /-- A workflow over one field of an object type. -/
 structure Workflow where
+  /-- The workflow's id, which an update event names with its transition (slice 9). -/
+  id : String := ""
   field : FieldId
   /-- The states a new record may start in. -/
   initial : List String
@@ -876,6 +880,12 @@ structure Tenant where
   limits : Limits := Limits.kernel
   /-- The roles the schema defines, the built-in `owner` and `public` among them (slice 7). -/
   roles : List RoleId := [ownerRole, publicRole]
+  /-- The tenant revision: 1 when created, raised by one by every accepted step (slice 9). -/
+  revision : Nat := 0
+  /-- The number of domain events the tenant has emitted; the next event has the number after it (slice 9). -/
+  eventSeq : Nat := 0
+  /-- The schema version: 1 at genesis, raised by one by every accepted schema change (slice 9). -/
+  schemaVersion : Nat := 1
   /-- The teams, by id (slice 7). -/
   teams : List (TeamId × TeamDef) := []
   /-- The invitations, by id (slice 7). -/
@@ -1125,6 +1135,25 @@ def fireAll (p : Principal) (old cand : Record) : List Workflow → Except Err R
     | .error e => .error e
     | .ok c => fireAll p old c ws
 
+/-- The transitions an accepted update takes, in the order of `fireAll` (slice 9): each workflow whose field
+    changes from the stored record `old` to the candidate names its workflow and the transition it takes, the
+    candidate evolving as `fireAll` evolves it. A refused update names none; the events of an accepted one
+    are read from this. -/
+def firedAll (p : Principal) (old cand : Record) : List Workflow → List (String × String)
+  | [] => []
+  | w :: ws =>
+    let was := old.fields.get w.field
+    let becomes := cand.fields.get w.field
+    if was == becomes then firedAll p old cand ws
+    else
+      let env : ExprEnv :=
+        { record := some old, old := some old, new := some cand, principal := p.userId? }
+      match findTransition env was becomes w.transitions with
+      | none => firedAll p old cand ws
+      | some tr => match evalSets env tr.set with
+        | .error _ => firedAll p old cand ws
+        | .ok as => (w.id, tr.name) :: firedAll p old (applySets cand as) ws
+
 /-- Two field lists hold the same values: every field either names has the same value in both. -/
 def sameFields (fs gs : Fields) : Bool :=
   (fs.map Prod.fst ++ gs.map Prod.fst).all (fun f => fs.get f == gs.get f)
@@ -1174,6 +1203,20 @@ def fieldTargets (schema : Schema) (f : FieldId) : List TypeId :=
     records too; a change to a composite constraint re-validates only its own type. -/
 def scopedTypes (types : List (TypeId × ObjType)) (ids : List TypeId) : List (TypeId × ObjType) :=
   types.filter (fun e => ids.contains e.1)
+
+/-- A stored record of an object type violates the type's schema when the write checks would refuse it
+    (`problem`: a field, a unique value or a composite constraint held by another record, a value over
+    a bound, a wrong type or a missing required field) or a constraint of the type is `false` or cannot be
+    evaluated on it. The kernel's `validate_record` decides the same for each record of a touched type
+    (slice 9: the grandfathered count of a lax schema change). -/
+def recViolated (L : Limits) (o : ObjType) (env : Env) (q : RecordId × Record) : Bool :=
+  (problem L o.schema o.uniques true env o.records q.1 q.2).isSome ||
+    (constraintProblem (storedEnv q.2) o.constraints).isSome
+
+/-- The number of records, of the scoped object types, that violate the schema those types now have: the
+    kernel's `grandfathered`, the records a lax change keeps (`Migration.violations`, counted per record). -/
+def violatedCount (L : Limits) (types : List (TypeId × ObjType)) (env : Env) : Nat :=
+  types.foldl (fun n e => n + (e.2.records.filter (recViolated L e.2 env)).length) 0
 
 /-- A composite definition the schema can hold: two to four fields, none repeated, each one of the
     schema and not a list (the kernel's `unique_problems`). -/

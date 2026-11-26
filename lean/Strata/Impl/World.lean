@@ -267,12 +267,13 @@ def IObj.ofEmpty (o : ObjType) : IObj :=
 def ITenant.ofEmpty (t : Tenant) : ITenant :=
   { types := t.types.map (fun e => (e.1, IObj.ofEmpty e.2)), members := t.members,
     grants := t.grants, policies := t.policies, nextId := t.nextId, limits := t.limits,
-    roles := t.roles, teams := t.teams, invitations := t.invitations }
+    roles := t.roles, teams := t.teams, invitations := t.invitations, revision := t.revision,
+    eventSeq := t.eventSeq, schemaVersion := t.schemaVersion }
 
 theorem ofEmpty_abs (t : Tenant) (h : ∀ e ∈ t.types, e.2.records = []) :
     (ITenant.ofEmpty t).abs = t := by
   cases t with
-  | mk types members grants policies nextId limits roles teams invitations =>
+  | mk types members grants policies nextId limits roles revision eventSeq schemaVersion teams invitations =>
     simp only [ITenant.abs, ITenant.ofEmpty, List.map_map]
     congr 1
     conv => rhs; rw [← List.map_id types]

@@ -258,6 +258,29 @@ theorem ClearedFrom.congr {ty : TypeId} {id : RecordId} {S S' : Cell → Prop} {
   exact ⟨o, hT, hs, hu, hcn, hw, hsz, fun i => ⟨fun h' => (hi i).1 ((hS _).mpr h'),
     fun h' => (hi i).2 (fun h'' => h' ((hS _).mp h''))⟩⟩
 
+/-- Clearing one referrer keeps the tenant's revision, event sequence and schema version (slice 9). -/
+theorem clearOne_revision (ty : TypeId) (id : RecordId) (y : XTenant) (c : Cell) :
+    (XTenant.clearOne ty id y c).core.revision = y.core.revision ∧
+      (XTenant.clearOne ty id y c).core.eventSeq = y.core.eventSeq ∧
+      (XTenant.clearOne ty id y c).core.schemaVersion = y.core.schemaVersion := by
+  unfold XTenant.clearOne
+  rcases y with ⟨core, ux, cx, rx⟩
+  dsimp only
+  split <;> (try split) <;> (try split) <;> simp [XTenant.reindex, ITenant.modifyType]
+
+theorem foldl_clearOne_revision (ty : TypeId) (id : RecordId) (ds : List Cell) :
+    ∀ y : XTenant, (ds.foldl (XTenant.clearOne ty id) y).core.revision = y.core.revision ∧
+      (ds.foldl (XTenant.clearOne ty id) y).core.eventSeq = y.core.eventSeq ∧
+      (ds.foldl (XTenant.clearOne ty id) y).core.schemaVersion = y.core.schemaVersion := by
+  induction ds with
+  | nil => intro y; exact ⟨rfl, rfl, rfl⟩
+  | cons c ds ih =>
+    intro y
+    simp only [List.foldl_cons]
+    obtain ⟨h1, h2, h3⟩ := ih (XTenant.clearOne ty id y c)
+    obtain ⟨g1, g2, g3⟩ := clearOne_revision ty id y c
+    exact ⟨h1.trans g1, h2.trans g2, h3.trans g3⟩
+
 theorem clearAll_cleared (ty : TypeId) (id : RecordId) (ds : List Cell) :
     ∀ (S : Cell → Prop) (y0 y : XTenant), ClearedFrom ty id S y0 y →
       ClearedFrom ty id (fun c => S c ∨ c ∈ ds) y0 (ds.foldl (XTenant.clearOne ty id) y) := by
@@ -343,7 +366,8 @@ theorem IObj.ext' (a b : IObj) (h1 : a.schema = b.schema) (h2 : a.uniques = b.un
 theorem ITenant.ext' (a b : ITenant) (h1 : a.types = b.types) (h2 : a.members = b.members)
     (h3 : a.grants = b.grants) (h4 : a.policies = b.policies) (h5 : a.nextId = b.nextId)
     (h6 : a.limits = b.limits) (h7 : a.roles = b.roles) (h8 : a.teams = b.teams)
-    (h9 : a.invitations = b.invitations) : a = b := by
+    (h9 : a.invitations = b.invitations) (h10 : a.revision = b.revision)
+    (h11 : a.eventSeq = b.eventSeq) (h12 : a.schemaVersion = b.schemaVersion) : a = b := by
   cases a; cases b; simp_all
 
 theorem getRec_delObjI (ty : TypeId) (id : RecordId) (j : TypeId) (o : IObj) (i : RecordId)
@@ -493,6 +517,9 @@ theorem deleteX_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
   · exact hcl.roles.trans (by rw [hx1core]; rfl)
   · exact hcl.teams.trans (by rw [hx1core]; rfl)
   · exact hcl.invitations.trans (by rw [hx1core]; rfl)
+  · rw [← hy, (foldl_clearOne_revision ty id _ x1).1, hx1core]; rfl
+  · rw [← hy, (foldl_clearOne_revision ty id _ x1).2.1, hx1core]; rfl
+  · rw [← hy, (foldl_clearOne_revision ty id _ x1).2.2, hx1core]; rfl
 
 theorem delete_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)

@@ -163,81 +163,6 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
   -- The tenant exists, so a creation is refused; a membership intent is the layer's decision.
   | .createTenant _ _ => .error .tenantExists
   | .member j => stepMemberT t p j
-
-/-- The tenant a `CreateTenant` makes, when none exists: the system only, with a name that is not
-    blank; it has the owner as its one member (`genesisTenant`). -/
-def createdTenant (p : Principal) (owner : PrincipalId) (name : String) : Except Err Tenant :=
-  if p != .system then .error .unauthorized
-  else if isBlank name then .error .invalidIntent
-  else .ok (genesisTenant owner)
-
-/-- The transition function of the model: one intent, in one context, against the world. The reserved
-    principal ids are refused first (`reservedRefused`), as in the kernel; then a tenant that does not
-    exist is made by a `CreateTenant` and is otherwise `noTenant`, and an intent against a tenant that
-    exists is `stepTenant`'s. -/
-def step (w : World) (i : Intent) (c : Ctx) : Except Err World :=
-  if reservedRefused c.principal i then .error .invalidIntent
-  else
-  match w c.tenant with
-  | none =>
-    match i with
-    | .createTenant owner name =>
-      match createdTenant c.principal owner name with
-      | .error e => .error e
-      | .ok t' => .ok (fun x => if x = c.tenant then some t' else w x)
-    | _ => .error .noTenant
-  | some t =>
-    match stepTenant t c.principal i with
-    | .error e => .error e
-    | .ok t' => .ok (fun x => if x = c.tenant then some t' else w x)
-
-
-/-- An accepted membership intent writes back the tenant's membership and nothing else: the tenant it
-    makes is the one before with another `MTenant`. -/
-theorem stepTenant_member_eq {t t' : Tenant} {p : Principal} {j : MemberIntent}
-    (h : stepTenant t p (.member j) = .ok t') : ∃ m, t' = t.withM m := by
-  simp only [stepTenant, stepMemberT] at h
-  cases hs : stepMember t.mt (j.ctxOf p) j with
-  | error e => simp [hs, Except.map] at h
-  | ok m => simp only [hs, Except.map, Except.ok.injEq] at h; exact ⟨m, h.symm⟩
-
-/-- The two ways a step is accepted: against a tenant that exists, by `stepTenant`; or by a
-    `CreateTenant` for a tenant that does not, which makes the genesis tenant. -/
-theorem step_cases {w w' : World} {i : Intent} {c : Ctx} (h : step w i c = .ok w') :
-    (∃ t t', w c.tenant = some t ∧ stepTenant t c.principal i = .ok t' ∧
-      w' = fun x => if x = c.tenant then some t' else w x) ∨
-    (∃ owner name, i = .createTenant owner name ∧ w c.tenant = none ∧
-      w' = fun x => if x = c.tenant then some (genesisTenant owner) else w x) := by
-  unfold step at h
-  split at h
-  · cases h
-  · cases hw : w c.tenant with
-    | some t =>
-      simp only [hw] at h
-      cases hs : stepTenant t c.principal i with
-      | error e => simp [hs] at h
-      | ok t' =>
-        simp only [hs, Except.ok.injEq] at h
-        exact Or.inl ⟨t, t', rfl, hs, h.symm⟩
-    | none =>
-      simp only [hw] at h
-      cases i with
-      | createTenant owner name =>
-        cases hc : createdTenant c.principal owner name with
-        | error e => simp [hc] at h
-        | ok t' =>
-          simp only [hc, Except.ok.injEq] at h
-          have : t' = genesisTenant owner := by
-            unfold createdTenant at hc
-            split at hc
-            · cases hc
-            · split at hc
-              · cases hc
-              · simpa using hc.symm
-          subst this
-          exact Or.inr ⟨owner, name, rfl, rfl, h.symm⟩
-      | _ => simp at h
-
 /-- Whether the acting principal is allowed to make this intent at all: the object type exists,
     and the permission holds on the record (or, for a schema change, the owner). -/
 def authorized (t : Tenant) (p : Principal) : Intent → Bool
@@ -287,6 +212,221 @@ def Intent.isSchema : Intent → Bool
   | .setUnique _ _ _ => true
   | .defineUnique _ _ => true
   | _ => false
+
+/-! ## Events, revisions and effects (slice 9)
+
+An accepted step emits the domain events of the kernel's transition, in order, raises the tenant's revision
+by one and its event sequence by the number of events, and asks for one `Publish` effect per event. The
+events are derived from the tenant before the step, the principal, the intent, and the tenant the decision
+wrote: each derivation is the kernel's emission for that intent (`transition::create_record`,
+`update_record`, `delete_record`, `change_schema`, `create_tenant`). `step` keeps its type; `transition`
+returns the events and effects alongside the world. -/
+
+/-- A summary line of a schema change, by ids: the kernel's `apply_change` line for a field definition
+    (`redefine field <object>.<field>`) or for a composite constraint (`define unique constraint <object>`). -/
+inductive SchemaLine where
+  | field (ty : TypeId) (f : FieldId)
+  | unique (ty : TypeId) (fs : List FieldId)
+  deriving DecidableEq, Repr
+
+/-- The body of a domain event (the kernel's `EventBody`). A record event names the record as stored before
+    and after; an update names the workflow transitions it fired, by workflow id, and a delete names the
+    record it removed. -/
+inductive EventBody where
+  | tenantCreated (name : String)
+  | schemaChanged (version : Nat) (summary : List SchemaLine) (grandfathered : Nat)
+  | recordCreated (ty : TypeId) (id : RecordId) (r : Record)
+  | recordUpdated (ty : TypeId) (id : RecordId) (before after : Record) (fired : List (String × String))
+  | recordDeleted (ty : TypeId) (id : RecordId) (before : Record)
+  deriving Repr
+
+/-- A domain event: its sequence number (gapless per tenant), the revision it was committed at, the principal
+    that caused it, and its body. The kernel's time and correlation are not modelled. -/
+structure DomainEvent where
+  seq : Nat
+  revision : Nat
+  principal : Principal
+  body : EventBody
+  deriving Repr
+
+/-- An effect of an accepted transition (the kernel's `Effect`). Only `Publish` is modelled: slice 15 adds the
+    automation effects, and the session revocation is not modelled. -/
+inductive Effect where
+  | publish (seq : Nat)
+  deriving DecidableEq, Repr
+
+/-- The records of the tenant that refer to record `id` of object type `ty` through a field, each with its
+    stored form and the form the delete rewrites it to. The deleted record does not refer to itself. -/
+def referrerEntries (t : Tenant) (ty : TypeId) (id : RecordId) :
+    List (TypeId × RecordId × Record × Record) :=
+  t.types.flatMap (fun e => e.2.records.filterMap (fun q =>
+    if !(e.1 == ty && q.1 == id) && recRefers e.2.schema ty id q.2 then
+      some (e.1, q.1, q.2, clearRef e.2.schema ty id q.2)
+    else none))
+
+/-- The update events of a delete's rewrites, in the kernel's order: by object type, then by record id (the
+    kernel collects them in a map keyed so). -/
+def referrerEvents (t : Tenant) (ty : TypeId) (id : RecordId) : List EventBody :=
+  ((referrerEntries t ty id).mergeSort
+    (fun a b => decide (a.1 < b.1 ∨ (a.1 = b.1 ∧ a.2.1 ≤ b.2.1)))).map
+    (fun e => .recordUpdated e.1 e.2.1 e.2.2.1 e.2.2.2 [])
+
+/-- The composite and single unique constraints the schema change names, as its summary line. -/
+def Intent.line : Intent → Option SchemaLine
+  | .setRequired ty f _ => some (.field ty f)
+  | .setUnique ty f _ => some (.field ty f)
+  | .defineUnique ty fs => some (.unique ty fs)
+  | _ => none
+
+/-- The events an accepted intent against a tenant that exists emits. `t` is the tenant before the step, `t'`
+    the tenant the decision wrote (its revision and sequence not yet raised). -/
+def eventBodies (t : Tenant) (p : Principal) : Intent → Tenant → List EventBody
+  | .create ty _, t' => match t'.recordAt ty t.nextId with
+    | some r => [.recordCreated ty t.nextId r]
+    | none => []
+  | .update ty id fs _, t' => match t.recordAt ty id, t'.recordAt ty id with
+    | some old, some r' =>
+      [.recordUpdated ty id old r'
+        (firedAll p old (patched old fs) (((t.typ? ty).map ObjType.workflows).getD []))]
+    | _, _ => []
+  | .delete ty id _, _ => match t.recordAt ty id with
+    | some old => referrerEvents t ty id ++ [.recordDeleted ty id old]
+    | none => []
+  | i, t' => match i.line with
+    | some l => [.schemaChanged (t.schemaVersion + 1) [l] (violatedCount t.limits (scopedTypes t'.types (i.touched t)) t'.env)]
+    | none => []
+
+/-- The tenant an accepted intent leaves: the decision's tenant with its revision raised by one, its event
+    sequence raised by the number of events the intent emits, and its schema version raised by one when the
+    intent changes the schema. -/
+def commitT (t t' : Tenant) (p : Principal) (i : Intent) : Tenant :=
+  { t' with revision := t.revision + 1,
+            eventSeq := t.eventSeq + (eventBodies t p i t').length,
+            schemaVersion := if i.isSchema then t.schemaVersion + 1 else t.schemaVersion }
+
+
+/-- The tenant a `CreateTenant` makes, when none exists: the system only, with a name that is not
+    blank; it has the owner as its one member (`genesisTenant`). -/
+def createdTenant (p : Principal) (owner : PrincipalId) (name : String) : Except Err Tenant :=
+  if p != .system then .error .unauthorized
+  else if isBlank name then .error .invalidIntent
+  else .ok (genesisTenant owner)
+
+/-- The transition function of the model: one intent, in one context, against the world. The reserved
+    principal ids are refused first (`reservedRefused`), as in the kernel; then a tenant that does not
+    exist is made by a `CreateTenant` and is otherwise `noTenant`, and an intent against a tenant that
+    exists is `stepTenant`'s. -/
+def step (w : World) (i : Intent) (c : Ctx) : Except Err World :=
+  if reservedRefused c.principal i then .error .invalidIntent
+  else
+  match w c.tenant with
+  | none =>
+    match i with
+    | .createTenant owner name =>
+      match createdTenant c.principal owner name with
+      | .error e => .error e
+      | .ok t' => .ok (fun x => if x = c.tenant then some t' else w x)
+    | _ => .error .noTenant
+  | some t =>
+    match stepTenant t c.principal i with
+    | .error e => .error e
+    | .ok t' => .ok (fun x => if x = c.tenant then some t' else w x)
+
+/-- The outcome of an accepted step (slice 9): the world after it, the domain events it emits in order, with
+    their sequence numbers and the revision they were committed at, and one `Publish` effect per event, in
+    the same order. A refused step has no outcome. -/
+structure Transition where
+  world : World
+  events : List DomainEvent
+  effects : List Effect
+
+/-- Numbers events from `seq` on, the `k`-th of the list (from `k`) having the sequence `seq + k`; all of them
+    are committed at `rev` by `p`. -/
+def numberEvents (seq rev : Nat) (p : Principal) : Nat → List EventBody → List DomainEvent
+  | _, [] => []
+  | k, b :: bs => { seq := seq + k, revision := rev, principal := p, body := b } ::
+      numberEvents seq rev p (k + 1) bs
+
+/-- The events of an accepted step, given the world before and after it: a creation of a tenant emits its
+    `TenantCreated` event as the first of its sequence; any other step's events are `eventBodies` of the
+    addressed tenant, numbered after its sequence and committed at its revision. -/
+def stepEvents (w w' : World) (c : Ctx) (i : Intent) : List DomainEvent :=
+  match w c.tenant, w' c.tenant with
+  | none, some t' => match i with
+    | .createTenant _ name => [{ seq := 1, revision := t'.revision, principal := c.principal,
+                                 body := .tenantCreated name }]
+    | _ => []
+  | some t, some t' => numberEvents (t.eventSeq + 1) t'.revision c.principal 0 (eventBodies t c.principal i t')
+  | _, _ => []
+
+/-- The world after an accepted step, with the tenant it addressed committed (`commitT`): its revision, event
+    sequence and schema version are raised. A creation writes the genesis tenant, which holds its own
+    revision and sequence, so it is kept. Every other tenant is kept as `step` left it. -/
+def commitWorld (w w' : World) (c : Ctx) (i : Intent) : World :=
+  fun x => if x = c.tenant then
+      match w c.tenant, w' c.tenant with
+      | some t, some t' => some (commitT t t' c.principal i)
+      | _, _ => w' x
+    else w' x
+
+/-- The transition of one intent (slice 9): the world after it, which is `step`'s with the tenant committed
+    (`commitWorld`), the domain events it emits in order, and one `Publish` effect per event. A refused step
+    has no transition, so it emits nothing and the revision stays where it was. `step` is the projection of
+    this world onto the records and the membership, which `transition_step` states. -/
+def transition (w : World) (i : Intent) (c : Ctx) : Except Err Transition :=
+  match step w i c with
+  | .error e => .error e
+  | .ok w' =>
+    let w'' := commitWorld w w' c i
+    let evs := stepEvents w w'' c i
+    .ok { world := w'', events := evs, effects := evs.map (fun e => .publish e.seq) }
+
+
+/-- An accepted membership intent writes back the tenant's membership and nothing else: the tenant it
+    makes is the one before with another `MTenant`. -/
+theorem stepTenant_member_eq {t t' : Tenant} {p : Principal} {j : MemberIntent}
+    (h : stepTenant t p (.member j) = .ok t') : ∃ m, t' = t.withM m := by
+  simp only [stepTenant, stepMemberT] at h
+  cases hs : stepMember t.mt (j.ctxOf p) j with
+  | error e => simp [hs, Except.map] at h
+  | ok m => simp only [hs, Except.map, Except.ok.injEq] at h; exact ⟨m, h.symm⟩
+
+/-- The two ways a step is accepted: against a tenant that exists, by `stepTenant`; or by a
+    `CreateTenant` for a tenant that does not, which makes the genesis tenant. -/
+theorem step_cases {w w' : World} {i : Intent} {c : Ctx} (h : step w i c = .ok w') :
+    (∃ t t', w c.tenant = some t ∧ stepTenant t c.principal i = .ok t' ∧
+      w' = fun x => if x = c.tenant then some t' else w x) ∨
+    (∃ owner name, i = .createTenant owner name ∧ w c.tenant = none ∧
+      w' = fun x => if x = c.tenant then some (genesisTenant owner) else w x) := by
+  unfold step at h
+  split at h
+  · cases h
+  · cases hw : w c.tenant with
+    | some t =>
+      simp only [hw] at h
+      cases hs : stepTenant t c.principal i with
+      | error e => simp [hs] at h
+      | ok t' =>
+        simp only [hs, Except.ok.injEq] at h
+        exact Or.inl ⟨t, t', rfl, hs, h.symm⟩
+    | none =>
+      simp only [hw] at h
+      cases i with
+      | createTenant owner name =>
+        cases hc : createdTenant c.principal owner name with
+        | error e => simp [hc] at h
+        | ok t' =>
+          simp only [hc, Except.ok.injEq] at h
+          have : t' = genesisTenant owner := by
+            unfold createdTenant at hc
+            split at hc
+            · cases hc
+            · split at hc
+              · cases hc
+              · simpa using hc.symm
+          subst this
+          exact Or.inr ⟨owner, name, rfl, rfl, h.symm⟩
+      | _ => simp at h
 
 /-- Referential integrity: every reference held by a record of the tenant, of any type, names an
     existing record of the type its field names. -/

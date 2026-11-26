@@ -79,16 +79,17 @@ def ticketSchema : Schema :=
     is escalated with nine votes, which a writer may not write (the record it would be is over the writers'
     limit). -/
 def ticketWorkflow : Workflow :=
-  { field := 1, initial := ["open"],
+  { id := "ticket_flow", field := 1, initial := ["open"],
     transitions :=
-      [ { source := "open", target := "closed", guard := some (.cmp .ge (.field .new 2) (.lit (.int 1))),
+      [ { name := "ship", source := "open", target := "closed",
+          guard := some (.cmp .ge (.field .new 2) (.lit (.int 1))),
           set := [(3, .lit (.str "shipped"))] },
-        { source := "closed", target := "open" },
-        { source := "open", target := "archived", guard := some (.isNull (.field .old 2)),
+        { name := "reopen", source := "closed", target := "open" },
+        { name := "archive", source := "open", target := "archived", guard := some (.isNull (.field .old 2)),
           set := [(2, .lit (.int 0))] },
-        { source := "closed", target := "archived",
+        { name := "archive_closed", source := "closed", target := "archived",
           set := [(3, .lit (.str "archived"))] },
-        { source := "open", target := "escalated", set := [(2, .lit (.int 9))] } ] }
+        { name := "escalate", source := "open", target := "escalated", set := [(2, .lit (.int 9))] } ] }
 
 /-- The role of an editor in the fixture (the kernel's `editor`). -/
 def editorRole : RoleId := 2
@@ -135,7 +136,10 @@ def initialTenant (n : Nat) : Tenant :=
     policies := fixturePolicies,
     nextId := 1,
     limits := Limits.kernel,
-    roles := [ownerRole, publicRole, editorRole, writerRole] }
+    roles := [ownerRole, publicRole, editorRole, writerRole],
+    -- The kernel's fixture installs the tenant by six accepted steps: its creation, two schema changes
+    -- (one event each, the schema version raised by each), and three role assignments (one event each).
+    revision := 6, eventSeq := 6, schemaVersion := 3 }
 
 /-- The fields an `update` line names for each object type: the item's fields, or the part's.
     A line that does not name one of them gives it `null`, so it replaces the record (`patch`

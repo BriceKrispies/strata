@@ -990,7 +990,7 @@ theorem step_preserves_refs (w w' : World) (i : Intent) (c : Ctx)
   · by_cases hxc : x = c.tenant
     · simp [hxc] at hx
       subst hx
-      exact stepTenant_preserves_refs t _ c.principal i (hrefs c.tenant t ht) hs
+      exact stepTenant_preserves_refs t t₁ c.principal i (hrefs c.tenant t ht) hs
     · simp [hxc] at hx
       exact hrefs x t' hx
   · by_cases hxc : x = c.tenant
