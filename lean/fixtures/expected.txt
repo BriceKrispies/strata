@@ -4350,3 +4350,323 @@ err invalid
 ok
 err invalid
 ok
+scenario h-setting-owner-writes-tenant-editor-refused
+ok
+err unauthorized
+err unauthorized
+ok
+source tenant
+team -
+value i:5
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 density level=tenant subject=tenant value=i:5 rev=2
+setting-revision 1 density 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-person-override-wins-over-tenant
+ok
+ok
+ok
+source person
+team -
+value i:7
+tenant-rev 3
+ok
+source tenant
+team -
+value i:5
+tenant-rev 3
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 density level=person subject=p100 value=i:7 rev=3
+setting-override 1 density level=tenant subject=tenant value=i:5 rev=2
+setting-revision 1 density 3
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-smaller-team-id-wins-person-beats-teams
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+source team
+team 1
+value s:first
+tenant-rev 3
+ok
+ok
+source person
+team -
+value s:mine
+tenant-rev 4
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops 101 -
+team 1 2 s:dev 101 -
+setting-override 1 label level=person subject=p101 value=s:mine rev=4
+setting-override 1 label level=team subject=team1 value=s:first rev=3
+setting-override 1 label level=team subject=team2 value=s:second rev=2
+setting-revision 1 label 4
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-team-override-reaches-only-its-members
+ok
+ok
+ok
+ok
+ok
+source team
+team 2
+value s:bold
+tenant-rev 2
+ok
+source default
+team -
+value s:plain
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops - -
+team 1 2 s:dev 102 -
+setting-override 1 mode level=team subject=team2 value=s:bold rev=2
+setting-revision 1 mode 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-banner-is-locked-at-the-tenant
+ok
+err invalid_intent
+err invalid_intent
+ok
+source tenant
+team -
+value s:maint
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 banner level=tenant subject=tenant value=s:maint rev=2
+setting-revision 1 banner 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-density-range-is-inclusive
+ok
+err limit_exceeded
+err limit_exceeded
+ok
+source tenant
+team -
+value i:9
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 density level=tenant subject=tenant value=i:9 rev=2
+setting-revision 1 density 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-mode-closed-set
+ok
+err invalid_intent
+err invalid
+ok
+source tenant
+team -
+value s:bold
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 mode level=tenant subject=tenant value=s:bold rev=2
+setting-revision 1 mode 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-member-names-closed-set
+ok
+err invalid_intent
+ok
+ok
+source tenant
+team -
+value s:everyone
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 member_names level=tenant subject=tenant value=s:everyone rev=2
+setting-revision 1 member_names 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-remove-then-version-conflict-then-rise
+ok
+err version_conflict
+err version_conflict
+err version_conflict
+ok
+source tenant
+team -
+value b:1
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 notify level=tenant subject=tenant value=b:1 rev=2
+setting-revision 1 notify 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-removal-of-an-absent-override
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+source default
+team -
+value i:3
+tenant-rev 1
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops - -
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-undefined-name-is-unknown-object
+err unknown_object
+err unknown_object
+err unknown_object
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-tenant-three-has-only-member-names
+err no_tenant
+ok
+ok
+source default
+team -
+value s:members
+tenant-rev 0
+ok
+err unknown_object
+ok
+source tenant
+team -
+value s:everyone
+tenant-rev 1
+err unknown_object
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 300 0
+setting-override 3 member_names level=tenant subject=tenant value=s:everyone rev=1
+end
+scenario h-setting-system-and-anonymous-writes-are-unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+ok
+source default
+team -
+value i:3
+tenant-rev 1
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-null-and-wrong-type-are-invalid
+err invalid
+err invalid
+err invalid
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 notify level=tenant subject=tenant value=b:1 rev=2
+setting-revision 1 notify 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-team-refusals
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops - -
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-editor-refused-at-team-level
+ok
+ok
+err unauthorized
+ok
+ok
+source team
+team 1
+value s:x
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops 101 -
+setting-override 1 label level=team subject=team1 value=s:x rev=2
+setting-revision 1 label 2
+tenant 2 next=1 required=1
+type 2 required=
+end
