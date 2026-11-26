@@ -75,9 +75,9 @@ def ticketSchema : Schema :=
 
 /-- The workflow of the tickets (slice 8), over field `1`: an open ticket is shipped when it has a vote
     (`closed`, the note `shipped`); a closed ticket may be reopened; an open ticket with no votes is
-    archived and its votes are set to `0`; a closed ticket is archived, but a transition whose assignment
-    cannot be evaluated (a string compared to an integer) refuses it; an open ticket is escalated with
-    nine votes, which a writer may not write (the record it would be is over the writers' limit). -/
+    archived and its votes are set to `0`; a closed ticket is archived with its note set; an open ticket
+    is escalated with nine votes, which a writer may not write (the record it would be is over the writers'
+    limit). -/
 def ticketWorkflow : Workflow :=
   { field := 1, initial := ["open"],
     transitions :=
@@ -87,7 +87,7 @@ def ticketWorkflow : Workflow :=
         { source := "open", target := "archived", guard := some (.isNull (.field .old 2)),
           set := [(2, .lit (.int 0))] },
         { source := "closed", target := "archived",
-          set := [(3, .cmp .lt .principal (.lit (.int 0)))] },
+          set := [(3, .lit (.str "archived"))] },
         { source := "open", target := "escalated", set := [(2, .lit (.int 9))] } ] }
 
 /-- The role of an editor in the fixture (the kernel's `editor`). -/

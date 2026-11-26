@@ -14,6 +14,7 @@
 //! | tenant `n` | tenant `t<n>` with two object types: `item` (the model's type `1`, the default) and `part` (type `2`) |
 //! | fields 0 to 8, 10, 11, 12 of type 1 | `f0: list of ref item, restrict`, `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict`, `f6: int, default 7`, `f7: list of string`, `f8: list of ref item, set-null`, `f10: string, unique`, `f11: ref part, restrict`, `f12: ref part, set-null` |
 //! | fields 1 to 4 of type 2 | `f1: ref item, restrict`, `f2: ref item, set-null`, `f3: list of ref item, set-null`, `f4: int` |
+//! | fields 1 to 3 of type 4 (the tickets, slice 8) | `f01: string, default open`, `f02: int`, `f03: string`; the workflow `ticket_flow` over `f01` (`open` to `closed` when `f02` is at least one and the note `f03` becomes `shipped`; `closed` to `open`; `open` to `archived` when `f02` is absent, setting `f02` to `0`; `closed` to `archived`; `open` to `escalated` setting `f02` to nine); an editor does everything to them, a writer reads and creates them and changes or deletes the ones it created whose `f02` is at most five |
 //! | `type <n>` before the intent | the object type of the intent; any number but `1` and `2` names a type the tenant does not have |
 //! | members, roles and policies | the `owner` role; an `editor` role with policies allowing every action on each object type; a `writer` role with policies allowing read and create, and update or delete where `record.$created_by == principal`; the `public` role with a policy allowing create of `part` when no user acts (`isNull(principal)`), so an anonymous caller may create a part; the system holds no role |
 //! | `create fs` | `CreateRecord` |
@@ -40,7 +41,7 @@
 //! | `invite <inv> <address> <roles> @<now>` | `CreateInvitation`, in a context whose `now` is `<now>` |
 //! | `invite-revoke <inv>` | `RevokeInvitation` |
 //! | `redeem <inv> @<now> [verified=<address>]` | `RedeemInvitation`, in a context whose `now` is `<now>` and whose `verified_address` is the address |
-//! | `Err.invalidIntent`, `unknownRole`, `lastOwner`, `tenantExists` | `InvalidIntent`, `UnknownRole`, `LastOwner`, `TenantExists` |
+//! | `Err.invalidIntent`, `unknownRole`, `lastOwner`, `tenantExists`, `workflowViolation` | `InvalidIntent`, `UnknownRole`, `LastOwner`, `TenantExists`, `WorkflowViolation` |
 //! | the editor role's `manage` power | the policy `editors_manage_members` (`manage` on `Resource::Members`, no condition) |
 //!
 //! # The Main.lean protocol
@@ -497,7 +498,7 @@ fn ticket_field_def(n: u64) -> FieldDef {
 
 /// The workflow of the tickets (the model's `ticketWorkflow`, slice 8), over the state field `1`: a
 /// ticket with a vote ships (`closed`, note `shipped`); a closed one reopens; an open one without votes
-/// is archived with its votes set to `0`; a closed one is archived, its assignment failing to evaluate;
+/// is archived with its votes set to `0`; a closed one is archived with its note set;
 /// an open one is escalated to nine votes.
 fn ticket_workflow() -> WorkflowDef {
     let votes = |scope: Scope| Box::new(Expr::Var(scope, "f02".to_string()));
@@ -537,14 +538,7 @@ fn ticket_workflow() -> WorkflowDef {
                 from: "closed".into(),
                 to: "archived".into(),
                 guard: None,
-                set: BTreeMap::from([(
-                    field_id(3),
-                    Expr::Cmp(
-                        CmpOp::Lt,
-                        Box::new(Expr::Principal),
-                        Box::new(Expr::Lit(Value::Int(0))),
-                    ),
-                )]),
+                set: BTreeMap::from([(field_id(3), Expr::Lit(Value::Str("archived".into())))]),
             },
             WorkflowTransition {
                 name: "escalate".into(),

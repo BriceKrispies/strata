@@ -2063,7 +2063,7 @@ op 1 100 type 4 create 2=i:1
 op 1 100 type 4 patch 1 1=s:closed
 op 1 100 type 4 patch 1 1=s:open
 end
-scenario h-an-assignment-that-cannot-be-evaluated-refuses-the-update
+scenario h-a-closed-ticket-is-archived-with-its-note
 op 1 100 type 4 create 2=i:1
 op 1 100 type 4 patch 1 1=s:closed
 op 1 100 type 4 patch 1 1=s:archived
