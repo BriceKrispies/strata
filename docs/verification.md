@@ -28,8 +28,10 @@ the system and the anonymous principal). Slice 7 adds members, teams and invitat
 workflows: a workflow over a string field of an object type, with its initial states, its transitions
 and their guards and assignments, decided by the same `step`. Slice 9 adds events and revisions: `transition`
 returns the world with the tenant's revision, event sequence and schema version committed, the domain events
-the step emits, and one `Publish` effect per event; `step` itself is unchanged. The model has no queries or
-scopes, and its events are only those listed in the slice 9 review note: the assumptions below list each
+the step emits, and one `Publish` effect per event; `step` itself is unchanged. Slice 10, in part, adds reads
+(`lean/Strata/Reads.lean`): field read rules, the visibility of a record, record reads and named queries, as the total
+function `read`. The model has no search, aggregates or scopes, and its events are only those listed in the slice 9
+review note: the assumptions below list each
 omission, and the gap analysis further down says which slice will add each. The theorems are
 about this model. The Rust kernel is compared with it on generated scenarios, which is evidence and
 not a proof.
@@ -131,6 +133,23 @@ with the tenant committed):
 | Publish effects | `transition_publish`, `transition_ok` | An accepted step's effects are one `Publish` per event, in the events' order; an accepted transition is a step, its world the committed world |
 | Commit | `eventBodies_commit`, `numberEvents_map_seq`, `numberEvents_length` | The events do not depend on the revision, sequence or schema version they are read from; the numbering is consecutive |
 | Executable kernels | `Impl.transitionI_refines`, `Impl.transitionX_refines`, `Impl.absW_commitWorldI`, `Impl.absX_commitWorldX`, `Impl.commitI_abs` | Each executable transition, on both stages, has the spec's world and events on the abstraction |
+
+Slice 10, first half: reads of records and named queries (`read`, `lean/Strata/Reads.lean`). The helper order lemmas
+are in `Reads.lean`; the theorems below are in `lean/Audit.lean`, which `lake env lean Audit.lean` checks (it is not a
+`lake build` target, so the `Verifies:` convention does not apply to them).
+
+| Property | Theorems | Statement |
+|---|---|---|
+| The system (open question) | `system_never_visible`, `system_reads_no_record`, `queryAll_system`, `queryPage_system_rows`, `redact_system` | The system holds no role, so it is refused every record: a record read gives no row (after the id-count and type checks) and a named query gives no row (after its own checks); no error is raised for lack of rights. Its redaction is the identity, which nothing it can read exposes. The intended outcome is left open (review note) |
+| Visibility and field read rules | `hidden_field_absent`, `readRecords_hide`, `query_rows_hide` | A field a read rule hides on the stored record (the rule not exactly `true`) is absent from every row a reader is given; a row is a stored record the principal may read |
+| Record reads | `rowOf_visible`, `readRecords_rows`, `readRecords_limit_first`, `readRecords_unknown_type`, `missing_and_invisible_same` | Rows are the visible records, redacted, in request order; more than 200 ids is `limitExceeded` before the type is looked at; an unknown type is `unknownObject`; a missing record and an invisible one both leave no row, so the answer does not show which ids exist |
+| Named queries: membership | `scanRows_mem`, `queryAll_mem_iff`, `query_mem_iff` | The rows are exactly the records the principal may read whose redacted copy makes the filter exactly `true`, each redacted |
+| Named queries: order | `queryAll_sorted`, `keysLe_total`, `keysLe_trans`, `dirLe_total`, `dirLe_trans`, `Val.leb_total`, `Val.leb_trans`, `orderKey_length` | The rows are sorted by the order keys (each with its direction) and then by id; the order on rows is a total preorder over the keys of one length |
+| Named queries: pages | `walk_eq_drop`, `query_pages_concat`, `query_pages_nodup`, `queryAll_ids_nodup`, `scanRows_ids_nodup`, `filterMap_fst_sublist` | Concatenating the pages from offset 0 gives the whole result, in order; when the records of the type have distinct ids, no record is in two pages |
+| Named queries: refusals | `query_unknown`, `query_undeclared_param`, `query_page_zero`, `query_page_over`, `query_wrong_cursor`, `query_scan_limit` | An unknown query is `unknownQuery`; an undeclared parameter, a page size of 0 and a cursor that is not an offset are `invalidIntent`; a page size over 200 and a type of more than 10,000 records are `limitExceeded` |
+
+`lake env lean Audit.lean` prints the axioms of each: only `propext`, `Classical.choice` and `Quot.sound` (the
+`#print axioms` lines at the end of `Audit.lean`). The slice 10 proofs use no `sorry`, `admit`, axiom or `native_decide`.
 
 `lake build` checks them. `lake env lean Audit.lean` prints the axioms of each: the standard `propext`,
 `Classical.choice` and `Quot.sound`, with no `sorryAx`. `lake env lean Audit.lean` prints the axioms each depends on: only
@@ -484,7 +503,33 @@ order:
 
 ### Reads (`read::read`, `query_plan`, `search`, `aggregates`)
 
-All not covered; slice 10.
+Slice 10 is partly done. Covered in the model (`lean/Strata/Reads.lean`, theorems in `lean/Audit.lean`, see the
+slice 10 review note): record visibility, field read rules and redaction, record reads, and named queries in their scan
+form (filter, order keys, parameters, page size, cursor). Not covered yet: the executable read and its refinement, the
+codec and Rust mirror of the read declarations, the harness scenarios and generator for reads (so none of this is
+checked against the Rust kernel yet), search and aggregates. The bullets below say which is which.
+
+- Visibility of a record: the authorization above for `Read` on the stored record; a field read
+  rule hides a present field unless it is exactly `true`. `redact` gives the system records
+  unredacted, but `roles_of` gives the system no role, and every policy and permission is held
+  through a role, so `visible_in` refuses the system every record. Slice 10 must state which
+  outcome is intended for system reads (open question). **Modelled (slice 10); the system outcome
+  is the kernel's as it is today, and the intent is left open.**
+- `Records { object, ids }`: more than 200 ids (`LimitExceeded`, before the type check); unknown
+  type (`UnknownObject`); missing and invisible records are left out silently, never
+  `UnknownRecord`; rows in request order, redacted. **Modelled (slice 10).**
+- Named queries: unknown query (`UnknownQuery`); an undeclared parameter, page size 0 or a cursor
+  of the wrong kind (`InvalidIntent`); page size over 200, or a scan over 10,000 records of the
+  type (`LimitExceeded`). Accepted: the visible records whose redacted copy makes the filter
+  exactly `true`, ordered by the order keys then by id, paged. **Modelled (slice 10) in its scan
+  form; the kernel's window and index plans, and their cursors, are not.**
+- Search: a query over 200 bytes, with no word, or with more than 8 words, or a page size of 0 or
+  over 200 (`InvalidIntent`); unknown type (`UnknownObject`); at most 1,000 candidates examined.
+  Hits in type then id order, with only the matched fields the reader may read. **Not covered (open).**
+- Aggregates: unknown query or aggregate (`UnknownQuery`); an undeclared parameter or filter field
+  (`InvalidIntent`); unknown type or field (`UnknownObject`, `UnknownField`); scan, selection,
+  group and sum bounds (`LimitExceeded`). Count, sum, min, max and top over the visible, filtered
+  records whose named fields the reader may read. **Not covered (open).**
 
 - Visibility of a record: the authorization above for `Read` on the stored record; a field read
   rule hides a present field unless it is exactly `true`. `redact` gives the system records
@@ -595,7 +640,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **7 (done)** | Tenants, members, teams, invitations, conferring, the owner rule, reserved principal ids. The decisions are in `Strata/Members.lean`, the theorems in `Strata/MembersProofs.lean`, and the intents are in `Intent` and decided by `step`; the executable kernels, the working set, the codec of tenants (Lean and Rust) and the differential harness, scenarios and generator cover them (see the slice 7 review note) | 6 |
 | **8 (done)** | Workflows: the workflow of an object type (field, initial states, transitions with guards and assignments), the create and update decisions, the state check and the invariant (`lean/Strata/Workflows.lean`); the executable kernels, the codec (Lean and Rust), the harness with the ticket type (id 4), the h- scenarios and the generator cover them (see the slice 8 review note). Approvals are not in this slice: they decide automation steps, which slice 15 adds | 5, 6 |
 | **9 (done)** | Events and revisions: event bodies, sequence numbers, the revision, `Publish` effects, the grandfathered count (`lean/Strata/EventProofs.lean`, see the slice 9 review note) | 1 to 8, for their content |
-| 10 | Reads: visibility, field read rules, record reads, named queries (filter, order, pages), search, aggregates | 5, 6 |
+| 10 (partly done) | Reads: visibility, field read rules, record reads, named queries (filter, order, pages) are in the model (`lean/Strata/Reads.lean`, the slice 10 review note); the executable read, the codec and the harness for reads, search and aggregates are not | 5, 6 |
 | 11 | Schema change in general: the change kinds, `SchemaConflict`, the abstract validity predicate, `Reject` and `Grandfather`, object and role removal, and the evolution model's acceptance as the rule for breaking changes | 3 to 8 |
 | 12 | Settings | 6, 7 |
 | 13 | Ledger | 6 |
@@ -1086,6 +1131,54 @@ transitions in `lean/Strata/Impl/Transition.lean`, the codec of the tenant and o
   required and unique flags); computed-field events; the codec of events (the step result still
   encodes a tenant, so the events are not in the foreign interface). `EventProofs.lean` proves the schema event for the
   required flag only (`transition_setRequired`); the unique flag and the composite constraint use the same derivation.
+
+### Slice 10 review note (records and queries): what was abstracted
+
+Slice 10 is reads, in two halves. This note covers the first: record visibility, field read rules, record reads and
+named queries. Search and aggregates are the second half and are not started. The model is `lean/Strata/Reads.lean`
+(`read`, `readRecords`, `queryPage`, `queryAll`, `rowOf`, `redact`, `Tenant.canRead`, `walk`); the theorems are in
+`lean/Audit.lean`. The Rust side is `crates/kernel/src/read.rs` and `query_plan.rs` (`read_named`, `scan`, `keyed`),
+`rules.rs` (`visible_in`, `redact`).
+
+- **The read declarations sit beside the write model.** A field's read rule and the named queries are a `ReadSpec`
+  passed to `read`, not fields of `FieldDef` or `ObjType`. So the write codec, its theorems (`lawful_objType`,
+  `lawful_fieldDef`) and the existing outcomes are unchanged. The codec of the read declarations is not written; it is
+  needed before a read crosses the boundary.
+- **Check order follows the kernel.** A record read refuses more than 200 ids before it looks at the type. A named query
+  checks, in order, the query, its parameters (an undeclared name), the page size (0, then over 200), the cursor (only an
+  offset is a scan's cursor), and the scan bound (more than 10,000 records of the type, counted before visibility), then
+  it pages.
+- **A named query is a scan.** The kernel plans a query as a window of the type, an index stream, or a scan, and each
+  plan issues its own cursor. The model serves every query as a scan and issues offsets; an `after` cursor is refused
+  as `invalidIntent`. A query the kernel plans as a window accepts an `after` cursor, so the model's refusal of it is an
+  abstraction, to be removed when the plans are modelled.
+- **Parameters are checked, not read.** `Expr` has no parameter form, so a filter cannot use a parameter in the model.
+  The undeclared-name check is the kernel's and is modelled; the value binding is not.
+- **Conditions see the record, the principal and nothing else.** No clock (the model has none), no lookup through a
+  reference, no scope, so `InsufficientState` (a record the snapshot lacks) does not arise. An erroring read rule hides
+  its field, as the kernel's `unwrap_or(false)` does; an erroring filter leaves its row out, as the kernel does.
+- **Order keys.** A key is a field's value on the redacted copy: `null` when the field is absent or hidden, which the
+  kernel also reads as `null` (`expr::attribute`), so such a row is kept and sorted first. The model's order on values is
+  by kind (`null`, bool, int, string, reference, list), then by payload; lists compare equal. The kernel's `Value` order
+  is not compared with this one; the rows of a query are sorted by it in the model and by the kernel's own order in the
+  Rust code. Unverified: that the two orders agree on every kind a key may hold.
+- **The result omits the revision and schema version.** The kernel's `ReadResult` carries both; the model returns rows
+  and a cursor only.
+- **Missing and invisible records.** Both give no row, from one function (`rowOf`): `missing_and_invisible_same` states
+  that neither yields a row, so a reader cannot tell the two apart from the answer. The kernel's `read_missing`, which
+  names the records a read lacks, is not modelled.
+- **System reads (open question, not decided here).** `redact` returns a record unredacted for the system, but `roles_of`
+  gives the system no role, and every policy and permission is held through a role, so `visible_in` refuses the system
+  every record. The model does exactly this: `system_never_visible`, so a record read by the system gives no row and a
+  named query gives no row (`system_reads_no_record`, `queryAll_system`, `queryPage_system_rows`), with the errors of the
+  checks above unchanged. Whether the system should read every record (what the unredacted redaction suggests) or
+  nothing (what the roles give it) is for the owner to decide; the model states the current kernel behaviour and records
+  the question here, and does not choose.
+- **Not covered in this half.** The executable read and its refinement (`Impl`); the codec and the Rust mirror of the
+  read declarations and requests; the harness scenarios and generator for reads, and the million-operation run. So no
+  read outcome has yet been compared with the Rust kernel. Also not covered: search; aggregates; the descendants read
+  (the `tree` form of a named query); scoped roles and the reads that follow references (`audience_needs`); the snapshot
+  that `read_missing` names (the model has no snapshot); and the revision in the result.
 
 ### Slice 6 review note: what was abstracted
 
