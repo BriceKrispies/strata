@@ -1,12 +1,12 @@
 # Strata tasks (Workgraph export)
 
-702 tasks linked to the strata repository or tagged strata. Full records: `tasks.json`.
+720 tasks linked to the strata repository or tagged strata. Full records: `tasks.json`.
 
 | Status | Count |
 |---|---:|
 | ready | 25 |
 | blocked | 1 |
-| proposed | 38 |
+| proposed | 56 |
 | backlog | 83 |
 | accepted | 123 |
 | cancelled | 432 |
@@ -47,10 +47,28 @@
 |---|---|---|---|
 | WG-5397 | medium | Working-set evidence: simulator fault schedule, Lean differential check, sampled read trace, experiments | WG-5385 |
 
-## proposed (38)
+## proposed (56)
 
 | Key | Priority | Title | Parent |
 |---|---|---|---|
+| WG-5679 | high | Personal data erasure as a first-class kernel primitive (redesign before WG-5673 lands) | WG-5648 |
+| WG-5678 | high | Tenant-script sandbox: isolated worker, WebAssembly host functions, fuel, validator | WG-5648 |
+| WG-5677 | high | No XSS: proved DOM-operation vocabulary, sink-free adapter check, browser fuzzing | WG-5654 |
+| WG-5676 | high | Browser kernel spec: the tenant-script boundary as an untrusted oracle | WG-5654 |
+| WG-5675 | high | Spec: tenant scripts in the browser sandbox (narrow NG-3 and D-506 to the server) | WG-5648 |
+| WG-5674 | medium | Strata: realm-spray throttle test is timing-sensitive and failed once in CI |  |
+| WG-5673 | medium | Kernel spec slice: erasure and retention | WG-5373 |
+| WG-5672 | medium | Kernel spec slice: segments | WG-5373 |
+| WG-5671 | medium | Kernel spec slice: triggers and automations | WG-5373 |
+| WG-5670 | medium | Kernel spec slice: operations | WG-5373 |
+| WG-5669 | medium | Kernel spec slice: definitions by schema change, read declarations in the tenant, link to Strata.Evolution | WG-5373 |
+| WG-5668 | medium | Kernel spec slice: ledger (finish): floor/cap and balance theorems, PostLedgerTransaction, expiry account order | WG-5373 |
+| WG-5667 | medium | Kernel: a lax schema change can leave dangling references (retype or removal under Grandfather) |  |
+| WG-5666 | high | Kernel: a workflow transition's assignments can move or clear another workflow field without its transition |  |
+| WG-5665 | high | Kernel: a failing expression default before the permission check reveals that an object type exists |  |
+| WG-5664 | high | Kernel: a delete clears a referrer's reference without re-checking the referrer's constraints |  |
+| WG-5663 | high | Browser kernel: former person's view survives a session change (found by the B1 Lean spec) |  |
+| WG-5662 | medium | A4: kernel and protocol requirements point to the Lean theorems that state them | WG-5648 |
 | WG-5661 | medium | C3: backend host steps as proved Lean functions behind thin trusted I/O shells, with a SQLite specification | WG-5648 |
 | WG-5660 | medium | C4: machine-checked reduction for concurrent optimistic transactions and host steps | WG-5648 |
 | WG-5659 | medium | B2: Lean browser kernel proved against its spec, compiled to WebAssembly and run in the worker | WG-5648 |
