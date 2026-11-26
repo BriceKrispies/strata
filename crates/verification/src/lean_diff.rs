@@ -14,6 +14,11 @@
 //! [`lean_intents`] reads the intent kinds `Main.lean` dispatches so a test can fail when the
 //! model gains an intent that [`GENERATED_INTENTS`] does not cover.
 //!
+//! Slice 7 adds the membership intents: the creation of tenant 3, roles, teams and invitations. The
+//! generator mixes single random operations of them with scripted sequences that reach the
+//! decisions that need several operations to line up (an invitation redeemed, revoked, expired, its
+//! issuer losing the right to manage members; a team that keeps the last owner; the last owner).
+//!
 //! The generator is aimed at the decisions of slice 2: patches that remove fields, expected
 //! versions right and wrong, a default relied on and suppressed, lists of scalars and of
 //! references (dangling elements, set-null and restricting lists, a required list), and values
@@ -21,11 +26,34 @@
 //! bound is only ever built so that the model's size and the kernel's encoding agree on which
 //! side of it it falls (see `straddle`).
 
-use crate::lean::{build_model, kernel_output, run_model};
+use crate::lean::{build_model, kernel_output, read_shapes, run_model};
 use std::path::Path;
 
 /// The intent kinds the generator produces; each is the word after the principal in an `op` line.
-pub const GENERATED_INTENTS: [&str; 5] = ["create", "update", "patch", "delete", "require"];
+pub const GENERATED_INTENTS: [&str; 22] = [
+    "create",
+    "update",
+    "patch",
+    "delete",
+    "require",
+    "unique",
+    "composite",
+    "create-tenant",
+    "assign",
+    "revoke",
+    "team",
+    "team-assign",
+    "team-revoke",
+    "team-add",
+    "team-remove",
+    "invite",
+    "invite-revoke",
+    "redeem",
+    "schema",
+    "setting",
+    "ledger",
+    "invoke",
+];
 
 /// Known differences between the model and the kernel that are intended, each with its reason.
 /// A differing pair of lines is accepted only if an entry explains it. Empty means the two agree
@@ -40,12 +68,38 @@ pub struct ByDesign {
     pub explains: fn(ops: &[Op], lean: &str, rust: &str) -> bool,
 }
 
+/// Who makes a generated operation: a user by its number, the system (which holds no role), or an
+/// anonymous caller (which holds `public` only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Caller {
+    User(u64),
+    System,
+    Anonymous,
+}
+
+impl Caller {
+    /// The principal as an `op` line names it.
+    fn token(self) -> String {
+        match self {
+            Caller::User(n) => n.to_string(),
+            Caller::System => "system".to_string(),
+            Caller::Anonymous => "anon".to_string(),
+        }
+    }
+}
+
 /// One generated operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Op {
     pub tenant: u64,
-    pub principal: u64,
+    pub principal: Caller,
+    /// The object type the intent names: `1` is `item`, `2` is `part`, and any other number names
+    /// a type the tenant does not have. Rendered as `type <n>` unless it is `1`.
+    pub object: u64,
     pub kind: OpKind,
+    /// The hop of the event that caused the intent, rendered as `hop=<n>` right after the principal. `None` writes no
+    /// token, which the model and the kernel read as hop zero.
+    pub hop: Option<u64>,
 }
 
 /// The intents, with fields as `(field number, value token)` (`s:oak`, `i:3`, `b:1`, `n`,
@@ -59,6 +113,63 @@ pub enum OpKind {
     Patch(u64, Option<u64>, Vec<(u64, String)>),
     Delete(u64, Option<u64>),
     Require(u64, bool),
+    /// A unique field: the field number, and whether the change is strict.
+    Unique(u64, bool),
+    /// A composite unique constraint over these fields.
+    Composite(Vec<u64>),
+    /// Create a tenant: its owner and its name token.
+    CreateTenant(u64, String),
+    /// Give a user a role, or take one away.
+    Assign(u64, u64),
+    Revoke(u64, u64),
+    /// Define a team: its number and its label token.
+    Team(u64, String),
+    /// Give a team a role, take one away; add a user to a team, remove one.
+    TeamAssign(u64, u64),
+    TeamRevoke(u64, u64),
+    TeamAdd(u64, u64),
+    TeamRemove(u64, u64),
+    /// Issue an invitation: its number, the address token, the roles (in the kernel's order) and the
+    /// time of the request.
+    Invite(u64, String, Vec<u64>, u64),
+    InviteRevoke(u64),
+    /// Redeem an invitation at a time, with a verified address token if the caller has one.
+    Redeem(u64, u64, Option<String>),
+    /// A schema change in general (slice 11): the expected version, whether the change is strict (`lax` otherwise),
+    /// and its changes, each as the tokens of one change (`define-field <type> <field> <ty> [required] [unique]
+    /// [default=<v>]`, `remove-field <type> <field>`, `define-type <type>`, `remove-type <type> [delete]`).
+    Schema(Option<u64>, bool, Vec<String>),
+    /// Read records (slice 10): the object type is the op's `object`, and the ids are tokens, `n` or `a-b`.
+    ReadRecords(Vec<String>),
+    /// Read a named query: its name and its arguments (`k=v`, `page=<n>`, `cursor=<c>`).
+    ReadQuery(String, Vec<String>),
+    /// Search (slice 10, second half): the object type (`*` or a number) and the words of the query, then its
+    /// arguments (`page=<n>`).
+    ReadSearch(String, Vec<String>, Vec<String>),
+    /// An aggregate of a named query: the query, the aggregate, and its arguments (`filter.<n>=<v>`, `k=v`).
+    ReadAggregate(String, String, Vec<String>),
+    /// A setting write (slice 12): the setting's name, its level token, the team it names (when any), the
+    /// expected revision (`v=<n>`, omitted when zero) and the value token, or `None` for a removal.
+    SettingWrite(String, String, Option<u64>, u64, Option<String>),
+    /// A setting read (slice 12): the setting's name.
+    SettingRead(String),
+    /// A ledger posting (slice 13): the time, then the postings, each as its tokens (`<unit> <owner> <amount>
+    /// key=<k> [reason=<r>] [corrects=<n>] [scope=<s>]`); a `;` token separates them in the rendered line.
+    LedgerPost(i64, Vec<String>),
+    /// A ledger expiry (slice 13): the time, the unit and the cutoff.
+    LedgerExpire(i64, u64, i64),
+    /// A ledger transaction (slice 13): the time, the header tokens (`op=<operation> key=<key> [reason=<reason>]`)
+    /// and the legs, each as its tokens (`<unit> <owner> <amount> [scope=<s>]`).
+    LedgerTx(i64, String, Vec<String>),
+    /// A balance read of a ledger account (slice 13): the unit, the owner token (a person's number or `pool<n>`),
+    /// the scope (empty for none) and whether the read is one's own.
+    LedgerRead(u64, String, String, bool),
+    /// An invocation of an operation (slice 14): the time, the operation's name, the idempotency key token (the text
+    /// after `key=`; none writes no `key=`) and the inputs, each as its name and value token.
+    Invoke(i64, String, Option<String>, Vec<(String, String)>),
+    /// A segment intent (slice 16): the text after `segment`, as `define <n> <name> <type> <field> <refresh|-> <expr>`,
+    /// `remove <n>` or `rebuild <n>`.
+    Segment(String),
 }
 
 pub type Scenario = Vec<Op>;
@@ -76,7 +187,18 @@ fn expected_text(expected: Option<u64>) -> String {
 
 impl Op {
     pub fn render(&self) -> String {
-        let head = format!("op {} {}", self.tenant, self.principal);
+        // The hop token comes right after the principal, before any `type <n>`. Reads do not use the head.
+        let hop = self.hop.map_or(String::new(), |n| format!(" hop={n}"));
+        let head = if self.object == 1 {
+            format!("op {} {}{hop}", self.tenant, self.principal.token())
+        } else {
+            format!(
+                "op {} {}{hop} type {}",
+                self.tenant,
+                self.principal.token(),
+                self.object
+            )
+        };
         match &self.kind {
             OpKind::Create(f) => format!("{head} create{}", fields_text(f)),
             OpKind::Update(id, v, f) => {
@@ -92,6 +214,137 @@ impl Op {
                     if *strict { "strict" } else { "lax" }
                 )
             }
+            OpKind::Unique(f, strict) => {
+                format!(
+                    "{head} unique {f} {}",
+                    if *strict { "strict" } else { "lax" }
+                )
+            }
+            OpKind::Composite(fs) => format!(
+                "{head} composite{}",
+                fs.iter().map(|f| format!(" {f}")).collect::<String>()
+            ),
+            OpKind::Schema(expected, strict, changes) => format!(
+                "{head} schema{} {}{}",
+                expected_text(*expected),
+                if *strict { "strict" } else { "lax" },
+                if changes.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", changes.join(" ; "))
+                }
+            ),
+            OpKind::CreateTenant(owner, name) => format!("{head} create-tenant {owner} {name}"),
+            OpKind::Assign(user, role) => format!("{head} assign {user} {role}"),
+            OpKind::Revoke(user, role) => format!("{head} revoke {user} {role}"),
+            OpKind::Team(team, label) => format!("{head} team {team} {label}"),
+            OpKind::TeamAssign(team, role) => format!("{head} team-assign {team} {role}"),
+            OpKind::TeamRevoke(team, role) => format!("{head} team-revoke {team} {role}"),
+            OpKind::TeamAdd(team, user) => format!("{head} team-add {team} {user}"),
+            OpKind::TeamRemove(team, user) => format!("{head} team-remove {team} {user}"),
+            OpKind::Invite(inv, address, roles, now) => {
+                let roles = if roles.is_empty() {
+                    "-".to_string()
+                } else {
+                    roles
+                        .iter()
+                        .map(u64::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                format!("{head} invite {inv} {address} {roles} @{now}")
+            }
+            OpKind::InviteRevoke(inv) => format!("{head} invite-revoke {inv}"),
+            OpKind::Redeem(inv, now, verified) => format!(
+                "{head} redeem {inv} @{now}{}",
+                verified
+                    .as_ref()
+                    .map_or(String::new(), |v| format!(" verified={v}"))
+            ),
+            OpKind::ReadRecords(ids) => format!(
+                "read {} {} records {}{}",
+                self.tenant,
+                self.principal.token(),
+                self.object,
+                ids.iter().map(|id| format!(" {id}")).collect::<String>()
+            ),
+            OpKind::ReadQuery(name, args) => format!(
+                "read {} {} query {name}{}",
+                self.tenant,
+                self.principal.token(),
+                args.iter().map(|arg| format!(" {arg}")).collect::<String>()
+            ),
+            OpKind::ReadSearch(ty, words, args) => format!(
+                "read {} {} search {ty}{}{}",
+                self.tenant,
+                self.principal.token(),
+                words
+                    .iter()
+                    .map(|word| format!(" {word}"))
+                    .collect::<String>(),
+                args.iter().map(|arg| format!(" {arg}")).collect::<String>()
+            ),
+            OpKind::ReadAggregate(query, aggregate, args) => format!(
+                "read {} {} aggregate {query} {aggregate}{}",
+                self.tenant,
+                self.principal.token(),
+                args.iter().map(|arg| format!(" {arg}")).collect::<String>()
+            ),
+            OpKind::SettingWrite(name, level, team, expected, value) => format!(
+                "{head} setting {name} {level}{}{}{}",
+                team.map_or(String::new(), |t| format!(" team={t}")),
+                if *expected == 0 {
+                    String::new()
+                } else {
+                    format!(" v={expected}")
+                },
+                value
+                    .as_ref()
+                    .map_or(" remove".to_string(), |v| format!(" {v}"))
+            ),
+            OpKind::SettingRead(name) => format!(
+                "read {} {} setting {name}",
+                self.tenant,
+                self.principal.token()
+            ),
+            OpKind::LedgerPost(now, postings) => format!(
+                "{head} ledger post @{now}{}",
+                postings
+                    .iter()
+                    .map(|p| format!(" {p}"))
+                    .collect::<Vec<String>>()
+                    .join(" ;")
+            ),
+            OpKind::LedgerExpire(now, unit, cutoff) => {
+                format!("{head} ledger expire @{now} {unit} {cutoff}")
+            }
+            OpKind::LedgerTx(now, header, legs) => format!(
+                "{head} ledger tx @{now} {header}{}",
+                legs.iter()
+                    .map(|l| format!(" {l}"))
+                    .collect::<Vec<String>>()
+                    .join(" ;")
+            ),
+            OpKind::Invoke(now, operation, key, inputs) => format!(
+                "{head} invoke @{now} {operation}{}{}",
+                key.as_ref().map_or(String::new(), |k| format!(" key={k}")),
+                inputs
+                    .iter()
+                    .map(|(name, value)| format!(" {name}={value}"))
+                    .collect::<String>()
+            ),
+            OpKind::Segment(text) => format!("{head} segment {text}"),
+            OpKind::LedgerRead(unit, owner, scope, own) => format!(
+                "read {} {} ledger {unit} {owner}{}{}",
+                self.tenant,
+                self.principal.token(),
+                if scope.is_empty() {
+                    String::new()
+                } else {
+                    format!(" scope={scope}")
+                },
+                if *own { " own" } else { "" }
+            ),
         }
     }
 }
@@ -196,9 +449,16 @@ fn value_token(rng: &mut Lcg, field: u64) -> String {
         (_, 2) | (_, 6) => 1,
         (_, 3) => 2,
         (_, 7) => 6,
+        (_, 10) => 0,
+        // Field 9 is the caller's principal by default, a string (slice 5).
+        (_, 9) => 0,
         _ => 4,
     };
+    // Field 1 is refused by a constraint when it is `forbidden` (slice 5), so that is sometimes
+    // written.
+    let forbidden = field == 1 && rng.below(12) == 0;
     match kind {
+        0 if forbidden => "s:forbidden".to_string(),
         0 => format!("s:{}", word(rng)),
         1 => format!("i:{}", rng.below(40) as i64 - 5),
         2 => format!("b:{}", rng.below(2)),
@@ -222,7 +482,7 @@ fn field_list(rng: &mut Lcg) -> Vec<(u64, String)> {
             out.push((field, value_token(rng, field)));
         }
     }
-    for (field, odds) in [(0u64, 4), (4, 3), (5, 4), (7, 4), (8, 4)] {
+    for (field, odds) in [(0u64, 4), (4, 3), (5, 4), (7, 4), (8, 4), (10, 3), (9, 4)] {
         if rng.below(odds) == 0 {
             out.push((field, value_token(rng, field)));
         }
@@ -232,12 +492,17 @@ fn field_list(rng: &mut Lcg) -> Vec<(u64, String)> {
     if rng.below(5) == 0 {
         out.push((6, value_token(rng, 6)));
     }
+    // Field 13 is declared by no type: an unknown field, refused as invalid. (Field 9 played this
+    // part until slice 5 declared it.)
     if rng.below(25) == 0 {
-        out.push((9, "i:1".to_string()));
+        out.push((UNDECLARED_FIELD, "i:1".to_string()));
     }
     out.sort_by_key(|(f, _)| *f);
     out
 }
+
+/// A field no fixture type declares.
+const UNDECLARED_FIELD: u64 = 13;
 
 /// A patch: one to three fields, each often removed (`n`).
 fn patch_fields(rng: &mut Lcg) -> Vec<(u64, String)> {
@@ -255,17 +520,45 @@ fn patch_fields(rng: &mut Lcg) -> Vec<(u64, String)> {
         out.push((field, token));
     }
     if rng.below(40) == 0 {
-        out.push((9, "i:1".to_string()));
+        out.push((UNDECLARED_FIELD, "i:1".to_string()));
     }
     out.sort_by_key(|(f, _)| *f);
     out
 }
 
-/// The field of a `require`: half the time one of the reference fields, sometimes a list.
+/// The field of a `unique`: a scalar, sometimes a list (refused), sometimes a field whose
+/// default makes every record without a value agree.
+fn unique_field(rng: &mut Lcg) -> u64 {
+    match rng.below(10) {
+        0 => rng.pick(&[0u64, 7]),
+        1..=3 => rng.pick(&[1u64, 2, 3]),
+        4 => UNDECLARED_FIELD + rng.below(4),
+        _ => rng.pick(&[10u64, 4, 6]),
+    }
+}
+
+/// The fields of a composite constraint: usually two or three declared scalars, sometimes a list,
+/// a repeated field, an undeclared one, or too few.
+fn composite_fields(rng: &mut Lcg) -> Vec<u64> {
+    match rng.below(10) {
+        0 => vec![2, 0],
+        1 => vec![2, 2],
+        2 => vec![1, 9],
+        3 => vec![2],
+        4 | 5 => vec![2, 3],
+        6 => vec![1, 10],
+        7 => vec![2, 3, 10],
+        _ => vec![3, 10, 4, 6],
+    }
+}
+
+/// The field of a `require`: half the time one of the reference fields, sometimes a list, sometimes a field the type
+/// does not declare (the change then defines it, as the kernel does).
 fn require_field(rng: &mut Lcg) -> u64 {
-    match rng.below(8) {
+    match rng.below(10) {
         0..=3 => 4 + rng.below(2),
         4 => rng.pick(&[0u64, 7, 8]),
+        5 => UNDECLARED_FIELD + rng.below(4),
         _ => 1 + rng.below(3),
     }
 }
@@ -415,7 +708,422 @@ fn expected_version(rng: &mut Lcg, guess: u64) -> Option<u64> {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The membership intents (slice 7)
+// ---------------------------------------------------------------------------------------------
+
+/// The user numbers from this one up are the kernel's reserved principal ids (`lean::RESERVED_FROM`,
+/// the model's `reservedFrom`).
+const RESERVED_USER: u64 = 1_000_000;
+
+/// Fourteen days in milliseconds: how long an invitation lasts (ADM-1082).
+const FORTNIGHT_MS: u64 = 14 * 24 * 60 * 60 * 1000;
+
+/// The owner of a tenant: the fixture's for `1` and `2`, and the owner the generator gives tenant `3`.
+fn home_of(tenant: u64) -> u64 {
+    match tenant {
+        2 => 200,
+        3 => 300,
+        _ => 100,
+    }
+}
+
+/// What a sequence has probably done to the membership of the tenants, so that aimed operations name
+/// teams and invitations that exist (an approximation, as for records: a refused operation still counts).
+#[derive(Clone, Default)]
+struct Members {
+    /// Tenant 3 was (probably) created.
+    created3: bool,
+    /// How many teams `team1`.. the sequence defined, per tenant.
+    teams: [u64; 4],
+    /// The invitations made, per tenant: the address token and the time of the request.
+    invites: [Vec<(String, u64)>; 4],
+}
+
+/// The kernel orders a set of roles by the role id's text: `editor` (2), `owner` (0), `public` (1),
+/// `role<n>`, `writer` (3). The model takes a role list in the order given, so the generator writes the
+/// roles of an invitation in the kernel's order, and a refusal for two bad roles is the same on both
+/// sides.
+fn role_order(role: u64) -> String {
+    match role {
+        0 => "owner".to_string(),
+        1 => "public".to_string(),
+        2 => "editor".to_string(),
+        3 => "writer".to_string(),
+        n => format!("role{n}"),
+    }
+}
+
+fn sorted_roles(mut roles: Vec<u64>) -> Vec<u64> {
+    roles.sort_by_key(|r| role_order(*r));
+    roles.dedup();
+    roles
+}
+
+/// A user an assignment or a team names: the tenant's own users, strangers, now and then a reserved id.
+fn member_user(rng: &mut Lcg, home: u64) -> u64 {
+    match rng.below(14) {
+        0..=2 => home,
+        3..=5 => home + 1,
+        6 | 7 => home + 2,
+        8 => home + 3,
+        9 | 10 => 150,
+        11 => 160,
+        12 => home + 4,
+        _ => RESERVED_USER + rng.below(2),
+    }
+}
+
+/// A role number: owner, editor and writer mostly, now and then `public` or one the tenant does not define.
+fn member_role(rng: &mut Lcg) -> u64 {
+    match rng.below(14) {
+        0..=2 => 0,
+        3 => 1,
+        4..=7 => 2,
+        8..=11 => 3,
+        _ => 9,
+    }
+}
+
+/// The caller of a membership operation: mostly the tenant's owner or editor, who may manage members,
+/// otherwise a writer, a stranger, the system, an anonymous caller, another tenant's owner or a
+/// reserved id.
+fn member_caller(rng: &mut Lcg, home: u64) -> Caller {
+    match rng.below(22) {
+        0..=8 => Caller::User(home),
+        9..=13 => Caller::User(home + 1),
+        14 | 15 => Caller::User(home + 2),
+        16 => Caller::User(999),
+        17 => Caller::System,
+        18 => Caller::Anonymous,
+        19 => Caller::User(RESERVED_USER + 1),
+        _ => Caller::User(if home == 100 { 201 } else { 101 }),
+    }
+}
+
+/// The address an invitation names: with capitals or spaces to be normalised, or with no `@`.
+fn invite_address(rng: &mut Lcg) -> String {
+    match rng.below(7) {
+        0 => "s:ann@x.org".to_string(),
+        1 => "s:Bob@X.com".to_string(),
+        2 => "s:_cy@x.org_".to_string(),
+        3 => "s:dave".to_string(),
+        4 => "s:EVE@x.org".to_string(),
+        5 => "s:_@_".to_string(),
+        _ => "s:fay@x.org".to_string(),
+    }
+}
+
+/// An address that is the same once normalised (trimmed and lowercased), written differently, or another.
+fn verified_address(rng: &mut Lcg, named: &str) -> Option<String> {
+    match rng.below(10) {
+        0 => None,
+        1 | 2 => Some("s:zed@x.org".to_string()),
+        3 | 4 => Some(named.to_uppercase().replacen("S:", "s:", 1)),
+        5 => Some(format!("s:_{}_", &named[2..])),
+        _ => Some(named.to_string()),
+    }
+}
+
+/// The roles an invitation offers.
+fn invite_roles(rng: &mut Lcg) -> Vec<u64> {
+    sorted_roles(match rng.below(10) {
+        0 => vec![],
+        1 => vec![0],
+        2 => vec![1],
+        3 => vec![9],
+        4 | 5 => vec![2],
+        6 | 7 => vec![3],
+        8 => vec![2, 3],
+        _ => vec![1, 9],
+    })
+}
+
+/// The time of a redemption, around the expiry of an invitation issued at `at`.
+fn redeem_time(rng: &mut Lcg, at: u64) -> u64 {
+    match rng.below(8) {
+        0 => at + FORTNIGHT_MS - 1,
+        1 => at + FORTNIGHT_MS,
+        2 => at + FORTNIGHT_MS + 1,
+        3 => at.saturating_sub(1),
+        _ => at + 1 + rng.below(1000),
+    }
+}
+
+/// One iteration of the generator that is about membership: a creation of tenant 3, a scripted
+/// sequence that builds a lifecycle (an invitation made, redeemed, revoked, expired; an owner team;
+/// the last owner), or one random operation.
+fn member_ops(rng: &mut Lcg, ms: &mut Members) -> Vec<Op> {
+    let tenant = match rng.below(10) {
+        0..=2 => 3,
+        3 | 4 => 2,
+        _ => 1,
+    };
+    let t = tenant as usize;
+    let home = home_of(tenant);
+    let mut ops = Vec::new();
+    let mk = |principal: Caller, kind: OpKind| Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind,
+    };
+    // Tenant 3 does not exist until the system creates it. Creations are mostly right; some name a
+    // blank name, a reserved owner or a tenant that exists, or are made by someone else.
+    if tenant == 3 && (!ms.created3 || rng.below(10) == 0) {
+        let owner = match rng.below(10) {
+            0 => RESERVED_USER,
+            1 => 301,
+            _ => 300,
+        };
+        let name = if rng.below(8) == 0 { "s:_" } else { "s:acme" };
+        let (at, who) = match rng.below(12) {
+            0 => (3, Caller::User(300)),
+            1 => (3, Caller::Anonymous),
+            2 => (rng.pick(&[1u64, 2]), Caller::System),
+            3 => (3, Caller::User(RESERVED_USER + 1)),
+            _ => (3, Caller::System),
+        };
+        ms.created3 |= at == 3 && who == Caller::System && owner < RESERVED_USER && name != "s:_";
+        ops.push(Op {
+            hop: None,
+            tenant: at,
+            principal: who,
+            object: 1,
+            kind: OpKind::CreateTenant(owner, name.to_string()),
+        });
+        return ops;
+    }
+    // Scripted sequences.
+    if rng.below(8) == 0 {
+        let inv = 1 + ms.invites[t].len() as u64;
+        let address = ["s:ann@x.org", "s:Bob@X.com", "s:_cy@x.org_"][rng.below(3) as usize];
+        let at = 1_000 + 1_000 * rng.below(5);
+        let issuer = if rng.below(3) == 0 { home + 1 } else { home };
+        let roles = sorted_roles(match rng.below(4) {
+            0 => vec![2],
+            1 => vec![3],
+            2 => vec![2, 3],
+            _ => vec![0],
+        });
+        let invite = |i: u64, who: u64, at: u64| {
+            mk(
+                Caller::User(who),
+                OpKind::Invite(i, address.to_string(), roles.clone(), at),
+            )
+        };
+        let redeem = |i: u64, who: u64, at: u64, verified: Option<&str>| {
+            mk(
+                Caller::User(who),
+                OpKind::Redeem(i, at, verified.map(str::to_string)),
+            )
+        };
+        match rng.below(7) {
+            // The invitation is made, redeemed, redeemed again and revoked too late.
+            0 => {
+                ops.push(invite(inv, issuer, at));
+                ops.push(redeem(inv, 150, at + 5, Some(address)));
+                ops.push(redeem(inv, 160, at + 6, Some(address)));
+                ops.push(mk(Caller::User(home), OpKind::InviteRevoke(inv)));
+            }
+            // The invitation is revoked, then redeemed.
+            1 => {
+                ops.push(invite(inv, issuer, at));
+                ops.push(mk(Caller::User(issuer), OpKind::InviteRevoke(inv)));
+                ops.push(mk(Caller::User(issuer), OpKind::InviteRevoke(inv)));
+                ops.push(redeem(inv, 150, at + 5, Some(address)));
+            }
+            // The expiry: the last millisecond and the first one after.
+            2 => {
+                ops.push(invite(inv, issuer, at));
+                ops.push(redeem(inv, 150, at + FORTNIGHT_MS, Some(address)));
+                ops.push(redeem(inv, 150, at + FORTNIGHT_MS - 1, Some(address)));
+            }
+            // The issuer loses the right to manage members before the invitation is redeemed.
+            3 => {
+                ops.push(invite(inv, home + 1, at));
+                ops.push(mk(Caller::User(home), OpKind::Revoke(home + 1, 2)));
+                ops.push(redeem(inv, 150, at + 5, Some(address)));
+            }
+            // The wrong address, no verified address, then the right one.
+            4 => {
+                ops.push(invite(inv, issuer, at));
+                ops.push(redeem(inv, 150, at + 5, Some("s:zed@x.org")));
+                ops.push(redeem(inv, 150, at + 5, None));
+                ops.push(redeem(inv, 150, at + 5, Some(address)));
+            }
+            // An owner team: the owner can drop its own role while the team keeps an owner.
+            5 => {
+                let team = 1 + ms.teams[t].min(2);
+                ms.teams[t] = ms.teams[t].max(team);
+                ops.push(mk(
+                    Caller::User(home),
+                    OpKind::Team(team, "s:ops".to_string()),
+                ));
+                ops.push(mk(Caller::User(home), OpKind::TeamAssign(team, 0)));
+                ops.push(mk(Caller::User(home), OpKind::TeamAdd(team, 150)));
+                ops.push(mk(Caller::User(home), OpKind::Revoke(home, 0)));
+                ops.push(mk(Caller::User(150), OpKind::TeamRemove(team, 150)));
+                ops.push(mk(Caller::User(home), OpKind::TeamRemove(team, 150)));
+            }
+            // The last owner: the owner takes its role away, with and without a second owner.
+            _ => {
+                ops.push(mk(Caller::User(home), OpKind::Revoke(home, 0)));
+                ops.push(mk(Caller::User(home), OpKind::Assign(home + 1, 0)));
+                ops.push(mk(Caller::User(home), OpKind::Revoke(home, 0)));
+                ops.push(mk(Caller::User(home + 1), OpKind::Revoke(home + 1, 0)));
+            }
+        }
+        if ops.iter().any(|op| matches!(op.kind, OpKind::Invite(..))) {
+            ms.invites[t].push((address.to_string(), at));
+        }
+        return ops;
+    }
+    // One random operation.
+    let caller = member_caller(rng, home);
+    let team = |rng: &mut Lcg, ms: &Members| {
+        if rng.below(10) == 0 {
+            7
+        } else {
+            1 + rng.below(ms.teams[t].clamp(1, 3))
+        }
+    };
+    let kind = match rng.below(26) {
+        0..=3 => OpKind::Assign(member_user(rng, home), member_role(rng)),
+        4..=6 => OpKind::Revoke(member_user(rng, home), member_role(rng)),
+        7 | 8 => {
+            let n = 1 + rng.below(3);
+            ms.teams[t] = ms.teams[t].max(n);
+            let label = if rng.below(5) == 0 { "s:_" } else { "s:ops" };
+            OpKind::Team(n, label.to_string())
+        }
+        9 | 10 => OpKind::TeamAssign(team(rng, ms), member_role(rng)),
+        11 => OpKind::TeamRevoke(team(rng, ms), member_role(rng)),
+        12..=14 => OpKind::TeamAdd(team(rng, ms), member_user(rng, home)),
+        15 => OpKind::TeamRemove(team(rng, ms), member_user(rng, home)),
+        16..=19 => {
+            let inv = if rng.below(6) == 0 {
+                1 + rng.below(3)
+            } else {
+                1 + ms.invites[t].len() as u64
+            };
+            let address = invite_address(rng);
+            let at = 1_000 + 1_000 * rng.below(5);
+            if inv as usize == ms.invites[t].len() + 1 {
+                ms.invites[t].push((address.clone(), at));
+            }
+            OpKind::Invite(inv, address, invite_roles(rng), at)
+        }
+        20 => OpKind::InviteRevoke(1 + rng.below(3)),
+        _ => {
+            let made = ms.invites[t].len() as u64;
+            if made == 0 || rng.below(8) == 0 {
+                OpKind::Redeem(
+                    1 + rng.below(3),
+                    1_000 + rng.below(5_000),
+                    Some("s:ann@x.org".to_string()),
+                )
+            } else {
+                let inv = 1 + rng.below(made);
+                let (named, at) = ms.invites[t][inv as usize - 1].clone();
+                let verified = verified_address(rng, &named);
+                OpKind::Redeem(inv, redeem_time(rng, at), verified)
+            }
+        }
+    };
+    // A redemption is made by whoever redeems, not by a manager: a user who may have no role.
+    let caller = if matches!(kind, OpKind::Redeem(..)) {
+        match rng.below(10) {
+            0 => Caller::System,
+            1 => Caller::Anonymous,
+            2 => Caller::User(home),
+            3 => Caller::User(RESERVED_USER + 1),
+            4 | 5 => Caller::User(160),
+            _ => Caller::User(150),
+        }
+    } else {
+        caller
+    };
+    ops.push(mk(caller, kind));
+    ops
+}
+
 /// One sequence, deterministic in `seed`.
+/// One ticket operation (slice 8, the model's type `4`): a create, a patch of the state or the votes, a
+/// replacement, or a delete, by an owner, an editor or a writer of tenant 1 or 2. The states are the
+/// workflow's (`open`, `closed`, `archived`, `escalated`), with a state no transition names, a state
+/// spelt in capitals, and `null`; the votes are small numbers, `0`, `null` and absent.
+fn ticket_op(rng: &mut Lcg) -> Op {
+    let tenant = if rng.below(4) == 0 { 2 } else { 1 };
+    let home = home_of(tenant);
+    let principal = match rng.below(16) {
+        0..=7 => home,
+        8..=10 => home + 1,
+        11..=13 => home + 2,
+        14 => home + 3,
+        _ => 999,
+    };
+    let state = |rng: &mut Lcg| -> String {
+        match rng.below(10) {
+            0..=2 => "s:open".to_string(),
+            3 | 4 => "s:closed".to_string(),
+            5 => "s:archived".to_string(),
+            6 => "s:escalated".to_string(),
+            7 => "s:bogus".to_string(),
+            8 => "s:OPEN".to_string(),
+            _ => "n".to_string(),
+        }
+    };
+    let votes = |rng: &mut Lcg| -> String {
+        match rng.below(8) {
+            0 => "n".to_string(),
+            1 => "i:0".to_string(),
+            2 => "i:3".to_string(),
+            3 => "i:7".to_string(),
+            _ => format!("i:{}", rng.below(3) + 1),
+        }
+    };
+    let kind = match rng.below(10) {
+        0..=2 => {
+            let mut fields = Vec::new();
+            if rng.below(8) != 0 {
+                fields.push((1, state(rng)));
+            }
+            if rng.below(2) == 0 {
+                fields.push((2, votes(rng)));
+            }
+            if rng.below(5) == 0 {
+                fields.push((3, "s:note".to_string()));
+            }
+            OpKind::Create(fields)
+        }
+        3..=6 => {
+            let mut fields = Vec::new();
+            if rng.below(3) != 0 {
+                fields.push((1, state(rng)));
+            }
+            if rng.below(2) == 0 || fields.is_empty() {
+                fields.push((2, votes(rng)));
+            }
+            OpKind::Patch(1 + rng.below(3), expected_version(rng, 1), fields)
+        }
+        7 => OpKind::Update(
+            1 + rng.below(3),
+            expected_version(rng, 1),
+            vec![(1, state(rng)), (2, votes(rng))],
+        ),
+        _ => OpKind::Delete(1 + rng.below(3), expected_version(rng, 1)),
+    };
+    Op {
+        hop: None,
+        tenant,
+        principal: Caller::User(principal),
+        object: 4,
+        kind,
+    }
+}
+
 pub fn generate(seed: u64) -> Scenario {
     let mut rng = Lcg(seed ^ 0x9e37_79b9_7f4a_7c15);
     // Warm the generator: nearby seeds would otherwise start alike.
@@ -431,13 +1139,26 @@ pub fn generate(seed: u64) -> Scenario {
     let mut versions: [Vec<u64>; 4] = Default::default();
     // Whether the tenant may hold a record near the record bound: patches there stay small.
     let mut big = [false; 4];
+    // What the sequence has probably done to the tenants' membership (slice 7).
+    let mut members = Members::default();
     for _ in 0..(8 + rng.below(20)) {
+        // One iteration in four is about membership: a creation of tenant 3, a scripted sequence, or
+        // one random operation.
+        if rng.below(4) == 0 {
+            ops.extend(member_ops(&mut rng, &mut members));
+            continue;
+        }
+        // One iteration in six is a ticket operation (slice 8): the tickets' workflow decides it.
+        if rng.below(6) == 0 {
+            ops.push(ticket_op(&mut rng));
+            continue;
+        }
         let tenant = match rng.below(12) {
             0 => 3,
             1 | 2 => 2,
             _ => 1,
         };
-        let home = if tenant == 2 { 200 } else { 100 };
+        let home = home_of(tenant);
         let principal = match rng.below(14) {
             0 => 999,
             1 => {
@@ -460,8 +1181,10 @@ pub fn generate(seed: u64) -> Scenario {
         if tenant != 3 && rng.below(10) == 0 {
             let first = created[t] + 1;
             let owner = |kind| Op {
+                hop: None,
                 tenant,
-                principal: home,
+                principal: Caller::User(home),
+                object: 1,
                 kind,
             };
             ops.push(owner(OpKind::Create(vec![(
@@ -512,7 +1235,7 @@ pub fn generate(seed: u64) -> Scenario {
         let aimed = tenant != 3 && rng.below(2) == 0;
         let mut principal = principal;
         // An aimed update, patch or delete names a record the sequence probably made.
-        let kind = match rng.below(20) {
+        let kind = match rng.below(22) {
             0..=6 => {
                 let mut fields = field_list(&mut rng);
                 if aimed {
@@ -606,21 +1329,1992 @@ pub fn generate(seed: u64) -> Scenario {
                 OpKind::Delete(id, expected)
             }
             18 => OpKind::Require(require_field(&mut rng), true),
+            19 => OpKind::Unique(unique_field(&mut rng), rng.below(3) != 0),
+            20 => OpKind::Composite(composite_fields(&mut rng)),
             _ => OpKind::Require(require_field(&mut rng), false),
         };
         // Schema changes are mostly attempted by the owner, so both strict outcomes occur.
-        let principal = if matches!(kind, OpKind::Require(..)) && rng.below(4) != 0 {
+        let principal = if matches!(
+            kind,
+            OpKind::Require(..) | OpKind::Unique(..) | OpKind::Composite(..)
+        ) && rng.below(4) != 0
+        {
             home
         } else {
             principal
         };
+        // Most intents name `item`; one in four names `part` (whose fields are its own), and one
+        // in twelve names a type the tenant does not have, so the unknown-type refusals occur.
+        let object = match rng.below(12) {
+            0 => 9,
+            1..=3 => 2,
+            _ => 1,
+        };
+        // A `require` or `unique` names any field: one the object type declares, or one it lacks, which the change
+        // defines as an optional boolean field, in the model (`ensureField`) as in the kernel (slice 11). Half the
+        // time a `require` or `unique` on a part names one of its own fields (1 to 4), as before.
+        let kind = match (object, kind) {
+            (2, OpKind::Require(f, strict)) if rng.below(2) == 0 => {
+                OpKind::Require(1 + f % 4, strict)
+            }
+            (2, OpKind::Unique(f, strict)) if rng.below(2) == 0 => {
+                OpKind::Unique(1 + f % 4, strict)
+            }
+            (_, kind) => kind,
+        };
+        // One operation in twenty-four is the system's, one in twelve an anonymous caller's, so the
+        // system and the `public` role are exercised on every type.
+        let caller = match rng.below(24) {
+            0 => Caller::System,
+            1 | 2 => Caller::Anonymous,
+            _ => Caller::User(principal),
+        };
         ops.push(Op {
+            hop: None,
             tenant,
-            principal,
+            principal: caller,
+            object,
             kind,
         });
     }
+    with_reads(seed, with_schema(seed, ops))
+}
+
+// ---------------------------------------------------------------------------------------------
+// The schema change in general (slice 11)
+// ---------------------------------------------------------------------------------------------
+
+/// The object types a schema change defines and removes. They are single digits so that the kernel's order of the
+/// types (by name, `type5` to `type8`, after `item`, `part` and `ticket`) is the model's (by number). The fixture's
+/// own types are never removed: a policy, a role permission and the fixture's queries name them.
+const NEW_TYPES: [u64; 4] = [5, 6, 7, 8];
+
+/// The fields the fixture's item declares that no constraint, workflow, policy, query, field read rule or search
+/// reads. The kernel refuses a change that removes or retypes a field one of these dependents reads
+/// (`dependencies::impact`, and the schema check), and the model holds the dependents that live in the tenant
+/// (constraints, workflows, composite unique constraints, policies) but not the queries, read rules and search
+/// declarations of the fixture, which the model keeps beside the tenant (`ReadSpec`). A generated change removes or
+/// redefines with another type only fields no such dependent reads, so that the two agree on every change the
+/// generator makes. Reachable again when the model holds the read declarations (see the slice 11 review note).
+const FREE_ITEM_FIELDS: [u64; 7] = [0, 4, 5, 6, 8, 11, 12];
+
+/// The part's field that no dependent reads (the part's constraint reads fields 1, 2, 4 and 5, its query field 4).
+const FREE_PART_FIELD: u64 = 3;
+
+/// Fields a schema change adds to a type (the fixture declares none of them), and may later redefine or remove.
+const ADDED_FIELDS: [u64; 4] = [13, 14, 15, 16];
+
+/// A field type token of a `schema` line (the model's `parseTy`): mostly a scalar, a reference to an item, a part or
+/// one of the types a change defines, or a list of one.
+fn type_token(rng: &mut Lcg, scalar_only: bool) -> String {
+    let span = if scalar_only { 8 } else { 10 };
+    match rng.below(span) {
+        0 | 1 => "int".to_string(),
+        2 | 3 => "str".to_string(),
+        4 => "bool".to_string(),
+        5 | 6 => format!(
+            "ref:{}:{}",
+            rng.pick(&[1u64, 1, 2, 5, 6, 9]),
+            rng.pick(&["r", "s"])
+        ),
+        7 => "ref:1:s".to_string(),
+        8 => format!("list:{}", type_token(rng, true)),
+        _ => "list:int".to_string(),
+    }
+}
+
+/// A default of a field of type `ty` as a value token: usually one of its type, sometimes of another.
+fn default_token(rng: &mut Lcg, ty: &str) -> String {
+    if rng.below(6) == 0 {
+        return "s:oak".to_string();
+    }
+    if ty == "int" {
+        format!("i:{}", rng.below(9))
+    } else if ty == "str" {
+        format!("s:{}", word(rng))
+    } else if ty == "bool" {
+        format!("b:{}", rng.below(2))
+    } else if ty.starts_with("ref:") {
+        format!("r:{}", 1 + rng.below(3))
+    } else {
+        "l:".to_string()
+    }
+}
+
+/// The options after a field's type: `required`, `unique`, `default=<v>`, each now and then.
+fn field_options(rng: &mut Lcg, ty: &str) -> String {
+    let mut out = String::new();
+    if rng.below(4) == 0 {
+        out.push_str(" required");
+    }
+    if rng.below(4) == 0 {
+        out.push_str(" unique");
+    }
+    if rng.below(4) == 0 {
+        out.push_str(&format!(" default={}", default_token(rng, ty)));
+    }
+    out
+}
+
+/// A type and a field a generated change may define or remove: a field the change adds, a free field of the fixture
+/// (see [`FREE_ITEM_FIELDS`]), or a field of a type a change defines.
+fn change_target(rng: &mut Lcg) -> (u64, u64) {
+    match rng.below(10) {
+        0..=2 => (1, rng.pick(&ADDED_FIELDS)),
+        3 => (1, rng.pick(&FREE_ITEM_FIELDS)),
+        4 => (2, rng.pick(&ADDED_FIELDS)),
+        5 => (2, FREE_PART_FIELD),
+        6 => (4, rng.pick(&ADDED_FIELDS)),
+        _ => (rng.pick(&NEW_TYPES), 1 + rng.below(4)),
+    }
+}
+
+/// A list of changes for one `schema` line, one to three of them. A type the list removes is the only type it names
+/// in that change and no other change of the list names it: the kernel rewrites and deletes the records of a type the
+/// tenant has when it is removed, and defined again or changed in the same list the two disagree on the events (the
+/// model holds that a type removed and defined again is refused only when a field of a type names it).
+fn change_list(rng: &mut Lcg) -> Vec<String> {
+    let mut changes: Vec<String> = Vec::new();
+    let mut removed: Vec<u64> = Vec::new();
+    let mut mentioned: Vec<u64> = Vec::new();
+    for _ in 0..(1 + rng.below(3)) {
+        let (change, named, is_removal) = match rng.below(10) {
+            0..=4 => {
+                let (ty, field) = change_target(rng);
+                let ty_text = type_token(rng, false);
+                let options = field_options(rng, &ty_text);
+                (
+                    format!("define-field {ty} {field} {ty_text}{options}"),
+                    ty,
+                    false,
+                )
+            }
+            5..=6 => {
+                let (ty, field) = change_target(rng);
+                (format!("remove-field {ty} {field}"), ty, false)
+            }
+            7 => {
+                let ty = rng.pick(&NEW_TYPES);
+                (format!("define-type {ty}"), ty, false)
+            }
+            _ => {
+                let ty = rng.pick(&NEW_TYPES);
+                let delete = if rng.below(2) == 0 { " delete" } else { "" };
+                (format!("remove-type {ty}{delete}"), ty, true)
+            }
+        };
+        if removed.contains(&named) || (is_removal && mentioned.contains(&named)) {
+            continue;
+        }
+        if is_removal {
+            removed.push(named);
+        }
+        mentioned.push(named);
+        changes.push(change);
+    }
+    changes
+}
+
+/// A schema change op of `tenant`.
+fn schema_op(
+    tenant: u64,
+    principal: Caller,
+    expected: Option<u64>,
+    strict: bool,
+    changes: Vec<String>,
+) -> Op {
+    Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::Schema(expected, strict, changes),
+    }
+}
+
+/// How many schema-changing operations the owner of `tenant` made in `before`, so that a guess of the schema version
+/// is often right (a refused operation still counts, so it is only a guess).
+fn schema_guess(before: &[Op], tenant: u64) -> u64 {
+    let owner = Caller::User(home_of(tenant));
+    let made = before
+        .iter()
+        .filter(|op| {
+            op.tenant == tenant
+                && op.principal == owner
+                && matches!(
+                    op.kind,
+                    OpKind::Require(..)
+                        | OpKind::Unique(..)
+                        | OpKind::Composite(..)
+                        | OpKind::Schema(..)
+                )
+        })
+        .count() as u64;
+    if tenant == 3 {
+        1 + made
+    } else {
+        3 + made
+    }
+}
+
+/// One random schema change of slice 11: mostly the owner's, in one of the tenants, with an expected version now and
+/// then, strict or lax, and a short list of changes.
+fn random_schema_op(rng: &mut Lcg, before: &[Op]) -> Op {
+    let tenant = match rng.below(10) {
+        0 | 1 => 3,
+        2 | 3 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(12) {
+        0 => Caller::System,
+        1 => Caller::Anonymous,
+        2 => Caller::User(home + 2),
+        3 => Caller::User(home + 1),
+        4 => Caller::User(999),
+        _ => Caller::User(home),
+    };
+    let expected = match rng.below(8) {
+        0 => Some(schema_guess(before, tenant)),
+        1 => Some(1 + rng.below(8)),
+        _ => None,
+    };
+    let strict = rng.below(5) < 3;
+    let changes = match rng.below(40) {
+        0 => Vec::new(),
+        1 => vec!["define-type 5".to_string(); 201],
+        _ => change_list(rng),
+    };
+    schema_op(tenant, principal, expected, strict, changes)
+}
+
+/// A short scripted sequence by the owner of a tenant that reaches the decisions a single random change seldom does:
+/// the records of a type a change removes or rewrites, a required or unique field defined over records, a field
+/// retyped under a composite constraint, the expected version, a reference to a type a change removes, the refusals
+/// of a list that is empty, over the limit, not the owner's or not valid.
+fn schema_script(rng: &mut Lcg) -> Vec<Op> {
+    let tenant = if rng.below(4) == 0 { 2 } else { 1 };
+    let owner = Caller::User(home_of(tenant));
+    let ty = rng.pick(&NEW_TYPES);
+    let on = |changes: Vec<String>, strict: bool| schema_op(tenant, owner, None, strict, changes);
+    let create_in = |object: u64, fields: Vec<(u64, String)>| Op {
+        hop: None,
+        tenant,
+        principal: owner,
+        object,
+        kind: OpKind::Create(fields),
+    };
+    let item = |fields: Vec<(u64, String)>| create_in(1, fields);
+    let patch_item = |id: u64, fields: Vec<(u64, String)>| Op {
+        hop: None,
+        tenant,
+        principal: owner,
+        object: 1,
+        kind: OpKind::Patch(id, None, fields),
+    };
+    match rng.below(7) {
+        // A type with records, then a change that rewrites or removes them.
+        0 => {
+            let unique = if rng.below(2) == 0 { " unique" } else { "" };
+            let mut ops = vec![on(
+                vec![
+                    format!("define-type {ty}"),
+                    format!("define-field {ty} 1 str required{unique}"),
+                    format!("define-field {ty} 2 int"),
+                ],
+                true,
+            )];
+            for _ in 0..(1 + rng.below(3)) {
+                ops.push(create_in(
+                    ty,
+                    vec![
+                        (1, format!("s:{}", word(rng))),
+                        (2, format!("i:{}", rng.below(5))),
+                    ],
+                ));
+            }
+            match rng.below(5) {
+                0 => ops.push(on(vec![format!("remove-field {ty} 2")], rng.below(2) == 0)),
+                1 => {
+                    ops.push(on(vec![format!("remove-type {ty}")], rng.below(2) == 0));
+                    ops.push(on(vec![format!("remove-type {ty} delete")], true));
+                }
+                2 => ops.push(on(
+                    vec![format!("remove-type {ty} delete")],
+                    rng.below(2) == 0,
+                )),
+                3 => {
+                    ops.push(on(vec![format!("define-field {ty} 3 int required")], true));
+                    ops.push(on(vec![format!("define-field {ty} 3 int required")], false));
+                }
+                _ => ops.push(on(
+                    vec![
+                        format!("define-field {ty} 2 str"),
+                        format!("remove-field {ty} 1"),
+                    ],
+                    rng.below(2) == 0,
+                )),
+            }
+            ops
+        }
+        // A required field, then a retyped one, over the item's records.
+        1 => {
+            let mut ops = vec![item(vec![(1, format!("s:{}", word(rng)))])];
+            if rng.below(2) == 0 {
+                ops.push(item(vec![(1, format!("s:{}", word(rng)))]));
+            }
+            ops.push(on(vec!["define-field 1 13 int required".to_string()], true));
+            ops.push(on(
+                vec!["define-field 1 13 int required".to_string()],
+                false,
+            ));
+            ops.push(patch_item(1, vec![(13, "i:3".to_string())]));
+            ops.push(on(vec!["define-field 1 13 str".to_string()], true));
+            ops.push(on(vec!["define-field 1 13 str".to_string()], false));
+            ops.push(on(vec!["remove-field 1 13".to_string()], rng.below(2) == 0));
+            ops
+        }
+        // A composite constraint over added fields, then a change that retypes or removes one of them.
+        2 => vec![
+            on(
+                vec![
+                    "define-field 1 13 int".to_string(),
+                    "define-field 1 14 str".to_string(),
+                ],
+                true,
+            ),
+            Op {
+                hop: None,
+                tenant,
+                principal: owner,
+                object: 1,
+                kind: OpKind::Composite(vec![13, 14]),
+            },
+            on(vec!["define-field 1 13 str".to_string()], rng.below(2) == 0),
+            on(vec!["remove-field 1 14".to_string()], rng.below(2) == 0),
+            on(vec!["define-field 1 13 int required".to_string()], true),
+            on(
+                vec![
+                    "remove-field 1 13".to_string(),
+                    "remove-field 1 14".to_string(),
+                ],
+                true,
+            ),
+        ],
+        // The expected version: the schema of a fixture tenant starts at version 3.
+        3 => {
+            let expect = |v: u64, name: String| {
+                schema_op(
+                    tenant,
+                    owner,
+                    Some(v),
+                    true,
+                    vec![format!("define-type {name}")],
+                )
+            };
+            vec![
+                expect(3, "5".to_string()),
+                expect(3, "6".to_string()),
+                expect(4, "6".to_string()),
+                expect(9, "7".to_string()),
+            ]
+        }
+        // A reference to a type, then the removal of the type.
+        4 => vec![
+            on(
+                vec![
+                    format!("define-type {ty}"),
+                    format!("define-field {ty} 1 str"),
+                    format!("define-field 1 13 ref:{ty}:s"),
+                ],
+                true,
+            ),
+            on(vec![format!("remove-type {ty}")], true),
+            on(
+                vec![format!("remove-field 1 13"), format!("remove-type {ty}")],
+                rng.below(2) == 0,
+            ),
+        ],
+        // Duplicates, then a unique field.
+        5 => vec![
+            on(vec!["define-field 1 13 str".to_string()], true),
+            item(vec![(1, "s:a".to_string()), (13, "s:dup".to_string())]),
+            item(vec![(1, "s:b".to_string()), (13, "s:dup".to_string())]),
+            on(vec!["define-field 1 13 str unique".to_string()], true),
+            on(vec!["define-field 1 13 str unique".to_string()], false),
+            on(
+                vec!["define-field 1 13 str unique required".to_string()],
+                true,
+            ),
+        ],
+        // The refusals of a list.
+        _ => {
+            let who = match rng.below(4) {
+                0 => Caller::System,
+                1 => Caller::Anonymous,
+                2 => Caller::User(home_of(tenant) + 2),
+                _ => Caller::User(999),
+            };
+            let invalid = match rng.below(6) {
+                0 => vec!["define-field 1 13 ref:9:r".to_string()],
+                1 => vec!["define-field 1 13 list:int unique".to_string()],
+                2 => vec!["define-field 1 13 list:list:int".to_string()],
+                3 => vec!["remove-field 1 15".to_string()],
+                4 => vec!["define-field 99 1 int".to_string()],
+                _ => vec!["remove-type 7".to_string()],
+            };
+            vec![
+                schema_op(tenant, who, None, true, vec![format!("define-type {ty}")]),
+                on(Vec::new(), true),
+                on(vec!["define-type 5".to_string(); 201], true),
+                on(invalid, rng.below(2) == 0),
+                schema_op(
+                    tenant,
+                    owner,
+                    Some(1 + rng.below(2)),
+                    true,
+                    vec!["define-type 5".to_string()],
+                ),
+            ]
+        }
+    }
+}
+
+/// The scenario with schema changes of slice 11 placed among its operations: a random one now and then, and the
+/// scripted sequences of [`schema_script`], from a stream of their own so the operations the rest of the generator
+/// draws are the same with or without them.
+fn with_schema(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7363_6865_6d61_3131);
+    for _ in 0..4 {
+        rng.below(2);
+    }
+    let rounds = match rng.below(6) {
+        0 | 1 => 0,
+        2 | 3 => 1,
+        4 => 2,
+        _ => 3,
+    };
+    for _ in 0..rounds {
+        let from = ops.len() / 4;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let batch = if rng.below(3) == 0 {
+            vec![random_schema_op(&mut rng, &ops[..at])]
+        } else {
+            schema_script(&mut rng)
+        };
+        for (k, op) in batch.into_iter().enumerate() {
+            ops.insert(at + k, op);
+        }
+    }
     ops
+}
+
+/// A read of slice 10, drawn from the stream `rng`. The reads of a scenario come from a stream of their
+/// own, so the operations the rest of the generator draws are the same with or without them. Mostly the
+/// tenants and principals of the fixture, sometimes tenant `3` (which may not exist yet), the system and an
+/// anonymous caller. A records read names a few ids (missing, invisible and visible ones occur together:
+/// the ids of other types and of records a principal may not read are among them), now and then 200
+/// ids (the bound) or 201 (over it), and now and then a type the tenant lacks. A query read names one of
+/// the fixture's queries, or one it lacks, with a parameter it declares or one it does not, a page size
+/// (none, 1 to 3, 0, 201) and a cursor (none, an offset, a position after a record).
+fn read_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(12) {
+        0 => 3,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0 => Caller::System,
+        1 | 2 => Caller::Anonymous,
+        3 => Caller::User(999),
+        4 => Caller::User(if home == 100 { 201 } else { 101 }),
+        5..=7 => Caller::User(home),
+        8..=10 => Caller::User(home + 1),
+        11..=15 => Caller::User(home + 2),
+        _ => Caller::User(home + 3),
+    };
+    if rng.below(5) < 2 {
+        let object = match rng.below(10) {
+            0 => 9,
+            1..=4 => 1,
+            5 | 6 => 2,
+            _ => 4,
+        };
+        let ids = match rng.below(14) {
+            0 => vec!["1-201".to_string()],
+            1 => vec!["1-200".to_string()],
+            _ => (0..1 + rng.below(5))
+                .map(|_| (1 + rng.below(12)).to_string())
+                .collect(),
+        };
+        return Op {
+            hop: None,
+            tenant,
+            principal,
+            object,
+            kind: OpKind::ReadRecords(ids),
+        };
+    }
+    let name = match rng.below(14) {
+        0 => "nope",
+        1..=4 => "items_by_rank",
+        5..=8 => "items_not_elm",
+        9 | 10 => "parts_ranked",
+        _ => "tickets_open",
+    };
+    let mut args: Vec<String> = Vec::new();
+    // `tag` is declared by `items_not_elm` only; any other name is refused.
+    match rng.below(8) {
+        0 => args.push("tag=s:x".to_string()),
+        1 => args.push("bogus=i:1".to_string()),
+        _ => {}
+    }
+    match rng.below(10) {
+        0 => args.push("page=0".to_string()),
+        1 => args.push("page=201".to_string()),
+        2..=5 => args.push(format!("page={}", 1 + rng.below(3))),
+        _ => {}
+    }
+    match rng.below(10) {
+        0..=2 => args.push(format!("cursor=o{}", rng.below(5))),
+        3 => args.push(format!("cursor=a{}", 1 + rng.below(6))),
+        _ => {}
+    }
+    Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::ReadQuery(name.to_string(), args),
+    }
+}
+
+/// The operations with a few reads placed among them, mostly in the later part of the sequence where
+/// there are records to read.
+fn with_reads(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7265_6164_735f_3130);
+    for _ in 0..4 {
+        rng.below(2);
+    }
+    for _ in 0..rng.below(7) {
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let read = read_op(&mut rng);
+        ops.insert(at, read);
+    }
+    ops
+}
+
+/// The principal of a read of a tenant whose home is `home`: the system, an anonymous caller, a user the
+/// tenant lacks, or one of its members.
+fn read_caller(rng: &mut Lcg, home: u64) -> Caller {
+    match rng.below(20) {
+        0 => Caller::System,
+        1 | 2 => Caller::Anonymous,
+        3 => Caller::User(999),
+        4 => Caller::User(if home == 100 { 201 } else { 101 }),
+        5..=7 => Caller::User(home),
+        8..=10 => Caller::User(home + 1),
+        11..=15 => Caller::User(home + 2),
+        _ => Caller::User(home + 3),
+    }
+}
+
+/// A search (slice 10, second half): an object type or all of them, a query of known words, none, too many
+/// or too long, a page size (none, 0, 201, or 1 to 3).
+fn search_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(12) {
+        0 => 3,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    let principal = read_caller(rng, home_of(tenant));
+    let object = match rng.below(8) {
+        0 => "*",
+        1 => "9",
+        2 => "2",
+        3 => "4",
+        _ => "1",
+    };
+    let words: Vec<String> = match rng.below(12) {
+        0 => Vec::new(),
+        1 => ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
+            .iter()
+            .map(|w| w.to_string())
+            .collect(),
+        2 => vec!["a".repeat(201)],
+        _ => (0..1 + rng.below(2))
+            .map(|_| word(rng).to_string())
+            .collect(),
+    };
+    let mut args: Vec<String> = Vec::new();
+    match rng.below(10) {
+        0 => args.push("page=0".to_string()),
+        1 => args.push("page=201".to_string()),
+        2..=5 => args.push(format!("page={}", 1 + rng.below(3))),
+        _ => {}
+    }
+    Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::ReadSearch(object.to_string(), words, args),
+    }
+}
+
+/// An aggregate (slice 10, second half): a declared aggregate of one of the fixture's queries, or an
+/// undeclared one or query, with a filter or a parameter the query declares or does not.
+fn aggregate_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(12) {
+        0 => 3,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    let principal = read_caller(rng, home_of(tenant));
+    let (query, aggregate) = match rng.below(14) {
+        0 => ("nope", "count"),
+        1 => ("items_by_rank", "nope"),
+        2 | 3 => ("items_by_rank", "bounded_count"),
+        4 | 5 => ("items_by_rank", "count_by_flag"),
+        6 => ("items_by_rank", "top_rank"),
+        7 => ("items_by_rank", "sum_rank"),
+        8 => ("items_by_rank", "min_rank"),
+        9 => ("items_by_rank", "max_rank"),
+        10 => ("items_not_elm", "count"),
+        11 => ("tickets_open", "max_note"),
+        12 => ("parts_ranked", "max"),
+        _ => ("tickets_open", "sum_votes"),
+    };
+    let mut args: Vec<String> = Vec::new();
+    match rng.below(8) {
+        0 => args.push("tag=s:x".to_string()),
+        1 => args.push("bogus=i:1".to_string()),
+        2 => args.push("filter.3=b:1".to_string()),
+        3 => args.push("filter.1=s:oak".to_string()),
+        _ => {}
+    }
+    Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::ReadAggregate(query.to_string(), aggregate.to_string(), args),
+    }
+}
+
+/// The searches and aggregates placed among the operations of a scenario, from a stream of their own.
+fn with_queries(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7175_6572_795f_3130);
+    for _ in 0..4 {
+        rng.below(2);
+    }
+    for _ in 0..3 + rng.below(6) {
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let read = if rng.below(2) == 0 {
+            search_op(&mut rng)
+        } else {
+            aggregate_op(&mut rng)
+        };
+        ops.insert(at, read);
+    }
+    ops
+}
+
+/// The setting name a setting operation picks (slice 12): one of the fixture's five, the platform's
+/// `member_names`, or a name no tenant defines (`unknown_object`).
+fn setting_name(rng: &mut Lcg) -> &'static str {
+    match rng.below(14) {
+        0 => "nope",
+        1 | 2 => "notify",
+        3 | 4 => "density",
+        5 | 6 => "label",
+        7 => "banner",
+        8 | 9 => "mode",
+        _ => "member_names",
+    }
+}
+
+/// The level a setting write names (slice 12): the platform (always refused for a user), the tenant, a team
+/// or the person.
+fn setting_level(rng: &mut Lcg) -> &'static str {
+    match rng.below(10) {
+        0 => "platform",
+        1..=3 => "tenant",
+        4..=6 => "team",
+        _ => "person",
+    }
+}
+
+/// The value token a setting write carries, or `None` for a removal (slice 12). Mostly a value of the setting's
+/// type and within its allowed set or range, sometimes out of them, of the wrong type, or null.
+fn setting_value(rng: &mut Lcg, name: &str) -> Option<String> {
+    if rng.below(5) == 0 {
+        return None;
+    }
+    if rng.below(12) == 0 {
+        return Some("n".to_string());
+    }
+    if rng.below(10) == 0 {
+        let wrong = match name {
+            "notify" => "s:x",
+            "density" => "s:3",
+            _ => "i:1",
+        };
+        return Some(wrong.to_string());
+    }
+    let values: &[&str] = match name {
+        "notify" => &["b:0", "b:1"],
+        "density" => &["i:0", "i:3", "i:9", "i:10", "i:-1"],
+        "label" => &["s:x", "s:a_b"],
+        "banner" => &["s:hi", "s:none"],
+        "mode" => &["s:plain", "s:bold", "s:italic"],
+        "member_names" => &["s:members", "s:everyone", "s:nobody", "s:anyone"],
+        _ => &["s:x", "i:1", "b:1"],
+    };
+    Some(rng.pick(values).to_string())
+}
+
+/// The subject an override of a setting names, as a key of the guess (slice 12).
+fn setting_subject(level: &str, team: Option<u64>, principal: Caller) -> String {
+    match level {
+        "tenant" => "tenant".to_string(),
+        "team" => format!("team{}", team.unwrap_or(0)),
+        "person" => format!("p{}", principal.token()),
+        _ => "platform".to_string(),
+    }
+}
+
+/// What the settings generator expects of the overrides it has made so far (slice 12), as if every write it
+/// makes were accepted: the revision of each override held (by tenant, setting and subject) and the writes
+/// made to each setting of each tenant (the setting's revision counts them). A guess: an expected revision is
+/// the guessed one most of the time and another one sometimes, so accepted and refused writes both occur.
+#[derive(Default)]
+struct SettingGuess {
+    held: std::collections::BTreeMap<String, u64>,
+    writes: std::collections::BTreeMap<String, u64>,
+}
+
+/// A setting write (slice 12): a tenant, a caller (mostly the owner and the editor,
+/// with the system, an anonymous caller and a user of another tenant as well), a setting name, a level, a team
+/// (named at the team level, sometimes missing, and now and then at another level), an expected revision
+/// (usually the guessed one) and a value or a removal.
+fn setting_write_op(rng: &mut Lcg, guess: &mut SettingGuess) -> Op {
+    let tenant = match rng.below(12) {
+        0 => 3,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0 => Caller::System,
+        1 | 2 => Caller::Anonymous,
+        3 => Caller::User(999),
+        4 => Caller::User(if home == 100 { 201 } else { 101 }),
+        5..=9 => Caller::User(home),
+        10..=13 => Caller::User(home + 1),
+        14..=16 => Caller::User(home + 2),
+        _ => Caller::User(home + 3),
+    };
+    let name = setting_name(rng);
+    let level = setting_level(rng);
+    // Teams 1 to 3: a team may not exist, which is a refusal.
+    let team = if level == "team" {
+        (rng.below(10) != 0).then(|| 1 + rng.below(3))
+    } else {
+        (rng.below(8) == 0).then(|| 1 + rng.below(3))
+    };
+    let key = format!(
+        "{tenant}/{name}/{}",
+        setting_subject(level, team, principal)
+    );
+    let expected = if rng.below(6) == 0 {
+        rng.below(4)
+    } else {
+        guess.held.get(&key).copied().unwrap_or(0)
+    };
+    let value = setting_value(rng, name);
+    let revision = {
+        let writes = guess.writes.entry(format!("{tenant}/{name}")).or_insert(0);
+        *writes += 1;
+        *writes
+    };
+    if value.is_some() {
+        guess.held.insert(key, revision);
+    } else {
+        guess.held.remove(&key);
+    }
+    Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::SettingWrite(name.to_string(), level.to_string(), team, expected, value),
+    }
+}
+
+/// A setting read (slice 12): a tenant, a caller (as for a record read) and a setting name.
+fn setting_read_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(12) {
+        0 => 3,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    let principal = read_caller(rng, home_of(tenant));
+    Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::SettingRead(setting_name(rng).to_string()),
+    }
+}
+
+/// A team defined by its owner and given a member, so that a team's override can resolve for that member
+/// (slice 12). Teams 1 and 2 only, in tenant 1 or, now and then, tenant 2.
+fn setting_team_setup(rng: &mut Lcg) -> Vec<Op> {
+    let tenant = if rng.below(4) == 0 { 2 } else { 1 };
+    let home = home_of(tenant);
+    let team = 1 + rng.below(2);
+    let member = home + rng.below(4);
+    vec![
+        Op {
+            hop: None,
+            tenant,
+            principal: Caller::User(home),
+            object: 1,
+            kind: OpKind::Team(team, "s:ops".to_string()),
+        },
+        Op {
+            hop: None,
+            tenant,
+            principal: Caller::User(home),
+            object: 1,
+            kind: OpKind::TeamAdd(team, member),
+        },
+    ]
+}
+
+/// The settings operations placed among the operations of a scenario, from a stream of their own (slice 12):
+/// writes and reads of the settings, and a team set up now and then. The team comes early, so that the
+/// writes and reads after it can see its member.
+fn with_settings(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7365_7474_696e_6773);
+    for _ in 0..4 {
+        rng.below(2);
+    }
+    if rng.below(2) == 0 {
+        let at = rng.below(ops.len() as u64 / 3 + 1) as usize;
+        for (k, op) in setting_team_setup(&mut rng).into_iter().enumerate() {
+            ops.insert(at + k, op);
+        }
+    }
+    let mut guess = SettingGuess::default();
+    for _ in 0..4 + rng.below(8) {
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let op = if rng.below(4) == 0 {
+            setting_read_op(&mut rng)
+        } else {
+            setting_write_op(&mut rng, &mut guess)
+        };
+        ops.insert(at, op);
+    }
+    ops
+}
+
+/// The first instant of each calendar month from January 2026 to April 2027, in milliseconds (UTC). The ledger's
+/// periods are computed by the model and the kernel; these are the times the generator aims at, so that a posting,
+/// an expiry and its cutoff fall in months that the expiry rule relates.
+const LEDGER_MONTHS: [i64; 16] = [
+    1767225600000,
+    1769904000000,
+    1772323200000,
+    1775001600000,
+    1777593600000,
+    1780272000000,
+    1782864000000,
+    1785542400000,
+    1788220800000,
+    1790812800000,
+    1793491200000,
+    1796083200000,
+    1798761600000,
+    1801440000000,
+    1803859200000,
+    1806537600000,
+];
+
+/// A time in calendar month `month` of [`LEDGER_MONTHS`], at a whole number of hours after its start (up to 27 days).
+fn ledger_time(rng: &mut Lcg, month: u64) -> i64 {
+    LEDGER_MONTHS[month as usize] + (rng.below(27 * 24) * 3_600_000) as i64
+}
+
+/// The owner token of a ledger posting or read: the owner's own account most often, a member's, a pool (declared or
+/// not) or a number that is no member.
+fn ledger_owner_token(rng: &mut Lcg, home: u64) -> String {
+    match rng.below(20) {
+        0..=9 => home.to_string(),
+        10..=11 => (home + 1).to_string(),
+        12 => (home + 2).to_string(),
+        13 => "999".to_string(),
+        14..=15 => "pool1".to_string(),
+        16 => "pool2".to_string(),
+        _ => (home + 3).to_string(),
+    }
+}
+
+/// One posting's tokens (slice 13). Unit `3` (the one that expires) is posted only to the unscoped account of person
+/// `100`, so that an expiry never has two due accounts in one tenant: the kernel takes the due accounts of one
+/// bucket start in the order of their account id, a SHA-256 hash of the tenant, owner, unit and scope that the model
+/// does not compute, so the generator keeps one account in that unit (owner and scope both). Amounts are within `±1000` for unit `1`, the one with
+/// a cap, and within `±100000` otherwise, so that the cap and the floor are both reached and not every posting
+/// crosses them. Keys come from a few names, so that replays, version conflicts and corrections occur.
+fn ledger_posting(rng: &mut Lcg, home: u64) -> String {
+    let unit = match rng.below(10) {
+        0..=3 => 1,
+        4..=5 => 2,
+        6..=8 => 3,
+        _ => 4,
+    };
+    let owner = if unit == 3 {
+        "100".to_string()
+    } else {
+        ledger_owner_token(rng, home)
+    };
+    let amount: i64 = if rng.below(30) == 0 {
+        0
+    } else if unit == 3 && rng.below(4) != 0 {
+        rng.below(100_000) as i64 + 1
+    } else if unit == 1 {
+        rng.below(2001) as i64 - 1000
+    } else {
+        rng.below(200_001) as i64 - 100_000
+    };
+    let key = match rng.below(40) {
+        0 => "key=".to_string(),
+        1 => format!("key=expiry:{}", rng.below(3)),
+        _ => format!("key=k{}", rng.below(8)),
+    };
+    let reason = match rng.below(20) {
+        0..=9 => "",
+        10..=11 => " reason=adjust",
+        12 => " reason=reverse",
+        _ => " reason=pay",
+    };
+    let corrects = if rng.below(10) < 2 {
+        format!(" corrects={}", rng.below(6))
+    } else {
+        String::new()
+    };
+    let scope = if unit != 3 && rng.below(6) == 0 {
+        " scope=s1"
+    } else {
+        ""
+    };
+    format!("{unit} {owner} {amount} {key}{reason}{corrects}{scope}")
+}
+
+/// A ledger posting operation (slice 13): one, two or three postings at one time, by a caller of the tenant or one
+/// that is not (the system, an anonymous caller, a member without the ledger capability, a number that is no member).
+fn ledger_post_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(20) {
+        0 => 3,
+        1..=3 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0 => Caller::System,
+        1 => Caller::Anonymous,
+        2 => Caller::User(999),
+        3..=5 => Caller::User(home + 1),
+        6 => Caller::User(home + 2),
+        _ => Caller::User(home),
+    };
+    let count = match rng.below(10) {
+        0..=6 => 1,
+        7..=8 => 2,
+        _ => 3,
+    };
+    let postings: Vec<String> = (0..count).map(|_| ledger_posting(rng, home)).collect();
+    let month = rng.below(12);
+    let now = ledger_time(rng, month);
+    Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::LedgerPost(now, postings),
+    }
+}
+
+/// One leg's tokens (slice 13): a unit, an owner (unit `3` only the unscoped account of person `100`, as for a
+/// posting), the amount, and now and then the scope `s1`.
+fn ledger_leg(rng: &mut Lcg, home: u64, unit: u64, amount: i64) -> String {
+    let owner = if unit == 3 {
+        "100".to_string()
+    } else {
+        ledger_owner_token(rng, home)
+    };
+    let scope = if unit != 3 && rng.below(6) == 0 {
+        " scope=s1"
+    } else {
+        ""
+    };
+    format!("{unit} {owner} {amount}{scope}")
+}
+
+/// A ledger transaction operation (slice 13): usually balanced legs in one unit, now and then one leg, legs that do
+/// not net to zero, legs in two units, a transfer between two people, a header that lacks its key or its
+/// operation, and a reason that names a correction. Keys come from a few names, so that retries occur.
+fn ledger_tx_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(20) {
+        0 => 3,
+        1..=3 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0 => Caller::System,
+        1 => Caller::Anonymous,
+        2 => Caller::User(999),
+        3..=5 => Caller::User(home + 1),
+        6 => Caller::User(home + 2),
+        _ => Caller::User(home),
+    };
+    let transfer = rng.below(5) == 0;
+    let operation = if rng.below(25) == 0 {
+        "op=".to_string()
+    } else {
+        "op=pay".to_string()
+    };
+    let key = if rng.below(25) == 0 {
+        "key=".to_string()
+    } else {
+        format!("key=t{}", rng.below(6))
+    };
+    let reason = if transfer {
+        " reason=transfer"
+    } else {
+        match rng.below(10) {
+            0..=4 => "",
+            5..=6 => " reason=pay",
+            7 => " reason=adjust",
+            _ => " reason=reverse",
+        }
+    };
+    let unit = match rng.below(10) {
+        0 => 3,
+        1..=4 => 1,
+        5..=7 => 2,
+        _ => 4,
+    };
+    let legs: Vec<String> = if transfer {
+        let amount = rng.below(60) as i64 + 1;
+        let sender = ledger_leg(rng, home, unit, -amount);
+        let recipient = ledger_leg(rng, home, unit, amount);
+        if rng.below(2) == 0 {
+            vec![sender, recipient]
+        } else {
+            vec![recipient, sender]
+        }
+    } else {
+        let count = match rng.below(10) {
+            0 => 1,
+            1..=6 => 2,
+            7..=8 => 3,
+            _ => 4,
+        };
+        let mut amounts: Vec<i64> = (0..count - 1).map(|_| rng.below(120) as i64 - 60).collect();
+        let last = -amounts.iter().sum::<i64>() + if rng.below(8) == 0 { 1 } else { 0 };
+        amounts.push(last);
+        let mut legs = Vec::new();
+        for (i, amount) in amounts.into_iter().enumerate() {
+            let leg_unit = if i + 1 == count as usize && count > 1 && rng.below(10) == 0 {
+                4
+            } else {
+                unit
+            };
+            legs.push(ledger_leg(rng, home, leg_unit, amount));
+        }
+        legs
+    };
+    let month = rng.below(12);
+    let now = ledger_time(rng, month);
+    Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::LedgerTx(now, format!("{operation} {key}{reason}"), legs),
+    }
+}
+
+/// The transaction operation that follows `op` and names the same key: half the time with the same legs (a replay
+/// when the first was accepted, which writes nothing), half the time with the amounts of the first two legs moved
+/// by one each way (the same key recorded with another request, `version_conflict`).
+fn ledger_tx_repeat(rng: &mut Lcg, op: &Op, now: i64, header: &str, legs: &[String]) -> Op {
+    let same = rng.below(2) == 0;
+    let legs: Vec<String> = legs
+        .iter()
+        .enumerate()
+        .map(|(i, leg)| {
+            if same || i > 1 {
+                return leg.clone();
+            }
+            let mut words: Vec<String> = leg.split(' ').map(str::to_string).collect();
+            if let Some(amount) = words.get(2).and_then(|w| w.parse::<i64>().ok()) {
+                words[2] = (if i == 0 { amount + 1 } else { amount - 1 }).to_string();
+            }
+            words.join(" ")
+        })
+        .collect();
+    Op {
+        hop: None,
+        tenant: op.tenant,
+        principal: op.principal,
+        object: op.object,
+        kind: OpKind::LedgerTx(now + 3_600_000, header.to_string(), legs),
+    }
+}
+
+/// A ledger expiry operation (slice 13): by the system, the owner or another caller; of unit `3` most often, so that
+/// buckets of the expiring unit fall due, and of a unit without an expiry or that no tenant declares now and then.
+fn ledger_expire_op(rng: &mut Lcg) -> Op {
+    let tenant = if rng.below(10) == 0 { 2 } else { 1 };
+    let home = home_of(tenant);
+    let principal = match rng.below(10) {
+        0..=3 => Caller::System,
+        4..=6 => Caller::User(home),
+        7 => Caller::User(home + 1),
+        8 => Caller::Anonymous,
+        _ => Caller::User(999),
+    };
+    let unit = match rng.below(10) {
+        0..=6 => 3,
+        7 => 1,
+        8 => 2,
+        _ => 9,
+    };
+    let month = rng.below(10);
+    let now = ledger_time(rng, month);
+    let cutoff = LEDGER_MONTHS[rng.below(10) as usize];
+    Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::LedgerExpire(now, unit, cutoff),
+    }
+}
+
+/// A ledger balance read (slice 13): by the owner of the tenant (who holds `ledger-read`), by the editor or the writer
+/// (who reads only their own account), or by a caller that may read nothing.
+fn ledger_read_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(20) {
+        0 => 3,
+        1..=2 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0 => Caller::System,
+        1 => Caller::Anonymous,
+        2 => Caller::User(999),
+        3..=8 => Caller::User(home),
+        9..=14 => Caller::User(home + 1),
+        15..=16 => Caller::User(home + 2),
+        _ => Caller::User(home + 3),
+    };
+    let unit = match rng.below(10) {
+        0..=3 => 1,
+        4..=5 => 2,
+        6..=8 => 3,
+        _ => 4,
+    };
+    let owner = ledger_owner_token(rng, home);
+    let scope = if rng.below(6) == 0 { "s1" } else { "" }.to_string();
+    let own = rng.below(3) == 0;
+    Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::LedgerRead(unit, owner, scope, own),
+    }
+}
+
+/// The posting operation that follows `op` and names the same keys: half the time with the same postings (a replay
+/// when the first was accepted, which writes nothing), half the time with each amount moved by one (a key recorded
+/// with another amount, `version_conflict`). It is made at a later time and changes no caller.
+fn ledger_repeat(rng: &mut Lcg, op: &Op, now: i64, postings: &[String]) -> Op {
+    let same = rng.below(2) == 0;
+    let postings: Vec<String> = postings
+        .iter()
+        .map(|p| {
+            if same {
+                return p.clone();
+            }
+            let mut words: Vec<String> = p.split(' ').map(str::to_string).collect();
+            if let Some(amount) = words.get(2).and_then(|w| w.parse::<i64>().ok()) {
+                words[2] = if amount == -1 { 2 } else { amount + 1 }.to_string();
+            }
+            words.join(" ")
+        })
+        .collect();
+    Op {
+        hop: None,
+        tenant: op.tenant,
+        principal: op.principal,
+        object: op.object,
+        kind: OpKind::LedgerPost(now + 3_600_000, postings),
+    }
+}
+
+/// The ledger operations placed among the operations of a scenario (slice 13): postings, expiries and balance reads,
+/// from a stream of their own, after the first third of the scenario so that the accounts they name may exist.
+fn with_ledger(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x6c65_6467_6572_0013);
+    for _ in 0..4 + rng.below(8) {
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let op = match rng.below(20) {
+            0..=8 => ledger_post_op(&mut rng),
+            9..=11 => ledger_tx_op(&mut rng),
+            12..=14 => ledger_expire_op(&mut rng),
+            _ => ledger_read_op(&mut rng),
+        };
+        let again = match &op.kind {
+            OpKind::LedgerPost(now, postings) if rng.below(3) == 0 => {
+                Some(ledger_repeat(&mut rng, &op, *now, postings))
+            }
+            OpKind::LedgerTx(now, header, legs) if rng.below(3) == 0 => {
+                Some(ledger_tx_repeat(&mut rng, &op, *now, header, legs))
+            }
+            _ => None,
+        };
+        ops.insert(at, op);
+        if let Some(again) = again {
+            ops.insert(at + 1, again);
+        }
+    }
+    ops
+}
+
+/// One input value of an invocation (slice 14): mostly well formed for `kind` (`text`, `item`, `count` or `amt`), and
+/// now and then missing a value (`n`), of the wrong type, or past a bound (a string one byte over the string limit, an
+/// amount over the unit's cap, a record that does not exist).
+fn invoke_value(rng: &mut Lcg, kind: &str) -> String {
+    match kind {
+        "text" => match rng.below(40) {
+            0 => "s*65537:x".to_string(),
+            1..=2 => "n".to_string(),
+            3..=4 => format!("i:{}", rng.below(9)),
+            5 => "b:1".to_string(),
+            _ => format!("s:{}", word(rng)),
+        },
+        "item" => match rng.below(20) {
+            0 => "s:1".to_string(),
+            1 => "i:1".to_string(),
+            2 => "n".to_string(),
+            3..=4 => format!("r:{}", 90 + rng.below(5)),
+            _ => format!("r:{}", 1 + rng.below(6)),
+        },
+        "count" => match rng.below(10) {
+            0..=1 => "i:-1".to_string(),
+            2 => "n".to_string(),
+            3 => "s:x".to_string(),
+            _ => format!("i:{}", rng.below(5)),
+        },
+        _ => match rng.below(30) {
+            0 => "i:5000".to_string(),
+            1 => "s:x".to_string(),
+            2 => "i:0".to_string(),
+            3..=5 => format!("i:-{}", 1 + rng.below(50)),
+            _ => format!("i:{}", rng.below(400)),
+        },
+    }
+}
+
+/// An invocation (slice 14), by one of the callers a fixture operation distinguishes: the owner, an editor, a writer,
+/// the system, an anonymous caller, a user that is no member. The operation is one of the six the fixture defines,
+/// or now and then one it does not; its inputs are drawn as for a valid call, then one is now and then left out and
+/// one the operation does not declare is now and then added; the key is mostly one of a few names (so that a
+/// posting is replayed under it), and now and then empty, malformed or absent.
+fn invoke_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(20) {
+        0 => 3,
+        1..=3 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0..=1 => Caller::System,
+        2 => Caller::Anonymous,
+        3 => Caller::User(999),
+        4..=7 => Caller::User(home + 1),
+        8..=10 => Caller::User(home + 2),
+        11 => Caller::User(home + 3),
+        _ => Caller::User(home),
+    };
+    let (operation, declared): (&str, &[(&str, &str)]) = match rng.below(25) {
+        0..=3 => ("note", &[("text", "text")]),
+        4..=7 => ("note_count", &[("text", "text"), ("count", "count")]),
+        8..=11 => ("retag", &[("item", "item"), ("text", "text")]),
+        12..=16 => ("drop", &[("item", "item")]),
+        17..=20 => ("grant", &[("amt", "amt")]),
+        21..=23 => ("note_grant", &[("text", "text"), ("amt", "amt")]),
+        _ => ("nope", &[]),
+    };
+    let mut inputs: Vec<(String, String)> = declared
+        .iter()
+        .map(|(name, kind)| (name.to_string(), invoke_value(rng, kind)))
+        .collect();
+    if !inputs.is_empty() && rng.below(12) == 0 {
+        let gone = rng.below(inputs.len() as u64) as usize;
+        inputs.remove(gone);
+    }
+    if rng.below(12) == 0 {
+        inputs.push(("extra".to_string(), "i:1".to_string()));
+    }
+    let key = match rng.below(24) {
+        0 => None,
+        1 => Some("bad".to_string()),
+        2 => Some(String::new()),
+        _ => Some(format!("k{}", rng.below(6))),
+    };
+    let month = rng.below(12);
+    let now = ledger_time(rng, month);
+    Op {
+        hop: None,
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::Invoke(now, operation.to_string(), key, inputs),
+    }
+}
+
+/// The invocations placed among the operations of a scenario (slice 14), from a stream of their own, after the first
+/// third of the scenario so that the records they name may exist. An invocation is now and then followed by the same
+/// one an hour later, so that a key is used twice.
+fn with_invokes(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x696e_766f_6b65_3134);
+    for _ in 0..6 + rng.below(10) {
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let op = invoke_op(&mut rng);
+        let again = match &op.kind {
+            OpKind::Invoke(now, operation, key, inputs) if rng.below(4) == 0 => Some(Op {
+                hop: None,
+                kind: OpKind::Invoke(
+                    *now + 3_600_000,
+                    operation.clone(),
+                    key.clone(),
+                    inputs.clone(),
+                ),
+                ..op.clone()
+            }),
+            _ => None,
+        };
+        ops.insert(at, op);
+        if let Some(again) = again {
+            ops.insert(at + 1, again);
+        }
+    }
+    ops
+}
+
+/// The shapes of a ledger operation's accepted answer as the coverage counts them (slice 13). A posting that
+/// emitted no event changed nothing (`replay`); a correction, and several postings, are counted when they emitted
+/// events. An expiry is `entries>0` when it debited an entry. A read is counted by the reach it was made with: the
+/// owner of the tenant holds `ledger-read` (`ledger-read`), the owner of the account reads its own (`owner`), and
+/// any other reader is `other`. A refusal is counted by its outcome alone, as every intent is.
+pub fn ledger_shapes<S: AsRef<str>>(rendered: &str, group: &[S]) -> Vec<String> {
+    let words: Vec<&str> = rendered.split_whitespace().collect();
+    if group.first().map(|line| line.as_ref()) != Some("ok") {
+        return Vec::new();
+    }
+    let events = group
+        .iter()
+        .filter(|line| line.as_ref().starts_with("event "))
+        .count();
+    match words.as_slice() {
+        ["op", _, _, "ledger", "tx", ..] => {
+            if events == 0 {
+                vec!["ledger-tx ok replay".to_string()]
+            } else {
+                Vec::new()
+            }
+        }
+        ["op", _, _, "ledger", "post", ..] => {
+            let mut shapes = Vec::new();
+            if events == 0 {
+                shapes.push("ledger-post ok replay".to_string());
+            } else {
+                if words.iter().any(|w| w.starts_with("corrects=")) {
+                    shapes.push("ledger-post ok correction".to_string());
+                }
+                if words.contains(&";") {
+                    shapes.push("ledger-post ok multi".to_string());
+                }
+            }
+            shapes
+        }
+        ["op", _, _, "ledger", "expire", ..] => {
+            if events > 0 {
+                vec!["ledger-expire ok entries>0".to_string()]
+            } else {
+                vec!["ledger-expire ok entries=0".to_string()]
+            }
+        }
+        ["read", tenant, principal, "ledger", _unit, owner, ..] => {
+            let tenant: u64 = tenant.parse().unwrap_or(0);
+            let reach = if *principal == home_of(tenant).to_string() {
+                "ledger-read"
+            } else if owner == principal {
+                "owner"
+            } else {
+                "other"
+            };
+            vec![format!("read-ledger ok {reach}")]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The invocation outcomes a run must reach (slice 14): an accepted invocation and each refusal the checks of an
+/// invocation can give (the invoker, the key, the inputs, a bound, the subject, a condition, a delete of a
+/// record that is still referred to, and a posting replayed under a key with other content). Counted by intent, as
+/// the other `REQUIRED_PER_INTENT` entries are.
+pub const INVOKE_KINDS: &[&str] = &[
+    "invoke ok",
+    "invoke err unauthorized",
+    "invoke err invalid_intent",
+    "invoke err invalid",
+    "invoke err limit_exceeded",
+    "invoke err not_found",
+    "invoke err constraint_violated",
+    "invoke err still_referenced",
+    "invoke err version_conflict",
+];
+
+/// The ledger outcomes a run must reach (slice 13): each refusal the ledger intents can give, an accepted posting, a
+/// replay, a correction, several postings, an expiry that debits, and each reach of a balance read, with the refusals
+/// a read can give. Counted by intent, as the other `REQUIRED_PER_INTENT` entries are.
+pub const LEDGER_KINDS: &[&str] = &[
+    "ledger-post ok",
+    "ledger-post ok replay",
+    "ledger-post ok correction",
+    "ledger-post ok multi",
+    "ledger-post err unauthorized",
+    "ledger-post err not_found",
+    "ledger-post err invalid_intent",
+    "ledger-post err self_action",
+    "ledger-post err version_conflict",
+    "ledger-post err constraint_violated",
+    "ledger-tx ok",
+    "ledger-tx ok replay",
+    "ledger-tx err unauthorized",
+    "ledger-tx err invalid_intent",
+    "ledger-tx err constraint_violated",
+    "ledger-tx err version_conflict",
+    "ledger-expire ok entries>0",
+    "ledger-expire err unauthorized",
+    "ledger-expire err invalid_intent",
+    "read-ledger ok ledger-read",
+    "read-ledger ok owner",
+    "read-ledger err unauthorized",
+    "read-ledger err not_found",
+];
+
+// ---------------------------------------------------------------------------------------------
+// Triggers and automations (slice 15)
+// ---------------------------------------------------------------------------------------------
+
+/// The hop of a generated operation (slice 15): most operations name none (hop zero), some name a hop within the
+/// limit, and one in twenty names one past it (9 or 10), which declines the triggers that fire on the operation.
+fn hop_token(rng: &mut Lcg) -> Option<u64> {
+    match rng.below(20) {
+        0..=11 => None,
+        12..=15 => Some(0),
+        16..=18 => Some(1 + rng.below(8)),
+        _ => Some(9 + rng.below(2)),
+    }
+}
+
+/// A short sequence on tenant `tenant` (1 or 2) that fires a trigger on purpose. `first` is the number of the item the
+/// sequence creates, as far as the generator can tell (an approximation, as `generate` keeps). The principals are the
+/// tenant's owner (`home`), editor (`home + 1`) and writer (`home + 2`).
+fn trigger_script(rng: &mut Lcg, tenant: u64, first: u64) -> Vec<Op> {
+    let home = home_of(tenant);
+    let op = |principal: u64, object: u64, hop: Option<u64>, kind: OpKind| Op {
+        tenant,
+        principal: Caller::User(principal),
+        object,
+        kind,
+        hop,
+    };
+    match rng.below(12) {
+        // An item made by a writer, at a hop past the limit or within it: trigger 1 declines `hop-limit` or starts without
+        // a run key, and trigger 8 (no third field) declines `condition-failed`, its run key being null for a created
+        // record. Often the editor deletes the item next, which starts trigger 4 with a run key.
+        0..=2 => {
+            let hop = if rng.below(2) == 0 {
+                9 + rng.below(2)
+            } else {
+                rng.below(4)
+            };
+            let made = op(
+                home + 2,
+                1,
+                Some(hop),
+                OpKind::Create(vec![(1, format!("s:{}", word(rng)))]),
+            );
+            if rng.below(2) == 0 {
+                vec![made, op(home + 1, 1, None, OpKind::Delete(first, None))]
+            } else {
+                vec![made]
+            }
+        }
+        // A part with a positive hop: trigger 2 starts without a run key.
+        3 => vec![op(
+            home + 2,
+            2,
+            Some(1 + rng.below(3)),
+            OpKind::Create(vec![(4, "i:5".to_string())]),
+        )],
+        // An item the editor makes with its third field set, then patches: trigger 3 starts without a run key.
+        4 | 5 => {
+            let made = op(
+                home + 1,
+                1,
+                None,
+                OpKind::Create(vec![
+                    (1, format!("s:{}", word(rng))),
+                    (3, "b:1".to_string()),
+                ]),
+            );
+            let patched = op(
+                home + 1,
+                1,
+                None,
+                OpKind::Patch(first, None, vec![(1, format!("s:{}", word(rng)))]),
+            );
+            vec![made, patched]
+        }
+        // A posting to unit 1 by the owner: trigger 5 starts the public automation.
+        6..=8 => {
+            let month = rng.below(12);
+            let posting = format!("1 {home} {} key=k{}", 1 + rng.below(999), rng.below(8));
+            vec![Op {
+                tenant,
+                principal: Caller::User(home),
+                object: 1,
+                kind: OpKind::LedgerPost(ledger_time(rng, month), vec![posting]),
+                hop: None,
+            }]
+        }
+        // A ticket: trigger 6's automation is a draft, so the trigger declines `automation-inactive`.
+        9 | 10 => vec![op(
+            home,
+            4,
+            None,
+            OpKind::Create(vec![(1, "s:open".to_string())]),
+        )],
+        // The owner assigns the editor the owner role, then the editor revokes the owner's: the automations the owner
+        // defined no longer hold authority they may confer, so they are suspended.
+        _ => vec![
+            op(home, 1, None, OpKind::Assign(home + 1, 0)),
+            op(home + 1, 1, None, OpKind::Revoke(home, 0)),
+        ],
+    }
+}
+
+/// Trigger sequences and hop tokens over a scenario (slice 15): a few `trigger_script`s at random points, each on tenant
+/// 1 or 2, and a hop token on each operation that names none yet.
+fn with_triggers(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7472_6967_6765_7273);
+    for _ in 0..4 + rng.below(6) {
+        let tenant = if rng.below(3) == 0 { 2 } else { 1 };
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let created = ops[..at]
+            .iter()
+            .filter(|op| {
+                op.tenant == tenant && op.object == 1 && matches!(op.kind, OpKind::Create(_))
+            })
+            .count() as u64;
+        for (n, op) in trigger_script(&mut rng, tenant, created + 1)
+            .into_iter()
+            .enumerate()
+        {
+            ops.insert(at + n, op);
+        }
+    }
+    for op in &mut ops {
+        if op.hop.is_none() {
+            op.hop = hop_token(&mut rng);
+        }
+    }
+    ops
+}
+
+/// The trigger outcomes a run must reach (slice 15), as `trigger_shapes` counts them: an automation started with a run
+/// key and without one, each decline the kernel gives a trigger (a hop past the limit, a run-as that is suspended, a
+/// condition that fails, a draft automation), and the suspension of an automation whose definer may no longer confer
+/// its run-as. The kinds only are checked, not the parameters of a start. `automation-removed` is left out on purpose:
+/// the kernel refuses to remove an automation that a trigger names, so no run reaches that decline.
+pub const TRIGGER_KINDS: &[&str] = &[
+    "start-automation run-key",
+    "start-automation no-run-key",
+    "decline-automation hop-limit",
+    "decline-automation run-as-suspended",
+    "decline-automation condition-failed",
+    "decline-automation automation-inactive",
+    "event automation-suspended",
+];
+
+// ---------------------------------------------------------------------------------------------
+// Segments (slice 16)
+// ---------------------------------------------------------------------------------------------
+//
+// The generator never writes a schema change that touches the profiles (type 20) or their fields: the model does not
+// check SEG-006 on a schema change, and the kernel refuses a change that removes or retypes a field a segment names.
+// The schema scripts of `generate` change types 1 and 2 and the types 5 to 8 only, so that holds. A tenant's profiles
+// stay far below the batch size of a segment decision (100), so no continuation is needed.
+
+/// Pairs of predicates over a profile (`f1` the person, `f2` the score): a segment defined with the first and then with
+/// the second changes who is a member, so the rebuild after the second one exits and enters persons.
+const SEGMENT_PREDICATE_PAIRS: [(&str, &str); 6] = [
+    ("ge f2 i:5", "lt f2 i:5"),
+    ("lt f2 i:8", "ge f2 i:8"),
+    ("not isnull f2", "isnull f2"),
+    ("eq f1 prin", "ne f1 prin"),
+    ("and ge f2 i:3 lt f2 i:9", "or lt f2 i:3 ge f2 i:9"),
+    ("eq f2 i:7", "ne f2 i:7"),
+];
+
+/// Definitions the segment capability, the name, the principal field, the predicate and the refresh interval refuse,
+/// each with the offset from the owner of the caller: `0` the owner, `1` the editor (holds the capability, may not
+/// read profiles), `2` a writer (holds no capability).
+const SEGMENT_REFUSALS: [(u64, &str); 14] = [
+    (2, "define 2 low_scorers 20 1 - lt f2 i:5"),
+    (1, "define 2 low_scorers 20 1 - lt f2 i:5"),
+    (3, "define 3 low_scorers 20 1 - lt f2 i:5"),
+    (0, "define 2 _ 20 1 - lt f2 i:5"),
+    (0, "define 2 high_scorers 20 1 - lt f2 i:5"),
+    (0, "define 2 low_scorers 20 2 - lt f2 i:5"),
+    (0, "define 2 low_scorers 20 1 - lt f9 i:5"),
+    (0, "define 2 low_scorers 20 1 - lt o2 i:5"),
+    (0, "define 2 low_scorers 20 1 - eq p:x i:5"),
+    (0, "define 2 low_scorers 20 1 - f2"),
+    (0, "define 2 low_scorers 20 1 60 lt f2 i:5"),
+    (0, "define 2 low_scorers 99 1 - lt f2 i:5"),
+    (0, "define 2 low_scorers 20 1 - eq f2 s:x"),
+    (0, "define 1 high_scorers 20 2 - ge f2 i:10"),
+];
+
+/// A short sequence on tenant `tenant` (1 or 2) over the profiles and the segments. `first` is the id of the first
+/// record the sequence creates, as far as the generator can tell (exact when the sequence opens the scenario). The
+/// principals are the tenant's owner (`home`), editor (`home + 1`) and writers (`home + 2`, `home + 3`). A person is
+/// `p<n>`, a number the principal field of a profile holds; no other text names a person in the model.
+fn segment_script(rng: &mut Lcg, tenant: u64, first: u64) -> Vec<Op> {
+    let home = home_of(tenant);
+    let op = |principal: u64, hop: Option<u64>, object: u64, kind: OpKind| Op {
+        tenant,
+        principal: Caller::User(principal),
+        object,
+        kind,
+        hop,
+    };
+    let fields = |who: u64, score: Option<u64>| -> Vec<(u64, String)> {
+        vec![
+            (1, format!("s:p{who}")),
+            (2, score.map_or("n".to_string(), |s| format!("i:{s}"))),
+        ]
+    };
+    let segment = |principal: u64, text: String| op(principal, None, 1, OpKind::Segment(text));
+    // A score mostly present, sometimes absent (a predicate over a missing field).
+    let score = |rng: &mut Lcg| -> Option<u64> {
+        if rng.below(6) == 0 {
+            None
+        } else {
+            Some(rng.below(20))
+        }
+    };
+    match rng.below(11) {
+        // A person enters, leaves and enters again as the score changes, and a delete of a member leaves it.
+        0 | 1 => {
+            let who = home + rng.below(8);
+            let mut ops = vec![
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Create(fields(who, Some(10 + rng.below(6)))),
+                ),
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Update(first, None, fields(who, Some(rng.below(10)))),
+                ),
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Update(first, None, fields(who, Some(10 + rng.below(6)))),
+                ),
+            ];
+            if rng.below(2) == 0 {
+                ops.push(op(home, None, 20, OpKind::Delete(first, None)));
+            }
+            ops
+        }
+        // An entry and an exit at a hop past the limit: the triggers on them decline `hop-limit`.
+        2 => {
+            let hop = Some(9 + rng.below(2));
+            let who = home + rng.below(8);
+            vec![
+                op(
+                    home,
+                    hop,
+                    20,
+                    OpKind::Create(fields(who, Some(10 + rng.below(6)))),
+                ),
+                op(
+                    home,
+                    hop,
+                    20,
+                    OpKind::Update(first, None, fields(who, Some(rng.below(10)))),
+                ),
+            ]
+        }
+        // Definitions the checks refuse.
+        3 => {
+            let count = 2 + rng.below(3);
+            (0..count)
+                .map(|_| {
+                    let (offset, text) = rng.pick(&SEGMENT_REFUSALS);
+                    segment(home + offset, text.to_string())
+                })
+                .collect()
+        }
+        // A segment defined with one predicate, rebuilt, defined with another and rebuilt, and sometimes removed.
+        4..=6 => {
+            let number = 1 + rng.below(3);
+            let name = match number {
+                1 => "high_scorers".to_string(),
+                n => format!("seg_{n}"),
+            };
+            let (before, after) = rng.pick(&SEGMENT_PREDICATE_PAIRS);
+            let (a, b) = (home + rng.below(4), home + 4 + rng.below(4));
+            let mut ops = vec![
+                op(home, None, 20, OpKind::Create(fields(a, score(rng)))),
+                op(home, None, 20, OpKind::Create(fields(b, score(rng)))),
+                segment(home, format!("define {number} {name} 20 1 - {before}")),
+                segment(home, format!("rebuild {number}")),
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Update(first, None, fields(a, Some(rng.below(20)))),
+                ),
+                segment(home, format!("define {number} {name} 20 1 - {after}")),
+                segment(home, format!("rebuild {number}")),
+            ];
+            if rng.below(3) == 0 {
+                ops.push(segment(home, format!("remove {number}")));
+            }
+            ops
+        }
+        // A removal, a second removal (`not_found`), one by a writer (`unauthorized`) and one of a segment never defined.
+        7 => {
+            let number = 1 + rng.below(3);
+            vec![
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Create(fields(home + rng.below(8), Some(10 + rng.below(6)))),
+                ),
+                segment(home, format!("remove {number}")),
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Update(first, None, fields(home, Some(rng.below(10)))),
+                ),
+                segment(home, format!("remove {number}")),
+                segment(home + 2, format!("remove {number}")),
+                segment(home, "remove 7".to_string()),
+            ]
+        }
+        // A rebuild of the fixture segment, by the owner and by a writer (the model checks no capability for a
+        // rebuild, which is a continuation of a job), and of a segment never defined.
+        8 => vec![
+            op(
+                home,
+                None,
+                20,
+                OpKind::Create(fields(home + rng.below(8), Some(rng.below(20)))),
+            ),
+            segment(home, "rebuild 1".to_string()),
+            segment(home + 2, "rebuild 1".to_string()),
+            segment(home, "rebuild 9".to_string()),
+        ],
+        // Writes of profiles by principals that may not make them.
+        9 => vec![
+            op(
+                home + 2,
+                None,
+                20,
+                OpKind::Create(fields(home + rng.below(8), Some(12))),
+            ),
+            op(
+                home + 1,
+                None,
+                20,
+                OpKind::Create(fields(home + rng.below(8), Some(12))),
+            ),
+            op(home + 2, None, 20, OpKind::Delete(first, None)),
+        ],
+        // More segments over the profiles than one object type allows: the 26th is `limit_exceeded`, and a profile
+        // then enters every segment it satisfies.
+        _ => {
+            let mut ops: Vec<Op> = (2..=26)
+                .map(|n| segment(home, format!("define {n} limit_{n} 20 1 - ge f2 i:{n}")))
+                .collect();
+            ops.push(op(
+                home,
+                None,
+                20,
+                OpKind::Create(fields(home + rng.below(8), Some(30))),
+            ));
+            ops
+        }
+    }
+}
+
+/// Segment sequences over a scenario (slice 16): one to three `segment_script`s, each on tenant 1 or 2. Half of them
+/// open the scenario, where the first record they create has the id 1; the others go at a random point, with the
+/// records the scenario has probably made before counted for the first id (an approximation, as `generate` keeps).
+fn with_segments(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7365_676d_656e_7473);
+    for _ in 0..1 + rng.below(3) {
+        let tenant = if rng.below(3) == 0 { 2 } else { 1 };
+        let at = if rng.below(2) == 0 {
+            0
+        } else {
+            rng.below(ops.len() as u64 + 1) as usize
+        };
+        let created = ops[..at]
+            .iter()
+            .filter(|op| op.tenant == tenant && matches!(op.kind, OpKind::Create(_)))
+            .count() as u64;
+        for (n, op) in segment_script(&mut rng, tenant, created + 1)
+            .into_iter()
+            .enumerate()
+        {
+            ops.insert(at + n, op);
+        }
+    }
+    ops
+}
+
+/// The segment outcomes a run must reach (slice 16), counted by intent (`segment-define`, `segment-remove`,
+/// `segment-rebuild`) as the other `REQUIRED_PER_INTENT` entries are, and by `segment_shapes`: an entry and an exit for
+/// each reason, a start of an automation by a segment trigger, and a hop-limit decline of one.
+pub const SEGMENT_KINDS: &[&str] = &[
+    "segment-define ok",
+    "segment-define err unauthorized",
+    "segment-define err invalid_intent",
+    "segment-define err limit_exceeded",
+    "segment-remove ok",
+    "segment-remove err unauthorized",
+    "segment-remove err not_found",
+    "segment-rebuild ok",
+    "segment-event entered change",
+    "segment-event exited change",
+    "segment-event entered predicate-change",
+    "segment-event exited predicate-change",
+    "segment-event entered member-change",
+    "segment-event exited member-change",
+    "segment start-automation",
+    "segment decline-automation hop-limit",
+];
+
+/// The segment outcomes of an operation as the coverage counts them (slice 16): each entry or exit event by direction
+/// and reason, each automation started by a segment trigger, and each decline of triggers 9 and 10 (the fixture's
+/// triggers on segment 1) by its reason. These are the `segment-event` lines and the effect lines of the operation's
+/// group, which `op_outcomes` attributes to the operation that caused them.
+pub fn segment_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
+    let mut shapes: Vec<String> = group
+        .iter()
+        .filter_map(|line| {
+            let line = line.as_ref();
+            let word = |key: &str| line.split_whitespace().find_map(|w| w.strip_prefix(key));
+            if line.starts_with("segment-event ") {
+                Some(format!(
+                    "segment-event {} {}",
+                    word("direction=")?,
+                    word("reason=")?
+                ))
+            } else if line.starts_with("effect start-automation ")
+                && line.contains(" params=")
+                && line.contains("segment=s:")
+            {
+                Some("segment start-automation".to_string())
+            } else if line.starts_with("effect decline-automation trigger=9 ")
+                || line.starts_with("effect decline-automation trigger=10 ")
+            {
+                Some(format!("segment decline-automation {}", word("reason=")?))
+            } else {
+                None
+            }
+        })
+        .collect();
+    // An entry or exit that a member change caused: the operation's group holds the `member-changed` event of the change,
+    // and the kernel's plan includes the users whose roles it changed (slice 16).
+    if group
+        .iter()
+        .any(|line| line.as_ref().contains(" member-changed "))
+    {
+        for line in group {
+            let line = line.as_ref();
+            if line.starts_with("segment-event ") {
+                if let Some(dir) = line
+                    .split_whitespace()
+                    .find_map(|w| w.strip_prefix("direction="))
+                {
+                    shapes.push(format!("segment-event {dir} member-change"));
+                }
+            }
+        }
+    }
+    shapes
+}
+
+/// The scenario of case `seed` with its searches, aggregates, settings and ledger operations placed in (see
+/// `with_queries`, `with_settings` and `with_ledger`). `generate` alone is what the fixture scenarios are made of, so
+/// the fixture does not change.
+pub fn generate_reads(seed: u64) -> Scenario {
+    with_triggers(
+        seed,
+        with_segments(
+            seed,
+            with_invokes(
+                seed,
+                with_ledger(
+                    seed,
+                    with_settings(seed, with_queries(seed, generate(seed))),
+                ),
+            ),
+        ),
+    )
 }
 
 /// The seed of case `index` in a run with base seed `base`.
@@ -726,21 +3420,117 @@ fn intent_name(op: &Op) -> &'static str {
         OpKind::Delete(..) => "delete",
         OpKind::Require(_, true) => "require-strict",
         OpKind::Require(_, false) => "require-lax",
+        OpKind::Unique(_, true) => "unique-strict",
+        OpKind::Unique(_, false) => "unique-lax",
+        OpKind::Composite(_) => "composite",
+        OpKind::Schema(..) => "schema",
+        OpKind::CreateTenant(..) => "create-tenant",
+        OpKind::Assign(..) => "assign",
+        OpKind::Revoke(..) => "revoke",
+        OpKind::Team(..) => "team",
+        OpKind::TeamAssign(..) => "team-assign",
+        OpKind::TeamRevoke(..) => "team-revoke",
+        OpKind::TeamAdd(..) => "team-add",
+        OpKind::TeamRemove(..) => "team-remove",
+        OpKind::Invite(..) => "invite",
+        OpKind::InviteRevoke(..) => "invite-revoke",
+        OpKind::Redeem(..) => "redeem",
+        OpKind::ReadRecords(_) => "read-records",
+        OpKind::ReadQuery(..) => "read-query",
+        OpKind::ReadSearch(..) => "read-search",
+        OpKind::ReadAggregate(..) => "read-aggregate",
+        OpKind::SettingWrite(_, _, _, _, Some(_)) => "setting",
+        OpKind::SettingWrite(_, _, _, _, None) => "setting-remove",
+        OpKind::SettingRead(_) => "read-setting",
+        OpKind::LedgerPost(..) => "ledger-post",
+        OpKind::LedgerExpire(..) => "ledger-expire",
+        OpKind::LedgerTx(..) => "ledger-tx",
+        OpKind::LedgerRead(..) => "read-ledger",
+        OpKind::Invoke(..) => "invoke",
+        OpKind::Segment(ref text) => {
+            if text.starts_with("define ") {
+                "segment-define"
+            } else if text.starts_with("remove ") {
+                "segment-remove"
+            } else {
+                "segment-rebuild"
+            }
+        }
     }
 }
 
 fn count_outcomes(scenarios: &[Scenario], lean: &[Vec<String>]) -> Outcomes {
     let mut counts = Outcomes::new();
     for (ops, out) in scenarios.iter().zip(lean) {
-        // Line 0 is `scenario <name>`; then one line per operation.
-        for (op, line) in ops.iter().zip(out.iter().skip(1)) {
+        // Line 0 is `scenario <name>`; then the lines of each operation, the first of which is its outcome.
+        for (op, group) in ops.iter().zip(crate::lean::op_outcomes(out)) {
+            let line = &group[0];
             *counts.entry(line.clone()).or_default() += 1;
             *counts
                 .entry(format!("{} {line}", intent_name(op)))
                 .or_default() += 1;
+            // The shapes of a read's answer, besides its outcome.
+            let mut shapes = read_shapes(&op.render(), group);
+            shapes.extend(setting_shapes(&op.render(), group));
+            shapes.extend(ledger_shapes(&op.render(), group));
+            shapes.extend(trigger_shapes(group));
+            shapes.extend(segment_shapes(group));
+            for shape in shapes {
+                if !shape.ends_with(" ok") {
+                    *counts.entry(shape).or_default() += 1;
+                }
+            }
         }
     }
     counts
+}
+
+/// The shapes of a setting read's answer as the coverage counts them (slice 12): for an accepted read, the
+/// source its value came from (`read-setting ok source <source>`). Its refusals are counted by their own
+/// outcome, as for every intent.
+pub fn setting_shapes<S: AsRef<str>>(rendered: &str, group: &[S]) -> Vec<String> {
+    let mut words = rendered.split_whitespace();
+    if words.next() != Some("read") || words.nth(2) != Some("setting") {
+        return Vec::new();
+    }
+    if group.first().map(|line| line.as_ref()) != Some("ok") {
+        return Vec::new();
+    }
+    group
+        .iter()
+        .find_map(|line| line.as_ref().strip_prefix("source "))
+        .map(|source| vec![format!("read-setting ok source {source}")])
+        .unwrap_or_default()
+}
+
+/// The trigger outcomes of an operation as the coverage counts them (slice 15): each automation start, by whether it
+/// carries a run key (`run-key=-` for none), each decline by its reason, and each automation suspended by a lost role.
+/// These are the effect lines (`effect start-automation`, `effect decline-automation`) and the event line
+/// (`event .. automation-suspended`) of the operation's group, which `op_outcomes` attributes to the operation that
+/// caused them. The parameters are not counted.
+pub fn trigger_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
+    group
+        .iter()
+        .filter_map(|line| {
+            let line = line.as_ref();
+            if line.starts_with("effect start-automation ") {
+                let key = if line.contains(" run-key=- ") {
+                    "no-run-key"
+                } else {
+                    "run-key"
+                };
+                Some(format!("start-automation {key}"))
+            } else if line.starts_with("effect decline-automation ") {
+                line.split_whitespace()
+                    .find_map(|word| word.strip_prefix("reason="))
+                    .map(|reason| format!("decline-automation {reason}"))
+            } else if line.starts_with("event ") && line.contains(" automation-suspended ") {
+                Some("event automation-suspended".to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// [`diff_batch`] that also reports the outcomes counted in the Lean output.
@@ -787,7 +3577,34 @@ pub fn diff_batch_counted(
 fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
     match kind {
         OpKind::Create(f) | OpKind::Update(_, _, f) | OpKind::Patch(_, _, f) => Some(f),
-        OpKind::Delete(..) | OpKind::Require(..) => None,
+        OpKind::Delete(..)
+        | OpKind::Require(..)
+        | OpKind::Unique(..)
+        | OpKind::Composite(..)
+        | OpKind::Schema(..)
+        | OpKind::CreateTenant(..)
+        | OpKind::Assign(..)
+        | OpKind::Revoke(..)
+        | OpKind::Team(..)
+        | OpKind::TeamAssign(..)
+        | OpKind::TeamRevoke(..)
+        | OpKind::TeamAdd(..)
+        | OpKind::TeamRemove(..)
+        | OpKind::Invite(..)
+        | OpKind::InviteRevoke(..)
+        | OpKind::Redeem(..)
+        | OpKind::ReadRecords(_)
+        | OpKind::ReadQuery(..)
+        | OpKind::ReadSearch(..)
+        | OpKind::ReadAggregate(..)
+        | OpKind::SettingWrite(..)
+        | OpKind::SettingRead(_)
+        | OpKind::LedgerPost(..)
+        | OpKind::LedgerExpire(..)
+        | OpKind::LedgerTx(..)
+        | OpKind::LedgerRead(..)
+        | OpKind::Segment(..)
+        | OpKind::Invoke(..) => None,
     }
 }
 
@@ -809,6 +3626,31 @@ fn reductions(ops: &Scenario) -> Vec<Scenario> {
                 f.remove(j);
             }
             out.push(smaller);
+        }
+        if let OpKind::Invoke(_, _, _, inputs) = &ops[i].kind {
+            for j in 0..inputs.len() {
+                let mut smaller = ops.clone();
+                if let OpKind::Invoke(_, _, _, kept) = &mut smaller[i].kind {
+                    kept.remove(j);
+                }
+                out.push(smaller);
+            }
+        }
+        if let OpKind::Schema(_, _, changes) = &ops[i].kind {
+            if changes.len() > 1 {
+                for j in 0..changes.len() {
+                    let mut smaller = ops.clone();
+                    if let OpKind::Schema(_, _, c) = &mut smaller[i].kind {
+                        c.remove(j);
+                    }
+                    out.push(smaller);
+                }
+            }
+            if let OpKind::Schema(Some(_), strict, changes) = &ops[i].kind {
+                let mut unversioned = ops.clone();
+                unversioned[i].kind = OpKind::Schema(None, *strict, changes.clone());
+                out.push(unversioned);
+            }
         }
         let versioned = match &ops[i].kind {
             OpKind::Update(_, v, _) | OpKind::Patch(_, v, _) | OpKind::Delete(_, v) => v.is_some(),
@@ -899,7 +3741,74 @@ pub const REQUIRED_PER_INTENT: &[&str] = &[
     "update err not_found",
     "require-strict err migration_rejected",
     "require-strict err unauthorized",
+    "schema ok",
+    "schema err unauthorized",
+    "schema err schema_conflict",
+    "schema err invalid_intent",
+    "schema err limit_exceeded",
+    "schema err invalid_schema",
+    "schema err migration_rejected",
+    "schema err no_tenant",
     "delete err unauthorized",
+    "create-tenant ok",
+    "create-tenant err unauthorized",
+    "create-tenant err invalid_intent",
+    "create-tenant err tenant_exists",
+    "assign ok",
+    "assign err unauthorized",
+    "assign err unknown_role",
+    "assign err invalid_intent",
+    "revoke ok",
+    "revoke err unauthorized",
+    "revoke err last_owner",
+    "team ok",
+    "team err invalid_intent",
+    "team-assign ok",
+    "team-assign err invalid_intent",
+    "team-assign err unknown_role",
+    "team-revoke ok",
+    "team-add ok",
+    "team-add err invalid_intent",
+    "team-remove ok",
+    "invite ok",
+    "invite err unauthorized",
+    "invite err invalid_intent",
+    "invite err unknown_role",
+    "invite-revoke ok",
+    "invite-revoke err invalid_intent",
+    "redeem ok",
+    "redeem err unauthorized",
+    "redeem err invalid_intent",
+    "read-records ok",
+    "read-records ok rows>0",
+    "read-records ok rows=0",
+    "read-records err limit_exceeded",
+    "read-records err unknown_object",
+    "read-query ok",
+    "read-query ok rows>0",
+    "read-query ok rows=0",
+    "read-query ok next",
+    "read-query ok cursor",
+    "read-query err unknown_query",
+    "read-query err invalid_intent",
+    "read-query err limit_exceeded",
+    // Settings (slice 12). The platform source is not required: the kernel's `resolve` holds no platform
+    // values, so no read reaches it.
+    "setting ok",
+    "setting-remove ok",
+    "setting err unauthorized",
+    "setting err invalid_intent",
+    "setting err unknown_object",
+    "setting err invalid",
+    "setting err limit_exceeded",
+    "setting err version_conflict",
+    "setting-remove err invalid_intent",
+    "read-setting err unknown_object",
+    "read-setting err no_tenant",
+    "read-setting ok source person",
+    "read-setting ok source team",
+    "read-setting ok source tenant",
+    "read-setting ok source default",
 ];
 
 /// Fail when the batch did not reach every outcome kind often enough: `ok`, every error the model
@@ -913,6 +3822,10 @@ pub fn check_coverage(outcomes: &Outcomes, main_source: &str) -> Result<(), Stri
             .map(|n| format!("err {n}")),
     );
     wanted.extend(REQUIRED_PER_INTENT.iter().map(|s| s.to_string()));
+    wanted.extend(LEDGER_KINDS.iter().map(|s| s.to_string()));
+    wanted.extend(INVOKE_KINDS.iter().map(|s| s.to_string()));
+    wanted.extend(TRIGGER_KINDS.iter().map(|s| s.to_string()));
+    wanted.extend(SEGMENT_KINDS.iter().map(|s| s.to_string()));
     let seen = |k: &str| outcomes.get(k).copied().unwrap_or(0);
     let thin: Vec<String> = wanted
         .iter()
@@ -938,7 +3851,7 @@ pub fn check_coverage(outcomes: &Outcomes, main_source: &str) -> Result<(), Stri
 pub fn run(lean_dir: &Path, base_seed: u64, cases: usize) -> Result<(), String> {
     build_model(lean_dir)?;
     let scenarios: Vec<Scenario> = (0..cases)
-        .map(|i| generate(case_seed(base_seed, i)))
+        .map(|i| generate_reads(case_seed(base_seed, i)))
         .collect();
     let (diffs, outcomes) = diff_batch_counted(lean_dir, &scenarios)?;
     let Some(first) = diffs.first() else {
@@ -971,4 +3884,120 @@ pub fn run(lean_dir: &Path, base_seed: u64, cases: usize) -> Result<(), String> 
         shown.lean.join("\n"),
         shown.rust.join("\n"),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The generator places reads of both forms among the operations of a scenario, and a rendered read
+    /// is a line `Main.lean` and the kernel harness both read (`read <tenant> <principal> records|query ..`).
+    #[test]
+    fn the_generator_places_reads_of_both_forms() {
+        let (mut records, mut queries) = (0, 0);
+        for i in 0..300 {
+            for op in generate(case_seed(20_261_121, i)) {
+                match &op.kind {
+                    OpKind::ReadRecords(_) => {
+                        records += 1;
+                        assert!(op.render().contains(" records "), "{}", op.render());
+                    }
+                    OpKind::ReadQuery(..) => {
+                        queries += 1;
+                        assert!(op.render().contains(" query "), "{}", op.render());
+                    }
+                    _ => {}
+                }
+                if matches!(op.kind, OpKind::ReadRecords(_) | OpKind::ReadQuery(..)) {
+                    assert!(op.render().starts_with("read "), "{}", op.render());
+                }
+            }
+        }
+        assert!(records > 100 && queries > 100, "{records} {queries}");
+    }
+
+    /// The generator places schema changes of slice 11 among the operations, and the kernel's harness reads every one
+    /// of them (no `unparsed` line), without the lake: the changes the generator writes are changes the kernel runs.
+    #[test]
+    fn the_generator_places_schema_changes_the_kernel_reads() {
+        let mut changes = 0;
+        let scenarios: Vec<Scenario> = (0..200)
+            .map(|i| generate(case_seed(20_261_125, i)))
+            .collect();
+        for ops in &scenarios {
+            for op in ops {
+                if matches!(op.kind, OpKind::Schema(..)) {
+                    changes += 1;
+                    assert!(op.render().contains(" schema "), "{}", op.render());
+                }
+            }
+        }
+        assert!(changes > 100, "{changes}");
+        let out = kernel_output(&render("k", &scenarios));
+        assert!(
+            !out.lines().any(|l| l.starts_with("unparsed")),
+            "{}",
+            out.lines()
+                .find(|l| l.starts_with("unparsed"))
+                .unwrap_or("")
+        );
+        assert!(out.contains("schema-changed"));
+    }
+
+    /// The full generator builds the chain the refused delete needs, without the lake: within 2000
+    /// scenarios, one makes a record as the first thing done to its tenant, then a record that refers to
+    /// it through field 5 or the list field 0, then deletes the first, all as the tenant's owner (who may
+    /// delete). The first record exists and has a name, the second names it, so the delete is refused
+    /// `still_referenced` by the model.
+    #[test]
+    fn the_generator_refuses_a_delete_of_a_record_a_restricting_field_refers_to() {
+        let mut found = 0;
+        for i in 0..2000 {
+            let ops = generate(case_seed(20_261_121, i));
+            for (at, window) in ops.windows(3).enumerate() {
+                let [first, second, delete] = window else {
+                    continue;
+                };
+                let tenant = first.tenant;
+                let owner = Caller::User(home_of(tenant));
+                if !(1..=2).contains(&tenant) || first.principal != owner {
+                    continue;
+                }
+                // Nothing before touched this tenant, so the first record has id 1.
+                if ops[..at].iter().any(|op| op.tenant == tenant) {
+                    continue;
+                }
+                let OpKind::Create(a) = &first.kind else {
+                    continue;
+                };
+                let OpKind::Create(b) = &second.kind else {
+                    continue;
+                };
+                let OpKind::Delete(id, _) = &delete.kind else {
+                    continue;
+                };
+                let has = |fields: &Vec<(u64, String)>, f: u64| fields.iter().any(|(g, _)| *g == f);
+                let names_first = b
+                    .iter()
+                    .any(|(f, v)| (*f == 5 && v == "r:1") || (*f == 0 && v == "l:r:1"));
+                let same = |op: &Op| op.tenant == tenant && op.principal == owner && op.object == 1;
+                if same(first)
+                    && same(second)
+                    && same(delete)
+                    && has(a, 1)
+                    && !has(a, 4)
+                    && !has(a, 0)
+                    && !has(a, 5)
+                    && names_first
+                    && *id == 1
+                {
+                    found += 1;
+                }
+            }
+        }
+        assert!(
+            found > 0,
+            "no generated scenario deletes a record a restricting field of a live record refers to"
+        );
+    }
 }

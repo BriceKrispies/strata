@@ -1,0 +1,1404 @@
+//! Compiled Lean called from Rust: the bytes come back as the Lean function computes them, from
+//! one thread and from many tokio worker threads at once.
+
+use strata_lean_kernel_ffi::codec::{
+    decode_ctx, decode_field_def, decode_intent, decode_member_intent, decode_policy,
+    decode_record, decode_refusal, decode_step_result, decode_tenant, decode_ty, decode_val,
+    encode_ctx, encode_field_def, encode_intent, encode_member_intent, encode_policy,
+    encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val,
+    Action, Change, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, InvitationDef, LedgerLeg,
+    LedgerOwner, LedgerPosting, LedgerState, LedgerTx, Limits, MemberIntent, Membership, ObjType,
+    OnDelete, Policy, Principal, Record, Refusal, Resource, Scope, SegDirection, SegEvent,
+    SegReason, SegmentDef, StepResult, TeamDef, Tenant, TriggerDef, TriggerOn, Ty, Val,
+    WfTransition, Workflow, MAX_EXPR_DEPTH, MAX_TY_DEPTH,
+};
+use strata_lean_kernel_ffi::{step, step_reference};
+
+#[test]
+fn the_lean_step_returns_the_bytes_lean_computes() {
+    assert_eq!(step(&[]), vec![0]);
+    assert_eq!(step(&[1, 2, 3]), vec![3, 2, 1, 6]);
+    assert_eq!(step(&[200, 100]), vec![100, 200, 44]);
+    let big: Vec<u8> = (0..1_000_000u32).map(|i| (i % 251) as u8).collect();
+    assert_eq!(step(&big), step_reference(&big));
+}
+
+#[test]
+fn many_tokio_worker_threads_call_lean_at_once() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(8)
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let mut tasks = Vec::new();
+        for t in 0..64u32 {
+            tasks.push(tokio::task::spawn_blocking(move || {
+                for i in 0..200u32 {
+                    let input: Vec<u8> = (0..(t * 7 + i) % 513).map(|k| (k ^ t) as u8).collect();
+                    assert_eq!(step(&input), step_reference(&input), "thread {t}, call {i}");
+                }
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+    });
+}
+
+// ----------------------------------------------------------------------------------------------
+// The boundary codec. The bytes below are the ones `lean/Strata/Codec/Fixtures.lean` proves the
+// Lean encoder produces for the same values.
+// ----------------------------------------------------------------------------------------------
+
+/// The fixture tenant of `lean/Strata/Codec/Fixtures.lean` (`fxTenant`): one object type, `1`,
+/// with one string field, no constraints and no records.
+fn fixture_tenant() -> Tenant {
+    Tenant {
+        types: vec![(
+            1,
+            ObjType {
+                schema: vec![(
+                    1,
+                    FieldDef {
+                        ty: Ty::Str,
+                        required: true,
+                        unique: false,
+                        default: Expr::Lit(Val::Null),
+                    },
+                )],
+                uniques: vec![],
+                records: vec![],
+                constraints: vec![],
+                workflows: vec![],
+            },
+        )],
+        members: vec![(7, vec![0])],
+        grants: vec![],
+        policies: vec![],
+        next_id: 1,
+        limits: Limits::KERNEL,
+        roles: vec![0, 1],
+        teams: vec![],
+        invitations: vec![],
+        revision: 0,
+        event_seq: 0,
+        schema_version: 1,
+        setting_defs: vec![],
+        overrides: vec![],
+        setting_revs: vec![],
+        ledger_decls: None,
+        ledger: LedgerState::default(),
+        segments: vec![],
+        memberships: vec![],
+        seg_log: vec![],
+        ledger_policies: vec![],
+        operations: vec![],
+        triggers: vec![],
+        automations: vec![],
+    }
+}
+
+const FIXTURE_TENANT: &[u8] = &[
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
+    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+/// The fixture tenant with one segment, one membership and one segment event (`fxTenantSeg` in
+/// `lean/Strata/Codec/Fixtures.lean`, slice 16).
+fn fixture_tenant_segments() -> Tenant {
+    Tenant {
+        segments: vec![(
+            1,
+            SegmentDef {
+                id: 1,
+                name: "a".into(),
+                subject: 1,
+                predicate: Expr::Cmp(
+                    CmpOp::Ge,
+                    Box::new(Expr::Field(Scope::Record, 2)),
+                    Box::new(Expr::Lit(Val::Int(10))),
+                ),
+                version: 2,
+                principal_field: 1,
+                defined_by: Some(7),
+            },
+        )],
+        memberships: vec![Membership {
+            segment: 1,
+            person: 7,
+            version: 2,
+        }],
+        seg_log: vec![SegEvent {
+            segment: 1,
+            person: 7,
+            direction: SegDirection::Entered,
+            reason: SegReason::Change,
+            version: 2,
+            revision: 3,
+            hop: 1,
+            principal: Principal::User(7),
+        }],
+        ..fixture_tenant()
+    }
+}
+
+/// The Lean encoding of `fxTenantSeg`.
+const FIXTURE_TENANT_SEGMENTS: &[u8] = &[
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
+    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 97, 1, 3, 5, 1,
+    0, 2, 0, 1, 0, 10, 2, 1, 1, 7, 1, 1, 7, 2, 1, 1, 7, 0, 0, 2, 3, 1, 0, 7,
+];
+
+#[test]
+fn fixture_tenant_with_segments_matches_lean() {
+    assert_eq!(
+        encode_tenant(&fixture_tenant_segments()),
+        FIXTURE_TENANT_SEGMENTS
+    );
+    assert_eq!(
+        decode_tenant(FIXTURE_TENANT_SEGMENTS),
+        Some(fixture_tenant_segments())
+    );
+}
+
+#[test]
+fn segment_event_and_trigger_encodings_match_lean() {
+    // An exited event with a predicate-change reason and the system principal, appended to the
+    // empty segment tail of the fixture tenant (its last byte is the empty event list).
+    let exited = Tenant {
+        seg_log: vec![SegEvent {
+            segment: 1,
+            person: 7,
+            direction: SegDirection::Exited,
+            reason: SegReason::PredicateChange,
+            version: 2,
+            revision: 3,
+            hop: 1,
+            principal: Principal::System,
+        }],
+        ..fixture_tenant()
+    };
+    let mut expected = FIXTURE_TENANT[..FIXTURE_TENANT.len() - 1].to_vec();
+    expected.extend_from_slice(&[1, 1, 7, 1, 1, 2, 3, 1, 1]);
+    assert_eq!(encode_tenant(&exited), expected);
+    assert_eq!(decode_tenant(&expected), Some(exited));
+    // The trigger events `segmentEntered 1` and `segmentExited 3`.
+    for (on, bytes) in [
+        (TriggerOn::SegmentEntered(1), [4u8, 1]),
+        (TriggerOn::SegmentExited(3), [5u8, 3]),
+    ] {
+        let tenant = Tenant {
+            triggers: vec![(
+                1,
+                TriggerDef {
+                    id: 1,
+                    on,
+                    condition: None,
+                    automation: 1,
+                    paused: false,
+                    defined_by: None,
+                },
+            )],
+            ..fixture_tenant()
+        };
+        let encoded = encode_tenant(&tenant);
+        assert!(encoded.windows(2).any(|w| w == bytes));
+        assert_eq!(decode_tenant(&encoded), Some(tenant));
+    }
+}
+
+/// The fixture tenant with a role `2`, a team and an invitation (`fxTenantM` in
+/// `lean/Strata/Codec/Fixtures.lean`): team `5` labelled `ab` with member 7 holding role 2, and
+/// invitation `9` to `a@b` for role 2, issued by 7, expiring at 300 and revoked by 7.
+fn fixture_tenant_members() -> Tenant {
+    Tenant {
+        roles: vec![0, 1, 2],
+        teams: vec![(
+            5,
+            TeamDef {
+                label: "ab".into(),
+                members: vec![7],
+                roles: vec![2],
+            },
+        )],
+        invitations: vec![(
+            9,
+            InvitationDef {
+                address: "a@b".into(),
+                roles: vec![2],
+                created_by: 7,
+                expires_at: 300,
+                redeemed_by: None,
+                revoked_by: Some(7),
+            },
+        )],
+        triggers: vec![],
+        automations: vec![],
+        ..fixture_tenant()
+    }
+}
+
+const FIXTURE_TENANT_MEMBERS: &[u8] = &[
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
+    128, 16, 3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1,
+    7, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+/// The fixture tenant with one workflow on its object type `1` (slice 9): id `""`, field 1, initial
+/// state `open`, and one transition named `ship` from `open` to `closed` with no guard and no
+/// assignments. The workflow's bytes are those of `fix_workflow_open` in `Fixtures.lean` with the
+/// transition's name, source, target, guard (none) and assignments (none) added in the order of
+/// `encWfTransition`. The Lean fixture has no transition; these bytes are what evaluating `encTenant` on the
+/// same tenant in Lean gives.
+fn fixture_tenant_workflow() -> Tenant {
+    let mut t = fixture_tenant();
+    t.types[0].1.workflows = vec![Workflow {
+        id: String::new(),
+        field: 1,
+        initial: vec!["open".into()],
+        transitions: vec![WfTransition {
+            name: "ship".into(),
+            source: "open".into(),
+            target: "closed".into(),
+            guard: None,
+            set: vec![],
+        }],
+    }];
+    t
+}
+
+/// `FIXTURE_TENANT` with the workflow list of its object type (the zero before the members) holding
+/// the one workflow of `fixture_tenant_workflow`.
+const FIXTURE_TENANT_WORKFLOW: &[u8] = &[
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
+    0, // the type entry, its schema, uniques, records, constraints
+    1, // one workflow
+    0, 1, 1, 4, 111, 112, 101, 110, // id "", field 1, initial ["open"]
+    1, 4, 115, 104, 105, 112, // one transition, named "ship"
+    4, 111, 112, 101, 110, // from "open"
+    6, 99, 108, 111, 115, 101, 100, // to "closed"
+    0, 0, // no guard, no assignments
+    1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+#[test]
+fn codec_fixtures_match_the_lean_encoder() {
+    assert_eq!(encode_val(&Val::Null), vec![0]);
+    assert_eq!(encode_val(&Val::Int(-1)), vec![1, 1, 0]);
+    assert_eq!(encode_val(&Val::Str("ab".into())), vec![2, 2, 97, 98]);
+    assert_eq!(encode_val(&Val::Ref(300)), vec![4, 172, 2]);
+    assert_eq!(
+        encode_val(&Val::List(vec![Elem::Int(5), Elem::Null])),
+        vec![5, 2, 1, 0, 5, 0]
+    );
+    assert_eq!(
+        encode_ty(&Ty::List(Box::new(Ty::Ref(0, OnDelete::SetNull)))),
+        vec![5, 4, 0]
+    );
+    assert_eq!(
+        encode_ty(&Ty::Ref(300, OnDelete::Restrict)),
+        vec![3, 172, 2]
+    );
+    let field = FieldDef {
+        ty: Ty::Int,
+        required: false,
+        unique: true,
+        default: Expr::Lit(Val::Int(-2)),
+    };
+    assert_eq!(encode_field_def(&field), vec![0, 0, 1, 0, 1, 1, 1]);
+    let record = Record {
+        owner: Some(4),
+        version: 1,
+        fields: vec![(2, Val::Bool(true))],
+    };
+    assert_eq!(encode_record(&record), vec![1, 4, 1, 1, 2, 3, 1]);
+    let anonymous_record = Record {
+        owner: None,
+        version: 1,
+        fields: vec![(2, Val::Bool(true))],
+    };
+    assert_eq!(encode_record(&anonymous_record), vec![0, 1, 1, 2, 3, 1]);
+    assert_eq!(encode_tenant(&fixture_tenant()), FIXTURE_TENANT);
+    assert_eq!(
+        encode_tenant(&fixture_tenant_members()),
+        FIXTURE_TENANT_MEMBERS
+    );
+    // The membership intents and refusals of slice 7 (`fix_intent_*` and `fix_err_*` in
+    // `Fixtures.lean`).
+    assert_eq!(
+        encode_intent(&Intent::CreateTenant {
+            owner: 7,
+            name: "ab".into()
+        }),
+        vec![6, 7, 2, 97, 98]
+    );
+    assert_eq!(
+        encode_intent(&Intent::Member(MemberIntent::AssignRole {
+            user: 9,
+            role: 2
+        })),
+        vec![7, 0, 9, 2]
+    );
+    assert_eq!(
+        encode_intent(&Intent::Member(MemberIntent::DefineTeam {
+            team: 5,
+            label: "ab".into()
+        })),
+        vec![7, 2, 5, 2, 97, 98]
+    );
+    assert_eq!(
+        encode_intent(&Intent::Member(MemberIntent::CreateInvitation {
+            invitation: 3,
+            address: "a@b".into(),
+            roles: vec![2],
+            now: 300
+        })),
+        vec![7, 7, 3, 3, 97, 64, 98, 1, 2, 172, 2]
+    );
+    assert_eq!(
+        encode_member_intent(&MemberIntent::RevokeInvitation { invitation: 3 }),
+        vec![8, 3]
+    );
+    assert_eq!(
+        encode_intent(&Intent::Member(MemberIntent::RedeemInvitation {
+            invitation: 3,
+            now: 300,
+            verified: Some("a@b".into())
+        })),
+        vec![7, 9, 3, 172, 2, 1, 3, 97, 64, 98]
+    );
+    assert_eq!(
+        encode_intent(&Intent::Member(MemberIntent::RedeemInvitation {
+            invitation: 3,
+            now: 300,
+            verified: None
+        })),
+        vec![7, 9, 3, 172, 2, 0]
+    );
+    // A schema change in general (slice 11; `fix_intent_changeSchema` and `fix_err_schemaConflict` in
+    // `Fixtures.lean`): the version 3 expected, lax, then four changes.
+    let schema_change = Intent::ChangeSchema {
+        expected: Some(3),
+        strict: false,
+        changes: vec![
+            Change::RemoveField { ty: 1, field: 13 },
+            Change::DefineType { ty: 5 },
+            Change::RemoveType {
+                ty: 5,
+                delete_records: true,
+            },
+            Change::DefineField {
+                ty: 1,
+                field: 2,
+                def: FieldDef {
+                    ty: Ty::Int,
+                    required: false,
+                    unique: true,
+                    default: Expr::Lit(Val::Int(-2)),
+                },
+            },
+        ],
+    };
+    let schema_change_bytes = vec![
+        8, 1, 3, 0, 4, 1, 1, 13, 2, 5, 3, 5, 1, 0, 1, 2, 0, 0, 1, 0, 1, 1, 1,
+    ];
+    assert_eq!(encode_intent(&schema_change), schema_change_bytes);
+    assert_eq!(decode_intent(&schema_change_bytes), Some(schema_change));
+    assert_eq!(encode_refusal(&Refusal::SchemaConflict), vec![19]);
+    assert_eq!(encode_refusal(&Refusal::SelfAction), vec![20]);
+    // The ledger intents (slice 13): tag 10, the time, then the postings; a posting is its owner (a person `0`
+    // and its number), its unit, its amount, its key, its reason, its corrected sequence and its scope.
+    let post = Intent::PostLedger {
+        now: 1000,
+        postings: vec![LedgerPosting {
+            owner: LedgerOwner::Person(7),
+            unit: 1,
+            amount: -5,
+            key: "k".into(),
+            reason: String::new(),
+            corrects: None,
+            scope: String::new(),
+        }],
+    };
+    assert_eq!(
+        encode_intent(&post),
+        vec![10, 0, 232, 7, 1, 0, 7, 1, 1, 4, 1, 107, 0, 0, 0]
+    );
+    assert_eq!(decode_intent(&encode_intent(&post)), Some(post));
+    // Tag 11: the time, the unit and the cutoff (-1 is the integer tag 1 and the natural 0).
+    let expire = Intent::ExpireLedger {
+        now: 1000,
+        unit: 3,
+        cutoff: -1,
+    };
+    assert_eq!(encode_intent(&expire), vec![11, 0, 232, 7, 3, 1, 0]);
+    assert_eq!(decode_intent(&encode_intent(&expire)), Some(expire));
+    // Tag 12: the time, then the transaction: its operation, key, reason and its legs, each a leg's owner, unit,
+    // amount and scope (the bytes `encIntent` gives in `lean/Strata/Codec/Boundary.lean`).
+    let transaction = Intent::PostLedgerTx {
+        now: 1000,
+        tx: LedgerTx {
+            operation: "o".into(),
+            key: "k".into(),
+            reason: String::new(),
+            legs: vec![
+                LedgerLeg {
+                    owner: LedgerOwner::Person(7),
+                    unit: 1,
+                    amount: -5,
+                    scope: String::new(),
+                },
+                LedgerLeg {
+                    owner: LedgerOwner::Pool(2),
+                    unit: 1,
+                    amount: 5,
+                    scope: "s".into(),
+                },
+            ],
+        },
+    };
+    assert_eq!(
+        encode_intent(&transaction),
+        vec![12, 0, 232, 7, 1, 111, 1, 107, 0, 2, 0, 7, 1, 1, 4, 0, 1, 2, 1, 0, 5, 1, 115]
+    );
+    assert_eq!(
+        decode_intent(&encode_intent(&transaction)),
+        Some(transaction)
+    );
+    assert_eq!(encode_refusal(&Refusal::InvalidIntent), vec![14]);
+    assert_eq!(encode_refusal(&Refusal::UnknownRole), vec![15]);
+    assert_eq!(encode_refusal(&Refusal::LastOwner), vec![16]);
+    assert_eq!(encode_refusal(&Refusal::TenantExists), vec![17]);
+    assert_eq!(encode_refusal(&Refusal::WorkflowViolation), vec![18]);
+    assert_eq!(
+        decode_tenant(FIXTURE_TENANT_MEMBERS),
+        Some(fixture_tenant_members())
+    );
+    assert_eq!(
+        encode_tenant(&fixture_tenant_workflow()),
+        FIXTURE_TENANT_WORKFLOW
+    );
+    assert_eq!(
+        decode_tenant(FIXTURE_TENANT_WORKFLOW),
+        Some(fixture_tenant_workflow())
+    );
+    assert_eq!(
+        decode_member_intent(&[9, 3, 172, 2, 0]),
+        Some(MemberIntent::RedeemInvitation {
+            invitation: 3,
+            now: 300,
+            verified: None
+        })
+    );
+    assert_eq!(
+        decode_intent(&[6, 7, 2, 97, 98]),
+        Some(Intent::CreateTenant {
+            owner: 7,
+            name: "ab".into()
+        })
+    );
+    // A policy naming the tenant's membership: role 1, resource tag 3, one action (manage, tag 4),
+    // no condition (`fix_policy_members` in `Fixtures.lean`).
+    let members_policy = Policy {
+        role: 1,
+        resource: Resource::Members,
+        actions: vec![Action::Manage],
+        condition: None,
+    };
+    assert_eq!(encode_policy(&members_policy), vec![1, 3, 1, 4, 0]);
+    assert_eq!(decode_policy(&[1, 3, 1, 4, 0]), Some(members_policy));
+    assert_eq!(
+        encode_ctx(&Ctx {
+            tenant: 3,
+            principal: Principal::User(9),
+            hop: 0
+        }),
+        vec![3, 0, 9, 0]
+    );
+    assert_eq!(
+        encode_ctx(&Ctx {
+            tenant: 3,
+            principal: Principal::System,
+            hop: 0
+        }),
+        vec![3, 1, 0]
+    );
+    assert_eq!(
+        encode_ctx(&Ctx {
+            tenant: 3,
+            principal: Principal::Anonymous,
+            hop: 0
+        }),
+        vec![3, 2, 0]
+    );
+    assert_eq!(
+        encode_intent(&Intent::SetRequired {
+            ty: 1,
+            field: 2,
+            strict: false
+        }),
+        vec![3, 1, 2, 0]
+    );
+    let update = Intent::Update {
+        ty: 1,
+        id: 5,
+        fields: vec![(1, Val::Str("x".into()))],
+        expected: None,
+    };
+    assert_eq!(encode_intent(&update), vec![1, 1, 5, 1, 1, 2, 1, 120, 0]);
+    assert_eq!(
+        encode_intent(&Intent::Create {
+            ty: 1,
+            fields: vec![]
+        }),
+        vec![0, 1, 0]
+    );
+    assert_eq!(encode_refusal(&Refusal::LimitExceeded), vec![8]);
+    assert_eq!(encode_refusal(&Refusal::UnknownObject), vec![11]);
+    assert_eq!(encode_refusal(&Refusal::ConstraintViolated), vec![12]);
+    assert_eq!(encode_refusal(&Refusal::Evaluation), vec![13]);
+    assert_eq!(
+        encode_step_result(&StepResult::Refused(Refusal::Unauthorized)),
+        vec![0, 1]
+    );
+    let accepted = [vec![1u8], FIXTURE_TENANT.to_vec()].concat();
+    assert_eq!(
+        encode_step_result(&StepResult::Accepted(fixture_tenant())),
+        accepted
+    );
+
+    // The same bytes decode back to the same values.
+    assert_eq!(decode_val(&[4, 172, 2]), Some(Val::Ref(300)));
+    assert_eq!(
+        decode_val(&[5, 2, 1, 0, 5, 0]),
+        Some(Val::List(vec![Elem::Int(5), Elem::Null]))
+    );
+    assert_eq!(decode_field_def(&[0, 0, 1, 0, 1, 1, 1]), Some(field));
+    assert_eq!(decode_record(&[1, 4, 1, 1, 2, 3, 1]), Some(record));
+    assert_eq!(decode_tenant(FIXTURE_TENANT), Some(fixture_tenant()));
+    assert_eq!(decode_intent(&[1, 1, 5, 1, 1, 2, 1, 120, 0]), Some(update));
+    assert_eq!(
+        decode_ty(&[5, 4, 0]),
+        Some(Ty::List(Box::new(Ty::Ref(0, OnDelete::SetNull))))
+    );
+    assert_eq!(
+        decode_ty(&[3, 172, 2]),
+        Some(Ty::Ref(300, OnDelete::Restrict))
+    );
+    assert_eq!(
+        decode_ctx(&[3, 0, 9, 0]),
+        Some(Ctx {
+            tenant: 3,
+            principal: Principal::User(9),
+            hop: 0
+        })
+    );
+    assert_eq!(
+        decode_step_result(&accepted),
+        Some(StepResult::Accepted(fixture_tenant()))
+    );
+}
+
+/// A small seeded generator (xorshift64): the same values on every run.
+struct Rng(u64);
+
+impl Rng {
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next_u64() % n
+    }
+
+    fn coin(&mut self) -> bool {
+        self.next_u64() & 1 == 1
+    }
+}
+
+fn gen_string(rng: &mut Rng) -> String {
+    const CHARS: [char; 7] = ['a', 'z', ' ', '\u{e9}', '\u{2713}', '\u{1F600}', '0'];
+    let len = rng.below(6);
+    let mut s = String::new();
+    for _ in 0..len {
+        let c = CHARS[rng.below(CHARS.len() as u64) as usize];
+        s.push(c);
+    }
+    s
+}
+
+fn gen_int(rng: &mut Rng) -> i64 {
+    match rng.below(6) {
+        0 => 0,
+        1 => i64::MIN,
+        2 => i64::MAX,
+        3 => -(rng.below(1000) as i64),
+        4 => rng.below(1000) as i64,
+        _ => rng.next_u64() as i64,
+    }
+}
+
+fn gen_nat(rng: &mut Rng) -> u64 {
+    match rng.below(5) {
+        0 => 0,
+        1 => rng.below(200),
+        2 => rng.below(1 << 21),
+        3 => u64::MAX - rng.below(4),
+        _ => rng.next_u64(),
+    }
+}
+
+fn gen_elem(rng: &mut Rng) -> Elem {
+    match rng.below(5) {
+        0 => Elem::Null,
+        1 => Elem::Int(gen_int(rng)),
+        2 => Elem::Str(gen_string(rng)),
+        3 => Elem::Bool(rng.coin()),
+        _ => Elem::Ref(gen_nat(rng)),
+    }
+}
+
+fn gen_val(rng: &mut Rng) -> Val {
+    match rng.below(6) {
+        0 => Val::Null,
+        1 => Val::Int(gen_int(rng)),
+        2 => Val::Str(gen_string(rng)),
+        3 => Val::Bool(rng.coin()),
+        4 => Val::Ref(gen_nat(rng)),
+        _ => {
+            let n = rng.below(4);
+            let mut items = Vec::new();
+            for _ in 0..n {
+                items.push(gen_elem(rng));
+            }
+            Val::List(items)
+        }
+    }
+}
+
+fn gen_ty(rng: &mut Rng, depth: u32) -> Ty {
+    if depth < 2 && rng.below(4) == 0 {
+        return Ty::List(Box::new(gen_ty(rng, depth + 1)));
+    }
+    match rng.below(5) {
+        0 => Ty::Int,
+        1 => Ty::Str,
+        2 => Ty::Bool,
+        3 => Ty::Ref(gen_nat(rng), OnDelete::Restrict),
+        _ => Ty::Ref(gen_nat(rng), OnDelete::SetNull),
+    }
+}
+
+fn gen_scope(rng: &mut Rng) -> Scope {
+    match rng.below(3) {
+        0 => Scope::Record,
+        1 => Scope::Old,
+        _ => Scope::New,
+    }
+}
+
+fn gen_cmp_op(rng: &mut Rng) -> CmpOp {
+    match rng.below(6) {
+        0 => CmpOp::Eq,
+        1 => CmpOp::Ne,
+        2 => CmpOp::Lt,
+        3 => CmpOp::Le,
+        4 => CmpOp::Gt,
+        _ => CmpOp::Ge,
+    }
+}
+
+/// An expression of bounded nesting: literals, reads, the principal, comparisons, the connectives.
+fn gen_expr(rng: &mut Rng, depth: usize) -> Expr {
+    if depth >= 3 {
+        return Expr::Lit(gen_val(rng));
+    }
+    match rng.below(10) {
+        0 => Expr::Lit(gen_val(rng)),
+        1 => Expr::Field(gen_scope(rng), gen_nat(rng)),
+        2 => Expr::Principal,
+        3 => Expr::Cmp(
+            gen_cmp_op(rng),
+            Box::new(gen_expr(rng, depth + 1)),
+            Box::new(gen_expr(rng, depth + 1)),
+        ),
+        4 => Expr::And(
+            Box::new(gen_expr(rng, depth + 1)),
+            Box::new(gen_expr(rng, depth + 1)),
+        ),
+        5 => Expr::Or(
+            Box::new(gen_expr(rng, depth + 1)),
+            Box::new(gen_expr(rng, depth + 1)),
+        ),
+        6 => Expr::Not(Box::new(gen_expr(rng, depth + 1))),
+        7 => Expr::IsNull(Box::new(gen_expr(rng, depth + 1))),
+        8 => Expr::CreatedBy(gen_scope(rng)),
+        _ => Expr::Lit(Val::Null),
+    }
+}
+
+fn gen_field_def(rng: &mut Rng) -> FieldDef {
+    let ty = gen_ty(rng, 0);
+    let required = rng.coin();
+    let unique = rng.coin();
+    let default = gen_expr(rng, 0);
+    FieldDef {
+        ty,
+        required,
+        unique,
+        default,
+    }
+}
+
+fn gen_fields(rng: &mut Rng) -> Vec<(u64, Val)> {
+    let n = rng.below(3);
+    let mut fields = Vec::new();
+    for _ in 0..n {
+        let id = gen_nat(rng);
+        let v = gen_val(rng);
+        fields.push((id, v));
+    }
+    fields
+}
+
+fn gen_record(rng: &mut Rng) -> Record {
+    let owner = gen_opt(rng);
+    let version = gen_nat(rng);
+    let fields = gen_fields(rng);
+    Record {
+        owner,
+        version,
+        fields,
+    }
+}
+
+fn gen_ids(rng: &mut Rng, max_len: u64) -> Vec<u64> {
+    let n = rng.below(max_len);
+    let mut ids = Vec::new();
+    for _ in 0..n {
+        ids.push(gen_nat(rng));
+    }
+    ids
+}
+
+fn gen_obj_type(rng: &mut Rng) -> ObjType {
+    let mut schema = Vec::new();
+    for _ in 0..rng.below(3) {
+        let id = gen_nat(rng);
+        let fd = gen_field_def(rng);
+        schema.push((id, fd));
+    }
+    let mut uniques = Vec::new();
+    for _ in 0..rng.below(3) {
+        uniques.push(gen_ids(rng, 4));
+    }
+    let mut records = Vec::new();
+    for _ in 0..rng.below(3) {
+        let id = gen_nat(rng);
+        let rec = gen_record(rng);
+        records.push((id, rec));
+    }
+    let mut constraints = Vec::new();
+    for _ in 0..rng.below(3) {
+        constraints.push(gen_expr(rng, 0));
+    }
+    let mut workflows = Vec::new();
+    for _ in 0..rng.below(3) {
+        workflows.push(gen_workflow(rng));
+    }
+    ObjType {
+        schema,
+        uniques,
+        records,
+        constraints,
+        workflows,
+    }
+}
+
+/// A workflow of the boundary generator (slice 8): a field, initial states and transitions with
+/// optional guards and assignments.
+fn gen_workflow(rng: &mut Rng) -> Workflow {
+    let id = gen_string(rng);
+    let field = gen_nat(rng);
+    let mut initial = Vec::new();
+    for _ in 0..rng.below(3) {
+        initial.push(gen_string(rng));
+    }
+    let mut transitions = Vec::new();
+    for _ in 0..rng.below(3) {
+        let name = gen_string(rng);
+        let source = gen_string(rng);
+        let target = gen_string(rng);
+        let guard = if rng.below(2) == 0 {
+            None
+        } else {
+            Some(gen_expr(rng, 0))
+        };
+        let mut set = Vec::new();
+        for _ in 0..rng.below(3) {
+            set.push((gen_nat(rng), gen_expr(rng, 0)));
+        }
+        transitions.push(WfTransition {
+            name,
+            source,
+            target,
+            guard,
+            set,
+        });
+    }
+    Workflow {
+        id,
+        field,
+        initial,
+        transitions,
+    }
+}
+
+fn gen_tenant(rng: &mut Rng) -> Tenant {
+    let mut types = Vec::new();
+    for _ in 0..rng.below(3) {
+        let id = gen_nat(rng);
+        let obj = gen_obj_type(rng);
+        types.push((id, obj));
+    }
+    let mut members = Vec::new();
+    for _ in 0..rng.below(3) {
+        let id = gen_nat(rng);
+        let roles = gen_ids(rng, 3);
+        members.push((id, roles));
+    }
+    let mut grants = Vec::new();
+    for _ in 0..rng.below(3) {
+        let role = gen_nat(rng);
+        let grant = gen_grant(rng);
+        grants.push((role, grant));
+    }
+    let mut policies = Vec::new();
+    for _ in 0..rng.below(3) {
+        policies.push(gen_policy(rng));
+    }
+    let next_id = gen_nat(rng);
+    let limits = Limits {
+        max_string: gen_nat(rng),
+        max_list: gen_nat(rng),
+        max_unique: gen_nat(rng),
+        max_record: gen_nat(rng),
+    };
+    let roles = gen_ids(rng, 4);
+    let mut teams = Vec::new();
+    for _ in 0..rng.below(3) {
+        let id = gen_nat(rng);
+        teams.push((
+            id,
+            TeamDef {
+                label: gen_string(rng),
+                members: gen_ids(rng, 3),
+                roles: gen_ids(rng, 3),
+            },
+        ));
+    }
+    let mut invitations = Vec::new();
+    for _ in 0..rng.below(3) {
+        let id = gen_nat(rng);
+        invitations.push((
+            id,
+            InvitationDef {
+                address: gen_string(rng),
+                roles: gen_ids(rng, 3),
+                created_by: gen_nat(rng),
+                expires_at: gen_nat(rng),
+                redeemed_by: gen_opt(rng),
+                revoked_by: gen_opt(rng),
+            },
+        ));
+    }
+    Tenant {
+        types,
+        members,
+        grants,
+        policies,
+        next_id,
+        limits,
+        roles,
+        teams,
+        invitations,
+        revision: gen_nat(rng),
+        event_seq: gen_nat(rng),
+        schema_version: gen_nat(rng),
+        setting_defs: vec![],
+        overrides: vec![],
+        setting_revs: vec![],
+        ledger_decls: None,
+        ledger: LedgerState::default(),
+        ledger_policies: vec![],
+        operations: vec![],
+        triggers: vec![],
+        automations: vec![],
+        segments: vec![],
+        memberships: vec![],
+        seg_log: vec![],
+    }
+}
+
+fn gen_principal(rng: &mut Rng) -> Principal {
+    match rng.below(3) {
+        0 => Principal::User(gen_nat(rng)),
+        1 => Principal::System,
+        _ => Principal::Anonymous,
+    }
+}
+
+fn gen_action(rng: &mut Rng) -> Action {
+    match rng.below(5) {
+        0 => Action::Read,
+        1 => Action::Create,
+        2 => Action::Update,
+        3 => Action::Delete,
+        _ => Action::Manage,
+    }
+}
+
+fn gen_resource(rng: &mut Rng) -> Resource {
+    match rng.below(4) {
+        0 => Resource::Object(gen_nat(rng)),
+        1 => Resource::AnyObject,
+        2 => Resource::Schema,
+        _ => Resource::Members,
+    }
+}
+
+fn gen_grant(rng: &mut Rng) -> Grant {
+    if rng.coin() {
+        Grant::Capability(gen_nat(rng))
+    } else {
+        let ty = gen_nat(rng);
+        Grant::Object(ty, gen_action(rng))
+    }
+}
+
+fn gen_policy(rng: &mut Rng) -> Policy {
+    let role = gen_nat(rng);
+    let resource = gen_resource(rng);
+    let mut actions = Vec::new();
+    for _ in 0..rng.below(4) {
+        actions.push(gen_action(rng));
+    }
+    let condition = if rng.coin() {
+        Some(gen_expr(rng, 0))
+    } else {
+        None
+    };
+    Policy {
+        role,
+        resource,
+        actions,
+        condition,
+    }
+}
+
+fn gen_opt(rng: &mut Rng) -> Option<u64> {
+    if rng.coin() {
+        Some(gen_nat(rng))
+    } else {
+        None
+    }
+}
+
+fn gen_member_intent(rng: &mut Rng) -> MemberIntent {
+    match rng.below(10) {
+        0 => MemberIntent::AssignRole {
+            user: gen_nat(rng),
+            role: gen_nat(rng),
+        },
+        1 => MemberIntent::RevokeRole {
+            user: gen_nat(rng),
+            role: gen_nat(rng),
+        },
+        2 => MemberIntent::DefineTeam {
+            team: gen_nat(rng),
+            label: gen_string(rng),
+        },
+        3 => MemberIntent::AssignTeamRole {
+            team: gen_nat(rng),
+            role: gen_nat(rng),
+        },
+        4 => MemberIntent::RevokeTeamRole {
+            team: gen_nat(rng),
+            role: gen_nat(rng),
+        },
+        5 => MemberIntent::AddTeamMember {
+            team: gen_nat(rng),
+            user: gen_nat(rng),
+        },
+        6 => MemberIntent::RemoveTeamMember {
+            team: gen_nat(rng),
+            user: gen_nat(rng),
+        },
+        7 => MemberIntent::CreateInvitation {
+            invitation: gen_nat(rng),
+            address: gen_string(rng),
+            roles: gen_ids(rng, 3),
+            now: gen_nat(rng),
+        },
+        8 => MemberIntent::RevokeInvitation {
+            invitation: gen_nat(rng),
+        },
+        _ => MemberIntent::RedeemInvitation {
+            invitation: gen_nat(rng),
+            now: gen_nat(rng),
+            verified: if rng.coin() {
+                Some(gen_string(rng))
+            } else {
+                None
+            },
+        },
+    }
+}
+
+fn gen_change(rng: &mut Rng) -> Change {
+    match rng.below(4) {
+        0 => Change::DefineField {
+            ty: gen_nat(rng),
+            field: gen_nat(rng),
+            def: gen_field_def(rng),
+        },
+        1 => Change::RemoveField {
+            ty: gen_nat(rng),
+            field: gen_nat(rng),
+        },
+        2 => Change::DefineType { ty: gen_nat(rng) },
+        _ => Change::RemoveType {
+            ty: gen_nat(rng),
+            delete_records: rng.coin(),
+        },
+    }
+}
+
+fn gen_intent(rng: &mut Rng) -> Intent {
+    match rng.below(9) {
+        8 => {
+            let expected = gen_opt(rng);
+            let strict = rng.coin();
+            let mut changes = Vec::new();
+            for _ in 0..rng.below(4) {
+                changes.push(gen_change(rng));
+            }
+            Intent::ChangeSchema {
+                expected,
+                strict,
+                changes,
+            }
+        }
+        6 => Intent::CreateTenant {
+            owner: gen_nat(rng),
+            name: gen_string(rng),
+        },
+        7 => Intent::Member(gen_member_intent(rng)),
+        0 => Intent::Create {
+            ty: gen_nat(rng),
+            fields: gen_fields(rng),
+        },
+        1 => {
+            let ty = gen_nat(rng);
+            let id = gen_nat(rng);
+            let fields = gen_fields(rng);
+            let expected = gen_opt(rng);
+            Intent::Update {
+                ty,
+                id,
+                fields,
+                expected,
+            }
+        }
+        2 => {
+            let ty = gen_nat(rng);
+            let id = gen_nat(rng);
+            let expected = gen_opt(rng);
+            Intent::Delete { ty, id, expected }
+        }
+        3 => {
+            let ty = gen_nat(rng);
+            let field = gen_nat(rng);
+            let strict = rng.coin();
+            Intent::SetRequired { ty, field, strict }
+        }
+        4 => {
+            let ty = gen_nat(rng);
+            let field = gen_nat(rng);
+            let strict = rng.coin();
+            Intent::SetUnique { ty, field, strict }
+        }
+        _ => {
+            let ty = gen_nat(rng);
+            Intent::DefineUnique {
+                ty,
+                fields: gen_ids(rng, 4),
+            }
+        }
+    }
+}
+
+fn gen_refusal(rng: &mut Rng) -> Refusal {
+    match rng.below(21) {
+        0 => Refusal::NoTenant,
+        1 => Refusal::Unauthorized,
+        2 => Refusal::NotFound,
+        3 => Refusal::Invalid,
+        4 => Refusal::MigrationRejected,
+        5 => Refusal::DanglingReference,
+        6 => Refusal::StillReferenced,
+        7 => Refusal::VersionConflict,
+        8 => Refusal::LimitExceeded,
+        9 => Refusal::UniqueViolated,
+        10 => Refusal::InvalidSchema,
+        11 => Refusal::UnknownObject,
+        12 => Refusal::ConstraintViolated,
+        13 => Refusal::Evaluation,
+        14 => Refusal::InvalidIntent,
+        15 => Refusal::UnknownRole,
+        16 => Refusal::LastOwner,
+        17 => Refusal::TenantExists,
+        18 => Refusal::WorkflowViolation,
+        19 => Refusal::SchemaConflict,
+        20 => Refusal::SelfAction,
+        _ => unreachable!("an unknown refusal tag"),
+    }
+}
+
+/// Encodes `value`, decodes the bytes back to an equal value, and encodes that again to the same
+/// bytes: one encoding per value.
+fn check_round_trip<T: PartialEq + std::fmt::Debug>(
+    value: &T,
+    encode: fn(&T) -> Vec<u8>,
+    decode: fn(&[u8]) -> Option<T>,
+) {
+    let bytes = encode(value);
+    let back = decode(&bytes).expect("the canonical bytes of a value decode");
+    assert_eq!(&back, value);
+    assert_eq!(encode(&back), bytes, "re-encoding changed the bytes");
+}
+
+/// No proper prefix of a canonical encoding decodes, and neither does the encoding with a byte
+/// appended.
+fn check_refuses_damage<T: PartialEq + std::fmt::Debug>(
+    bytes: &[u8],
+    decode: fn(&[u8]) -> Option<T>,
+) {
+    for cut in 0..bytes.len() {
+        assert!(
+            decode(&bytes[..cut]).is_none(),
+            "a prefix of length {cut} decoded"
+        );
+    }
+    let mut longer = bytes.to_vec();
+    longer.push(0);
+    assert!(decode(&longer).is_none(), "a trailing byte was accepted");
+}
+
+#[test]
+fn generated_values_round_trip_and_decode_only_canonically() {
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    for _ in 0..300 {
+        let v = gen_val(&mut rng);
+        check_round_trip(&v, encode_val, decode_val);
+        let t = gen_ty(&mut rng, 0);
+        check_round_trip(&t, encode_ty, decode_ty);
+        let fd = gen_field_def(&mut rng);
+        check_round_trip(&fd, encode_field_def, decode_field_def);
+        let r = gen_record(&mut rng);
+        check_round_trip(&r, encode_record, decode_record);
+        let c = Ctx {
+            tenant: gen_nat(&mut rng),
+            principal: gen_principal(&mut rng),
+            hop: 0,
+        };
+        check_round_trip(&c, encode_ctx, decode_ctx);
+        let i = gen_intent(&mut rng);
+        check_round_trip(&i, encode_intent, decode_intent);
+        let e = gen_refusal(&mut rng);
+        check_round_trip(&e, encode_refusal, decode_refusal);
+    }
+    for _ in 0..40 {
+        let t = gen_tenant(&mut rng);
+        check_round_trip(&t, encode_tenant, decode_tenant);
+        let s = if rng.coin() {
+            StepResult::Accepted(t)
+        } else {
+            StepResult::Refused(gen_refusal(&mut rng))
+        };
+        check_round_trip(&s, encode_step_result, decode_step_result);
+    }
+}
+
+#[test]
+fn damaged_encodings_do_not_decode() {
+    check_refuses_damage(
+        &encode_val(&Val::List(vec![Elem::Int(-7), Elem::Str("é".into())])),
+        decode_val,
+    );
+    check_refuses_damage(
+        &encode_intent(&Intent::Update {
+            ty: 1,
+            id: 5,
+            fields: vec![(1, Val::Str("x".into()))],
+            expected: Some(300),
+        }),
+        decode_intent,
+    );
+    check_refuses_damage(FIXTURE_TENANT, decode_tenant);
+    check_refuses_damage(FIXTURE_TENANT_MEMBERS, decode_tenant);
+    check_refuses_damage(FIXTURE_TENANT_WORKFLOW, decode_tenant);
+    check_refuses_damage(
+        &encode_intent(&Intent::Member(MemberIntent::CreateInvitation {
+            invitation: 3,
+            address: "a@b".into(),
+            roles: vec![2],
+            now: 300,
+        })),
+        decode_intent,
+    );
+}
+
+#[test]
+fn non_canonical_and_out_of_range_bytes_are_refused() {
+    // A natural with a zero last group (the minimal form of 0 is one byte).
+    assert_eq!(decode_val(&[4, 0x80, 0x00]), None);
+    // A negative integer whose natural has a zero last group.
+    assert_eq!(decode_val(&[1, 1, 0x80, 0x00]), None);
+    // Invalid UTF-8 in a string.
+    assert_eq!(decode_val(&[2, 1, 0xFF]), None);
+    // A boolean that is neither 0 nor 1; an unknown tag; an integer sign tag of 3.
+    assert_eq!(decode_val(&[3, 2]), None);
+    assert_eq!(decode_val(&[6]), None);
+    assert_eq!(decode_val(&[1, 3, 5]), None);
+    // A list whose count is longer than the bytes that follow.
+    assert_eq!(decode_val(&[5, 9]), None);
+    // A natural that does not fit in 64 bits.
+    assert_eq!(
+        decode_val(&[4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 127]),
+        None
+    );
+    // The largest natural, and its one encoding, decodes.
+    assert_eq!(
+        decode_val(&[4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1]),
+        Some(Val::Ref(u64::MAX))
+    );
+    assert_eq!(
+        encode_val(&Val::Ref(u64::MAX)),
+        vec![4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1]
+    );
+    // Nesting: `MAX_TY_DEPTH` levels of list decode, one more does not.
+    let mut deep = vec![5u8; MAX_TY_DEPTH];
+    deep.push(0);
+    assert!(decode_ty(&deep).is_some());
+    let mut too_deep = vec![5u8; MAX_TY_DEPTH + 1];
+    too_deep.push(0);
+    assert_eq!(decode_ty(&too_deep), None);
+    assert_eq!(MAX_TY_DEPTH, 64);
+}
+
+/// An expression is a tag and its parts, in prefix order: `not` (tag `6`) nested `MAX_EXPR_DEPTH`
+/// levels, around the literal `null`, decodes; one level more does not (the codec's bound).
+#[test]
+fn codec_expression_nesting_is_bounded() {
+    let mut deep = vec![6u8; MAX_EXPR_DEPTH];
+    deep.extend([0, 0]);
+    let decoded = decode_expr_bytes(&deep);
+    assert!(decoded.is_some());
+    let mut too_deep = vec![6u8; MAX_EXPR_DEPTH + 1];
+    too_deep.extend([0, 0]);
+    assert_eq!(decode_expr_bytes(&too_deep), None);
+    assert_eq!(
+        encode_field_def(&FieldDef {
+            ty: Ty::Bool,
+            required: false,
+            unique: false,
+            default: Expr::Principal,
+        }),
+        vec![2, 0, 0, 2]
+    );
+}
+
+/// Decodes an expression by decoding a field definition whose default is it, after the type `bool`
+/// (tag `2`) and two flags.
+fn decode_expr_bytes(expr: &[u8]) -> Option<FieldDef> {
+    let mut bytes = vec![2u8, 0, 0];
+    bytes.extend_from_slice(expr);
+    decode_field_def(&bytes)
+}
+
+/// An operation of the schema, an invocation of it and a `param` expression round-trip through the codec, and the
+/// invocation is tag `13` (slice 14).
+#[test]
+fn operations_and_invocations_round_trip() {
+    use strata_lean_kernel_ffi::codec::{OpCond, OpDef, OpInput, OpOwner, OpStep};
+    let op = OpDef {
+        id: "note".into(),
+        inputs: vec![OpInput {
+            name: "text".into(),
+            ty: Ty::Str,
+            required: true,
+        }],
+        signed_in: true,
+        roles: vec![2],
+        subject: Some((1, "item".into())),
+        conditions: vec![OpCond {
+            id: "ok".into(),
+            expr: Expr::IsNull(Box::new(Expr::Param("text".into()))),
+        }],
+        steps: vec![
+            OpStep::Create {
+                id: "c".into(),
+                ty: 1,
+                fields: vec![(1, Expr::Param("text".into()))],
+            },
+            OpStep::Update {
+                id: "u".into(),
+                ty: 1,
+                record: Expr::Param("item".into()),
+                fields: vec![(1, Expr::Lit(Val::Null))],
+            },
+            OpStep::Delete {
+                id: "d".into(),
+                ty: 1,
+                record: Expr::Param("item".into()),
+            },
+            OpStep::Post {
+                id: "p".into(),
+                owner: OpOwner::Pool(3),
+                unit: 1,
+                amount: Expr::Param("amt".into()),
+                reason: "grant".into(),
+            },
+            OpStep::Post {
+                id: "q".into(),
+                owner: OpOwner::Invoker,
+                unit: 1,
+                amount: Expr::Lit(Val::Int(1)),
+                reason: String::new(),
+            },
+        ],
+    };
+    let tenant = Tenant {
+        operations: vec![("note".into(), op)],
+        triggers: vec![],
+        automations: vec![],
+        ..fixture_tenant()
+    };
+    assert_eq!(decode_tenant(&encode_tenant(&tenant)), Some(tenant));
+    let invoke = Intent::InvokeOperation {
+        now: 5,
+        operation: "o".into(),
+        inputs: vec![("a".into(), Val::Int(1))],
+        key: "k".into(),
+    };
+    let bytes = encode_intent(&invoke);
+    assert_eq!(bytes[0], 13);
+    assert_eq!(decode_intent(&bytes), Some(invoke));
+}

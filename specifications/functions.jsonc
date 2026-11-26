@@ -4709,6 +4709,134 @@
       ]
     },
     {
+      "id": "clear-breaks",
+      "description": "rules.rs constraint_breaks (WG-5664): whether some constraint of the object type fails on the record a delete would leave, once its set-null references are cleared: false, or an evaluation error, fails; null and true do not. The record is checked as the constraint loop checks it: record and new the candidate, old none, no parameters.",
+      "params": [
+        {
+          "name": "object",
+          "type": "object-type-def"
+        },
+        {
+          "name": "candidate",
+          "type": "record"
+        },
+        {
+          "name": "who",
+          "type": "principal"
+        },
+        {
+          "name": "now",
+          "type": "timestamp"
+        },
+        {
+          "name": "roles",
+          "type": "set<role-id>"
+        }
+      ],
+      "returns": "bool",
+      "let": [
+        {
+          "name": "scope-new",
+          "expr": "call record-scope(candidate)"
+        },
+        {
+          "name": "env",
+          "expr": "expr-env{record: scope-new, old: null, new: scope-new, param: {}, now: value.time(now), principal: call principal-value(who), has_role: roles}"
+        }
+      ],
+      "body": "fold(c in values(object.constraints), acc = false, acc || (match eval(tenant-rule-language, c.expr, env) { Ok(r) => match r { bool(b) => !b, _ => false }, Err(_) => true }))",
+      "examples": [
+        {
+          "description": "A record breaking its type's constraint (a title over 24 characters) breaks it.",
+          "args": {
+            "object": {
+              "fixture": "fx-object-type-def-1"
+            },
+            "candidate": {
+              "fixture": "fx-record-3"
+            },
+            "who": {
+              "user": "alpha:writer1"
+            },
+            "now": 5000,
+            "roles": [
+              "public",
+              "writer"
+            ]
+          },
+          "result": true
+        },
+        {
+          "description": "An unset excerpt makes len null, which does not break the constraint.",
+          "args": {
+            "object": {
+              "fixture": "fx-object-type-def-2",
+              "with": {
+                "constraints": {
+                  "excerpt_length": {
+                    "id": "excerpt_length",
+                    "expr": {
+                      "cmp": {
+                        "op": "le",
+                        "left": {
+                          "len": {
+                            "var": {
+                              "scope": "new",
+                              "field": "excerpt"
+                            }
+                          }
+                        },
+                        "right": {
+                          "lit": {
+                            "int": 280
+                          }
+                        }
+                      }
+                    },
+                    "message": "An excerpt has at most 280 characters"
+                  }
+                }
+              }
+            },
+            "candidate": {
+              "id": 5,
+              "object": "post",
+              "version": 1,
+              "created-by": "site:ann",
+              "created-at": 1005,
+              "updated-at": 1005,
+              "fields": {
+                "title": {
+                  "str": "Draft"
+                },
+                "slug": {
+                  "str": "draft"
+                },
+                "body": {
+                  "str": "Text."
+                },
+                "author": {
+                  "ref": 2
+                },
+                "status": {
+                  "str": "draft"
+                }
+              }
+            },
+            "who": {
+              "user": "site:ann"
+            },
+            "now": 6000,
+            "roles": [
+              "author",
+              "public"
+            ]
+          },
+          "result": false
+        }
+      ]
+    },
+    {
       "id": "constraint-checks",
       "description": "rules.rs validate_record, constraint loop: each constraint of the object type (in id order) is evaluated with record and new the candidate, old the stored record, no parameters; false fails with ConstraintViolated, an evaluation error with Evaluation, anything else passes. texts holds the printed form of each constraint expression (the kernel writes it with Display); see the report of WG-4937.",
       "params": [
@@ -11995,7 +12123,7 @@
     },
     {
       "id": "workflow-problems",
-      "description": "schema.rs TenantSchema::problems, one workflow: an unknown object type (nothing else is checked), a field that is unknown or not a string, no initial state, and per transition a guard and each set expression (in field order) that does not check, and a set field the type does not declare.",
+      "description": "schema.rs TenantSchema::problems, one workflow: an unknown object type (nothing else is checked), a field that is unknown or not a string, no initial state, and per transition a guard and each set expression (in field order) that does not check, a set field the type does not declare, a set field that is the field of another workflow of the type, a set field of this workflow that is not a string literal, and a string literal assigned to this workflow's field that is not one of its states (WG-5666: a transition may assign its own state field only a declared state, written as a literal).",
       "params": [
         {
           "name": "schema",
@@ -12017,7 +12145,7 @@
           "expr": "format('workflow {}', workflow.id)"
         }
       ],
-      "body": "match get(schema.objects, workflow.object) { None => [format('{}: unknown object type {}', at, workflow.object)], Some(o) => let env = expr-check-env{fields: call field-shapes(o.fields), params: [], roles} in concat(concat(match get(o.fields, workflow.field) { Some(f) => match f.ty { str => [], _ => [format('{}: field {} is not a string', at, workflow.field)] }, None => [format('{}: unknown field {}', at, workflow.field)] }, if workflow.initial == [] then [format('{}: no initial state', at)] else []), fold(t in workflow.transitions, ps = [], concat(concat(ps, match t.guard { Some(g) => match check(tenant-rule-language, g, env) { Ok(_) => [], Err(e) => [format('{}.{}: guard: {}', at, t.name, e)] }, None => [] }), fold(k in keys(t.set), qs = [], concat(concat(qs, if get(o.fields, k) == null then [format('{}.{}: sets unknown field {}', at, t.name, k)] else []), match get(t.set, k) { Some(e2) => match check(tenant-rule-language, e2, env) { Ok(_) => [], Err(e) => [format('{}.{}: set {}: {}', at, t.name, k, e)] }, None => [] }))))) }",
+      "body": "match get(schema.objects, workflow.object) { None => [format('{}: unknown object type {}', at, workflow.object)], Some(o) => let env = expr-check-env{fields: call field-shapes(o.fields), params: [], roles} in concat(concat(match get(o.fields, workflow.field) { Some(f) => match f.ty { str => [], _ => [format('{}: field {} is not a string', at, workflow.field)] }, None => [format('{}: unknown field {}', at, workflow.field)] }, if workflow.initial == [] then [format('{}: no initial state', at)] else []), fold(t in workflow.transitions, ps = [], concat(concat(ps, match t.guard { Some(g) => match check(tenant-rule-language, g, env) { Ok(_) => [], Err(e) => [format('{}.{}: guard: {}', at, t.name, e)] }, None => [] }), fold(k in keys(t.set), qs = [], concat(concat(concat(concat(concat(qs, if get(o.fields, k) == null then [format('{}.{}: sets unknown field {}', at, t.name, k)] else []), if any(v in values(schema.workflows), v.id != workflow.id && v.object == workflow.object && v.field == k) then [format('{}.{}: sets {}, the field of another workflow of {}: a transition may not assign it', at, t.name, k, workflow.object)] else []), if !any(v in values(schema.workflows), v.id != workflow.id && v.object == workflow.object && v.field == k) && k == workflow.field && !(match get(t.set, k) { Some(e3) => match e3 { lit(v) => match v { str(_) => true, _ => false }, _ => false }, None => false }) then [format('{}.{}: sets {} to a value that is not a string literal: a workflow field takes only a state written as a literal', at, t.name, k)] else []), match get(t.set, k) { Some(e2) => match check(tenant-rule-language, e2, env) { Ok(_) => [], Err(e) => [format('{}.{}: set {}: {}', at, t.name, k, e)] }, None => [] }), match get(t.set, k) { Some(e3) => match e3 { lit(v) => match v { str(s) => if k == workflow.field && call workflow-has-state(workflow, s) == false then [format('{}.{}: sets {} to {}, which is not a state of the workflow {}', at, t.name, k, s, workflow.id)] else [], _ => [] }, _ => [] }, None => [] }))))) }",
       "examples": [
         {
           "args": {
@@ -12115,6 +12243,7 @@
             "workflow w: no initial state",
             "workflow w.go: guard: undeclared parameter p",
             "workflow w.go: sets unknown field colour",
+            "workflow w.go: sets rank to a value that is not a string literal: a workflow field takes only a state written as a literal",
             "workflow w.go: set rank: unknown field nope"
           ]
         },
@@ -12139,6 +12268,158 @@
           },
           "result": [
             "workflow w: unknown field mood"
+          ]
+        },
+        {
+          "description": "A transition may not assign the field of another workflow: here the status field of the note_status workflow of the schema.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-4"
+            },
+            "roles": [
+              "editor",
+              "owner",
+              "public",
+              "writer"
+            ],
+            "workflow": {
+              "id": "w2",
+              "object": "note",
+              "field": "body",
+              "initial": [
+                "x"
+              ],
+              "transitions": [
+                {
+                  "name": "go",
+                  "from": "x",
+                  "to": "y",
+                  "set": {
+                    "status": {
+                      "lit": {
+                        "str": "draft"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "result": [
+            "workflow w2.go: sets status, the field of another workflow of note: a transition may not assign it"
+          ]
+        },
+        {
+          "description": "A transition may assign its own workflow field only a string literal: here null, which is refused.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-4"
+            },
+            "roles": [
+              "editor",
+              "owner",
+              "public",
+              "writer"
+            ],
+            "workflow": {
+              "id": "w3",
+              "object": "note",
+              "field": "body",
+              "initial": [
+                "x"
+              ],
+              "transitions": [
+                {
+                  "name": "clear",
+                  "from": "x",
+                  "to": "y",
+                  "set": {
+                    "body": {
+                      "lit": "null"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "result": [
+            "workflow w3.clear: sets body to a value that is not a string literal: a workflow field takes only a state written as a literal"
+          ]
+        },
+        {
+          "description": "A transition may assign its own workflow field a string literal that is one of its states: defined.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-4"
+            },
+            "roles": [
+              "editor",
+              "owner",
+              "public",
+              "writer"
+            ],
+            "workflow": {
+              "id": "w4",
+              "object": "note",
+              "field": "body",
+              "initial": [
+                "x"
+              ],
+              "transitions": [
+                {
+                  "name": "go",
+                  "from": "x",
+                  "to": "y",
+                  "set": {
+                    "body": {
+                      "lit": {
+                        "str": "x"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "result": []
+        },
+        {
+          "description": "A transition may not assign its own workflow field a string literal that is not one of its states.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-4"
+            },
+            "roles": [
+              "editor",
+              "owner",
+              "public",
+              "writer"
+            ],
+            "workflow": {
+              "id": "w5",
+              "object": "note",
+              "field": "body",
+              "initial": [
+                "x"
+              ],
+              "transitions": [
+                {
+                  "name": "go",
+                  "from": "x",
+                  "to": "y",
+                  "set": {
+                    "body": {
+                      "lit": {
+                        "str": "zz"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "result": [
+            "workflow w5.go: sets body to zz, which is not a state of the workflow w5"
           ]
         }
       ]
@@ -16655,7 +16936,7 @@
     },
     {
       "id": "create-record",
-      "description": "transition.rs create_record: the object type, the defaults (defaults), the candidate (the next record id, version 1, created by the user or no one, created and updated now), authorisation of Create with the candidate as new, the initial workflow states, then validate-record against the tenant's schema; accepted, it is a PutRecord, a RecordCreated event and the next record id moves on.",
+      "description": "transition.rs create_record: the object type, the permission to create asked before the defaults (may-attempt, or require with no record when no policy could allow it: WG-5665), the defaults (defaults), the candidate (the next record id, version 1, created by the user or no one, created and updated now), authorisation of Create with the candidate as new, the initial workflow states, then validate-record against the tenant's schema; accepted, it is a PutRecord, a RecordCreated event and the next record id moves on.",
       "params": [
         {
           "name": "d",
@@ -16678,20 +16959,24 @@
           "expr": "try call object-def(d, object, action.create)"
         },
         {
+          "name": "gate",
+          "expr": "if call may-attempt(d.tenant, d.ctx.principal, action.create, resource.object(object)) then d else try call require(d, action.create, resource.object(object), subject{})"
+        },
+        {
           "name": "c",
-          "expr": "d.ctx"
+          "expr": "gate.ctx"
         },
         {
           "name": "filled",
-          "expr": "try call defaults(def, fields, c.principal, c.now, d.tenant, d.evidence)"
+          "expr": "try call defaults(def, fields, c.principal, c.now, gate.tenant, gate.evidence)"
         },
         {
           "name": "candidate",
-          "expr": "record{id: d.next-record, object, version: 1, created-by: match c.principal { user(id) => id, _ => null }, created-at: c.now, updated-at: c.now, fields: filled.values}"
+          "expr": "record{id: gate.next-record, object, version: 1, created-by: match c.principal { user(id) => id, _ => null }, created-at: c.now, updated-at: c.now, fields: filled.values}"
         },
         {
           "name": "d1",
-          "expr": "try call require(draft{tenant: d.tenant, ctx: d.ctx, coverage: d.coverage, ops: d.ops, events: d.events, effects: d.effects, evidence: filled.evidence, next-record: d.next-record}, action.create, resource.object(object), subject{new: candidate})"
+          "expr": "try call require(draft{tenant: gate.tenant, ctx: gate.ctx, coverage: gate.coverage, ops: gate.ops, events: gate.events, effects: gate.effects, evidence: filled.evidence, next-record: gate.next-record}, action.create, resource.object(object), subject{new: candidate})"
         },
         {
           "name": "d2",
@@ -17723,11 +18008,6 @@
               "kind": "unauthorized",
               "message": "Anonymous may not Create Object(ObjectTypeId(\"note\"))",
               "evidence": [
-                {
-                  "rule": "default:note.status",
-                  "passed": true,
-                  "detail": "'draft'"
-                },
                 {
                   "rule": "policy:none",
                   "passed": false,
@@ -21464,9 +21744,13 @@
         {
           "name": "firsts",
           "expr": "fold(h in sortBy(h2 in sortBy(h1 in scan.hits, h1.record.id), h2.record.object), acc = [], if any(a in acc, a.record.object == h.record.object && a.record.id == h.record.id) then acc else concat(acc, [h]))"
+        },
+        {
+          "name": "checked",
+          "expr": "fold(h in firsts, dr = scan.draft, if (match get(d2.tenant.schema.objects, h.record.object) { Some(rdef) => call clear-breaks(rdef, call cleared-record(h.record, scan.hits, target, d2.ctx.now), d2.ctx.principal, d2.ctx.now, call roles-of(d2.tenant, d2.ctx.principal)), None => false }) then fail(call draft-reject(concat(dr.evidence, [check{rule: format('constraint:{}', h.record.object), passed: false, detail: format('{} {} would violate a constraint once cleared', h.record.object, h.record.id)}]), error-kind.constraint-violated, format('{} {} would violate a constraint when {} {} is deleted', h.record.object, h.record.id, object, id))) else dr)"
         }
       ],
-      "body": "let d3 = scan.draft in decided{draft: draft{tenant: d3.tenant, ctx: d3.ctx, coverage: d3.coverage, ops: concat(concat(d3.ops, map(h in firsts, delta-op.put-record(call cleared-record(h.record, scan.hits, target, d3.ctx.now)))), [delta-op.delete-record{object, id}]), events: concat(concat(d3.events, map(h in firsts, event-body.record-updated{before: h.record, after: call cleared-record(h.record, scan.hits, target, d3.ctx.now)})), [event-body.record-deleted{before: old}]), effects: d3.effects, evidence: d3.evidence, next-record: d3.next-record}, output: output.deleted{object, id}}",
+      "body": "let d3 = checked in decided{draft: draft{tenant: d3.tenant, ctx: d3.ctx, coverage: d3.coverage, ops: concat(concat(d3.ops, map(h in firsts, delta-op.put-record(call cleared-record(h.record, scan.hits, target, d3.ctx.now)))), [delta-op.delete-record{object, id}]), events: concat(concat(d3.events, map(h in firsts, event-body.record-updated{before: h.record, after: call cleared-record(h.record, scan.hits, target, d3.ctx.now)})), [event-body.record-deleted{before: old}]), effects: d3.effects, evidence: d3.evidence, next-record: d3.next-record}, output: output.deleted{object, id}}",
       "examples": [
         {
           "description": "behaviour.rs deleting_a_referenced_record_clears_set_null_references: one update for the cleared note, one delete.",

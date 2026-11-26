@@ -97,7 +97,7 @@ op 1 102 update 6 1=s:oak 2=n
 op 1 103 create 1=s:ash 3=b:0
 op 1 999 delete 1
 op 1 102 create 1=s:oak
-op 1 101 update 5 1=s:ash 9=i:1
+op 1 101 update 5 1=s:ash 9=s:oak
 op 1 100 require 3 lax
 op 3 100 require 3 lax
 op 1 103 create 1=s:yew 2=b:0
@@ -160,7 +160,7 @@ op 1 101 delete 6
 op 1 100 require 1 lax
 op 1 201 create 1=s:fir
 op 2 203 update 1 1=s:ash 3=b:0
-op 1 102 update 1 1=s:elm 3=b:0 9=i:1
+op 1 102 update 1 1=s:elm 3=b:0 9=s:oak
 op 1 103 delete 2
 op 1 102 create 1=s:fir 2=i:21
 op 2 203 update 1 1=i:29 2=i:3 3=i:19
@@ -175,7 +175,7 @@ end
 scenario s9
 op 1 201 update 4 1=s:fir 3=b:1
 op 1 103 delete 1
-op 2 101 update 3 1=s:fir 2=i:33 9=i:1
+op 2 101 update 3 1=s:fir 2=i:33 9=s:oak
 op 1 102 delete 2
 op 1 100 require 1 lax
 op 1 101 update 5 1=s:yew 2=i:34
@@ -192,7 +192,7 @@ op 1 102 create 2=n 3=b:0
 op 1 999 create 1=b:0
 op 1 100 delete 2
 op 1 100 update 4 1=s:elm 2=i:26
-op 1 102 update 4 1=s:yew 9=i:1
+op 1 102 update 4 1=s:yew 9=s:oak
 op 2 202 update 6 1=s:oak
 op 1 201 create 1=s:fir
 op 1 102 update 6 1=s:yew
@@ -227,7 +227,7 @@ op 1 201 create 1=s:yew 3=b:1
 op 1 100 delete 4
 op 1 102 create 1=s:elm 2=i:28
 op 1 101 create 1=n 3=b:1
-op 1 100 update 3 1=n 9=i:1
+op 1 100 update 3 1=n 9=s:oak
 op 2 999 update 3 2=i:0
 op 1 103 create 1=s:oak 2=i:-3
 op 1 100 create 1=s:ash 2=i:-2
@@ -239,7 +239,7 @@ end
 scenario s13
 op 1 103 update 5 1=s:yew 2=i:28 3=b:1
 op 1 103 create 1=s:yew
-op 1 103 update 5 1=s:ash 3=n 9=i:1
+op 1 103 update 5 1=s:ash 3=n 9=s:oak
 op 1 100 create 1=s:ash
 op 1 103 create 1=s:yew
 op 1 100 update 3 1=s:fir 2=i:14 3=b:1
@@ -350,7 +350,7 @@ op 1 102 create 1=s:fir 3=b:0
 op 1 100 delete 2
 op 1 102 update 4 1=n 2=i:2 3=b:0
 op 1 201 update 5 1=s:ash 2=i:0 3=b:1
-op 1 103 update 5 1=s:oak 2=s:elm 9=i:1
+op 1 103 update 5 1=s:oak 2=s:elm 9=s:oak
 op 1 102 delete 4
 op 1 101 update 1 1=s:oak 2=i:32
 op 3 102 create 1=s:oak 2=i:-3 3=b:1
@@ -358,7 +358,7 @@ op 3 102 update 1 1=s:fir 2=i:23 3=b:0
 op 1 101 create 1=s:fir 2=i:12
 op 1 103 delete 6
 op 1 103 delete 5
-op 1 102 create 1=s:ash 2=b:0 3=b:1 9=i:1
+op 1 102 create 1=s:ash 2=b:0 3=b:1 9=s:oak
 op 1 103 update 3 2=i:3
 end
 scenario s19
@@ -437,13 +437,13 @@ scenario s23
 op 1 102 update 3 1=s:fir 2=i:34 3=b:0
 op 1 101 update 4 1=s:ash 3=n
 op 1 102 create 1=s:elm 2=i:1
-op 2 999 create 1=b:1 2=i:24 9=i:1
+op 2 999 create 1=b:1 2=i:24 9=s:oak
 op 1 100 create 1=s:elm 2=i:14
 op 1 201 create
 op 2 200 delete 5
 op 2 101 create 1=s:fir 2=i:16
 op 1 102 create
-op 2 201 create 1=s:elm 2=i:18 3=b:1 9=i:1
+op 2 201 create 1=s:elm 2=i:18 3=b:1 9=s:oak
 op 1 100 require 3 lax
 op 3 999 create 1=s:ash 2=i:32
 op 1 101 create 1=s:oak 3=b:1
@@ -487,14 +487,14 @@ op 2 200 require 1 lax
 op 1 100 update 5 1=s:oak 2=i:7
 op 1 999 update 3 3=n
 op 1 100 create 1=n 2=i:15
-op 1 999 update 5 1=i:16 9=i:1
+op 1 999 update 5 1=i:16 9=s:oak
 op 1 100 require 3 lax
 end
 scenario s26
 op 1 102 create 1=s:elm 2=i:8
 op 2 203 update 5 1=s:fir 2=i:32
 op 1 102 update 3 2=i:4
-op 3 103 create 1=s:elm 2=s:ash 9=i:1
+op 3 103 create 1=s:elm 2=s:ash 9=s:oak
 op 1 102 update 1 1=s:fir
 op 1 102 create 1=s:oak 2=i:20 3=b:0
 op 3 201 create 1=s:oak 3=b:1
@@ -630,7 +630,7 @@ op 1 103 create 1=s:yew
 op 1 100 update 1 1=s:ash 3=b:1
 op 1 103 create 1=s:ash 2=i:5 3=b:1
 op 1 102 create 1=s:fir 2=i:6 3=b:0
-op 1 103 update 2 1=s:elm 3=b:1 9=i:1
+op 1 103 update 2 1=s:elm 3=b:1 9=s:oak
 op 2 101 delete 3
 end
 scenario s34
@@ -666,7 +666,7 @@ op 1 102 update 6 1=s:ash 2=i:33
 op 1 100 require 3 lax
 op 1 103 update 6 1=s:oak 3=b:1
 op 2 200 create 1=s:fir
-op 1 103 update 5 1=s:fir 2=i:18 3=b:0 9=i:1
+op 1 103 update 5 1=s:fir 2=i:18 3=b:0 9=s:oak
 op 1 103 update 4 1=s:oak 2=i:23
 op 1 103 update 2 1=n 3=b:0
 op 2 203 create 1=s:fir 2=i:2
@@ -719,7 +719,7 @@ op 1 103 create 1=n
 op 1 102 create 1=s:oak 2=i:13
 op 1 201 update 1 1=s:yew 2=n
 op 1 102 create 1=s:oak 2=b:0 3=b:1
-op 1 101 update 1 1=s:fir 2=i:11 3=b:0 9=i:1
+op 1 101 update 1 1=s:fir 2=i:11 3=b:0 9=s:oak
 op 1 103 create 1=s:elm 2=i:15
 op 1 103 create 3=b:0
 op 1 101 update 1 1=s:ash
@@ -741,7 +741,7 @@ op 1 103 create 1=s:oak 2=b:1 3=b:0
 op 2 200 require 3 lax
 op 3 100 create 1=s:ash
 op 1 103 require 1 lax
-op 1 101 create 1=n 2=i:12 3=b:0 9=i:1
+op 1 101 create 1=n 2=i:12 3=b:0 9=s:oak
 op 1 102 delete 3
 op 1 103 update 6 1=n 2=i:2 3=b:0
 op 1 103 create 1=s:yew 2=i:29
@@ -776,7 +776,7 @@ op 1 102 create 1=s:fir
 op 1 102 update 6 1=s:oak 2=s:yew 3=b:1
 op 1 100 delete 6
 op 2 200 create 1=s:ash 2=i:32 3=b:1
-op 1 103 create 1=s:yew 3=b:0 9=i:1
+op 1 103 create 1=s:yew 3=b:0 9=s:oak
 op 2 200 create 1=s:yew 3=b:1
 end
 scenario s42
@@ -821,7 +821,7 @@ end
 scenario s44
 op 1 102 delete 5
 op 1 201 require 2 strict
-op 1 100 update 3 1=n 3=b:0 9=i:1
+op 1 100 update 3 1=n 3=b:0 9=s:oak
 op 1 101 create 1=n 3=b:1
 op 1 103 update 1 1=s:fir 2=n
 op 1 102 create
@@ -893,7 +893,7 @@ op 1 103 create 1=s:ash 3=b:0
 op 1 102 create 1=s:yew 2=i:25
 op 1 102 update 5 1=s:oak
 op 2 200 require 3 lax
-op 1 100 update 5 1=s:yew 3=b:0 9=i:1
+op 1 100 update 5 1=s:yew 3=b:0 9=s:oak
 op 1 101 update 4 1=s:elm
 op 1 201 require 2 strict
 op 2 200 require 1 lax
@@ -909,7 +909,7 @@ op 1 201 delete 4
 op 1 201 update 5 1=s:ash 3=b:0
 op 1 103 create 1=s:oak 2=i:0 3=b:0
 op 1 103 delete 2
-op 2 203 update 2 9=i:1
+op 2 203 update 2 9=s:oak
 op 2 203 update 2 1=s:yew 2=i:8
 op 1 100 create 1=s:yew
 op 3 201 create 1=i:0 2=i:6
@@ -918,7 +918,7 @@ scenario s49
 op 1 100 update 3 1=b:0 3=b:1
 op 2 202 create 3=b:0
 op 1 102 create 1=s:yew
-op 1 101 update 4 1=s:fir 2=i:27 9=i:1
+op 1 101 update 4 1=s:fir 2=i:27 9=s:oak
 op 1 100 require 3 lax
 op 1 103 update 4 1=s:ash
 op 2 999 create 1=s:fir 2=i:5
@@ -949,7 +949,7 @@ op 1 100 require 1 strict
 op 1 999 update 3 1=s:ash
 op 1 100 delete 1
 op 1 102 update 4 1=s:elm
-op 1 102 create 1=s:fir 2=i:20 3=b:1 9=i:1
+op 1 102 create 1=s:fir 2=i:20 3=b:1 9=s:oak
 op 3 999 create 1=s:ash 2=i:0
 end
 scenario s51
@@ -987,7 +987,7 @@ op 1 103 delete 4
 op 1 103 update 2 1=s:oak 2=i:17 3=b:0
 op 1 103 delete 3
 op 1 100 require 1 strict
-op 1 100 create 1=n 3=b:0 9=i:1
+op 1 100 create 1=n 3=b:0 9=s:oak
 op 1 103 update 1 1=s:oak 2=n 3=b:1
 op 1 100 delete 1
 op 1 100 create 1=s:oak 3=b:0
@@ -1087,7 +1087,7 @@ op 1 103 create 1=s:oak
 op 1 100 update 2 1=s:ash 2=i:25
 op 1 101 create 1=n 2=i:0
 op 2 202 create 1=s:fir 3=b:1
-op 3 102 create 2=i:0 9=i:1
+op 3 102 create 2=i:0 9=s:oak
 op 1 100 update 5 1=s:yew
 op 1 999 update 6 1=n 2=n
 op 1 103 create 1=s:yew 3=b:0
@@ -1435,4 +1435,1499 @@ op 1 100 create 1=s:oak 7=l*1001:s:a 8=l:s:oak
 op 1 100 create 3=b:1 7=l*1001:s:a
 op 1 100 create 9=i:1 1=s*65537:x
 op 1 100 create 1=n 2=s:bad
+end
+scenario h-unique-field-refuses-a-duplicate
+op 1 100 create 1=s:oak 10=s:a
+op 1 100 create 1=s:ash 10=s:a
+op 1 100 create 1=s:elm 10=s:b
+op 1 100 create 1=s:fir
+op 1 100 create 1=s:yew
+op 1 100 update 2 1=s:ash 10=s:b
+op 1 100 update 1 1=s:oak 10=s:a
+op 1 100 patch 3 10=s:a
+op 1 100 create 1=s:oak 10=s:b
+op 1 100 create 1=s:oak 10=s:c
+op 1 100 patch 1 10=n
+op 1 100 create 1=s:ash 10=s:a
+end
+scenario h-unique-checks-follow-the-field-order
+op 1 100 create 10=s:a
+op 1 100 create 1=s:oak 10=s:a
+op 1 100 create 1=s:oak 10=s:a 4=r:99
+op 1 100 create 1=s:oak 10=i:1
+op 1 100 create 1=s:oak 10=s*201:x
+op 1 100 create 1=s:oak 10=s*150:x
+op 1 100 create 1=s:ash 10=s:a
+end
+scenario h-unique-bound-is-in-bytes
+op 1 100 create 1=s:oak 10=s*201:x
+op 1 100 create 1=s:oak 10=s*150:x
+op 1 100 create 1=s:ash 10=s*150:x
+end
+scenario h-composite-unique-needs-every-field
+op 1 100 composite 2 3
+op 1 100 create 1=s:oak 2=i:1 3=b:1
+op 1 100 create 1=s:ash 2=i:1
+op 1 100 create 1=s:elm 2=i:1 3=b:0
+op 1 100 create 1=s:fir 2=i:1 3=b:1
+op 1 100 create 1=s:yew 3=b:1
+op 1 100 patch 3 3=b:1
+op 1 100 patch 3 2=i:2
+op 1 100 create 1=s:oak 2=i:1 3=b:1
+op 1 100 patch 4 2=i:1
+end
+scenario h-composite-over-existing-duplicates-is-refused
+op 1 100 create 1=s:oak 2=i:1 3=b:1
+op 1 100 create 1=s:ash 2=i:1 3=b:1
+op 1 100 composite 2 3
+op 1 100 create 1=s:elm 2=i:1 3=b:1
+op 1 100 create 1=s:fir 2=i:2
+end
+scenario h-unique-over-existing-duplicates
+op 1 100 create 1=s:oak 2=i:1
+op 1 100 create 1=s:oak 2=i:2
+op 1 100 unique 1 strict
+op 1 100 unique 2 strict
+op 1 100 unique 1 lax
+op 1 100 create 1=s:oak 2=i:3
+op 1 100 create 1=s:elm 2=i:4
+op 1 100 update 2 1=s:oak 2=i:2
+op 1 100 update 3 1=s:elm 2=i:4
+end
+scenario h-a-list-field-cannot-be-unique
+op 1 100 unique 0 strict
+op 1 100 unique 7 lax
+op 1 100 composite 2 0
+op 1 100 composite 2 9
+op 1 100 composite 2
+op 1 100 composite 2 2
+op 1 101 unique 2 strict
+op 1 101 composite 2 3
+end
+scenario h-unique-survives-a-delete
+op 1 100 create 1=s:oak 10=s:a
+op 1 100 create 1=s:ash 10=s:b 4=r:1
+op 1 100 delete 1
+op 1 100 create 1=s:elm 10=s:a
+op 1 100 update 2 1=s:ash 10=s:a
+op 1 100 create 1=s:fir 10=s:b
+end
+scenario h-strict-change-needs-conforming-records
+op 1 100 create 1=s:yew
+op 1 100 require 4 lax
+op 1 100 composite 3 10 4 6
+end
+scenario h-strict-change-refuses-a-grandfathered-duplicate
+op 1 100 create 1=s:oak
+op 1 101 create 1=s:fir 3=b:0
+op 1 100 unique 6 lax
+op 1 100 require 1 strict
+end
+scenario h-unknown-type-owner
+op 1 100 type 9 create 1=s:oak
+op 1 100 type 9 update 1 1=s:ash
+op 1 100 type 9 delete 1
+op 1 100 type 9 require 1 strict
+end
+scenario h-unknown-type-other
+op 1 101 type 9 create 1=s:oak
+op 1 102 type 9 update 1 1=s:ash
+op 1 101 type 9 delete 1
+op 1 101 type 9 require 1 strict
+op 1 100 type 9 create 1=s:oak
+end
+scenario h-unknown-type-owner-hides-existing-type
+op 1 100 create 1=s:oak
+op 1 100 type 9 delete 1
+op 1 100 type 2 delete 1
+end
+scenario h-cross-type-dangling-create
+op 1 100 create 1=s:oak
+op 1 100 type 2 create 1=r:1
+op 1 100 type 2 create 1=r:50
+op 1 100 create 1=s:elm 11=r:2
+op 1 100 create 1=s:fir 11=r:99
+end
+scenario h-cross-type-dangling-update
+op 1 100 create 1=s:oak
+op 1 100 type 2 create 1=r:1
+op 1 100 type 2 patch 2 1=r:77
+op 1 100 type 2 patch 2 2=r:1
+op 1 100 type 2 patch 2 2=r:88
+end
+scenario h-cross-type-restrict-both-ways
+op 1 100 create 1=s:oak
+op 1 100 type 2 create 1=r:1
+op 1 100 create 1=s:elm 11=r:2
+op 1 100 type 2 delete 2
+op 1 100 delete 1
+op 1 100 delete 3
+op 1 100 type 2 delete 2
+op 1 100 delete 1
+end
+scenario h-cross-type-set-null-clears
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash
+op 1 100 type 2 create 2=r:1 3=l:r:1,r:2
+op 1 100 delete 1
+op 1 100 type 2 create 2=r:2 3=l:r:2
+op 1 100 delete 2
+end
+scenario h-unknown-type-schema-by-others
+op 1 101 type 9 composite 1 2
+op 1 100 type 9 composite 1 2
+op 1 100 type 9 unique 1 strict
+op 1 100 type 9 unique 1 lax
+end
+scenario h-strict-change-scoped-to-the-touched-type
+op 1 101 create 1=s:fir
+op 1 100 require 4 lax
+op 1 100 type 2 require 4 strict
+end
+scenario h-strict-change-revalidates-a-reference-target
+op 1 100 create 1=s:oak
+op 1 100 require 4 lax
+op 1 100 type 2 require 1 strict
+op 1 100 type 2 require 2 strict
+end
+scenario h-constraint-refuses-a-negative-value
+op 1 100 create 1=s:oak 2=i:-1
+op 1 100 create 1=s:oak 2=i:0
+op 1 100 patch 1 2=i:-3
+op 1 100 patch 1 2=i:7
+op 1 100 patch 1 2=n
+op 1 100 patch 1 2=i:-9
+end
+scenario h-constraint-refuses-a-forbidden-name
+op 1 100 create 1=s:forbidden
+op 1 100 create 1=s:oak
+op 1 100 patch 1 1=s:forbidden
+op 1 100 create 1=s:forbidden 2=i:-1
+op 1 100 patch 1 1=s:ash
+end
+scenario h-a-null-constraint-passes
+op 1 100 create 1=s:oak
+op 1 100 patch 1 3=n
+end
+scenario h-constraints-come-after-the-other-checks
+op 1 100 create 1=s:oak 10=s:a
+op 1 100 create 1=s:ash 2=i:-1 10=s:a
+op 1 100 create 2=i:-1 3=b:1
+op 1 100 create 1=s:elm 2=i:-1 4=r:99
+op 1 100 create 1=s:forbidden 10=s:a
+end
+scenario h-expression-default-is-the-caller
+op 1 101 create 1=s:oak
+op 1 102 create 1=s:ash 9=s:x
+op 1 101 patch 1 9=n
+op 1 101 create 1=s:elm
+end
+scenario h-expression-default-decides-the-field
+op 1 100 type 2 create 4=i:1
+op 1 101 type 2 create 4=i:1
+op 1 101 type 2 create 4=i:1 5=b:1
+op 1 999 type 2 create 4=i:1
+end
+scenario h-a-stranger-holds-only-public
+op 1 150 create 1=s:oak
+op 1 150 type 2 create 4=i:1
+op 1 150 update 1 1=s:ash
+op 1 150 delete 1
+end
+scenario h-the-system-holds-no-role
+op 1 system create 1=s:oak
+op 1 system type 2 create 4=i:1
+op 1 system require 1 lax
+op 1 101 create 1=s:oak
+op 1 system update 1 1=s:ash
+op 1 system delete 1
+op 1 system require 1 strict
+end
+scenario h-an-anonymous-caller-creates-a-part-with-no-creator
+op 1 anon type 2 create 4=i:1
+op 1 anon type 2 create 4=i:2 5=b:1
+op 1 101 type 2 create 4=i:3
+end
+scenario h-an-anonymous-caller-may-not-create-an-item
+op 1 anon create 1=s:oak
+op 1 anon type 3 create 1=s:oak
+op 1 100 type 3 create 1=s:oak
+end
+scenario h-an-anonymous-caller-may-not-change-a-record
+op 1 101 create 1=s:oak
+op 1 anon update 1 1=s:ash
+op 1 anon delete 1
+op 1 anon update 9 1=s:ash
+end
+scenario h-a-writer-changes-only-its-own-records
+op 1 102 create 1=s:oak
+op 1 103 create 1=s:ash
+op 1 102 update 1 1=s:elm
+op 1 102 update 2 1=s:fir
+op 1 103 delete 1
+op 1 103 delete 2
+op 1 102 delete 1
+end
+scenario h-an-editor-changes-any-record
+op 1 102 create 1=s:oak
+op 1 101 update 1 1=s:ash
+op 1 101 delete 1
+end
+scenario h-a-writer-cannot-tell-a-missing-record-from-another-writers
+op 1 102 update 9 1=s:ash
+op 1 102 delete 9
+op 1 101 update 9 1=s:ash
+op 1 101 delete 9
+end
+scenario h-the-owner-may-do-everything
+op 1 100 create 1=s:oak
+op 1 100 update 1 1=s:ash
+op 1 100 delete 1
+op 1 100 type 2 create 4=i:9
+op 1 100 require 1 strict
+end
+scenario h-an-editor-may-not-change-the-schema
+op 1 101 require 1 lax
+op 1 101 unique 10 strict
+op 1 101 composite 1 2
+op 1 100 require 1 lax
+end
+scenario h-delete-that-breaks-a-referrers-constraint
+op 1 100 create 1=s:oak
+op 1 101 type 2 create 2=r:1
+op 1 100 delete 1
+op 1 100 type 2 patch 2 4=i:5
+op 1 100 delete 1
+op 1 100 type 2 delete 2
+op 1 100 delete 1
+end
+scenario h-delete-clearing-a-list-referrer-under-a-constraint
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash
+op 1 101 type 2 create 2=r:1 3=l:r:1,r:2
+op 1 100 delete 1
+op 1 100 delete 2
+op 1 100 type 2 patch 3 3=l:
+op 1 100 delete 1
+op 1 100 type 2 patch 3 4=i:2
+op 1 100 delete 1
+end
+scenario h-the-system-creates-a-tenant
+op 3 100 assign 301 2
+op 3 system create-tenant 300 s:acme
+op 3 300 assign 301 2
+op 3 301 assign 302 3
+op 3 302 assign 303 3
+op 3 system create-tenant 300 s:acme
+end
+scenario h-only-the-system-creates-a-tenant
+op 3 300 create-tenant 300 s:acme
+op 3 anon create-tenant 300 s:acme
+op 3 100 create-tenant 100 s:acme
+op 3 300 assign 301 2
+op 3 system create-tenant 300 s:acme
+op 3 300 assign 301 2
+end
+scenario h-a-tenant-needs-a-name
+op 3 system create-tenant 300 s:_
+op 3 300 create-tenant 300 s:_
+op 3 system create-tenant 300 s:__
+op 3 300 assign 301 2
+op 3 system create-tenant 300 s:a
+op 3 300 assign 301 2
+end
+scenario h-a-tenant-that-exists-is-not-created-again
+op 1 system create-tenant 100 s:acme
+op 1 100 create-tenant 100 s:acme
+op 1 150 create-tenant 150 s:acme
+op 2 system create-tenant 200 s:_
+op 3 system create-tenant 300 s:acme
+op 3 system create-tenant 301 s:acme
+op 3 300 team 1 s:ops
+end
+scenario h-a-reserved-id-is-refused-before-anything-else
+op 1 1000001 create 1=s:oak 2=i:1
+op 9 1000001 assign 150 2
+op 1 1000001 team 1 s:ops
+op 1 100 assign 1000000 2
+op 9 100 assign 1000000 2
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 2
+op 1 100 team-add 1 1000000
+op 1 100 team-add 1 150
+op 1 1000001 redeem 1 @1000 verified=s:a@b.org
+op 3 system create-tenant 1000000 s:acme
+op 1 system create-tenant 1000000 s:acme
+op 3 1000001 create-tenant 300 s:acme
+op 3 system create-tenant 300 s:acme
+end
+scenario h-the-owner-assigns-and-revokes-a-role
+op 1 100 assign 150 2
+op 1 150 create 1=s:oak 2=i:1
+op 1 100 assign 150 3
+op 1 100 revoke 150 2
+op 1 150 patch 1 1=s:ash
+op 1 100 revoke 150 3
+op 1 150 create 1=s:oak 2=i:1
+op 1 100 revoke 150 3
+end
+scenario h-only-a-manager-assigns-roles
+op 1 102 assign 150 3
+op 1 999 assign 150 3
+op 1 system assign 150 3
+op 1 anon assign 150 3
+op 1 201 assign 150 3
+op 1 102 assign 150 9
+op 1 102 assign 150 1
+op 1 102 revoke 100 0
+end
+scenario h-the-role-is-checked-before-the-conferring
+op 1 100 assign 150 9
+op 1 100 assign 150 1
+op 1 100 revoke 150 9
+op 1 100 revoke 150 1
+op 1 101 assign 150 9
+op 1 101 assign 150 1
+op 1 101 assign 150 0
+op 1 101 revoke 100 0
+op 1 101 revoke 150 0
+end
+scenario h-an-editor-confers-what-it-holds
+op 1 101 assign 150 3
+op 1 101 assign 151 2
+op 1 150 create 1=s:oak 2=i:1
+op 1 151 create 1=s:ash 2=i:1
+op 1 151 assign 152 2
+op 1 151 assign 152 0
+op 1 100 assign 152 0
+op 1 152 revoke 100 0
+op 1 152 revoke 152 0
+op 1 152 revoke 101 0
+op 1 101 revoke 150 3
+op 1 101 revoke 151 2
+end
+scenario h-the-last-owner-stays
+op 1 100 revoke 100 0
+op 1 100 assign 101 0
+op 1 100 revoke 100 0
+op 1 101 revoke 101 0
+op 1 101 revoke 150 0
+op 1 101 assign 100 0
+op 1 100 revoke 101 0
+op 1 100 revoke 100 0
+end
+scenario h-the-owner-of-tenant-two-is-another-user
+op 2 200 assign 100 0
+op 2 100 revoke 200 0
+op 1 100 assign 200 0
+op 1 200 revoke 100 0
+op 1 100 revoke 100 0
+op 1 100 revoke 200 0
+op 1 200 revoke 200 0
+end
+scenario h-a-team-is-defined-by-a-manager
+op 1 100 team 1 s:ops
+op 1 100 team 1 s:dev
+op 1 101 team 2 s:support
+op 1 102 team 3 s:nobody
+op 1 100 team 4 s:_
+op 1 100 team 1 s:_
+op 1 100 team 1 s:a_b
+op 1 system team 1 s:ops
+op 1 anon team 1 s:ops
+end
+scenario h-a-team-must-exist
+op 1 100 team-assign 7 2
+op 1 100 team-assign 7 9
+op 1 100 team-revoke 7 2
+op 1 100 team-add 7 150
+op 1 100 team-remove 7 150
+op 1 102 team-add 7 150
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 9
+op 1 100 team-assign 1 1
+op 1 100 team-assign 1 2
+op 1 100 team-add 1 150
+op 1 100 team-remove 1 150
+end
+scenario h-a-team-gives-its-members-its-roles
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 3
+op 1 150 create 1=s:oak 2=i:1
+op 1 100 team-add 1 150
+op 1 150 create 1=s:oak 2=i:1
+op 1 150 patch 1 1=s:ash
+op 1 100 team-assign 1 2
+op 1 150 delete 1
+op 1 100 team-revoke 1 3
+op 1 100 team-revoke 1 2
+op 1 150 create 1=s:oak 2=i:1
+op 1 100 team-add 1 150
+op 1 100 team-remove 1 150
+op 1 100 team-remove 1 150
+end
+scenario h-a-team-can-be-given-the-power-to-manage-members
+op 1 150 assign 151 3
+op 1 100 team 1 s:leads
+op 1 100 team-assign 1 2
+op 1 100 team-add 1 150
+op 1 150 assign 151 3
+op 1 150 assign 151 0
+op 1 150 team 2 s:more
+op 1 150 invite 1 s:a@b.org 3 @1000
+end
+scenario h-adding-to-a-team-asks-to-confer-its-roles
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 0
+op 1 101 team-assign 1 3
+op 1 101 team-add 1 150
+op 1 100 team-add 1 150
+op 1 101 team-remove 1 150
+op 1 101 team-revoke 1 0
+op 1 100 team-revoke 1 0
+op 1 101 team-add 1 150
+op 1 101 team-remove 1 150
+end
+scenario h-a-team-that-holds-owner-keeps-an-owner
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 0
+op 1 100 team-add 1 150
+op 1 100 revoke 100 0
+op 1 150 team-remove 1 150
+op 1 150 team-revoke 1 0
+op 1 150 assign 100 0
+op 1 150 team-remove 1 150
+op 1 100 team-revoke 1 0
+op 1 100 team-add 1 150
+op 1 100 revoke 100 0
+end
+scenario h-a-team-that-holds-the-only-owner-role
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 0
+op 1 100 team-add 1 100
+op 1 100 revoke 100 0
+op 1 100 team-revoke 1 0
+op 1 100 team-remove 1 100
+op 1 100 assign 100 0
+op 1 100 team-revoke 1 0
+op 1 100 revoke 100 0
+end
+scenario h-an-invitation-is-made-and-redeemed
+op 1 150 redeem 1 @1000 verified=s:ann@x.org
+op 1 100 invite 1 s:Ann@X.org 2 @1000
+op 1 150 redeem 1 @1005 verified=s:_ann@x.org_
+op 1 150 create 1=s:oak 2=i:1
+op 1 151 redeem 1 @1006 verified=s:ann@x.org
+op 1 100 invite-revoke 1
+op 1 100 invite 1 s:ann@x.org 2 @1000
+end
+scenario h-redeeming-adds-to-the-roles-held
+op 1 100 invite 1 s:ann@x.org 3 @1000
+op 1 101 redeem 1 @1001 verified=s:ann@x.org
+op 1 101 team 1 s:ops
+op 1 100 invite 2 s:ann@x.org 2,3 @1000
+op 1 102 redeem 2 @1001 verified=s:ann@x.org
+op 1 102 team 1 s:ops
+op 1 100 team 1 s:ops
+end
+scenario h-redeeming-is-checked-in-order
+op 1 system redeem 1 @1000 verified=s:ann@x.org
+op 1 anon redeem 1 @1000 verified=s:ann@x.org
+op 1 150 redeem 1 @1000 verified=s:ann@x.org
+op 1 100 invite 1 s:ann@x.org 2 @1000
+op 1 150 redeem 1 @1001
+op 1 150 redeem 1 @1001 verified=s:zed@x.org
+op 1 150 redeem 1 @1001 verified=s:ann@x.org
+op 1 151 redeem 1 @1002 verified=s:zed@x.org
+op 1 151 redeem 1 @1002 verified=s:ann@x.org
+op 1 150 redeem 2 @1001 verified=s:ann@x.org
+end
+scenario h-an-invitation-expires-after-fourteen-days
+op 1 100 invite 1 s:ann@x.org 2 @1000
+op 1 100 invite 2 s:bob@x.org 2 @2000
+op 1 100 invite 3 s:cy@x.org 2 @0
+op 1 150 redeem 1 @1209601000 verified=s:ann@x.org
+op 1 150 redeem 1 @1209601001 verified=s:ann@x.org
+op 1 150 redeem 2 @1209601999 verified=s:bob@x.org
+op 1 151 redeem 3 @1209599999 verified=s:cy@x.org
+op 1 152 redeem 3 @1209600000 verified=s:cy@x.org
+end
+scenario h-a-revoked-invitation-is-not-redeemed
+op 1 100 invite 1 s:ann@x.org 2 @1000
+op 1 102 invite-revoke 1
+op 1 100 invite-revoke 1
+op 1 100 invite-revoke 1
+op 1 150 redeem 1 @1001 verified=s:ann@x.org
+op 1 100 invite-revoke 9
+op 1 system invite-revoke 1
+op 1 100 invite 1 s:ann@x.org 2 @1000
+end
+scenario h-an-invitation-is-checked-in-order
+op 1 102 invite 1 s:dave 9 @1000
+op 1 system invite 1 s:ann@x.org 2 @1000
+op 1 anon invite 1 s:ann@x.org 2 @1000
+op 1 100 invite 1 s:dave 9 @1000
+op 1 100 invite 1 s:ann@x.org - @1000
+op 1 100 invite 1 s:_@_ 2 @1000
+op 1 100 invite 1 s:ann@x.org 9 @1000
+op 1 100 invite 1 s:ann@x.org 1 @1000
+op 1 100 invite 1 s:ann@x.org 2 @1000
+op 1 100 invite 1 s:dave@x.org 9 @1000
+op 1 100 invite 2 s:dave@x.org 9 @1000
+op 1 100 invite 2 s:dave@x.org 1,9 @1000
+op 1 100 invite 2 s:dave@x.org 0,1 @1000
+op 1 101 invite 3 s:ann@x.org 0 @1000
+op 1 101 invite 3 s:ann@x.org 2,3 @1000
+op 1 101 invite 1 s:ann@x.org 2 @1000
+end
+scenario h-the-issuer-must-still-hold-the-authority
+op 1 101 invite 1 s:ann@x.org 3 @1000
+op 1 100 revoke 101 2
+op 1 150 redeem 1 @1001 verified=s:ann@x.org
+op 1 100 assign 101 2
+op 1 150 redeem 1 @1002 verified=s:ann@x.org
+op 1 101 invite 2 s:bob@x.org 2 @1000
+op 1 100 invite 3 s:cy@x.org 0 @1000
+op 1 101 invite-revoke 3
+op 1 100 invite-revoke 3
+end
+scenario h-an-invitation-can-make-an-owner
+op 1 100 invite 1 s:ann@x.org 0 @1000
+op 1 150 redeem 1 @1001 verified=s:ann@x.org
+op 1 150 revoke 100 0
+op 1 100 revoke 150 0
+op 1 100 revoke 100 0
+end
+scenario h-redeeming-by-a-tenants-own-owner
+op 1 100 invite 1 s:ann@x.org 3 @1000
+op 1 100 redeem 1 @1001 verified=s:ann@x.org
+op 1 100 revoke 100 0
+op 1 100 revoke 100 3
+end
+scenario h-the-state-shows-a-created-tenant-and-the-fixtures-membership
+op 3 system create-tenant 300 s:acme
+op 3 300 assign 301 0
+op 3 300 team 2 s:ops
+op 3 301 team-assign 2 0
+op 3 300 team-add 2 302
+op 3 300 invite 4 s:_Bob@X.com_ 0 @5000
+op 3 300 invite 2 s:a@b 0 @6000
+op 3 302 redeem 4 @5001 verified=s:BOB@x.com
+op 3 301 revoke 300 0
+op 3 300 revoke 301 0
+op 1 100 team 5 s:eng
+op 1 100 invite 3 s:z@y 2,3 @100
+op 2 100 assign 100 2
+op 2 200 assign 100 2
+end
+scenario h-a-new-ticket-starts-open
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 create 1=s:open 3=s:x
+end
+scenario h-a-new-ticket-cannot-start-closed
+op 1 100 type 4 create 1=s:closed
+op 1 100 type 4 create 2=i:1
+end
+scenario h-a-new-ticket-must-name-a-state
+op 1 100 type 4 create 1=n
+op 1 100 type 4 create 1=s:OPEN
+end
+scenario h-a-ticket-with-a-vote-ships
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 1=s:open
+end
+scenario h-a-ticket-without-a-vote-does-not-ship
+op 1 100 type 4 create 2=i:0
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 2=i:1 1=s:closed
+end
+scenario h-a-guard-that-cannot-be-read-refuses
+op 1 100 type 4 create
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 1=s:archived
+end
+scenario h-an-undeclared-state-is-refused
+op 1 100 type 4 create
+op 1 100 type 4 patch 1 1=s:bogus
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 1=s:escalated
+op 1 100 type 4 patch 1 1=s:open
+end
+scenario h-a-transition-writes-its-assignments
+op 1 100 type 4 create
+op 1 100 type 4 patch 1 1=s:archived
+end
+scenario h-a-closed-ticket-reopens-without-a-guard
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 1=s:open
+end
+scenario h-a-closed-ticket-is-archived-with-its-note
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 1=s:archived
+end
+scenario h-a-writer-may-not-write-what-an-assignment-makes-it
+op 1 102 type 4 create 2=i:1
+op 1 102 type 4 patch 1 1=s:escalated
+op 1 101 type 4 patch 1 1=s:escalated
+end
+scenario h-the-version-is-checked-before-the-transition
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 patch 1 v=5 1=s:bogus
+op 1 100 type 4 patch 1 v=1 1=s:bogus
+end
+scenario h-a-patch-that-keeps-the-state-needs-no-transition
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 patch 1 2=i:4
+end
+scenario h-a-replacement-that-drops-the-state-is-refused
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 update 1 2=i:4
+end
+scenario h-deleting-a-ticket-needs-no-transition
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 delete 1
+end
+scenario h-events-tenant-created
+op 3 system create-tenant 300 s:acme_co
+end
+scenario h-events-record-created
+op 1 100 create 1=s:oak
+op 1 100 type 4 create 2=i:1
+end
+scenario h-events-transition-fires
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 patch 1 1=s:closed
+end
+scenario h-events-update-fires-no-transition
+op 1 100 create 1=s:oak
+op 1 100 patch 1 1=s:ash
+end
+scenario h-events-delete-rewrites-a-referrer
+op 1 100 create 1=s:oak
+op 1 100 create 1=s:ash 4=r:1
+op 1 100 delete 1
+end
+scenario h-events-lax-change-grandfathers-a-record
+op 1 100 create 1=s:oak
+op 1 100 require 4 lax
+end
+scenario h-events-change-grandfathers-nothing
+op 1 100 create 1=s:oak 2=i:1
+op 1 100 require 2 lax
+op 1 100 composite 2 3
+end
+scenario h-events-membership
+op 1 100 assign 101 3
+op 1 100 revoke 101 3
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 3
+op 1 100 team-add 1 150
+op 1 100 team-remove 1 150
+end
+scenario h-read-records-visible-missing-and-invisible
+op 1 100 create 1=s:oak 2=i:5 3=b:1 10=s:secret
+op 1 101 create 1=s:ash 2=i:9 3=b:0 10=s:hidden
+op 1 102 create 1=s:elm 2=i:7
+op 1 103 create 1=s:fir 3=b:1 10=s:shown
+op 1 100 type 2 create 1=r:1 4=i:3
+read 1 100 records 1 1 2 3 4
+read 1 102 records 1 4 99 1 1
+read 1 101 records 1 5 6 7
+read 1 100 records 2 5 1
+read 1 999 records 1 1 2
+read 1 201 records 1 1 2
+read 1 system records 1 1 2 3 4
+read 1 anon records 1 1 2 3 4
+read 2 200 records 1 1 2
+read 2 100 records 1 1 2
+read 1 100 records 1
+end
+scenario h-read-records-refusals
+op 1 100 create 1=s:oak
+read 1 100 records 9 1
+read 1 100 records 3 1
+read 1 100 records 1 1-200
+read 1 100 records 1 1-201
+read 1 100 records 9 1-201
+read 1 system records 1 1-201
+read 3 100 records 1 1
+read 3 100 records 1 1-201
+op 3 system create-tenant 100 s:acme
+read 3 100 records 1 1
+read 3 100 records 1 1-201
+read 3 system records 2 1
+end
+scenario h-read-redaction-by-record-and-by-principal
+op 1 100 create 1=s:oak 3=b:1 10=s:shown
+op 1 100 create 1=s:ash 3=b:0 10=s:hidden
+op 1 100 create 1=s:elm 10=s:nothing
+op 1 100 create 1=s:fir 3=b:1
+op 1 100 type 2 create 4=i:3
+op 1 101 type 2 create 4=i:1
+op 1 100 type 4 create 2=i:3 3=s:note
+op 1 100 type 4 create 2=i:0 3=s:hid
+op 1 100 type 4 create 3=s:none
+read 1 100 records 1 1 2 3 4
+read 1 103 records 1 1 2 3 4
+read 1 100 records 2 5 6
+read 1 101 records 2 5 6
+read 1 102 records 2 5 6
+read 1 100 records 4 7 8 9
+read 1 101 records 4 7 8 9
+read 1 anon records 2 5 6
+read 1 system records 2 5 6
+end
+scenario h-read-query-orders-by-keys-then-id
+op 1 100 create 1=s:oak 2=i:5 3=b:1
+op 1 101 create 1=s:ash 2=i:9 3=b:0
+op 1 102 create 1=s:elm 2=i:7
+op 1 103 create 1=s:fir 3=b:1
+op 1 100 create 1=s:yew 2=i:5 3=b:0
+op 1 100 create 1=s:oak 2=i:5 3=b:1
+read 1 100 query items_by_rank
+read 1 102 query items_by_rank
+read 1 100 query items_not_elm page=10
+read 1 100 query items_not_elm
+read 1 system query items_by_rank
+read 1 anon query items_by_rank
+read 2 200 query items_by_rank
+end
+scenario h-read-query-pages-and-cursors
+op 1 100 create 1=s:a 2=i:1
+op 1 100 create 1=s:b 2=i:2
+op 1 100 create 1=s:c 2=i:3
+op 1 100 create 1=s:d 2=i:4
+op 1 100 create 1=s:e 2=i:5
+read 1 100 query items_by_rank page=2
+read 1 100 query items_by_rank page=2 cursor=o2
+read 1 100 query items_by_rank page=2 cursor=o4
+read 1 100 query items_by_rank page=2 cursor=o5
+read 1 100 query items_by_rank page=2 cursor=o50
+read 1 100 query items_by_rank page=5
+read 1 100 query items_by_rank page=4 cursor=o1
+read 1 100 query items_by_rank page=2 cursor=a1
+read 1 100 query items_by_rank cursor=a3
+read 1 100 query items_not_elm
+read 1 100 query items_not_elm cursor=o3
+read 1 100 query items_not_elm page=1
+read 1 100 query items_not_elm page=200
+op 1 100 delete 5
+read 1 100 query items_by_rank page=2 cursor=o4
+end
+scenario h-read-query-refusals-in-the-kernels-order
+op 1 100 create 1=s:oak 2=i:5
+read 1 100 query nope
+read 1 100 query nope page=0
+read 1 100 query nope bogus=i:1
+read 1 100 query items_not_elm bogus=i:1 page=0
+read 1 100 query items_not_elm bogus=i:1 page=201
+read 1 100 query items_not_elm page=0 cursor=a1
+read 1 100 query items_not_elm page=201 cursor=a1
+read 1 100 query items_not_elm page=201
+read 1 100 query items_not_elm page=0
+read 1 100 query items_not_elm page=1 cursor=a1
+read 1 100 query items_by_rank tag=s:x
+read 1 100 query items_not_elm tag=s:x
+read 1 100 query items_not_elm tag=s:x page=1
+read 1 100 query items_not_elm tag=l:s:a,s:b
+read 1 100 query parts_ranked tag=n
+read 1 system query nope
+read 1 anon query items_by_rank page=0
+read 3 100 query items_by_rank
+op 3 system create-tenant 100 s:acme
+read 3 100 query items_by_rank
+read 3 system query nope
+end
+scenario h-read-query-filter-and-hidden-order-keys
+op 1 100 create 1=s:elm 2=i:7
+op 1 100 create 1=s:oak 2=i:3
+op 1 100 type 2 create 4=i:9
+op 1 101 type 2 create 4=i:2
+op 1 100 type 2 create 4=i:5
+op 1 100 type 4 create 2=i:2 3=s:b
+op 1 100 type 4 create 2=i:2 3=s:a
+op 1 100 type 4 create 1=s:shut 2=i:1
+op 1 100 type 4 create 2=i:0 3=s:z
+read 1 100 query items_not_elm
+read 1 100 query parts_ranked
+read 1 101 query parts_ranked
+read 1 102 query parts_ranked
+read 1 100 query tickets_open
+read 1 100 query tickets_open page=1 cursor=o1
+read 1 102 query tickets_open
+end
+scenario h-read-follows-writes-and-schema-changes
+op 1 100 create 1=s:oak 2=i:5 3=b:1 10=s:secret
+op 1 100 create 1=s:ash 2=i:9 3=b:0 10=s:hidden
+op 1 100 create 1=s:elm 2=i:7 3=b:1 10=s:more
+read 1 100 records 1 1 2 3
+read 1 100 query items_by_rank
+op 1 100 patch 1 3=b:0
+read 1 100 records 1 1 2 3
+op 1 100 unique 10 strict
+read 1 100 records 1 1 2 3
+read 1 100 query items_by_rank
+op 1 100 require 2 lax
+read 1 100 records 1 1 2 3
+op 1 100 delete 2
+read 1 100 records 1 1 2 3
+read 1 100 query items_by_rank
+op 1 100 patch 3 3=n
+read 1 100 records 1 1 2 3
+op 1 100 type 2 create 4=i:3
+op 1 100 type 2 require 4 lax
+read 1 100 records 2 4
+op 1 100 type 4 create 2=i:3 3=s:n
+op 1 100 type 4 unique 3 lax
+read 1 100 records 4 5
+end
+scenario h-read-another-tenant-and-unknown-principal
+op 2 200 create 1=s:oak 2=i:5
+op 2 201 create 1=s:ash 2=i:6
+read 2 200 records 1 1 2
+read 2 100 records 1 1 2
+read 2 999 records 1 1 2
+read 2 202 query items_by_rank
+read 2 999 query items_by_rank
+read 1 200 query items_by_rank
+read 1 200 records 1 1
+end
+scenario h-search-visible-and-hidden-fields
+op 1 100 create 1=s:oak-tree 2=i:5 3=b:1 7=l:s:red,s:blue 10=s:Hidden
+op 1 100 create 1=s:elm 2=i:9 3=b:0 7=l:s:green 10=s:pine
+op 1 100 create 1=s:oakwood 2=i:7 3=b:1 10=s:shown
+op 1 100 type 4 create 2=i:2 3=s:urgent
+op 1 100 type 4 create 2=i:0 3=s:quiet
+read 1 100 search * oak
+read 1 100 search * pine
+read 1 100 search * shown
+read 1 100 search * hidden
+read 1 100 search * red blue
+read 1 100 search * open
+read 1 100 search * urgent
+read 1 100 search * quiet
+read 1 102 search * oak
+read 1 101 search * pine
+read 1 anon search * oak
+read 1 system search * oak
+read 2 200 search * oak
+read 3 100 search * oak
+end
+scenario h-search-refusals-and-paging
+op 1 100 create 1=s:oak-tree 2=i:5 3=b:1
+op 1 100 create 1=s:oakwood 2=i:7 3=b:1
+op 1 100 type 4 create 2=i:2 3=s:oak-note
+op 1 100 type 4 create 2=i:3 3=s:oak-note-two
+read 1 100 search *
+read 1 100 search * oak page=0
+read 1 100 search * oak page=201
+read 1 100 search * oak page=200
+read 1 100 search 9 oak
+read 1 100 search * a b c d e f g h i
+read 1 100 search * a b c d e f g h
+read 1 100 search * aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+read 1 100 search * ---
+read 1 100 search * oak
+read 1 100 search * oak page=1
+read 1 100 search * oak page=2
+read 1 100 search 4 oak
+read 1 100 search 2 oak
+read 1 100 search 1 oak page=1
+read 3 100 search * oak
+end
+scenario h-aggregate-items-by-rank
+op 1 100 create 1=s:a 2=i:5 3=b:1
+op 1 100 create 1=s:b 2=i:9 3=b:0
+op 1 100 create 1=s:c 3=b:1
+op 1 100 create 1=s:elm 2=i:7 3=b:1
+read 1 100 aggregate items_by_rank count
+read 1 100 aggregate items_by_rank bounded_count
+read 1 100 aggregate items_by_rank sum_rank
+read 1 100 aggregate items_by_rank min_rank
+read 1 100 aggregate items_by_rank max_rank
+read 1 100 aggregate items_by_rank top_rank
+read 1 100 aggregate items_by_rank count_by_flag
+read 1 101 aggregate items_by_rank sum_rank
+read 1 100 aggregate items_by_rank sum_rank filter.3=b:1
+read 1 100 aggregate items_by_rank sum_rank filter.1=s:a
+read 1 100 aggregate items_by_rank nope
+read 1 100 aggregate nope count
+read 1 100 aggregate items_by_rank count tag=s:x
+read 1 100 aggregate items_not_elm count tag=s:x
+read 1 100 aggregate items_not_elm count filter.3=b:1
+read 1 100 aggregate items_not_elm sum_rank tag=s:x
+read 1 100 aggregate items_not_elm count nope=i:1
+read 1 anon aggregate items_by_rank count
+read 1 system aggregate items_by_rank sum_rank
+read 3 100 aggregate items_by_rank count
+end
+scenario h-aggregate-hidden-by-field-rule-and-sum-overflow
+op 1 100 create 1=s:a 2=i:9223372036854775807
+op 1 100 create 1=s:b 2=i:9223372036854775807
+read 1 100 aggregate items_by_rank sum_rank
+read 1 100 aggregate items_by_rank count
+read 1 100 aggregate items_by_rank min_rank
+op 1 100 type 2 create 4=i:3
+op 1 100 type 2 create 4=i:8
+read 1 100 aggregate parts_ranked sum
+read 1 101 aggregate parts_ranked count
+read 1 101 aggregate parts_ranked sum
+read 1 101 aggregate parts_ranked max
+read 1 100 aggregate parts_ranked max
+read 1 100 aggregate tickets_open max_note
+end
+scenario h-aggregate-tickets-hidden-note
+op 1 100 type 4 create 2=i:0 3=s:quiet
+op 1 100 type 4 create 2=i:2 3=s:urgent
+read 1 100 aggregate tickets_open count
+read 1 100 aggregate tickets_open sum_votes
+read 1 100 aggregate tickets_open max_note
+read 1 101 aggregate tickets_open max_note
+read 1 100 aggregate tickets_open max_note filter.2=i:2
+end
+scenario h-schema-define-types-and-fields
+op 1 100 schema strict define-type 5 ; define-field 5 1 str required unique ; define-field 5 2 int
+op 1 100 type 5 create 1=s:a 2=i:1
+op 1 100 type 5 create 1=s:a 2=i:2
+op 1 100 type 5 create 1=s:b
+op 1 100 schema strict define-field 1 13 int
+op 1 100 create 1=s:x 13=i:4
+op 1 100 create 1=s:y 13=s:no
+op 1 100 schema strict define-type 5
+op 1 100 schema strict define-field 5 3 list:ref:1:s ; define-field 5 4 bool default=b:1
+op 1 100 type 5 create 1=s:c 3=l:r:3 4=b:0
+op 1 100 type 5 create 1=s:d 3=l:r:99
+scenario h-schema-expected-version
+op 1 100 schema v=3 strict define-type 5
+op 1 100 schema v=3 strict define-type 6
+op 1 100 schema v=4 strict define-type 6
+op 1 100 schema v=9 lax define-type 7
+op 1 101 schema v=3 strict define-type 7
+op 2 200 schema v=3 lax define-field 1 13 bool
+scenario h-schema-refusals
+op 1 102 schema strict define-type 5
+op 1 system schema strict define-type 5
+op 1 anon schema strict define-type 5
+op 1 999 schema v=1 strict define-type 5
+op 1 100 schema strict
+op 1 100 schema lax
+op 1 100 schema strict define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5
+op 1 100 schema strict define-field 99 1 int
+op 1 100 schema strict define-field 1 13 ref:9:r
+op 1 100 schema strict define-field 1 13 list:int unique
+op 1 100 schema strict define-field 1 13 list:list:int
+op 1 100 schema strict remove-field 1 15
+op 1 100 schema strict remove-field 1 4 ; define-field 1 4 int
+op 1 100 schema strict remove-type 7
+op 1 100 schema strict remove-type 1
+op 3 300 schema strict define-type 5
+op 1 100 schema strict define-type 5 ; remove-field 5 1
+scenario h-schema-required-over-records
+op 1 100 create 1=s:a
+op 1 100 create 1=s:b 2=i:3
+op 1 100 schema strict define-field 1 13 int required
+op 1 100 schema lax define-field 1 13 int required
+op 1 100 patch 1 13=i:7
+op 1 100 schema strict define-field 1 13 int required unique
+op 1 100 schema strict define-field 1 13 str
+op 1 100 schema lax define-field 1 13 str
+op 1 100 schema strict define-field 1 13 str default=s:z
+op 1 100 create 1=s:c
+op 1 100 schema strict remove-field 1 13
+scenario h-schema-remove-field-strips-records
+op 1 100 create 1=s:a
+op 1 100 create 1=s:b 4=r:1 5=r:1 6=i:2
+op 2 200 create 1=s:z
+op 2 200 create 1=s:y 4=r:1
+op 1 100 schema strict remove-field 1 4 ; remove-field 1 6
+op 1 100 schema strict remove-field 1 4
+op 1 100 schema strict remove-field 1 5 ; define-field 1 5 int
+op 1 100 schema strict remove-field 1 5 ; define-field 1 5 ref:1:r
+op 1 100 create 1=s:c 4=r:1
+op 1 100 schema lax remove-field 2 3 ; remove-field 1 0 ; remove-field 1 8
+op 2 200 schema strict remove-field 1 4
+scenario h-schema-remove-type-with-records
+op 1 100 schema strict define-type 5 ; define-type 6 ; define-field 5 1 str ; define-field 6 1 int
+op 1 100 type 5 create 1=s:a
+op 1 100 type 5 create 1=s:b
+op 1 100 type 6 create 1=i:1
+op 1 100 schema strict remove-type 5
+op 1 100 schema strict remove-type 6 ; remove-type 5 delete
+op 1 100 schema lax remove-type 6 delete
+op 1 100 schema strict remove-type 6
+op 1 100 type 5 create 1=s:c
+scenario h-schema-composite-under-change
+op 1 100 schema strict define-field 1 13 int ; define-field 1 14 str
+op 1 100 composite 13 14
+op 1 100 schema strict define-field 1 13 str
+op 1 100 schema strict define-field 1 13 int required
+op 1 100 schema strict remove-field 1 14
+op 1 100 schema strict define-field 1 14 list:str
+op 1 100 schema strict remove-field 1 13 ; remove-field 1 14
+op 1 100 schema strict define-field 1 14 ref:1:r
+scenario h-schema-reference-to-type
+op 1 100 schema strict define-type 5 ; define-field 5 1 str ; define-field 1 13 ref:5:s
+op 1 100 type 5 create 1=s:a
+op 1 100 create 1=s:x 13=r:1
+op 1 100 create 1=s:y 13=r:7
+op 1 100 schema strict remove-type 5 delete
+op 1 100 schema strict remove-field 1 13 ; remove-type 5 delete
+op 1 100 schema strict define-field 1 13 ref:2:r
+op 1 100 schema strict define-field 1 14 ref:1:r
+op 1 100 schema lax define-field 1 13 ref:5:s
+scenario h-require-and-unique-define-absent-fields
+op 1 100 create 1=s:a
+op 1 100 require 13 strict
+op 1 100 unique 14 strict
+op 1 100 require 15 lax
+op 1 100 require 15 strict
+op 1 100 unique 16 lax
+op 1 100 type 2 require 17 lax
+op 1 100 type 2 unique 18 strict
+op 1 100 unique 13 strict
+op 1 101 require 20 lax
+op 1 100 type 9 require 21 lax
+op 1 100 create 1=s:b 13=b:1 15=b:0
+op 1 100 schema strict remove-field 1 13 ; remove-field 1 14
+scenario h-schema-unique-over-duplicates
+op 1 100 schema strict define-field 1 13 str
+op 1 100 create 1=s:a 13=s:dup
+op 1 100 create 1=s:b 13=s:dup
+op 1 100 schema strict define-field 1 13 str unique
+op 1 100 schema lax define-field 1 13 str unique
+op 1 100 create 1=s:c 13=s:dup
+op 1 100 create 1=s:c 13=s:new
+op 1 100 schema strict define-field 1 13 str required
+scenario h-schema-on-a-created-tenant
+op 3 300 schema strict define-type 5
+op 3 system create-tenant 300 s:acme
+op 3 300 schema strict define-type 5 ; define-field 5 1 str
+op 3 300 type 5 create 1=s:a
+op 3 300 schema v=2 strict define-type 6
+op 3 300 schema v=1 strict define-type 6
+op 3 300 schema strict remove-type 5 delete
+scenario h-schema-two-types-events-in-order
+op 1 100 schema strict define-type 5 ; define-type 6 ; define-field 5 1 str ; define-field 6 1 str
+op 1 100 type 6 create 1=s:a
+op 1 100 type 5 create 1=s:b
+op 1 100 type 5 create 1=s:c
+op 1 100 schema strict define-field 5 2 int ; define-field 6 2 int ; define-field 1 13 ref:6:s ; define-field 5 3 str
+op 1 100 type 5 patch 2 3=s:x
+op 1 100 type 6 patch 1 2=i:4
+op 1 100 schema strict remove-field 6 1 ; remove-field 5 3
+scenario h-define-field-checked-in-id-order
+op 1 100 type 2 require 0 lax
+op 1 100 type 2 create 1=s*65537:x
+op 1 100 type 2 create 0=s:a 1=s*65537:x
+op 1 100 schema strict define-field 2 3 int required ; define-field 2 0 str required
+op 1 100 type 2 create 1=r:1 4=i:2 3=s:x
+op 1 100 type 2 create 0=s:a 3=i:1
+scenario h-setting-owner-writes-tenant-editor-refused
+op 1 100 setting density tenant i:5
+op 1 101 setting density tenant i:6
+op 1 101 setting density tenant v=1 i:6
+read 1 101 setting density
+end
+scenario h-setting-person-override-wins-over-tenant
+op 1 100 setting density tenant i:5
+op 1 100 setting density person i:7
+read 1 100 setting density
+read 1 101 setting density
+end
+scenario h-setting-smaller-team-id-wins-person-beats-teams
+op 1 100 team 1 s:ops
+op 1 100 team 2 s:dev
+op 1 100 team-add 1 101
+op 1 100 team-add 2 101
+op 1 100 setting label team team=2 s:second
+op 1 100 setting label team team=1 s:first
+read 1 101 setting label
+op 1 101 setting label person s:mine
+read 1 101 setting label
+end
+scenario h-setting-team-override-reaches-only-its-members
+op 1 100 team 1 s:ops
+op 1 100 team 2 s:dev
+op 1 100 team-add 2 102
+op 1 100 setting mode team team=2 s:bold
+read 1 102 setting mode
+read 1 101 setting mode
+end
+scenario h-setting-banner-is-locked-at-the-tenant
+op 1 100 setting banner tenant s:maint
+op 1 100 setting banner person s:mine
+op 1 101 setting banner person s:mine
+read 1 101 setting banner
+end
+scenario h-setting-density-range-is-inclusive
+op 1 100 setting density tenant i:9
+op 1 100 setting density tenant v=1 i:10
+op 1 100 setting density tenant v=1 i:-1
+read 1 101 setting density
+end
+scenario h-setting-mode-closed-set
+op 1 100 setting mode tenant s:bold
+op 1 100 setting mode tenant v=1 s:italic
+op 1 100 setting mode tenant v=1 i:1
+read 1 101 setting mode
+end
+scenario h-setting-member-names-closed-set
+op 1 100 setting member_names tenant s:nobody
+op 1 100 setting member_names tenant v=1 s:anyone
+op 1 100 setting member_names tenant v=1 s:everyone
+read 1 102 setting member_names
+end
+scenario h-setting-remove-then-version-conflict-then-rise
+op 1 100 setting notify tenant b:1
+op 1 100 setting notify tenant v=1 remove
+op 1 100 setting notify tenant v=1 b:0
+op 1 100 setting notify tenant v=0 b:0
+read 1 101 setting notify
+end
+scenario h-setting-removal-of-an-absent-override
+op 1 100 team 1 s:ops
+op 1 100 setting label team team=1 remove
+op 1 100 setting density person remove
+op 1 100 setting notify person v=0 remove
+op 1 100 setting density tenant remove
+read 1 100 setting density
+end
+scenario h-setting-undefined-name-is-unknown-object
+op 1 100 setting nope tenant b:1
+op 1 100 setting nope person s:x
+read 1 100 setting nope
+end
+scenario h-setting-tenant-three-has-only-member-names
+read 3 300 setting member_names
+op 3 system create-tenant 300 s:acme
+read 3 300 setting member_names
+op 3 300 setting member_names tenant s:everyone
+op 3 300 setting notify tenant b:1
+read 3 300 setting member_names
+read 3 300 setting notify
+end
+scenario h-setting-system-and-anonymous-writes-are-unauthorized
+op 1 system setting density tenant i:4
+op 1 anon setting density tenant i:4
+op 1 system setting density person i:4
+op 1 anon setting notify tenant b:1
+read 1 system setting density
+end
+scenario h-setting-null-and-wrong-type-are-invalid
+op 1 100 setting density tenant n
+op 1 100 setting density tenant s:3
+op 1 100 setting notify tenant i:1
+op 1 100 setting notify tenant v=0 b:1
+end
+scenario h-setting-team-refusals
+op 1 100 team 1 s:ops
+op 1 100 setting label team team=9 s:x
+op 1 100 setting label person team=1 s:x
+op 1 100 setting density tenant team=1 i:2
+op 1 100 setting label team s:x
+end
+scenario h-setting-editor-refused-at-team-level
+op 1 100 team 1 s:ops
+op 1 100 team-add 1 101
+op 1 101 setting label team team=1 s:x
+op 1 100 setting label team team=1 s:x
+read 1 101 setting label
+end
+scenario h-ledger-post-accepted-and-read
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+read 1 100 ledger 1 100
+end
+scenario h-ledger-replay-changes-nothing
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+end
+scenario h-ledger-version-conflict
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+op 1 100 ledger post @1767225600000 1 100 300 key=k1
+end
+scenario h-ledger-unauthorized-postings
+op 1 101 ledger post @1767225600000 1 101 5 key=k1
+op 1 system ledger post @1767225600000 1 100 5 key=k2
+op 1 anon ledger post @1767225600000 1 100 5 key=k3
+op 1 999 ledger post @1767225600000 1 999 5 key=k4
+end
+scenario h-ledger-unknown-unit-and-owner
+op 1 100 ledger post @1767225600000 9 100 5 key=k1
+op 1 100 ledger post @1767225600000 1 999 5 key=k2
+op 1 100 ledger post @1767225600000 1 pool2 5 key=k3
+op 1 100 ledger post @1767225600000 1 pool1 5 key=k4
+end
+scenario h-ledger-invalid-amount-and-key
+op 1 100 ledger post @1767225600000 1 100 0 key=k1
+op 1 100 ledger post @1767225600000 1 100 5 key=
+op 1 100 ledger post @1767225600000 1 100 5 key=expiry:1
+end
+scenario h-ledger-self-adjustment-refused
+op 1 100 ledger post @1767225600000 1 100 5 key=k1 reason=adjust
+op 1 100 ledger post @1767225600000 1 100 5 key=k2 reason=reverse
+op 1 100 ledger post @1767225600000 1 101 5 key=k3 reason=adjust
+end
+scenario h-ledger-correction-names-an-entry
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+op 1 100 ledger post @1767225600000 1 100 -200 key=k2 corrects=1
+op 1 100 ledger post @1767225600000 1 100 -200 key=k3 corrects=7
+op 1 100 ledger post @1767225600000 1 100 -200 key=k4 corrects=0
+end
+scenario h-ledger-multi-posting-one-refusal-refuses-all
+op 1 100 ledger post @1767225600000 1 100 10 key=a1 ; 2 100 5 key=a2 ; 1 100 0 key=a3
+op 1 100 ledger post @1767225600000 1 100 10 key=b1 ; 2 100 5 key=b2
+end
+scenario h-ledger-cap-and-floor
+op 1 100 ledger post @1767225600000 1 100 900 key=c1
+op 1 100 ledger post @1767225600000 1 100 200 key=c2
+op 1 100 ledger post @1767225600000 1 100 -300 key=c3
+op 2 200 ledger post @1767225600000 2 200 -5 key=f1
+end
+scenario h-ledger-expiry-debits-due-credit
+op 1 100 ledger post @1767225600000 3 100 100 key=e1
+op 1 100 ledger post @1767225600000 3 100 50 key=e2
+op 1 system ledger expire @1772323200000 3 1767225600000
+read 1 100 ledger 3 100
+end
+scenario h-ledger-expiry-refused
+op 1 100 ledger post @1767225600000 3 100 100 key=e1
+op 1 101 ledger expire @1772323200000 3 1767225600000
+op 1 100 ledger expire @1772323200000 1 1767225600000
+op 1 100 ledger expire @1769904000000 3 1772323200000
+op 1 system ledger expire @1772323200000 9 1767225600000
+end
+scenario h-ledger-expiry-with-nothing-due
+op 1 system ledger expire @1772323200000 3 1767225600000
+op 1 100 ledger post @1772323200000 3 100 40 key=e1
+op 1 system ledger expire @1775001600000 3 1767225600000
+end
+scenario h-ledger-reads-by-reach
+op 1 100 ledger post @1767225600000 1 101 25 key=r1
+read 1 101 ledger 1 101
+read 1 101 ledger 1 101 own
+read 1 101 ledger 1 100
+read 1 102 ledger 1 101
+read 1 100 ledger 1 101
+read 1 100 ledger 4 100
+read 1 100 ledger 2 100 own
+read 1 anon ledger 1 100
+end
+scenario h-ledger-reads-without-an-account
+read 1 102 ledger 2 102
+read 1 102 ledger 2 102 own
+read 1 100 ledger 2 102
+read 1 102 ledger 1 102 scope=s1
+end
+scenario h-ledger-tx-accepted-and-read
+op 1 100 ledger post @1767225600000 2 100 500 key=p1
+op 1 100 ledger tx @1767225600000 op=pay key=t1 reason=pay 2 100 -200 ; 2 101 200
+read 1 100 ledger 2 100
+read 1 100 ledger 2 101
+end
+scenario h-ledger-tx-retry-replays-and-another-request-conflicts
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=t1 reason=pay 2 100 -50 ; 2 101 50
+op 1 100 ledger tx @1767225600000 op=pay key=t1 reason=pay 2 100 -50 ; 2 101 50
+op 1 100 ledger tx @1767225600000 op=pay key=t1 reason=pay 2 100 -60 ; 2 101 60
+op 1 100 ledger tx @1767225600000 op=pay key=t1 reason=refund 2 100 -50 ; 2 101 50
+read 1 100 ledger 2 101
+end
+scenario h-ledger-tx-needs-two-legs-that-net-to-zero-in-each-unit
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=u1 2 100 5
+op 1 100 ledger tx @1767225600000 op=pay key=u2 2 100 -5 ; 2 101 6
+op 1 100 ledger tx @1767225600000 op=pay key=u3 2 100 -5 ; 1 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=u4 2 100 -5 ; 2 101 3 ; 2 102 2
+op 1 100 ledger tx @1767225600000 op=pay key=u5 2 100 -5 ; 2 101 3 ; 2 102 3
+end
+scenario h-ledger-tx-header-is-complete
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op= key=h1 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key= 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2 100 -5 ; 2 101 5
+end
+scenario h-ledger-tx-unauthorized
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 101 ledger tx @1767225600000 op=pay key=a1 2 101 -5 ; 2 102 5
+op 1 system ledger tx @1767225600000 op=pay key=a2 2 100 -5 ; 2 101 5
+op 1 anon ledger tx @1767225600000 op=pay key=a3 2 100 -5 ; 2 101 5
+op 1 999 ledger tx @1767225600000 op=pay key=a4 2 100 -5 ; 2 101 5
+end
+scenario h-ledger-tx-at-most-sixty-four-legs
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=m1 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1
+op 1 100 ledger tx @1767225600000 op=pay key=m2 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1
+read 1 100 ledger 2 101
+end
+scenario h-ledger-tx-one-refused-leg-refuses-all
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=r1 2 100 -5 ; 2 999 5
+op 1 100 ledger tx @1767225600000 op=pay key=r2 2 100 -5 ; 9 101 5 ; 9 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=r3 1 100 1500 ; 1 101 -1500
+op 1 100 ledger tx @1767225600000 op=pay key=r4 2 100 -5 ; 2 101 5
+read 1 100 ledger 2 100
+end
+scenario h-ledger-tx-self-adjustment-refused
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=s1 reason=adjust 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=s2 reason=reverse 2 101 -5 ; 2 102 5
+op 1 100 ledger tx @1767225600000 op=pay key=s3 reason=reverse 2 101 -5 ; 2 100 5
+end
+scenario h-ledger-tx-transfer-rules
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=x1 reason=transfer 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=x2 reason=transfer 2 101 3 ; 2 100 -3
+op 1 100 ledger tx @1767225600000 op=pay key=x3 reason=transfer 2 100 -5 ; 2 100 5
+op 1 100 ledger tx @1767225600000 op=pay key=x4 reason=transfer 2 100 -5 ; 2 pool1 5
+op 1 100 ledger tx @1767225600000 op=pay key=x5 reason=transfer 2 100 -5 ; 2 101 2 ; 2 102 3
+op 1 100 ledger tx @1767225600000 op=pay key=x6 reason=transfer 2 100 -5 ; 2 999 5
+op 1 100 ledger tx @1767225600000 op=pay key=x7 reason=transfer 2 100 5 ; 2 101 -5
+op 1 100 ledger tx @1767225600000 op=pay key=x8 reason=transfer 2 100 -5 scope=s1 ; 2 100 5
+end
+scenario h-ledger-tx-and-postings-do-not-share-an-entry
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 100 -5 key=q:0
+op 1 100 ledger tx @1767225600000 op=pay key=q 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=v 2 100 -7 ; 2 101 7
+op 1 100 ledger post @1767225600000 2 100 -7 key=v:0
+end
+scenario h-invoke-accepted-create
+op 1 101 invoke @5000 note key=k1 text=s:hello
+end
+scenario h-invoke-not-signed-in-refused
+op 1 anon invoke @5000 note key=k1 text=s:hello
+op 1 system invoke @5001 note key=k2 text=s:hello
+end
+scenario h-invoke-roles-refused
+op 1 100 invoke @5000 retag key=k1 item=r:1 text=s:new
+op 1 100 invoke @5001 drop key=k2 item=r:1
+end
+scenario h-invoke-unknown-operation-refused
+op 1 101 invoke @5000 nope key=k1
+end
+scenario h-invoke-key-refused
+op 1 101 invoke @5000 note text=s:hello
+op 1 101 invoke @5001 note key=bad text=s:hello
+end
+scenario h-invoke-inputs-refused
+op 1 101 invoke @5000 note key=k1 text=s:hello extra=i:1
+op 1 101 invoke @5001 note key=k2
+op 1 101 invoke @5002 note key=k3 text=i:4
+op 1 101 invoke @5003 note key=k4 text=s*65537:x
+end
+scenario h-invoke-subject-refused
+op 1 101 invoke @5000 retag key=k1 item=r:99 text=s:new
+op 1 101 invoke @5001 drop key=k2 item=s:1
+end
+scenario h-invoke-condition-refused
+op 1 101 invoke @5000 note_count key=k1 text=s:a count=i:-1
+op 1 101 invoke @5001 note_count key=k2 text=s:a
+op 1 101 invoke @5002 note_count key=k3 text=s:a count=i:0
+end
+scenario h-invoke-posting-atomic
+op 1 100 invoke @5000 note_grant key=k1 text=s:y amt=i:5000
+op 1 100 invoke @5001 note_grant key=k2 text=s:y amt=i:5
+op 1 100 invoke @5002 grant key=k3 amt=i:50
+end
+scenario h-invoke-posting-replay
+op 1 101 invoke @5000 grant key=k1 amt=i:50
+op 1 101 invoke @5001 grant key=k1 amt=i:50
+op 1 101 invoke @5002 grant key=k1 amt=i:7
+end
+scenario h-invoke-delete-still-referenced
+op 1 101 create 1=s:target
+op 1 101 create 1=s:holder 5=r:1
+op 1 101 invoke @5000 drop key=k1 item=r:1
+end
+scenario h-trigger-item-created
+op 1 102 create 1=s:hello
+end
+scenario h-trigger-hop-limit
+op 1 102 hop=9 create 1=s:hello
+op 1 102 hop=8 create 1=s:hello
+end
+scenario h-trigger-part-created-with-hop
+op 1 101 hop=2 type 2 create 4=i:4
+op 1 101 type 2 create 4=i:4
+end
+scenario h-trigger-item-updated
+op 1 102 create 1=s:hello
+op 1 102 update 1 1=s:bye
+end
+scenario h-trigger-item-deleted
+op 1 102 create 1=s:hello
+op 1 100 delete 1
+end
+scenario h-trigger-ledger-posted
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+end
+scenario h-trigger-draft-inactive
+op 1 101 type 4 create 3=s:n
+end
+scenario h-trigger-paused-part-updated
+op 1 101 type 2 create 4=i:4
+op 1 101 type 2 update 1 4=i:5
+end
+scenario h-trigger-suspended-after-revoking-owner
+op 1 100 assign 101 0
+op 1 100 revoke 100 0
+op 1 102 create 1=s:after
+op 1 101 type 2 create 4=i:5
+end
+scenario h-segment-entry-on-create
+op 1 100 type 20 create 1=s:p200 2=i:12
+op 1 100 type 20 create 1=s:p201 2=i:9
+end
+scenario h-segment-exit-on-update-and-entry-on-delete-of-a-member
+op 1 100 type 20 create 1=s:p200 2=i:12
+op 1 100 type 20 update 1 1=s:p200 2=i:3
+op 1 100 type 20 update 1 1=s:p200 2=i:11
+op 1 100 type 20 delete 1
+end
+scenario h-segment-hop-limit-declines-the-trigger
+op 1 100 hop=9 type 20 create 1=s:p202 2=i:20
+end
+scenario h-segment-define-refusals
+op 1 102 segment define 2 low_scorers 20 1 - lt f2 i:5
+op 1 101 segment define 2 low_scorers 20 1 - lt f2 i:5
+op 1 100 segment define 2 _ 20 1 - lt f2 i:5
+op 1 100 segment define 2 high_scorers 20 1 - lt f2 i:5
+op 1 100 segment define 2 low_scorers 20 2 - lt f2 i:5
+op 1 100 segment define 2 low_scorers 20 1 - lt f9 i:5
+op 1 100 segment define 2 low_scorers 20 1 - lt o2 i:5
+op 1 100 segment define 2 low_scorers 20 1 - eq p:x i:5
+op 1 100 segment define 2 low_scorers 20 1 - f2
+op 1 100 segment define 2 low_scorers 20 1 60 lt f2 i:5
+op 1 100 segment define 1 high_scorers 20 2 - ge f2 i:10
+op 1 100 segment define 2 low_scorers 20 1 - lt f2 i:5
+op 1 100 segment define 2 low_scorers 20 1 - lt f2 i:5
+end
+scenario h-segment-rebuild-after-a-predicate-change
+op 1 100 type 20 create 1=s:p200 2=i:7
+op 1 100 type 20 create 1=s:p201 2=i:4
+op 1 100 segment define 1 high_scorers 20 1 - ge f2 i:5
+op 1 100 segment rebuild 1
+op 1 100 segment rebuild 1
+end
+scenario h-segment-remove-drops-memberships-without-events
+op 1 100 type 20 create 1=s:p200 2=i:12
+op 1 100 segment remove 1
+op 1 100 type 20 update 1 1=s:p200 2=i:1
+op 1 100 segment remove 1
+end
+scenario h-segment-member-change-re-evaluates-a-principal-predicate
+op 1 100 type 20 create 1=s:p101 2=i:9
+op 1 100 segment define 3 seg_3 20 1 - eq f1 prin
+op 1 100 assign 101 0
 end

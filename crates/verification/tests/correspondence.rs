@@ -8,9 +8,10 @@
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
+use strata_verification::drt;
 use strata_verification::lean::{
-    compare_outputs, hand_written, kernel_output, model_output, parse_audit, scenarios, verify,
-    FIXTURE_COUNT, FIXTURE_SEED,
+    compare_outputs, hand_written, kernel_output, model_output, outcome_lines, parse_audit,
+    scenarios, verify, Generator, FIXTURE_COUNT, FIXTURE_SEED,
 };
 use strata_verification::lean_diff;
 use strata_verification::obligations;
@@ -67,7 +68,9 @@ fn committed_fixtures_match_the_generator_and_the_kernel() {
         &committed_scenarios[generated.len()..],
         "everything after the generated scenarios must be hand-written scenarios named h-..."
     );
-    let expected = kernel_output(&committed_scenarios);
+    // expected.txt holds the outcome lines only. The revision, event and effect lines of an accepted step
+    // are compared model-to-kernel by `the_lean_model_agrees_with_the_kernel`.
+    let expected = outcome_lines(&kernel_output(&committed_scenarios));
     let committed = read("expected.txt");
     let difference = compare_outputs(&committed_scenarios, &committed, &expected).first_difference;
     assert_eq!(
@@ -314,7 +317,12 @@ fn random_sequences_run_the_same_on_the_lean_model_and_the_kernel() {
     let seed = env_number("STRATA_LEAN_DIFF_SEED", DEFAULT_DIFF_SEED);
     // The batch the run compares must exercise every intent kind the model executes.
     let batch: String = (0..cases)
-        .map(|i| lean_diff::render("r", &[lean_diff::generate(lean_diff::case_seed(seed, i))]))
+        .map(|i| {
+            lean_diff::render(
+                "r",
+                &[lean_diff::generate_reads(lean_diff::case_seed(seed, i))],
+            )
+        })
         .collect();
     for kind in lean_diff::GENERATED_INTENTS {
         assert!(
@@ -343,7 +351,12 @@ fn the_generator_produces_every_intent_the_lean_model_executes() {
     );
     // The generator really does produce each kind it claims.
     let produced: String = (0..200)
-        .map(|i| lean_diff::render("g", &[lean_diff::generate(lean_diff::case_seed(1, i))]))
+        .map(|i| {
+            lean_diff::render(
+                "g",
+                &[lean_diff::generate_reads(lean_diff::case_seed(1, i))],
+            )
+        })
         .collect();
     for kind in lean_diff::GENERATED_INTENTS {
         assert!(
@@ -373,6 +386,26 @@ fn words(code: &str) -> impl Iterator<Item = (&str, &str)> {
         }
     }
     out.into_iter()
+}
+
+/// The differential harness (`drt::run`, the example `drt`) runs end to end through the model: a
+/// small count, in batches, with one Lean process per batch. The minimiser's logic is tested
+/// without Lean, in `tests/minimise.rs`.
+#[test]
+fn the_differential_harness_runs_through_the_model() {
+    let _lake = require_lake();
+    let out = std::env::temp_dir().join(format!("strata-drt-smoke-{}", std::process::id()));
+    let totals = drt::run(&lean_dir(), &out, DEFAULT_DIFF_SEED, 20, 8, Generator::Full)
+        .expect("the harness runs");
+    let _ = std::fs::remove_dir_all(&out);
+    assert_eq!(totals.scenarios, 20);
+    assert_eq!(totals.batches, 3);
+    assert!(totals.operations >= 20 * 10);
+    assert_eq!(
+        totals.disagreements, 0,
+        "the model and the kernel differ: {:?}",
+        totals.minimised
+    );
 }
 
 #[test]

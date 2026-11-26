@@ -1,0 +1,26 @@
+[package]
+autotests = false
+name = "strata-lean-kernel-ffi"
+description = "Calls compiled Lean from Rust through a plain C ABI over canonical bytes (spike S1 of the formal verification programme, docs/formal-verification.md)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[dependencies]
+
+[dev-dependencies]
+tokio.workspace = true
+
+[[test]]
+name = "lean_kernel_ffi_it"
+path = "tests/lean_kernel_ffi_it.rs"
+
+# This is the one crate that may use `unsafe`: it is the boundary to the compiled Lean library.
+# The workspace forbids unsafe code everywhere else; here every unsafe block is a call across that
+# boundary and carries a SAFETY comment.
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"

@@ -1,22 +1,26 @@
 /-
-Slice 1 of the reference model: references between records.
+Reference integrity over several object types (slices 1, 2 and 4 of the reference model).
 
-What the slice claims, about the model in `Strata/Model.lean`:
+What the file claims, about the model in `Strata/Model.lean`:
 
-- A write is accepted only if every record it names exists (`problem_none`), so referential
-  integrity (`Tenant.RefsOk`) holds after every accepted step from a state where it held,
-  strict or not (`stepTenant_preserves_refs`, `step_preserves_refs`).
-- A delete of a record that another record names through a restricting or required field is
+- A write is accepted only if every record it names exists in the type its field names
+  (`problem_none`), so referential integrity (`Tenant.RefsOk`) holds after every accepted step from
+  a state where it held, strict or not, across types (`stepTenant_preserves_refs`,
+  `step_preserves_refs`).
+- A delete of a record that a record of any type names through a restricting or required field is
   refused with `stillReferenced` (`delete_refused_while_referenced`).
-- An accepted delete leaves no record naming the deleted one, and the deleted one gone
+- An accepted delete leaves no record of any type naming the deleted one, and the deleted one gone
   (`delete_leaves_no_reference`).
 
-The first half of the file is lemmas about field lists and record lists.
+The first part is lemmas about field lists and record lists; the second about values and the
+references they hold; the third about the object types of a tenant.
 
 No `sorry`, no added axioms. `Audit.lean` prints the axioms each theorem depends on.
 -/
 
 import Strata.Model
+import Strata.StepParts
+import Strata.SchemaChangeInv
 
 namespace Strata
 
@@ -106,19 +110,41 @@ theorem mem_valuesOf {fs : Fields} {f : FieldId} {v : Val} (h : (f, v) ∈ fs) :
 theorem null_untyped (ty : Ty) : Val.null.hasType ty = false := by
   cases ty <;> rfl
 
+
+theorem has_replace {rs : Records} {id x : RecordId} {r : Record} :
+    Records.has (rs.map (fun q => if q.1 == id then (q.1, r) else q)) x = rs.has x := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [has_iff, List.mem_map]
+  constructor
+  · rintro ⟨r', q, hq, heq⟩
+    by_cases hid : (q.1 == id) = true
+    · simp only [hid, ite_true, Prod.mk.injEq] at heq
+      obtain ⟨hx, -⟩ := heq
+      exact ⟨q.2, by rw [← hx]; simpa using hq⟩
+    · simp only [hid] at heq
+      exact ⟨r', by rw [← heq]; exact hq⟩
+  · rintro ⟨r', hr⟩
+    by_cases hid : (x == id) = true
+    · exact ⟨r, (x, r'), hr, by simp [hid]⟩
+    · exact ⟨r', (x, r'), hr, by simp [hid]⟩
+
+
 /-! ## Lemmas: what a write that is not refused satisfies -/
 
-theorem valueProblem_none {L : Limits} {rs : Records} {d : FieldDef} {v : Val}
-    (h : valueProblem L rs d v = none) :
-    v.overLimit L = false ∧ v.hasType d.ty = true ∧ v.resolves rs = true := by
+theorem valueProblem_none {L : Limits} {uniq : Bool} {env : Env} {rs : Records} {self : RecordId}
+    {f : FieldId} {d : FieldDef} {v : Val} (h : valueProblem L uniq env rs self f d v = none) :
+    v.overLimit L = false ∧ v.hasType d.ty = true ∧ v.resolves env d.ty = true ∧
+      (uniq = true → d.unique = true → clashAt rs self f v = false) := by
   unfold valueProblem at h
   cases h0 : v.overLimit L <;> cases h1 : (d.unique && decide (L.maxUnique < v.size)) <;>
-    cases h2 : v.hasType d.ty <;> cases h3 : v.resolves rs <;> simp_all
+    cases h2 : v.hasType d.ty <;> cases h3 : (uniq && d.unique && clashAt rs self f v) <;>
+    cases h4 : v.resolves env d.ty <;> simp_all
 
-theorem fieldProblem_none {L : Limits} {rs : Records} {fs : Fields} {fd : FieldId × FieldDef}
-    (h : fieldProblem L rs fs fd = none) :
+theorem fieldProblem_none {L : Limits} {uniq : Bool} {env : Env} {rs : Records} {self : RecordId}
+    {fs : Fields} {fd : FieldId × FieldDef}
+    (h : fieldProblem L uniq env rs self fs fd = none) :
     (fd.2.required = true → (fs.valuesOf fd.1).isEmpty = false) ∧
-      ∀ v ∈ fs.valuesOf fd.1, valueProblem L rs fd.2 v = none := by
+      ∀ v ∈ fs.valuesOf fd.1, valueProblem L uniq env rs self fd.1 fd.2 v = none := by
   unfold fieldProblem at h
   split at h
   · cases h
@@ -129,31 +155,39 @@ theorem fieldProblem_none {L : Limits} {rs : Records} {fs : Fields} {fd : FieldI
 /-- What a record with nothing to refuse satisfies, part by part: within the record bound, every
     field known with a value that passes its checks, and every field of the schema passing its
     checks. -/
-theorem problem_none_parts {L : Limits} {schema : Schema} {rs : Records} {r : Record}
-    (h : problem L schema rs r = none) :
+theorem problem_none_parts {L : Limits} {schema : Schema} {us : List (List FieldId)}
+    {uniq : Bool} {env : Env} {rs : Records} {self : RecordId} {r : Record}
+    (h : problem L schema us uniq env rs self r = none) :
     r.size ≤ L.maxRecord ∧
-      (∀ fv ∈ r.fields, ∃ d, schema.lookup fv.1 = some d ∧ valueProblem L rs d fv.2 = none) ∧
-      ∀ fd ∈ schema, fieldProblem L rs r.fields fd = none := by
+      (∀ fv ∈ r.fields, ∃ d, schema.lookup fv.1 = some d ∧
+        valueProblem L uniq env rs self fv.1 d fv.2 = none) ∧
+      ∀ fd ∈ schema, fieldProblem L uniq env rs self r.fields fd = none := by
   unfold problem at h
   split at h
   · cases h
   · rename_i hsize
     split at h
     · rename_i hknown
-      have hall := List.findSome?_eq_none_iff.mp h
-      refine ⟨by simpa using hsize, fun fv hfv => ?_, hall⟩
-      have hk := List.all_eq_true.mp hknown fv hfv
-      cases hl : schema.lookup fv.1 with
-      | none => rw [hl] at hk; cases hk
-      | some d =>
-        refine ⟨d, rfl, ?_⟩
-        have hmem := lookup_mem hl
-        exact (fieldProblem_none (hall _ hmem)).2 fv.2 (mem_valuesOf (by simpa using hfv))
+      split at h
+      · cases h
+      · rename_i hall
+        have hall' := List.findSome?_eq_none_iff.mp hall
+        refine ⟨by simpa using hsize, fun fv hfv => ?_, hall'⟩
+        have hk := List.all_eq_true.mp hknown fv hfv
+        cases hl : schema.lookup fv.1 with
+        | none => rw [hl] at hk; cases hk
+        | some d =>
+          refine ⟨d, rfl, ?_⟩
+          have hmem := lookup_mem hl
+          exact (fieldProblem_none (hall' _ hmem)).2 fv.2 (mem_valuesOf (by simpa using hfv))
     · cases h
 
-/-- A record with nothing to refuse conforms to the schema and holds no dangling reference. -/
-theorem problem_none {L : Limits} {schema : Schema} {rs : Records} {r : Record}
-    (h : problem L schema rs r = none) : conforms schema r = true ∧ refsOk rs r = true := by
+/-- A record with nothing to refuse conforms to the schema, and every reference it holds names an
+    existing record of the type its field names. -/
+theorem problem_none {L : Limits} {schema : Schema} {us : List (List FieldId)} {uniq : Bool}
+    {env : Env} {rs : Records} {self : RecordId} {r : Record}
+    (h : problem L schema us uniq env rs self r = none) :
+    conforms schema r = true ∧ refsOk env schema r = true := by
   obtain ⟨-, hval, hall⟩ := problem_none_parts h
   refine ⟨?_, ?_⟩
   · unfold conforms
@@ -176,28 +210,55 @@ theorem problem_none {L : Limits} {schema : Schema} {rs : Records} {r : Record}
   · unfold refsOk
     rw [List.all_eq_true]
     intro fv hfv
-    obtain ⟨d, _, hp⟩ := hval fv hfv
-    exact (valueProblem_none hp).2.2
+    obtain ⟨d, hl, hp⟩ := hval fv hfv
+    simp only [hl]
+    exact (valueProblem_none hp).2.2.1
 
-/-! ## Lemmas: values with references taken out -/
+/-! ## Lemmas: references across the tables of a tenant -/
 
-/-- A value still resolves when every record that existed still exists. -/
-theorem resolves_mono {rs rs' : Records} (hinc : ∀ x, rs.has x = true → rs'.has x = true)
-    {v : Val} (h : v.resolves rs = true) : v.resolves rs' = true := by
+/-- A reference still resolves when every record that existed, in every type, still exists. -/
+theorem resolves_mono {env env' : Env} (hinc : ∀ t x, Records.has (env t) x = true → Records.has (env' t) x = true)
+    {ty : Ty} {v : Val} (h : v.resolves env ty = true) : v.resolves env' ty = true := by
   cases v with
-  | ref x => simp only [Val.resolves] at h ⊢; exact hinc x h
+  | ref x =>
+    simp only [Val.resolves, refHas] at h ⊢
+    cases hT : ty.target? with
+    | none => rfl
+    | some t => simp only [hT] at h ⊢; exact hinc t x h
   | list vs =>
     simp only [Val.resolves, List.all_eq_true] at h ⊢
     intro e he
-    have := h e he
-    cases e <;> simp_all [Elem.resolves]
+    have hres := h e he
+    cases e with
+    | ref x =>
+      simp only [Elem.resolves, refHas] at hres ⊢
+      cases hT : ty.target? with
+      | none => rfl
+      | some t => simp only [hT] at hres ⊢; exact hinc t x hres
+    | _ => rfl
   | _ => rfl
 
-/-- Taking the references to `id` out of a value that resolves leaves one that resolves among
-    records that keep every record but `id`. -/
-theorem resolves_dropRef {rs rs' : Records} {id : RecordId}
-    (hinc : ∀ x, rs.has x = true → x ≠ id → rs'.has x = true) {v v' : Val}
-    (h : v.resolves rs = true) (hd : v.dropRef id = some v') : v'.resolves rs' = true := by
+/-- Taking the references to some record out of a value leaves a value that resolves wherever the
+    original did. -/
+theorem resolves_dropRef_sub {env : Env} {ty : Ty} {id : RecordId} {v v' : Val}
+    (h : v.resolves env ty = true) (hd : v.dropRef id = some v') : v'.resolves env ty = true := by
+  cases v with
+  | ref x =>
+    simp only [Val.dropRef] at hd
+    split at hd
+    · cases hd
+    · cases hd; exact h
+  | list vs =>
+    simp only [Val.dropRef, Option.some.injEq] at hd
+    subst hd
+    simp only [Val.resolves, List.all_eq_true, List.mem_filter] at h ⊢
+    intro e he
+    exact h e he.1
+  | _ => simp only [Val.dropRef, Option.some.injEq] at hd; subst hd; exact h
+
+/-- Dropping the references to `id` leaves no reference to `id`. -/
+theorem dropRef_refersTo {id : RecordId} {v v' : Val} (hd : v.dropRef id = some v') :
+    v'.refersTo id = false := by
   cases v with
   | ref x =>
     simp only [Val.dropRef] at hd
@@ -205,22 +266,80 @@ theorem resolves_dropRef {rs rs' : Records} {id : RecordId}
     · cases hd
     · rename_i hx
       cases hd
-      simp only [Val.resolves] at h ⊢
-      exact hinc x h hx
+      simpa [Val.refersTo] using hx
   | list vs =>
     simp only [Val.dropRef, Option.some.injEq] at hd
     subst hd
-    simp only [Val.resolves, List.all_eq_true, List.mem_filter] at h ⊢
-    intro e ⟨he, hne⟩
-    have := h e he
-    cases e with
-    | ref x =>
-      simp only [Elem.resolves] at this ⊢
-      exact hinc x this (by rintro rfl; simp at hne)
-    | _ => rfl
+    simp only [Val.refersTo, List.contains_eq_any_beq, List.any_eq_false, List.mem_filter]
+    intro e he
+    simp only [beq_iff_eq, bne_iff_ne, ne_eq] at he ⊢
+    obtain ⟨-, hne⟩ := he
+    intro hbad
+    exact hne hbad.symm
   | _ => simp only [Val.dropRef, Option.some.injEq] at hd; subst hd; rfl
 
-/-- A value that does not name `id` is left as it is. -/
+/-- A reference that resolves, and does not name `id` through a field of type `T`, still resolves
+    once the records of type `T` lose record `id`: the tables gained nothing and lost only
+    `(T, id)`. -/
+theorem resolves_exc {env env' : Env} {T : TypeId} {id : RecordId}
+    (hinc : ∀ t x, (t ≠ T ∨ x ≠ id) → Records.has (env t) x = true → Records.has (env' t) x = true)
+    {ty : Ty} {v : Val} (h : v.resolves env ty = true)
+    (hn : ty.target? ≠ some T ∨ v.refersTo id = false) : v.resolves env' ty = true := by
+  cases v with
+  | ref x =>
+    simp only [Val.resolves, refHas] at h ⊢
+    cases hT : ty.target? with
+    | none => rfl
+    | some t =>
+      simp only [hT] at h ⊢
+      by_cases htT : t = T
+      · subst htT
+        have hx : x ≠ id := by
+          rcases hn with hn | hn
+          · exact absurd hT hn
+          · simpa [Val.refersTo] using hn
+        exact hinc t x (Or.inr hx) h
+      · exact hinc t x (Or.inl htT) h
+  | list vs =>
+    simp only [Val.resolves, List.all_eq_true] at h ⊢
+    intro e he
+    have hres := h e he
+    cases e with
+    | ref x =>
+      simp only [Elem.resolves, refHas] at hres ⊢
+      cases hT : ty.target? with
+      | none => rfl
+      | some t =>
+        simp only [hT] at hres ⊢
+        by_cases htT : t = T
+        · subst htT
+          have hx : x ≠ id := by
+            rcases hn with hn | hn
+            · exact absurd hT hn
+            · intro hxid
+              subst hxid
+              have hmem : Elem.ref x ∈ vs := he
+              simp only [Val.refersTo, List.contains_eq_any_beq, List.any_eq_false,
+                beq_iff_eq] at hn
+              exact hn (Elem.ref x) hmem rfl
+          exact hinc t x (Or.inr hx) hres
+        · exact hinc t x (Or.inl htT) hres
+    | _ => rfl
+  | _ => rfl
+
+/-- A field of a record of a type with schema `schema` that does not name the deleted record
+    through the type `T` gives `resolves_exc` what it needs. -/
+theorem fieldRefers_false_hn {schema : Schema} {T : TypeId} {id : RecordId}
+    {fv : FieldId × Val} {d : FieldDef} (hl : schema.lookup fv.1 = some d)
+    (h : fieldRefers schema T id fv = false) :
+    d.ty.target? ≠ some T ∨ fv.2.refersTo id = false := by
+  unfold fieldRefers at h
+  rw [hl] at h
+  by_cases ht : d.ty.target? = some T
+  · right
+    simpa [ht] using h
+  · left; exact ht
+
 theorem dropRef_of_not_refersTo {id : RecordId} {v : Val} (h : v.refersTo id = false) :
     v.dropRef id = some v := by
   cases v with
@@ -271,307 +390,988 @@ theorem dropRef_present {id : RecordId} {v : Val} (h1 : v ≠ .null) (h2 : v ≠
   | str s => exact ⟨_, rfl, h1⟩
   | bool b => exact ⟨_, rfl, h1⟩
 
-theorem mem_clearFields {id : RecordId} {fs : Fields} {fv : FieldId × Val}
-    (h : fv ∈ clearFields id fs) : ∃ v, (fv.1, v) ∈ fs ∧ v.dropRef id = some fv.2 := by
-  unfold clearFields at h
-  obtain ⟨a, ha, hm⟩ := List.mem_filterMap.mp h
-  cases hd : a.2.dropRef id with
-  | none => rw [hd] at hm; cases hm
-  | some v =>
-    rw [hd] at hm
-    simp only [Option.map_some, Option.some.injEq] at hm
-    subst hm
-    exact ⟨a.2, by simpa using ha, hd⟩
-
-/-- A field that is present and not a single reference to `id` is still present after the
-    references to `id` are cleared. -/
-theorem get_clearFields {id : RecordId} {f : FieldId} :
-    ∀ {fs : Fields}, fs.get f ≠ .null → fs.get f ≠ .ref id → (clearFields id fs).get f ≠ .null
-  | [], h, _ => absurd rfl h
-  | (k, v) :: fs, h1, h2 => by
-    unfold Fields.get at h1 h2
-    rw [lookup_cons_nat] at h1 h2
-    unfold clearFields
-    rw [List.filterMap_cons]
-    by_cases hk : f = k
-    · subst hk
-      simp only [ite_true] at h1 h2
-      obtain ⟨v', hd, hne⟩ := dropRef_present h1 h2
-      simp only [hd, Option.map_some]
-      unfold Fields.get
-      rw [lookup_cons_nat]
-      simpa using hne
-    · simp only [hk, ite_false] at h1 h2
-      have ih := get_clearFields (fs := fs) h1 h2
-      unfold clearFields at ih
-      cases hd : v.dropRef id with
-      | none => simpa [hd] using ih
-      | some v' =>
-        simp only [Option.map_some]
-        unfold Fields.get at ih ⊢
-        rw [lookup_cons_nat]
-        simpa [hk] using ih
-
-/-! ## Lemmas: references across changes to the set of records -/
-
-/-- References still resolve when every record that existed still exists. -/
-theorem refsOk_mono {rs rs' : Records} {r : Record}
-    (hinc : ∀ x, rs.has x = true → rs'.has x = true) (h : refsOk rs r = true) :
-    refsOk rs' r = true := by
+/-- Records are added: every reference still resolves. -/
+theorem refsOk_mono {env env' : Env} {schema : Schema} {r : Record}
+    (hinc : ∀ t x, Records.has (env t) x = true → Records.has (env' t) x = true) (h : refsOk env schema r = true) :
+    refsOk env' schema r = true := by
   unfold refsOk at *
   rw [List.all_eq_true] at *
-  exact fun fv hfv => resolves_mono hinc (h fv hfv)
+  intro fv hfv
+  have := h fv hfv
+  cases hl : schema.lookup fv.1 with
+  | none => rfl
+  | some d =>
+    rw [hl] at this
+    exact resolves_mono hinc this
 
-/-- Clearing the references to `id` keeps every other reference resolving, among records that
-    keep every record but `id`. -/
-theorem refsOk_clear {rs rs' : Records} {id : RecordId} {r : Record}
-    (hinc : ∀ x, rs.has x = true → x ≠ id → rs'.has x = true) (h : refsOk rs r = true) :
-    refsOk rs' (clearRef id r) = true := by
+/-- Each field of the clearing is a field of the original, unchanged, or changed through the
+    references it holds to the deleted record in a field of the type `T`. -/
+theorem mem_clearFields {schema : Schema} {T : TypeId} {id : RecordId} {fs : Fields}
+    {fv : FieldId × Val} (h : fv ∈ clearFields schema T id fs) :
+    ∃ v, (fv.1, v) ∈ fs ∧
+      ((fieldRefers schema T id (fv.1, v) = false ∧ fv.2 = v) ∨
+        (fieldRefers schema T id (fv.1, v) = true ∧ v.dropRef id = some fv.2)) := by
+  unfold clearFields at h
+  obtain ⟨a, ha, hm⟩ := List.mem_filterMap.mp h
+  split at hm
+  · rename_i hr
+    cases hd : a.2.dropRef id with
+    | none => simp [hd] at hm
+    | some v =>
+      simp only [hd, Option.map_some, Option.some.injEq] at hm
+      subst hm
+      exact ⟨a.2, by simpa using ha, Or.inr ⟨hr, hd⟩⟩
+  · rename_i hr
+    simp only [Option.some.injEq] at hm
+    subst hm
+    exact ⟨a.2, by simpa using ha, Or.inl ⟨by simpa using hr, rfl⟩⟩
+
+/-- A field whose first entry is present, not `null`, and not a single reference to `id` through a
+    field that forbids its clearing, keeps a present value after the clearing. -/
+theorem get_clearFields {schema : Schema} {T : TypeId} {id : RecordId} {f : FieldId} :
+    ∀ {fs : Fields}, (∃ v, fs.lookup f = some v ∧ v ≠ .null ∧
+        (v ≠ .ref id ∨ fieldRefers schema T id (f, v) = false)) →
+      ∃ v', (clearFields schema T id fs).lookup f = some v' ∧ v' ≠ .null
+  | [], ⟨_, h, _, _⟩ => by simp [List.lookup] at h
+  | (k, u) :: fs, ⟨w, hw, hwn, hwr⟩ => by
+    by_cases hk : f = k
+    · subst k
+      rw [lookup_cons_nat, if_pos rfl] at hw
+      have hvw : u = w := Option.some.inj hw
+      subst hvw
+      by_cases hr : fieldRefers schema T id (f, u) = true
+      · have hv : u ≠ .ref id := by
+          rcases hwr with h' | h'
+          · exact h'
+          · rw [hr] at h'; cases h'
+        obtain ⟨v', hd, hne⟩ := dropRef_present hwn hv
+        refine ⟨v', ?_, hne⟩
+        simp [clearFields, hr, hd, lookup_cons_nat]
+      · have hr' : fieldRefers schema T id (f, u) = false := by simpa using hr
+        refine ⟨u, ?_, hwn⟩
+        simp [clearFields, hr', lookup_cons_nat]
+    · rw [lookup_cons_nat, if_neg hk] at hw
+      obtain ⟨v', hv', hn'⟩ := get_clearFields (schema := schema) (T := T) (id := id) (f := f)
+        (fs := fs) ⟨w, hw, hwn, hwr⟩
+      refine ⟨v', ?_, hn'⟩
+      unfold clearFields at hv' ⊢
+      simp only [List.filterMap_cons]
+      by_cases hr : fieldRefers schema T id (k, u) = true
+      · rw [if_pos hr]
+        cases hd : u.dropRef id with
+        | none => exact hv'
+        | some w' =>
+          simp only [hd, Option.map_some]
+          rw [lookup_cons_nat, if_neg hk]
+          exact hv'
+      · rw [if_neg hr]
+        dsimp only
+        rw [lookup_cons_nat, if_neg hk]
+        exact hv'
+
+/-- A required field of a record that conforms, whose value is not a reference to the deleted
+    record through a field that forbids it, is still present after the clearing. -/
+theorem requiredOk_clear {schema : Schema} {T : TypeId} {id : RecordId} {fs : Fields}
+    {fd : FieldId × FieldDef}
+    (hfree : ∀ fv ∈ fs, fieldRefers schema T id fv = true →
+      forbidsDelete schema fv.1 fv.2 = false)
+    (hmem : fd ∈ schema) (hreq : fd.2.required = true) (h : requiredOk fs fd = true) :
+    requiredOk (clearFields schema T id fs) fd = true := by
+  unfold requiredOk at h ⊢
+  rw [hreq] at h ⊢
+  simp only [Bool.not_true, Bool.false_or, bne_iff_ne, ne_eq] at h ⊢
+  have hget : fs.get fd.1 ≠ .null := h
+  cases hl : fs.lookup fd.1 with
+  | none => simp [Fields.get, hl] at hget
+  | some v =>
+    have hv : v ≠ .null := by simpa [Fields.get, hl] using hget
+    have hmemv : (fd.1, v) ∈ fs := lookup_mem hl
+    have hr : v ≠ .ref id ∨ fieldRefers schema T id (fd.1, v) = false := by
+      by_cases hvr : v = .ref id
+      · right
+        by_cases hc' : fieldRefers schema T id (fd.1, v) = true
+        · have hf := hfree (fd.1, v) hmemv hc'
+          have hforb : forbidsDelete schema fd.1 v = true := by
+            unfold forbidsDelete
+            exact List.any_eq_true.mpr ⟨fd, hmem, by simp [hreq, hvr, Val.isList]⟩
+          rw [hforb] at hf
+          cases hf
+        · simpa using hc'
+      · exact Or.inl hvr
+    obtain ⟨v', hv', hn'⟩ := get_clearFields (schema := schema) (T := T) (id := id) (f := fd.1)
+      (fs := fs) ⟨v, hl, hv, hr⟩
+    simpa [Fields.get, hv'] using hn'
+
+/-- Clearing the references to `id` keeps every other reference resolving, among the tables that
+    keep every record but `(T, id)`. -/
+theorem refsOk_clear {env env' : Env} {T : TypeId} {id : RecordId} {schema : Schema} {r : Record}
+    (hinc : ∀ t x, (t ≠ T ∨ x ≠ id) → Records.has (env t) x = true → Records.has (env' t) x = true)
+    (h : refsOk env schema r = true) :
+    refsOk env' schema (clearRef schema T id r) = true := by
   unfold refsOk at h
   rw [List.all_eq_true] at h
   unfold clearRef
   split
-  · simp only [refsOk, List.all_eq_true]
+  · unfold refsOk
+    rw [List.all_eq_true]
     intro fv hfv
-    obtain ⟨v, hmem, hd⟩ := mem_clearFields hfv
-    exact resolves_dropRef hinc (h _ hmem) hd
+    obtain ⟨v, hmem, hc⟩ := mem_clearFields hfv
+    have hv := h (fv.1, v) hmem
+    cases hl : schema.lookup fv.1 with
+    | none => rfl
+    | some d =>
+      rw [hl] at hv
+      rcases hc with ⟨hf, hfv'⟩ | ⟨-, hd⟩
+      · rw [hfv']
+        exact resolves_exc hinc hv (fieldRefers_false_hn (fv := (fv.1, v)) hl hf)
+      · exact resolves_exc hinc (resolves_dropRef_sub hv hd) (Or.inr (dropRef_refersTo hd))
   · rename_i hn
-    simp only [refsOk, List.all_eq_true]
+    unfold refsOk
+    rw [List.all_eq_true]
     intro fv hfv
-    have hnv : fv.2.refersTo id = false := by
-      simp only [Record.refersTo, List.any_eq_true, not_exists, not_and, Bool.not_eq_true] at hn
-      exact hn fv hfv
-    exact resolves_dropRef hinc (h fv hfv) (dropRef_of_not_refersTo hnv)
+    have hf : fieldRefers schema T id fv = false := by
+      by_cases hc' : fieldRefers schema T id fv = true
+      · exact absurd (by unfold recRefers; exact List.any_eq_true.mpr ⟨fv, hfv, hc'⟩) hn
+      · simpa using hc'
+    have hv := h fv hfv
+    cases hl : schema.lookup fv.1 with
+    | none => rfl
+    | some d =>
+      rw [hl] at hv
+      exact resolves_exc hinc hv (fieldRefers_false_hn hl hf)
 
 /-- Clearing references through fields that do not forbid it keeps a record conforming. -/
-theorem conforms_clear {schema : Schema} {id : RecordId} {r : Record}
-    (hfree : ∀ fv ∈ r.fields, fv.2.refersTo id = true → forbidsDelete schema fv.1 fv.2 = false)
-    (h : conforms schema r = true) : conforms schema (clearRef id r) = true := by
+theorem conforms_clear {schema : Schema} {T : TypeId} {id : RecordId} {r : Record}
+    (hfree : ∀ fv ∈ r.fields, fieldRefers schema T id fv = true →
+      forbidsDelete schema fv.1 fv.2 = false)
+    (h : conforms schema r = true) : conforms schema (clearRef schema T id r) = true := by
   unfold clearRef
   split
   · unfold conforms at *
     simp only [Bool.and_eq_true, List.all_eq_true] at *
     obtain ⟨hf, hr⟩ := h
     refine ⟨fun fv hfv => ?_, fun fd hfd => ?_⟩
-    · obtain ⟨v, hmem, hd⟩ := mem_clearFields hfv
-      have := hf _ hmem
+    · obtain ⟨v, hmem, hc⟩ := mem_clearFields hfv
+      have hok := hf _ hmem
       unfold fieldOk at *
-      simp only at this ⊢
       cases hl : schema.lookup fv.1 with
-      | none => rw [hl] at this; cases this
-      | some d => rw [hl] at this; exact hasType_dropRef this hd
-    · have := hr fd hfd
-      unfold requiredOk at *
-      cases hreq : fd.2.required
-      · simp
-      · simp only [hreq, Bool.not_true, Bool.false_or, bne_iff_ne, ne_eq] at this ⊢
-        apply get_clearFields this
-        intro heq
-        have hmem := get_mem heq (by simp)
-        have hf := hfree _ hmem (by simp [Val.refersTo])
-        have : forbidsDelete schema fd.1 (.ref id) = true := by
-          unfold forbidsDelete
-          exact List.any_eq_true.mpr ⟨fd, hfd, by simp [hreq, Val.isList]⟩
-        simp_all
+      | none => rw [hl] at hok; cases hok
+      | some d =>
+        rw [hl] at hok
+        rcases hc with ⟨-, hfv'⟩ | ⟨-, hd⟩
+        · rw [hfv']; exact hok
+        · exact hasType_dropRef hok hd
+    · cases hreq : fd.2.required
+      · simp [requiredOk, hreq]
+      · exact requiredOk_clear hfree hfd hreq (hr fd hfd)
   · exact h
 
-/-- The records after a delete: `id` gone, every reference to it cleared. -/
-abbrev afterDelete (rs : Records) (id : RecordId) : Records :=
-  (rs.filter (fun q => q.1 != id)).map (fun q => (q.1, clearRef id q.2))
+/-! ## Lemmas: record lists after a clearing, and membership -/
 
-theorem has_afterDelete {rs : Records} {id x : RecordId} :
-    Records.has (afterDelete rs id) x = true ↔ rs.has x = true ∧ x ≠ id := by
-  simp only [has_iff, List.mem_map, List.mem_filter, Prod.mk.injEq]
-  constructor
-  · rintro ⟨r, q, ⟨hq, hne⟩, hx, -⟩
-    subst hx
-    exact ⟨⟨q.2, by simpa using hq⟩, by simpa using hne⟩
-  · rintro ⟨⟨r, hr⟩, hne⟩
-    exact ⟨clearRef id r, (x, r), ⟨hr, by simpa using hne⟩, rfl, rfl⟩
+theorem has_cons_of (q : RecordId × Record) {rs : Records} {x : RecordId}
+    (h : Records.has rs x = true) : Records.has (q :: rs) x = true := by
+  rw [has_iff] at h ⊢
+  obtain ⟨r, hr⟩ := h
+  exact ⟨r, List.mem_cons_of_mem _ hr⟩
 
-/-- Replacing one record's fields keeps the set of ids. -/
-theorem has_replace {rs : Records} {id x : RecordId} {r : Record} :
-    Records.has (rs.map (fun q => if q.1 == id then (q.1, r) else q)) x = rs.has x := by
+theorem has_delClear (schema : Schema) (ty : TypeId) (id : RecordId) (rs : Records)
+    (x : RecordId) : Records.has (delClear schema ty id rs) x = Records.has rs x := by
   apply Bool.eq_iff_iff.mpr
-  simp only [has_iff, List.mem_map]
+  rw [has_iff, has_iff]
   constructor
-  · rintro ⟨r', q, hq, heq⟩
-    by_cases hid : (q.1 == id) = true
-    · simp only [hid, ite_true, Prod.mk.injEq] at heq
-      obtain ⟨hx, -⟩ := heq
-      exact ⟨q.2, by rw [← hx]; simpa using hq⟩
-    · simp only [hid] at heq
-      exact ⟨r', by rw [← heq]; exact hq⟩
-  · rintro ⟨r', hr⟩
-    by_cases hid : (x == id) = true
-    · exact ⟨r, (x, r'), hr, by simp [hid]⟩
-    · exact ⟨r', (x, r'), hr, by simp [hid]⟩
+  · rintro ⟨r, hr⟩
+    unfold delClear at hr
+    obtain ⟨a, ha, hae⟩ := List.mem_map.mp hr
+    rw [Prod.mk.injEq] at hae
+    exact ⟨a.2, by rw [← hae.1]; exact ha⟩
+  · rintro ⟨r, hr⟩
+    exact ⟨clearRef schema ty id r, List.mem_map.mpr ⟨(x, r), hr, rfl⟩⟩
+
+theorem has_filter_ne (rs : Records) (id x : RecordId) :
+    Records.has (rs.filter (fun q => q.1 != id)) x = (Records.has rs x && x != id) := by
+  apply Bool.eq_iff_iff.mpr
+  rw [has_iff, Bool.and_eq_true, has_iff, bne_iff_ne]
+  constructor
+  · rintro ⟨r, hr⟩
+    obtain ⟨hmem, hp⟩ := List.mem_filter.mp hr
+    exact ⟨⟨r, hmem⟩, by simpa [bne_iff_ne] using hp⟩
+  · rintro ⟨⟨r, hr⟩, hne⟩
+    exact ⟨r, List.mem_filter.mpr ⟨hr, by simpa [bne_iff_ne] using hne⟩⟩
+
+/-! ## Lemmas: the object types of a tenant -/
+
+/-- Replacing the entry of one object type: the lookup of every type is as it was, except that the
+    type replaced now holds `o'`. -/
+theorem lookup_putType (l : List (TypeId × ObjType)) (ty k : TypeId) (o' : ObjType) :
+    (putTypeList l ty o').lookup k =
+      if k == ty then (l.lookup k).map (fun _ => o') else l.lookup k := by
+  induction l with
+  | nil => simp [putTypeList, List.lookup]
+  | cons e es ih =>
+    obtain ⟨j, p⟩ := e
+    by_cases hkt : k = ty <;> by_cases hkj : k = j <;> by_cases hjt : j = ty <;>
+      simp_all [putTypeList, List.lookup, beq_iff_eq] <;> (try split) <;> simp_all [beq_iff_eq]
+
+theorem typ?_putType (t : Tenant) (ty k : TypeId) (o' : ObjType) :
+    (t.putType ty o').typ? k = if k == ty then (t.typ? k).map (fun _ => o') else t.typ? k := by
+  unfold Tenant.typ? Tenant.putType
+  exact lookup_putType t.types ty k o'
+
+theorem typ?_putType_other (t : Tenant) (ty k : TypeId) (o' : ObjType) (h : k ≠ ty) :
+    (t.putType ty o').typ? k = t.typ? k := by
+  rw [typ?_putType]
+  have hk : (k == ty) = false := by simpa using h
+  simp [hk]
+
+theorem typ?_putType_self (t : Tenant) (ty : TypeId) (o o' : ObjType) (h : t.typ? ty = some o) :
+    (t.putType ty o').typ? ty = some o' := by
+  rw [typ?_putType]
+  simp [h]
+
+/-- The records of each type after a write that replaces one object type's entry: that type's
+    records are `o'`'s, every other type's are as they were. -/
+theorem env_putType (t : Tenant) (ty : TypeId) (o o' : ObjType) (h : t.typ? ty = some o)
+    (k : TypeId) : (t.putType ty o').env k = if k == ty then o'.records else t.env k := by
+  unfold Tenant.env
+  rw [typ?_putType]
+  by_cases hk : k == ty
+  · rw [if_pos hk]
+    have hk' : k = ty := by simpa using hk
+    subst hk'
+    simp [h]
+  · rw [if_neg hk]
+    simp [hk]
+
+/-- Applying a per-type function to the entries of a type list, the lookup of a type applies the
+    function to its own entry. -/
+theorem lookup_map_entry (l : List (TypeId × ObjType)) (g : TypeId → ObjType → ObjType)
+    (k : TypeId) :
+    (l.map (fun e => (e.1, g e.1 e.2))).lookup k = (l.lookup k).map (g k) := by
+  induction l with
+  | nil => simp [List.lookup]
+  | cons e es ih =>
+    obtain ⟨j, o⟩ := e
+    simp only [List.map_cons, List.lookup]
+    cases hkj : k == j <;> simp_all
+
+theorem typ?_afterDelete (t : Tenant) (ty id k : TypeId) :
+    (t.afterDelete ty id).typ? k = (t.typ? k).map (delObj ty id k) := by
+  unfold Tenant.afterDelete Tenant.typ?
+  exact lookup_map_entry t.types (delObj ty id) k
+
+/-- A delete removes the deleted record from its table and leaves every other record of every
+    table, so the records of a type have the deleted record's id exactly when they had it and are
+    not the deleted record. -/
+theorem has_delObj_self (ty id : TypeId) (o : ObjType) (x : RecordId) :
+    Records.has (delObj ty id ty o).records x = (Records.has o.records x && x != id) := by
+  simp only [delObj, beq_self_eq_true, if_true]
+  rw [has_delClear, has_filter_ne]
+
+theorem has_delObj_other (ty id k : TypeId) (o : ObjType) (x : RecordId) (hk : (k == ty) = false) :
+    Records.has (delObj ty id k o).records x = Records.has o.records x := by
+  simp only [delObj, hk, Bool.false_eq_true, if_false, has_delClear]
+
+/-- The records of a type after a delete: the deleted record gone from its own type, and every
+    reference to it cleared. -/
+theorem env_afterDelete_has (t : Tenant) (ty : TypeId) (id : RecordId) (k : TypeId) (x : RecordId) :
+    Records.has ((t.afterDelete ty id).env k) x = (Records.has (t.env k) x && !(k == ty && x == id)) := by
+  cases h : t.typ? k with
+  | none =>
+    have hL : (t.afterDelete ty id).env k = [] := by
+      unfold Tenant.env; rw [typ?_afterDelete, h]; rfl
+    have hR : t.env k = [] := by
+      unfold Tenant.env; rw [h]; rfl
+    rw [hL, hR]; simp [Records.has, List.lookup]
+  | some o =>
+    have hL : (t.afterDelete ty id).env k = (delObj ty id k o).records := by
+      unfold Tenant.env; rw [typ?_afterDelete, h]; rfl
+    have hR : t.env k = o.records := by
+      unfold Tenant.env; rw [h]; rfl
+    rw [hL, hR]
+    by_cases hk : k = ty
+    · subst hk
+      rw [has_delObj_self]
+      simp [bne]
+    · have hk' : (k == ty) = false := by simpa using hk
+      rw [has_delObj_other _ _ _ _ _ hk']
+      simp [hk']
+
+/-- A delete keeps every record of every type but the deleted one. -/
+theorem env_afterDelete_inc (t : Tenant) (ty : TypeId) (idr : RecordId) (T : TypeId) (x : RecordId)
+    (h : T ≠ ty ∨ x ≠ idr) (hx : Records.has (t.env T) x = true) :
+    Records.has ((t.afterDelete ty idr).env T) x = true := by
+  rw [env_afterDelete_has, hx]
+  rcases h with h | h
+  · have : (T == ty) = false := by simpa using h
+    simp [this]
+  · have : (x == idr) = false := by simpa using h
+    simp [this]
+
+theorem lookup_map_ty (l : List (FieldId × FieldDef))
+    (g : FieldId × FieldDef → FieldId × FieldDef)
+    (hg : ∀ e, (g e).1 = e.1 ∧ (g e).2.ty = e.2.ty) (k : FieldId) :
+    ((l.map g).lookup k).map (fun d => d.ty) = (l.lookup k).map (fun d => d.ty) := by
+  induction l with
+  | nil => simp [List.lookup]
+  | cons e es ih =>
+    obtain ⟨j, d⟩ := e
+    have hgj := hg (j, d)
+    simp only [List.map_cons, List.lookup]
+    rw [hgj.1]
+    cases hkj : k == j
+    · simp only [hkj]; exact ih
+    · simp only [hkj, Option.map_some, Option.some.injEq]; exact hgj.2
+
+theorem makeRequired_ty (s : Schema) (f k : FieldId) :
+    ((makeRequired s f).lookup k).map (fun d => d.ty) = (s.lookup k).map (fun d => d.ty) :=
+  lookup_map_ty s (fun fd => if fd.1 == f then (fd.1, { fd.2 with required := true }) else fd)
+    (fun e => ⟨by dsimp only; split <;> rfl, by dsimp only; split <;> rfl⟩) k
+
+theorem makeUnique_ty (s : Schema) (f k : FieldId) :
+    ((makeUnique s f).lookup k).map (fun d => d.ty) = (s.lookup k).map (fun d => d.ty) :=
+  lookup_map_ty s (fun fd => if fd.1 == f then (fd.1, { fd.2 with unique := true }) else fd)
+    (fun e => ⟨by dsimp only; split <;> rfl, by dsimp only; split <;> rfl⟩) k
+
+/-- A schema change that leaves every type's reference targets as they were leaves every reference
+    resolving the same way. -/
+theorem refsOk_congr_ty {env : Env} {s s' : Schema} {r : Record}
+    (hty : ∀ k, (s'.lookup k).map (fun d => d.ty) = (s.lookup k).map (fun d => d.ty)) :
+    refsOk env s' r = refsOk env s r := by
+  unfold refsOk
+  congr 1
+  funext fv
+  have h := hty fv.1
+  cases h1 : s.lookup fv.1 <;> cases h2 : s'.lookup fv.1 <;> simp_all
+
+/-- A schema change that leaves every field's type as it was, except that it declares a field the type did not have
+    with a type that names no object type, leaves every reference resolving the same way. -/
+theorem refsOk_congr_ty' {env : Env} {s s' : Schema} {r : Record}
+    (hty : ∀ k, (s'.lookup k).map (fun d => d.ty) = (s.lookup k).map (fun d => d.ty) ∨
+      (s.lookup k = none ∧ (s'.lookup k).map (fun d => d.ty) = some .bool)) :
+    refsOk env s' r = refsOk env s r := by
+  unfold refsOk
+  congr 1
+  funext fv
+  rcases hty fv.1 with h | ⟨h0, h1⟩
+  · cases h1 : s.lookup fv.1 <;> cases h2 : s'.lookup fv.1 <;> simp_all
+  · rw [h0]
+    cases h2 : s'.lookup fv.1 with
+    | none => simp [h2] at h1
+    | some d =>
+      simp only [h2, Option.map_some, Option.some.injEq] at h1
+      show Val.resolves env d.ty fv.2 = true
+      rw [h1]
+      cases fv.2 with
+      | list vs =>
+        simp only [Val.resolves, List.all_eq_true]
+        intro e _
+        cases e <;> rfl
+      | ref id => rfl
+      | _ => rfl
+
+theorem ensure_makeRequired_ty (s : Schema) (f k : FieldId) :
+    (((makeRequired (ensureField s f) f).lookup k).map (fun d => d.ty) = (s.lookup k).map (fun d => d.ty)) ∨
+      (s.lookup k = none ∧ ((makeRequired (ensureField s f) f).lookup k).map (fun d => d.ty) = some .bool) := by
+  rw [makeRequired_ty]
+  rcases ensureField_lookup s f k with h | ⟨h0, h1⟩
+  · left; rw [h]
+  · right; refine ⟨h0, ?_⟩; rw [h1]; rfl
+
+theorem ensure_makeUnique_ty (s : Schema) (f k : FieldId) :
+    (((makeUnique (ensureField s f) f).lookup k).map (fun d => d.ty) = (s.lookup k).map (fun d => d.ty)) ∨
+      (s.lookup k = none ∧ ((makeUnique (ensureField s f) f).lookup k).map (fun d => d.ty) = some .bool) := by
+  rw [makeUnique_ty]
+  rcases ensureField_lookup s f k with h | ⟨h0, h1⟩
+  · left; rw [h]
+  · right; refine ⟨h0, ?_⟩; rw [h1]; rfl
+
+/-! ## Lemmas: a write to one object type -/
+
+/-- A write that replaces the records of one object type, keeping every record id, or that adds a
+    record that resolves: referential integrity of the tenant. -/
+theorem refsOk_putType {t : Tenant} {ty : TypeId} {o o' : ObjType}
+    (ho : t.typ? ty = some o) (hs : o'.schema = o.schema) (hrefs : t.RefsOk)
+    (hinc : ∀ k x, Records.has (t.env k) x = true → Records.has ((t.putType ty o').env k) x = true)
+    (hnew : ∀ q ∈ o'.records, q ∈ o.records ∨ refsOk t.env o.schema q.2 = true) :
+    (t.putType ty o').RefsOk := by
+  intro T o'' hT q hq
+  by_cases hTy : T = ty
+  · subst hTy
+    rw [typ?_putType_self t T o o' ho] at hT
+    cases hT
+    rw [hs]
+    rcases hnew q hq with hmem | hres
+    · exact refsOk_mono (fun k x => hinc k x) (hrefs T o ho q hmem)
+    · exact refsOk_mono (fun k x => hinc k x) hres
+  · rw [typ?_putType_other t ty T o' hTy] at hT
+    exact refsOk_mono (fun k x => hinc k x) (hrefs T o'' hT q hq)
+
+/-- A schema change that leaves every record as it was, and every field's type but for the declaration of fields of a
+    type that names no object type, keeps referential integrity of the tenant. -/
+theorem refsOk_putType_schema' {t : Tenant} {ty : TypeId} {o o' : ObjType}
+    (ho : t.typ? ty = some o) (hr : o'.records = o.records) (hty : ∀ k,
+      (o'.schema.lookup k).map (fun d => d.ty) = (o.schema.lookup k).map (fun d => d.ty) ∨
+      (o.schema.lookup k = none ∧ (o'.schema.lookup k).map (fun d => d.ty) = some .bool))
+    (hrefs : t.RefsOk) : (t.putType ty o').RefsOk := by
+  have henv : (t.putType ty o').env = t.env := by
+    funext k
+    rw [env_putType t ty o o' ho k]
+    by_cases hk : k == ty
+    · rw [if_pos hk, hr]
+      have hk' : k = ty := by simpa using hk
+      subst hk'
+      unfold Tenant.env
+      rw [ho]
+      simp
+    · rw [if_neg hk]
+  intro T o'' hT q hq
+  by_cases hTy : T = ty
+  · subst hTy
+    rw [typ?_putType_self t T o o' ho] at hT
+    cases hT
+    rw [refsOk_congr_ty' hty, henv]
+    have hq' : q ∈ o.records := by rw [← hr]; exact hq
+    exact hrefs T o ho q hq'
+  · rw [typ?_putType_other t ty T o' hTy] at hT
+    rw [henv]
+    exact hrefs T o'' hT q hq
+
+/-- A schema change that leaves every record and every reference's type as they were keeps
+    referential integrity of the tenant. -/
+theorem refsOk_putType_schema {t : Tenant} {ty : TypeId} {o o' : ObjType}
+    (ho : t.typ? ty = some o) (hr : o'.records = o.records) (hty : ∀ k,
+      (o'.schema.lookup k).map (fun d => d.ty) = (o.schema.lookup k).map (fun d => d.ty))
+    (hrefs : t.RefsOk) : (t.putType ty o').RefsOk := by
+  have henv : (t.putType ty o').env = t.env := by
+    funext k
+    rw [env_putType t ty o o' ho k]
+    by_cases hk : k == ty
+    · rw [if_pos hk, hr]
+      have hk' : k = ty := by simpa using hk
+      subst hk'
+      unfold Tenant.env
+      rw [ho]
+      simp
+    · rw [if_neg hk]
+  intro T o'' hT q hq
+  by_cases hTy : T = ty
+  · subst hTy
+    rw [typ?_putType_self t T o o' ho] at hT
+    cases hT
+    rw [refsOk_congr_ty hty, henv]
+    have hq' : q ∈ o.records := by rw [← hr]; exact hq
+    exact hrefs T o ho q hq'
+  · rw [typ?_putType_other t ty T o' hTy] at hT
+    rw [henv]
+    exact hrefs T o'' hT q hq
+
+
+/-! ## Lemmas: the clearing of a delete -/
+
+theorem fieldRefers_of_refersTo_false {schema : Schema} {T : TypeId} {id : RecordId}
+    {fv : FieldId × Val} (h : fv.2.refersTo id = false) : fieldRefers schema T id fv = false := by
+  unfold fieldRefers
+  cases schema.lookup fv.1 with
+  | none => rfl
+  | some d => simp [h]
+
+/-- After the references to `id` of type `T` are cleared from a record, no field of it names
+    record `id` of type `T`. -/
+theorem fieldRefers_clearRef (schema : Schema) (T : TypeId) (id : RecordId) (r : Record) :
+    ∀ fv ∈ (clearRef schema T id r).fields, fieldRefers schema T id fv = false := by
+  intro fv hfv
+  unfold clearRef at hfv
+  split at hfv
+  · rename_i hr
+    obtain ⟨v, hmem, hc⟩ := mem_clearFields hfv
+    rcases hc with ⟨hf, hfv'⟩ | ⟨-, hd⟩
+    · have hfv2 : fv = (fv.1, v) := Prod.ext rfl hfv'
+      rw [hfv2]
+      exact hf
+    · exact fieldRefers_of_refersTo_false (dropRef_refersTo hd)
+  · rename_i hn
+    have hf : fieldRefers schema T id fv = false := by
+      by_cases hc' : fieldRefers schema T id fv = true
+      · exact absurd (by unfold recRefers; exact List.any_eq_true.mpr ⟨fv, hfv, hc'⟩) hn
+      · simpa using hc'
+    exact hf
+
+/-- A record that no record blocks, and that is not the deleted record, conforms after the
+    clearing. -/
+theorem conforms_afterDelete (t : Tenant) (ty : TypeId) (id : RecordId) (k : TypeId)
+    (o : ObjType) (q : RecordId × Record) (ho : t.typ? k = some o) (hq : q ∈ o.records)
+    (hne : ¬ (k == ty && q.1 == id)) (hnb : t.blockedDelete ty id = false)
+    (hc : conforms o.schema q.2 = true) : conforms o.schema (clearRef o.schema ty id q.2) = true := by
+  apply conforms_clear _ hc
+  intro fv hfv hv
+  have h1 : o.records.any (blocks k o.schema ty id) = false := by
+    have := (List.any_eq_false.mp hnb) (k, o) (lookup_mem ho)
+    simpa using this
+  have hblock : blocks k o.schema ty id q = false := by
+    simpa using (List.any_eq_false.mp h1) q hq
+  unfold blocks at hblock
+  have hne' : (!(k == ty && q.1 == id)) = true := by
+    cases hb : (k == ty && q.1 == id)
+    · rfl
+    · exact absurd hb hne
+  rw [hne', Bool.true_and] at hblock
+  have hfvb := (List.any_eq_false.mp hblock) fv hfv
+  simp only [hv, Bool.true_and, Bool.not_eq_true] at hfvb
+  exact hfvb
+
+/-! ## Lemmas: the steps that delete -/
+
+/-- An accepted delete leaves the tenant it computes: the record gone from its table, and every
+    reference to it cleared. -/
+theorem stepTenant_delete_eq {t t' : Tenant} {p : Principal} {ty : TypeId} {id : RecordId}
+    {ev : Option Nat} (h : stepTenant t p (.delete ty id ev) = .ok t') :
+    t' = t.afterDelete ty id := by
+  simp only [stepTenant] at h
+  repeat' split at h
+  all_goals first
+    | exact (Except.ok.inj h).symm
+    | cases h
 
 /-! ## The slice's properties -/
 
-/-- Referential integrity is kept by every accepted step on a tenant, strict or not: a write
-    names only existing records, single or in a list; a delete is refused or clears what named
-    the deleted record (a field, or a list element); and a schema change touches no record. -/
-theorem stepTenant_preserves_refs (t t' : Tenant) (p : PrincipalId) (i : Intent)
-    (hrefs : t.RefsOk) (h : stepTenant t p i = .ok t') : t'.RefsOk := by
+/-! ## Operations (slice 14): referential integrity of their steps -/
+
+/-- The parts of an operation's create: its record is the one a direct create writes, checked as a direct create's
+    record is (`newRecord` of the evaluated fields, the structural checks and the constraints), at the next id. -/
+theorem opCreate_ok_parts {c : OpCtx} {st st' : OpState} {id : String} {ty : TypeId}
+    {fs : List (FieldId × Expr)} {o : ObjType} (ho : st.tenant.typ? ty = some o)
+    (h : opCreate c st id ty fs = .ok st') :
+    ∃ vals r, newRecord o.schema c.principal vals = .ok r ∧
+      problem st.tenant.limits o.schema o.uniques true st.tenant.env o.records st.tenant.nextId r = none ∧
+      constraintProblem (writeEnv c.principal r none) o.constraints = none ∧
+      st'.tenant = { st.tenant.putType ty { o with records := (st.tenant.nextId, r) :: o.records } with
+        nextId := st.tenant.nextId + 1 } := by
+  unfold opCreate at h
+  simp only [ho] at h
+  split at h
+  · simp at h
+  rename_i vals hv
+  split at h
+  · simp at h
+  rename_i r hN
+  split at h
+  · simp at h
+  split at h
+  · simp at h
+  rename_i hP
+  split at h
+  · simp at h
+  rename_i hC
+  simp only [Except.ok.injEq] at h
+  subst h
+  exact ⟨vals, r, hN, hP, hC, rfl⟩
+
+/-- An operation's create keeps referential integrity: the new record names existing records (`problem`), and no other
+    record changes. -/
+theorem opCreate_refsOk {c : OpCtx} {st st' : OpState} {id : String} {ty : TypeId}
+    {fs : List (FieldId × Expr)} (hrefs : st.tenant.RefsOk) (h : opCreate c st id ty fs = .ok st') :
+    st'.tenant.RefsOk := by
+  cases hT : st.tenant.typ? ty with
+  | none => simp [opCreate, hT] at h
+  | some o =>
+    obtain ⟨vals, r, -, hP, -, ht⟩ := opCreate_ok_parts hT h
+    rw [ht]
+    have hinc : ∀ k x, Records.has (st.tenant.env k) x = true →
+        Records.has ((st.tenant.putType ty { o with records := (st.tenant.nextId, r) ::
+          o.records }).env k) x = true := by
+      intro k x hx
+      rw [env_putType st.tenant ty o _ hT k]
+      by_cases hk : k == ty
+      · rw [if_pos hk]
+        have hk' : k = ty := by simpa using hk
+        subst hk'
+        have hr : st.tenant.env k = o.records := by
+          unfold Tenant.env; rw [hT]; simp
+        rw [hr] at hx
+        exact has_cons_of _ hx
+      · rw [if_neg hk]; exact hx
+    have hnew : ∀ q ∈ ({ o with records := (st.tenant.nextId, r) ::
+        o.records } : ObjType).records, q ∈ o.records ∨ refsOk st.tenant.env o.schema q.2 = true := by
+      intro q hq
+      rcases List.mem_cons.mp hq with rfl | hq'
+      · right; exact (problem_none hP).2
+      · left; exact hq'
+    exact refsOk_putType hT rfl hrefs hinc hnew
+
+/-- An operation's update keeps referential integrity: the patched record names existing records (`problem`). -/
+theorem opUpdate_refsOk {c : OpCtx} {st st' : OpState} {ty : TypeId} {record : Expr}
+    {fs : List (FieldId × Expr)} (hrefs : st.tenant.RefsOk) (h : opUpdate c st ty record fs = .ok st') :
+    st'.tenant.RefsOk := by
+  cases hT : st.tenant.typ? ty with
+  | none => simp [opUpdate, hT] at h
+  | some o =>
+    simp only [opUpdate, hT] at h
+    split at h
+    · simp at h
+    rename_i id _
+    split at h
+    · simp at h
+    rename_i old hL
+    split at h
+    · simp at h
+    rename_i vals _
+    split at h
+    · simp at h
+    rename_i r _
+    split at h
+    · simp at h
+    split at h
+    · simp at h
+    rename_i hP
+    split at h
+    · simp at h
+    rename_i hC
+    simp only [Except.ok.injEq] at h
+    subst h
+    have hinc : ∀ k x, Records.has (st.tenant.env k) x = true →
+        Records.has ((st.tenant.putType ty { o with records := o.records.map (fun q =>
+          if q.1 == id then (q.1, r) else q) }).env k) x = true := by
+      intro k x hx
+      rw [env_putType st.tenant ty o _ hT k]
+      by_cases hk : k == ty
+      · rw [if_pos hk]
+        have hk' : k = ty := by simpa using hk
+        subst hk'
+        have hr : st.tenant.env k = o.records := by
+          unfold Tenant.env; rw [hT]; simp
+        rw [hr] at hx
+        rw [has_replace]
+        exact hx
+      · rw [if_neg hk]; exact hx
+    have hnew : ∀ q ∈ ({ o with records := o.records.map (fun q =>
+        if q.1 == id then (q.1, r) else q) } : ObjType).records,
+        q ∈ o.records ∨ refsOk st.tenant.env o.schema q.2 = true := by
+      intro q hq
+      obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+      by_cases hid : (q₀.1 == id) = true
+      · simp only [hid, if_true] at hmap
+        right
+        rw [← hmap]
+        exact (problem_none hP).2
+      · simp only [hid, if_false] at hmap
+        left
+        rw [← hmap]
+        exact hq₀
+    exact refsOk_putType hT rfl hrefs hinc hnew
+
+/-- Deleting a record of a tenant with referential integrity clears the references to it in every type. -/
+theorem afterDelete_refsOk (t : Tenant) (ty : TypeId) (id : RecordId) (hrefs : t.RefsOk) :
+    (t.afterDelete ty id).RefsOk := by
+  intro T o'' hT q hq
+  rw [typ?_afterDelete] at hT
+  cases ho : t.typ? T with
+  | none => rw [ho] at hT; cases hT
+  | some o =>
+    rw [ho] at hT
+    simp only [Option.map_some, Option.some.injEq] at hT
+    subst hT
+    obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+    subst hmap
+    have hq₀' : q₀ ∈ o.records := by
+      by_cases hTy : (T == ty) = true
+      · rw [if_pos hTy] at hq₀
+        exact (List.mem_filter.mp hq₀).1
+      · rw [if_neg hTy] at hq₀
+        exact hq₀
+    exact refsOk_clear (fun k x hx hxk => env_afterDelete_inc t ty id k x hx hxk)
+      (hrefs T o ho q₀ hq₀')
+
+/-- An operation's delete keeps referential integrity: the references to the deleted record are cleared in every
+    type, as a direct delete clears them. -/
+theorem opDelete_refsOk {c : OpCtx} {st st' : OpState} {ty : TypeId} {record : Expr}
+    (hrefs : st.tenant.RefsOk) (h : opDelete c st ty record = .ok st') : st'.tenant.RefsOk := by
+  simp only [opDelete] at h
+  repeat' split at h
+  all_goals (try (simp at h; done))
+  all_goals (simp only [Except.ok.injEq] at h; subst h; exact afterDelete_refsOk _ _ _ hrefs)
+
+/-- A step of an operation keeps referential integrity. -/
+theorem opStep_refsOk (c : OpCtx) (st st' : OpState) (s : OpStep) (hrefs : st.tenant.RefsOk)
+    (h : opStep c st s = .ok st') : st'.tenant.RefsOk := by
+  cases s with
+  | create id ty fs => exact opCreate_refsOk hrefs h
+  | update _ ty rec fs => exact opUpdate_refsOk hrefs h
+  | delete _ ty rec => exact opDelete_refsOk hrefs h
+  | post id owner unit amt reason =>
+    simp only [opStep, opPost] at h
+    repeat' split at h
+    all_goals (try (simp at h; done))
+    all_goals (simp only [Except.ok.injEq] at h; subst h; exact hrefs)
+
+/-- Referential integrity is kept by every accepted step on a tenant, strict or not: a write names
+    only existing records of the types its fields name, single or in a list; a delete is refused or
+    clears what named the deleted record in every type; and a schema change touches no record and
+    changes no reference's type. -/
+theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
+    (hrefs : t.RefsOk) (hlax : i.laxChange = false) (h : stepTenant t p i = .ok t') : t'.RefsOk := by
   cases i with
-  | create fs =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · rename_i hp
-        cases h
-        have hinc : ∀ x, t.records.has x = true →
-            Records.has ((t.nextId, newRecord t.schema p fs) :: t.records) x = true := by
-          intro x hx
-          obtain ⟨r, hr⟩ := has_iff.mp hx
-          exact has_iff.mpr ⟨r, List.mem_cons_of_mem _ hr⟩
+  | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; exact hrefs
+  | postLedgerTx now tx => obtain ⟨L, rfl⟩ := postLedgerTxT_ok_shape h; exact hrefs
+  | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; exact hrefs
+  | invokeOperation now op ins key =>
+    exact invokeOperationT_pres Tenant.RefsOk (fun c s st st' hs hp => opStep_refsOk c st st' s hp hs) hrefs h
+  | changeSchema ev strict cs =>
+    have hs : strict = true := by
+      cases strict
+      · simp [Intent.laxChange] at hlax
+      · rfl
+    exact changeSchema_refs hrefs hs h
+  | createTenant owner name => simp [stepTenant] at h
+  | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact hrefs
+  | writeSetting n lvl team v ev => obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h; exact hrefs
+  | create ty fs =>
+    cases hT : t.typ? ty with
+    | none => simp [stepTenant, hT] at h
+    | some o =>
+      obtain ⟨r, -, hP, -, ht⟩ := create_ok_parts hT h
+      subst ht
+      have hinc : ∀ k x, Records.has (t.env k) x = true →
+          Records.has ((t.putType ty { o with records := (t.nextId, r) ::
+            o.records }).env k) x = true := by
+        intro k x hx
+        rw [env_putType t ty o _ hT k]
+        by_cases hk : k == ty
+        · rw [if_pos hk]
+          have hk' : k = ty := by simpa using hk
+          subst hk'
+          have hr : t.env k = o.records := by
+            unfold Tenant.env; rw [hT]; simp
+          rw [hr] at hx
+          exact has_cons_of _ hx
+        · rw [if_neg hk]; exact hx
+      have hnew : ∀ q ∈ ({ o with records := (t.nextId, r) ::
+          o.records } : ObjType).records, q ∈ o.records ∨ refsOk t.env o.schema q.2 = true := by
         intro q hq
-        cases hq with
-        | head => exact refsOk_mono hinc (problem_none hp).2
-        | tail _ hq' => exact refsOk_mono hinc (hrefs q hq')
-  | update id fs ev =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · rename_i hp
-            cases h
-            intro q hq
-            simp only at hq ⊢
-            obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
-            by_cases hid : (q₀.1 == id) = true
-            · simp only [hid, ite_true]
-              exact refsOk_mono (fun x hx => by rw [has_replace]; exact hx) (problem_none hp).2
-            · simp only [hid]
-              exact refsOk_mono (fun x hx => by rw [has_replace]; exact hx) (hrefs q₀ hq₀)
-  | delete id ev =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · cases h
-            intro q hq
-            simp only at hq ⊢
-            obtain ⟨q₀, hq₀, rfl⟩ := List.mem_map.mp hq
-            exact refsOk_clear (fun x hx hne => has_afterDelete.mpr ⟨hx, hne⟩)
-              (hrefs q₀ (List.mem_filter.mp hq₀).1)
-  | setRequired f strict =>
-    simp only [stepTenant] at h
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · cases h
-        exact hrefs
+        rcases List.mem_cons.mp hq with rfl | hq'
+        · right; exact (problem_none hP).2
+        · left; exact hq'
+      exact refsOk_putType hT rfl hrefs hinc hnew
+  | update ty id fs ev =>
+    cases hT : t.typ? ty with
+    | none => simp [stepTenant, hT] at h
+    | some o =>
+      cases hL : o.records.lookup id with
+      | none => simp [stepTenant, hT, hL, missingRecord] at h
+      | some old =>
+        obtain ⟨r, -, -, hP, -, -, ht⟩ := update_ok_parts_gen hT hL h
+        subst ht
+        have hinc : ∀ k x, Records.has (t.env k) x = true →
+            Records.has ((t.putType ty { o with records := o.records.map (fun q =>
+              if q.1 == id then (q.1, r) else q) }).env k) x = true := by
+          intro k x hx
+          rw [env_putType t ty o _ hT k]
+          by_cases hk : k == ty
+          · rw [if_pos hk]
+            have hk' : k = ty := by simpa using hk
+            subst hk'
+            have hr : t.env k = o.records := by
+              unfold Tenant.env; rw [hT]; simp
+            rw [hr] at hx
+            rw [has_replace]
+            exact hx
+          · rw [if_neg hk]; exact hx
+        have hnew : ∀ q ∈ ({ o with records := o.records.map (fun q =>
+            if q.1 == id then (q.1, r) else q) } : ObjType).records,
+            q ∈ o.records ∨ refsOk t.env o.schema q.2 = true := by
+          intro q hq
+          obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+          by_cases hid : (q₀.1 == id) = true
+          · simp only [hid, if_true] at hmap
+            right
+            rw [← hmap]
+            exact (problem_none hP).2
+          · simp only [hid, if_false] at hmap
+            left
+            rw [← hmap]
+            exact hq₀
+        exact refsOk_putType hT rfl hrefs hinc hnew
+  | delete ty id ev =>
+    have ht := stepTenant_delete_eq h
+    subst ht
+    intro T o'' hT q hq
+    rw [typ?_afterDelete] at hT
+    cases ho : t.typ? T with
+    | none => rw [ho] at hT; cases hT
+    | some o =>
+      rw [ho] at hT
+      simp only [Option.map_some, Option.some.injEq] at hT
+      subst hT
+      obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+      subst hmap
+      have hq₀' : q₀ ∈ o.records := by
+        by_cases hTy : (T == ty) = true
+        · rw [if_pos hTy] at hq₀
+          exact (List.mem_filter.mp hq₀).1
+        · rw [if_neg hTy] at hq₀
+          exact hq₀
+      exact refsOk_clear (fun k x hx hxk => env_afterDelete_inc t ty id k x hx hxk)
+        (hrefs T o ho q₀ hq₀')
+  | setRequired ty f strict =>
+    cases hT : t.typ? ty with
+    | none => simp only [stepTenant, hT] at h; split at h <;> cases h
+    | some o =>
+      simp only [stepTenant, hT] at h
+      repeat' split at h
+      all_goals try cases h
+      exact refsOk_putType_schema' hT rfl (fun k => ensure_makeRequired_ty o.schema f k) hrefs
+  | setUnique ty f strict =>
+    cases hT : t.typ? ty with
+    | none => simp only [stepTenant, hT] at h; split at h <;> cases h
+    | some o =>
+      simp only [stepTenant, hT] at h
+      repeat' split at h
+      all_goals try cases h
+      exact refsOk_putType_schema' hT rfl (fun k => ensure_makeUnique_ty o.schema f k) hrefs
+  | defineUnique ty fs =>
+    cases hT : t.typ? ty with
+    | none => simp only [stepTenant, hT] at h; split at h <;> cases h
+    | some o =>
+      simp only [stepTenant, hT] at h
+      repeat' split at h
+      all_goals try cases h
+      exact refsOk_putType_schema hT rfl (fun k => rfl) hrefs
 
 /-- Referential integrity for the world: every accepted step keeps it, strict or not. -/
 theorem step_preserves_refs (w w' : World) (i : Intent) (c : Ctx)
-    (hrefs : w.RefsOk) (h : step w i c = .ok w') : w'.RefsOk := by
+    (hrefs : w.RefsOk) (hlax : i.laxChange = false) (h : step w i c = .ok w') : w'.RefsOk := by
   intro x t' hx
-  unfold step at h
-  cases ht : w c.tenant with
-  | none => rw [ht] at h; cases h
-  | some t =>
-    rw [ht] at h
-    simp only at h
-    cases hs : stepTenant t c.principal i with
-    | error e => rw [hs] at h; cases h
-    | ok t₁ =>
-      rw [hs] at h
-      cases h
-      by_cases hxc : x = c.tenant
-      · simp [hxc] at hx
-        subst hx
-        exact stepTenant_preserves_refs t _ c.principal i (hrefs c.tenant t ht) hs
-      · simp [hxc] at hx
-        exact hrefs x t' hx
+  rcases step_cases h with ⟨t, t₁, ht, hs, rfl⟩ | ⟨owner, name, rfl, hnone, rfl⟩
+  · by_cases hxc : x = c.tenant
+    · simp [hxc] at hx
+      subst hx
+      exact stepTenant_preserves_refs t t₁ c.principal i (hrefs c.tenant t ht) hlax hs
+    · simp [hxc] at hx
+      exact hrefs x t' hx
+  · by_cases hxc : x = c.tenant
+    · simp [hxc] at hx
+      subst hx
+      intro T o hT
+      simp [genesisTenant, Tenant.typ?] at hT
+    · simp [hxc] at hx
+      exact hrefs x t' hx
 
 /-- A record that another record names through a field that restricts deletion, or through a
-    required single reference, cannot be deleted: one who may delete it, naming no version or
-    the record's version, is refused with `stillReferenced`. -/
-theorem delete_refused_while_referenced (t : Tenant) (p : PrincipalId) (id : RecordId)
-    (ev : Option Nat) (old : Record) (q : RecordId × Record)
-    (hl : t.records.lookup id = some old) (hcan : canEdit t p old = true)
+    required single reference, cannot be deleted: one who may delete it, naming no version or the
+    record's version, is refused with `stillReferenced`. The referring record may be of any type. -/
+theorem delete_refused_while_referenced (t : Tenant) (p : Principal) (ty : TypeId)
+    (id : RecordId) (ev : Option Nat) (o : ObjType) (old : Record) (S : TypeId) (so : ObjType)
+    (q : RecordId × Record)
+    (ho : t.typ? ty = some o) (hl : o.records.lookup id = some old) (hcan : canDelete t p ty old = true)
     (hv : versionClash ev old = false)
-    (hq : q ∈ t.records) (hb : blocks t.schema id q = true) :
-    stepTenant t p (.delete id ev) = .error .stillReferenced := by
-  have hany : t.records.any (blocks t.schema id) = true := List.any_eq_true.mpr ⟨q, hq, hb⟩
-  simp [stepTenant, hl, hcan, hv, hany]
+    (hS : t.typ? S = some so) (hq : q ∈ so.records) (hb : blocks S so.schema ty id q = true) :
+    stepTenant t p (.delete ty id ev) = .error .stillReferenced := by
+  have hany : t.blockedDelete ty id = true := by
+    unfold Tenant.blockedDelete
+    exact List.any_eq_true.mpr ⟨(S, so), lookup_mem hS, List.any_eq_true.mpr ⟨q, hq, hb⟩⟩
+  simp [stepTenant, ho, hl, hcan, hv, hany]
 
-/-- An accepted delete removes the record and leaves no record naming it, through a single
-    reference or a list element, whatever the state. -/
-theorem delete_leaves_no_reference (t t' : Tenant) (p : PrincipalId) (id : RecordId)
-    (ev : Option Nat) (h : stepTenant t p (.delete id ev) = .ok t') :
-    t'.records.has id = false ∧ ∀ q ∈ t'.records, ∀ fv ∈ q.2.fields, fv.2.refersTo id = false := by
-  simp only [stepTenant] at h
-  split at h
-  · cases h
-  · split at h
-    · cases h
-    · split at h
-      · cases h
-      · split at h
-        · cases h
-        · cases h
-          refine ⟨?_, ?_⟩
-          · cases hh : Records.has (afterDelete t.records id) id
-            · rfl
-            · exact absurd rfl (has_afterDelete.mp hh).2
-          · intro q hq fv hfv
-            obtain ⟨q₀, -, rfl⟩ := List.mem_map.mp hq
-            simp only [clearRef] at hfv
-            split at hfv
-            · obtain ⟨v, -, hd⟩ := mem_clearFields hfv
-              cases v with
-              | ref x =>
-                simp only [Val.dropRef] at hd
-                split at hd
-                · cases hd
-                · rename_i hx
-                  simp only [Option.some.injEq] at hd
-                  rw [← hd]
-                  simpa [Val.refersTo] using hx
-              | list vs =>
-                simp only [Val.dropRef, Option.some.injEq] at hd
-                rw [← hd]
-                simp [Val.refersTo]
-              | _ =>
-                simp only [Val.dropRef, Option.some.injEq] at hd
-                rw [← hd]
-                rfl
-            · rename_i hn
-              simp only [Record.refersTo, List.any_eq_true, not_exists, not_and,
-                Bool.not_eq_true] at hn
-              exact hn fv hfv
+/-- An accepted delete removes the record and leaves no record of any type naming it, through a
+    field of the type it names, whatever the state was. -/
+theorem delete_leaves_no_reference (t t' : Tenant) (p : Principal) (ty : TypeId)
+    (id : RecordId) (ev : Option Nat) (h : stepTenant t p (.delete ty id ev) = .ok t') :
+    (∀ o', t'.typ? ty = some o' → Records.has o'.records id = false) ∧
+      ∀ k o', t'.typ? k = some o' → ∀ q ∈ o'.records, ∀ fv ∈ q.2.fields,
+        fieldRefers o'.schema ty id fv = false := by
+  have ht := stepTenant_delete_eq h
+  subst ht
+  refine ⟨?_, ?_⟩
+  · intro o' hT
+    rw [typ?_afterDelete] at hT
+    cases ho : t.typ? ty with
+    | none => rw [ho] at hT; cases hT
+    | some o =>
+      rw [ho] at hT
+      simp only [Option.map_some, Option.some.injEq] at hT
+      subst hT
+      unfold delObj
+      simp only [beq_self_eq_true, if_true]
+      rw [has_delClear, has_filter_ne]
+      simp
+  · intro k o' hT q hq fv hfv
+    rw [typ?_afterDelete] at hT
+    cases ho : t.typ? k with
+    | none => rw [ho] at hT; cases hT
+    | some o =>
+      rw [ho] at hT
+      simp only [Option.map_some, Option.some.injEq] at hT
+      subst hT
+      unfold delObj at hq
+      obtain ⟨q₀, -, hmap⟩ := List.mem_map.mp (by unfold delClear at hq; exact hq)
+      subst hmap
+      exact fieldRefers_clearRef _ ty id q₀.2 fv hfv
 
-/-- Conformance survives the clearing a delete does: a record that blocks nothing has no
-    reference to the deleted record through a field that forbids its clearing. -/
-theorem conforms_afterDelete (t : Tenant) (id : RecordId) (q : RecordId × Record)
-    (hq : q ∈ t.records) (hne : q.1 ≠ id) (hnb : t.records.any (blocks t.schema id) = false)
-    (hc : conforms t.schema q.2 = true) : conforms t.schema (clearRef id q.2) = true := by
-  apply conforms_clear _ hc
-  intro fv hfv hv
-  cases hf : forbidsDelete t.schema fv.1 fv.2
-  · rfl
-  · have : blocks t.schema id q = true := by
-      unfold blocks
-      simp only [Bool.and_eq_true, bne_iff_ne, ne_eq]
-      exact ⟨hne, List.any_eq_true.mpr ⟨fv, hfv, by simp [hv, hf]⟩⟩
-    have := List.any_eq_true.mpr ⟨q, hq, this⟩
-    rw [hnb] at this
-    cases this
+
+/-! ## Schema changes that leave the records alone (typed) -/
+
+/-- Writing one object type's entry with the same records leaves every type's records as they
+    were. -/
+theorem env_putType_records (t : Tenant) (ty : TypeId) (o o' : ObjType) (h : t.typ? ty = some o)
+    (hr : o'.records = o.records) (k : TypeId) : (t.putType ty o').env k = t.env k := by
+  rw [env_putType t ty o o' h k]
+  by_cases hk : k == ty
+  · rw [if_pos hk]
+    have hk' : k = ty := by simpa using hk
+    subst hk'
+    simp [Tenant.env, h, hr]
+  · rw [if_neg hk]
+
+/-- A field made required leaves the counter and every type's records as they are. -/
+theorem setRequired_records (t t' : Tenant) (p : Principal) (ty : TypeId) (f : FieldId)
+    (s : Bool) (h : stepTenant t p (.setRequired ty f s) = .ok t') :
+    t'.nextId = t.nextId ∧ ∀ T, t'.env T = t.env T := by
+  constructor
+  · simp only [stepTenant] at h
+    repeat' split at h
+    all_goals (try cases h)
+    all_goals rfl
+  · intro T
+    cases hT : t.typ? ty with
+    | none => simp only [stepTenant, hT] at h; split at h <;> cases h
+    | some o =>
+      simp only [stepTenant, hT] at h
+      repeat' split at h
+      all_goals (try cases h)
+      all_goals exact env_putType_records t ty o { o with schema := makeRequired (ensureField o.schema f) f } hT rfl T
+
+/-- A field made unique leaves the counter and every type's records as they are. -/
+theorem setUnique_records (t t' : Tenant) (p : Principal) (ty : TypeId) (f : FieldId)
+    (s : Bool) (h : stepTenant t p (.setUnique ty f s) = .ok t') :
+    t'.nextId = t.nextId ∧ ∀ T, t'.env T = t.env T := by
+  constructor
+  · simp only [stepTenant] at h
+    repeat' split at h
+    all_goals (try cases h)
+    all_goals rfl
+  · intro T
+    cases hT : t.typ? ty with
+    | none => simp only [stepTenant, hT] at h; split at h <;> cases h
+    | some o =>
+      simp only [stepTenant, hT] at h
+      repeat' split at h
+      all_goals (try cases h)
+      all_goals exact env_putType_records t ty o { o with schema := makeUnique (ensureField o.schema f) f } hT rfl T
+
+/-- A composite unique constraint leaves the counter and every type's records as they are. -/
+theorem defineUnique_records (t t' : Tenant) (p : Principal) (ty : TypeId) (fs : List FieldId)
+    (h : stepTenant t p (.defineUnique ty fs) = .ok t') :
+    t'.nextId = t.nextId ∧ ∀ T, t'.env T = t.env T := by
+  constructor
+  · simp only [stepTenant] at h
+    repeat' split at h
+    all_goals (try cases h)
+    all_goals rfl
+  · intro T
+    cases hT : t.typ? ty with
+    | none => simp only [stepTenant, hT] at h; split at h <;> cases h
+    | some o =>
+      simp only [stepTenant, hT] at h
+      repeat' split at h
+      all_goals (try cases h)
+      all_goals exact env_putType_records t ty o { o with uniques := o.uniques ++ [fs] } hT rfl T
 
 end Strata

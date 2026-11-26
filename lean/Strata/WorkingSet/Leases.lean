@@ -499,10 +499,10 @@ theorem linv_init (x : TenantId) (w : World) (g n : Nat) (now : Nat) :
   refine ⟨fun _ e he => by simp at he, fun _ _ _ h => by simp at h, fun _ _ _ h => by simp at h,
     ⟨Nat.lt_succ_self _, fun _ _ _ h => by simp at h⟩, fun _ h => by simp [serving] at h⟩
 
-def cexHeader : Header := { schema := [], owner := 0, editors := [], writers := [] }
+def cexHeader : Header := { types := [], members := [(0, [ownerRole])], grants := [], policies := [] }
 
 def cexTenantL : Tenant :=
-  { schema := [], owner := 0, editors := [], writers := [], records := [], nextId := 1 }
+  { types := [], members := [(0, [ownerRole])], grants := [], policies := [], nextId := 1 }
 
 def cexProc : Proc :=
   { cache := [{ key := .header 1, stamp := 1, val := .header (some cexHeader) }],

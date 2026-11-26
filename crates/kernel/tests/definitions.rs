@@ -607,3 +607,85 @@ fn a_trigger_selects_a_declared_event_kind_and_binds_its_name() {
         trigger.on
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Workflow transitions may not assign a workflow field (the WfDefined rule of the model).
+// ---------------------------------------------------------------------------------------------
+
+/// A workflow over `body` of the notes world, whose one transition assigns `set`.
+fn body_flow(set: Vec<(FieldId, Expr)>) -> WorkflowDef {
+    WorkflowDef {
+        id: WorkflowId::new("body_flow").expect("id"),
+        object: object("note"),
+        field: field("body"),
+        initial: BTreeSet::from(["draft".to_string()]),
+        transitions: vec![WorkflowTransition {
+            name: "tidy".into(),
+            from: "draft".into(),
+            to: "tidied".into(),
+            guard: None,
+            set: set.into_iter().collect(),
+        }],
+    }
+}
+
+#[test]
+fn a_transition_that_assigns_another_workflows_field_is_refused() {
+    // The notes world's status workflow is over `status`; this transition assigns it.
+    let set = vec![(field("status"), Expr::Lit(Value::Str("draft".into())))];
+    let error = refused(
+        &notes_world(),
+        "owner",
+        vec![SchemaChange::DefineWorkflow(body_flow(set))],
+    );
+    assert_eq!(error.kind, ErrorKind::InvalidSchema);
+    assert!(
+        error
+            .message
+            .contains("sets status, the field of another workflow of note"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn a_transition_that_assigns_null_to_a_workflow_field_is_refused() {
+    // `body` is the field of this workflow; only a string literal may be assigned to it.
+    let set = vec![(field("body"), Expr::Lit(Value::Null))];
+    let error = refused(
+        &notes_world(),
+        "owner",
+        vec![SchemaChange::DefineWorkflow(body_flow(set))],
+    );
+    assert_eq!(error.kind, ErrorKind::InvalidSchema);
+    assert!(
+        error
+            .message
+            .contains("sets body to a value that is not a string literal"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn a_transition_that_assigns_a_plain_field_is_defined() {
+    let set = vec![(field("title"), Expr::Lit(Value::Str("tidy".into())))];
+    must(
+        &notes_world(),
+        "owner",
+        9_000,
+        change(vec![SchemaChange::DefineWorkflow(body_flow(set))]),
+    );
+}
+
+#[test]
+fn a_transition_that_assigns_a_declared_state_literal_to_its_own_field_is_defined() {
+    // `draft` is a state of this workflow (initial), so the assignment is allowed.
+    let set = vec![(field("body"), Expr::Lit(Value::Str("draft".into())))];
+    must(
+        &notes_world(),
+        "owner",
+        9_000,
+        change(vec![SchemaChange::DefineWorkflow(body_flow(set))]),
+    );
+}

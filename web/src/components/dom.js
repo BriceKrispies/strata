@@ -11,6 +11,33 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const URL_ATTRS = new Set(['href', 'src', 'action']);
 const PROPS = new Set(['value', 'checked', 'selected']);
 
+// The renderer's closed vocabulary: the same sets the Lean model states (lean/Strata/Client/Dom.lean,
+// `allowedTags` and `allowedAttrs`). A tag outside ALLOWED_TAGS is drawn as a span, and an attribute
+// outside it is dropped, so no element a view model or a tenant script names can be script-capable.
+const ALLOWED_TAGS = new Set([
+  'a', 'aside', 'article', 'blockquote', 'button', 'caption', 'code', 'dd', 'details', 'div', 'dl', 'dt', 'em',
+  'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'header', 'hr', 'img', 'input',
+  'label', 'legend', 'li', 'main', 'nav', 'ol', 'option', 'p', 'path', 'pre', 'progress', 'rect', 'section',
+  'select', 'span', 'strong', 'summary', 'svg', 'table', 'tbody', 'td', 'textarea', 'th', 'thead', 'time', 'tr', 'ul',
+]);
+const ALLOWED_ATTRS = new Set([
+  'action', 'alt', 'autocapitalize', 'autocomplete', 'checked', 'class', 'd', 'datetime', 'disabled', 'fill',
+  'focusable', 'for', 'height', 'hidden', 'href', 'id', 'inputmode', 'lang', 'loading', 'max', 'maxlength', 'min',
+  'name', 'novalidate', 'open', 'pattern', 'placeholder', 'required', 'rel', 'role', 'rows', 'scope', 'selected',
+  'shape-rendering', 'spellcheck', 'src', 'step', 'stroke', 'stroke-linejoin', 'stroke-width', 'tabindex', 'title',
+  'type', 'value', 'viewBox', 'width',
+]);
+
+/**
+ * Whether an attribute name may be set: listed, or in the `data-` or `aria-` family, and never an
+ * event handler, a style, an inline document or a form-action override.
+ * @param {string} name
+ */
+export function allowedAttr(name) {
+  if (/^on/i.test(name) || name === 'style' || name === 'srcdoc' || name === 'formaction') return false;
+  return ALLOWED_ATTRS.has(name) || /^(data|aria)-/.test(name);
+}
+
 // True while the picture being drawn is older than what the person has typed since: the worker
 // has not yet answered their latest keystrokes, so its `value` and `checked` are stale.
 let holding = false;
@@ -48,7 +75,8 @@ export function h(tag, attrs, ...children) {
   };
   children.forEach(add);
   const { key = null, ...rest } = attrs ?? {};
-  return { tag, attrs: rest, children: flat, key: key === null ? null : String(key) };
+  const kept = Object.fromEntries(Object.entries(rest).filter(([name]) => allowedAttr(name)));
+  return { tag: ALLOWED_TAGS.has(tag) ? tag : 'span', attrs: kept, children: flat, key: key === null ? null : String(key) };
 }
 
 /**

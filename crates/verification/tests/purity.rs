@@ -376,9 +376,14 @@ fn the_scan_would_catch_a_violation() {
     );
 }
 
+/// The one workspace member allowed `unsafe`: the boundary to the compiled Lean kernel
+/// (docs/formal-verification.md, section on S1).
+const UNSAFE_BOUNDARY: &str = "crates/lean-kernel-ffi";
+
 /// Every workspace member, the generated crates and the specification compiler's fixture crates
-/// included, inherits the workspace lints (`unsafe_code = "forbid"` among them). The generated
-/// crates' manifests are written by specc, so the line is emitted there.
+/// included, inherits the workspace lints (`unsafe_code = "forbid"` among them), except the Lean
+/// boundary crate, which must allow unsafe code and deny unsafe operations outside unsafe blocks.
+/// The generated crates' manifests are written by specc, so the line is emitted there.
 #[test]
 fn every_workspace_member_inherits_the_workspace_lints() {
     let workspace = std::fs::read_to_string(root().join("..").join("Cargo.toml")).unwrap();
@@ -396,6 +401,18 @@ fn every_workspace_member_inherits_the_workspace_lints() {
     for member in members {
         let manifest =
             std::fs::read_to_string(root().join("..").join(member).join("Cargo.toml")).unwrap();
+        if member == UNSAFE_BOUNDARY {
+            // The one crate that calls compiled Lean: it must allow unsafe code, and must still
+            // deny unsafe operations outside an explicit unsafe block.
+            let lints = manifest.replace(' ', "");
+            assert!(
+                lints.contains("[lints.rust]")
+                    && lints.contains("unsafe_code=\"allow\"")
+                    && lints.contains("unsafe_op_in_unsafe_fn=\"deny\""),
+                "{member} must declare its own [lints.rust] with unsafe_op_in_unsafe_fn = \"deny\""
+            );
+            continue;
+        }
         let inherits = manifest
             .split("[lints]")
             .nth(1)

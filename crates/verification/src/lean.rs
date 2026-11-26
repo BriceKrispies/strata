@@ -11,17 +11,60 @@
 //!
 //! | Lean model | Rust kernel in these fixtures |
 //! |---|---|
-//! | tenant `n` | tenant `t<n>` with one object type `item` |
-//! | fields 0 to 8 | `f0: list of ref item, restrict`, `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict`, `f6: int, default 7`, `f7: list of string`, `f8: list of ref item, set-null` |
-//! | owner, editors, writers | the `owner` role; an `editor` role allowed everything on `item`; a `writer` role allowed to create, and to update or delete where `record.$created_by == principal` |
+//! | tenant `n` | tenant `t<n>` with two object types: `item` (the model's type `1`, the default) and `part` (type `2`) |
+//! | fields 0 to 8, 10, 11, 12 of type 1 | `f0: list of ref item, restrict`, `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict`, `f6: int, default 7`, `f7: list of string`, `f8: list of ref item, set-null`, `f10: string, unique`, `f11: ref part, restrict`, `f12: ref part, set-null` |
+//! | fields 1 to 4 of type 2 | `f1: ref item, restrict`, `f2: ref item, set-null`, `f3: list of ref item, set-null`, `f4: int` |
+//! | fields 1 to 3 of type 4 (the tickets, slice 8) | `f01: string, default open`, `f02: int`, `f03: string`; the workflow `ticket_flow` over `f01` (`open` to `closed` when `f02` is at least one and the note `f03` becomes `shipped`; `closed` to `open`; `open` to `archived` when `f02` is absent, setting `f02` to `0`; `closed` to `archived`; `open` to `escalated` setting `f02` to nine); an editor does everything to them, a writer reads and creates them and changes or deletes the ones it created whose `f02` is at most five |
+//! | `type <n>` before the intent | the object type of the intent; any number but `1` and `2` names a type the tenant does not have unless a change defined it (the types `5` to `8` are the ones the generator defines, `type5` to `type8`, so that the kernel's order of the types by name is the model's by number) |
+//! | members, roles and policies | the `owner` role; an `editor` role with policies allowing every action on each object type; a `writer` role with policies allowing read and create, and update or delete where `record.$created_by == principal`; the `public` role with a policy allowing create of `part` when no user acts (`isNull(principal)`), so an anonymous caller may create a part; the system holds no role |
 //! | `create fs` | `CreateRecord` |
-//! | `update id [v=n] fs` | `UpdateRecord` naming fields `f0` to `f8`, absent ones as `null` |
+//! | `update id [v=n] fs` | `UpdateRecord` naming fields `f0` to `f8` and `f10`, absent ones as `null` |
 //! | `patch id [v=n] fs` | `UpdateRecord` naming only the fields given, `n` removing one |
 //! | `delete id [v=n]` | `DeleteRecord` |
-//! | `setRequired f strict` | `ChangeSchema [DefineField f required]` with `Reject` or `Grandfather` |
+//! | `setRequired f strict` | `ChangeSchema [DefineField f required]` with `Reject` or `Grandfather`; a field the type lacks is defined as an optional boolean field (the model's `plainField`) |
+//! | `setUnique f strict` | `ChangeSchema [DefineField f unique]`, the field's other attributes kept (an optional boolean field when the type lacks it), with `Reject` or `Grandfather` |
+//! | `schema [v=<n>] [strict\|lax] <change> ; <change> ..` (slice 11) | `ChangeSchema` with `expected_version` `<n>` and `Reject` (strict, the default) or `Grandfather`; the changes in order |
+//! | `define-field <type> <field> <ty> [required] [unique] [default=<v>]` | `DefineField` (a new field, or the redefinition of one); `<ty>` is `int`, `str`, `bool`, `ref:<type>:r` (restrict), `ref:<type>:s` (set-null) or `list:<ty>` |
+//! | `remove-field <type> <field>`, `define-type <type>`, `remove-type <type> [delete]` | `RemoveField`, `DefineObject` (label `type<n>`), `RemoveObject` with `delete_records` |
+//! | `Err.schemaConflict` | `SchemaConflict` |
+//! | `defineUnique fs` | `ChangeSchema [DefineUnique]`, a composite constraint named `u<fields>` |
 //! | `Err.danglingReference`, `Err.stillReferenced` | `DanglingReference`, `StillReferenced` |
 //! | `Err.invalid` | `TypeMismatch`, `MissingRequired`, `UnknownField` |
+//! | `Err.uniqueViolated`, `Err.invalidSchema` | `UniqueViolated`, `InvalidSchema` |
+//! | `Err.unknownObject` | `UnknownObject` (the owner's refusal of a type the tenant does not have) |
 //! | `Err.versionConflict`, `Err.limitExceeded` | `VersionConflict`, `LimitExceeded` |
+//! | tenant `3` | a tenant that does not exist until a system `create-tenant` makes it (no object types) |
+//! | role `n` | `0` is `owner`, `1` `public`, `2` `editor`, `3` `writer`, any other number the unknown role `role<n>` |
+//! | user `n`, `n` below `1000000` | principal `p<n>`; from `1000000` up the reserved principal `team:p<n>` (the model's `reservedId`) |
+//! | team `n`, invitation `n` | `team<n>`, `inv<n>` |
+//! | `create-tenant <owner> <name>` | `CreateTenant` (the context's principal is the caller) |
+//! | `assign <user> <role>`, `revoke <user> <role>` | `AssignRole`, `RevokeRole` |
+//! | `team <team> <label>` | `DefineTeam` |
+//! | `team-assign`, `team-revoke <team> <role>` | `AssignTeamRole`, `RevokeTeamRole` |
+//! | `team-add`, `team-remove <team> <user>` | `AddTeamMember`, `RemoveTeamMember` |
+//! | `invite <inv> <address> <roles> @<now>` | `CreateInvitation`, in a context whose `now` is `<now>` |
+//! | `invite-revoke <inv>` | `RevokeInvitation` |
+//! | `redeem <inv> @<now> [verified=<address>]` | `RedeemInvitation`, in a context whose `now` is `<now>` and whose `verified_address` is the address |
+//! | `Err.invalidIntent`, `unknownRole`, `lastOwner`, `tenantExists`, `workflowViolation` | `InvalidIntent`, `UnknownRole`, `LastOwner`, `TenantExists`, `WorkflowViolation` |
+//! | the editor role's `manage` power | the policy `editors_manage_members` (`manage` on `Resource::Members`, no condition) |
+//! | `fixtureReadRules` (slice 10) | the field read rules of `t1` and `t2`: `f10` of an item is shown when `f03 == true`; `f04` of a part only to `p100`; the note `f03` of a ticket when `f02 >= 1` |
+//! | `fixtureQueries` | the named queries `items_by_rank`, `items_not_elm` (a declared parameter `tag` its filter does not read), `parts_ranked` and `tickets_open`, each planned by the kernel as a scan; tenant `3` declares none |
+//! | `read <t> <p> records <type> <ids..>` | `ReadRequest::Records`, the ids `n` or `a-b` |
+//! | `read <t> <p> query <name> [k=v ..] [page=<n>] [cursor=<c>]` | `ReadRequest::Named`; a cursor is `o<n>` (`PageCursor::Offset`) or `a<id>` (`After`) |
+//! | `Err.unknownQuery` (read only) | `UnknownQuery` |
+//! | `setting <name> <level> [team=<n>] [v=<rev>] <value\|remove>` (slice 12) | `WriteSetting`, the team `team<n>`, the expected revision `<rev>` (zero when absent); the fixture defines `notify`, `density`, `label`, `banner` and `mode` (`fixture_settings`) |
+//! | `read <t> <p> setting <name>` (slice 12) | `settings::resolve` for the principal; `err <kind>`, or the source, the team's number, the value and the tenant's revision |
+//! | `ledger post @<now> <unit> <owner> <amount> key=<k> [reason=<r>] [corrects=<n>] [scope=<s>] [; ..]` (slice 13) | `Intent::PostLedger` in a context whose `now` is `<now>`; a unit `n` is the kernel's `u<n>` and a pool `n` is `pool<n>` (a kernel name starts with a letter); a person's owner is `p<n>` |
+//! | `ledger expire @<now> <unit> <cutoff>` (slice 13) | `Intent::ExpireLedger` in a context whose `now` is `<now>` |
+//! | `ledger tx @<now> op=<operation> key=<k> [reason=<r>] <unit> <owner> <amount> [scope=<s>] [; ..]` (slice 13) | `Intent::PostLedgerTransaction` in a context whose `now` is `<now>`; each `;`-separated group is one leg, written as a posting without a key, a reason or a correction |
+//! | `read <t> <p> ledger <unit> <owner> [scope=<s>] [own]` (slice 13) | `ledger::read_balance`; `err <kind>`, or `ok`, the balance and the sequence number |
+//! | `invoke @<now> <operation> [key=<k>] [<input>=<value> ..]` after `op <t> <p>` (slice 14) | `Intent::InvokeOperation` in a context whose `now` is `<now>` and whose `idempotency_key` stays none; `key=<k>` is the intent's idempotency key (empty when absent) and each other token an input, its value read as a field value is |
+//! | the fixture operations (slice 14) | `fixture_operations`: `note`, `note_count`, `retag`, `drop`, `grant` and `note_grant`, defined on tenants `t1` and `t2` in the fixture batch that defines the settings (so no further revision or event) |
+//! | type `20`, the profiles (slice 16) | `profile`: `f01: string, required, unique` (the principal field), `f02: int`; printed in the state only while it holds a record |
+//! | `segment define <n> <name> <type> <field> <refresh\|-> <expr>`, `segment remove <n>`, `segment rebuild <n>` (slice 16) | `segments::define`, `segments::remove`, and the rebuild pass over every person of the subject type (decided with the reason `predicate-change`); the segment tables are one `SegmentTables` a tenant, and an accepted record step is followed by `plan_change`, `targets`, `decide_write` and `apply` (batches stripped: the model has none) |
+//! | segment number `n` (slice 16) | a fixed `SegmentId` per tenant and number (`segment_ids`), increasing with `n`, so the kernel's order of the segments by id is the model's by number |
+//! | segment 1, the editor's `segments-define`, automation 5, triggers 9 and 10 (slice 16) | `high scorers` over the profiles (`f02 >= 10`, defined by the owner after the schema batches); the capability on the editor role; automation `w5` run as the owner; triggers `t9` and `t10` on its entry and exit; the schema batch adds no revision or event |
+//! | the fixture ledger (slice 13) | `fixture_ledger_decls` on tenants `t1` and `t2`, set on the schema after the fixture batch (no event) |
 //!
 //! # The Main.lean protocol
 //!
@@ -30,29 +73,61 @@
 //!
 //! ```text
 //! scenario <name>              starts a scenario from the initial world
-//! op <tenant> <principal> <intent> [args]
+//! op <tenant> <principal> [type <n>] <intent> [args]
+//!                              `<principal>` is a user number, `system` (no role) or `anon` (the `public` role only);
 //!                              one intent, as `create f=v ..`, `update <id> [v=n] f=v ..`,
 //!                              `patch <id> [v=n] f=v ..`, `delete <id> [v=n]`,
 //!                              `require <field> strict|lax`
+//!                              `unique <field> strict|lax`, `composite <field> ..`,
+//!                              `schema [v=<n>] [strict|lax] <change> ; <change> ..` (slice 11), or a membership intent
+//!                              (slice 7): `create-tenant <owner> <name>`, `assign <user> <role>`,
+//!                              `revoke <user> <role>`, `team <team> <label>`, `team-assign <team> <role>`,
+//!                              `team-revoke <team> <role>`, `team-add <team> <user>`,
+//!                              `team-remove <team> <user>`, `invite <inv> <address> <roles> @<now>`,
+//!                              `invite-revoke <inv>`, `redeem <inv> @<now> [verified=<address>]`, or a setting write
+//!                              (slice 12): `setting <name> <level> [team=<n>] [v=<rev>] <value|remove>`, a value being
+//!                              `i:<int>`, `s:<text>`, `b:0`, `b:1` or `n`.
+//!                              A text (name, label, address) is `s:<text>` with `_` for a space; roles
+//!                              are numbers separated by commas, or `-` for none; `@<now>` is the time of
+//!                              the request in milliseconds
 //! end                          prints the final state and returns to the initial world
 //! ```
 //!
 //! A value is `n`, `i:<int>`, `s:<text>`, `s*<count>:<text>` (the text repeated), `b:1`, `b:0`,
 //! `r:<id>`, or a list: `l:<element>,<element>,..` (`l:` is empty) or `l*<count>:<element>`.
 //!
-//! Output: `scenario <name>`, then `ok` or `err <kind>` per op (`unparsed <line>` for a line it
-//! cannot read), then `state`, the state lines and `end`. A new intent is a new `op` arm in
+//! Output: `scenario <name>`, then per op either `err <kind>` or an accepted step: `ok`, `revision <n>`
+//! (the tenant's revision after it), one `event <seq> rev=<rev> by=<principal> <body>` line per event,
+//! then one `effect publish <seq>` per event (`unparsed <line>` for a line it cannot read), then
+//! `state`, the state lines and `end`. `outcome_lines` drops the revision, event and effect lines.
+//! A read line (`read <tenant> <principal> records <type> <ids..>` or
+//! `read <tenant> <principal> query <name> [k=v ..] [page=<n>] [cursor=<c>]`; an id is `n` or `a-b`) changes
+//! nothing and prints `err <kind>` (`no_tenant`, `unknown_object`, `unknown_query`, `invalid_intent`,
+//! `limit_exceeded`), or `ok`, `next <cursor>` (`-` for none) and one `row <id> <record>` line per row, in order.
+//! `op_outcomes` cuts an output into the lines of each operation, so that the coverage counts one outcome each.
+//! A tenant's state lines end with its membership (`roles`, `member`, `team` and `invitation` lines, sorted) when that is not the one the
+//! fixture starts it with, and always for tenant 3, which is printed only when it exists. A new intent is a new `op` arm in
 //! `parseOp`; `crate::lean_diff` generates every such intent (and a test fails if one is missing).
 //! The differential harness is `crate::lean_diff`.
 //!
 //! Agreement on these scenarios is evidence of correspondence on the modelled fragment. It is
-//! not a proof, and it says nothing about what the model leaves out: constraints, workflows,
-//! references, uniqueness, queries, events.
+//! not a proof, and it says nothing about what the model leaves out: workflows, queries, events,
+//! teams, scopes, role and policy definitions by intent, the clock, and the expression functions beyond
+//! the slice 5 fragment.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
+use std::sync::{Arc, OnceLock};
+use strata_kernel::rules::Lookup;
+use strata_kernel::search::{SearchRequest, SearchResult};
+use strata_kernel::segments::{
+    Definition, Locate, Occasion, SegmentEvent, SegmentId, SegmentKey, SegmentReason,
+    SegmentTables, Target,
+};
+use strata_kernel::triggers::{AutomationDecline, AutomationStart};
+use strata_kernel::types::{PageCursor, QueryId};
 use strata_kernel::*;
 
 /// A linear congruential generator: enough to make varied scenarios, and trivially repeatable.
@@ -103,57 +178,123 @@ fn field_tokens(rng: &mut Lcg) -> String {
         }
     }
     if rng.below(25) == 0 {
-        tokens.push("9=i:1".to_string());
+        tokens.push("9=s:oak".to_string());
     }
     tokens.join(" ")
 }
 
+/// One scenario, named `s<n>`, written from the generator's random stream.
+fn write_scenario(rng: &mut Lcg, n: usize, out: &mut String) {
+    out.push_str(&format!("scenario s{n}\n"));
+    for _ in 0..(10 + rng.below(16)) {
+        let tenant = match rng.below(12) {
+            0 => 3,
+            1 | 2 => 2,
+            _ => 1,
+        };
+        let home = if tenant == 2 { 200 } else { 100 };
+        let principal = match rng.below(14) {
+            0 => 999,
+            1 => {
+                if home == 100 {
+                    201
+                } else {
+                    101
+                }
+            }
+            2 | 3 => home,
+            4 | 5 => home + 1,
+            6..=9 => home + 2,
+            _ => home + 3,
+        };
+        let op = match rng.below(20) {
+            0..=7 => format!("create {}", field_tokens(rng)),
+            8..=13 => format!("update {} {}", 1 + rng.below(6), field_tokens(rng)),
+            14..=16 => format!("delete {}", 1 + rng.below(6)),
+            17 => format!("require {} strict", 1 + rng.below(3)),
+            _ => format!("require {} lax", 1 + rng.below(3)),
+        };
+        // Schema changes are mostly attempted by the owner, so that both strict outcomes occur.
+        let principal = if op.starts_with("require") && rng.below(4) != 0 {
+            home
+        } else {
+            principal
+        };
+        out.push_str(format!("op {tenant} {principal} {op}").trim_end());
+        out.push('\n');
+    }
+    out.push_str("end\n");
+}
+
+/// The generator behind [`scenarios`], read a batch at a time. Each batch continues the random
+/// stream and numbers its scenarios on from the last, so the batches of one stream, concatenated,
+/// are exactly what [`scenarios`] writes for the same seed and total count.
+pub struct ScenarioStream {
+    rng: Lcg,
+    next: usize,
+    seed: u64,
+    generator: Generator,
+}
+
+/// Which generator a [`ScenarioStream`] draws from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Generator {
+    /// The generator of the committed fixtures ([`scenarios`]). It covers the create, full
+    /// replacement, delete and schema-change intents, the first slice of the model only.
+    Fixture,
+    /// The generator of `lean_diff`: every intent of `Main.lean` (patch and expected versions
+    /// included), references, lists, and the string, list and record bounds, one below, at and
+    /// above. Scenario `n` is `lean_diff::generate_reads` (the scenario of `lean_diff::generate` with search and aggregate reads woven in) of the case seed `n` of the base seed.
+    Full,
+}
+
+impl ScenarioStream {
+    /// The stream [`scenarios`] draws from.
+    pub fn new(seed: u64) -> Self {
+        Self::with_generator(seed, Generator::Fixture)
+    }
+
+    /// A stream of the full generator (see [`Generator::Full`]).
+    pub fn full(seed: u64) -> Self {
+        Self::with_generator(seed, Generator::Full)
+    }
+
+    fn with_generator(seed: u64, generator: Generator) -> Self {
+        Self {
+            rng: Lcg(seed),
+            next: 0,
+            seed,
+            generator,
+        }
+    }
+
+    /// The next `count` scenarios, as a scenario file.
+    pub fn batch(&mut self, count: usize) -> String {
+        let mut out = String::new();
+        for n in self.next..self.next + count {
+            match self.generator {
+                Generator::Fixture => write_scenario(&mut self.rng, n, &mut out),
+                Generator::Full => write_full_scenario(self.seed, n, &mut out),
+            }
+        }
+        self.next += count;
+        out
+    }
+}
+
+/// One scenario of the full generator, named `f<n>`.
+fn write_full_scenario(seed: u64, n: usize, out: &mut String) {
+    out.push_str(&format!("scenario f{n}\n"));
+    for op in crate::lean_diff::generate_reads(crate::lean_diff::case_seed(seed, n)) {
+        out.push_str(&op.render());
+        out.push('\n');
+    }
+    out.push_str("end\n");
+}
+
 /// The scenario file both sides run. Deterministic in `seed`.
 pub fn scenarios(seed: u64, count: usize) -> String {
-    let mut rng = Lcg(seed);
-    let mut out = String::new();
-    for n in 0..count {
-        out.push_str(&format!("scenario s{n}\n"));
-        for _ in 0..(10 + rng.below(16)) {
-            let tenant = match rng.below(12) {
-                0 => 3,
-                1 | 2 => 2,
-                _ => 1,
-            };
-            let home = if tenant == 2 { 200 } else { 100 };
-            let principal = match rng.below(14) {
-                0 => 999,
-                1 => {
-                    if home == 100 {
-                        201
-                    } else {
-                        101
-                    }
-                }
-                2 | 3 => home,
-                4 | 5 => home + 1,
-                6..=9 => home + 2,
-                _ => home + 3,
-            };
-            let op = match rng.below(20) {
-                0..=7 => format!("create {}", field_tokens(&mut rng)),
-                8..=13 => format!("update {} {}", 1 + rng.below(6), field_tokens(&mut rng)),
-                14..=16 => format!("delete {}", 1 + rng.below(6)),
-                17 => format!("require {} strict", 1 + rng.below(3)),
-                _ => format!("require {} lax", 1 + rng.below(3)),
-            };
-            // Schema changes are mostly attempted by the owner, so that both strict outcomes occur.
-            let principal = if op.starts_with("require") && rng.below(4) != 0 {
-                home
-            } else {
-                principal
-            };
-            out.push_str(format!("op {tenant} {principal} {op}").trim_end());
-            out.push('\n');
-        }
-        out.push_str("end\n");
-    }
-    out
+    ScenarioStream::new(seed).batch(count)
 }
 
 fn id<T: TryFrom<String>>(text: String) -> T
@@ -167,8 +308,79 @@ fn item() -> ObjectTypeId {
     id("item".to_string())
 }
 
+/// The second object type of the fixture (the model's type `2`). Its references point into items
+/// and back.
+fn part() -> ObjectTypeId {
+    id("part".to_string())
+}
+
+/// The object type an intent names: `1` is `item`, `2` is `part`, and any other number is a type
+/// the tenant does not have.
+fn object_of(ty: u64) -> ObjectTypeId {
+    match ty {
+        1 => item(),
+        2 => part(),
+        4 => ticket(),
+        20 => profile(),
+        n => id(format!("type{n}")),
+    }
+}
+
+/// The object type of the profiles, the model's type `20` (slice 16): the people a segment groups. The generator
+/// never writes a schema change that touches it or its fields, since the model does not check SEG-006 on a schema
+/// change (the kernel refuses a change that removes or retypes a field a segment names).
+fn profile() -> ObjectTypeId {
+    id("profile".to_string())
+}
+
+/// Field `n` of a profile: `1` a required unique string (the principal field, `p<n>`), `2` an optional integer (the
+/// score).
+fn profile_field_def(n: u64) -> FieldDef {
+    FieldDef {
+        id: field_id(n),
+        label: format!("f{n}"),
+        ty: if n == 1 {
+            FieldType::Str
+        } else {
+            FieldType::Int
+        },
+        required: n == 1,
+        unique: n == 1,
+        default: None,
+        read: None,
+        personal: None,
+        normalise: None,
+        computed: None,
+    }
+}
+
+/// The fields an `update` line names for an object type, as the model's `fieldsOf` lists them.
+fn fixture_fields(object: &ObjectTypeId) -> Vec<u64> {
+    if *object == item() {
+        vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    } else if *object == part() {
+        vec![1, 2, 3, 4, 5]
+    } else if *object == ticket() {
+        vec![1, 2, 3]
+    } else {
+        // The profiles (type 20) have none, as the model's `fieldsOf` has none: an `update` names the fields it
+        // changes, as a patch does, and the generator names both.
+        Vec::new()
+    }
+}
+
+/// Field `n` of the fixture. The kernel checks a record's fields in the order of their ids, which
+/// are strings; the model checks them by number. Two-digit ids (`f04`, `f10`) make the two orders
+/// the same, so the fixture does not invent a check-order difference the kernel does not have.
 fn field_id(n: u64) -> FieldId {
-    id(format!("f{n}"))
+    id(format!("f{n:02}"))
+}
+
+/// The number of a fixture field (`f10` is 10).
+fn field_number(field: &FieldId) -> u64 {
+    field.as_str()[1..]
+        .parse()
+        .expect("fixture fields are f<number>")
 }
 
 fn field_type(n: u64) -> FieldType {
@@ -176,7 +388,14 @@ fn field_type(n: u64) -> FieldType {
         target: item(),
         on_delete,
     };
+    let part_reference = |on_delete| FieldType::Ref {
+        target: part(),
+        on_delete,
+    };
     match n {
+        // Fields 11 and 12 of an item refer to a part; 11 restricts the part's delete, 12 clears.
+        11 => part_reference(OnDelete::Restrict),
+        12 => part_reference(OnDelete::SetNull),
         0 => FieldType::List(Box::new(reference(OnDelete::Restrict))),
         1 => FieldType::Str,
         2 | 6 => FieldType::Int,
@@ -187,8 +406,68 @@ fn field_type(n: u64) -> FieldType {
         7 => FieldType::List(Box::new(FieldType::Str)),
         // Field 8 loses an element when that element's record is deleted.
         8 => FieldType::List(Box::new(reference(OnDelete::SetNull))),
+        // Field 9 is the caller's principal, as a string (the kernel names a principal `p<n>`).
+        9 => FieldType::Str,
+        10 => FieldType::Str,
         _ => FieldType::Bool,
     }
+}
+
+/// The default of a field of an item, as the model's `Main.lean` gives it: field `6` the constant
+/// `7`, field `9` the principal (an expression).
+fn item_default(n: u64) -> Option<Expr> {
+    match n {
+        6 => Some(Expr::Lit(Value::Int(7))),
+        9 => Some(Expr::Principal),
+        _ => None,
+    }
+}
+
+/// The constraints of the item type, in id order (the model's `itemConstraints`): field `2` is absent
+/// or not negative, and field `1` is not the name `forbidden`.
+fn item_constraints() -> Vec<SchemaChange> {
+    let field = |n: u64| Box::new(Expr::Var(Scope::Record, format!("f{n:02}")));
+    let absent_or_not_negative = Expr::Or(vec![
+        Expr::IsNull(field(2)),
+        Expr::Cmp(CmpOp::Ge, field(2), Box::new(Expr::Lit(Value::Int(0)))),
+    ]);
+    let not_forbidden = Expr::Cmp(
+        CmpOp::Ne,
+        field(1),
+        Box::new(Expr::Lit(Value::Str("forbidden".into()))),
+    );
+    [
+        ("c1", absent_or_not_negative, "a value is negative"),
+        ("c2", not_forbidden, "the name is forbidden"),
+    ]
+    .into_iter()
+    .map(|(name, expr, message)| SchemaChange::DefineConstraint {
+        object: item(),
+        constraint: ConstraintDef {
+            id: id(name.to_string()),
+            expr,
+            message: message.to_string(),
+        },
+    })
+    .collect()
+}
+
+/// The constraint of the part type (the model's `partConstraints`, WG-5664): a part names an item
+/// (field `1`, or field `2`, a set-null reference, which a delete clears), has a number (field `4`),
+/// or was made by `p100` (field `5`, whose default is whether the caller is `p100`). A delete that
+/// clears the only reference of a part that has none of the others is refused.
+fn part_constraints() -> Vec<SchemaChange> {
+    let field = |n: u64| Box::new(Expr::Var(Scope::Record, format!("f{n:02}")));
+    let named = |n: u64| Expr::Not(Box::new(Expr::IsNull(field(n))));
+    let made_by_p100 = Expr::Cmp(CmpOp::Eq, field(5), Box::new(Expr::Lit(Value::Bool(true))));
+    vec![SchemaChange::DefineConstraint {
+        object: part(),
+        constraint: ConstraintDef {
+            id: id("c1".to_string()),
+            expr: Expr::Or(vec![named(1), named(2), named(4), made_by_p100]),
+            message: "a part names no item, has no number and was not made by p100".to_string(),
+        },
+    }]
 }
 
 fn field_def(n: u64, required: bool) -> FieldDef {
@@ -197,9 +476,531 @@ fn field_def(n: u64, required: bool) -> FieldDef {
         label: format!("f{n}"),
         ty: field_type(n),
         required,
+        // Field 10 is unique: no two records hold the same value in it.
+        unique: n == 10,
+        default: item_default(n),
+        read: item_read(n),
+        personal: None,
+        normalise: None,
+        computed: None,
+    }
+}
+
+/// Field `n` of a part: `1` an item reference that restricts the delete, `2` an item reference
+/// that clears (set-null), `3` a list of item references that clear, `4` an integer.
+fn part_field_type(n: u64) -> FieldType {
+    let item_reference = |on_delete| FieldType::Ref {
+        target: item(),
+        on_delete,
+    };
+    match n {
+        1 => item_reference(OnDelete::Restrict),
+        2 => item_reference(OnDelete::SetNull),
+        3 => FieldType::List(Box::new(item_reference(OnDelete::SetNull))),
+        5 => FieldType::Bool,
+        _ => FieldType::Int,
+    }
+}
+
+/// The default of a part's field: field `5` is whether the caller is `p100` (the model's
+/// `partSchema`).
+fn part_default(n: u64) -> Option<Expr> {
+    (n == 5).then(|| {
+        Expr::Cmp(
+            CmpOp::Eq,
+            Box::new(Expr::Principal),
+            Box::new(Expr::Lit(Value::Str("p100".into()))),
+        )
+    })
+}
+
+fn part_field_def(n: u64) -> FieldDef {
+    FieldDef {
+        id: field_id(n),
+        label: format!("f{n}"),
+        ty: part_field_type(n),
+        required: false,
         unique: false,
-        // Field 6 has the constant default 7.
-        default: (n == 6).then_some(Expr::Lit(Value::Int(7))),
+        default: part_default(n),
+        read: part_read(n),
+        personal: None,
+        normalise: None,
+        computed: None,
+    }
+}
+
+/// The read rule of field `n` of an item (the model's `fixtureReadRules`): field `10` is shown only
+/// when the boolean field `3` is `true`.
+fn item_read(n: u64) -> Option<Expr> {
+    (n == 10).then(|| {
+        Expr::Cmp(
+            CmpOp::Eq,
+            Box::new(Expr::Var(Scope::Record, "f03".into())),
+            Box::new(Expr::Lit(Value::Bool(true))),
+        )
+    })
+}
+
+/// The read rule of field `n` of a part: field `4` is shown only to `p100`.
+fn part_read(n: u64) -> Option<Expr> {
+    (n == 4).then(|| {
+        Expr::Cmp(
+            CmpOp::Eq,
+            Box::new(Expr::Principal),
+            Box::new(Expr::Lit(Value::Str("p100".into()))),
+        )
+    })
+}
+
+/// The read rule of field `n` of a ticket: the note (field `3`) is shown only once the ticket has a
+/// vote (field `2` at least one).
+fn ticket_read(n: u64) -> Option<Expr> {
+    (n == 3).then(|| {
+        Expr::Cmp(
+            CmpOp::Ge,
+            Box::new(Expr::Var(Scope::Record, "f02".into())),
+            Box::new(Expr::Lit(Value::Int(1))),
+        )
+    })
+}
+
+/// The named queries of the fixture (the model's `fixtureQueries`), declared in tenants `t1` and `t2`.
+/// Each is one the kernel plans as a scan: it orders, and either has no filter or orders by more than
+/// one key. `items_not_elm` declares a parameter `tag` that its filter does not read.
+fn fixture_queries() -> Vec<SchemaChange> {
+    let key = |field: &str, descending: bool| OrderKey {
+        field: field.to_string(),
+        descending,
+    };
+    let text = |op: CmpOp, field: &str, value: &str| {
+        Expr::Cmp(
+            op,
+            Box::new(Expr::Var(Scope::Record, field.into())),
+            Box::new(Expr::Lit(Value::Str(value.into()))),
+        )
+    };
+    let query = |name: &str,
+                 object: ObjectTypeId,
+                 filter: Option<Expr>,
+                 params: &[&str],
+                 order: Vec<OrderKey>,
+                 limit: Option<u32>| {
+        SchemaChange::DefineQuery(QueryDef {
+            id: id::<QueryId>(name.to_string()),
+            object,
+            filter,
+            params: params.iter().map(|p| p.to_string()).collect(),
+            order,
+            limit,
+            aggregates: None,
+            declared_fields: None,
+            tree: None,
+        })
+    };
+    let changes = vec![
+        query(
+            "items_by_rank",
+            item(),
+            None,
+            &[],
+            vec![key("f02", true)],
+            None,
+        ),
+        query(
+            "items_not_elm",
+            item(),
+            Some(text(CmpOp::Ne, "f01", "elm")),
+            &["tag"],
+            vec![key("f03", false), key("f02", true)],
+            Some(3),
+        ),
+        query(
+            "parts_ranked",
+            part(),
+            None,
+            &[],
+            vec![key("f04", false)],
+            None,
+        ),
+        query(
+            "tickets_open",
+            ticket(),
+            Some(text(CmpOp::Eq, "f01", "open")),
+            &[],
+            vec![key("f02", false), key("f03", false)],
+            Some(2),
+        ),
+    ];
+    changes.into_iter().map(with_aggregates).collect()
+}
+
+/// The setting definitions of the fixture (slice 12, the model's `fixtureSettings`): `notify` (a flag, opened at the
+/// tenant and the person), `density` (a whole number from 0 to 9, opened at the tenant, the team and the person),
+/// `label` (text, opened at the team and the person), `banner` (text, opened at the tenant and the person, locked at
+/// the tenant) and `mode` (text from the closed set `plain` and `bold`, opened at the tenant and the team).
+fn fixture_settings() -> Vec<SchemaChange> {
+    let define = |name: &str,
+                  ty: &str,
+                  levels: &[SettingLevel],
+                  locked_by: Option<SettingLevel>,
+                  default: Value,
+                  allowed: Option<SettingAllowed>| {
+        SchemaChange::DefineSetting(SettingDef {
+            id: id(name.to_string()),
+            label: name.to_string(),
+            r#type: SettingType::new(ty).expect("fixture setting types are valid"),
+            default,
+            levels: levels.iter().copied().collect(),
+            locked_by,
+            area: None,
+            description: None,
+            allowed,
+        })
+    };
+    vec![
+        define(
+            "notify",
+            "bool",
+            &[SettingLevel::Tenant, SettingLevel::Person],
+            None,
+            Value::Bool(false),
+            None,
+        ),
+        define(
+            "density",
+            "i64",
+            &[
+                SettingLevel::Tenant,
+                SettingLevel::Team,
+                SettingLevel::Person,
+            ],
+            None,
+            Value::Int(3),
+            Some(SettingAllowed::Range { min: 0, max: 9 }),
+        ),
+        define(
+            "label",
+            "string",
+            &[SettingLevel::Team, SettingLevel::Person],
+            None,
+            Value::Str("plain".to_string()),
+            None,
+        ),
+        define(
+            "banner",
+            "string",
+            &[SettingLevel::Tenant, SettingLevel::Person],
+            Some(SettingLevel::Tenant),
+            Value::Str("none".to_string()),
+            None,
+        ),
+        define(
+            "mode",
+            "string",
+            &[SettingLevel::Tenant, SettingLevel::Team],
+            None,
+            Value::Str("plain".to_string()),
+            Some(SettingAllowed::Closed {
+                values: vec![
+                    Value::Str("plain".to_string()),
+                    Value::Str("bold".to_string()),
+                ],
+            }),
+        ),
+    ]
+}
+
+/// The aggregates and the declared fields of a fixture query (the model's `fixtureQueries`, slice 10, second
+/// half): what a request may filter or aggregate on, and the aggregates it declares by name. The queries
+/// with none are left as they are.
+fn with_aggregates(change: SchemaChange) -> SchemaChange {
+    let SchemaChange::DefineQuery(mut def) = change else {
+        return change;
+    };
+    let agg = |name: &str,
+               kind: AggregateKind,
+               field: Option<u64>,
+               group_by: Option<u64>,
+               n: Option<u32>,
+               descending: bool,
+               scan_bound: u32| AggregateDef {
+        id: id::<AggregateId>(name.to_string()),
+        kind,
+        field: field.map(field_id),
+        group_by: group_by.map(field_id),
+        group_by_second: None,
+        n,
+        descending,
+        scan_bound,
+    };
+    let (declared, aggregates): (Vec<u64>, Vec<AggregateDef>) = match def.id.0.as_str() {
+        "items_by_rank" => (
+            vec![2, 3],
+            vec![
+                agg(
+                    "count",
+                    AggregateKind::Count,
+                    None,
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "bounded_count",
+                    AggregateKind::Count,
+                    None,
+                    None,
+                    None,
+                    false,
+                    2,
+                ),
+                agg(
+                    "sum_rank",
+                    AggregateKind::Sum,
+                    Some(2),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "min_rank",
+                    AggregateKind::Minimum,
+                    Some(2),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "max_rank",
+                    AggregateKind::Maximum,
+                    Some(2),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "top_rank",
+                    AggregateKind::Top,
+                    Some(2),
+                    None,
+                    Some(2),
+                    true,
+                    10_000,
+                ),
+                agg(
+                    "count_by_flag",
+                    AggregateKind::Count,
+                    None,
+                    Some(3),
+                    None,
+                    false,
+                    10_000,
+                ),
+            ],
+        ),
+        "items_not_elm" => (
+            vec![2, 3],
+            vec![
+                agg(
+                    "count",
+                    AggregateKind::Count,
+                    None,
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "sum_rank",
+                    AggregateKind::Sum,
+                    Some(2),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+            ],
+        ),
+        "parts_ranked" => (
+            vec![4],
+            vec![
+                agg(
+                    "count",
+                    AggregateKind::Count,
+                    None,
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "sum",
+                    AggregateKind::Sum,
+                    Some(4),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "max",
+                    AggregateKind::Maximum,
+                    Some(4),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+            ],
+        ),
+        "tickets_open" => (
+            vec![2, 3],
+            vec![
+                agg(
+                    "count",
+                    AggregateKind::Count,
+                    None,
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "sum_votes",
+                    AggregateKind::Sum,
+                    Some(2),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "max_note",
+                    AggregateKind::Maximum,
+                    Some(3),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+            ],
+        ),
+        _ => (Vec::new(), Vec::new()),
+    };
+    if !declared.is_empty() {
+        def.declared_fields = Some(declared.iter().map(|n| field_id(*n)).collect());
+    }
+    if !aggregates.is_empty() {
+        def.aggregates = Some(aggregates);
+    }
+    SchemaChange::DefineQuery(def)
+}
+
+/// The object type of the tickets, the model's type `4` (slice 8): a state (`1`), a vote count (`2`)
+/// and a note (`3`), with the workflow of `ticket_workflow`.
+fn ticket() -> ObjectTypeId {
+    id("ticket".to_string())
+}
+
+/// The type of a ticket's field: the vote count is an integer, the state and the note are strings.
+fn ticket_field_type(n: u64) -> FieldType {
+    if n == 2 {
+        FieldType::Int
+    } else {
+        FieldType::Str
+    }
+}
+
+/// The default of a ticket's field: a new ticket starts `open` (field `1`).
+fn ticket_default(n: u64) -> Option<Expr> {
+    (n == 1).then(|| Expr::Lit(Value::Str("open".into())))
+}
+
+fn ticket_field_def(n: u64) -> FieldDef {
+    FieldDef {
+        id: field_id(n),
+        label: format!("f{n}"),
+        ty: ticket_field_type(n),
+        required: false,
+        unique: false,
+        default: ticket_default(n),
+        read: ticket_read(n),
+        personal: None,
+        normalise: None,
+        computed: None,
+    }
+}
+
+/// The workflow of the tickets (the model's `ticketWorkflow`, slice 8), over the state field `1`: a
+/// ticket with a vote ships (`closed`, note `shipped`); a closed one reopens; an open one without votes
+/// is archived with its votes set to `0`; a closed one is archived with its note set;
+/// an open one is escalated to nine votes.
+fn ticket_workflow() -> WorkflowDef {
+    let votes = |scope: Scope| Box::new(Expr::Var(scope, "f02".to_string()));
+    WorkflowDef {
+        id: id("ticket_flow".to_string()),
+        object: ticket(),
+        field: field_id(1),
+        initial: BTreeSet::from(["open".to_string()]),
+        transitions: vec![
+            WorkflowTransition {
+                name: "ship".into(),
+                from: "open".into(),
+                to: "closed".into(),
+                guard: Some(Expr::Cmp(
+                    CmpOp::Ge,
+                    votes(Scope::New),
+                    Box::new(Expr::Lit(Value::Int(1))),
+                )),
+                set: BTreeMap::from([(field_id(3), Expr::Lit(Value::Str("shipped".into())))]),
+            },
+            WorkflowTransition {
+                name: "reopen".into(),
+                from: "closed".into(),
+                to: "open".into(),
+                guard: None,
+                set: BTreeMap::new(),
+            },
+            WorkflowTransition {
+                name: "archive".into(),
+                from: "open".into(),
+                to: "archived".into(),
+                guard: Some(Expr::IsNull(votes(Scope::Old))),
+                set: BTreeMap::from([(field_id(2), Expr::Lit(Value::Int(0)))]),
+            },
+            WorkflowTransition {
+                name: "archive_closed".into(),
+                from: "closed".into(),
+                to: "archived".into(),
+                guard: None,
+                set: BTreeMap::from([(field_id(3), Expr::Lit(Value::Str("archived".into())))]),
+            },
+            WorkflowTransition {
+                name: "escalate".into(),
+                from: "open".into(),
+                to: "escalated".into(),
+                guard: None,
+                set: BTreeMap::from([(field_id(2), Expr::Lit(Value::Int(9)))]),
+            },
+        ],
+    }
+}
+
+/// The definition a `require` or `unique` line falls back to when the tenant does not have the field: an optional
+/// boolean field, which the line then makes required or unique. This is the model `plainField`, the definition
+/// `setRequired` and `setUnique` give a field their object type lacks.
+fn fallback_field(_object: &ObjectTypeId, n: u64) -> FieldDef {
+    FieldDef {
+        id: field_id(n),
+        label: format!("f{n}"),
+        ty: FieldType::Bool,
+        required: false,
+        unique: false,
+        default: None,
         read: None,
         personal: None,
         normalise: None,
@@ -207,8 +1008,1122 @@ fn field_def(n: u64, required: bool) -> FieldDef {
     }
 }
 
+/// A field type token of a `schema` line: `int`, `str`, `bool`, `ref:<type>:r` (a reference that restricts the delete
+/// of its target), `ref:<type>:s` (one cleared when its target is deleted) and `list:<type>` (the model `parseTy`).
+fn parse_field_type(token: &str) -> Option<FieldType> {
+    match token {
+        "int" => Some(FieldType::Int),
+        "str" => Some(FieldType::Str),
+        "bool" => Some(FieldType::Bool),
+        _ => {
+            if let Some(inner) = token.strip_prefix("list:") {
+                parse_field_type(inner).map(|t| FieldType::List(Box::new(t)))
+            } else if let Some(rest) = token.strip_prefix("ref:") {
+                let (target, mode) = rest.split_once(':')?;
+                let on_delete = match mode {
+                    "r" => OnDelete::Restrict,
+                    "s" => OnDelete::SetNull,
+                    _ => return None,
+                };
+                Some(FieldType::Ref {
+                    target: object_of(target.parse().ok()?),
+                    on_delete,
+                })
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// One change of a `schema` line, as the model `parseChange` reads it: `define-field <type> <field> <ty> [required]
+/// [unique] [default=<v>]`, `remove-field <type> <field>`, `define-type <type>`, `remove-type <type> [delete]`.
+fn parse_schema_change(tokens: &[&str]) -> Option<SchemaChange> {
+    match tokens {
+        ["define-field", object, field, ty, options @ ..] => {
+            let n: u64 = field.parse().ok()?;
+            let mut def = FieldDef {
+                id: field_id(n),
+                label: format!("f{n}"),
+                ty: parse_field_type(ty)?,
+                required: false,
+                unique: false,
+                default: None,
+                read: None,
+                personal: None,
+                normalise: None,
+                computed: None,
+            };
+            for option in options {
+                match *option {
+                    "required" => def.required = true,
+                    "unique" => def.unique = true,
+                    other => {
+                        let value = other.strip_prefix("default=")?;
+                        def.default = match parse_value(value) {
+                            Value::Null => None,
+                            v => Some(Expr::Lit(v)),
+                        };
+                    }
+                }
+            }
+            Some(SchemaChange::DefineField {
+                object: object_of(object.parse().ok()?),
+                field: def,
+            })
+        }
+        ["remove-field", object, field] => Some(SchemaChange::RemoveField {
+            object: object_of(object.parse().ok()?),
+            field: field_id(field.parse().ok()?),
+        }),
+        ["define-type", object] => {
+            let n: u64 = object.parse().ok()?;
+            Some(SchemaChange::DefineObject {
+                id: object_of(n),
+                label: format!("type{n}"),
+            })
+        }
+        ["remove-type", object] => Some(SchemaChange::RemoveObject {
+            id: object_of(object.parse().ok()?),
+            delete_records: false,
+        }),
+        ["remove-type", object, "delete"] => Some(SchemaChange::RemoveObject {
+            id: object_of(object.parse().ok()?),
+            delete_records: true,
+        }),
+        _ => None,
+    }
+}
+
+/// A `schema` line, as the model `parseSchemaOp` reads it: `schema [v=<n>] [strict|lax] <change> ; <change> ..`
+/// (strict unless it says `lax`), the changes separated by `;`.
+fn parse_schema_op(tokens: &[&str]) -> Option<Intent> {
+    let (expected, rest) = split_expected_version(tokens);
+    let (existing, rest) = match rest.split_first() {
+        Some((&"strict", more)) => (ExistingData::Reject, more),
+        Some((&"lax", more)) => (ExistingData::Grandfather, more),
+        _ => (ExistingData::Reject, rest),
+    };
+    let changes: Vec<SchemaChange> = if rest.is_empty() {
+        Vec::new()
+    } else {
+        rest.split(|token| *token == ";")
+            .map(parse_schema_change)
+            .collect::<Option<Vec<SchemaChange>>>()?
+    };
+    Some(Intent::ChangeSchema {
+        changes,
+        expected_version: expected.map(SchemaVersion),
+        existing,
+    })
+}
+
+/// The user numbers from this one up are the kernel's reserved principal ids (the model's
+/// `reservedFrom`): the harness writes such a user `team:p<n>`, which `refuse_reserved_principals`
+/// refuses as a caller and as a named user.
+const RESERVED_FROM: u64 = 1_000_000;
+
+/// The principal id of user `n`.
+fn principal_id(n: u64) -> PrincipalId {
+    if n >= RESERVED_FROM {
+        id(format!("team:p{n}"))
+    } else {
+        id(format!("p{n}"))
+    }
+}
+
 fn principal(n: u64) -> Principal {
-    Principal::User(id(format!("p{n}")))
+    Principal::User(principal_id(n))
+}
+
+/// The role numbered `n` in the scenario format: `0` owner, `1` public, `2` editor, `3` writer, and
+/// any other number a role the tenant does not define.
+fn role_id(n: u64) -> RoleId {
+    id(match n {
+        0 => "owner".to_string(),
+        1 => "public".to_string(),
+        2 => "editor".to_string(),
+        3 => "writer".to_string(),
+        n => format!("role{n}"),
+    })
+}
+
+/// The number of a role: the inverse of [`role_id`].
+fn role_number(role: &RoleId) -> u64 {
+    match role.as_str() {
+        "owner" => 0,
+        "public" => 1,
+        "editor" => 2,
+        "writer" => 3,
+        other => other["role".len()..]
+            .parse()
+            .expect("fixture roles are role<number>"),
+    }
+}
+
+/// The number of a user: the digits after the `p`.
+fn user_number(user: &PrincipalId) -> u64 {
+    user.as_str()
+        .trim_start_matches("team:")
+        .trim_start_matches('p')
+        .parse()
+        .expect("fixture users are p<number>")
+}
+
+/// A text token of the scenario format: `s:<text>`, `_` for a space.
+fn parse_text(token: &str) -> Option<String> {
+    token.strip_prefix("s:").map(|text| text.replace('_', " "))
+}
+
+/// A text as the state lines print it.
+fn show_text(text: &str) -> String {
+    format!("s:{}", text.replace(' ', "_"))
+}
+
+/// A set of numbers, sorted, separated by commas; `-` for none.
+fn show_numbers(mut numbers: Vec<u64>) -> String {
+    numbers.sort_unstable();
+    if numbers.is_empty() {
+        "-".to_string()
+    } else {
+        numbers
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+/// The roles of an invitation as the scenario format writes them: numbers separated by commas, or
+/// `-` for none.
+fn parse_roles(token: &str) -> Option<BTreeSet<RoleId>> {
+    if token == "-" {
+        return Some(BTreeSet::new());
+    }
+    token
+        .split(',')
+        .map(|n| n.parse::<u64>().ok().map(role_id))
+        .collect()
+}
+
+/// The time of a request: `@<milliseconds>`.
+fn parse_now(token: &str) -> Option<Timestamp> {
+    token
+        .strip_prefix('@')
+        .and_then(|n| n.parse::<i64>().ok())
+        .map(Timestamp)
+}
+
+/// A membership or creation line of the scenario format (slice 7), or `None` for a line it cannot
+/// read. The two that carry the time and the verified address of the request set them in `ctx`.
+fn parse_member_op(rest: &[&str], ctx: &mut Context) -> Option<Intent> {
+    let number = |token: &str| token.parse::<u64>().ok();
+    Some(match rest {
+        ["create-tenant", owner, name] => Intent::CreateTenant {
+            name: parse_text(name)?,
+            owner: principal_id(number(owner)?),
+        },
+        ["assign", user, role] => Intent::AssignRole {
+            principal: principal_id(number(user)?),
+            role: role_id(number(role)?),
+        },
+        ["revoke", user, role] => Intent::RevokeRole {
+            principal: principal_id(number(user)?),
+            role: role_id(number(role)?),
+        },
+        ["team", team, label] => Intent::DefineTeam {
+            team: id(format!("team{}", number(team)?)),
+            label: parse_text(label)?,
+        },
+        ["team-assign", team, role] => Intent::AssignTeamRole {
+            team: id(format!("team{}", number(team)?)),
+            role: role_id(number(role)?),
+        },
+        ["team-revoke", team, role] => Intent::RevokeTeamRole {
+            team: id(format!("team{}", number(team)?)),
+            role: role_id(number(role)?),
+        },
+        ["team-add", team, user] => Intent::AddTeamMember {
+            team: id(format!("team{}", number(team)?)),
+            principal: principal_id(number(user)?),
+        },
+        ["team-remove", team, user] => Intent::RemoveTeamMember {
+            team: id(format!("team{}", number(team)?)),
+            principal: principal_id(number(user)?),
+        },
+        ["invite", invitation, address, roles, now] => {
+            ctx.now = parse_now(now)?;
+            Intent::CreateInvitation {
+                invitation: id(format!("inv{}", number(invitation)?)),
+                address: parse_text(address)?,
+                roles: parse_roles(roles)?,
+            }
+        }
+        ["invite-revoke", invitation] => Intent::RevokeInvitation {
+            invitation: id(format!("inv{}", number(invitation)?)),
+        },
+        ["redeem", invitation, now] => {
+            ctx.now = parse_now(now)?;
+            Intent::RedeemInvitation {
+                invitation: id(format!("inv{}", number(invitation)?)),
+            }
+        }
+        ["redeem", invitation, now, verified] => {
+            ctx.now = parse_now(now)?;
+            ctx.verified_address = Some(parse_text(verified.strip_prefix("verified=")?)?);
+            Intent::RedeemInvitation {
+                invitation: id(format!("inv{}", number(invitation)?)),
+            }
+        }
+        _ => return None,
+    })
+}
+
+/// A principal token of the scenario format: a number is that user, `system` the system and `anon` an
+/// anonymous caller.
+/// A settings level token (slice 12).
+fn parse_setting_level(token: &str) -> Option<SettingLevel> {
+    match token {
+        "platform" => Some(SettingLevel::Platform),
+        "tenant" => Some(SettingLevel::Tenant),
+        "team" => Some(SettingLevel::Team),
+        "person" => Some(SettingLevel::Person),
+        _ => None,
+    }
+}
+
+/// A scalar or reference token, as the model's `parseElem` reads it: `n`, `i:<int>`, `s:<text>`,
+/// `s*<count>:<text>` (the text repeated), `b:1`, `b:0`, `r:<id>`. Anything else is not a value, and the
+/// write is then not parsed (an `unparsed` line, as the model prints it).
+fn setting_elem(token: &str) -> Option<Value> {
+    if token == "n" {
+        return Some(Value::Null);
+    }
+    if let Some(n) = token.strip_prefix("i:") {
+        return Some(Value::Int(n.parse().ok()?));
+    }
+    if let Some(rest) = token.strip_prefix("s*") {
+        let (count, text) = rest.split_once(':')?;
+        let count: usize = count.parse().ok()?;
+        return Some(Value::Str(text.repeat(count)));
+    }
+    if let Some(text) = token.strip_prefix("s:") {
+        return Some(Value::Str(text.to_string()));
+    }
+    match token {
+        "b:1" => return Some(Value::Bool(true)),
+        "b:0" => return Some(Value::Bool(false)),
+        _ => {}
+    }
+    if let Some(id) = token.strip_prefix("r:") {
+        return Some(Value::Ref(RecordId(id.parse().ok()?)));
+    }
+    None
+}
+
+/// A setting value token, as the model's `parseVal` reads it: a scalar or reference (`setting_elem`), a list `l:`
+/// of such elements separated by commas (`l:` alone is the empty list), or `l*<count>:<element>` (the element
+/// repeated).
+fn parse_setting_value(token: &str) -> Option<Value> {
+    if let Some(rest) = token.strip_prefix("l*") {
+        let (count, element) = rest.split_once(':')?;
+        let count: usize = count.parse().ok()?;
+        return Some(Value::List(vec![setting_elem(element)?; count]));
+    }
+    if let Some(body) = token.strip_prefix("l:") {
+        if body.is_empty() {
+            return Some(Value::List(Vec::new()));
+        }
+        let items: Option<Vec<Value>> = body.split(',').map(setting_elem).collect();
+        return items.map(Value::List);
+    }
+    setting_elem(token)
+}
+
+/// A setting write (slice 12): `setting <name> <level> [team=<n>] [v=<rev>] <value|remove>`, from the token
+/// `setting` on. The team is `team<n>`, the expected revision is zero when no `v=` token is given, and `remove`
+/// removes the override (the model's `parseSettingOp`).
+fn parse_setting_op(tokens: &[&str]) -> Option<Intent> {
+    let ["setting", name, level, more @ ..] = tokens else {
+        return None;
+    };
+    let level = parse_setting_level(level)?;
+    let (team, more) = match more.split_first() {
+        Some((first, rest)) => match first.strip_prefix("team=") {
+            Some(n) => (Some(n.parse::<u64>().ok()?), rest),
+            None => (None, more),
+        },
+        None => (None, more),
+    };
+    let (expected_revision, more) = match more.split_first() {
+        Some((first, rest)) => match first.strip_prefix("v=") {
+            Some(n) => (n.parse::<u64>().ok()?, rest),
+            None => (0, more),
+        },
+        None => (0, more),
+    };
+    let value = match more {
+        ["remove"] => None,
+        [value] => Some(parse_setting_value(value)?),
+        _ => return None,
+    };
+    Some(Intent::WriteSetting {
+        setting: SettingId::try_from(name.to_string()).ok()?,
+        level,
+        team: team.map(|n| id::<TeamId>(format!("team{n}"))),
+        value,
+        expected_revision,
+    })
+}
+
+fn parse_principal(token: &str) -> Principal {
+    match token {
+        "system" => Principal::System,
+        "anon" => Principal::Anonymous,
+        number => principal(number.parse().expect("fixture principal")),
+    }
+}
+
+/// The kernel's name of ledger unit `n`. A unit name starts with a letter (the `ledger-unit` pattern), so the
+/// scenario's number is written after a `u`; the names are internal, and every printed line uses the number.
+fn ledger_unit(n: u64) -> LedgerUnit {
+    LedgerUnit(format!("u{n}"))
+}
+
+/// The kernel's name of pool `n`: `pool<n>`, which starts with a letter (the `ledger-pool-name` pattern).
+fn ledger_pool(n: u64) -> LedgerPoolName {
+    LedgerPoolName(format!("pool{n}"))
+}
+
+/// The number of a unit: the inverse of [`ledger_unit`].
+fn unit_number(unit: &LedgerUnit) -> u64 {
+    unit.0
+        .trim_start_matches('u')
+        .parse()
+        .expect("fixture units are u<number>")
+}
+
+/// The number of a pool: the inverse of [`ledger_pool`].
+fn pool_number(pool: &LedgerPoolName) -> u64 {
+    pool.0
+        .trim_start_matches("pool")
+        .parse()
+        .expect("fixture pools are pool<number>")
+}
+
+/// A ledger owner as the scenario names it: a person's number, or `pool<n>` (the model's `parseOwner`).
+fn parse_ledger_owner(token: &str) -> Option<LedgerOwner> {
+    match token.strip_prefix("pool") {
+        Some(number) => Some(LedgerOwner::Pool {
+            pool: ledger_pool(number.parse().ok()?),
+        }),
+        None => Some(LedgerOwner::Principal {
+            principal: principal_id(token.parse().ok()?),
+        }),
+    }
+}
+
+/// A ledger owner as the printed forms name it: a person's number, or `pool<n>` (the model's `showOwner`).
+fn ledger_owner_text(owner: &LedgerOwner) -> String {
+    match owner {
+        LedgerOwner::Principal { principal } => user_number(principal).to_string(),
+        LedgerOwner::Pool { pool } => format!("pool{}", pool_number(pool)),
+    }
+}
+
+/// A scope or a reason as the printed forms name it: `-` when it is empty.
+fn ledger_text(text: &str) -> String {
+    if text.is_empty() {
+        "-".to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// The scope a request names: none when the scenario names none (the kernel's `scope_text` reads it as empty).
+fn ledger_scope(text: &str) -> Option<LedgerScope> {
+    (!text.is_empty()).then(|| LedgerScope(text.to_string()))
+}
+
+/// A posting's tokens: `<unit> <owner> <amount> key=<k> [reason=<r>] [corrects=<n>] [scope=<s>]` (slice 13; the
+/// model's `parsePosting`). A `corrects=` that is not a number leaves the posting uncorrected, as the model does.
+fn parse_posting(tokens: &[&str]) -> Option<LedgerPostingRequest> {
+    let [unit, owner, amount, options @ ..] = tokens else {
+        return None;
+    };
+    let unit: u64 = unit.parse().ok()?;
+    let owner = parse_ledger_owner(owner)?;
+    let amount: i64 = amount.parse().ok()?;
+    let mut key: Option<String> = None;
+    let mut reason = String::new();
+    let mut corrects: Option<u64> = None;
+    let mut scope = String::new();
+    for option in options.iter() {
+        if let Some(text) = option.strip_prefix("key=") {
+            key = Some(text.to_string());
+        } else if let Some(text) = option.strip_prefix("reason=") {
+            reason = text.to_string();
+        } else if let Some(text) = option.strip_prefix("corrects=") {
+            corrects = text.parse().ok();
+        } else if let Some(text) = option.strip_prefix("scope=") {
+            scope = text.to_string();
+        } else {
+            return None;
+        }
+    }
+    Some(LedgerPostingRequest {
+        owner,
+        unit: ledger_unit(unit),
+        amount: LedgerAmount(amount),
+        idempotency_key: key?,
+        reason,
+        corrects,
+        scope: ledger_scope(&scope),
+    })
+}
+
+/// The postings of a `post` line, split on the `;` token (the model's `splitPostings`): an empty group is a
+/// refusal to parse, as the model's is.
+fn parse_postings(tokens: &[&str]) -> Option<Vec<LedgerPostingRequest>> {
+    tokens
+        .split(|token| *token == ";")
+        .map(parse_posting)
+        .collect()
+}
+
+/// The time of a ledger intent, `@<now>` (the model's `parseNowInt`).
+fn parse_ledger_now(token: &str) -> Option<i64> {
+    token.strip_prefix('@')?.parse().ok()
+}
+
+/// One leg of a `tx` line: `<unit> <owner> <amount> [scope=<s>]` (slice 13; the model's `parseLeg`).
+fn parse_leg(tokens: &[&str]) -> Option<LedgerLeg> {
+    let [unit, owner, amount, options @ ..] = tokens else {
+        return None;
+    };
+    let unit: u64 = unit.parse().ok()?;
+    let owner = parse_ledger_owner(owner)?;
+    let amount: i64 = amount.parse().ok()?;
+    let mut scope = String::new();
+    for option in options.iter() {
+        scope = option.strip_prefix("scope=")?.to_string();
+    }
+    Some(LedgerLeg {
+        owner,
+        unit: ledger_unit(unit),
+        amount: LedgerAmount(amount),
+        scope: ledger_scope(&scope),
+    })
+}
+
+/// A ledger intent and its time: `ledger post @<now> <posting> [; <posting>]*`, `ledger expire @<now> <unit>
+/// <cutoff>` or `ledger tx @<now> op=<operation> key=<key> [reason=<reason>] <leg> [; <leg>]*` (slice 13; the
+/// model's `parseLedgerOp`). The time becomes the context's `now`.
+fn parse_ledger_op(tokens: &[&str]) -> Option<(i64, Intent)> {
+    match tokens {
+        ["ledger", "tx", now, operation, key, rest @ ..] => {
+            let now = parse_ledger_now(now)?;
+            let operation = operation.strip_prefix("op=")?.to_string();
+            let key = key.strip_prefix("key=")?.to_string();
+            let (reason, legs) = match rest {
+                [first, more @ ..] if first.starts_with("reason=") => {
+                    (first["reason=".len()..].to_string(), more)
+                }
+                _ => (String::new(), rest),
+            };
+            let legs: Vec<LedgerLeg> = legs
+                .split(|token| *token == ";")
+                .map(parse_leg)
+                .collect::<Option<Vec<LedgerLeg>>>()?;
+            Some((
+                now,
+                Intent::PostLedgerTransaction {
+                    transaction: LedgerTransaction {
+                        operation,
+                        idempotency_key: key,
+                        reason,
+                        on_behalf_of: None,
+                        legs,
+                    },
+                },
+            ))
+        }
+        ["ledger", "post", now, postings @ ..] => {
+            let now = parse_ledger_now(now)?;
+            let postings = parse_postings(postings)?;
+            Some((now, Intent::PostLedger { postings }))
+        }
+        ["ledger", "expire", now, unit, cutoff] => {
+            let now = parse_ledger_now(now)?;
+            let unit: u64 = unit.parse().ok()?;
+            let cutoff: i64 = cutoff.parse().ok()?;
+            Some((
+                now,
+                Intent::ExpireLedger {
+                    unit: ledger_unit(unit),
+                    cutoff: Timestamp(cutoff),
+                },
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// An invocation of an operation and its time: `invoke @<now> <operation> [key=<k>] [<input>=<value> ..]` (slice 14;
+/// the model's `parseInvoke`). The time becomes the context's `now`; `key=<k>` is the idempotency key of the intent
+/// (the first one written, empty when there is none), and every other token is an input, read as a field value. A token
+/// that is not `<name>=<value>` does not parse.
+fn parse_invoke_op(tokens: &[&str]) -> Option<(i64, Intent)> {
+    let ["invoke", now, operation, args @ ..] = tokens else {
+        return None;
+    };
+    let now = parse_ledger_now(now)?;
+    let operation = TenantOperationId::new(*operation).ok()?;
+    let mut key: Option<String> = None;
+    let mut inputs: BTreeMap<String, Value> = BTreeMap::new();
+    for arg in args {
+        if let Some(written) = arg.strip_prefix("key=") {
+            key.get_or_insert_with(|| written.to_string());
+            continue;
+        }
+        let parts: Vec<&str> = arg.split('=').collect();
+        let [name, value] = parts.as_slice() else {
+            return None;
+        };
+        inputs
+            .entry((*name).to_string())
+            .or_insert_with(|| parse_value(value));
+    }
+    Some((
+        now,
+        Intent::InvokeOperation {
+            operation,
+            inputs,
+            idempotency_key: key.unwrap_or_default(),
+        },
+    ))
+}
+
+/// A ledger balance read after `read <t> <p>`: `ledger <unit> <owner> [scope=<s>] [own]` (slice 13; the model's
+/// `parseLedgerRead`). Returns the unit, the owner, the scope and whether the read is one's own.
+fn parse_ledger_read(tokens: &[&str]) -> Option<(LedgerUnit, LedgerOwner, String, bool)> {
+    let ["ledger", unit, owner, options @ ..] = tokens else {
+        return None;
+    };
+    let unit: u64 = unit.parse().ok()?;
+    let owner = parse_ledger_owner(owner)?;
+    let mut scope = String::new();
+    let mut own = false;
+    for option in options.iter() {
+        if let Some(text) = option.strip_prefix("scope=") {
+            scope = text.to_string();
+        } else if *option == "own" {
+            own = true;
+        } else {
+            return None;
+        }
+    }
+    Some((ledger_unit(unit), owner, scope, own))
+}
+
+/// The lines a ledger balance read prints (the model's `showLedgerRead`): `err <kind>`, or `ok`, the balance and
+/// the sequence number.
+fn ledger_read_lines(result: Result<LedgerBalance, DomainError>) -> Vec<String> {
+    match result {
+        Err(error) => vec![format!("err {}", show_error(error.kind))],
+        Ok(balance) => vec![
+            "ok".to_string(),
+            format!("balance {}", balance.balance.0),
+            format!("seq {}", balance.last_sequence),
+        ],
+    }
+}
+
+/// The fixture's ledger declarations (slice 13; the model's `fixtureLedgerDecls`): units `1` and `2` without an
+/// expiry, unit `3` expiring monthly after two periods, pool `1`, a cap of 1000 on unit `1` and a floor of zero on
+/// unit `2`, and no account limit.
+fn fixture_ledger_decls() -> LedgerDeclarations {
+    let units = [
+        (1u64, None),
+        (2, None),
+        (
+            3,
+            Some(LedgerExpiry {
+                period: LedgerPeriod::Month,
+                periods: 2,
+            }),
+        ),
+    ]
+    .into_iter()
+    .map(|(n, expiry)| {
+        (
+            ledger_unit(n),
+            LedgerUnitDecl {
+                unit: ledger_unit(n),
+                description: String::new(),
+                expiry,
+                transfer: None,
+            },
+        )
+    })
+    .collect();
+    let pools = std::iter::once((
+        ledger_pool(1),
+        LedgerPoolDecl {
+            pool: ledger_pool(1),
+            description: String::new(),
+            parent: None,
+        },
+    ))
+    .collect();
+    let limit = |unit: u64, floor: Option<i64>, cap: Option<i64>| LedgerLimit {
+        unit: ledger_unit(unit),
+        owner: None,
+        floor: floor.map(LedgerAmount),
+        cap: cap.map(LedgerAmount),
+        period_cap: None,
+        period: None,
+        scope: None,
+        additions_only: None,
+    };
+    LedgerDeclarations {
+        units,
+        pools,
+        limits: vec![limit(1, None, Some(1000)), limit(2, Some(0), None)],
+    }
+}
+
+/// One input of a fixture operation, with no label.
+fn operation_input(name: &str, ty: FieldType, required: bool) -> TenantOperationInput {
+    TenantOperationInput {
+        name: name.to_string(),
+        ty,
+        required,
+        label: None,
+    }
+}
+
+/// A fixture operation: its id and label are `name`, with no agent policy.
+fn operation_def(
+    name: &str,
+    inputs: Vec<TenantOperationInput>,
+    invokers: TenantOperationInvokers,
+    subject: Option<TenantOperationSubject>,
+    conditions: Vec<TenantOperationCondition>,
+    steps: Vec<TenantOperationStep>,
+) -> SchemaChange {
+    SchemaChange::DefineOperation(TenantOperationDef {
+        id: id(name.to_string()),
+        label: name.to_string(),
+        inputs,
+        invokers,
+        subject,
+        conditions,
+        steps,
+        agent_policy: None,
+    })
+}
+
+/// The fixture's operations (slice 14; the model's `fixtureOperations`): `note` creates an item from its text,
+/// `note_count` does so under a condition on an optional count, `retag` and `drop` update and delete the item they
+/// are about (an editor only, not every signed-in person), and `grant` and `note_grant` post to unit `1` for the
+/// invoker, the latter after creating an item. Defined in the fixture batch that defines the settings, so they raise
+/// neither the revision nor the event sequence.
+fn fixture_operations() -> Vec<SchemaChange> {
+    let signed_in = TenantOperationInvokers {
+        signed_in: true,
+        roles: BTreeSet::new(),
+    };
+    let editors = TenantOperationInvokers {
+        signed_in: false,
+        roles: BTreeSet::from([role_id(2)]),
+    };
+    let item_input = || {
+        operation_input(
+            "item",
+            FieldType::Ref {
+                target: item(),
+                on_delete: OnDelete::Restrict,
+            },
+            true,
+        )
+    };
+    let subject = || {
+        Some(TenantOperationSubject {
+            object: item(),
+            input: "item".to_string(),
+            self_action: None,
+        })
+    };
+    let create_note = |fields: Vec<(u64, &str)>| TenantOperationStep::CreateRecord {
+        id: "n".to_string(),
+        object: item(),
+        fields: fields
+            .into_iter()
+            .map(|(n, input)| (field_id(n), Expr::Param(input.to_string())))
+            .collect(),
+    };
+    let grant_step = || TenantOperationStep::PostLedger {
+        id: "p".to_string(),
+        owner: TenantOperationPostingOwner::Invoker,
+        unit: ledger_unit(1),
+        scope: None,
+        amount: Expr::Param("amt".to_string()),
+        reason: "grant".to_string(),
+        reference: None,
+    };
+    vec![
+        operation_def(
+            "note",
+            vec![operation_input("text", FieldType::Str, true)],
+            signed_in.clone(),
+            None,
+            vec![],
+            vec![create_note(vec![(1, "text")])],
+        ),
+        operation_def(
+            "note_count",
+            vec![
+                operation_input("text", FieldType::Str, true),
+                operation_input("count", FieldType::Int, false),
+            ],
+            signed_in.clone(),
+            None,
+            vec![TenantOperationCondition {
+                id: "count_ok".to_string(),
+                expr: Expr::Cmp(
+                    CmpOp::Ge,
+                    Box::new(Expr::Param("count".to_string())),
+                    Box::new(Expr::Lit(Value::Int(0))),
+                ),
+                error: "count_negative".to_string(),
+                message: "the count is negative".to_string(),
+            }],
+            vec![create_note(vec![(1, "text"), (2, "count")])],
+        ),
+        operation_def(
+            "retag",
+            vec![item_input(), operation_input("text", FieldType::Str, true)],
+            editors.clone(),
+            subject(),
+            vec![],
+            vec![TenantOperationStep::UpdateRecord {
+                id: "u".to_string(),
+                object: item(),
+                record: Expr::Param("item".to_string()),
+                fields: BTreeMap::from([(field_id(1), Expr::Param("text".to_string()))]),
+            }],
+        ),
+        operation_def(
+            "drop",
+            vec![item_input()],
+            editors,
+            subject(),
+            vec![],
+            vec![TenantOperationStep::DeleteRecord {
+                id: "d".to_string(),
+                object: item(),
+                record: Expr::Param("item".to_string()),
+            }],
+        ),
+        operation_def(
+            "grant",
+            vec![operation_input("amt", FieldType::Int, true)],
+            signed_in.clone(),
+            None,
+            vec![],
+            vec![grant_step()],
+        ),
+        operation_def(
+            "note_grant",
+            vec![
+                operation_input("text", FieldType::Str, true),
+                operation_input("amt", FieldType::Int, true),
+            ],
+            signed_in,
+            None,
+            vec![],
+            vec![create_note(vec![(1, "text")]), grant_step()],
+        ),
+    ]
+}
+
+/// Declares the fixture ledger on a fixture tenant's schema, directly: no schema event is emitted, so the
+/// revision and the event sequence stay the fixture's (slice 13).
+fn set_fixture_ledger(world: &mut World, tenant: &TenantId) {
+    let state = world
+        .tenants
+        .get_mut(tenant)
+        .expect("the fixture tenant exists");
+    let state = Arc::make_mut(state);
+    Arc::make_mut(&mut state.schema).ledger = Some(fixture_ledger_decls());
+}
+
+/// The number of an automation: the digits after the `w` of its id `w<number>`.
+fn automation_number(automation: &WorkflowId) -> u64 {
+    automation.as_str()[1..]
+        .parse()
+        .expect("fixture automations are w<number>")
+}
+
+/// The number of a trigger: the digits after the `t` of its id `t<number>`.
+fn trigger_number(trigger: &TriggerId) -> u64 {
+    trigger.as_str()[1..]
+        .parse()
+        .expect("fixture triggers are t<number>")
+}
+
+/// Automation `n` of the fixture (slice 15): the id `w<n>`, one step that ends, run as the roles given by
+/// number, defined by the owner, with the run key and the state given.
+fn fixture_automation(
+    n: u64,
+    owner: u64,
+    roles: &[u64],
+    run_key: Option<Expr>,
+    state: Option<AutomationState>,
+) -> AutomationDef {
+    let done = StepName::new("done").expect("the step name is valid");
+    AutomationDef {
+        id: WorkflowId::new(format!("w{n}")).expect("the automation id is valid"),
+        label: format!("Automation {n}"),
+        run_as: RunAs {
+            roles: roles.iter().map(|&r| role_id(r)).collect(),
+        },
+        run_key,
+        start: done.clone(),
+        steps: BTreeMap::from([(
+            done,
+            AutomationStepDef {
+                action: AutomationStep::End,
+                next: None,
+                retry: None,
+                timeout: None,
+                compensate: None,
+            },
+        )]),
+        defined_by: Some(principal_id(owner)),
+        defined_at: None,
+        suspended_for: None,
+        state,
+    }
+}
+
+/// Trigger `n` of the fixture (slice 15), starting automation `automation` and defined by the owner.
+fn fixture_trigger(
+    n: u64,
+    on: TriggerEvent,
+    condition: Option<Expr>,
+    automation: u64,
+    paused: Option<bool>,
+    owner: u64,
+) -> TriggerDef {
+    TriggerDef {
+        id: TriggerId::new(format!("t{n}")).expect("the trigger id is valid"),
+        on,
+        condition,
+        automation: WorkflowId::new(format!("w{automation}")).expect("the automation id is valid"),
+        paused,
+        defined_by: Some(principal_id(owner)),
+        defined_at: None,
+    }
+}
+
+/// The automations of the fixture (slice 15), as the model's `fixtureAutomations` lists them: `1` runs as
+/// the writers, `2` as the editors with the run key `param.seq`, `3` as the editors with the run key
+/// `param.transition` (the kernel checks run keys against event parameters only, and refuses `public` as a
+/// run-as), and `4` as the writers in the draft state.
+fn fixture_automation_changes(owner: u64) -> Vec<SchemaChange> {
+    vec![
+        SchemaChange::DefineAutomation(fixture_automation(1, owner, &[3], None, None)),
+        SchemaChange::DefineAutomation(fixture_automation(
+            2,
+            owner,
+            &[2],
+            Some(Expr::Param("seq".into())),
+            None,
+        )),
+        SchemaChange::DefineAutomation(fixture_automation(
+            3,
+            owner,
+            &[2],
+            Some(Expr::Param("transition".into())),
+            None,
+        )),
+        SchemaChange::DefineAutomation(fixture_automation(
+            4,
+            owner,
+            &[3],
+            None,
+            Some(AutomationState::Draft),
+        )),
+        // Automation 5 (slice 16) runs as the owner role, for the triggers on the entries and exits of segment 1.
+        SchemaChange::DefineAutomation(fixture_automation(5, owner, &[0], None, None)),
+    ]
+}
+
+/// The triggers of the fixture (slice 15), as the model's `fixtureTriggers` lists them. Triggers 9 and 10 (slice 16)
+/// fire on the entry and the exit of segment 1 of `tenant`; the kernel does not check the segment reference of a
+/// trigger, so the segment may be defined after the schema batch.
+fn fixture_trigger_changes(owner: u64, tenant: &TenantId) -> Vec<SchemaChange> {
+    let first = segment_id(tenant, 1).expect("segment 1 has an id");
+    let hop_positive = Expr::Cmp(
+        CmpOp::Gt,
+        Box::new(Expr::Param("hop".into())),
+        Box::new(Expr::Lit(Value::Int(0))),
+    );
+    let third_null = Expr::IsNull(Box::new(Expr::Var(Scope::New, field_id(3).as_str().into())));
+    vec![
+        SchemaChange::DefineTrigger(fixture_trigger(
+            1,
+            TriggerEvent::RecordCreated { object: item() },
+            None,
+            1,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            2,
+            TriggerEvent::RecordCreated { object: part() },
+            Some(hop_positive),
+            1,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            3,
+            TriggerEvent::RecordUpdated {
+                object: item(),
+                transition: None,
+            },
+            None,
+            1,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            4,
+            TriggerEvent::RecordDeleted { object: item() },
+            None,
+            2,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            5,
+            TriggerEvent::LedgerPosted {
+                unit: ledger_unit(1),
+            },
+            None,
+            3,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            6,
+            TriggerEvent::RecordCreated { object: ticket() },
+            None,
+            4,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            7,
+            TriggerEvent::RecordUpdated {
+                object: part(),
+                transition: None,
+            },
+            None,
+            2,
+            Some(true),
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            8,
+            TriggerEvent::RecordCreated { object: item() },
+            Some(third_null),
+            2,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            9,
+            TriggerEvent::SegmentEntered { segment: first },
+            None,
+            5,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            10,
+            TriggerEvent::SegmentExited { segment: first },
+            None,
+            5,
+            None,
+            owner,
+        )),
+    ]
+}
+
+/// How many numbered segments the harness has ids for.
+const SEGMENT_NUMBERS: u64 = 100;
+
+/// The slice of the id space a segment number owns: the id's top 64 bits scaled to `0..SEGMENT_NUMBERS`.
+fn segment_slot(segment: SegmentId) -> u64 {
+    let high = (segment.0.as_u128() >> 64) as u64;
+    ((u128::from(high) * u128::from(SEGMENT_NUMBERS)) >> 64) as u64
+}
+
+/// The ids of segments `1..=SEGMENT_NUMBERS` of a tenant. Number `n` takes the first of the keys
+/// `harness-seg-<n>-<k>` (`k` from zero) whose derived id lies in the `n`th slice of the id space, so the ids rise
+/// with the numbers, and the kernel's order of the segments by id is the model's by number.
+fn numbered_segment_ids(tenant: &TenantId) -> Vec<SegmentId> {
+    (1..=SEGMENT_NUMBERS)
+        .map(|n| {
+            (0u64..)
+                .map(|k| {
+                    strata_kernel::segments::derive_segment_id(
+                        tenant,
+                        &SegmentKey(format!("harness-seg-{n}-{k}")),
+                    )
+                })
+                .find(|candidate| segment_slot(*candidate) == n - 1)
+                .expect("a key in each slice exists")
+        })
+        .collect()
+}
+
+/// The segment ids of tenant `t1`, `t2` or `t3`, by number minus one (empty for another tenant).
+fn segment_ids(tenant: &TenantId) -> &'static [SegmentId] {
+    static TABLE: OnceLock<BTreeMap<String, Vec<SegmentId>>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        ["t1", "t2", "t3"]
+            .iter()
+            .map(|name| {
+                (
+                    name.to_string(),
+                    numbered_segment_ids(&id::<TenantId>(name.to_string())),
+                )
+            })
+            .collect()
+    });
+    match table.get(tenant.as_str()) {
+        Some(ids) => ids.as_slice(),
+        None => &[],
+    }
+}
+
+/// The id of segment number `n` of a tenant.
+fn segment_id(tenant: &TenantId, n: u64) -> Option<SegmentId> {
+    let index = usize::try_from(n.checked_sub(1)?).ok()?;
+    segment_ids(tenant).get(index).copied()
+}
+
+/// The number of a segment id of a tenant: the inverse of [`segment_id`].
+fn segment_number(tenant: &TenantId, segment: SegmentId) -> Option<u64> {
+    segment_ids(tenant)
+        .iter()
+        .position(|candidate| *candidate == segment)
+        .map(|index| index as u64 + 1)
 }
 
 /// The kernel world that corresponds to the model's `initialWorld`.
@@ -245,15 +2160,20 @@ fn initial_world() -> World {
                 owner: id(format!("p{owner}")),
             },
         );
+        set_fixture_ledger(&mut world, &tenant);
         let role = |name: &str| RoleDef {
             id: id(name.to_string()),
             label: name.to_string(),
         };
-        let policy = |name: &str, role: &str, actions: &[Action], condition: Option<Expr>| {
+        let policy = |object: ObjectTypeId,
+                      name: &str,
+                      role: &str,
+                      actions: &[Action],
+                      condition: Option<Expr>| {
             SchemaChange::DefinePolicy(PolicyDef {
                 id: id(name.to_string()),
                 role: id(role.to_string()),
-                resource: Resource::Object(item()),
+                resource: Resource::Object(object),
                 actions: actions.iter().copied().collect(),
                 condition,
             })
@@ -263,9 +2183,16 @@ fn initial_world() -> World {
             Box::new(Expr::Var(Scope::Record, "$created_by".into())),
             Box::new(Expr::Principal),
         );
-        let changes = vec![
+        let mut changes = vec![
             SchemaChange::DefineRole(role("editor")),
             SchemaChange::DefineRole(role("writer")),
+            // The editor may define, remove and rebuild segments (slice 16, the model's `grants`).
+            SchemaChange::DefineRolePermissions {
+                role: id("editor".to_string()),
+                permissions: vec![Permission::Capability(
+                    strata_kernel::segments::SEGMENTS_DEFINE.to_string(),
+                )],
+            },
             SchemaChange::DefineObject {
                 id: item(),
                 label: "Item".into(),
@@ -275,38 +2202,175 @@ fn initial_world() -> World {
                 field: field_def(1, true),
             },
         ];
-        let mut changes = changes;
         changes.extend(
-            [0u64, 2, 3, 4, 5, 6, 7, 8].map(|n| SchemaChange::DefineField {
+            [0u64, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(|n| SchemaChange::DefineField {
                 object: item(),
                 field: field_def(n, false),
             }),
         );
+        // The part type comes after the item type, since its references point into items.
+        changes.push(SchemaChange::DefineObject {
+            id: part(),
+            label: "Part".into(),
+        });
+        changes.extend([1u64, 2, 3, 4, 5].map(|n| SchemaChange::DefineField {
+            object: part(),
+            field: part_field_def(n),
+        }));
+        // The constraints read fields, so they follow the fields of both types.
+        changes.extend(item_constraints());
+        changes.extend(part_constraints());
+        // The tickets (the model's type `4`, slice 8): their fields, then their workflow, which reads them.
+        changes.push(SchemaChange::DefineObject {
+            id: ticket(),
+            label: "Ticket".into(),
+        });
+        changes.extend([1u64, 2, 3].map(|n| SchemaChange::DefineField {
+            object: ticket(),
+            field: ticket_field_def(n),
+        }));
+        changes.push(SchemaChange::DefineWorkflow(ticket_workflow()));
+        // The profiles (the model's type `20`, slice 16): the people a segment groups.
+        changes.push(SchemaChange::DefineObject {
+            id: profile(),
+            label: "Profile".into(),
+        });
+        changes.extend([1u64, 2].map(|n| SchemaChange::DefineField {
+            object: profile(),
+            field: profile_field_def(n),
+        }));
         changes.extend([
             policy(
+                item(),
                 "editors_all",
                 "editor",
                 &[Action::Read, Action::Create, Action::Update, Action::Delete],
                 None,
             ),
             policy(
+                item(),
                 "writers_create",
                 "writer",
                 &[Action::Read, Action::Create],
                 None,
             ),
             policy(
+                item(),
                 "writers_own",
+                "writer",
+                &[Action::Update, Action::Delete],
+                Some(own.clone()),
+            ),
+            // The tickets: an editor does everything; a writer reads and creates them, and changes or
+            // deletes the ones it created whose votes are at most five (the model's `ticketWorkflow`
+            // and `fixturePolicies`).
+            policy(
+                ticket(),
+                "tickets_editors_all",
+                "editor",
+                &[Action::Read, Action::Create, Action::Update, Action::Delete],
+                None,
+            ),
+            policy(
+                ticket(),
+                "tickets_writers_create",
+                "writer",
+                &[Action::Read, Action::Create],
+                None,
+            ),
+            policy(
+                ticket(),
+                "tickets_writers_own",
+                "writer",
+                &[Action::Update, Action::Delete],
+                Some(Expr::And(vec![
+                    own.clone(),
+                    Expr::Cmp(
+                        CmpOp::Le,
+                        Box::new(Expr::Var(Scope::New, "f02".into())),
+                        Box::new(Expr::Lit(Value::Int(5))),
+                    ),
+                ])),
+            ),
+            policy(
+                part(),
+                "part_editors_all",
+                "editor",
+                &[Action::Read, Action::Create, Action::Update, Action::Delete],
+                None,
+            ),
+            policy(
+                part(),
+                "part_writers_create",
+                "writer",
+                &[Action::Read, Action::Create],
+                None,
+            ),
+            policy(
+                part(),
+                "part_writers_own",
                 "writer",
                 &[Action::Update, Action::Delete],
                 Some(own),
             ),
+            // Anyone who holds `public` may create a part when no user is acting: an anonymous caller.
+            policy(
+                part(),
+                "public_creates_parts_anonymously",
+                "public",
+                &[Action::Create],
+                Some(Expr::IsNull(Box::new(Expr::Principal))),
+            ),
+            // An editor may manage the tenant's members (slice 7), so a manager who is not the owner
+            // is in the fixture: it may confer the roles whose powers it holds.
+            SchemaChange::DefinePolicy(PolicyDef {
+                id: id("editors_manage_members".to_string()),
+                role: id("editor".to_string()),
+                resource: Resource::Members,
+                actions: BTreeSet::from([Action::Manage]),
+                condition: None,
+            }),
         ]);
+        // The named queries read the fields above and the policies decide who may read them.
+        changes.extend(fixture_queries());
+        // The searchable fields (slice 10, second half): an item's text fields (`1`, `7`, `9` and `10`) and a
+        // ticket's state and note (`1` and `3`). A part has no text field.
+        changes.push(SchemaChange::SetSearchable {
+            object: item(),
+            fields: vec![field_id(1), field_id(7), field_id(9), field_id(10)],
+        });
+        changes.push(SchemaChange::SetSearchable {
+            object: ticket(),
+            fields: vec![field_id(1), field_id(3)],
+        });
+        // The setting definitions (slice 12), in the same batch, so the revision and schema version stay as they were.
+        changes.extend(fixture_settings());
+        // The operations (slice 14), in the same batch too. Their posting steps name ledger unit `1`, which the batch is
+        // checked against, so the ledger is declared before it (and again after it, below).
+        changes.extend(fixture_operations());
+        // The automations, then the triggers that start them (slice 15), in the same batch.
+        changes.extend(fixture_automation_changes(owner));
+        changes.extend(fixture_trigger_changes(owner, &tenant));
         world = run(
             &world,
             principal(owner),
             Intent::ChangeSchema {
                 changes,
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
+        );
+        // Fields 11 and 12 of an item refer to parts, so they follow the part type.
+        world = run(
+            &world,
+            principal(owner),
+            Intent::ChangeSchema {
+                changes: [11u64, 12]
+                    .map(|n| SchemaChange::DefineField {
+                        object: item(),
+                        field: field_def(n, false),
+                    })
+                    .to_vec(),
                 expected_version: None,
                 existing: ExistingData::Reject,
             },
@@ -325,8 +2389,418 @@ fn initial_world() -> World {
                 },
             );
         }
+        set_fixture_ledger(&mut world, &tenant);
     }
     world
+}
+
+/// The segment tables of the fixture tenants (slice 16): segment 1, `high scorers`, defined by the owner after the
+/// schema batches with the kernel's `define`, its write applied without the batches (the model has none). It adds no
+/// event, and the tenant's revision, event sequence and schema version stay the fixture's.
+fn initial_segments(world: &World) -> BTreeMap<TenantId, SegmentTables> {
+    let mut tables = BTreeMap::new();
+    for n in [1u64, 2] {
+        let tenant_id: TenantId = id(format!("t{n}"));
+        let state = world
+            .tenants
+            .get(&tenant_id)
+            .expect("the fixture tenant exists");
+        let ctx = Context {
+            tenant: tenant_id.clone(),
+            principal: principal(n * 100),
+            session: None,
+            now: Timestamp(500),
+            correlation: "fixture".into(),
+            verified_address: None,
+            idempotency_key: None,
+            language: None,
+            hop: None,
+            agent: None,
+        };
+        let definition = Definition {
+            id: segment_id(&tenant_id, 1).expect("segment 1 has an id"),
+            name: "high scorers".to_string(),
+            subject: profile(),
+            predicate: Expr::Cmp(
+                CmpOp::Ge,
+                Box::new(Expr::Var(Scope::Record, field_id(2).as_str().to_string())),
+                Box::new(Expr::Lit(Value::Int(10))),
+            ),
+            refresh_seconds: None,
+            principal_field: field_id(1),
+            visible_to_members: false,
+        };
+        let mut write = strata_kernel::segments::define(state, &[], definition, &ctx)
+            .expect("the fixture segment defines")
+            .write;
+        write.clear_batches.clear();
+        write.batches.clear();
+        let mut table = SegmentTables::default();
+        table.apply(&write).expect("the fixture segment is applied");
+        tables.insert(tenant_id, table);
+    }
+    tables
+}
+
+/// A segment intent of a scenario (slice 16), as the model's `SegIntent`.
+enum SegmentOp {
+    Define {
+        number: u64,
+        name: String,
+        subject: u64,
+        principal_field: u64,
+        refresh: Option<u32>,
+        predicate: Expr,
+    },
+    Remove(u64),
+    Rebuild(u64),
+}
+
+/// A literal token of a segment expression: `n`, `i:<int>`, `s:<text>`, `b:1`, `b:0` or `r:<id>` (nothing else).
+fn segment_literal(token: &str) -> Option<Value> {
+    if token == "n" {
+        return Some(Value::Null);
+    }
+    match token.split_once(':') {
+        Some(("i", n)) => n.parse().ok().map(Value::Int),
+        Some(("s", text)) => Some(Value::Str(text.to_string())),
+        Some(("b", flag)) => match flag {
+            "1" => Some(Value::Bool(true)),
+            "0" => Some(Value::Bool(false)),
+            _ => None,
+        },
+        Some(("r", n)) => n.parse().ok().map(|n| Value::Ref(RecordId(n))),
+        _ => None,
+    }
+}
+
+/// A segment expression in prefix form and the tokens after it (the model's `parseSegExpr`): `f<n>` reads field `n`
+/// of the record, `o<n>` and `w<n>` of the old and the new record, `c` is the creator, `prin` the principal,
+/// `p:<name>` a parameter, a literal is a value token; `eq ne lt le gt ge and or` take two operands, `not isnull` one.
+fn parse_segment_expr<'a, 'b>(tokens: &'b [&'a str]) -> Option<(Expr, &'b [&'a str])> {
+    let (token, rest) = tokens.split_first()?;
+    let name = |digits: &str| -> Option<String> {
+        Some(field_id(digits.parse().ok()?).as_str().to_string())
+    };
+    match *token {
+        "prin" => Some((Expr::Principal, rest)),
+        "c" => Some((Expr::Var(Scope::Record, "$created_by".to_string()), rest)),
+        "not" => {
+            let (a, rest) = parse_segment_expr(rest)?;
+            Some((Expr::Not(Box::new(a)), rest))
+        }
+        "isnull" => {
+            let (a, rest) = parse_segment_expr(rest)?;
+            Some((Expr::IsNull(Box::new(a)), rest))
+        }
+        "and" | "or" | "eq" | "ne" | "lt" | "le" | "gt" | "ge" => {
+            let (a, rest) = parse_segment_expr(rest)?;
+            let (b, rest) = parse_segment_expr(rest)?;
+            let compare = |op: CmpOp| Expr::Cmp(op, Box::new(a.clone()), Box::new(b.clone()));
+            let expr = match *token {
+                "and" => Expr::And(vec![a.clone(), b.clone()]),
+                "or" => Expr::Or(vec![a.clone(), b.clone()]),
+                "eq" => compare(CmpOp::Eq),
+                "ne" => compare(CmpOp::Ne),
+                "lt" => compare(CmpOp::Lt),
+                "le" => compare(CmpOp::Le),
+                "gt" => compare(CmpOp::Gt),
+                _ => compare(CmpOp::Ge),
+            };
+            Some((expr, rest))
+        }
+        other => {
+            if let Some(digits) = other.strip_prefix('f') {
+                Some((Expr::Var(Scope::Record, name(digits)?), rest))
+            } else if let Some(digits) = other.strip_prefix('o') {
+                Some((Expr::Var(Scope::Old, name(digits)?), rest))
+            } else if let Some(digits) = other.strip_prefix('w') {
+                Some((Expr::Var(Scope::New, name(digits)?), rest))
+            } else if let Some(parameter) = other.strip_prefix("p:") {
+                Some((Expr::Param(parameter.to_string()), rest))
+            } else {
+                Some((Expr::Lit(segment_literal(other)?), rest))
+            }
+        }
+    }
+}
+
+/// A segment intent, as the model's `parseSegOp` reads what follows `op <t> <p> [hop=<n>]`: `segment define <n> <name>
+/// <type> <principal field> <refresh|-> <expression>` (a name's spaces are `_`), `segment remove <n>` or `segment
+/// rebuild <n>`.
+fn parse_segment_op(tokens: &[&str]) -> Option<SegmentOp> {
+    match tokens {
+        ["segment", "define", number, name, subject, field, refresh, expression @ ..] => {
+            let refresh = if *refresh == "-" {
+                None
+            } else {
+                Some(refresh.parse::<u32>().ok()?)
+            };
+            let (predicate, left) = parse_segment_expr(expression)?;
+            if !left.is_empty() {
+                return None;
+            }
+            Some(SegmentOp::Define {
+                number: number.parse().ok()?,
+                name: name.replace('_', " "),
+                subject: subject.parse().ok()?,
+                principal_field: field.parse().ok()?,
+                refresh,
+                predicate,
+            })
+        }
+        ["segment", "remove", number] => Some(SegmentOp::Remove(number.parse().ok()?)),
+        ["segment", "rebuild", number] => Some(SegmentOp::Rebuild(number.parse().ok()?)),
+        _ => None,
+    }
+}
+
+/// Decide `targets` on the world's state and write the result to the tables, as the kernel's commit does (slice 16):
+/// the rows of the pairs, `decide_write` with the reason, the hop of the context and the revision, the batch fields
+/// of the write stripped (the model has no batches), then `check` and `apply`. The events are in the tables' log.
+fn decide_segments(
+    world: &World,
+    tables: &mut SegmentTables,
+    ctx: &Context,
+    targets: &[Target],
+    reason: SegmentReason,
+) {
+    if targets.is_empty() {
+        return;
+    }
+    let Some(tenant) = world.tenants.get(&ctx.tenant) else {
+        return;
+    };
+    let catalog = tables.catalog();
+    let rows = tables.rows(&strata_kernel::segments::pairs(targets));
+    let occasion = Occasion {
+        reason,
+        hop: u64::from(ctx.hop.unwrap_or(0)),
+        revision: tenant.revision,
+        now: ctx.now,
+    };
+    let mut decided = strata_kernel::segments::decide_write(
+        &catalog,
+        &world.state(&ctx.tenant),
+        targets,
+        &rows,
+        &occasion,
+        ctx,
+    )
+    .expect("the segment decision is made on the complete state");
+    decided.write.clear_batches.clear();
+    decided.write.batches.clear();
+    tables
+        .check(&decided.write)
+        .expect("the segment write rests on the tables");
+    tables
+        .apply(&decided.write)
+        .expect("the segment write is applied");
+}
+
+/// The segment decisions after an accepted step (slice 16, the model's `segAfterRecords`): the change plan of its
+/// events, the targets (no referenced records, the model has no reference hop), and their decision.
+fn segment_record_pass(
+    world: &World,
+    tables: &mut SegmentTables,
+    ctx: &Context,
+    events: &[DomainEvent],
+) {
+    let Some(tenant) = world.tenants.get(&ctx.tenant) else {
+        return;
+    };
+    let catalog = tables.catalog();
+    if catalog.is_empty() {
+        return;
+    }
+    let plan = strata_kernel::segments::plan_change(&catalog, &tenant.schema, events);
+    let changed = strata_kernel::segments::changes(events);
+    let (targets, _batches) = strata_kernel::segments::targets(
+        &plan,
+        &catalog,
+        &[],
+        &strata_kernel::segments::after_map(&changed),
+        u64::from(ctx.hop.unwrap_or(0)),
+        ctx.now,
+    );
+    decide_segments(world, tables, ctx, &targets, SegmentReason::Change);
+}
+
+/// The rebuild of a segment (slice 16, the model's `segRebuildPass`): every subject record of the segment's subject
+/// type in record id order, as its person (the first of two records of one person only), decided with the reason
+/// `predicate-change`. A segment the tenant does not hold rebuilds nothing.
+fn segment_rebuild_pass(
+    world: &World,
+    tables: &mut SegmentTables,
+    ctx: &Context,
+    segment: SegmentId,
+) {
+    let Some(tenant) = world.tenants.get(&ctx.tenant) else {
+        return;
+    };
+    let Some(held) = tables.segments.get(&segment).cloned() else {
+        return;
+    };
+    let mut seen = BTreeSet::new();
+    let mut targets = Vec::new();
+    for record in tenant.records_of(&held.subject) {
+        let Some(person) = strata_kernel::segments::person_of(record, &held.principal_field) else {
+            continue;
+        };
+        if seen.insert(person.clone()) {
+            targets.push(Target {
+                segment,
+                person,
+                locate: Locate::Id(record.id),
+            });
+        }
+    }
+    decide_segments(world, tables, ctx, &targets, SegmentReason::PredicateChange);
+}
+
+/// One entry or exit event of the segment log as the model's `showSegEvent` prints it: the tenant, the position in the
+/// log, the segment's number, the person, the direction, the reason, the version, the revision, the hop and the
+/// principal.
+fn segment_event_line(tenant: &str, position: usize, logged: &SegmentEvent) -> String {
+    let event = &logged.event;
+    let number = segment_number(&logged.tenant, event.segment)
+        .expect("a logged segment is one the harness numbers");
+    format!(
+        "segment-event {tenant} seq={position} seg={number} person={} direction={} reason={} version={} revision={} hop={} by={}",
+        event.person.as_str(),
+        event.direction.as_str(),
+        event.reason.as_str(),
+        event.version,
+        event.revision.0,
+        event.hop,
+        principal_text(&logged.principal)
+    )
+}
+
+/// The lines of the segment events a step appended to the log (from index `first`), and the effect lines of the
+/// triggers on them, in the order of the pump (`segment_pump::decide_all`): each event in position order, and for
+/// each the triggers that match it in trigger id order.
+fn segment_report(
+    world: &World,
+    tables: &SegmentTables,
+    ctx: &Context,
+    tenant: &str,
+    first: usize,
+) -> (Vec<String>, Vec<String>) {
+    let events: Vec<String> = tables
+        .events
+        .iter()
+        .enumerate()
+        .skip(first)
+        .map(|(index, logged)| segment_event_line(tenant, index + 1, logged))
+        .collect();
+    let mut effects = Vec::new();
+    let state = world.state(&ctx.tenant);
+    let Some(stored) = state.tenant.as_deref() else {
+        return (events, effects);
+    };
+    let lookup = Lookup {
+        tenant: stored,
+        coverage: &state.coverage,
+    };
+    let catalog = tables.catalog();
+    let mut triggers: Vec<&TriggerDef> = stored
+        .schema
+        .triggers
+        .iter()
+        .flat_map(|all| all.values())
+        .collect();
+    triggers.sort_by_key(|trigger| trigger_number(&trigger.id));
+    for (index, logged) in tables.events.iter().enumerate().skip(first) {
+        let position = index as u64 + 1;
+        let Some(segment) = catalog.iter().find(|s| s.id == logged.event.segment) else {
+            continue;
+        };
+        for trigger in &triggers {
+            if !strata_kernel::segment_flow::matches(&trigger.on, &logged.event) {
+                continue;
+            }
+            let subject =
+                strata_kernel::segment_flow::subject_of(&lookup, segment, &logged.event.person)
+                    .expect("the subject of a segment event is looked up on the complete state");
+            let effect = strata_kernel::segment_flow::decide(
+                lookup,
+                ctx,
+                position,
+                logged,
+                subject.map(|record| &**record),
+                trigger,
+            )
+            .expect("a segment trigger is decided on the complete state");
+            if let Some(text) = effect.and_then(|effect| effect_text(&effect, &ctx.tenant)) {
+                effects.push(text);
+            }
+        }
+    }
+    (events, effects)
+}
+
+/// The lines of a segment intent (slice 16): `err <kind>`, or `ok`, the tenant's revision, the segment events it
+/// appended and the effects of the triggers on them. `None` for a segment number the harness has no id for.
+fn run_segment_op(
+    world: &World,
+    tables: &mut BTreeMap<TenantId, SegmentTables>,
+    ctx: &Context,
+    tenant: &str,
+    op: SegmentOp,
+) -> Option<Vec<String>> {
+    let Some(stored) = world.tenants.get(&ctx.tenant) else {
+        return Some(vec!["err no_tenant".to_string()]);
+    };
+    let table = tables.entry(ctx.tenant.clone()).or_default();
+    let first = table.events.len();
+    match op {
+        SegmentOp::Define {
+            number,
+            name,
+            subject,
+            principal_field,
+            refresh,
+            predicate,
+        } => {
+            let definition = Definition {
+                id: segment_id(&ctx.tenant, number)?,
+                name,
+                subject: object_of(subject),
+                predicate,
+                refresh_seconds: refresh,
+                principal_field: field_id(principal_field),
+                visible_to_members: false,
+            };
+            match strata_kernel::segments::define(stored, &table.catalog(), definition, ctx) {
+                Err(error) => return Some(vec![format!("err {}", show_error(error.kind))]),
+                Ok(defined) => {
+                    let mut write = defined.write;
+                    write.clear_batches.clear();
+                    write.batches.clear();
+                    table
+                        .apply(&write)
+                        .expect("an accepted definition is applied");
+                }
+            }
+        }
+        SegmentOp::Remove(number) => {
+            let segment = segment_id(&ctx.tenant, number)?;
+            match strata_kernel::segments::remove(stored, &table.catalog(), segment, ctx) {
+                Err(error) => return Some(vec![format!("err {}", show_error(error.kind))]),
+                Ok(write) => table.apply(&write).expect("an accepted removal is applied"),
+            }
+        }
+        SegmentOp::Rebuild(number) => {
+            let segment = segment_id(&ctx.tenant, number)?;
+            segment_rebuild_pass(world, table, ctx, segment);
+        }
+    }
+    let (events, effects) = segment_report(world, table, ctx, tenant, first);
+    let mut lines = vec!["ok".to_string(), format!("revision {}", stored.revision.0)];
+    lines.extend(events);
+    lines.extend(effects);
+    Some(lines)
 }
 
 /// A scalar, reference or `n`: the element of a list, or a whole value. Garbage reads as `null`,
@@ -431,58 +2905,947 @@ fn show_error(kind: ErrorKind) -> &'static str {
         ErrorKind::StillReferenced => "still_referenced",
         ErrorKind::VersionConflict => "version_conflict",
         ErrorKind::LimitExceeded => "limit_exceeded",
+        ErrorKind::UniqueViolated => "unique_violated",
+        ErrorKind::InvalidSchema => "invalid_schema",
+        ErrorKind::UnknownObject => "unknown_object",
+        ErrorKind::ConstraintViolated => "constraint_violated",
+        ErrorKind::Evaluation => "evaluation",
+        ErrorKind::InvalidIntent => "invalid_intent",
+        ErrorKind::UnknownRole => "unknown_role",
+        ErrorKind::LastOwner => "last_owner",
+        ErrorKind::TenantExists => "tenant_exists",
+        ErrorKind::WorkflowViolation => "workflow_violation",
+        ErrorKind::SchemaConflict => "schema_conflict",
+        ErrorKind::UnknownQuery => "unknown_query",
+        ErrorKind::SelfAction => "self_action",
         _ => "unmodelled",
     }
 }
 
-fn show_world(world: &World) -> Vec<String> {
+/// The membership of a tenant, one line each: its roles, its members, its teams and its invitations,
+/// sorted by number, lists sorted (the model's `membershipLines`).
+fn membership_lines(n: u64, tenant: &TenantState) -> Vec<String> {
+    let mut out = vec![format!(
+        "roles {n} {}",
+        show_numbers(tenant.schema.roles.keys().map(role_number).collect())
+    )];
+    let mut members: Vec<(u64, String)> = tenant
+        .members
+        .iter()
+        .map(|(user, roles)| {
+            (
+                user_number(user),
+                show_numbers(roles.iter().map(role_number).collect()),
+            )
+        })
+        .collect();
+    members.sort();
+    out.extend(
+        members
+            .iter()
+            .map(|(user, roles)| format!("member {n} {user} {roles}")),
+    );
+    let mut teams: Vec<(u64, String)> = tenant
+        .schema
+        .all_teams()
+        .map(|team| {
+            (
+                team.id.as_str()["team".len()..]
+                    .parse()
+                    .expect("fixture teams are team<number>"),
+                format!(
+                    "{} {} {}",
+                    show_text(&team.label),
+                    show_numbers(team.members.iter().map(user_number).collect()),
+                    show_numbers(team.roles.iter().map(role_number).collect())
+                ),
+            )
+        })
+        .collect();
+    teams.sort();
+    out.extend(
+        teams
+            .iter()
+            .map(|(team, rest)| format!("team {n} {team} {rest}")),
+    );
+    let user_or_dash = |user: &Option<PrincipalId>| {
+        user.as_ref()
+            .map_or_else(|| "-".to_string(), |u| user_number(u).to_string())
+    };
+    let mut invitations: Vec<(u64, String)> = tenant
+        .schema
+        .all_invitations()
+        .map(|invitation| {
+            (
+                invitation.id.as_str()["inv".len()..]
+                    .parse()
+                    .expect("fixture invitations are inv<number>"),
+                format!(
+                    "{} {} by={} expires={} redeemed={} revoked={}",
+                    show_text(&invitation.address),
+                    show_numbers(invitation.roles.iter().map(role_number).collect()),
+                    user_number(&invitation.created_by),
+                    invitation
+                        .expires_at
+                        .map_or_else(|| "-".to_string(), |at| at.0.to_string()),
+                    user_or_dash(&invitation.redeemed_by),
+                    user_or_dash(&invitation.revoked_by)
+                ),
+            )
+        })
+        .collect();
+    invitations.sort();
+    out.extend(
+        invitations
+            .iter()
+            .map(|(invitation, rest)| format!("invitation {n} {invitation} {rest}")),
+    );
+    out
+}
+
+/// The membership lines of the fixture's own tenants (`1` and `2`), which a tenant's state prints its
+/// membership against.
+fn initial_membership() -> &'static [Vec<String>; 2] {
+    static INITIAL: std::sync::OnceLock<[Vec<String>; 2]> = std::sync::OnceLock::new();
+    INITIAL.get_or_init(|| {
+        let world = initial_world();
+        [1u64, 2].map(|n| {
+            let tenant = &world.tenants[&id::<TenantId>(format!("t{n}"))];
+            membership_lines(n, tenant)
+        })
+    })
+}
+
+/// A setting's subject as the printed forms name it (slice 12): the tenant, or the subject's own name, which is
+/// `team<n>` for a team and `p<n>` for a person in the kernel too.
+fn subject_text(level: SettingLevel, subject: &str) -> String {
+    match level {
+        SettingLevel::Tenant => "tenant".to_string(),
+        _ => subject.to_string(),
+    }
+}
+
+/// The settings of a tenant that hold an override or a revision (slice 12, the model's `settingLines`): one line
+/// per override in key order, then one per setting whose revision is above one, by name (a defined setting has revision
+/// one, so a revision line shows a setting that has been written). An override's key is its
+/// setting, its level and its subject, where the tenant's subject is the tenant's number `n`. Nothing when there are
+/// none, so a tenant without a setting write prints as before.
+fn setting_lines(n: u64, tenant: &TenantState) -> Vec<String> {
+    let Some(values) = tenant.setting_values.as_deref() else {
+        return Vec::new();
+    };
+    let mut overrides: Vec<(String, &SettingOverride)> = values
+        .overrides
+        .values()
+        .map(|held| {
+            let subject = match held.level {
+                SettingLevel::Tenant => n.to_string(),
+                _ => held.subject.clone(),
+            };
+            (
+                format!(
+                    "{}/{}/{subject}",
+                    held.setting.as_str(),
+                    held.level.as_str()
+                ),
+                held,
+            )
+        })
+        .collect();
+    overrides.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out: Vec<String> = overrides
+        .iter()
+        .map(|(_, held)| {
+            format!(
+                "setting-override {n} {} level={} subject={} value={} rev={}",
+                held.setting.as_str(),
+                held.level.as_str(),
+                subject_text(held.level, &held.subject),
+                show_value(&held.value),
+                held.revision
+            )
+        })
+        .collect();
+    out.extend(
+        values
+            .revisions
+            .iter()
+            .filter(|(_, revision)| **revision > 1)
+            .map(|(setting, revision)| {
+                format!("setting-revision {n} {} {revision}", setting.as_str())
+            }),
+    );
+    out
+}
+
+/// The source of a resolved setting as the printed forms name it (slice 12).
+fn source_text(source: &SettingSource) -> &'static str {
+    match source {
+        SettingSource::Person => "person",
+        SettingSource::Team => "team",
+        SettingSource::Tenant => "tenant",
+        SettingSource::Platform => "platform",
+        SettingSource::Default => "default",
+    }
+}
+
+/// The lines of a setting read (slice 12, the model's `showSettingRead`): `err <kind>`, or `ok`, the source, the
+/// team's number (`-` for none), the value and the setting's revision at the tenant. A tenant that does not exist
+/// is `no_tenant`, and a name the kernel does not define is `unknown_object`, as the kernel refuses it.
+fn setting_read_lines(world: &World, ctx: &Context, name: &str) -> Vec<String> {
+    let Some(tenant) = world.tenants.get(&ctx.tenant) else {
+        return vec!["err no_tenant".to_string()];
+    };
+    let Ok(setting) = SettingId::try_from(name.to_string()) else {
+        return vec!["err unknown_object".to_string()];
+    };
+    match strata_kernel::settings::resolve(tenant, &ctx.principal, &setting) {
+        Err(error) => vec![format!("err {}", show_error(error.kind))],
+        Ok(resolution) => {
+            let team = match &resolution.team {
+                Some(team) => team
+                    .as_str()
+                    .strip_prefix("team")
+                    .unwrap_or(team.as_str())
+                    .to_string(),
+                None => "-".to_string(),
+            };
+            vec![
+                "ok".to_string(),
+                format!("source {}", source_text(&resolution.source)),
+                format!("team {team}"),
+                format!("value {}", show_value(&resolution.value)),
+                format!("tenant-rev {}", resolution.tenant_revision),
+            ]
+        }
+    }
+}
+
+fn show_world(world: &World, segments: &BTreeMap<TenantId, SegmentTables>) -> Vec<String> {
     let mut out = Vec::new();
-    for n in [1u64, 2] {
-        let Some(tenant) = world.tenants.get(&id::<TenantId>(format!("t{n}"))) else {
-            out.push(format!("tenant {n} absent"));
+    // Tenants 1 and 2 are always printed, `absent` when they are; tenant 3 only when a creation made it.
+    for n in [1u64, 2, 3] {
+        let tenant_id: TenantId = id(format!("t{n}"));
+        let Some(tenant) = world.tenants.get(&tenant_id) else {
+            if n != 3 {
+                out.push(format!("tenant {n} absent"));
+            }
             continue;
         };
-        let required: Vec<String> = tenant.schema.objects[&item()]
-            .fields
-            .values()
-            .filter(|f| f.required)
-            .map(|f| f.id.as_str()[1..].to_string())
-            .collect();
+        // The required fields of an object type, by number, as the model's `requiredOf` prints
+        // them. Fields print in the model's order, by number (`f10` after `f6`), not by name.
+        let required_text = |object: &ObjectTypeId| -> String {
+            let Some(definition) = tenant.schema.objects.get(object) else {
+                return String::new();
+            };
+            let mut required: Vec<u64> = definition
+                .fields
+                .values()
+                .filter(|f| f.required)
+                .map(|f| field_number(&f.id))
+                .collect();
+            required.sort_unstable();
+            let required: Vec<String> = required.iter().map(u64::to_string).collect();
+            required.join(",")
+        };
         out.push(format!(
             "tenant {n} next={} required={}",
             tenant.next_record,
-            required.join(",")
+            required_text(&item())
         ));
-        for record in tenant.records_of(&item()) {
-            let owner = record
-                .created_by
-                .as_ref()
-                .map_or("0", |p| &p.as_str()[1..])
-                .to_string();
-            let fields: Vec<String> = record
-                .fields
-                .iter()
-                .map(|(field, value)| format!("{}={}", &field.as_str()[1..], show_value(value)))
-                .collect();
-            out.push(
-                format!(
-                    "record {} owner={owner} v={} {}",
-                    record.id,
-                    record.version,
-                    fields.join(" ")
-                )
-                .trim_end()
-                .to_string(),
-            );
+        // The item's records, then the part type's (the model's type `2`), with its own header.
+        for (object, pre) in [(item(), ""), (part(), "type 2 "), (ticket(), "type 4 ")] {
+            if !pre.is_empty() {
+                if !tenant.schema.objects.contains_key(&object) {
+                    continue;
+                }
+                // The tickets print only while they hold a record, as the model's `showTenant` does.
+                if pre == "type 4 " && tenant.records_of(&object).next().is_none() {
+                    continue;
+                }
+                out.push(format!("{pre}required={}", required_text(&object)));
+            }
+            for record in tenant.records_of(&object) {
+                out.push(
+                    format!("{pre}record {} {}", record.id, record_text(record))
+                        .trim_end()
+                        .to_string(),
+                );
+            }
+        }
+        // The object types a schema change defined (`type<n>`), by number, each with its header and its records, as
+        // the model prints every type but the item, the part and the ticket that way.
+        let mut defined: Vec<(u64, &ObjectTypeId)> = tenant
+            .schema
+            .objects
+            .keys()
+            .filter(|object| !["item", "part", "ticket"].contains(&object.as_str()))
+            // The profiles (type 20, slice 16) print only while they hold a record, as the tickets do.
+            .filter(|object| {
+                object.as_str() != "profile" || tenant.records_of(object).next().is_some()
+            })
+            .map(|object| (object_number(object), object))
+            .collect();
+        defined.sort_unstable_by_key(|(number, _)| *number);
+        for (number, object) in defined {
+            out.push(format!("type {number} required={}", required_text(object)));
+            for record in tenant.records_of(object) {
+                out.push(
+                    format!("type {number} record {} {}", record.id, record_text(record))
+                        .trim_end()
+                        .to_string(),
+                );
+            }
+        }
+        // The membership, when it is not the one the fixture starts the tenant with.
+        let lines = membership_lines(n, tenant);
+        if n == 3 || lines != initial_membership()[n as usize - 1] {
+            out.extend(lines);
+        }
+        // The setting overrides and revisions (slice 12), after the membership, as the model prints them.
+        out.extend(setting_lines(n, tenant));
+        // The ledger accounts and their entries (slice 13), last, as the model prints them.
+        out.extend(ledger_lines(n, tenant));
+        // The memberships of segments (slice 16), last, sorted by segment number and then by person, as the model
+        // prints them: the tables' order is by segment id (which rises with the number) and then by person.
+        if let Some(table) = segments.get(&tenant_id) {
+            for membership in table.memberships.values() {
+                let number = segment_number(&tenant_id, membership.segment)
+                    .expect("a member of a segment the harness numbers");
+                out.push(format!(
+                    "segment-member {n} seg={number} person={} version={}",
+                    membership.person.as_str(),
+                    membership.version
+                ));
+            }
         }
     }
     out
 }
 
+/// The order of ledger accounts as the model prints them: a person before a pool, then by number, unit and scope.
+fn account_rank(account: &LedgerAccount) -> (u8, u64, u64, String) {
+    let (kind, number) = match &account.owner {
+        Some(LedgerOwner::Principal { principal }) => (0, user_number(principal)),
+        Some(LedgerOwner::Pool { pool }) => (1, pool_number(pool)),
+        None => (2, 0),
+    };
+    (
+        kind,
+        number,
+        unit_number(&account.unit),
+        account.scope.0.clone(),
+    )
+}
+
+/// The ledger of a tenant (slice 13), printed only while it has an account: each account's header in
+/// `accountBefore` order, then the entries of each account in sequence order (the model's `ledgerLines`).
+fn ledger_lines(n: u64, tenant: &TenantState) -> Vec<String> {
+    let Some(ledger) = tenant.ledger.as_ref() else {
+        return Vec::new();
+    };
+    let mut accounts: Vec<&LedgerAccount> = ledger.accounts.values().collect();
+    accounts.sort_by_key(|account| account_rank(account));
+    let mut out = Vec::new();
+    for account in accounts {
+        let owner = account
+            .owner
+            .as_ref()
+            .map_or_else(|| "-".to_string(), ledger_owner_text);
+        let unit = unit_number(&account.unit);
+        let scope = ledger_text(&account.scope.0);
+        let buckets = match account.buckets.as_deref() {
+            Some(list) if !list.is_empty() => list
+                .iter()
+                .map(|bucket| format!("{}:{}", bucket.period_start.0, bucket.remaining))
+                .collect::<Vec<String>>()
+                .join(","),
+            _ => "-".to_string(),
+        };
+        out.push(format!(
+            "ledger-account {n} owner={owner} unit={unit} scope={scope} balance={} seq={} buckets={buckets}",
+            account.balance.0, account.last_sequence
+        ));
+        let key = strata_kernel::ledger::account_key(&account.account);
+        let entries: &[LedgerEntry] = ledger.entries.get(&key).map_or(&[], |held| held.as_slice());
+        for entry in entries {
+            let by = entry
+                .caused_by
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |user| user_number(user).to_string());
+            let corrects = entry
+                .corrects
+                .map_or_else(|| "-".to_string(), |c| c.to_string());
+            out.push(format!(
+                "ledger-entry {n} owner={owner} unit={unit} scope={scope} seq={} amount={} key={} reason={} by={by} at={} corrects={corrects}{}",
+                entry.sequence,
+                entry.amount.0,
+                entry.idempotency_key,
+                ledger_text(&entry.reason),
+                entry.at.0,
+                if entry.transaction.is_some() {
+                    " txn=1"
+                } else {
+                    ""
+                }
+            ));
+        }
+    }
+    out
+}
+
+/// The object type as the scenario format numbers it: `item` is `1`, `part` is `2`, `ticket` is `4`,
+/// and `type<n>` is `n`.
+fn object_number(object: &ObjectTypeId) -> u64 {
+    match object.as_str() {
+        "item" => 1,
+        "part" => 2,
+        "ticket" => 4,
+        "profile" => 20,
+        other => other
+            .strip_prefix("type")
+            .and_then(|n| n.parse().ok())
+            .expect("fixture object types are item, part, ticket, profile or type<number>"),
+    }
+}
+
+/// A record as the model's `recordBody` prints it: its creator (a user number, or `-`), its version and
+/// its fields by number, with the values of `show_value`. Used by the state lines and by the events.
+fn record_text(record: &Record) -> String {
+    // The creator as the model prints it: its user id, or `-` when no user created the record.
+    let owner = record
+        .created_by
+        .as_ref()
+        .map_or_else(|| "-".to_string(), |p| p.as_str()[1..].to_string());
+    let mut numbered: Vec<(u64, &Value)> = record
+        .fields
+        .iter()
+        .map(|(field, value)| (field_number(field), value))
+        .collect();
+    numbered.sort_by_key(|(n, _)| *n);
+    let fields: Vec<String> = numbered
+        .iter()
+        .map(|(n, value)| format!("{n}={}", show_value(value)))
+        .collect();
+    format!("owner={owner} v={} {}", record.version, fields.join(" "))
+        .trim_end()
+        .to_string()
+}
+
+/// A principal as the event lines print it: a user's number, `system` or `anon`.
+fn principal_text(principal: &Principal) -> String {
+    match principal {
+        Principal::User(user) => user_number(user).to_string(),
+        Principal::System => "system".to_string(),
+        Principal::Anonymous => "anon".to_string(),
+    }
+}
+
+/// The member of a `member-changed` event: a user's number, or `team:<team number>` for the change of a
+/// team's own roles (the kernel names a team's principal `team:<team id>`, and its id is `team<n>`).
+fn member_text(principal: &PrincipalId) -> String {
+    match principal.as_str().strip_prefix("team:team") {
+        Some(number) => format!("team:{number}"),
+        None => user_number(principal).to_string(),
+    }
+}
+
+/// The summary of a `schema-changed` line, from the change list of the intent: each field definition as
+/// `field:<object>.<field>` and each composite unique as `unique:<object>:<fields>`, in list order; `-` for
+/// none. Other kinds of change are not in the model and are left out.
+fn schema_summary(changes: &[SchemaChange]) -> String {
+    let items: Vec<String> = changes
+        .iter()
+        .filter_map(|change| match change {
+            SchemaChange::DefineField { object, field } => Some(format!(
+                "field:{}.{}",
+                object_number(object),
+                field_number(&field.id)
+            )),
+            SchemaChange::RemoveField { object, field } => Some(format!(
+                "remove-field:{}.{}",
+                object_number(object),
+                field_number(field)
+            )),
+            SchemaChange::DefineObject { id, .. } => {
+                Some(format!("define-type:{}", object_number(id)))
+            }
+            SchemaChange::RemoveObject { id, .. } => {
+                Some(format!("remove-type:{}", object_number(id)))
+            }
+            SchemaChange::DefineUnique { object, unique } => {
+                let fields: Vec<String> = unique
+                    .fields
+                    .iter()
+                    .map(|field| field_number(field).to_string())
+                    .collect();
+                Some(format!(
+                    "unique:{}:{}",
+                    object_number(object),
+                    fields.join(",")
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    if items.is_empty() {
+        "-".to_string()
+    } else {
+        items.join(";")
+    }
+}
+
+/// The workflow transitions an update fired, sorted by workflow id, as `<workflow>:<transition>` entries
+/// joined by commas; `-` for none.
+fn fired_text(fired: Option<&BTreeMap<WorkflowId, String>>) -> String {
+    match fired {
+        Some(map) if !map.is_empty() => map
+            .iter()
+            .map(|(workflow, transition)| format!("{workflow}:{transition}"))
+            .collect::<Vec<String>>()
+            .join(","),
+        _ => "-".to_string(),
+    }
+}
+
+/// One domain event as the model's `showEvent` prints it: the sequence number, the revision, the
+/// principal and the body. `changes` is the change list of the intent that emitted the event (empty for
+/// any other intent); a `schema-changed` line takes its summary from it.
+fn event_text(event: &DomainEvent, changes: &[SchemaChange]) -> String {
+    let body = match &event.body {
+        EventBody::TenantCreated { name } => format!("tenant-created name={name}"),
+        EventBody::SchemaChanged {
+            version,
+            grandfathered,
+            ..
+        } => format!(
+            "schema-changed version={} grandfathered={grandfathered} summary={}",
+            version.0,
+            schema_summary(changes)
+        ),
+        EventBody::RecordCreated { record } => format!(
+            "record-created type={} id={} {}",
+            object_number(&record.object),
+            record.id,
+            record_text(record)
+        ),
+        EventBody::RecordUpdated {
+            before,
+            after,
+            transitions,
+        } => format!(
+            "record-updated type={} id={} before=[{}] after=[{}] fired={}",
+            object_number(&before.object),
+            before.id,
+            record_text(before),
+            record_text(after),
+            fired_text(transitions.as_ref())
+        ),
+        EventBody::RecordDeleted { before } => format!(
+            "record-deleted type={} id={} before=[{}]",
+            object_number(&before.object),
+            before.id,
+            record_text(before)
+        ),
+        EventBody::MemberChanged { principal, roles } => format!(
+            "member-changed who={} roles={}",
+            member_text(principal),
+            show_numbers(roles.iter().map(role_number).collect())
+        ),
+        EventBody::SettingChanged {
+            setting,
+            level,
+            subject,
+        } => format!(
+            "setting-changed setting={} level={} subject={}",
+            setting.as_str(),
+            level.as_str(),
+            subject_text(*level, subject)
+        ),
+        EventBody::LedgerEntryPosted {
+            owner,
+            unit,
+            scope,
+            amount,
+            balance,
+            balance_before,
+            entry_sequence,
+            reason,
+            ..
+        } => format!(
+            "ledger-posted owner={} unit={} scope={} amount={} balance={} before={} seq={} reason={}",
+            ledger_owner_text(owner),
+            unit_number(unit),
+            ledger_text(&scope.0),
+            amount.0,
+            balance.0,
+            balance_before.0,
+            entry_sequence,
+            ledger_text(reason)
+        ),
+        EventBody::AutomationSuspended {
+            automation,
+            definer,
+            role,
+        } => format!(
+            "automation-suspended automation={} definer={} role={}",
+            automation_number(automation),
+            user_number(definer),
+            role_number(role)
+        ),
+    };
+    format!(
+        "event {} rev={} by={} {body}",
+        event.seq,
+        event.revision.0,
+        principal_text(&event.principal)
+    )
+}
+
+/// The lines of an output that are not the revision, event and effect lines of an accepted step. The
+/// committed `expected.txt` holds only these outcome lines.
+pub fn outcome_lines(output: &str) -> String {
+    let kept: Vec<&str> = output
+        .lines()
+        .filter(|line| {
+            !(line.starts_with("revision ")
+                || line.starts_with("event ")
+                || line.starts_with("segment-event ")
+                || line.starts_with("effect "))
+        })
+        .collect();
+    let mut text = kept.join("\n");
+    text.push('\n');
+    text
+}
+
+/// The definition of field `n` as the tenant's schema holds it now. The kernel's `DefineField`
+/// replaces the whole definition, so a change to one attribute starts from this one.
+fn current_field(
+    world: &World,
+    tenant: &TenantId,
+    object: &ObjectTypeId,
+    n: u64,
+) -> Option<FieldDef> {
+    let state = world.tenants.get(tenant)?;
+    state
+        .schema
+        .objects
+        .get(object)?
+        .fields
+        .get(&field_id(n))
+        .cloned()
+}
+
+/// A token of record ids: `n`, or `a-b` for every id from `a` to `b` (the model's `parseIds`).
+fn parse_ids(token: &str) -> Option<Vec<RecordId>> {
+    match token.split_once('-') {
+        None => Some(vec![RecordId(token.parse().ok()?)]),
+        Some((first, last)) => {
+            let (first, last): (u64, u64) = (first.parse().ok()?, last.parse().ok()?);
+            Some((first..=last).map(RecordId).collect())
+        }
+    }
+}
+
+/// A cursor token: `o<n>` is an offset, `a<id>` a position after a record (the model's `parseCursor`).
+fn parse_cursor(token: &str) -> Option<PageCursor> {
+    if let Some(offset) = token.strip_prefix('o') {
+        Some(PageCursor::Offset(offset.parse().ok()?))
+    } else {
+        let after = token.strip_prefix('a')?;
+        Some(PageCursor::After(RecordId(after.parse().ok()?)))
+    }
+}
+
+/// The request a read line asks, after its tenant and principal: `records <type> <ids..>` or
+/// `query <name> [k=v ..] [page=<n>] [cursor=<c>]` (the model's `parseRead`).
+fn parse_read(tokens: &[&str]) -> Option<ReadRequest> {
+    match tokens {
+        ["records", ty, ids @ ..] => {
+            let mut all = Vec::new();
+            for token in ids {
+                all.extend(parse_ids(token)?);
+            }
+            Some(ReadRequest::Records {
+                object: object_of(ty.parse().ok()?),
+                ids: all,
+            })
+        }
+        ["query", name, args @ ..] => {
+            let mut params = BTreeMap::new();
+            let mut page_size = None;
+            let mut cursor = None;
+            for arg in args {
+                let (key, value) = arg.split_once('=')?;
+                match key {
+                    "page" => page_size = Some(value.parse().ok()?),
+                    "cursor" => cursor = Some(parse_cursor(value)?),
+                    _ => {
+                        params.insert(key.to_string(), parse_value(value));
+                    }
+                }
+            }
+            Some(ReadRequest::Named {
+                query: id::<QueryId>(name.to_string()),
+                params,
+                page_size,
+                cursor,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The lines a read prints (the model's `showRead`): `err <kind>`, or `ok`, `next <cursor>` (`-` for
+/// none) and one `row <id> <record>` line per row.
+fn read_lines(result: &Result<ReadResult, DomainError>) -> Vec<String> {
+    match result {
+        Err(error) => vec![format!("err {}", show_error(error.kind))],
+        Ok(read) => {
+            let next = match &read.next {
+                None => "-".to_string(),
+                Some(PageCursor::Offset(n)) => format!("o{n}"),
+                Some(PageCursor::After(after)) => format!("a{}", after.0),
+                Some(PageCursor::At(_)) => "at".to_string(),
+            };
+            let mut lines = vec!["ok".to_string(), format!("next {next}")];
+            lines.extend(
+                read.rows
+                    .iter()
+                    .map(|row| format!("row {} {}", row.id.0, record_text(row))),
+            );
+            lines
+        }
+    }
+}
+
+/// The request a search line asks, after its tenant and principal: `<type|*> <words..> [page=<n>]` (the
+/// model's `parseSearch`). The words are the tokens before a last `page=` token, joined by spaces.
+fn parse_search(tokens: &[&str]) -> Option<SearchRequest> {
+    let (ty, rest) = tokens.split_first()?;
+    let objects = match *ty {
+        "*" => Vec::new(),
+        number => vec![object_of(number.parse().ok()?)],
+    };
+    let (words, page_size): (&[&str], Option<u32>) = match rest.last() {
+        Some(last) if last.starts_with("page=") => (
+            &rest[..rest.len() - 1],
+            Some(last["page=".len()..].parse().ok()?),
+        ),
+        _ => (rest, None),
+    };
+    Some(SearchRequest {
+        query: words.join(" "),
+        objects,
+        page_size,
+        cursor: None,
+    })
+}
+
+/// The request an aggregate line asks, after its tenant and principal: `<query> <aggregate> [filter.<n>=<v>
+/// ..] [<param>=<v> ..]` (the model's `parseAggregate`). `filter.<n>` filters on field `n`; any other `k=v` is
+/// a parameter.
+fn parse_aggregate(tokens: &[&str]) -> Option<AggregateRequest> {
+    let [query, aggregate, args @ ..] = tokens else {
+        return None;
+    };
+    let mut params = BTreeMap::new();
+    let mut filter = BTreeMap::new();
+    for arg in args {
+        let (key, value) = arg.split_once('=')?;
+        match key.strip_prefix("filter.") {
+            Some(number) => {
+                filter.insert(field_id(number.parse().ok()?), parse_value(value));
+            }
+            None => {
+                params.insert(key.to_string(), parse_value(value));
+            }
+        }
+    }
+    Some(AggregateRequest {
+        query: id::<QueryId>(query.to_string()),
+        aggregate: id::<AggregateId>(aggregate.to_string()),
+        params,
+        filter,
+    })
+}
+
+/// The number the model gives an object type of the fixture (`item` is `1`, `part` `2`, `ticket` `4`).
+fn type_number(object: &ObjectTypeId) -> u64 {
+    match object.to_string().as_str() {
+        "item" => 1,
+        "part" => 2,
+        "ticket" => 4,
+        "profile" => 20,
+        other => other
+            .strip_prefix("type")
+            .and_then(|number| number.parse().ok())
+            .unwrap_or(0),
+    }
+}
+
+/// The lines a search prints (the model's `showSearch`): `err <kind>`, or `ok`, `examined <n>`, `next <type>
+/// <id>` (`-` for none) and one `hit <type> <id> matched=<fields> <record>` line per hit, in order.
+fn search_lines(result: &Result<SearchResult, DomainError>) -> Vec<String> {
+    match result {
+        Err(error) => vec![format!("err {}", show_error(error.kind))],
+        Ok(found) => {
+            let next = match &found.next {
+                None => "-".to_string(),
+                Some(cursor) => format!("{} {}", type_number(&cursor.object), cursor.id.0),
+            };
+            let mut lines = vec![
+                "ok".to_string(),
+                format!("examined {}", found.examined),
+                format!("next {next}"),
+            ];
+            for hit in &found.hits {
+                let matched: Vec<String> = hit
+                    .matched
+                    .iter()
+                    .map(|field| field_number(field).to_string())
+                    .collect();
+                lines.push(format!(
+                    "hit {} {} matched={} {}",
+                    type_number(&hit.object),
+                    hit.record.id.0,
+                    matched.join(","),
+                    record_text(&hit.record)
+                ));
+            }
+            lines
+        }
+    }
+}
+
+/// The error line of an aggregate: a limit names its rule (`scan-bound-exceeded`, `sum-overflow` or
+/// `group-bound-exceeded`), and an unknown field is named as such (not as the write's `invalid`).
+fn aggregate_error_line(error: &DomainError) -> String {
+    match error.kind {
+        ErrorKind::LimitExceeded => match error.evidence.first() {
+            Some(check) => format!("err limit_exceeded {}", check.rule),
+            None => "err limit_exceeded".to_string(),
+        },
+        ErrorKind::UnknownField => "err unknown_field".to_string(),
+        kind => format!("err {}", show_error(kind)),
+    }
+}
+
+/// A top row's id and value, as the model prints them: the value as `show_value` writes a value.
+fn top_row_text(row: &ValueMap) -> Option<(u64, String)> {
+    let json: serde_json::Value = serde_json::from_str(row.as_str()).ok()?;
+    let id = json.get("id")?.as_u64()?;
+    let value = match json.get("value")? {
+        serde_json::Value::Null => "n".to_string(),
+        serde_json::Value::Bool(flag) => show_value(&Value::Bool(*flag)),
+        serde_json::Value::Number(number) => show_value(&Value::Int(number.as_i64()?)),
+        serde_json::Value::String(text) => show_value(&Value::Str(text.clone())),
+        _ => return None,
+    };
+    Some((id, value))
+}
+
+/// The lines an aggregate prints (the model's `showAgg`): `err <kind>`, or `ok`, `scanned <n>`, and for each
+/// group `group <key|-> <value|->` followed by its `top <id> <value>` rows.
+fn aggregate_lines(result: &Result<AggregateResult, DomainError>) -> Vec<String> {
+    match result {
+        Err(error) => vec![aggregate_error_line(error)],
+        Ok(found) => {
+            let shown = |value: Option<&Value>| value.map_or_else(|| "-".to_string(), show_value);
+            let mut lines = vec!["ok".to_string(), format!("scanned {}", found.scanned)];
+            for group in &found.groups {
+                lines.push(format!(
+                    "group {} {}",
+                    shown(group.key.as_ref()),
+                    shown(group.value.as_ref())
+                ));
+                for row in &group.rows {
+                    if let Some((id, value)) = top_row_text(row) {
+                        lines.push(format!("top {id} {value}"));
+                    }
+                }
+            }
+            lines
+        }
+    }
+}
+
+/// An automation start as the model's `showEffect` prints it: the trigger, the automation, the event and its
+/// hop, the automation as the caused-by principal, the definer (`p<n>`, or `-`), the definition version, the
+/// run key (or `-`) and the parameters by name (or `-`). The parameter `at` is not bound by the model, so it
+/// is left out.
+fn start_text(start: &AutomationStart, tenant: &TenantId) -> String {
+    let params: Vec<String> = start
+        .params
+        .iter()
+        .filter(|(name, _)| name.as_str() != "at")
+        .map(|(name, value)| match (name.as_str(), value) {
+            // A segment event's `segment` parameter is the segment's id, which the model names by its number.
+            ("segment", Value::Str(text)) => {
+                let number = segment_ids(tenant)
+                    .iter()
+                    .position(|candidate| candidate.to_string() == *text);
+                match number {
+                    Some(index) => format!("{name}=s:{}", index + 1),
+                    None => format!("{name}={}", show_value(value)),
+                }
+            }
+            _ => format!("{name}={}", show_value(value)),
+        })
+        .collect();
+    let params = if params.is_empty() {
+        "-".to_string()
+    } else {
+        params.join(",")
+    };
+    let on_behalf_of = start
+        .on_behalf_of
+        .as_ref()
+        .map_or_else(|| "-".to_string(), |p| p.as_str().to_string());
+    format!(
+        "effect start-automation trigger={} automation={} event={} hop={} caused-by=automation:{} on-behalf-of={on_behalf_of} definition={} run-key={} params={params}",
+        trigger_number(&start.trigger),
+        automation_number(&start.automation),
+        start.event_seq,
+        start.hop,
+        automation_number(&start.automation),
+        start.definition_version.0,
+        start.run_key.as_deref().unwrap_or("-"),
+    )
+}
+
+/// An automation decline as the model's `showEffect` prints it: the trigger, the automation, the event and
+/// its hop, and the reason in kebab case. The decline's detail text is not printed.
+fn decline_text(decline: &AutomationDecline) -> String {
+    format!(
+        "effect decline-automation trigger={} automation={} event={} hop={} reason={}",
+        trigger_number(&decline.trigger),
+        automation_number(&decline.automation),
+        decline.event_seq,
+        decline.hop,
+        decline.reason.as_str()
+    )
+}
+
+/// The output line of a kernel effect that the model prints: `effect publish` for a publish, and the run or
+/// the decline of a trigger. The kernel's other effects are not in the model and print nothing.
+fn effect_text(effect: &Effect, tenant: &TenantId) -> Option<String> {
+    match effect {
+        Effect::Publish { seq } => Some(format!("effect publish {seq}")),
+        Effect::StartAutomation(start) => Some(start_text(start, tenant)),
+        Effect::DeclineAutomation(decline) => Some(decline_text(decline)),
+        _ => None,
+    }
+}
+
 /// Run a scenario file through the Rust kernel and print what the Lean program prints.
 pub fn kernel_output(scenarios: &str) -> String {
     let initial = initial_world();
+    let initial_tables = initial_segments(&initial);
     let mut world = initial.clone();
+    // The segment tables of each tenant (slice 16): the storage block the kernel's segment decisions read and write.
+    let mut tables = initial_tables.clone();
     let mut out = Vec::new();
     let mut at = 1_000;
     for line in scenarios.lines() {
@@ -491,41 +3854,73 @@ pub fn kernel_output(scenarios: &str) -> String {
             [] => {}
             ["scenario", name @ ..] => {
                 world = initial.clone();
+                tables = initial_tables.clone();
                 out.push(format!("scenario {}", name.join(" ")));
             }
             ["end"] => {
                 out.push("state".to_string());
-                out.extend(show_world(&world));
+                out.extend(show_world(&world, &tables));
                 out.push("end".to_string());
                 world = initial.clone();
+                tables = initial_tables.clone();
             }
-            ["op", tenant, who, rest @ ..] => {
+            ["op", tenant, who, after_who @ ..] => {
+                // An optional `hop=<n>` token, right after the principal, gives the hop of the event that caused
+                // the intent (slice 15). Without it the hop is none. A hop that is not a number leaves the line unparsed.
+                let (hop, after_who): (Option<u32>, &[&str]) = match after_who {
+                    [token, more @ ..] if token.starts_with("hop=") => {
+                        match token[4..].parse::<u32>() {
+                            Ok(n) => (Some(n), more),
+                            Err(_) => {
+                                out.push(format!("unparsed {line}"));
+                                continue;
+                            }
+                        }
+                    }
+                    _ => (None, after_who),
+                };
+                let (object, rest): (ObjectTypeId, &[&str]) = match after_who {
+                    ["type", ty, tail @ ..] => (object_of(ty.parse().expect("object type")), tail),
+                    _ => (item(), after_who),
+                };
                 at += 1;
-                let ctx = Context {
+                let mut ctx = Context {
                     tenant: id(format!("t{tenant}")),
-                    principal: principal(who.parse().expect("fixture principal")),
+                    principal: parse_principal(who),
                     session: None,
                     now: Timestamp(at),
                     correlation: "fixture".into(),
                     verified_address: None,
                     idempotency_key: None,
                     language: None,
-                    hop: None,
+                    hop,
                     agent: None,
                 };
+                // A segment intent (slice 16) is decided by the segment block, not by a transition of the kernel.
+                if rest.first() == Some(&"segment") {
+                    match parse_segment_op(rest)
+                        .and_then(|op| run_segment_op(&world, &mut tables, &ctx, tenant, op))
+                    {
+                        Some(lines) => out.extend(lines),
+                        None => out.push(format!("unparsed {line}")),
+                    }
+                    continue;
+                }
                 let intent = match rest {
                     ["create", fields @ ..] => Intent::CreateRecord {
-                        object: item(),
+                        object: object.clone(),
                         fields: parse_fields(fields),
                     },
                     ["update", record, after_id @ ..] => {
                         // The model replaces a record; a patch that names every field does too.
                         let (expected_version, fields) = split_expected_version(after_id);
-                        let mut all: BTreeMap<FieldId, Value> =
-                            (0..=8).map(|n| (field_id(n), Value::Null)).collect();
+                        let mut all: BTreeMap<FieldId, Value> = fixture_fields(&object)
+                            .into_iter()
+                            .map(|n| (field_id(n), Value::Null))
+                            .collect();
                         all.extend(parse_fields(fields));
                         Intent::UpdateRecord {
-                            object: item(),
+                            object: object.clone(),
                             id: RecordId(record.parse().expect("id")),
                             fields: all,
                             expected_version,
@@ -534,7 +3929,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                     ["patch", record, after_id @ ..] => {
                         let (expected_version, fields) = split_expected_version(after_id);
                         Intent::UpdateRecord {
-                            object: item(),
+                            object: object.clone(),
                             id: RecordId(record.parse().expect("id")),
                             fields: parse_fields(fields),
                             expected_version,
@@ -547,17 +3942,29 @@ pub fn kernel_output(scenarios: &str) -> String {
                             continue;
                         }
                         Intent::DeleteRecord {
-                            object: item(),
+                            object: object.clone(),
                             id: RecordId(record.parse().expect("id")),
                             expected_version,
                         }
                     }
+                    ["schema", rest @ ..] => match parse_schema_op(rest) {
+                        Some(intent) => intent,
+                        None => {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        }
+                    },
                     ["require", field, mode] => {
                         let n: u64 = field.parse().expect("field");
+                        // A field the tenant does not have (or a tenant that does not exist) is
+                        // defined afresh, as before uniqueness; the kernel decides what follows.
+                        let mut def = current_field(&world, &ctx.tenant, &object, n)
+                            .unwrap_or_else(|| fallback_field(&object, n));
+                        def.required = true;
                         Intent::ChangeSchema {
                             changes: vec![SchemaChange::DefineField {
-                                object: item(),
-                                field: field_def(n, true),
+                                object: object.clone(),
+                                field: def,
                             }],
                             expected_version: None,
                             existing: if *mode == "strict" {
@@ -567,17 +3974,172 @@ pub fn kernel_output(scenarios: &str) -> String {
                             },
                         }
                     }
-                    _ => {
-                        out.push(format!("unparsed {line}"));
-                        continue;
+                    ["unique", field, mode] => {
+                        let n: u64 = field.parse().expect("field");
+                        // A field the tenant does not have (or a tenant that does not exist) is
+                        // defined afresh, as before uniqueness; the kernel decides what follows.
+                        let mut def = current_field(&world, &ctx.tenant, &object, n)
+                            .unwrap_or_else(|| fallback_field(&object, n));
+                        def.unique = true;
+                        Intent::ChangeSchema {
+                            changes: vec![SchemaChange::DefineField {
+                                object: object.clone(),
+                                field: def,
+                            }],
+                            expected_version: None,
+                            existing: if *mode == "strict" {
+                                ExistingData::Reject
+                            } else {
+                                ExistingData::Grandfather
+                            },
+                        }
                     }
+                    ["composite", fields @ ..] => {
+                        let Some(ids) = fields
+                            .iter()
+                            .map(|f| f.parse::<u64>().ok().map(field_id))
+                            .collect::<Option<Vec<FieldId>>>()
+                        else {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        };
+                        let unique = UniqueDef {
+                            id: id(format!("u{}", fields.join("_"))),
+                            fields: ids,
+                            message: "unique".to_string(),
+                        };
+                        Intent::ChangeSchema {
+                            changes: vec![SchemaChange::DefineUnique {
+                                object: object.clone(),
+                                unique,
+                            }],
+                            expected_version: None,
+                            existing: ExistingData::Reject,
+                        }
+                    }
+                    ["setting", ..] => match parse_setting_op(rest) {
+                        Some(intent) => intent,
+                        None => {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        }
+                    },
+                    ["invoke", ..] => match parse_invoke_op(rest) {
+                        Some((now, intent)) => {
+                            // An invocation is decided at the time the scenario gives, not the fixture's clock.
+                            ctx.now = Timestamp(now);
+                            intent
+                        }
+                        None => {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        }
+                    },
+                    ["ledger", ..] => match parse_ledger_op(rest) {
+                        Some((now, intent)) => {
+                            // A ledger intent is decided at the time the scenario gives, not the fixture's clock.
+                            ctx.now = Timestamp(now);
+                            intent
+                        }
+                        None => {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        }
+                    },
+                    _ => match parse_member_op(rest, &mut ctx) {
+                        Some(intent) => intent,
+                        None => {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        }
+                    },
                 };
                 match world.step(&intent, &ctx) {
-                    Ok((next, _)) => {
+                    Ok((next, transition)) => {
                         world = next;
+                        // As the model prints an accepted step: `ok`, the tenant's revision after it, each
+                        // event, then the publish effects, then the trigger effects in the kernel's order.
                         out.push("ok".to_string());
+                        let revision = world.tenants.get(&ctx.tenant).map_or(0, |t| t.revision.0);
+                        out.push(format!("revision {revision}"));
+                        let changes: Vec<SchemaChange> = match &intent {
+                            Intent::ChangeSchema { changes, .. } => changes.clone(),
+                            _ => Vec::new(),
+                        };
+                        out.extend(
+                            transition
+                                .events
+                                .iter()
+                                .map(|event| event_text(event, &changes)),
+                        );
+                        // The segment decisions of the step (slice 16): the entries and exits of the persons its
+                        // records changed, printed after its events, and the effects of the triggers on them,
+                        // printed after the step's own trigger effects.
+                        let table = tables.entry(ctx.tenant.clone()).or_default();
+                        let first = table.events.len();
+                        segment_record_pass(&world, table, &ctx, &transition.events);
+                        let (segment_events, segment_effects) =
+                            segment_report(&world, table, &ctx, tenant, first);
+                        out.extend(segment_events);
+                        out.extend(
+                            transition
+                                .effects
+                                .iter()
+                                .filter(|effect| matches!(effect, Effect::Publish { .. }))
+                                .filter_map(|effect| effect_text(effect, &ctx.tenant)),
+                        );
+                        out.extend(
+                            transition
+                                .effects
+                                .iter()
+                                .filter(|effect| !matches!(effect, Effect::Publish { .. }))
+                                .filter_map(|effect| effect_text(effect, &ctx.tenant)),
+                        );
+                        out.extend(segment_effects);
                     }
                     Err(error) => out.push(format!("err {}", show_error(error.kind))),
+                }
+            }
+            ["read", tenant, who, rest @ ..] => {
+                at += 1;
+                let ctx = Context {
+                    tenant: id(format!("t{tenant}")),
+                    principal: parse_principal(who),
+                    session: None,
+                    now: Timestamp(at),
+                    correlation: "fixture".into(),
+                    verified_address: None,
+                    idempotency_key: None,
+                    language: None,
+                    hop: None,
+                    agent: None,
+                };
+                match rest {
+                    ["search", request @ ..] => match parse_search(request) {
+                        Some(request) => out.extend(search_lines(&world.search(&request, &ctx))),
+                        None => out.push(format!("unparsed {line}")),
+                    },
+                    ["aggregate", request @ ..] => match parse_aggregate(request) {
+                        Some(request) => {
+                            out.extend(aggregate_lines(&world.aggregate(&request, &ctx)))
+                        }
+                        None => out.push(format!("unparsed {line}")),
+                    },
+                    ["setting", name] => out.extend(setting_read_lines(&world, &ctx, name)),
+                    ["ledger", ..] => match parse_ledger_read(rest) {
+                        Some((unit, owner, scope, own)) => {
+                            let state = world.state(&ctx.tenant);
+                            let result = strata_kernel::ledger::read_balance(
+                                &state, &owner, &unit, &scope, own, &ctx,
+                            );
+                            out.extend(ledger_read_lines(result));
+                        }
+                        None => out.push(format!("unparsed {line}")),
+                    },
+                    _ => match parse_read(rest) {
+                        Some(request) => out.extend(read_lines(&world.read(&request, &ctx))),
+                        None => out.push(format!("unparsed {line}")),
+                    },
                 }
             }
             _ => out.push(format!("unparsed {line}")),
@@ -615,10 +4177,50 @@ pub fn build_model(lean_dir: &Path) -> Result<(), String> {
     }
 }
 
-/// Run the already built model on a scenario file (a path `lake exe` can open from `lean_dir`:
-/// relative to it, or absolute) and return what it prints.
+/// Run the already built model on a scenario file (a path relative to `lean_dir`, or absolute)
+/// and return what it prints.
 pub fn run_model(lean_dir: &Path, fixture: &str) -> Result<String, String> {
-    let (ok, text) = lake(lean_dir, &["exe", "strata_model", fixture])?;
+    // Run the built executable itself, not `lake exe`: Lake replays the build's warnings onto
+    // stdout before the program's output, and those lines would be compared as model output.
+    let exe = lean_dir
+        .join(".lake")
+        .join("build")
+        .join("bin")
+        .join(format!("strata_model{}", std::env::consts::EXE_SUFFIX));
+    let mut command = Command::new(&exe);
+    // STRATA_LEAN_KERNEL selects which Lean kernel prints: `spec` (the default, the model),
+    // `impl` (the executable kernel, stage 1) or `indexed` (stage 2, the one meant to run).
+    match std::env::var("STRATA_LEAN_KERNEL").as_deref() {
+        Ok("impl") => {
+            command.arg("--impl");
+        }
+        Ok("indexed") => {
+            command.arg("--indexed");
+        }
+        Ok("spec") | Err(_) => {}
+        Ok(other) => {
+            return Err(format!(
+                "STRATA_LEAN_KERNEL={other}: expected spec, impl or indexed"
+            ))
+        }
+    }
+    let output = command
+        .arg(fixture)
+        .current_dir(lean_dir)
+        .output()
+        .map_err(|e| {
+            format!(
+                "could not run {} (build it with `lake build strata_model`): {e}",
+                exe.display()
+            )
+        })?;
+    let ok = output.status.success();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .replace("\r\n", "\n");
     if ok {
         Ok(text)
     } else {
@@ -677,6 +4279,135 @@ pub fn parse_audit(output: &str) -> Vec<Checked> {
         .collect()
 }
 
+/// The lines of each operation in one scenario's output (from its `scenario` line, as `chunks` and
+/// `outputs_by_scenario` cut it). An operation prints a first line, `ok`, `err <kind>` or `unparsed ..`,
+/// and an accepted one may go on with `revision`, `event`, `effect`, `next` and `row` lines. A group is
+/// a first line with the lines that follow it up to the next first line; the state lines at the end
+/// are not an operation's. The `k`th group is the outcome of the `k`th operation.
+pub fn op_outcomes<S: AsRef<str>>(output: &[S]) -> Vec<&[S]> {
+    const CONTINUATION: [&str; 17] = [
+        "revision ",
+        "event ",
+        "segment-event ",
+        "effect ",
+        "next ",
+        "row ",
+        "examined ",
+        "hit ",
+        "scanned ",
+        "group ",
+        "top ",
+        "source ",
+        "team ",
+        "value ",
+        "tenant-rev ",
+        "balance ",
+        "seq ",
+    ];
+    let end = output
+        .iter()
+        .position(|line| line.as_ref() == "state")
+        .unwrap_or(output.len());
+    let mut groups: Vec<&[S]> = Vec::new();
+    let mut start: Option<usize> = None;
+    for (at, line) in output.iter().enumerate().take(end).skip(1) {
+        if CONTINUATION
+            .iter()
+            .any(|prefix| line.as_ref().starts_with(prefix))
+        {
+            continue;
+        }
+        if let Some(first) = start {
+            groups.push(&output[first..at]);
+        }
+        start = Some(at);
+    }
+    if let Some(first) = start {
+        groups.push(&output[first..end]);
+    }
+    groups
+}
+
+/// The kind of an operation's outcome as the coverage counts it: its first line, and for a read the
+/// shape of an answer as well. `rendered` is the operation's own line, `group` its outcome lines.
+/// A read is `read-records` or `read-query` (by its fourth word); an answer is counted with rows or
+/// without, with a next cursor, and with a cursor asked for.
+pub fn read_shapes<S: AsRef<str>>(rendered: &str, group: &[S]) -> Vec<String> {
+    let mut words = rendered.split_whitespace();
+    if words.next() != Some("read") {
+        return Vec::new();
+    }
+    let name = match words.nth(2) {
+        Some("search") => return search_shapes(group),
+        Some("aggregate") => return aggregate_shapes(group),
+        Some("records") => "read-records",
+        Some("query") => "read-query",
+        _ => return Vec::new(),
+    };
+    let first = group.first().map_or("", |line| line.as_ref());
+    let mut shapes = vec![format!("{name} {first}")];
+    if first == "ok" {
+        let has = |prefix: &str, except: &str| {
+            group
+                .iter()
+                .any(|line| line.as_ref().starts_with(prefix) && line.as_ref() != except)
+        };
+        shapes.push(format!(
+            "{name} ok rows{}",
+            if has("row ", "") { ">0" } else { "=0" }
+        ));
+        if has("next ", "next -") {
+            shapes.push(format!("{name} ok next"));
+        }
+        if rendered.contains(" cursor=") {
+            shapes.push(format!("{name} ok cursor"));
+        }
+    }
+    shapes
+}
+
+/// The shapes of a search answer as the coverage counts them: its first line, and for an accepted search
+/// whether it holds hits and whether it names a next cursor.
+fn search_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
+    let first = group.first().map_or("", |line| line.as_ref());
+    let mut shapes = vec![format!("read-search {first}")];
+    if first == "ok" {
+        let hits = group.iter().any(|line| line.as_ref().starts_with("hit "));
+        shapes.push(format!(
+            "read-search ok hits{}",
+            if hits { ">0" } else { "=0" }
+        ));
+        if group
+            .iter()
+            .any(|line| line.as_ref().starts_with("next ") && line.as_ref() != "next -")
+        {
+            shapes.push("read-search ok next".to_string());
+        }
+    }
+    shapes
+}
+
+/// The shapes of an aggregate answer as the coverage counts them: its first line, and for an accepted one
+/// whether it is grouped (its groups have keys) and whether it lists top rows.
+fn aggregate_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
+    let first = group.first().map_or("", |line| line.as_ref());
+    let mut shapes = vec![format!("read-aggregate {first}")];
+    if first == "ok" {
+        let grouped = group.iter().any(|line| {
+            let line = line.as_ref();
+            line.starts_with("group ") && !line.starts_with("group - ")
+        });
+        shapes.push(format!(
+            "read-aggregate ok {}",
+            if grouped { "grouped" } else { "ungrouped" }
+        ));
+        if group.iter().any(|line| line.as_ref().starts_with("top ")) {
+            shapes.push("read-aggregate ok top".to_string());
+        }
+    }
+    shapes
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Correspondence {
     pub scenarios: usize,
@@ -703,7 +4434,10 @@ pub fn compare_outputs(scenarios: &str, lean: &str, rust: &str) -> Correspondenc
             .lines()
             .filter(|l| l.starts_with("scenario"))
             .count(),
-        operations: scenarios.lines().filter(|l| l.starts_with("op ")).count(),
+        operations: scenarios
+            .lines()
+            .filter(|l| l.starts_with("op ") || l.starts_with("read "))
+            .count(),
         agree: first_difference.is_none(),
         first_difference,
     }

@@ -87,6 +87,7 @@
  *   | { type: 'scroll_top' }
  *   | { type: 'passkey', op: 'create' | 'get', id: number, options: any }
  *   | { type: 'log', level: string, event: string, correlation: string, detail: string }
+ *   | { type: 'navigate_away', href: string }
  * )} Effect
  */
 

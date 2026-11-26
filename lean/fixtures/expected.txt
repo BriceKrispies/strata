@@ -24,11 +24,13 @@ err invalid
 err unauthorized
 state
 tenant 1 next=5 required=1,3
-record 1 owner=101 v=1 1=s:yew 2=i:26 3=b:0 6=i:7
-record 2 owner=102 v=1 1=s:oak 2=i:16 3=b:0 6=i:7
-record 3 owner=103 v=1 1=s:elm 2=i:22 3=b:1 6=i:7
-record 4 owner=103 v=1 1=s:elm 3=b:1 6=i:7
+record 1 owner=101 v=1 1=s:yew 2=i:26 3=b:0 6=i:7 9=s:p101
+record 2 owner=102 v=1 1=s:oak 2=i:16 3=b:0 6=i:7 9=s:p102
+record 3 owner=103 v=1 1=s:elm 2=i:22 3=b:1 6=i:7 9=s:p103
+record 4 owner=103 v=1 1=s:elm 3=b:1 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s1
 ok
@@ -47,9 +49,11 @@ err not_found
 ok
 state
 tenant 1 next=3 required=1,2
-record 1 owner=101 v=1 1=s:fir 3=b:0 6=i:7
+record 1 owner=101 v=1 1=s:fir 3=b:0 6=i:7 9=s:p101
 record 2 owner=103 v=2 1=s:yew 2=i:27 3=b:1
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s2
 err unauthorized
@@ -75,8 +79,10 @@ err not_found
 err unauthorized
 state
 tenant 1 next=2 required=1,3
-record 1 owner=102 v=1 1=s:fir 3=b:1 6=i:7
+record 1 owner=102 v=1 1=s:fir 3=b:1 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s3
 err unauthorized
@@ -97,8 +103,10 @@ err unauthorized
 err invalid
 state
 tenant 1 next=2 required=1,2
-record 1 owner=100 v=1 1=s:oak 3=b:0 6=i:7
+record 1 owner=100 v=1 1=s:oak 3=b:0 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s4
 ok
@@ -124,10 +132,12 @@ err invalid
 err invalid
 state
 tenant 1 next=4 required=1,3
-record 1 owner=101 v=1 1=s:oak 3=b:1 6=i:7
-record 2 owner=102 v=1 1=s:oak 3=b:1 6=i:7
-record 3 owner=103 v=1 1=s:ash 3=b:0 6=i:7
+record 1 owner=101 v=1 1=s:oak 3=b:1 6=i:7 9=s:p101
+record 2 owner=102 v=1 1=s:oak 3=b:1 6=i:7 9=s:p102
+record 3 owner=103 v=1 1=s:ash 3=b:0 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s5
 err unauthorized
@@ -148,9 +158,11 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=3 required=1,3
-record 1 owner=100 v=1 1=s:oak 3=b:1 6=i:7
-record 2 owner=103 v=1 1=s:fir 2=i:18 3=b:0 6=i:7
+record 1 owner=100 v=1 1=s:oak 3=b:1 6=i:7 9=s:p100
+record 2 owner=103 v=1 1=s:fir 2=i:18 3=b:0 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s6
 ok
@@ -166,13 +178,14 @@ ok
 err unauthorized
 err unauthorized
 err unauthorized
-ok
+err constraint_violated
 ok
 state
-tenant 1 next=3 required=1,3
-record 1 owner=100 v=1 1=s:fir 2=i:30 3=b:0 6=i:7
-record 2 owner=103 v=1 1=s:oak 2=i:-3 3=b:0 6=i:7
+tenant 1 next=2 required=1,3
+record 1 owner=100 v=1 1=s:fir 2=i:30 3=b:0 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s7
 ok
@@ -191,11 +204,13 @@ err unauthorized
 ok
 state
 tenant 1 next=4 required=1
-record 1 owner=100 v=1 1=s:oak 2=i:18 3=b:1 6=i:7
-record 2 owner=102 v=1 1=s:ash 2=i:13 3=b:1 6=i:7
-record 3 owner=103 v=1 1=s:fir 6=i:7
+record 1 owner=100 v=1 1=s:oak 2=i:18 3=b:1 6=i:7 9=s:p100
+record 2 owner=102 v=1 1=s:ash 2=i:13 3=b:1 6=i:7 9=s:p102
+record 3 owner=103 v=1 1=s:fir 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=202 v=1 1=s:elm 6=i:7
+record 1 owner=202 v=1 1=s:elm 6=i:7 9=s:p202
+type 2 required=
 end
 scenario s8
 err unauthorized
@@ -207,7 +222,7 @@ err unauthorized
 err unauthorized
 ok
 err unauthorized
-ok
+err constraint_violated
 ok
 err unauthorized
 ok
@@ -216,12 +231,13 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=4 required=1
-record 1 owner=102 v=1 1=s:fir 2=i:21 6=i:7
-record 2 owner=101 v=1 1=s:oak 6=i:7
-record 3 owner=100 v=1 1=s:yew 2=i:3 6=i:7
-tenant 2 next=3 required=1
-record 1 owner=203 v=1 1=s:yew 2=i:-4 3=b:1 6=i:7
-record 2 owner=203 v=1 1=s:fir 6=i:7
+record 1 owner=102 v=1 1=s:fir 2=i:21 6=i:7 9=s:p102
+record 2 owner=101 v=1 1=s:oak 6=i:7 9=s:p101
+record 3 owner=100 v=1 1=s:yew 2=i:3 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=2 required=1
+record 1 owner=203 v=1 1=s:fir 6=i:7 9=s:p203
+type 2 required=
 end
 scenario s9
 err unauthorized
@@ -236,8 +252,10 @@ err unauthorized
 ok
 state
 tenant 1 next=1 required=1
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=202 v=1 1=s:oak 2=i:34 6=i:7
+record 1 owner=202 v=1 1=s:oak 2=i:34 6=i:7 9=s:p202
+type 2 required=
 end
 scenario s10
 err unauthorized
@@ -254,8 +272,10 @@ err unauthorized
 ok
 state
 tenant 1 next=2 required=1
-record 1 owner=102 v=1 1=s:oak 2=i:16 6=i:7
+record 1 owner=102 v=1 1=s:oak 2=i:16 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s11
 ok
@@ -277,10 +297,12 @@ err not_found
 err invalid
 state
 tenant 1 next=3 required=1
-record 1 owner=101 v=1 1=s:fir 3=b:1 6=i:7
-record 2 owner=103 v=1 1=s:elm 3=b:0 6=i:7
+record 1 owner=101 v=1 1=s:fir 3=b:1 6=i:7 9=s:p101
+record 2 owner=103 v=1 1=s:elm 3=b:0 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=201 v=1 1=s:oak 6=i:7
+record 1 owner=201 v=1 1=s:oak 6=i:7 9=s:p201
+type 2 required=
 end
 scenario s12
 err unauthorized
@@ -294,20 +316,20 @@ ok
 err invalid
 err not_found
 err unauthorized
-ok
-ok
+err constraint_violated
+err constraint_violated
 err not_found
 err no_tenant
 err unauthorized
 ok
 state
-tenant 1 next=5 required=1
-record 1 owner=103 v=1 1=s:yew 2=i:12 3=b:0 6=i:7
-record 2 owner=102 v=1 1=s:elm 2=i:28 6=i:7
-record 3 owner=103 v=1 1=s:oak 2=i:-3 6=i:7
-record 4 owner=100 v=1 1=s:ash 2=i:-2 6=i:7
+tenant 1 next=3 required=1
+record 1 owner=103 v=1 1=s:yew 2=i:12 3=b:0 6=i:7 9=s:p103
+record 2 owner=102 v=1 1=s:elm 2=i:28 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=201 v=1 1=s:yew 6=i:7
+record 1 owner=201 v=1 1=s:yew 6=i:7 9=s:p201
+type 2 required=
 end
 scenario s13
 err unauthorized
@@ -332,11 +354,13 @@ err no_tenant
 err unauthorized
 state
 tenant 1 next=5 required=1,3
-record 1 owner=103 v=1 1=s:yew 6=i:7
-record 2 owner=100 v=1 1=s:ash 6=i:7
+record 1 owner=103 v=1 1=s:yew 6=i:7 9=s:p103
+record 2 owner=100 v=1 1=s:ash 6=i:7 9=s:p100
 record 3 owner=103 v=2 1=s:fir 2=i:14 3=b:1
-record 4 owner=103 v=1 1=s:oak 3=b:0 6=i:7
+record 4 owner=103 v=1 1=s:oak 3=b:0 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1,2
+type 2 required=
 end
 scenario s14
 ok
@@ -356,8 +380,10 @@ err invalid
 err no_tenant
 state
 tenant 1 next=2 required=1,3
-record 1 owner=100 v=1 1=s:elm 2=i:9 3=b:0 6=i:7
+record 1 owner=100 v=1 1=s:elm 2=i:9 3=b:0 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1,3
+type 2 required=
 end
 scenario s15
 err unauthorized
@@ -381,14 +407,16 @@ err unauthorized
 ok
 state
 tenant 1 next=8 required=1
-record 1 owner=100 v=1 1=s:ash 2=i:27 6=i:7
-record 2 owner=100 v=1 1=s:yew 2=i:20 6=i:7
-record 3 owner=103 v=1 1=s:elm 6=i:7
-record 4 owner=101 v=1 1=s:fir 6=i:7
-record 5 owner=101 v=1 1=s:elm 6=i:7
-record 6 owner=100 v=1 1=s:ash 6=i:7
-record 7 owner=103 v=1 1=s:elm 6=i:7
+record 1 owner=100 v=1 1=s:ash 2=i:27 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:yew 2=i:20 6=i:7 9=s:p100
+record 3 owner=103 v=1 1=s:elm 6=i:7 9=s:p103
+record 4 owner=101 v=1 1=s:fir 6=i:7 9=s:p101
+record 5 owner=101 v=1 1=s:elm 6=i:7 9=s:p101
+record 6 owner=100 v=1 1=s:ash 6=i:7 9=s:p100
+record 7 owner=103 v=1 1=s:elm 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s16
 err unauthorized
@@ -413,10 +441,12 @@ err unauthorized
 ok
 state
 tenant 1 next=3 required=1
-record 1 owner=101 v=1 1=s:elm 2=i:5 6=i:7
-record 2 owner=101 v=1 1=s:ash 6=i:7
+record 1 owner=101 v=1 1=s:elm 2=i:5 6=i:7 9=s:p101
+record 2 owner=101 v=1 1=s:ash 6=i:7 9=s:p101
+type 2 required=
 tenant 2 next=2 required=1
 record 1 owner=203 v=2 1=s:ash
+type 2 required=
 end
 scenario s17
 ok
@@ -435,9 +465,11 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=3 required=1,2,3
-record 1 owner=103 v=1 1=s:fir 3=b:1 6=i:7
-record 2 owner=103 v=1 1=s:ash 3=b:1 6=i:7
+record 1 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103
+record 2 owner=103 v=1 1=s:ash 3=b:1 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s18
 err invalid
@@ -468,10 +500,12 @@ err unauthorized
 state
 tenant 1 next=6 required=1
 record 1 owner=102 v=2 1=s:oak 2=i:32
-record 3 owner=102 v=1 1=s:elm 2=i:4 3=b:1 6=i:7
-record 5 owner=101 v=1 1=s:fir 2=i:12 6=i:7
+record 3 owner=102 v=1 1=s:elm 2=i:4 3=b:1 6=i:7 9=s:p102
+record 5 owner=101 v=1 1=s:fir 2=i:12 6=i:7 9=s:p101
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=203 v=1 1=s:elm 6=i:7
+record 1 owner=203 v=1 1=s:elm 6=i:7 9=s:p203
+type 2 required=
 end
 scenario s19
 ok
@@ -488,10 +522,12 @@ ok
 err unauthorized
 state
 tenant 1 next=1 required=1,3
+type 2 required=
 tenant 2 next=4 required=1
-record 1 owner=202 v=1 1=s:fir 6=i:7
-record 2 owner=200 v=1 1=s:oak 6=i:7
-record 3 owner=203 v=1 1=s:ash 2=i:32 6=i:7
+record 1 owner=202 v=1 1=s:fir 6=i:7 9=s:p202
+record 2 owner=200 v=1 1=s:oak 6=i:7 9=s:p200
+record 3 owner=203 v=1 1=s:ash 2=i:32 6=i:7 9=s:p203
+type 2 required=
 end
 scenario s20
 err unauthorized
@@ -510,11 +546,13 @@ ok
 ok
 state
 tenant 1 next=5 required=1,3
-record 1 owner=102 v=1 1=s:oak 2=i:30 3=b:0 6=i:7
-record 2 owner=103 v=1 1=s:elm 2=i:29 3=b:0 6=i:7
+record 1 owner=102 v=1 1=s:oak 2=i:30 3=b:0 6=i:7 9=s:p102
+record 2 owner=103 v=1 1=s:elm 2=i:29 3=b:0 6=i:7 9=s:p103
 record 3 owner=103 v=2 1=s:ash 3=b:0
-record 4 owner=102 v=1 1=s:fir 3=b:1 6=i:7
+record 4 owner=102 v=1 1=s:fir 3=b:1 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s21
 err unauthorized
@@ -536,11 +574,13 @@ err unauthorized
 ok
 state
 tenant 1 next=3 required=1
-record 1 owner=103 v=1 1=s:fir 6=i:7
-record 2 owner=103 v=1 1=s:oak 2=i:10 6=i:7
+record 1 owner=103 v=1 1=s:fir 6=i:7 9=s:p103
+record 2 owner=103 v=1 1=s:oak 2=i:10 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=4 required=1
-record 1 owner=200 v=1 1=s:elm 6=i:7
-record 2 owner=203 v=1 1=s:oak 3=b:0 6=i:7
+record 1 owner=200 v=1 1=s:elm 6=i:7 9=s:p200
+record 2 owner=203 v=1 1=s:oak 3=b:0 6=i:7 9=s:p203
+type 2 required=
 end
 scenario s22
 err unauthorized
@@ -566,8 +606,10 @@ ok
 err no_tenant
 state
 tenant 1 next=2 required=1,2
-record 1 owner=101 v=1 1=s:oak 2=i:26 6=i:7
+record 1 owner=101 v=1 1=s:oak 2=i:26 6=i:7 9=s:p101
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s23
 err unauthorized
@@ -579,7 +621,7 @@ err unauthorized
 err not_found
 err unauthorized
 err invalid
-err invalid
+ok
 ok
 err no_tenant
 ok
@@ -588,11 +630,14 @@ ok
 err unauthorized
 state
 tenant 1 next=5 required=1,3
-record 1 owner=102 v=1 1=s:elm 2=i:1 6=i:7
-record 2 owner=100 v=1 1=s:elm 2=i:14 6=i:7
-record 3 owner=101 v=1 1=s:oak 3=b:1 6=i:7
-record 4 owner=101 v=1 1=s:elm 3=b:0 6=i:7
-tenant 2 next=1 required=1
+record 1 owner=102 v=1 1=s:elm 2=i:1 6=i:7 9=s:p102
+record 2 owner=100 v=1 1=s:elm 2=i:14 6=i:7 9=s:p100
+record 3 owner=101 v=1 1=s:oak 3=b:1 6=i:7 9=s:p101
+record 4 owner=101 v=1 1=s:elm 3=b:0 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=2 required=1
+record 1 owner=201 v=1 1=s:elm 2=i:18 3=b:1 6=i:7 9=s:oak
+type 2 required=
 end
 scenario s24
 err no_tenant
@@ -617,7 +662,9 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=1 required=1,2
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s25
 ok
@@ -637,8 +684,10 @@ err unauthorized
 ok
 state
 tenant 1 next=2 required=1,3
-record 1 owner=103 v=1 1=s:yew 2=i:23 3=b:0 6=i:7
+record 1 owner=103 v=1 1=s:yew 2=i:23 3=b:0 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s26
 ok
@@ -659,11 +708,13 @@ ok
 ok
 state
 tenant 1 next=6 required=1
-record 2 owner=102 v=1 1=s:oak 2=i:20 3=b:0 6=i:7
-record 3 owner=101 v=1 1=s:oak 6=i:7
-record 4 owner=102 v=1 1=s:yew 2=i:3 3=b:0 6=i:7
-record 5 owner=101 v=1 1=s:oak 2=i:20 3=b:1 6=i:7
+record 2 owner=102 v=1 1=s:oak 2=i:20 3=b:0 6=i:7 9=s:p102
+record 3 owner=101 v=1 1=s:oak 6=i:7 9=s:p101
+record 4 owner=102 v=1 1=s:yew 2=i:3 3=b:0 6=i:7 9=s:p102
+record 5 owner=101 v=1 1=s:oak 2=i:20 3=b:1 6=i:7 9=s:p101
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s27
 err invalid
@@ -681,9 +732,11 @@ err unauthorized
 ok
 state
 tenant 1 next=2 required=1,2
-record 1 owner=100 v=1 1=s:oak 6=i:7
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=200 v=1 1=s:yew 2=i:25 6=i:7
+record 1 owner=200 v=1 1=s:yew 2=i:25 6=i:7 9=s:p200
+type 2 required=
 end
 scenario s28
 err invalid
@@ -712,12 +765,14 @@ err unauthorized
 err not_found
 state
 tenant 1 next=5 required=1
-record 1 owner=101 v=1 1=s:elm 2=i:24 3=b:1 6=i:7
-record 2 owner=100 v=1 1=s:fir 2=i:12 6=i:7
-record 3 owner=103 v=1 1=s:elm 3=b:0 6=i:7
-record 4 owner=101 v=1 1=s:elm 2=i:10 3=b:0 6=i:7
+record 1 owner=101 v=1 1=s:elm 2=i:24 3=b:1 6=i:7 9=s:p101
+record 2 owner=100 v=1 1=s:fir 2=i:12 6=i:7 9=s:p100
+record 3 owner=103 v=1 1=s:elm 3=b:0 6=i:7 9=s:p103
+record 4 owner=101 v=1 1=s:elm 2=i:10 3=b:0 6=i:7 9=s:p101
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=202 v=1 1=s:elm 6=i:7
+record 1 owner=202 v=1 1=s:elm 6=i:7 9=s:p202
+type 2 required=
 end
 scenario s29
 err unauthorized
@@ -729,14 +784,15 @@ err unauthorized
 err migration_rejected
 ok
 err invalid
-ok
+err constraint_violated
 state
-tenant 1 next=4 required=1
-record 1 owner=103 v=1 1=s:ash 6=i:7
-record 2 owner=102 v=1 1=s:fir 6=i:7
-record 3 owner=102 v=1 1=s:ash 2=i:-1 6=i:7
+tenant 1 next=3 required=1
+record 1 owner=103 v=1 1=s:ash 6=i:7 9=s:p103
+record 2 owner=102 v=1 1=s:fir 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=203 v=1 1=s:fir 2=i:34 3=b:1 6=i:7
+record 1 owner=203 v=1 1=s:fir 2=i:34 3=b:1 6=i:7 9=s:p203
+type 2 required=
 end
 scenario s30
 ok
@@ -753,7 +809,9 @@ err not_found
 ok
 state
 tenant 1 next=1 required=1,2,3
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s31
 err unauthorized
@@ -777,12 +835,14 @@ err unauthorized
 err invalid
 state
 tenant 1 next=4 required=1,3
-record 1 owner=103 v=1 1=s:oak 2=i:8 6=i:7
-record 2 owner=103 v=1 1=s:oak 2=i:20 6=i:7
-record 3 owner=100 v=1 1=s:ash 2=i:17 6=i:7
+record 1 owner=103 v=1 1=s:oak 2=i:8 6=i:7 9=s:p103
+record 2 owner=103 v=1 1=s:oak 2=i:20 6=i:7 9=s:p103
+record 3 owner=100 v=1 1=s:ash 2=i:17 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=3 required=1
-record 1 owner=200 v=1 1=s:oak 6=i:7
-record 2 owner=202 v=1 1=s:oak 3=b:1 6=i:7
+record 1 owner=200 v=1 1=s:oak 6=i:7 9=s:p200
+record 2 owner=202 v=1 1=s:oak 3=b:1 6=i:7 9=s:p202
+type 2 required=
 end
 scenario s32
 ok
@@ -808,15 +868,17 @@ err no_tenant
 err invalid
 state
 tenant 1 next=8 required=1
-record 1 owner=101 v=1 1=s:yew 3=b:1 6=i:7
-record 2 owner=103 v=1 1=s:fir 2=i:26 6=i:7
-record 3 owner=101 v=1 1=s:elm 3=b:1 6=i:7
-record 4 owner=102 v=1 1=s:fir 2=i:23 6=i:7
-record 5 owner=102 v=1 1=s:fir 6=i:7
-record 6 owner=102 v=1 1=s:oak 2=i:4 3=b:1 6=i:7
-record 7 owner=100 v=1 1=s:yew 3=b:1 6=i:7
+record 1 owner=101 v=1 1=s:yew 3=b:1 6=i:7 9=s:p101
+record 2 owner=103 v=1 1=s:fir 2=i:26 6=i:7 9=s:p103
+record 3 owner=101 v=1 1=s:elm 3=b:1 6=i:7 9=s:p101
+record 4 owner=102 v=1 1=s:fir 2=i:23 6=i:7 9=s:p102
+record 5 owner=102 v=1 1=s:fir 6=i:7 9=s:p102
+record 6 owner=102 v=1 1=s:oak 2=i:4 3=b:1 6=i:7 9=s:p102
+record 7 owner=100 v=1 1=s:yew 3=b:1 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=2 required=1,2,3
-record 1 owner=202 v=1 1=s:yew 2=i:20 3=b:0 6=i:7
+record 1 owner=202 v=1 1=s:yew 2=i:20 3=b:0 6=i:7 9=s:p202
+type 2 required=
 end
 scenario s33
 err unauthorized
@@ -833,9 +895,11 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=3 required=1,2
-record 1 owner=103 v=1 1=s:ash 2=i:5 3=b:1 6=i:7
-record 2 owner=102 v=1 1=s:fir 2=i:6 3=b:0 6=i:7
+record 1 owner=103 v=1 1=s:ash 2=i:5 3=b:1 6=i:7 9=s:p103
+record 2 owner=102 v=1 1=s:fir 2=i:6 3=b:0 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s34
 ok
@@ -851,10 +915,12 @@ ok
 state
 tenant 1 next=5 required=1
 record 1 owner=103 v=2 1=s:ash 2=i:13 3=b:0
-record 2 owner=101 v=1 1=s:elm 2=i:27 6=i:7
-record 3 owner=100 v=1 1=s:ash 2=i:5 6=i:7
-record 4 owner=103 v=1 1=s:oak 2=i:29 6=i:7
+record 2 owner=101 v=1 1=s:elm 2=i:27 6=i:7 9=s:p101
+record 3 owner=100 v=1 1=s:ash 2=i:5 6=i:7 9=s:p100
+record 4 owner=103 v=1 1=s:oak 2=i:29 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s35
 err unauthorized
@@ -870,8 +936,10 @@ err invalid
 err unauthorized
 state
 tenant 1 next=2 required=1
-record 1 owner=102 v=1 1=s:elm 6=i:7
+record 1 owner=102 v=1 1=s:elm 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s36
 err unauthorized
@@ -888,9 +956,11 @@ ok
 err unauthorized
 state
 tenant 1 next=1 required=1,3
+type 2 required=
 tenant 2 next=3 required=1
-record 1 owner=200 v=1 1=s:fir 6=i:7
-record 2 owner=203 v=1 1=s:fir 2=i:2 6=i:7
+record 1 owner=200 v=1 1=s:fir 6=i:7 9=s:p200
+record 2 owner=203 v=1 1=s:fir 2=i:2 6=i:7 9=s:p203
+type 2 required=
 end
 scenario s37
 err unauthorized
@@ -915,10 +985,12 @@ err unauthorized
 err invalid
 state
 tenant 1 next=4 required=1,2
-record 1 owner=102 v=1 1=s:ash 3=b:1 6=i:7
-record 2 owner=102 v=1 1=s:elm 3=b:1 6=i:7
-record 3 owner=100 v=1 1=s:yew 6=i:7
+record 1 owner=102 v=1 1=s:ash 3=b:1 6=i:7 9=s:p102
+record 2 owner=102 v=1 1=s:elm 3=b:1 6=i:7 9=s:p102
+record 3 owner=100 v=1 1=s:yew 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s38
 err invalid
@@ -939,11 +1011,13 @@ err unauthorized
 ok
 state
 tenant 1 next=5 required=1,3
-record 1 owner=100 v=1 1=s:ash 3=b:1 6=i:7
-record 2 owner=103 v=1 1=s:elm 2=i:14 3=b:0 6=i:7
-record 3 owner=102 v=1 1=s:oak 2=i:0 3=b:0 6=i:7
-record 4 owner=101 v=1 1=s:elm 2=i:27 3=b:0 6=i:7
+record 1 owner=100 v=1 1=s:ash 3=b:1 6=i:7 9=s:p100
+record 2 owner=103 v=1 1=s:elm 2=i:14 3=b:0 6=i:7 9=s:p103
+record 3 owner=102 v=1 1=s:oak 2=i:0 3=b:0 6=i:7 9=s:p102
+record 4 owner=101 v=1 1=s:elm 2=i:27 3=b:0 6=i:7 9=s:p101
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s39
 err invalid
@@ -952,7 +1026,7 @@ err invalid
 ok
 err unauthorized
 err invalid
-err invalid
+ok
 ok
 err invalid
 ok
@@ -967,10 +1041,12 @@ err invalid
 ok
 state
 tenant 1 next=4 required=1,3
-record 1 owner=102 v=3 1=s:ash 3=b:0
-record 2 owner=103 v=1 1=s:elm 2=i:15 6=i:7
-record 3 owner=103 v=1 1=s:oak 3=b:1 6=i:7
+record 1 owner=102 v=4 1=s:ash 3=b:0
+record 2 owner=103 v=1 1=s:elm 2=i:15 6=i:7 9=s:p103
+record 3 owner=103 v=1 1=s:oak 3=b:1 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s40
 ok
@@ -993,8 +1069,10 @@ err not_found
 err invalid
 state
 tenant 1 next=2 required=1,2
-record 1 owner=103 v=1 1=s:yew 2=i:29 6=i:7
+record 1 owner=103 v=1 1=s:yew 2=i:29 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1,3
+type 2 required=
 end
 scenario s41
 err unauthorized
@@ -1010,7 +1088,7 @@ ok
 err unauthorized
 err not_found
 err migration_rejected
-ok
+err constraint_violated
 ok
 ok
 ok
@@ -1019,19 +1097,21 @@ ok
 err unauthorized
 ok
 ok
-err invalid
+ok
 ok
 state
 tenant 1 next=9 required=1
-record 1 owner=103 v=1 1=s:fir 6=i:7
-record 2 owner=100 v=1 1=s:ash 6=i:7
-record 3 owner=103 v=1 1=s:oak 6=i:7
-record 5 owner=102 v=1 1=s:oak 3=b:0 6=i:7
-record 7 owner=103 v=1 1=s:elm 3=b:1 6=i:7
-record 8 owner=102 v=1 1=s:fir 6=i:7
+record 1 owner=103 v=1 1=s:fir 6=i:7 9=s:p103
+record 2 owner=100 v=1 1=s:ash 6=i:7 9=s:p100
+record 3 owner=103 v=1 1=s:oak 6=i:7 9=s:p103
+record 5 owner=101 v=1 1=s:fir 3=b:0 6=i:7 9=s:p101
+record 7 owner=102 v=1 1=s:fir 6=i:7 9=s:p102
+record 8 owner=103 v=1 1=s:yew 3=b:0 6=i:7 9=s:oak
+type 2 required=
 tenant 2 next=3 required=1
-record 1 owner=200 v=1 1=s:ash 2=i:32 3=b:1 6=i:7
-record 2 owner=200 v=1 1=s:yew 3=b:1 6=i:7
+record 1 owner=200 v=1 1=s:ash 2=i:32 3=b:1 6=i:7 9=s:p200
+record 2 owner=200 v=1 1=s:yew 3=b:1 6=i:7 9=s:p200
+type 2 required=
 end
 scenario s42
 err unauthorized
@@ -1059,27 +1139,30 @@ err unauthorized
 ok
 state
 tenant 1 next=1 required=1,2,3
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=203 v=1 1=s:ash 2=i:19 3=b:1 6=i:7
+record 1 owner=203 v=1 1=s:ash 2=i:19 3=b:1 6=i:7 9=s:p203
+type 2 required=
 end
 scenario s43
 err unauthorized
 err no_tenant
 err no_tenant
 err unauthorized
-ok
+err constraint_violated
 err no_tenant
 err no_tenant
 ok
 err unauthorized
-err migration_rejected
+ok
 err not_found
 err unauthorized
 state
-tenant 1 next=2 required=1
-record 1 owner=102 v=1 1=s:elm 2=i:-4 6=i:7
+tenant 1 next=1 required=1,3
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=203 v=1 1=s:elm 2=i:25 6=i:7
+record 1 owner=203 v=1 1=s:elm 2=i:25 6=i:7 9=s:p203
+type 2 required=
 end
 scenario s44
 err unauthorized
@@ -1099,8 +1182,10 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=2 required=1
-record 1 owner=103 v=1 1=s:elm 2=i:28 3=b:1 6=i:7
+record 1 owner=103 v=1 1=s:elm 2=i:28 3=b:1 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s45
 err unauthorized
@@ -1115,18 +1200,19 @@ err not_found
 err unauthorized
 ok
 ok
-ok
+err constraint_violated
 err unauthorized
 err invalid
 ok
 ok
 state
-tenant 1 next=6 required=1,3
-record 1 owner=102 v=1 1=s:ash 6=i:7
-record 2 owner=101 v=1 1=s:elm 2=i:10 3=b:0 6=i:7
-record 4 owner=100 v=1 1=s:oak 6=i:7
-record 5 owner=103 v=1 1=s:elm 2=i:-5 6=i:7
+tenant 1 next=5 required=1,3
+record 1 owner=102 v=1 1=s:ash 6=i:7 9=s:p102
+record 2 owner=101 v=1 1=s:elm 2=i:10 3=b:0 6=i:7 9=s:p101
+record 4 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s46
 err unauthorized
@@ -1138,27 +1224,27 @@ ok
 err invalid
 err unauthorized
 err no_tenant
-ok
+err constraint_violated
 ok
 err invalid
 err unauthorized
 ok
 err invalid
-ok
+err constraint_violated
 err no_tenant
 err unauthorized
 err invalid
 ok
 state
-tenant 1 next=7 required=1
-record 1 owner=102 v=1 1=s:oak 2=i:27 3=b:1 6=i:7
-record 2 owner=103 v=1 1=s:fir 6=i:7
-record 3 owner=103 v=1 1=s:fir 2=i:-4 3=b:0 6=i:7
-record 4 owner=102 v=1 1=s:ash 6=i:7
-record 5 owner=101 v=1 1=s:elm 2=i:-1 6=i:7
-record 6 owner=102 v=1 1=s:oak 6=i:7
+tenant 1 next=5 required=1
+record 1 owner=102 v=1 1=s:oak 2=i:27 3=b:1 6=i:7 9=s:p102
+record 2 owner=103 v=1 1=s:fir 6=i:7 9=s:p103
+record 3 owner=102 v=1 1=s:ash 6=i:7 9=s:p102
+record 4 owner=102 v=1 1=s:oak 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=200 v=1 1=s:ash 3=b:0 6=i:7
+record 1 owner=200 v=1 1=s:ash 3=b:0 6=i:7 9=s:p200
+type 2 required=
 end
 scenario s47
 err not_found
@@ -1183,10 +1269,12 @@ err unauthorized
 ok
 state
 tenant 1 next=3 required=1,2,3
-record 1 owner=102 v=1 1=s:oak 2=i:28 6=i:7
-record 2 owner=103 v=1 1=s:ash 2=i:3 3=b:1 6=i:7
+record 1 owner=102 v=1 1=s:oak 2=i:28 6=i:7 9=s:p102
+record 2 owner=103 v=1 1=s:ash 2=i:3 3=b:1 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=2 required=1,3
-record 1 owner=203 v=1 1=s:ash 2=i:10 6=i:7
+record 1 owner=203 v=1 1=s:ash 2=i:10 6=i:7 9=s:p203
+type 2 required=
 end
 scenario s48
 ok
@@ -1205,12 +1293,14 @@ ok
 err no_tenant
 state
 tenant 1 next=5 required=1
-record 1 owner=102 v=1 1=s:yew 6=i:7
-record 2 owner=101 v=1 1=s:yew 3=b:0 6=i:7
-record 3 owner=103 v=1 1=s:oak 2=i:0 3=b:0 6=i:7
-record 4 owner=100 v=1 1=s:yew 6=i:7
+record 1 owner=102 v=1 1=s:yew 6=i:7 9=s:p102
+record 2 owner=101 v=1 1=s:yew 3=b:0 6=i:7 9=s:p101
+record 3 owner=103 v=1 1=s:oak 2=i:0 3=b:0 6=i:7 9=s:p103
+record 4 owner=100 v=1 1=s:yew 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=202 v=1 1=s:ash 3=b:1 6=i:7
+record 1 owner=202 v=1 1=s:ash 3=b:1 6=i:7 9=s:p202
+type 2 required=
 end
 scenario s49
 err not_found
@@ -1232,9 +1322,11 @@ err invalid
 err no_tenant
 state
 tenant 1 next=3 required=1,3
-record 1 owner=102 v=1 1=s:yew 6=i:7
-record 2 owner=102 v=1 1=s:oak 2=i:33 3=b:0 6=i:7
+record 1 owner=102 v=1 1=s:yew 6=i:7 9=s:p102
+record 2 owner=102 v=1 1=s:oak 2=i:33 3=b:0 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s50
 err unauthorized
@@ -1252,11 +1344,14 @@ ok
 err unauthorized
 ok
 err unauthorized
-err invalid
+ok
 err no_tenant
 state
-tenant 1 next=2 required=1
+tenant 1 next=3 required=1
+record 2 owner=102 v=1 1=s:fir 2=i:20 3=b:1 6=i:7 9=s:oak
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s51
 err unauthorized
@@ -1271,14 +1366,16 @@ err unauthorized
 ok
 state
 tenant 1 next=4 required=1
-record 1 owner=102 v=1 1=s:elm 6=i:7
-record 3 owner=103 v=1 1=s:oak 6=i:7
+record 1 owner=102 v=1 1=s:elm 6=i:7 9=s:p102
+record 3 owner=103 v=1 1=s:oak 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s52
-ok
+err constraint_violated
 err unauthorized
-ok
+err not_found
 err unauthorized
 err no_tenant
 err unauthorized
@@ -1287,10 +1384,11 @@ err unauthorized
 err unauthorized
 ok
 state
-tenant 1 next=3 required=1
-record 1 owner=102 v=2 1=s:yew
-record 2 owner=101 v=1 1=s:fir 2=i:29 6=i:7
+tenant 1 next=2 required=1
+record 1 owner=101 v=1 1=s:fir 2=i:29 6=i:7 9=s:p101
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s53
 ok
@@ -1315,8 +1413,10 @@ err invalid
 err no_tenant
 state
 tenant 1 next=2 required=1,2
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=202 v=1 1=s:fir 3=b:0 6=i:7
+record 1 owner=202 v=1 1=s:fir 3=b:0 6=i:7 9=s:p202
+type 2 required=
 end
 scenario s54
 err unauthorized
@@ -1344,9 +1444,11 @@ ok
 err not_found
 state
 tenant 1 next=1 required=1,2,3
+type 2 required=
 tenant 2 next=3 required=1
-record 1 owner=200 v=1 1=s:fir 3=b:0 6=i:7
-record 2 owner=201 v=1 1=s:oak 3=b:0 6=i:7
+record 1 owner=200 v=1 1=s:fir 3=b:0 6=i:7 9=s:p200
+record 2 owner=201 v=1 1=s:oak 3=b:0 6=i:7 9=s:p201
+type 2 required=
 end
 scenario s55
 err invalid
@@ -1372,31 +1474,33 @@ err unauthorized
 err unauthorized
 state
 tenant 1 next=4 required=1,2
-record 1 owner=103 v=1 1=s:oak 2=i:21 6=i:7
-record 2 owner=103 v=1 1=s:yew 2=i:24 6=i:7
-record 3 owner=100 v=1 1=s:yew 2=i:8 6=i:7
+record 1 owner=103 v=1 1=s:oak 2=i:21 6=i:7 9=s:p103
+record 2 owner=103 v=1 1=s:yew 2=i:24 6=i:7 9=s:p103
+record 3 owner=100 v=1 1=s:yew 2=i:8 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s56
 err unauthorized
 ok
-ok
+err constraint_violated
 err unauthorized
 ok
 err unauthorized
 err unauthorized
 err unauthorized
-err invalid
-err unauthorized
+err not_found
+ok
 err not_found
 ok
 ok
 state
-tenant 1 next=4 required=1
-record 1 owner=100 v=1 1=s:oak 2=i:-3 6=i:7
-record 2 owner=102 v=1 1=s:elm 6=i:7
-record 3 owner=102 v=1 1=s:ash 2=i:15 6=i:7
+tenant 1 next=3 required=1
+record 2 owner=102 v=1 1=s:ash 2=i:15 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario s57
 err unauthorized
@@ -1415,11 +1519,13 @@ ok
 err invalid
 state
 tenant 1 next=5 required=1
-record 1 owner=103 v=1 1=s:ash 2=i:20 3=b:1 6=i:7
-record 2 owner=101 v=1 1=s:oak 3=b:0 6=i:7
-record 3 owner=103 v=1 1=s:oak 6=i:7
-record 4 owner=101 v=1 1=s:oak 6=i:7
+record 1 owner=103 v=1 1=s:ash 2=i:20 3=b:1 6=i:7 9=s:p103
+record 2 owner=101 v=1 1=s:oak 3=b:0 6=i:7 9=s:p101
+record 3 owner=103 v=1 1=s:oak 6=i:7 9=s:p103
+record 4 owner=101 v=1 1=s:oak 6=i:7 9=s:p101
+type 2 required=
 tenant 2 next=1 required=1,3
+type 2 required=
 end
 scenario s58
 err not_found
@@ -1442,11 +1548,13 @@ err no_tenant
 err unauthorized
 state
 tenant 1 next=4 required=1,2
-record 1 owner=103 v=1 1=s:oak 6=i:7
-record 2 owner=103 v=1 1=s:yew 3=b:0 6=i:7
-record 3 owner=101 v=1 1=s:fir 2=i:17 6=i:7
+record 1 owner=103 v=1 1=s:oak 6=i:7 9=s:p103
+record 2 owner=103 v=1 1=s:yew 3=b:0 6=i:7 9=s:p103
+record 3 owner=101 v=1 1=s:fir 2=i:17 6=i:7 9=s:p101
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=202 v=1 1=s:fir 3=b:1 6=i:7
+record 1 owner=202 v=1 1=s:fir 3=b:1 6=i:7 9=s:p202
+type 2 required=
 end
 scenario s59
 ok
@@ -1470,10 +1578,12 @@ err invalid
 err invalid
 state
 tenant 1 next=2 required=1,2,3
-record 1 owner=102 v=1 1=s:yew 3=b:0 6=i:7
+record 1 owner=102 v=1 1=s:yew 3=b:0 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=3 required=1
-record 1 owner=202 v=1 1=s:oak 6=i:7
-record 2 owner=203 v=1 1=s:elm 6=i:7
+record 1 owner=202 v=1 1=s:oak 6=i:7 9=s:p202
+record 2 owner=203 v=1 1=s:elm 6=i:7 9=s:p203
+type 2 required=
 end
 scenario h-default-relied-on
 ok
@@ -1488,12 +1598,14 @@ ok
 ok
 state
 tenant 1 next=6 required=1
-record 1 owner=100 v=3 1=s:oak 2=i:4
-record 2 owner=100 v=2 1=s:oak 6=i:9
+record 1 owner=100 v=3 1=s:oak 2=i:4 9=s:p100
+record 2 owner=100 v=2 1=s:oak 6=i:9 9=s:p100
 record 3 owner=100 v=2 1=s:ash
-record 4 owner=101 v=1 1=s:elm 6=i:7
-record 5 owner=102 v=1 1=s:yew 3=b:1 6=i:7
+record 4 owner=101 v=1 1=s:elm 6=i:7 9=s:p101
+record 5 owner=102 v=1 1=s:yew 3=b:1 6=i:7 9=s:p102
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-patch-keeps-and-removes
 ok
@@ -1513,7 +1625,9 @@ ok
 state
 tenant 1 next=2 required=1
 record 1 owner=100 v=9 1=s:ash
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-patch-by-a-writer-on-its-own-record
 ok
@@ -1528,9 +1642,11 @@ err unauthorized
 err not_found
 state
 tenant 1 next=3 required=1
-record 1 owner=102 v=2 1=s:oak 2=i:1 6=i:7
-record 2 owner=103 v=2 1=s:ash 2=i:1 6=i:7
+record 1 owner=102 v=2 1=s:oak 2=i:1 6=i:7 9=s:p102
+record 2 owner=103 v=2 1=s:ash 2=i:1 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-expected-version
 ok
@@ -1546,7 +1662,9 @@ ok
 err not_found
 state
 tenant 1 next=2 required=1
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-expected-version-checks-in-order
 ok
@@ -1571,9 +1689,11 @@ err version_conflict
 ok
 state
 tenant 1 next=4 required=1
-record 1 owner=100 v=1 1=s:oak 6=i:7
-record 3 owner=103 v=1 1=s:elm 6=i:7
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+record 3 owner=103 v=1 1=s:elm 6=i:7 9=s:p103
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-expected-version-with-a-referrer
 ok
@@ -1584,8 +1704,10 @@ ok
 ok
 state
 tenant 1 next=3 required=1
-record 2 owner=100 v=2 1=s:ash 6=i:7
+record 2 owner=100 v=2 1=s:ash 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-delete-raises-the-version-of-a-referrer-once
 ok
@@ -1596,9 +1718,11 @@ ok
 ok
 state
 tenant 1 next=4 required=1
-record 2 owner=100 v=3 1=s:ash 2=i:1 6=i:7 8=l:
-record 3 owner=100 v=3 1=s:elm 2=i:1 6=i:7
+record 2 owner=100 v=3 1=s:ash 2=i:1 6=i:7 8=l: 9=s:p100
+record 3 owner=100 v=3 1=s:elm 2=i:1 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-delete-leaves-the-version-of-an-unrelated-record
 ok
@@ -1609,9 +1733,11 @@ ok
 ok
 state
 tenant 1 next=4 required=1
-record 2 owner=100 v=3 1=s:ash 2=i:1 6=i:7
-record 3 owner=100 v=2 1=s:elm 2=i:1 4=r:2 6=i:7
+record 2 owner=100 v=3 1=s:ash 2=i:1 6=i:7 9=s:p100
+record 3 owner=100 v=2 1=s:elm 2=i:1 4=r:2 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-a-list-of-strings
 ok
@@ -1627,11 +1753,13 @@ ok
 ok
 state
 tenant 1 next=5 required=1
-record 1 owner=100 v=3 1=s:oak 6=i:7
-record 2 owner=100 v=2 1=s:oak 6=i:7 7=l:
-record 3 owner=100 v=1 1=s:oak 6=i:7 7=l:s:a,s:a,s:a
-record 4 owner=100 v=1 1=s:oak 6=i:7
+record 1 owner=100 v=3 1=s:oak 6=i:7 9=s:p100
+record 2 owner=100 v=2 1=s:oak 6=i:7 7=l: 9=s:p100
+record 3 owner=100 v=1 1=s:oak 6=i:7 7=l:s:a,s:a,s:a 9=s:p100
+record 4 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-a-list-of-the-wrong-type
 ok
@@ -1646,8 +1774,10 @@ err invalid
 err invalid
 state
 tenant 1 next=2 required=1
-record 1 owner=100 v=1 1=s:oak 6=i:7
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-a-list-of-references-that-dangle
 ok
@@ -1663,10 +1793,12 @@ ok
 ok
 state
 tenant 1 next=2 required=1
-record 1 owner=100 v=2 1=s:oak 6=i:7 8=l:r:1
+record 1 owner=100 v=2 1=s:oak 6=i:7 8=l:r:1 9=s:p100
+type 2 required=
 tenant 2 next=3 required=1
-record 1 owner=200 v=1 1=s:oak 6=i:7
-record 2 owner=200 v=1 1=s:oak 6=i:7 8=l:r:1
+record 1 owner=200 v=1 1=s:oak 6=i:7 9=s:p200
+record 2 owner=200 v=1 1=s:oak 6=i:7 8=l:r:1 9=s:p200
+type 2 required=
 end
 scenario h-a-set-null-list-loses-an-element
 ok
@@ -1677,8 +1809,10 @@ ok
 ok
 state
 tenant 1 next=4 required=1
-record 3 owner=100 v=4 1=s:elm 2=i:1 6=i:7 8=l:
+record 3 owner=100 v=4 1=s:elm 2=i:1 6=i:7 8=l: 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-a-restricting-list-blocks-a-delete
 ok
@@ -1694,8 +1828,10 @@ ok
 ok
 state
 tenant 1 next=4 required=1
-record 3 owner=100 v=4 1=s:elm 6=i:7
+record 3 owner=100 v=4 1=s:elm 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-a-restricting-list-wins-over-a-set-null-list
 ok
@@ -1706,9 +1842,11 @@ ok
 ok
 state
 tenant 1 next=4 required=1
-record 2 owner=100 v=3 1=s:ash 6=i:7 8=l:
-record 3 owner=100 v=2 1=s:elm 6=i:7 8=l:
+record 2 owner=100 v=3 1=s:ash 6=i:7 8=l: 9=s:p100
+record 3 owner=100 v=2 1=s:elm 6=i:7 8=l: 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-a-list-may-hold-the-record-itself
 ok
@@ -1716,7 +1854,9 @@ ok
 ok
 state
 tenant 1 next=2 required=1
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-a-required-list-does-not-block-a-delete
 ok
@@ -1731,8 +1871,10 @@ ok
 ok
 state
 tenant 1 next=4 required=1,8
-record 2 owner=100 v=4 1=s:ash 6=i:7 8=l:
+record 2 owner=100 v=4 1=s:ash 6=i:7 8=l: 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-a-required-restricting-list
 ok
@@ -1747,8 +1889,10 @@ ok
 ok
 state
 tenant 1 next=3 required=0,1
-record 2 owner=100 v=2 0=l: 1=s:ash 6=i:7
+record 2 owner=100 v=2 0=l: 1=s:ash 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-a-required-list-of-strings
 ok
@@ -1761,10 +1905,12 @@ ok
 err invalid
 state
 tenant 1 next=4 required=1,7
-record 1 owner=100 v=1 1=s:oak 6=i:7 7=l:s:a
-record 2 owner=100 v=2 1=s:ash 6=i:7 7=l:
-record 3 owner=100 v=1 1=s:elm 6=i:7 7=l:
+record 1 owner=100 v=1 1=s:oak 6=i:7 7=l:s:a 9=s:p100
+record 2 owner=100 v=2 1=s:ash 6=i:7 7=l: 9=s:p100
+record 3 owner=100 v=1 1=s:elm 6=i:7 7=l: 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-the-string-bound-is-in-bytes
 ok
@@ -1783,10 +1929,12 @@ ok
 state
 tenant 1 next=5 required=1
 record 1 owner=100 v=2 1=s*65536:y
-record 2 owner=100 v=2 1=s*65536:z 6=i:7
-record 3 owner=100 v=3 1=s:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq 6=i:7
-record 4 owner=100 v=1 1=s*21845:€ 6=i:7
+record 2 owner=100 v=2 1=s*65536:z 6=i:7 9=s:p100
+record 3 owner=100 v=3 1=s:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq 6=i:7 9=s:p100
+record 4 owner=100 v=1 1=s*21845:€ 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-the-string-bound-for-a-string-in-a-list
 ok
@@ -1800,10 +1948,12 @@ ok
 ok
 state
 tenant 1 next=4 required=1
-record 1 owner=100 v=2 1=s:oak 6=i:7 7=l:s*65536:x
-record 2 owner=100 v=1 1=s:oak 6=i:7 7=l:s:a,s*65536:x
-record 3 owner=100 v=1 1=s:oak 6=i:7 7=l:s*60000:x,s*60000:x
+record 1 owner=100 v=2 1=s:oak 6=i:7 7=l:s*65536:x 9=s:p100
+record 2 owner=100 v=1 1=s:oak 6=i:7 7=l:s:a,s*65536:x 9=s:p100
+record 3 owner=100 v=1 1=s:oak 6=i:7 7=l:s*60000:x,s*60000:x 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-the-list-bound
 ok
@@ -1829,14 +1979,16 @@ err still_referenced
 ok
 state
 tenant 1 next=9 required=1
-record 1 owner=100 v=1 1=s:oak 6=i:7
-record 3 owner=100 v=1 1=s:oak 6=i:7 7=l*1000:s:a
-record 4 owner=100 v=1 0=l*1000:r:1 1=s:oak 6=i:7
-record 5 owner=100 v=1 1=s:oak 6=i:7 8=l*1000:r:1
-record 6 owner=100 v=1 1=s:oak 6=i:7 7=l*100:s:b
-record 7 owner=100 v=1 1=s:oak 6=i:7 7=l:s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b
-record 8 owner=100 v=1 1=s:oak 6=i:7 7=l*100:s:b,s:c
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+record 3 owner=100 v=1 1=s:oak 6=i:7 7=l*1000:s:a 9=s:p100
+record 4 owner=100 v=1 0=l*1000:r:1 1=s:oak 6=i:7 9=s:p100
+record 5 owner=100 v=1 1=s:oak 6=i:7 8=l*1000:r:1 9=s:p100
+record 6 owner=100 v=1 1=s:oak 6=i:7 7=l*100:s:b 9=s:p100
+record 7 owner=100 v=1 1=s:oak 6=i:7 7=l:s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b,s:b 9=s:p100
+record 8 owner=100 v=1 1=s:oak 6=i:7 7=l*100:s:b,s:c 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-a-list-bound-with-an-element-deleted
 ok
@@ -1849,8 +2001,10 @@ ok
 ok
 state
 tenant 1 next=4 required=1
-record 3 owner=100 v=3 1=s:elm 6=i:7
+record 3 owner=100 v=3 1=s:elm 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-the-record-bound
 err limit_exceeded
@@ -1865,10 +2019,12 @@ ok
 ok
 state
 tenant 1 next=4 required=1
-record 1 owner=100 v=1 1=s*65536:x 6=i:7 7=l:s*64000:x,s*64000:x,s*64000:x
-record 2 owner=100 v=1 1=s*65536:x 6=i:7 7=l:s*65536:x,s*65536:x
+record 1 owner=100 v=1 1=s*65536:x 6=i:7 7=l:s*64000:x,s*64000:x,s*64000:x 9=s:p100
+record 2 owner=100 v=1 1=s*65536:x 6=i:7 7=l:s*65536:x,s*65536:x 9=s:p100
 record 3 owner=100 v=4 1=s:oak 2=i:1
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-the-record-bound-comes-first
 ok
@@ -1885,8 +2041,10 @@ err unauthorized
 err not_found
 state
 tenant 1 next=2 required=1
-record 1 owner=100 v=1 1=s:oak 6=i:7
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-a-limit-in-one-tenant-leaves-the-other-alone
 err limit_exceeded
@@ -1896,9 +2054,11 @@ ok
 err no_tenant
 state
 tenant 1 next=2 required=1
-record 1 owner=100 v=1 1=s:oak 6=i:7 7=l*1000:s:a
+record 1 owner=100 v=1 1=s:oak 6=i:7 7=l*1000:s:a 9=s:p100
+type 2 required=
 tenant 2 next=2 required=1
-record 1 owner=200 v=1 1=s*65536:x 6=i:7
+record 1 owner=200 v=1 1=s*65536:x 6=i:7 9=s:p200
+type 2 required=
 end
 scenario h-update-replaces-every-field
 ok
@@ -1911,7 +2071,9 @@ state
 tenant 1 next=3 required=1
 record 1 owner=100 v=4 1=s:yew 8=l:r:2
 record 2 owner=100 v=2 1=s:elm
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
 end
 scenario h-the-first-failing-field-decides
 ok
@@ -1923,10 +2085,3370 @@ err dangling_reference
 err invalid
 err limit_exceeded
 err invalid
-err invalid
+err limit_exceeded
 err invalid
 state
 tenant 1 next=2 required=1
-record 1 owner=100 v=1 1=s:oak 6=i:7
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
 tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-unique-field-refuses-a-duplicate
+ok
+err unique_violated
+ok
+ok
+ok
+ok
+ok
+err unique_violated
+err unique_violated
+ok
+ok
+ok
+state
+tenant 1 next=7 required=1
+record 1 owner=100 v=3 1=s:oak
+record 2 owner=100 v=2 1=s:ash 10=s:b
+record 3 owner=100 v=1 1=s:fir 6=i:7 9=s:p100
+record 4 owner=100 v=1 1=s:yew 6=i:7 9=s:p100
+record 5 owner=100 v=1 1=s:oak 6=i:7 9=s:p100 10=s:c
+record 6 owner=100 v=1 1=s:ash 6=i:7 9=s:p100 10=s:a
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-unique-checks-follow-the-field-order
+err invalid
+ok
+err dangling_reference
+err invalid
+err limit_exceeded
+ok
+err unique_violated
+state
+tenant 1 next=3 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100 10=s:a
+record 2 owner=100 v=1 1=s:oak 6=i:7 9=s:p100 10=s*150:x
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-unique-bound-is-in-bytes
+err limit_exceeded
+ok
+err unique_violated
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100 10=s*150:x
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-composite-unique-needs-every-field
+ok
+ok
+ok
+ok
+err unique_violated
+ok
+err unique_violated
+ok
+err unique_violated
+err unique_violated
+state
+tenant 1 next=5 required=1
+record 1 owner=100 v=1 1=s:oak 2=i:1 3=b:1 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:ash 2=i:1 6=i:7 9=s:p100
+record 3 owner=100 v=2 1=s:elm 2=i:2 3=b:0 6=i:7 9=s:p100
+record 4 owner=100 v=1 1=s:yew 3=b:1 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-composite-over-existing-duplicates-is-refused
+ok
+ok
+err unique_violated
+ok
+ok
+state
+tenant 1 next=5 required=1
+record 1 owner=100 v=1 1=s:oak 2=i:1 3=b:1 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:ash 2=i:1 3=b:1 6=i:7 9=s:p100
+record 3 owner=100 v=1 1=s:elm 2=i:1 3=b:1 6=i:7 9=s:p100
+record 4 owner=100 v=1 1=s:fir 2=i:2 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-unique-over-existing-duplicates
+ok
+ok
+err migration_rejected
+ok
+ok
+err unique_violated
+ok
+err unique_violated
+ok
+state
+tenant 1 next=4 required=1
+record 1 owner=100 v=1 1=s:oak 2=i:1 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:oak 2=i:2 6=i:7 9=s:p100
+record 3 owner=100 v=2 1=s:elm 2=i:4
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-list-field-cannot-be-unique
+err invalid_schema
+err invalid_schema
+err invalid_schema
+ok
+err invalid_schema
+err invalid_schema
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-unique-survives-a-delete
+ok
+ok
+ok
+ok
+err unique_violated
+err unique_violated
+state
+tenant 1 next=4 required=1
+record 2 owner=100 v=2 1=s:ash 6=i:7 9=s:p100 10=s:b
+record 3 owner=100 v=1 1=s:elm 6=i:7 9=s:p100 10=s:a
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-strict-change-needs-conforming-records
+ok
+ok
+err migration_rejected
+state
+tenant 1 next=2 required=1,4
+record 1 owner=100 v=1 1=s:yew 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-strict-change-refuses-a-grandfathered-duplicate
+ok
+ok
+ok
+err migration_rejected
+state
+tenant 1 next=3 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+record 2 owner=101 v=1 1=s:fir 3=b:0 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-unknown-type-owner
+err unknown_object
+err unknown_object
+err unknown_object
+err invalid_schema
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-unknown-type-other
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err unknown_object
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-unknown-type-owner-hides-existing-type
+ok
+err unknown_object
+err not_found
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-cross-type-dangling-create
+ok
+ok
+err dangling_reference
+ok
+err dangling_reference
+state
+tenant 1 next=4 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+record 3 owner=100 v=1 1=s:elm 6=i:7 9=s:p100 11=r:2
+type 2 required=
+type 2 record 2 owner=100 v=1 1=r:1 5=b:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-cross-type-dangling-update
+ok
+ok
+err dangling_reference
+ok
+err dangling_reference
+state
+tenant 1 next=3 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
+type 2 record 2 owner=100 v=2 1=r:1 2=r:1 5=b:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-cross-type-restrict-both-ways
+ok
+ok
+ok
+err still_referenced
+err still_referenced
+ok
+ok
+ok
+state
+tenant 1 next=4 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-cross-type-set-null-clears
+ok
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=5 required=1
+type 2 required=
+type 2 record 3 owner=100 v=3 3=l: 5=b:1
+type 2 record 4 owner=100 v=2 3=l: 5=b:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-unknown-type-schema-by-others
+err unauthorized
+err invalid_schema
+err invalid_schema
+err invalid_schema
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-strict-change-scoped-to-the-touched-type
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1,4
+record 1 owner=101 v=1 1=s:fir 6=i:7 9=s:p101
+type 2 required=4
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-strict-change-revalidates-a-reference-target
+ok
+ok
+err migration_rejected
+err migration_rejected
+state
+tenant 1 next=2 required=1,4
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-constraint-refuses-a-negative-value
+err constraint_violated
+ok
+err constraint_violated
+ok
+ok
+err constraint_violated
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=3 1=s:oak 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-constraint-refuses-a-forbidden-name
+err constraint_violated
+ok
+err constraint_violated
+err constraint_violated
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=2 1=s:ash 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-null-constraint-passes
+ok
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=2 1=s:oak 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-constraints-come-after-the-other-checks
+ok
+err unique_violated
+err invalid
+err dangling_reference
+err unique_violated
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100 10=s:a
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-expression-default-is-the-caller
+ok
+ok
+ok
+ok
+state
+tenant 1 next=4 required=1
+record 1 owner=101 v=2 1=s:oak 6=i:7
+record 2 owner=102 v=1 1=s:ash 6=i:7 9=s:x
+record 3 owner=101 v=1 1=s:elm 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-expression-default-decides-the-field
+ok
+ok
+ok
+err unauthorized
+state
+tenant 1 next=4 required=1
+type 2 required=
+type 2 record 1 owner=100 v=1 4=i:1 5=b:1
+type 2 record 2 owner=101 v=1 4=i:1 5=b:0
+type 2 record 3 owner=101 v=1 4=i:1 5=b:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-stranger-holds-only-public
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-the-system-holds-no-role
+err unauthorized
+err unauthorized
+err unauthorized
+ok
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=2 required=1
+record 1 owner=101 v=1 1=s:oak 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-anonymous-caller-creates-a-part-with-no-creator
+ok
+ok
+ok
+state
+tenant 1 next=4 required=1
+type 2 required=
+type 2 record 1 owner=- v=1 4=i:1
+type 2 record 2 owner=- v=1 4=i:2 5=b:1
+type 2 record 3 owner=101 v=1 4=i:3 5=b:0
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-anonymous-caller-may-not-create-an-item
+err unauthorized
+err unauthorized
+err unknown_object
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-anonymous-caller-may-not-change-a-record
+ok
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=2 required=1
+record 1 owner=101 v=1 1=s:oak 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-writer-changes-only-its-own-records
+ok
+ok
+ok
+err unauthorized
+err unauthorized
+ok
+ok
+state
+tenant 1 next=3 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-editor-changes-any-record
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-writer-cannot-tell-a-missing-record-from-another-writers
+err unauthorized
+err unauthorized
+err not_found
+err not_found
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-the-owner-may-do-everything
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=3 required=1
+type 2 required=
+type 2 record 2 owner=100 v=1 4=i:9 5=b:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-editor-may-not-change-the-schema
+err unauthorized
+err unauthorized
+err unauthorized
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-delete-that-breaks-a-referrers-constraint
+ok
+ok
+err constraint_violated
+ok
+ok
+ok
+err not_found
+state
+tenant 1 next=3 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-delete-clearing-a-list-referrer-under-a-constraint
+ok
+ok
+ok
+err constraint_violated
+ok
+ok
+err constraint_violated
+ok
+ok
+state
+tenant 1 next=4 required=1
+type 2 required=
+type 2 record 3 owner=101 v=5 3=l: 4=i:2 5=b:0
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-the-system-creates-a-tenant
+err no_tenant
+ok
+err unknown_role
+err unauthorized
+err unauthorized
+err tenant_exists
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 300 0
+end
+scenario h-only-the-system-creates-a-tenant
+err unauthorized
+err unauthorized
+err unauthorized
+err no_tenant
+ok
+err unknown_role
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 300 0
+end
+scenario h-a-tenant-needs-a-name
+err invalid_intent
+err unauthorized
+err invalid_intent
+err no_tenant
+ok
+err unknown_role
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 300 0
+end
+scenario h-a-tenant-that-exists-is-not-created-again
+err tenant_exists
+err tenant_exists
+err tenant_exists
+err tenant_exists
+ok
+err tenant_exists
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 300 0
+team 3 1 s:ops - -
+end
+scenario h-a-reserved-id-is-refused-before-anything-else
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+ok
+err invalid_intent
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops 150 2
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 300 0
+end
+scenario h-the-owner-assigns-and-revokes-a-role
+ok
+ok
+ok
+ok
+ok
+ok
+err unauthorized
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=150 v=2 1=s:ash 2=i:1 6=i:7 9=s:p150
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-only-a-manager-assigns-roles
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-the-role-is-checked-before-the-conferring
+err unknown_role
+err invalid_intent
+err unknown_role
+err invalid_intent
+err unknown_role
+err invalid_intent
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-editor-confers-what-it-holds
+ok
+ok
+ok
+ok
+ok
+err unauthorized
+ok
+ok
+err last_owner
+ok
+ok
+ok
+state
+tenant 1 next=3 required=1
+record 1 owner=150 v=1 1=s:oak 2=i:1 6=i:7 9=s:p150
+record 2 owner=151 v=1 1=s:ash 2=i:1 6=i:7 9=s:p151
+type 2 required=
+roles 1 0,1,2,3
+member 1 101 2
+member 1 102 3
+member 1 103 3
+member 1 152 0,2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-the-last-owner-stays
+err last_owner
+ok
+ok
+err last_owner
+ok
+ok
+ok
+err last_owner
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-the-owner-of-tenant-two-is-another-user
+ok
+ok
+ok
+ok
+err unauthorized
+err unauthorized
+err last_owner
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 101 2
+member 1 102 3
+member 1 103 3
+member 1 200 0
+tenant 2 next=1 required=1
+type 2 required=
+roles 2 0,1,2,3
+member 2 100 0
+member 2 201 2
+member 2 202 3
+member 2 203 3
+end
+scenario h-a-team-is-defined-by-a-manager
+ok
+ok
+ok
+err unauthorized
+err invalid_intent
+err invalid_intent
+ok
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:a_b - -
+team 1 2 s:support - -
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-team-must-exist
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err unauthorized
+ok
+err unknown_role
+err invalid_intent
+ok
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops - 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-team-gives-its-members-its-roles
+ok
+ok
+err unauthorized
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+err unauthorized
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops - -
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-team-can-be-given-the-power-to-manage-members
+err unauthorized
+ok
+ok
+ok
+ok
+err unauthorized
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+member 1 151 3
+team 1 1 s:leads 150 2
+team 1 2 s:more - -
+invitation 1 1 s:a@b.org 3 by=150 expires=1209601000 redeemed=- revoked=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-adding-to-a-team-asks-to-confer-its-roles
+ok
+ok
+ok
+err unauthorized
+ok
+err unauthorized
+err unauthorized
+ok
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops - 3
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-team-that-holds-owner-keeps-an-owner
+ok
+ok
+ok
+ok
+err last_owner
+err last_owner
+ok
+ok
+ok
+ok
+err last_owner
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops 150 -
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-team-that-holds-the-only-owner-role
+ok
+ok
+ok
+ok
+err last_owner
+err last_owner
+ok
+ok
+err last_owner
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops 100 -
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-invitation-is-made-and-redeemed
+err invalid_intent
+ok
+ok
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+state
+tenant 1 next=2 required=1
+record 1 owner=150 v=1 1=s:oak 2=i:1 6=i:7 9=s:p150
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+member 1 150 2
+invitation 1 1 s:ann@x.org 2 by=100 expires=1209601000 redeemed=150 revoked=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-redeeming-adds-to-the-roles-held
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2,3
+member 1 102 2,3
+member 1 103 3
+team 1 1 s:ops - -
+invitation 1 1 s:ann@x.org 3 by=100 expires=1209601000 redeemed=101 revoked=-
+invitation 1 2 s:ann@x.org 2,3 by=100 expires=1209601000 redeemed=102 revoked=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-redeeming-is-checked-in-order
+err unauthorized
+err unauthorized
+err invalid_intent
+ok
+err unauthorized
+err unauthorized
+ok
+err unauthorized
+err invalid_intent
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+member 1 150 2
+invitation 1 1 s:ann@x.org 2 by=100 expires=1209601000 redeemed=150 revoked=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-invitation-expires-after-fourteen-days
+ok
+ok
+ok
+err invalid_intent
+err invalid_intent
+ok
+ok
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+member 1 150 2
+member 1 151 2
+invitation 1 1 s:ann@x.org 2 by=100 expires=1209601000 redeemed=- revoked=-
+invitation 1 2 s:bob@x.org 2 by=100 expires=1209602000 redeemed=150 revoked=-
+invitation 1 3 s:cy@x.org 2 by=100 expires=1209600000 redeemed=151 revoked=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-revoked-invitation-is-not-redeemed
+ok
+err unauthorized
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err unauthorized
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+invitation 1 1 s:ann@x.org 2 by=100 expires=1209601000 redeemed=- revoked=100
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-invitation-is-checked-in-order
+err unauthorized
+err unauthorized
+err unauthorized
+err invalid_intent
+err invalid_intent
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err unknown_role
+err invalid_intent
+err invalid_intent
+err unauthorized
+ok
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+invitation 1 1 s:@ 2 by=100 expires=1209601000 redeemed=- revoked=-
+invitation 1 3 s:ann@x.org 2,3 by=101 expires=1209601000 redeemed=- revoked=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-the-issuer-must-still-hold-the-authority
+ok
+ok
+err unauthorized
+ok
+ok
+ok
+ok
+err unauthorized
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+member 1 150 3
+invitation 1 1 s:ann@x.org 3 by=101 expires=1209601000 redeemed=150 revoked=-
+invitation 1 2 s:bob@x.org 2 by=101 expires=1209601000 redeemed=- revoked=-
+invitation 1 3 s:cy@x.org 0 by=100 expires=1209601000 redeemed=- revoked=100
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-invitation-can-make-an-owner
+ok
+ok
+ok
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 101 2
+member 1 102 3
+member 1 103 3
+member 1 150 0
+invitation 1 1 s:ann@x.org 0 by=100 expires=1209601000 redeemed=150 revoked=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-redeeming-by-a-tenants-own-owner
+ok
+ok
+err last_owner
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+invitation 1 1 s:ann@x.org 3 by=100 expires=1209601000 redeemed=100 revoked=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-the-state-shows-a-created-tenant-and-the-fixtures-membership
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+err unauthorized
+ok
+ok
+err unauthorized
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 5 s:eng - -
+invitation 1 3 s:z@y 2,3 by=100 expires=1209600100 redeemed=- revoked=-
+tenant 2 next=1 required=1
+type 2 required=
+roles 2 0,1,2,3
+member 2 100 2
+member 2 200 0
+member 2 201 2
+member 2 202 3
+member 2 203 3
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 301 0
+member 3 302 0
+team 3 2 s:ops 302 0
+invitation 3 2 s:a@b 0 by=300 expires=1209606000 redeemed=- revoked=-
+invitation 3 4 s:bob@x.com 0 by=300 expires=1209605000 redeemed=302 revoked=-
+end
+scenario h-a-new-ticket-starts-open
+ok
+ok
+state
+tenant 1 next=3 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=1 1=s:open 2=i:1
+type 4 record 2 owner=100 v=1 1=s:open 3=s:x
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-new-ticket-cannot-start-closed
+err workflow_violation
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=1 1=s:open 2=i:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-new-ticket-must-name-a-state
+err workflow_violation
+err workflow_violation
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-ticket-with-a-vote-ships
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=3 1=s:open 2=i:1 3=s:shipped
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-ticket-without-a-vote-does-not-ship
+ok
+err workflow_violation
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=2 1=s:closed 2=i:1 3=s:shipped
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-guard-that-cannot-be-read-refuses
+ok
+err workflow_violation
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=2 1=s:archived 2=i:0
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-an-undeclared-state-is-refused
+ok
+err workflow_violation
+err workflow_violation
+ok
+err workflow_violation
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=2 1=s:escalated 2=i:9
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-transition-writes-its-assignments
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=2 1=s:archived 2=i:0
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-closed-ticket-reopens-without-a-guard
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=3 1=s:open 2=i:1 3=s:shipped
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-closed-ticket-is-archived-with-its-note
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=3 1=s:archived 2=i:1 3=s:archived
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-writer-may-not-write-what-an-assignment-makes-it
+ok
+err unauthorized
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=102 v=2 1=s:escalated 2=i:9
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-the-version-is-checked-before-the-transition
+ok
+err version_conflict
+err workflow_violation
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=1 1=s:open 2=i:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-patch-that-keeps-the-state-needs-no-transition
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=2 1=s:open 2=i:4
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-a-replacement-that-drops-the-state-is-refused
+ok
+err workflow_violation
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=1 1=s:open 2=i:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-deleting-a-ticket-needs-no-transition
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-tenant-created
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 300 0
+end
+scenario h-events-record-created
+ok
+ok
+state
+tenant 1 next=3 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
+type 4 required=
+type 4 record 2 owner=100 v=1 1=s:open 2=i:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-transition-fires
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=2 1=s:closed 2=i:1 3=s:shipped
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-update-fires-no-transition
+ok
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=2 1=s:ash 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-delete-rewrites-a-referrer
+ok
+ok
+ok
+state
+tenant 1 next=3 required=1
+record 2 owner=100 v=2 1=s:ash 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-lax-change-grandfathers-a-record
+ok
+ok
+state
+tenant 1 next=2 required=1,4
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-change-grandfathers-nothing
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1,2
+record 1 owner=100 v=1 1=s:oak 2=i:1 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-membership
+ok
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops - 3
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-records-visible-missing-and-invisible
+ok
+ok
+ok
+ok
+ok
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+row 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+row 3 owner=102 v=1 1=s:elm 2=i:7 6=i:7 9=s:p102
+row 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103 10=s:shown
+ok
+next -
+row 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103 10=s:shown
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+ok
+next -
+ok
+next -
+row 5 owner=100 v=1 1=r:1 4=i:3 5=b:1
+ok
+next -
+ok
+next -
+ok
+next -
+ok
+next -
+ok
+next -
+ok
+next -
+ok
+next -
+state
+tenant 1 next=6 required=1
+record 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+record 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101 10=s:hidden
+record 3 owner=102 v=1 1=s:elm 2=i:7 6=i:7 9=s:p102
+record 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103 10=s:shown
+type 2 required=
+type 2 record 5 owner=100 v=1 1=r:1 4=i:3 5=b:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-records-refusals
+ok
+err unknown_object
+err unknown_object
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+err limit_exceeded
+err limit_exceeded
+err limit_exceeded
+err no_tenant
+err no_tenant
+ok
+err unknown_object
+err limit_exceeded
+err unknown_object
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 100 0
+end
+scenario h-read-redaction-by-record-and-by-principal
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 3=b:1 6=i:7 9=s:p100 10=s:shown
+row 2 owner=100 v=1 1=s:ash 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:fir 3=b:1 6=i:7 9=s:p100
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 3=b:1 6=i:7 9=s:p100 10=s:shown
+row 2 owner=100 v=1 1=s:ash 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:fir 3=b:1 6=i:7 9=s:p100
+ok
+next -
+row 5 owner=100 v=1 4=i:3 5=b:1
+row 6 owner=101 v=1 4=i:1 5=b:0
+ok
+next -
+row 5 owner=100 v=1 5=b:1
+row 6 owner=101 v=1 5=b:0
+ok
+next -
+row 5 owner=100 v=1 5=b:1
+row 6 owner=101 v=1 5=b:0
+ok
+next -
+row 7 owner=100 v=1 1=s:open 2=i:3 3=s:note
+row 8 owner=100 v=1 1=s:open 2=i:0
+row 9 owner=100 v=1 1=s:open
+ok
+next -
+row 7 owner=100 v=1 1=s:open 2=i:3 3=s:note
+row 8 owner=100 v=1 1=s:open 2=i:0
+row 9 owner=100 v=1 1=s:open
+ok
+next -
+ok
+next -
+state
+tenant 1 next=10 required=1
+record 1 owner=100 v=1 1=s:oak 3=b:1 6=i:7 9=s:p100 10=s:shown
+record 2 owner=100 v=1 1=s:ash 3=b:0 6=i:7 9=s:p100 10=s:hidden
+record 3 owner=100 v=1 1=s:elm 6=i:7 9=s:p100 10=s:nothing
+record 4 owner=100 v=1 1=s:fir 3=b:1 6=i:7 9=s:p100
+type 2 required=
+type 2 record 5 owner=100 v=1 4=i:3 5=b:1
+type 2 record 6 owner=101 v=1 4=i:1 5=b:0
+type 4 required=
+type 4 record 7 owner=100 v=1 1=s:open 2=i:3 3=s:note
+type 4 record 8 owner=100 v=1 1=s:open 2=i:0 3=s:hid
+type 4 record 9 owner=100 v=1 1=s:open 3=s:none
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-query-orders-by-keys-then-id
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+next -
+row 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+row 3 owner=102 v=1 1=s:elm 2=i:7 6=i:7 9=s:p102
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 5 owner=100 v=1 1=s:yew 2=i:5 3=b:0 6=i:7 9=s:p100
+row 6 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103
+ok
+next -
+row 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+row 3 owner=102 v=1 1=s:elm 2=i:7 6=i:7 9=s:p102
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 5 owner=100 v=1 1=s:yew 2=i:5 3=b:0 6=i:7 9=s:p100
+row 6 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103
+ok
+next -
+row 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+row 5 owner=100 v=1 1=s:yew 2=i:5 3=b:0 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 6 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103
+ok
+next o3
+row 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+row 5 owner=100 v=1 1=s:yew 2=i:5 3=b:0 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+ok
+next -
+ok
+next -
+ok
+next -
+state
+tenant 1 next=7 required=1
+record 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+record 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+record 3 owner=102 v=1 1=s:elm 2=i:7 6=i:7 9=s:p102
+record 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103
+record 5 owner=100 v=1 1=s:yew 2=i:5 3=b:0 6=i:7 9=s:p100
+record 6 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-query-pages-and-cursors
+ok
+ok
+ok
+ok
+ok
+ok
+next o2
+row 5 owner=100 v=1 1=s:e 2=i:5 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+ok
+next o4
+row 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+ok
+next -
+row 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+ok
+next -
+ok
+next -
+ok
+next -
+row 5 owner=100 v=1 1=s:e 2=i:5 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+ok
+next -
+row 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+err invalid_intent
+err invalid_intent
+ok
+next o3
+row 5 owner=100 v=1 1=s:e 2=i:5 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+ok
+next -
+row 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+ok
+next o1
+row 5 owner=100 v=1 1=s:e 2=i:5 6=i:7 9=s:p100
+ok
+next -
+row 5 owner=100 v=1 1=s:e 2=i:5 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+ok
+ok
+next -
+state
+tenant 1 next=6 required=1
+record 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+record 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+record 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-query-refusals-in-the-kernels-order
+ok
+err unknown_query
+err unknown_query
+err unknown_query
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err limit_exceeded
+err limit_exceeded
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 2=i:5 6=i:7 9=s:p100
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 2=i:5 6=i:7 9=s:p100
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 2=i:5 6=i:7 9=s:p100
+err invalid_intent
+err unknown_query
+err invalid_intent
+err no_tenant
+ok
+err unknown_query
+err unknown_query
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:oak 2=i:5 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 100 0
+end
+scenario h-read-query-filter-and-hidden-order-keys
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+err workflow_violation
+ok
+ok
+next -
+row 2 owner=100 v=1 1=s:oak 2=i:3 6=i:7 9=s:p100
+ok
+next -
+row 4 owner=101 v=1 4=i:2 5=b:0
+row 5 owner=100 v=1 4=i:5 5=b:1
+row 3 owner=100 v=1 4=i:9 5=b:1
+ok
+next -
+row 3 owner=100 v=1 5=b:1
+row 4 owner=101 v=1 5=b:0
+row 5 owner=100 v=1 5=b:1
+ok
+next -
+row 3 owner=100 v=1 5=b:1
+row 4 owner=101 v=1 5=b:0
+row 5 owner=100 v=1 5=b:1
+ok
+next o2
+row 8 owner=100 v=1 1=s:open 2=i:0
+row 7 owner=100 v=1 1=s:open 2=i:2 3=s:a
+ok
+next o2
+row 7 owner=100 v=1 1=s:open 2=i:2 3=s:a
+ok
+next o2
+row 8 owner=100 v=1 1=s:open 2=i:0
+row 7 owner=100 v=1 1=s:open 2=i:2 3=s:a
+state
+tenant 1 next=9 required=1
+record 1 owner=100 v=1 1=s:elm 2=i:7 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:oak 2=i:3 6=i:7 9=s:p100
+type 2 required=
+type 2 record 3 owner=100 v=1 4=i:9 5=b:1
+type 2 record 4 owner=101 v=1 4=i:2 5=b:0
+type 2 record 5 owner=100 v=1 4=i:5 5=b:1
+type 4 required=
+type 4 record 6 owner=100 v=1 1=s:open 2=i:2 3=s:b
+type 4 record 7 owner=100 v=1 1=s:open 2=i:2 3=s:a
+type 4 record 8 owner=100 v=1 1=s:open 2=i:0 3=s:z
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-follows-writes-and-schema-changes
+ok
+ok
+ok
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+ok
+next -
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+ok
+ok
+next -
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+ok
+ok
+next -
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+ok
+next -
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+ok
+ok
+next -
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+ok
+ok
+next -
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+ok
+next -
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+ok
+ok
+next -
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=2 1=s:elm 2=i:7 6=i:7 9=s:p100
+ok
+ok
+ok
+next -
+row 4 owner=100 v=1 4=i:3 5=b:1
+ok
+ok
+ok
+next -
+row 5 owner=100 v=1 1=s:open 2=i:3 3=s:n
+state
+tenant 1 next=6 required=1,2
+record 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100 10=s:secret
+record 3 owner=100 v=2 1=s:elm 2=i:7 6=i:7 9=s:p100 10=s:more
+type 2 required=4
+type 2 record 4 owner=100 v=1 4=i:3 5=b:1
+type 4 required=
+type 4 record 5 owner=100 v=1 1=s:open 2=i:3 3=s:n
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-another-tenant-and-unknown-principal
+ok
+ok
+ok
+next -
+row 1 owner=200 v=1 1=s:oak 2=i:5 6=i:7 9=s:p200
+row 2 owner=201 v=1 1=s:ash 2=i:6 6=i:7 9=s:p201
+ok
+next -
+ok
+next -
+ok
+next -
+row 2 owner=201 v=1 1=s:ash 2=i:6 6=i:7 9=s:p201
+row 1 owner=200 v=1 1=s:oak 2=i:5 6=i:7 9=s:p200
+ok
+next -
+ok
+next -
+ok
+next -
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=3 required=1
+record 1 owner=200 v=1 1=s:oak 2=i:5 6=i:7 9=s:p200
+record 2 owner=201 v=1 1=s:ash 2=i:6 6=i:7 9=s:p201
+type 2 required=
+end
+scenario h-search-visible-and-hidden-fields
+ok
+ok
+ok
+ok
+ok
+ok
+examined 2
+next -
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 7=l:s:red,s:blue 9=s:p100 10=s:Hidden
+hit 1 3 matched=1 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:shown
+ok
+examined 1
+next -
+ok
+examined 1
+next -
+hit 1 3 matched=10 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:shown
+ok
+examined 1
+next -
+hit 1 1 matched=10 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 7=l:s:red,s:blue 9=s:p100 10=s:Hidden
+ok
+examined 1
+next -
+hit 1 1 matched=7 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 7=l:s:red,s:blue 9=s:p100 10=s:Hidden
+ok
+examined 2
+next -
+hit 4 4 matched=1 owner=100 v=1 1=s:open 2=i:2 3=s:urgent
+hit 4 5 matched=1 owner=100 v=1 1=s:open 2=i:0
+ok
+examined 1
+next -
+hit 4 4 matched=3 owner=100 v=1 1=s:open 2=i:2 3=s:urgent
+ok
+examined 1
+next -
+ok
+examined 2
+next -
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 7=l:s:red,s:blue 9=s:p100 10=s:Hidden
+hit 1 3 matched=1 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:shown
+ok
+examined 1
+next -
+ok
+examined 2
+next -
+ok
+examined 2
+next -
+ok
+examined 0
+next -
+err no_tenant
+state
+tenant 1 next=6 required=1
+record 1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 7=l:s:red,s:blue 9=s:p100 10=s:Hidden
+record 2 owner=100 v=1 1=s:elm 2=i:9 3=b:0 6=i:7 7=l:s:green 9=s:p100 10=s:pine
+record 3 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:shown
+type 2 required=
+type 4 required=
+type 4 record 4 owner=100 v=1 1=s:open 2=i:2 3=s:urgent
+type 4 record 5 owner=100 v=1 1=s:open 2=i:0 3=s:quiet
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-search-refusals-and-paging
+ok
+ok
+ok
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+examined 4
+next -
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+hit 1 2 matched=1 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100
+hit 4 3 matched=3 owner=100 v=1 1=s:open 2=i:2 3=s:oak-note
+hit 4 4 matched=3 owner=100 v=1 1=s:open 2=i:3 3=s:oak-note-two
+err unknown_object
+err invalid_intent
+ok
+examined 0
+next -
+err invalid_intent
+err invalid_intent
+ok
+examined 4
+next -
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+hit 1 2 matched=1 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100
+hit 4 3 matched=3 owner=100 v=1 1=s:open 2=i:2 3=s:oak-note
+hit 4 4 matched=3 owner=100 v=1 1=s:open 2=i:3 3=s:oak-note-two
+ok
+examined 1
+next 1 1
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+ok
+examined 2
+next 1 2
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+hit 1 2 matched=1 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100
+ok
+examined 2
+next -
+hit 4 3 matched=3 owner=100 v=1 1=s:open 2=i:2 3=s:oak-note
+hit 4 4 matched=3 owner=100 v=1 1=s:open 2=i:3 3=s:oak-note-two
+ok
+examined 0
+next -
+ok
+examined 1
+next 1 1
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+err no_tenant
+state
+tenant 1 next=5 required=1
+record 1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100
+type 2 required=
+type 4 required=
+type 4 record 3 owner=100 v=1 1=s:open 2=i:2 3=s:oak-note
+type 4 record 4 owner=100 v=1 1=s:open 2=i:3 3=s:oak-note-two
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-aggregate-items-by-rank
+ok
+ok
+ok
+ok
+ok
+scanned 4
+group - i:4
+err limit_exceeded scan-bound-exceeded
+ok
+scanned 4
+group - i:21
+ok
+scanned 4
+group - i:5
+ok
+scanned 4
+group - i:9
+ok
+scanned 4
+group - -
+top 2 i:9
+top 4 i:7
+ok
+scanned 4
+group b:0 i:1
+group b:1 i:3
+ok
+scanned 4
+group - i:21
+ok
+scanned 3
+group - i:12
+err invalid_intent
+err unknown_query
+err unknown_query
+err invalid_intent
+ok
+scanned 3
+group - i:3
+ok
+scanned 2
+group - i:2
+ok
+scanned 3
+group - i:14
+err invalid_intent
+ok
+scanned 0
+group - i:0
+ok
+scanned 0
+group - i:0
+err no_tenant
+state
+tenant 1 next=5 required=1
+record 1 owner=100 v=1 1=s:a 2=i:5 3=b:1 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:b 2=i:9 3=b:0 6=i:7 9=s:p100
+record 3 owner=100 v=1 1=s:c 3=b:1 6=i:7 9=s:p100
+record 4 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-aggregate-hidden-by-field-rule-and-sum-overflow
+ok
+ok
+err limit_exceeded sum-overflow
+ok
+scanned 2
+group - i:2
+ok
+scanned 2
+group - i:9223372036854775807
+ok
+ok
+ok
+scanned 2
+group - i:11
+ok
+scanned 2
+group - i:2
+ok
+scanned 0
+group - i:0
+ok
+scanned 0
+group - -
+ok
+scanned 2
+group - i:8
+ok
+scanned 0
+group - -
+state
+tenant 1 next=5 required=1
+record 1 owner=100 v=1 1=s:a 2=i:9223372036854775807 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:b 2=i:9223372036854775807 6=i:7 9=s:p100
+type 2 required=
+type 2 record 3 owner=100 v=1 4=i:3 5=b:1
+type 2 record 4 owner=100 v=1 4=i:8 5=b:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-aggregate-tickets-hidden-note
+ok
+ok
+ok
+scanned 2
+group - i:2
+ok
+scanned 2
+group - i:2
+ok
+scanned 1
+group - s:urgent
+ok
+scanned 1
+group - s:urgent
+ok
+scanned 1
+group - s:urgent
+state
+tenant 1 next=3 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=1 1=s:open 2=i:0 3=s:quiet
+type 4 record 2 owner=100 v=1 1=s:open 2=i:2 3=s:urgent
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-schema-define-types-and-fields
+ok
+ok
+err unique_violated
+ok
+ok
+ok
+err invalid
+ok
+ok
+ok
+err dangling_reference
+scenario h-schema-expected-version
+ok
+err schema_conflict
+ok
+err schema_conflict
+err unauthorized
+ok
+scenario h-schema-refusals
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err invalid_intent
+err invalid_intent
+err limit_exceeded
+err invalid_schema
+err invalid_schema
+err invalid_schema
+err invalid_schema
+err invalid_schema
+ok
+err invalid_schema
+err invalid_schema
+err no_tenant
+err invalid_schema
+scenario h-schema-required-over-records
+ok
+ok
+err migration_rejected
+ok
+ok
+err migration_rejected
+err migration_rejected
+ok
+err migration_rejected
+ok
+ok
+scenario h-schema-remove-field-strips-records
+ok
+ok
+ok
+ok
+ok
+err invalid_schema
+err migration_rejected
+ok
+err invalid
+ok
+ok
+scenario h-schema-remove-type-with-records
+ok
+ok
+ok
+ok
+err migration_rejected
+err migration_rejected
+ok
+err invalid_schema
+ok
+scenario h-schema-composite-under-change
+ok
+ok
+err invalid_schema
+ok
+err invalid_schema
+err invalid_schema
+err invalid_schema
+err invalid_schema
+scenario h-schema-reference-to-type
+ok
+ok
+ok
+err dangling_reference
+err invalid_schema
+ok
+ok
+ok
+err invalid_schema
+scenario h-require-and-unique-define-absent-fields
+ok
+err migration_rejected
+ok
+ok
+err migration_rejected
+ok
+ok
+ok
+err migration_rejected
+err unauthorized
+err invalid_schema
+err invalid
+err invalid_schema
+scenario h-schema-unique-over-duplicates
+ok
+ok
+ok
+err migration_rejected
+ok
+err unique_violated
+ok
+ok
+scenario h-schema-on-a-created-tenant
+err no_tenant
+ok
+ok
+ok
+ok
+err schema_conflict
+ok
+scenario h-schema-two-types-events-in-order
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+scenario h-define-field-checked-in-id-order
+ok
+err invalid
+err invalid
+ok
+err invalid
+ok
+scenario h-setting-owner-writes-tenant-editor-refused
+ok
+err unauthorized
+err unauthorized
+ok
+source tenant
+team -
+value i:5
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 density level=tenant subject=tenant value=i:5 rev=2
+setting-revision 1 density 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-person-override-wins-over-tenant
+ok
+ok
+ok
+source person
+team -
+value i:7
+tenant-rev 3
+ok
+source tenant
+team -
+value i:5
+tenant-rev 3
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 density level=person subject=p100 value=i:7 rev=3
+setting-override 1 density level=tenant subject=tenant value=i:5 rev=2
+setting-revision 1 density 3
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-smaller-team-id-wins-person-beats-teams
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+source team
+team 1
+value s:first
+tenant-rev 3
+ok
+ok
+source person
+team -
+value s:mine
+tenant-rev 4
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops 101 -
+team 1 2 s:dev 101 -
+setting-override 1 label level=person subject=p101 value=s:mine rev=4
+setting-override 1 label level=team subject=team1 value=s:first rev=3
+setting-override 1 label level=team subject=team2 value=s:second rev=2
+setting-revision 1 label 4
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-team-override-reaches-only-its-members
+ok
+ok
+ok
+ok
+ok
+source team
+team 2
+value s:bold
+tenant-rev 2
+ok
+source default
+team -
+value s:plain
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops - -
+team 1 2 s:dev 102 -
+setting-override 1 mode level=team subject=team2 value=s:bold rev=2
+setting-revision 1 mode 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-banner-is-locked-at-the-tenant
+ok
+err invalid_intent
+err invalid_intent
+ok
+source tenant
+team -
+value s:maint
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 banner level=tenant subject=tenant value=s:maint rev=2
+setting-revision 1 banner 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-density-range-is-inclusive
+ok
+err limit_exceeded
+err limit_exceeded
+ok
+source tenant
+team -
+value i:9
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 density level=tenant subject=tenant value=i:9 rev=2
+setting-revision 1 density 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-mode-closed-set
+ok
+err invalid_intent
+err invalid
+ok
+source tenant
+team -
+value s:bold
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 mode level=tenant subject=tenant value=s:bold rev=2
+setting-revision 1 mode 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-member-names-closed-set
+ok
+err invalid_intent
+ok
+ok
+source tenant
+team -
+value s:everyone
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 member_names level=tenant subject=tenant value=s:everyone rev=2
+setting-revision 1 member_names 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-remove-then-version-conflict-then-rise
+ok
+err version_conflict
+err version_conflict
+err version_conflict
+ok
+source tenant
+team -
+value b:1
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 notify level=tenant subject=tenant value=b:1 rev=2
+setting-revision 1 notify 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-removal-of-an-absent-override
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+source default
+team -
+value i:3
+tenant-rev 1
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops - -
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-undefined-name-is-unknown-object
+err unknown_object
+err unknown_object
+err unknown_object
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-tenant-three-has-only-member-names
+err no_tenant
+ok
+ok
+source default
+team -
+value s:members
+tenant-rev 0
+ok
+err unknown_object
+ok
+source tenant
+team -
+value s:everyone
+tenant-rev 1
+err unknown_object
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 300 0
+setting-override 3 member_names level=tenant subject=tenant value=s:everyone rev=1
+end
+scenario h-setting-system-and-anonymous-writes-are-unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+ok
+source default
+team -
+value i:3
+tenant-rev 1
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-null-and-wrong-type-are-invalid
+err invalid
+err invalid
+err invalid
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+setting-override 1 notify level=tenant subject=tenant value=b:1 rev=2
+setting-revision 1 notify 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-team-refusals
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops - -
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-setting-editor-refused-at-team-level
+ok
+ok
+err unauthorized
+ok
+ok
+source team
+team 1
+value s:x
+tenant-rev 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops 101 -
+setting-override 1 label level=team subject=team1 value=s:x rev=2
+setting-revision 1 label 2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-post-accepted-and-read
+ok
+ok
+balance 500
+seq 1
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=500 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=500 key=k1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-replay-changes-nothing
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=500 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=500 key=k1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-version-conflict
+ok
+err version_conflict
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=500 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=500 key=k1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-unauthorized-postings
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-unknown-unit-and-owner
+err not_found
+err not_found
+err not_found
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=pool1 unit=1 scope=- balance=5 seq=1 buckets=-
+ledger-entry 1 owner=pool1 unit=1 scope=- seq=1 amount=5 key=k4 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-invalid-amount-and-key
+err invalid_intent
+err invalid_intent
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-self-adjustment-refused
+err self_action
+err self_action
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=101 unit=1 scope=- balance=5 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=1 scope=- seq=1 amount=5 key=k3 reason=adjust by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-correction-names-an-entry
+ok
+ok
+err invalid_intent
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=300 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=500 key=k1 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=2 amount=-200 key=k2 reason=- by=100 at=1767225600000 corrects=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-multi-posting-one-refusal-refuses-all
+err invalid_intent
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=10 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=10 key=b1 reason=- by=100 at=1767225600000 corrects=-
+ledger-account 1 owner=100 unit=2 scope=- balance=5 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=5 key=b2 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-cap-and-floor
+ok
+err constraint_violated
+ok
+err constraint_violated
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=600 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=900 key=c1 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=2 amount=-300 key=c3 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-expiry-debits-due-credit
+ok
+ok
+ok
+ok
+balance 0
+seq 3
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=3 scope=- balance=0 seq=3 buckets=-
+ledger-entry 1 owner=100 unit=3 scope=- seq=1 amount=100 key=e1 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=3 scope=- seq=2 amount=50 key=e2 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=3 scope=- seq=3 amount=-150 key=expiry:1767225600000 reason=expiry by=- at=1772323200000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-expiry-refused
+ok
+err unauthorized
+err invalid_intent
+err invalid_intent
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=3 scope=- balance=100 seq=1 buckets=1767225600000:100
+ledger-entry 1 owner=100 unit=3 scope=- seq=1 amount=100 key=e1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-expiry-with-nothing-due
+ok
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=3 scope=- balance=40 seq=1 buckets=1772323200000:40
+ledger-entry 1 owner=100 unit=3 scope=- seq=1 amount=40 key=e1 reason=- by=100 at=1772323200000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-reads-by-reach
+ok
+ok
+balance 25
+seq 1
+ok
+balance 25
+seq 1
+err unauthorized
+err unauthorized
+ok
+balance 25
+seq 1
+err not_found
+ok
+balance 0
+seq 0
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=101 unit=1 scope=- balance=25 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=1 scope=- seq=1 amount=25 key=r1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-reads-without-an-account
+err not_found
+ok
+balance 0
+seq 0
+err not_found
+err not_found
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-accepted-and-read
+ok
+ok
+ok
+balance 300
+seq 2
+ok
+balance 200
+seq 1
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=300 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=500 key=p1 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-200 key=t1:0 reason=pay by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=200 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=200 key=t1:1 reason=pay by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-retry-replays-and-another-request-conflicts
+ok
+ok
+ok
+ok
+err version_conflict
+err version_conflict
+ok
+balance 70
+seq 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=950 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-50 key=t1:0 reason=pay by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=70 seq=2 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=50 key=t1:1 reason=pay by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-needs-two-legs-that-net-to-zero-in-each-unit
+ok
+ok
+err constraint_violated
+err constraint_violated
+err constraint_violated
+ok
+err constraint_violated
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=995 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-5 key=u4:0 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=23 seq=2 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=3 key=u4:1 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=102 unit=2 scope=- balance=2 seq=1 buckets=-
+ledger-entry 1 owner=102 unit=2 scope=- seq=1 amount=2 key=u4:2 reason=- by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-header-is-complete
+ok
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=995 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-5 key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:0 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=25 seq=2 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=5 key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1 reason=- by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-unauthorized
+ok
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=101 unit=2 scope=- balance=20 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-at-most-sixty-four-legs
+ok
+ok
+err constraint_violated
+ok
+ok
+balance 52
+seq 33
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=968 seq=33 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-1 key=m2:0 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=3 amount=-1 key=m2:2 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=4 amount=-1 key=m2:4 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=5 amount=-1 key=m2:6 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=6 amount=-1 key=m2:8 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=7 amount=-1 key=m2:10 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=8 amount=-1 key=m2:12 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=9 amount=-1 key=m2:14 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=10 amount=-1 key=m2:16 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=11 amount=-1 key=m2:18 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=12 amount=-1 key=m2:20 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=13 amount=-1 key=m2:22 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=14 amount=-1 key=m2:24 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=15 amount=-1 key=m2:26 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=16 amount=-1 key=m2:28 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=17 amount=-1 key=m2:30 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=18 amount=-1 key=m2:32 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=19 amount=-1 key=m2:34 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=20 amount=-1 key=m2:36 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=21 amount=-1 key=m2:38 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=22 amount=-1 key=m2:40 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=23 amount=-1 key=m2:42 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=24 amount=-1 key=m2:44 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=25 amount=-1 key=m2:46 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=26 amount=-1 key=m2:48 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=27 amount=-1 key=m2:50 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=28 amount=-1 key=m2:52 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=29 amount=-1 key=m2:54 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=30 amount=-1 key=m2:56 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=31 amount=-1 key=m2:58 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=32 amount=-1 key=m2:60 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=33 amount=-1 key=m2:62 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=52 seq=33 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=1 key=m2:1 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=3 amount=1 key=m2:3 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=4 amount=1 key=m2:5 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=5 amount=1 key=m2:7 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=6 amount=1 key=m2:9 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=7 amount=1 key=m2:11 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=8 amount=1 key=m2:13 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=9 amount=1 key=m2:15 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=10 amount=1 key=m2:17 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=11 amount=1 key=m2:19 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=12 amount=1 key=m2:21 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=13 amount=1 key=m2:23 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=14 amount=1 key=m2:25 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=15 amount=1 key=m2:27 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=16 amount=1 key=m2:29 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=17 amount=1 key=m2:31 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=18 amount=1 key=m2:33 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=19 amount=1 key=m2:35 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=20 amount=1 key=m2:37 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=21 amount=1 key=m2:39 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=22 amount=1 key=m2:41 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=23 amount=1 key=m2:43 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=24 amount=1 key=m2:45 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=25 amount=1 key=m2:47 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=26 amount=1 key=m2:49 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=27 amount=1 key=m2:51 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=28 amount=1 key=m2:53 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=29 amount=1 key=m2:55 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=30 amount=1 key=m2:57 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=31 amount=1 key=m2:59 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=32 amount=1 key=m2:61 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=33 amount=1 key=m2:63 reason=- by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-one-refused-leg-refuses-all
+ok
+ok
+err not_found
+err not_found
+err constraint_violated
+ok
+ok
+balance 995
+seq 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=995 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-5 key=r4:0 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=25 seq=2 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=5 key=r4:1 reason=- by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-self-adjustment-refused
+ok
+ok
+err self_action
+ok
+err self_action
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=1000 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-account 1 owner=101 unit=2 scope=- balance=15 seq=2 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=-5 key=s2:0 reason=reverse by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=102 unit=2 scope=- balance=5 seq=1 buckets=-
+ledger-entry 1 owner=102 unit=2 scope=- seq=1 amount=5 key=s2:1 reason=reverse by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-transfer-rules
+ok
+ok
+ok
+ok
+err constraint_violated
+err constraint_violated
+err constraint_violated
+err constraint_violated
+ok
+err constraint_violated
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=997 seq=4 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-5 key=x1:0 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=3 amount=-3 key=x2:1 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=4 amount=5 key=x7:0 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=23 seq=4 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=5 key=x1:1 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=3 amount=3 key=x2:0 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=4 amount=-5 key=x7:1 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-and-postings-do-not-share-an-entry
+ok
+ok
+err version_conflict
+ok
+err version_conflict
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=988 seq=3 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-5 key=q:0 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=3 amount=-7 key=v:0 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=7 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=7 key=v:1 reason=- by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-accepted-create
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=101 v=1 1=s:hello 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-not-signed-in-refused
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-roles-refused
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-unknown-operation-refused
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-key-refused
+err invalid_intent
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=101 v=1 1=s:hello 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-inputs-refused
+err invalid
+err invalid
+err invalid
+err limit_exceeded
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-subject-refused
+err not_found
+err invalid
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-condition-refused
+err constraint_violated
+err constraint_violated
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=101 v=1 1=s:a 2=i:0 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-posting-atomic
+err constraint_violated
+ok
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:y 6=i:7 9=s:p100
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=55 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=5 key=op:note_grant:p100:k2:p reason=grant by=100 at=5001 corrects=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=2 amount=50 key=op:grant:p100:k3:p reason=grant by=100 at=5002 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-posting-replay
+ok
+ok
+err version_conflict
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=101 unit=1 scope=- balance=50 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=1 scope=- seq=1 amount=50 key=op:grant:p101:k1:p reason=grant by=101 at=5000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-delete-still-referenced
+ok
+ok
+err still_referenced
+state
+tenant 1 next=3 required=1
+record 1 owner=101 v=1 1=s:target 6=i:7 9=s:p101
+record 2 owner=101 v=1 1=s:holder 5=r:1 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-item-created
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=102 v=1 1=s:hello 6=i:7 9=s:p102
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-hop-limit
+ok
+ok
+state
+tenant 1 next=3 required=1
+record 1 owner=102 v=1 1=s:hello 6=i:7 9=s:p102
+record 2 owner=102 v=1 1=s:hello 6=i:7 9=s:p102
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-part-created-with-hop
+ok
+ok
+state
+tenant 1 next=3 required=1
+type 2 required=
+type 2 record 1 owner=101 v=1 4=i:4 5=b:0
+type 2 record 2 owner=101 v=1 4=i:4 5=b:0
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-item-updated
+ok
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=102 v=2 1=s:bye
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-item-deleted
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-ledger-posted
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=500 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=500 key=k1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-draft-inactive
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=101 v=1 1=s:open 3=s:n
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-paused-part-updated
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 2 record 1 owner=101 v=2 4=i:5
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-suspended-after-revoking-owner
+ok
+ok
+ok
+ok
+state
+tenant 1 next=3 required=1
+record 1 owner=102 v=1 1=s:after 6=i:7 9=s:p102
+type 2 required=
+type 2 record 2 owner=101 v=1 4=i:5 5=b:0
+roles 1 0,1,2,3
+member 1 101 0,2
+member 1 102 3
+member 1 103 3
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-entry-on-create
+ok
+ok
+state
+tenant 1 next=3 required=1
+type 2 required=
+type 20 required=1
+type 20 record 1 owner=100 v=1 1=s:p200 2=i:12
+type 20 record 2 owner=100 v=1 1=s:p201 2=i:9
+segment-member 1 seg=1 person=p200 version=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-exit-on-update-and-entry-on-delete-of-a-member
+ok
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-hop-limit-declines-the-trigger
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 20 required=1
+type 20 record 1 owner=100 v=1 1=s:p202 2=i:20
+segment-member 1 seg=1 person=p202 version=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-define-refusals
+err unauthorized
+err unauthorized
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-rebuild-after-a-predicate-change
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=3 required=1
+type 2 required=
+type 20 required=1
+type 20 record 1 owner=100 v=1 1=s:p200 2=i:7
+type 20 record 2 owner=100 v=1 1=s:p201 2=i:4
+segment-member 1 seg=1 person=p200 version=2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-remove-drops-memberships-without-events
+ok
+ok
+ok
+err not_found
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 20 required=1
+type 20 record 1 owner=100 v=2 1=s:p200 2=i:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-member-change-re-evaluates-a-principal-predicate
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 20 required=1
+type 20 record 1 owner=100 v=1 1=s:p101 2=i:9
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 0,2
+member 1 102 3
+member 1 103 3
+segment-member 1 seg=3 person=p101 version=1
+tenant 2 next=1 required=1
+type 2 required=
 end

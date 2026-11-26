@@ -482,6 +482,8 @@ pub fn plan(
 /// A record found by a search, as the reader receives it, and the fields that matched.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchHit {
+    /// The object type of the record.
+    pub object: ObjectTypeId,
     /// The record without the fields the reader may not read.
     pub record: Arc<Record>,
     /// The fields that matched, each one the reader may read.
@@ -570,6 +572,7 @@ pub fn decide(
         let matched = matching_fields(def, &shown, &named, &plan.tokens);
         if !matched.is_empty() {
             hits.push(SearchHit {
+                object: object.clone(),
                 record: shown,
                 matched,
             });

@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 use strata_verification::lean::{
-    hand_written, model_output, scenarios, FIXTURE_COUNT, FIXTURE_SEED,
+    hand_written, model_output, outcome_lines, scenarios, FIXTURE_COUNT, FIXTURE_SEED,
 };
 
 fn main() {
@@ -29,7 +29,10 @@ fn main() {
         hand_written(&current)
     );
     std::fs::write(fixtures.join("scenarios.txt"), &text).expect("write scenarios.txt");
-    let expected = model_output(&lean_dir, "fixtures/scenarios.txt").expect("the Lean model runs");
+    // expected.txt holds the outcome lines only (see `outcome_lines`).
+    let expected = outcome_lines(
+        &model_output(&lean_dir, "fixtures/scenarios.txt").expect("the Lean model runs"),
+    );
     std::fs::write(fixtures.join("expected.txt"), expected).expect("write expected.txt");
     println!("rewrote {}", fixtures.display());
 }

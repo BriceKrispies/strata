@@ -1,0 +1,1527 @@
+/-
+The abstract model of the Strata kernel.
+
+This is a deliberately small model: several object types per tenant, three scalar value kinds,
+references between records (within a type and across types), lists of either, versions, patch
+updates, constant defaults, the size limits as an abstract bound, unique fields and composite
+unique constraints, ownership-based authorization and three kinds of schema change. It is not the
+Rust kernel and proving things about it proves nothing about the Rust kernel by itself. What
+connects the two is stated in `docs/verification.md` and exercised by the correspondence fixtures.
+
+Everything here is a total, computable function, so the model can also be run (`Main.lean`).
+
+Shape of the state. A tenant has one table per object type; each table holds the schema of the
+type, its composite unique constraints and its records. Record ids come from one counter for the
+whole tenant, as the kernel's do, so an id names at most one record of the tenant. A reference
+names a record by its type and its id: a field whose type targets type `T` holds a record of `T`,
+and a record of any other type is not one it can name (the kernel's `lookup.record(target, id)`).
+-/
+
+import Strata.LedgerTypes
+
+namespace Strata
+
+abbrev TenantId := Nat
+abbrev PrincipalId := Nat
+abbrev RecordId := Nat
+abbrev FieldId := Nat
+/-- An object type of a tenant (the kernel's `ObjectTypeId`). -/
+abbrev TypeId := Nat
+
+/-- An element of a list value: a scalar or a reference. The kernel's lists never hold lists.
+    (`null` is expressible, as in the kernel, and has no type.) -/
+inductive Elem where
+  | null
+  | int (i : Int)
+  | str (s : String)
+  | bool (b : Bool)
+  | ref (id : RecordId)
+  deriving DecidableEq, Repr
+
+/-- A value. `null` is the absence of a value. -/
+inductive Val where
+  | null
+  | int (i : Int)
+  | str (s : String)
+  | bool (b : Bool)
+  /-- A reference to the record with this id, of the type the field names. -/
+  | ref (id : RecordId)
+  /-- A list of scalars or of references. -/
+  | list (vs : List Elem)
+  deriving DecidableEq, Repr
+
+/-- What deleting a record does to a record that refers to it through a field of this kind:
+    `restrict` refuses the delete, `setNull` clears the field (or, in a list, removes the
+    element). -/
+inductive OnDelete where
+  | restrict
+  | setNull
+  deriving DecidableEq, Repr
+
+inductive Ty where
+  | int
+  | str
+  | bool
+  /-- A reference to a record of object type `target`. -/
+  | ref (target : TypeId) (onDelete : OnDelete)
+  /-- A list whose elements have type `elem`. The kernel's schema check refuses nested lists, and
+      no element value has a list type. -/
+  | list (elem : Ty)
+  deriving DecidableEq, Repr
+
+/-- Which record an expression reads a field from: the record being checked (the kernel's
+    `record`), the stored record an update replaces (`old`, absent on a create) or the new record
+    (`new`, the same as `record` on a write). -/
+inductive Scope where
+  | record
+  | old
+  | new
+  deriving DecidableEq, Repr
+
+inductive CmpOp where
+  | eq
+  | ne
+  | lt
+  | le
+  | gt
+  | ge
+  deriving DecidableEq, Repr
+
+/-- The expression language of constraints and expression defaults (slice 5): the kernel's
+    `tenant-rule-language` restricted to literals, field reads of the three scopes, the principal,
+    comparisons, the three-valued connectives and `isNull`. Its evaluation, and the errors it can
+    raise, are in the section "Expressions" below. -/
+inductive Expr where
+  /-- A literal value. -/
+  | lit (v : Val)
+  /-- A field of the record in the scope; `null` when there is no such record or it lacks the field. -/
+  | field (s : Scope) (f : FieldId)
+  /-- The system attribute `$created_by` of a record in the scope: the string `p<n>` of the user
+      who created it, `null` when no user did (the system or an anonymous caller) or there is no
+      record (slice 6). -/
+  | createdBy (s : Scope)
+  /-- The acting principal, as the kernel names it: the string `p<n>` for the principal `n` (the
+      fixtures name principals so); `null` for the system and for an anonymous caller, which name
+      no user. -/
+  | principal
+  | cmp (op : CmpOp) (a b : Expr)
+  /-- Kleene `and`: `false` if either operand is `false`, `null` if one is `null`, else `true`. -/
+  | and (a b : Expr)
+  /-- Kleene `or`: `true` if either operand is `true`, `null` if one is `null`, else `false`. -/
+  | or (a b : Expr)
+  | not (a : Expr)
+  | isNull (a : Expr)
+  /-- An input of the operation being invoked, by name; `null` never: an unbound name is an error (slice 14).
+      The constraints and defaults of a schema are checked with no inputs, so a parameter there is unbound. -/
+  | param (name : String)
+  deriving DecidableEq, Repr
+
+/-! ## Principals, roles and policies (slice 6)
+
+Authorization is data. A principal is a user, the system or an anonymous caller. Principals hold
+roles directly (`Tenant.members`). A role grants an action on the records of one object type, or
+a capability (`Tenant.grants`), and a policy grants actions on a resource under a condition
+(`Tenant.policies`). `Tenant.allows` is the decision, mirroring the kernel's `rules::authorize`
+without its scopes, clock and lookups. -/
+
+/-- Who acts. A user is named by its id; the system holds no role; an anonymous caller holds the
+    built-in `public` role and nothing else (the kernel's `Principal`). -/
+inductive Principal where
+  | user (id : PrincipalId)
+  | system
+  | anonymous
+  /-- An automation acts as its own principal, the kernel's `automation:<workflow-id>` (WFL-1527): it holds the run-as
+      roles of the automation `a` and no other role, and it names no user. -/
+  | automation (a : Nat)
+  deriving DecidableEq, Repr
+
+/-- The user a principal is, if it is one: the principal an expression reads as `principal` and the
+    creator a record is given. -/
+def Principal.userId? : Principal → Option PrincipalId
+  | .user p => some p
+  | _ => none
+
+/-- A role, by id (the kernel's `RoleId`). -/
+abbrev RoleId := Nat
+
+/-- A capability, by id (the kernel's `Grant::Capability`). -/
+abbrev CapabilityId := Nat
+
+/-- The built-in role of the owner, which may do anything in its tenant. -/
+def ownerRole : RoleId := 0
+
+/-- The built-in role every principal but the system holds. -/
+def publicRole : RoleId := 1
+
+/-- An action (the kernel's `Action`). Manage is the schema's; the others are the actions on the
+    records of an object type. -/
+inductive Action where
+  | read
+  | create
+  | update
+  | delete
+  | manage
+  deriving DecidableEq, Repr
+
+/-- What a policy names (the kernel's `Resource`): the records of one object type, the records of
+    every type, or the schema. -/
+inductive Resource where
+  | object (ty : TypeId)
+  | anyObject
+  | schema
+  /-- The membership of the tenant: its members, teams and invitations (slice 7). -/
+  | members
+  deriving DecidableEq, Repr
+
+/-- What a role grants: a capability, or an action on the records of an object type (the kernel's
+    `Grant`). A manage action is never granted on an object type. -/
+inductive Grant where
+  | capability (c : CapabilityId)
+  | object (ty : TypeId) (a : Action)
+  deriving DecidableEq, Repr
+
+/-- A policy: a role holds the actions it names on the resource, when its condition holds. A policy
+    with no condition holds unconditionally. Its condition is an expression of the slice 5 language,
+    evaluated over the record and the principal (the kernel's `PolicyDef`, whose id is left out: it
+    names the policy in a refusal and decides nothing). -/
+structure Policy where
+  role : RoleId
+  resource : Resource
+  actions : List Action
+  condition : Option Expr := none
+  deriving Repr
+
+/-- The resource a policy's resource reaches: the same resource, or every object type for
+    `anyObject`. -/
+def Resource.covers : Resource → Resource → Bool
+  | .anyObject, .object _ => true
+  | a, b => a == b
+
+structure FieldDef where
+  ty : Ty
+  required : Bool
+  /-- Whether the field is declared unique: no two records of its type hold the same keyed value
+      in it (`Val.keyed`). A unique value has a bound of its own on its encoded size, and a list
+      field is never unique (`setUnique` and `defineUnique` refuse one). -/
+  unique : Bool := false
+  /-- The expression a create fills the field with when the intent does not name it. The constant
+      default is `.lit v`; `.lit .null`, the default of a field with none, fills nothing. -/
+  default : Expr := .lit .null
+  deriving DecidableEq, Repr
+
+/-- Whether a list element has a type. `null` has none. -/
+def Elem.hasType : Elem → Ty → Bool
+  | .int _, .int => true
+  | .str _, .str => true
+  | .bool _, .bool => true
+  | .ref _, .ref _ _ => true
+  | _, _ => false
+
+/-- Whether a value has a type. `null` has none: absence is handled by `required`. A list has a
+    list type when every element has the element type. -/
+def Val.hasType : Val → Ty → Bool
+  | .int _, .int => true
+  | .str _, .str => true
+  | .bool _, .bool => true
+  | .ref _, .ref _ _ => true
+  | .list vs, .list e => vs.all (fun v => v.hasType e)
+  | _, _ => false
+
+def Val.isList : Val → Bool
+  | .list _ => true
+  | _ => false
+
+def Ty.isList : Ty → Bool
+  | .list _ => true
+  | _ => false
+
+/-- The object type a reference of this type names: the target of a reference field, or of the
+    elements of a list of references. -/
+def Ty.target? : Ty → Option TypeId
+  | .ref t _ => some t
+  | .list e => e.target?
+  | _ => none
+
+/-- A field of this type refuses the delete of a record it names. -/
+def Ty.restricts : Ty → Bool
+  | .ref _ .restrict => true
+  | .list (.ref _ .restrict) => true
+  | _ => false
+
+/-! ## Size limits
+
+The kernel bounds a string's bytes, a list's length, a unique value's encoded bytes and a record's
+encoded bytes (`limits.rs`, `rules::validate_record`). The model keeps the bounds as numbers of the
+tenant and the first two measures exactly, and replaces the two encodings by an abstract measure,
+`Val.size`: a string counts its UTF-8 bytes, any other scalar one, a list the sum of its elements.
+Every JSON encoding is at least that long, so a value or record the model finds too large the
+kernel finds too large as well; the converse holds away from the bound (`docs/verification.md`,
+slice 2's review note). -/
+
+structure Limits where
+  maxString : Nat
+  maxList : Nat
+  maxUnique : Nat
+  maxRecord : Nat
+  deriving DecidableEq, Repr
+
+/-- The kernel's numbers: `MAX_STRING_BYTES`, `MAX_LIST_LEN`, `MAX_UNIQUE_BYTES`,
+    `MAX_RECORD_BYTES`. -/
+def Limits.kernel : Limits :=
+  { maxString := 65536, maxList := 1000, maxUnique := 200, maxRecord := 262144 }
+
+def Elem.size : Elem → Nat
+  | .str s => s.utf8ByteSize
+  | _ => 1
+
+/-- The abstract size of a value: a stand-in for its encoded length, never more than it. -/
+def Val.size : Val → Nat
+  | .str s => s.utf8ByteSize
+  | .list vs => (vs.map Elem.size).sum
+  | _ => 1
+
+/-- A string element over the string bound. -/
+def Elem.overLimit (L : Limits) : Elem → Bool
+  | .str s => decide (L.maxString < s.utf8ByteSize)
+  | _ => false
+
+/-- A value breaks the string or list bound: a string too long, or a list too long or holding a
+    string too long (the kernel's `limits::value_problem`). -/
+def Val.overLimit (L : Limits) : Val → Bool
+  | .str s => decide (L.maxString < s.utf8ByteSize)
+  | .list vs => decide (L.maxList < vs.length) || vs.any (Elem.overLimit L)
+  | _ => false
+
+abbrev Fields := List (FieldId × Val)
+abbrev Schema := List (FieldId × FieldDef)
+
+structure Record where
+  /-- The user who created the record (the kernel's `created_by`): `none` when the creator is the
+      system or an anonymous caller, which name no user (slice 6). -/
+  owner : Option PrincipalId
+  /-- 1 when created, raised by one by every accepted update of the record and by every delete
+      that clears a reference it holds. -/
+  version : Nat
+  fields : Fields
+  deriving DecidableEq, Repr
+
+/-- The abstract size of a record: the sum of its values' sizes. -/
+def Record.size (r : Record) : Nat :=
+  (r.fields.map (fun fv => fv.2.size)).sum
+
+/-- The value of a field in a record; `null` when the record does not mention it. -/
+def Fields.get (fs : Fields) (f : FieldId) : Val :=
+  match fs.lookup f with
+  | some v => v
+  | none => .null
+
+/-! ## Expressions (slice 5)
+
+An expression is evaluated in an environment: the record being checked, the stored record an
+update replaces, and the principal. A value is a `Val`, `null` included, and an evaluation can fail:
+the result is `Except Unit Val`, where `error ()` is the kernel's `EvalError`. The rules are the
+kernel's (`crates/model-core/src/tenant_rule_language.rs`, `kleene`, `equality`, `order`):
+
+- a field read of an absent record is `null`, and so is a field the record lacks;
+- a comparison with `null` on either side is `null`; comparing two kinds that differ is an error;
+  an ordering (`<`, `<=`, `>`, `>=`) is defined for integers and strings only, so an ordering of
+  booleans, references or lists is an error;
+- `not` and the connectives take booleans and `null`, and any other operand is an error; `and` and
+  `or` are Kleene: a decisive operand (`false` for `and`, `true` for `or`) decides the result
+  whatever the other operand is, even an error, because the kernel stops at it; otherwise `null`
+  if either is `null`, else the non-decisive value.
+
+Left to right, the first error decides, and a decisive operand before it does not. The truth tables
+are lemmas in `Strata/Constraints.lean`. -/
+
+/-- The outcome of evaluating an expression: a value, or an evaluation error. -/
+abbrev EvalResult := Except Unit Val
+
+/-- What an expression may observe: the record being checked, the stored record an update replaces
+    (none on a create), and the principal (none for the system). -/
+structure ExprEnv where
+  record : Option Record := none
+  old : Option Record := none
+  new : Option Record := none
+  principal : Option PrincipalId := none
+  /-- The inputs of the operation an expression belongs to, by name (slice 14); empty outside an operation. -/
+  params : List (String × Val) := []
+
+/-- The record an expression reads from a scope, if there is one. -/
+def ExprEnv.scoped (env : ExprEnv) : Scope → Option Record
+  | .record => env.record
+  | .old => env.old
+  | .new => env.new
+
+/-- Two values of the same kind (`null` is of no kind). -/
+def Val.sameKind : Val → Val → Bool
+  | .int _, .int _ => true
+  | .str _, .str _ => true
+  | .bool _, .bool _ => true
+  | .ref _, .ref _ => true
+  | .list _, .list _ => true
+  | .null, .null => true
+  | _, _ => false
+
+/-- The truth of an ordering test from whether the left is less than the right and whether they are
+    equal. -/
+def ordTest : CmpOp → Bool → Bool → Bool
+  | .lt, lt, _ => lt
+  | .le, lt, eq => lt || eq
+  | .gt, lt, eq => !(lt || eq)
+  | .ge, lt, _ => !lt
+  | .eq, _, eq => eq
+  | .ne, _, eq => !eq
+
+/-- A comparison: `null` when either side is `null`; an error when the kinds differ, or when an
+    ordering is asked of a kind that has none. -/
+def compareVals (op : CmpOp) (x y : Val) : EvalResult :=
+  if x == .null || y == .null then .ok .null
+  else if !x.sameKind y then .error ()
+  else match op with
+    | .eq => .ok (.bool (x == y))
+    | .ne => .ok (.bool (!(x == y)))
+    | _ => match x, y with
+      | .int a, .int b => .ok (.bool (ordTest op (decide (a < b)) (decide (a = b))))
+      | .str a, .str b => .ok (.bool (ordTest op (decide (a < b)) (decide (a = b))))
+      | _, _ => .error ()
+
+/-- An operand of `not` or of a connective: a boolean, or `null`. -/
+def truthOf : Val → EvalResult
+  | .bool b => .ok (.bool b)
+  | .null => .ok .null
+  | _ => .error ()
+
+/-- Kleene connective: `d` is the decisive value (`false` for `and`, `true` for `or`). The left
+    operand decides when it is `d`, whatever the right one is. -/
+def connective (d : Bool) (x y : EvalResult) : EvalResult :=
+  match x with
+  | .error _ => .error ()
+  | .ok (.bool b) =>
+    if b == d then .ok (.bool d)
+    else match y with
+      | .error _ => .error ()
+      | .ok w => truthOf w
+  | .ok .null =>
+    match y with
+    | .error _ => .error ()
+    | .ok (.bool c) => if c == d then .ok (.bool d) else .ok .null
+    | .ok .null => .ok .null
+    | .ok _ => .error ()
+  | .ok _ => .error ()
+
+/-- Evaluate an expression in an environment. -/
+def evalExpr (env : ExprEnv) : Expr → EvalResult
+  | .lit v => .ok v
+  | .field s f => .ok (match env.scoped s with
+      | some r => r.fields.get f
+      | none => .null)
+  | .createdBy s => .ok (match env.scoped s with
+      | some r => match r.owner with
+        | some n => .str ("p" ++ toString n)
+        | none => .null
+      | none => .null)
+  | .principal => .ok (match env.principal with
+      | some p => .str ("p" ++ toString p)
+      | none => .null)
+  | .cmp op a b => match evalExpr env a, evalExpr env b with
+    | .ok x, .ok y => compareVals op x y
+    | _, _ => .error ()
+  | .and a b => connective false (evalExpr env a) (evalExpr env b)
+  | .or a b => connective true (evalExpr env a) (evalExpr env b)
+  | .not a => match evalExpr env a with
+    | .ok (.bool b) => .ok (.bool (!b))
+    | .ok .null => .ok .null
+    | _ => .error ()
+  | .isNull a => match evalExpr env a with
+    | .ok .null => .ok (.bool true)
+    | .ok _ => .ok (.bool false)
+    | .error _ => .error ()
+  | .param n => match env.params.find? (fun q => q.1 == n) with
+    | some q => .ok q.2
+    | none => .error ()
+
+/-- The environment a write's constraints are checked in: the candidate record (as `record` and as
+    `new`), the stored record it replaces (none on a create), and the caller. -/
+def writeEnv (p : Principal) (candidate : Record) (old : Option Record) : ExprEnv :=
+  { record := some candidate, old := old, new := some candidate, principal := p.userId? }
+
+/-- The environment a stored record is checked in when a schema change re-validates it: the record
+    as `record` and `new`, no old record, and the system as principal (as the kernel's `Reject`
+    does). -/
+def storedEnv (r : Record) : ExprEnv :=
+  { record := some r, new := some r }
+
+/-- The fields a create writes beyond the named ones: the default of each field of the schema the
+    intent does not name, when it evaluates to something other than `null`. Any default that cannot
+    be evaluated fails the whole create. The defaults are evaluated with no record (a field reads as
+    `null`) and the caller as principal. -/
+def defaultsOf (env : ExprEnv) : Schema → Fields → Except Unit Fields
+  | [], _ => .ok []
+  | (f, d) :: ss, fs =>
+    match defaultsOf env ss fs with
+    | .error _ => .error ()
+    | .ok rest =>
+      if fs.any (fun fv => fv.1 == f) then .ok rest
+      else match evalExpr env d.default with
+        | .error _ => .error ()
+        | .ok .null => .ok rest
+        | .ok v => .ok ((f, v) :: rest)
+
+/-! ## Field checks -/
+
+/-- A field of a record is known to the schema and has the declared type. -/
+def fieldOk (schema : Schema) (fv : FieldId × Val) : Bool :=
+  match schema.lookup fv.1 with
+  | some d => fv.2.hasType d.ty
+  | none => false
+
+/-- A required field of the schema is present in the record. -/
+def requiredOk (fs : Fields) (fd : FieldId × FieldDef) : Bool :=
+  !fd.2.required || fs.get fd.1 != .null
+
+/-- A record conforms to a schema: only known fields, of the right type, nothing required missing. -/
+def conforms (schema : Schema) (r : Record) : Bool :=
+  r.fields.all (fieldOk schema) && schema.all (requiredOk r.fields)
+
+inductive Err where
+  | noTenant
+  | unauthorized
+  | notFound
+  | invalid
+  | migrationRejected
+  /-- A written record refers to a record that does not exist in the type its field names. -/
+  | danglingReference
+  /-- A deleted record is still referred to through a field that forbids it. -/
+  | stillReferenced
+  /-- The intent named a version and the record is at another. -/
+  | versionConflict
+  /-- A written value or record is over a size bound. -/
+  | limitExceeded
+  /-- A written record agrees with another record of its type on a unique field, or on every field
+      of a composite unique constraint. -/
+  | uniqueViolated
+  /-- A schema change defines something the schema cannot hold: a field the tenant does not have,
+      a unique field that is a list, or a composite constraint of the wrong size, with a repeated
+      field or a list field. -/
+  | invalidSchema
+  /-- The intent names an object type the tenant does not have, and the caller could act on that
+      type. -/
+  | unknownObject
+  /-- A constraint of the record's type is `false` on the record written (slice 5). -/
+  | constraintViolated
+  /-- An expression that a write or a default needs cannot be evaluated (a type error, or an
+      operand it cannot read): the kernel's `Evaluation` (slice 5). -/
+  | evaluation
+  /-- An intent the kernel refuses as malformed: a reserved principal id, a blank name or label, a
+      team or invitation that is not there, a role that is `public`, an invitation that is closed
+      (slice 7). -/
+  | invalidIntent
+  /-- A role the tenant's schema does not define (slice 7). -/
+  | unknownRole
+  /-- A removal that would leave the tenant with no owner (slice 7). -/
+  | lastOwner
+  /-- A `CreateTenant` for a tenant that exists (slice 7). -/
+  | tenantExists
+  /-- A record's workflow field is not an initial state on a create, or an update changes it without a
+      declared transition whose guard is true, or leaves it a state that is not one (slice 8). -/
+  | workflowViolation
+  /-- A schema change names an expected version that is not the schema version (slice 11). -/
+  | schemaConflict
+  /-- A ledger posting by an adjustment or a reversal to one's own account, which the kernel refuses whatever
+      the actor's roles (slice 13, ADM-1629). -/
+  | selfAction
+  deriving DecidableEq, Repr
+
+/-- The first constraint that fails on the record, in the order given: `false` is
+    `constraintViolated`, an evaluation error is `evaluation`; `true` and `null` pass. -/
+def constraintProblem (env : ExprEnv) : List Expr → Option Err
+  | [] => none
+  | c :: cs => match evalExpr env c with
+    | .error _ => some Err.evaluation
+    | .ok (.bool false) => some Err.constraintViolated
+    | .ok _ => constraintProblem env cs
+
+/-! ## Records of the tenant
+
+The records of one object type form a list of `(id, record)` pairs with distinct ids. Within a
+tenant, a reference is resolved against the records of the type it names. -/
+
+abbrev Records := List (RecordId × Record)
+
+/-- Whether a record with this id exists in the list. -/
+def Records.has (rs : Records) (id : RecordId) : Bool :=
+  (rs.lookup id).isSome
+
+/-- The records of each object type of the tenant, as a function of the type. A type the tenant
+    does not have has none. -/
+abbrev Env := TypeId → Records
+
+/-- A reference of type `ty` names a record that exists in the type it targets. A value that holds
+    no reference to a type names nothing to check. -/
+def refHas (env : Env) (ty : Ty) (id : RecordId) : Bool :=
+  match ty.target? with
+  | some t => (env t).has id
+  | none => true
+
+/-- A list element names no record, or names one that exists in the target type. -/
+def Elem.resolves (env : Env) (ty : Ty) : Elem → Bool
+  | .ref id => refHas env ty id
+  | _ => true
+
+/-- A value names only records that exist in its target type: as a reference, or through the
+    elements of a list. -/
+def Val.resolves (env : Env) (ty : Ty) : Val → Bool
+  | .ref id => refHas env ty id
+  | .list vs => vs.all (Elem.resolves env ty)
+  | _ => true
+
+/-- Every reference a record holds names an existing record of the type the field names. -/
+def refsOk (env : Env) (schema : Schema) (r : Record) : Bool :=
+  r.fields.all (fun fv => match schema.lookup fv.1 with
+    | some d => fv.2.resolves env d.ty
+    | none => true)
+
+/-- The values a record gives a field: one, or none when it does not mention it. (A field named
+    twice has two; the kernel's records are maps, and the model's writes keep one per name, so
+    a create's fields and a patch's keep one value per name (`normalise`, `Fields.set`).) -/
+def Fields.valuesOf (fs : Fields) (f : FieldId) : List Val :=
+  (fs.filter (fun fv => fv.1 == f)).map Prod.snd
+
+/-! ## Unique fields and composite constraints
+
+A unique field, and each composite constraint, is a set of fields on which no two records of one
+type may agree. Two records agree on a set of fields when each field holds a keyed value (present
+and not a list) in both, and the same one. A composite constraint whose fields are not all present
+in a record does not apply to it, which `Val.keyed` gives for free. A unique field is the one-field
+case of this, so one notion serves both. The records a clash is checked against are those of the
+type being written, which is the list `rs` the functions below take. -/
+
+/-- A value a unique constraint can clash on: present, and not a list. A list is never unique
+    (the kernel refuses a unique list field), so no list clashes. -/
+def Val.keyed : Val → Bool
+  | .null => false
+  | .list _ => false
+  | _ => true
+
+/-- Two records agree on the fields `us`: each holds a keyed value in each of them, and the same. -/
+def agreeOn (us : List FieldId) (fs gs : Fields) : Bool :=
+  us.all (fun f => (fs.get f).keyed && fs.get f == gs.get f)
+
+/-- Some two distinct records of the list agree on the fields `us`: the stored data violates the
+    constraint. -/
+def dupFields (rs : Records) (us : List FieldId) : Bool :=
+  rs.any (fun q₁ => rs.any (fun q₂ => q₁.1 != q₂.1 && agreeOn us q₁.2.fields q₂.2.fields))
+
+/-- The value `v`, keyed, that another record, not the one with id `self`, holds in field `f`. -/
+def clashAt (rs : Records) (self : RecordId) (f : FieldId) (v : Val) : Bool :=
+  v.keyed && rs.any (fun q => q.1 != self && q.2.fields.get f == v)
+
+/-- What is wrong with one value of a field defined by `d`, if anything, in the kernel's order:
+    over the string or list bound, a unique value over its bound, the wrong type, a unique value
+    another record holds (only when `uniq`), a reference or a reference element naming no record of
+    its target type. `uniq` says whether the unique checks are made: a write that is refused for
+    some other reason and whose unique checks are not made is reported as it would be without
+    them. -/
+def valueProblem (L : Limits) (uniq : Bool) (env : Env) (rs : Records) (self : RecordId)
+    (f : FieldId) (d : FieldDef) (v : Val) : Option Err :=
+  if v.overLimit L then some .limitExceeded
+  else if d.unique && decide (L.maxUnique < v.size) then some .limitExceeded
+  else if !v.hasType d.ty then some .invalid
+  else if uniq && d.unique && clashAt rs self f v then some .uniqueViolated
+  else if !v.resolves env d.ty then some .danglingReference
+  else none
+
+/-- What is wrong with a record's values of one field of the schema, if anything. -/
+def fieldProblem (L : Limits) (uniq : Bool) (env : Env) (rs : Records) (self : RecordId)
+    (fs : Fields) (fd : FieldId × FieldDef) : Option Err :=
+  if fd.2.required && (fs.valuesOf fd.1).isEmpty then some .invalid
+  else (fs.valuesOf fd.1).findSome? (valueProblem L uniq env rs self fd.1 fd.2)
+
+/-- The composite unique constraints, after the fields: a record that agrees with another record
+    of its type on every field of one of them is refused (when `uniq`). -/
+def compositeProblem (uniq : Bool) (rs : Records) (self : RecordId) (fs : Fields)
+    (us : List (List FieldId)) : Option Err :=
+  if uniq && us.any (fun u => rs.any (fun q => q.1 != self && agreeOn u fs q.2.fields)) then
+    some .uniqueViolated
+  else none
+
+/-- The refusal for writing record `r` as record `self` of a type with schema `schema` and
+    composite constraints `us`, among the records `rs` of that type and `env` for the targets of
+    its references, or `none` if it may be written, with the unique checks made when `uniq`.
+
+    When several things are wrong, which refusal is given is part of the outcome: a record over
+    the record bound comes first, then a field the schema does not know, then the fields of the
+    schema in schema order, each refused for being missing, over a bound, of the wrong type, a
+    unique value held by another record, or naming no record; then the composite constraints.
+    (The kernel's schema is ordered by field id, and the correspondence fixtures declare it in that
+    order.) -/
+def problem (L : Limits) (schema : Schema) (us : List (List FieldId)) (uniq : Bool) (env : Env)
+    (rs : Records) (self : RecordId) (r : Record) : Option Err :=
+  if decide (L.maxRecord < r.size) then some .limitExceeded
+  else if r.fields.all (fun fv => (schema.lookup fv.1).isSome) then
+    match schema.findSome? (fieldProblem L uniq env rs self r.fields) with
+    | some e => some e
+    | none => compositeProblem uniq rs self r.fields us
+  else some .invalid
+
+/-! ## References and deletes -/
+
+/-- Whether a value names record `id`: it is a reference to it, or a list holding one. -/
+def Val.refersTo (id : RecordId) : Val → Bool
+  | .ref x => x == id
+  | .list vs => vs.contains (Elem.ref id)
+  | _ => false
+
+/-- A field of a record of a type with schema `schema` names record `id` of object type `t`: the
+    field's type targets `t`, and its value names `id`. -/
+def fieldRefers (schema : Schema) (t : TypeId) (id : RecordId) (fv : FieldId × Val) : Bool :=
+  match schema.lookup fv.1 with
+  | some d => d.ty.target? == some t && fv.2.refersTo id
+  | none => false
+
+/-- A record of a type with schema `schema` names record `id` of object type `t` through a field. -/
+def recRefers (schema : Schema) (t : TypeId) (id : RecordId) (r : Record) : Bool :=
+  r.fields.any (fieldRefers schema t id)
+
+/-- A reference to a deleted record through field `f`, held in value `v`, forbids the delete:
+    some definition of `f` restricts deletion, or is required while `v` is a single reference. A
+    required list never forbids it: the element is removed and the list stays. (The kernel asks
+    whether the field's type is a list; on a record of the declared types that is whether the
+    value is one.) -/
+def forbidsDelete (schema : Schema) (f : FieldId) (v : Val) : Bool :=
+  schema.any (fun fd => fd.1 == f && ((fd.2.required && !v.isList) || fd.2.ty.restricts))
+
+/-- Record `q` of object type `S`, with schema `schema`, refers to record `id` of type `t` through a
+    field that forbids its deletion. A record does not block its own delete. -/
+def blocks (S : TypeId) (schema : Schema) (t : TypeId) (id : RecordId)
+    (q : RecordId × Record) : Bool :=
+  !(S == t && q.1 == id) &&
+    q.2.fields.any (fun fv => fieldRefers schema t id fv && forbidsDelete schema fv.1 fv.2)
+
+/-- A value with the references to `id` taken out: a single reference to it is gone (`none`), a
+    list loses those elements and stays, possibly empty. -/
+def Val.dropRef (id : RecordId) : Val → Option Val
+  | .ref x => if x = id then none else some (.ref x)
+  | .list vs => some (.list (vs.filter (fun v => v != Elem.ref id)))
+  | v => some v
+
+/-- The fields with the references to `id` cleared, through the fields that name records of type
+    `t`. -/
+def clearFields (schema : Schema) (t : TypeId) (id : RecordId) (fs : Fields) : Fields :=
+  fs.filterMap (fun fv =>
+    if fieldRefers schema t id fv then (fv.2.dropRef id).map (fun v => (fv.1, v))
+    else some fv)
+
+/-- A record of a type with schema `schema` that refers to record `id` of type `t`, with every such
+    reference cleared and its version raised; any other record as it is. -/
+def clearRef (schema : Schema) (t : TypeId) (id : RecordId) (r : Record) : Record :=
+  if recRefers schema t id r then
+    { r with fields := clearFields schema t id r.fields, version := r.version + 1 }
+  else r
+
+/-! ## Workflows (slice 8)
+
+A workflow names a string field of an object type, the states the field may start in and the
+transitions between states (the kernel's `WorkflowDef`, without its id). A create must start the field
+in an initial state. An update whose patch changes the field must take it along a transition from the
+old state to the new one whose guard is true; the transition's assignments are then written to the
+record; the result is authorised again when they changed it, and it must hold one of the states. The
+decisions are the kernel's `transition::create_record` and `update_record`, and the state check is
+`rules::validate_record`'s. -/
+
+/-- A transition: from one state to another, when its guard holds (absent, it always does), with
+    assignments that give fields of the record new values, each an expression read in the environment
+    of the update. A `null` removes the field. The fields assigned are distinct. -/
+structure WfTransition where
+  /-- The transition's name, which an update event names (the kernel's transition name, slice 9). -/
+  name : String := ""
+  source : String
+  target : String
+  guard : Option Expr := none
+  set : List (FieldId × Expr) := []
+  deriving Repr
+
+/-- A workflow over one field of an object type. -/
+structure Workflow where
+  /-- The workflow's id, which an update event names with its transition (slice 9). -/
+  id : String := ""
+  field : FieldId
+  /-- The states a new record may start in. -/
+  initial : List String
+  transitions : List WfTransition := []
+  deriving Repr
+
+/-- Every state the workflow names: its initial states and both ends of its transitions. -/
+def Workflow.states (w : Workflow) : List String :=
+  w.initial ++ w.transitions.flatMap (fun tr => [tr.source, tr.target])
+
+/-- A new record's workflow field is one of the initial states. Any other value, or none, refuses the
+    create (the kernel's first workflow check on a create). -/
+def wfInitialOk (w : Workflow) (r : Record) : Bool :=
+  match r.fields.get w.field with
+  | .str s => decide (s ∈ w.initial)
+  | _ => false
+
+/-- A new record starts in an initial state of every workflow of its type. -/
+def initialsOk (ws : List Workflow) (r : Record) : Bool :=
+  ws.all (fun w => wfInitialOk w r)
+
+/-- A stored record's workflow field, when it holds a string, holds one of the states of the workflow
+    (the kernel's `validate_record` checks string values only). -/
+def wfStateOk (w : Workflow) (r : Record) : Bool :=
+  match r.fields.get w.field with
+  | .str s => decide (s ∈ w.states)
+  | _ => true
+
+/-- Every workflow of the type holds its state in the record. -/
+def statesOk (ws : List Workflow) (r : Record) : Bool :=
+  ws.all (fun w => wfStateOk w r)
+
+/-- A guard holds when it is absent, or evaluates to `true`: `false`, `null` and an evaluation error do
+    not hold (the kernel's `holds`). -/
+def guardHolds (env : ExprEnv) : Option Expr → Bool
+  | none => true
+  | some c => match evalExpr env c with
+    | .ok (.bool true) => true
+    | _ => false
+
+/-- The first transition, in the order given, that takes the state `was` to the state `becomes` and whose
+    guard holds (the kernel's search of a workflow's transitions). -/
+def findTransition (env : ExprEnv) (was becomes : Val) : List WfTransition → Option WfTransition
+  | [] => none
+  | tr :: trs =>
+    if was == .str tr.source && becomes == .str tr.target && guardHolds env tr.guard then some tr
+    else findTransition env was becomes trs
+
+/-- The new values of a transition's assignments, each read in the environment; an error in any of them
+    is an error of the transition (the kernel evaluates them all before it writes any). -/
+def evalSets (env : ExprEnv) : List (FieldId × Expr) → Except Unit (List (FieldId × Val))
+  | [] => .ok []
+  | (f, e) :: es =>
+    match evalExpr env e with
+    | .error _ => .error ()
+    | .ok v => match evalSets env es with
+      | .error _ => .error ()
+      | .ok vs => .ok ((f, v) :: vs)
+
+/-! ## Object types and the tenant -/
+
+/-- One object type of a tenant: its schema, its composite unique constraints and its records. -/
+structure ObjType where
+  schema : Schema
+  /-- The composite unique constraints, each a list of fields (the kernel's `UniqueDef`). -/
+  uniques : List (List FieldId) := []
+  records : Records := []
+  /-- The constraints of the type, in the kernel's order (by constraint id): each must not be
+      `false` on a record of the type, checked after every other check of a write (slice 5). -/
+  constraints : List Expr := []
+  /-- The workflows over the type, in the kernel's order (slice 8). -/
+  workflows : List Workflow := []
+  deriving Repr
+
+/-! ## Membership: teams, invitations and the roles a schema defines (slice 7)
+
+The state the membership intents read and write. A team gives its members the roles it holds; an
+invitation offers roles to an address. `MTenant` is the part of a tenant they see: the members, the
+grants and policies (to decide who may manage members and confer roles), the roles the schema
+defines, the teams and the invitations. A tenant holds these in its own fields (`Tenant.mt`,
+`Tenant.withM`), and the decisions are in `Strata/Members.lean`. -/
+
+/-- A team, by id (the kernel's `TeamId`). -/
+abbrev TeamId := Nat
+
+/-- An invitation, by id (the kernel's `InvitationId`). -/
+abbrev InvitationId := Nat
+
+/-- A team: its label, the members it has and the roles those members hold through it. -/
+structure TeamDef where
+  label : String
+  members : List PrincipalId := []
+  roles : List RoleId := []
+  deriving Repr
+
+/-- An invitation: the normalised address it names, the roles it offers, the user who issued it, the
+    time it expires (the issue time plus fourteen days, in milliseconds), and who redeemed it or
+    revoked it, if anyone. -/
+structure InvitationDef where
+  address : String
+  roles : List RoleId
+  createdBy : PrincipalId
+  expiresAt : Nat
+  redeemedBy : Option PrincipalId := none
+  revokedBy : Option PrincipalId := none
+  deriving Repr
+
+/-- A level of a setting (slice 12, the kernel's `SettingLevel`), from the least to the most specific. -/
+inductive SettingLevel where
+  | platform
+  | tenant
+  | team
+  | person
+  deriving DecidableEq, Repr
+
+/-- The place of a level from the least to the most specific (the kernel's `rank`). -/
+def SettingLevel.rank : SettingLevel → Nat
+  | .platform => 0
+  | .tenant => 1
+  | .team => 2
+  | .person => 3
+
+/-- A setting's type: a flag, a whole number or text. The kernel's timestamps and declared types are not
+    modelled (slice 12 review note). -/
+inductive SettingType where
+  | bool
+  | int
+  | str
+  deriving DecidableEq, Repr
+
+/-- Whether a value is of a setting's type; `null` is of none. -/
+def SettingType.admits : SettingType → Val → Bool
+  | .bool, .bool _ => true
+  | .int, .int _ => true
+  | .str, .str _ => true
+  | _, _ => false
+
+/-- What a setting definition allows beyond its type: a closed set of values, or a range of whole numbers
+    (the kernel's `SettingAllowed`, without the reference form). -/
+inductive SettingAllowed where
+  | closed (vs : List Val)
+  | range (lo hi : Int)
+  deriving DecidableEq, Repr
+
+/-- A setting definition (the kernel's `SettingDef`): its name, its type, the levels that may hold an
+    override, the level a lock closes from (every level more specific than it is closed), its default and
+    what it allows. The kernel's label and description are not modelled. -/
+structure SettingDef where
+  name : String
+  ty : SettingType
+  levels : List SettingLevel
+  locked : Option SettingLevel := none
+  default : Val
+  allowed : Option SettingAllowed := none
+  deriving DecidableEq, Repr
+
+/-- What an override is of: the tenant itself, a team, or a person (the kernel's override key names the
+    level and the subject). -/
+inductive SettingSubject where
+  | tenant
+  | team (t : TeamId)
+  | person (p : PrincipalId)
+  deriving DecidableEq, Repr
+
+/-- The level of a subject. -/
+def SettingSubject.level : SettingSubject → SettingLevel
+  | .tenant => .tenant
+  | .team _ => .team
+  | .person _ => .person
+
+/-- An override of a setting at a subject: its value and the revision of the setting it was written at. -/
+structure SettingOverride where
+  name : String
+  subject : SettingSubject
+  value : Val
+  revision : Nat
+  deriving DecidableEq, Repr
+
+/-- What the membership intents see of a tenant: its members (who hold direct roles), the grants and
+    policies that decide who may manage members and confer a role, the roles its schema defines (the
+    built-in `owner` and `public` included), its teams and its invitations. -/
+structure MTenant where
+  members : List (PrincipalId × List RoleId)
+  grants : List (RoleId × Grant)
+  policies : List Policy
+  roles : List RoleId := [ownerRole, publicRole]
+  teams : List (TeamId × TeamDef) := []
+  invitations : List (InvitationId × InvitationDef) := []
+  deriving Repr
+
+/-- The direct roles of a user: the roles its tenant's members table gives it (none if absent). -/
+def MTenant.directOf (m : MTenant) (p : PrincipalId) : List RoleId :=
+  (m.members.lookup p).getD []
+
+/-- The roles a user holds through the teams it belongs to. -/
+def MTenant.teamRoles (m : MTenant) (p : PrincipalId) : List RoleId :=
+  (m.teams.filter (fun e => e.2.members.contains p)).flatMap (fun e => e.2.roles)
+
+/-- The effective roles of a principal (the kernel's `roles_of`): none for the system, `public` for an
+    anonymous caller, and for a user `public`, its direct roles and the roles of its teams. -/
+def MTenant.rolesOf (m : MTenant) : Principal → List RoleId
+  | .system => []
+  | .anonymous => [publicRole]
+  | .user p => publicRole :: (m.directOf p ++ m.teamRoles p)
+  -- An automation holds the roles of its own automation, which the tenant decides, never a membership (see `Tenant.rolesOf`).
+  | .automation _ => []
+
+/-! ## Operations (slice 14)
+
+An operation is declared data of the schema (the kernel's `TenantOperationDef`, without its agent policy): inputs,
+the invokers, an optional subject (a record named by one input), conditions and steps. The steps are the kernel's
+record steps (create, update, delete) and its ledger posting (`post`), each with the operation's own powers. -/
+
+/-- One input of an operation: its name, its type, and whether it must be given (the kernel's `TenantOperationInput`). -/
+structure OpInput where
+  name : String
+  ty : Ty
+  required : Bool
+  deriving DecidableEq, Repr
+
+/-- Whose account a posting step posts to: the invoker's own, or a pool's (the kernel's `TenantOperationPostingOwner`
+    without a principal expression, which the model leaves out). -/
+inductive OpOwner where
+  | invoker
+  | pool (n : Nat)
+  deriving DecidableEq, Repr
+
+/-- One step of an operation. Each id names the step: a later step reads the record an earlier create made as the
+    parameter of its id. A posting's amount is an expression that must evaluate to an integer. -/
+inductive OpStep where
+  /-- Create a record of object type `ty`, its fields given by expressions; the invoker is its creator. -/
+  | create (id : String) (ty : TypeId) (fields : List (FieldId × Expr))
+  /-- Patch the record of type `ty` that `record` names: each named field takes its value, `null` removes it. -/
+  | update (id : String) (ty : TypeId) (record : Expr) (fields : List (FieldId × Expr))
+  /-- Delete the record of type `ty` that `record` names, clearing or refusing the references to it. -/
+  | delete (id : String) (ty : TypeId) (record : Expr)
+  /-- Post to a ledger unit, for the owner, with the amount and the reason. -/
+  | post (id : String) (owner : OpOwner) (unit : Nat) (amount : Expr) (reason : String)
+  deriving DecidableEq, Repr
+
+/-- A condition of an operation, checked on the state before any step; `false` or `null` refuses the invocation. -/
+structure OpCond where
+  id : String
+  expr : Expr
+  deriving DecidableEq, Repr
+
+/-- An operation of a schema (the kernel's `TenantOperationDef`). `subject` names an object type and the input whose
+    value is the record the invocation is about. `signedIn` lets every signed-in person invoke it; `roles` lets the
+    holders of those roles invoke it. -/
+structure OpDef where
+  id : String
+  inputs : List OpInput
+  signedIn : Bool
+  roles : List RoleId
+  subject : Option (TypeId × String) := none
+  conditions : List OpCond := []
+  steps : List OpStep
+  deriving DecidableEq, Repr
+
+/-! ## Triggers and automations (slice 15)
+
+A trigger subscribes to a kind of event the kernel matches (a record created, updated or deleted, or a ledger
+posting), with a condition over the event's parameters and record scopes, and starts an automation. An automation
+is declared data: its run-as roles, its run key, its definer and its state. Its steps are run by the automation
+worker outside the kernel, so they are not modelled. The decisions are in `Strata/Triggers.lean`. -/
+
+/-- The events a trigger subscribes to, as the kernel matches them. `recordUpdated` names a workflow transition the
+    update must fire, or any update when none is named. The kinds that come from engines outside the kernel match no
+    kernel event and are not modelled. -/
+inductive TriggerOn where
+  | recordCreated (ty : TypeId)
+  | recordUpdated (ty : TypeId) (transition : Option String)
+  | recordDeleted (ty : TypeId)
+  | ledgerPosted (unit : Nat)
+  /-- An entry into the segment (slice 16): matched against the segment log, not the kernel's event sequence. -/
+  | segmentEntered (seg : Nat)
+  /-- An exit from the segment (slice 16). -/
+  | segmentExited (seg : Nat)
+  deriving DecidableEq, Repr
+
+/-- A trigger (the kernel's `TriggerDef`): its id, its event, its condition (none for every event), the automation it
+    starts, whether it is paused, and the user who defined it (none for the system). The definition time is not
+    modelled: no decision reads it. -/
+structure TriggerDef where
+  id : Nat
+  on : TriggerOn
+  condition : Option Expr := none
+  automation : Nat
+  paused : Bool := false
+  definedBy : Option PrincipalId := none
+  deriving Repr
+
+/-- The state an automation is defined with. A draft starts no runs; an active automation does. An automation with no
+    state is active (the kernel's `state_of`). -/
+inductive AutoState where
+  | active
+  | draft
+  deriving DecidableEq, Repr
+
+/-- An automation (the kernel's `AutomationDef`, without its steps): its run-as roles, the run key expression (none
+    for one run per event), its definer (none for the system), the role it is suspended for when its definer may no
+    longer confer it, and its state. -/
+structure AutomationDef where
+  id : Nat
+  runAs : List RoleId
+  runKey : Option Expr := none
+  definedBy : Option PrincipalId := none
+  suspendedFor : Option RoleId := none
+  state : AutoState := .active
+  deriving Repr
+
+/-! ## Segments (slice 16)
+
+A segment is a named set of people defined by a predicate over the record that stands for each person: the subject
+record, of the subject type, whose principal field holds the person's string `p<n>`. Its definition, its memberships and
+its log of entries and exits are held in the tenant, as the kernel's storage block holds them (`segments.rs`). The
+decisions are in `Strata/Segments.lean`. -/
+
+/-- A segment's id (the kernel's `SegmentId`; a number in the model). -/
+abbrev SegmentId := Nat
+
+/-- A segment as defined (the kernel's `Segment`, without its refresh interval, which only a time-dependent predicate has,
+    and without its visibility to members, which only reads consult). `version` is raised by every change of the predicate. -/
+structure SegmentDef where
+  id : SegmentId
+  name : String
+  subject : TypeId
+  predicate : Expr
+  version : Nat
+  principalField : FieldId
+  definedBy : Option PrincipalId := none
+  deriving Repr
+
+/-- One membership (the kernel's `Membership`): the segment, the person, and the version that decided it. The time of entry
+    is not modelled. -/
+structure Membership where
+  segment : SegmentId
+  person : PrincipalId
+  version : Nat
+  deriving DecidableEq, Repr
+
+/-- Whether a person entered or left a segment (the kernel's `SegmentDirection`). -/
+inductive SegDirection where
+  | entered
+  | exited
+  deriving DecidableEq, Repr
+
+/-- Why a segment's memberships were decided (the kernel's `SegmentReason`): a change of a record, or the rebuild that a
+    changed predicate starts. -/
+inductive SegReason where
+  | change
+  | predicateChange
+  deriving DecidableEq, Repr
+
+/-- An entry or exit event of the segment log (the kernel's `SegmentEvent`): the segment, the person, the direction, the
+    reason, the version that decided it, the revision of the change, the hop (the hop of the change plus one) and the
+    principal the change is made by. Its time and correlation are not modelled. -/
+structure SegEvent where
+  segment : SegmentId
+  person : PrincipalId
+  direction : SegDirection
+  reason : SegReason
+  version : Nat
+  revision : Nat
+  hop : Nat
+  principal : Principal
+  deriving Repr
+
+/-- Everything one tenant owns. -/
+structure Tenant where
+  /-- The object types, by id. Each id occurs once. -/
+  types : List (TypeId × ObjType)
+  /-- The users holding roles directly (the kernel's `members`), each with its roles. The owner is a
+      member holding `ownerRole`; the editors and writers of the fixture hold their roles so. -/
+  members : List (PrincipalId × List RoleId)
+  /-- What each role grants: a capability, or an action on the records of an object type (the
+      kernel's role permissions). -/
+  grants : List (RoleId × Grant)
+  /-- The policies of the tenant (the kernel's `policies`). -/
+  policies : List Policy
+  /-- The id the next created record receives, whatever its type. -/
+  nextId : Nat
+  /-- The size bounds. The kernel's are constants (`Limits.kernel`). -/
+  limits : Limits := Limits.kernel
+  /-- The roles the schema defines, the built-in `owner` and `public` among them (slice 7). -/
+  roles : List RoleId := [ownerRole, publicRole]
+  /-- The tenant revision: 1 when created, raised by one by every accepted step (slice 9). -/
+  revision : Nat := 0
+  /-- The number of domain events the tenant has emitted; the next event has the number after it (slice 9). -/
+  eventSeq : Nat := 0
+  /-- The schema version: 1 at genesis, raised by one by every accepted schema change (slice 9). -/
+  schemaVersion : Nat := 1
+  /-- The teams, by id (slice 7). -/
+  teams : List (TeamId × TeamDef) := []
+  /-- The invitations, by id (slice 7). -/
+  invitations : List (InvitationId × InvitationDef) := []
+  /-- The setting definitions the tenant's schema holds (slice 12; the platform's are added by lookup). -/
+  settingDefs : List SettingDef := []
+  /-- The overrides of settings, at most one for each setting and subject (slice 12). -/
+  overrides : List SettingOverride := []
+  /-- The revision of each setting, by name, raised by each change of it (slice 12, never reused). -/
+  settingRevs : List (String × Nat) := []
+  /-- The ledger declarations of the schema: its units, pools and unit limits; `none` when it declares none
+      (slice 13). -/
+  ledgerDecls : Option LedgerDecls := none
+  /-- The ledger's accounts, journal and account limits (slice 13). -/
+  ledger : LedgerState := {}
+  /-- The policies that bound reads of the ledger (slice 13). -/
+  ledgerPolicies : List LedgerPolicy := []
+  /-- The operations the schema defines, by id (slice 14): their inputs, invokers, subject, conditions and steps. -/
+  operations : List (String × OpDef) := []
+  /-- The triggers, by id (slice 15). -/
+  triggers : List (Nat × TriggerDef) := []
+  /-- The automations, by id (slice 15). -/
+  automations : List (Nat × AutomationDef) := []
+  /-- The segments, by id (slice 16). -/
+  segments : List (SegmentId × SegmentDef) := []
+  /-- The memberships, at most one for each segment and person (slice 16). -/
+  memberships : List Membership := []
+  /-- The entry and exit events, oldest first; the position of an event is its index plus one (slice 16). -/
+  segLog : List SegEvent := []
+  deriving Repr
+
+/-- The part of a tenant the membership intents see. -/
+def Tenant.mt (t : Tenant) : MTenant :=
+  { members := t.members, grants := t.grants, policies := t.policies, roles := t.roles,
+    teams := t.teams, invitations := t.invitations }
+
+/-- The tenant with its membership state replaced by `m`; its object types, records, counter and
+    limits are kept. -/
+def Tenant.withM (t : Tenant) (m : MTenant) : Tenant :=
+  { t with members := m.members, grants := m.grants, policies := m.policies, roles := m.roles,
+           teams := m.teams, invitations := m.invitations }
+
+/-- The whole state: each tenant id has a tenant or does not. -/
+abbrev World := TenantId → Option Tenant
+
+/-- The object type `ty` of the tenant, if it has one. -/
+def Tenant.typ? (t : Tenant) (ty : TypeId) : Option ObjType := t.types.lookup ty
+
+/-- The records of each object type of the tenant. -/
+def Tenant.env (t : Tenant) : Env := fun ty => ((t.typ? ty).map ObjType.records).getD []
+
+/-- The record of type `ty` with id `id`, if the tenant holds it. -/
+def Tenant.recordAt (t : Tenant) (ty : TypeId) (id : RecordId) : Option Record :=
+  (t.typ? ty).bind (fun o => o.records.lookup id)
+
+/-- The object types with the entry of `ty` replaced by `o`: the first entry of that type, which is the
+    one the lookup of `ty` finds (a tenant holds one entry per type, the kernel's map). -/
+def putTypeList : List (TypeId × ObjType) → TypeId → ObjType → List (TypeId × ObjType)
+  | [], _, _ => []
+  | (k, p) :: es, ty, o => if k == ty then (ty, o) :: es else (k, p) :: putTypeList es ty o
+
+/-- The tenant with object type `ty` replaced by `o`. -/
+def Tenant.putType (t : Tenant) (ty : TypeId) (o : ObjType) : Tenant :=
+  { t with types := putTypeList t.types ty o }
+
+/-- Some record of any type of the tenant refers to record `id` of type `ty` through a field that
+    forbids its deletion. -/
+def Tenant.blockedDelete (t : Tenant) (ty : TypeId) (id : RecordId) : Bool :=
+  t.types.any (fun e => e.2.records.any (blocks e.1 e.2.schema ty id))
+
+/-- Every record of a table with the references to record `id` of type `ty` cleared. -/
+def delClear (schema : Schema) (ty : TypeId) (id : RecordId) (rs : Records) : Records :=
+  rs.map (fun q => (q.1, clearRef schema ty id q.2))
+
+/-- The object type `j` (with contents `o`) after record `id` of type `ty` is deleted: in its own
+    table the record is gone, and in every table the references to it are cleared. -/
+def delObj (ty : TypeId) (id : RecordId) (j : TypeId) (o : ObjType) : ObjType :=
+  let kept := if j == ty then o.records.filter (fun q => q.1 != id) else o.records
+  { o with records := delClear o.schema ty id kept }
+
+/-- The tenant after record `id` of type `ty` is deleted. -/
+def Tenant.afterDelete (t : Tenant) (ty : TypeId) (id : RecordId) : Tenant :=
+  { t with types := t.types.map (fun e => (e.1, delObj ty id e.1 e.2)) }
+
+/-- Whether a delete of record `id` of type `ty` would leave a record it rewrites violating a
+    constraint of its type (WG-5664). The rewritten records are the other records that refer to
+    `id` through a clearing field; a rewritten record breaks a constraint when one of its constraints
+    is `false` or cannot be evaluated (`constraintProblem` says so). The kernel refuses such a delete
+    with `constraintViolated`, as a restrict refuses it with `stillReferenced`, so the invariant
+    `Tenant.Satisfied` survives every accepted delete. -/
+def Tenant.clearBreaks (t : Tenant) (ty : TypeId) (id : RecordId) : Bool :=
+  t.types.any (fun e => e.2.records.any (fun q =>
+    !(e.1 == ty && q.1 == id) && recRefers e.2.schema ty id q.2 &&
+      (constraintProblem (storedEnv (clearRef e.2.schema ty id q.2)) e.2.constraints).isSome))
+
+/-- The automation of a tenant, by id. -/
+def Tenant.automationDef? (t : Tenant) (a : Nat) : Option AutomationDef := t.automations.lookup a
+
+/-- The roles of a principal (the kernel's `roles_of`). An automation principal holds exactly the run-as roles of its
+    automation, and none when the automation is missing or suspended (`automation_roles`, WFL-1527, WFL-1529); every
+    other principal holds what its membership gives. -/
+def Tenant.rolesOf (t : Tenant) : Principal → List RoleId
+  | .automation a => match t.automationDef? a with
+    | some d => if d.suspendedFor.isSome then [] else d.runAs
+    | none => []
+  | p => t.mt.rolesOf p
+
+/-- A policy's condition holds on the environment: absent, or an expression that is exactly `true`.
+    `false`, `null` and an evaluation error do not (the kernel's `authorize`). -/
+def condHolds (env : ExprEnv) : Option Expr → Bool
+  | none => true
+  | some c => match evalExpr env c with
+    | .ok (.bool true) => true
+    | _ => false
+
+/-- The decision of the kernel's `authorize`, without scopes: the owner may do anything; otherwise
+    a role the principal holds grants the action on the object type, or a policy of such a role
+    names the action on the resource and its condition holds. Default deny. -/
+def Tenant.allows (t : Tenant) (p : Principal) (a : Action) (r : Resource) (env : ExprEnv) : Bool :=
+  let roles := t.rolesOf p
+  roles.contains ownerRole ||
+    (match r with
+     | .object ty => a != .manage &&
+         t.grants.any (fun g => roles.contains g.1 && g.2 == .object ty a)
+     | _ => false) ||
+    t.policies.any (fun pol => roles.contains pol.role && pol.actions.contains a &&
+      pol.resource.covers r && condHolds env pol.condition)
+
+/-- A principal is permitted an action on a resource in an environment: the owner role, a grant of a role it
+    holds that names the action on the object type (never a manage action), or a policy of such a role
+    that names the action, reaches the resource and has a holding condition. -/
+def Tenant.Permits (t : Tenant) (p : Principal) (a : Action) (r : Resource) (env : ExprEnv) : Prop :=
+  ownerRole ∈ t.rolesOf p ∨
+  (∃ ty, r = .object ty ∧ a ≠ .manage ∧ ∃ g ∈ t.grants, g.1 ∈ t.rolesOf p ∧ g.2 = .object ty a) ∨
+  ∃ pol ∈ t.policies, pol.role ∈ t.rolesOf p ∧ a ∈ pol.actions ∧ pol.resource.covers r = true ∧
+    condHolds env pol.condition = true
+
+/-- A policy's resource reaches the one a decision names: the same resource, or every object type
+    for `anyObject` when the decision names an object type. -/
+theorem Resource.covers_iff (x r : Resource) :
+    x.covers r = true ↔ x = r ∨ (x = .anyObject ∧ ∃ ty, r = .object ty) := by
+  cases x <;> cases r <;> simp [Resource.covers]
+
+/-- The decision is the permission: the Bool decision holds exactly when the principal is permitted
+    the action on the resource (`Tenant.Permits`). -/
+theorem Tenant.allows_iff (t : Tenant) (p : Principal) (a : Action) (r : Resource) (env : ExprEnv) :
+    t.allows p a r env = true ↔ t.Permits p a r env := by
+  unfold Tenant.allows Tenant.Permits
+  cases r <;> simp [Bool.or_eq_true, Bool.and_eq_true, List.any_eq_true, Resource.covers_iff,
+    condHolds, bne_iff_ne, beq_iff_eq, or_assoc, and_assoc]
+
+/-- The environment an authorization decision is made in (the kernel's `Subject`): the record it
+    tests (the stored one, else the new one), the stored record and the new one, and the user. -/
+def subjectEnv (p : Principal) (old new : Option Record) : ExprEnv :=
+  { record := old.or new, old := old, new := new, principal := p.userId? }
+
+/-- May `p` create a record of type `ty` that would be `r`? -/
+def canCreate (t : Tenant) (p : Principal) (ty : TypeId) (r : Record) : Bool :=
+  t.allows p .create (.object ty) (subjectEnv p none (some r))
+
+/-- May `p` update record `old` of type `ty`, which would become `new`? -/
+def canUpdate (t : Tenant) (p : Principal) (ty : TypeId) (old new : Record) : Bool :=
+  t.allows p .update (.object ty) (subjectEnv p (some old) (some new))
+
+/-- May `p` delete record `old` of type `ty`? -/
+def canDelete (t : Tenant) (p : Principal) (ty : TypeId) (old : Record) : Bool :=
+  t.allows p .delete (.object ty) (subjectEnv p (some old) (some old))
+
+/-- May `p` attempt a create on type `ty` under some grant or policy, whatever the condition of
+    the policy and whatever the record? The kernel's `may_attempt`, asked before the defaults of
+    the type are evaluated (WG-5665): a caller whom nothing could allow is refused `unauthorized`
+    whether or not a default would fail. -/
+def canAttemptCreate (t : Tenant) (p : Principal) (ty : TypeId) : Bool :=
+  let roles := t.rolesOf p
+  roles.contains ownerRole ||
+    t.grants.any (fun g => roles.contains g.1 && g.2 == .object ty .create) ||
+    t.policies.any (fun pol => roles.contains pol.role && pol.actions.contains .create &&
+      pol.resource.covers (.object ty))
+
+/-- A create that the record allows is one the caller could attempt. -/
+theorem canCreate_attempt (t : Tenant) (p : Principal) (ty : TypeId) (r : Record)
+    (h : canCreate t p ty r = true) : canAttemptCreate t p ty = true := by
+  unfold canCreate Tenant.allows at h
+  unfold canAttemptCreate
+  simp only [Bool.or_eq_true, Bool.and_eq_true] at h ⊢
+  rcases h with (h | h) | h
+  · exact Or.inl (Or.inl h)
+  · exact Or.inl (Or.inr h.2)
+  · exact Or.inr (List.any_eq_true.mpr (by
+      obtain ⟨pol, hp, hq⟩ := List.any_eq_true.mp h
+      exact ⟨pol, hp, by simp only [Bool.and_eq_true] at hq ⊢; exact hq.1⟩))
+
+/-- A caller whom no grant or policy could allow to create is allowed no record of the type. -/
+theorem canCreate_false_of_attempt (t : Tenant) (p : Principal) (ty : TypeId) (r : Record)
+    (h : canAttemptCreate t p ty = false) : canCreate t p ty r = false := by
+  cases hc : canCreate t p ty r with
+  | false => rfl
+  | true => have := canCreate_attempt t p ty r hc; rw [h] at this; cases this
+
+/-- May `p` perform `a` on type `ty` when there is no record to test the permission against? Only
+    what does not depend on a record: a grant, or a policy with no condition. The kernel asks this
+    of a record intent whose record is missing (`stored`), and of an unknown type (`object_def`). -/
+def canWithoutRecord (t : Tenant) (p : Principal) (ty : TypeId) (a : Action) : Bool :=
+  t.allows p a (.object ty) (subjectEnv p none none)
+
+/-- May `p` change the schema (the kernel's `Manage` on the schema)? -/
+def canManage (t : Tenant) (p : Principal) : Bool :=
+  t.allows p .manage .schema (subjectEnv p none none)
+
+/-- The refusal for an update or delete of a record that does not exist. The permission is asked
+    first: one who could not act on a record of the type gets `unauthorized`, the same as for a
+    record that exists, and only one who could learns that this one is missing (KRN-1080). -/
+def missingRecord (t : Tenant) (p : Principal) (ty : TypeId) (a : Action) : Err :=
+  if canWithoutRecord t p ty a then .notFound else .unauthorized
+
+/-- The refusal for an intent that names an object type the tenant does not have. The kernel asks
+    whether the caller could act on that type with the action before it says the type is missing:
+    one who could gets `unknownObject`, anyone else `unauthorized`, whether or not the type exists
+    (`object_def`). -/
+def unknownType (t : Tenant) (p : Principal) (ty : TypeId) (a : Action) : Err :=
+  if canWithoutRecord t p ty a then .unknownObject else .unauthorized
+
+/-- One entry of a patch: field `fv.1` takes value `fv.2`, or is removed if that is `null`. -/
+def Fields.set (fs : Fields) (fv : FieldId × Val) : Fields :=
+  if fv.2 == .null then fs.filter (fun g => g.1 != fv.1)
+  else fv :: fs.filter (fun g => g.1 != fv.1)
+
+/-- A patch applied to fields, entry by entry. -/
+def Fields.patch (fs ps : Fields) : Fields :=
+  ps.foldl Fields.set fs
+
+/-- Absent values are not stored, and a name given twice keeps its last value: the fields of a
+    create are built as the kernel builds its records, a map from names to values. -/
+def normalise (fs : Fields) : Fields :=
+  fs.foldl Fields.set []
+
+/-- The fields a create writes: the named ones that are not `null`, then the defaults of the fields
+    of the schema that the intent does not name at all (`defaultsOf`). A field named as `null` gets
+    no default, the kernel's rule. An evaluation error in a default is an error of the create. -/
+def withDefaults (env : ExprEnv) (schema : Schema) (fs : Fields) : Except Unit Fields :=
+  (defaultsOf env schema fs).map (fun ds => normalise fs ++ ds)
+
+/-- The record a create by `p` writes, at version 1, or the error of its defaults. -/
+def newRecord (schema : Schema) (p : Principal) (fs : Fields) : Except Unit Record :=
+  (withDefaults { principal := p.userId? } schema fs).map
+    (fun fs' => { owner := p.userId?, version := 1, fields := fs' })
+
+/-- The record an accepted update writes: patched, one version on. -/
+def patched (old : Record) (ps : Fields) : Record :=
+  { owner := old.owner, version := old.version + 1, fields := old.fields.patch ps }
+
+/-- The record with each assignment written in turn (`Fields.set`: a `null` removes the field). -/
+def applySets (r : Record) (as : List (FieldId × Val)) : Record :=
+  as.foldl (fun c fv => { c with fields := Fields.set c.fields fv }) r
+
+/-- One workflow, against the stored record `old` and the candidate `cand` the update has built so far
+    (slice 8). When the field has the same state on both, nothing is checked. Otherwise a transition
+    from the old state to the new one whose guard holds must exist (`workflowViolation` if not), and its
+    assignments are applied (an evaluation error in one of them is `evaluation`). The guard and the
+    assignments read the stored record as `record` and `old`, the candidate as `new`, and the acting
+    principal. -/
+def fireOne (p : Principal) (old cand : Record) (w : Workflow) : Except Err Record :=
+  let was := old.fields.get w.field
+  let becomes := cand.fields.get w.field
+  if was == becomes then .ok cand
+  else
+    let env : ExprEnv :=
+      { record := some old, old := some old, new := some cand, principal := p.userId? }
+    match findTransition env was becomes w.transitions with
+    | none => .error .workflowViolation
+    | some tr => match evalSets env tr.set with
+      | .error _ => .error .evaluation
+      | .ok as => .ok (applySets cand as)
+
+/-- Every workflow of the type, in the order given, against the stored record and the candidate. -/
+def fireAll (p : Principal) (old cand : Record) : List Workflow → Except Err Record
+  | [] => .ok cand
+  | w :: ws => match fireOne p old cand w with
+    | .error e => .error e
+    | .ok c => fireAll p old c ws
+
+/-- The transitions an accepted update takes, in the order of `fireAll` (slice 9): each workflow whose field
+    changes from the stored record `old` to the candidate names its workflow and the transition it takes, the
+    candidate evolving as `fireAll` evolves it. A refused update names none; the events of an accepted one
+    are read from this. -/
+def firedAll (p : Principal) (old cand : Record) : List Workflow → List (String × String)
+  | [] => []
+  | w :: ws =>
+    let was := old.fields.get w.field
+    let becomes := cand.fields.get w.field
+    if was == becomes then firedAll p old cand ws
+    else
+      let env : ExprEnv :=
+        { record := some old, old := some old, new := some cand, principal := p.userId? }
+      match findTransition env was becomes w.transitions with
+      | none => firedAll p old cand ws
+      | some tr => match evalSets env tr.set with
+        | .error _ => firedAll p old cand ws
+        | .ok as => (w.id, tr.name) :: firedAll p old (applySets cand as) ws
+
+/-- Two field lists hold the same values: every field either names has the same value in both. -/
+def sameFields (fs gs : Fields) : Bool :=
+  (fs.map Prod.fst ++ gs.map Prod.fst).all (fun f => fs.get f == gs.get f)
+
+/-- The intent names a version and the record is at another. -/
+def versionClash : Option Nat → Record → Bool
+  | some v, r => v != r.version
+  | none, _ => false
+
+/-- The definition a `setRequired` or `setUnique` gives a field its type does not declare: an optional boolean field, which
+    the intent then makes required or unique (the kernel's harness defines the field afresh, `DefineField`). -/
+def plainField : FieldDef := { ty := .bool, required := false }
+
+/-- A field entered in a schema at its place by id: the kernel checks a record's fields in the order of their ids, so a
+    schema that keeps its fields sorted by id (the fixture's are) is checked in that order whatever fields a change
+    defines. -/
+def insertField : Schema → FieldId × FieldDef → Schema
+  | [], e => [e]
+  | x :: xs, e => if e.1 < x.1 then e :: x :: xs else x :: insertField xs e
+
+/-- The schema with field `f` declared: as it is when it is, otherwise with the plain definition at its place. -/
+def ensureField (schema : Schema) (f : FieldId) : Schema :=
+  if schema.any (fun fd => fd.1 == f) then schema else insertField schema (f, plainField)
+
+def makeRequired (schema : Schema) (f : FieldId) : Schema :=
+  schema.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with required := true }) else fd)
+
+def makeUnique (schema : Schema) (f : FieldId) : Schema :=
+  schema.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with unique := true }) else fd)
+
+/-- Whether the records of one object type would violate its schema: some record does not conform
+    (a required field missing, a value of the wrong type); a unique field is held by two records,
+    or holds a value over the unique bound; a composite constraint is held by two records. -/
+def tableViolated (L : Limits) (o : ObjType) : Bool :=
+  !(o.records.all (fun q => conforms o.schema q.2)) ||
+    o.schema.any (fun fd => fd.2.unique &&
+      (dupFields o.records [fd.1] ||
+        o.records.any (fun q => decide (L.maxUnique < (q.2.fields.get fd.1).size)))) ||
+    o.uniques.any (fun u => dupFields o.records u) ||
+    o.records.any (fun q => (constraintProblem (storedEnv q.2) o.constraints).isSome)
+
+/-- Whether the records of any object type of the tenant would violate the schema of their type.
+    The kernel's `Reject` checks every record of every type against the resulting schema, so a
+    violation in any type refuses a strict change to any type. -/
+def schemaViolated (L : Limits) (types : List (TypeId × ObjType)) : Bool :=
+  types.any (fun e => tableViolated L e.2)
+
+/-- The one refusal every strict schema change makes: `Reject` refuses the change when the records
+    of the object types it re-validates would violate their schema (`schemaViolated`, over the
+    types given, which the caller scopes with `scopedTypes`). A lax change never refuses. -/
+def schemaChangeRefused (L : Limits) (types : List (TypeId × ObjType)) (strict : Bool) : Bool :=
+  strict && schemaViolated L types
+
+/-- The object types a field refers to (`Ty.target?`, which the kernel's `ref_target` agrees with). -/
+def fieldTargets (schema : Schema) (f : FieldId) : List TypeId :=
+  match schema.lookup f with
+  | some d => d.ty.target?.toList
+  | none => []
+
+/-- The object types a schema change re-validates: the types whose ids are listed (the kernel's
+    `touched_objects`). A change to a field that refers to another type re-validates that type's
+    records too; a change to a composite constraint re-validates only its own type. -/
+def scopedTypes (types : List (TypeId × ObjType)) (ids : List TypeId) : List (TypeId × ObjType) :=
+  types.filter (fun e => ids.contains e.1)
+
+/-- A stored record of an object type violates the type's schema when the write checks would refuse it
+    (`problem`: a field, a unique value or a composite constraint held by another record, a value over
+    a bound, a wrong type or a missing required field) or a constraint of the type is `false` or cannot be
+    evaluated on it. The kernel's `validate_record` decides the same for each record of a touched type
+    (slice 9: the grandfathered count of a lax schema change). -/
+def recViolated (L : Limits) (o : ObjType) (env : Env) (q : RecordId × Record) : Bool :=
+  (problem L o.schema o.uniques true env o.records q.1 q.2).isSome ||
+    (constraintProblem (storedEnv q.2) o.constraints).isSome
+
+/-- The number of records, of the scoped object types, that violate the schema those types now have: the
+    kernel's `grandfathered`, the records a lax change keeps (`Migration.violations`, counted per record). -/
+def violatedCount (L : Limits) (types : List (TypeId × ObjType)) (env : Env) : Nat :=
+  types.foldl (fun n e => n + (e.2.records.filter (recViolated L e.2 env)).length) 0
+
+/-- A composite definition the schema can hold: two to four fields, none repeated, each one of the
+    schema and not a list (the kernel's `unique_problems`). -/
+def uniqueFieldsOk (schema : Schema) (fs : List FieldId) : Bool :=
+  decide (2 ≤ fs.length) && decide (fs.length ≤ 4) && decide fs.Nodup &&
+    fs.all (fun f => match schema.lookup f with
+      | some d => !d.ty.isList
+      | none => false)
+

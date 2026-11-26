@@ -11,8 +11,9 @@ use crate::intent::{
 };
 use crate::rewrite;
 use crate::rules::{
-    assigned_roles, authorize, authorize_needing, holds_any, holds_power, insufficient, may_confer,
-    missing_error, missing_grants, roles_of, validate_record, Lookup, Subject,
+    assigned_roles, authorize, authorize_needing, constraint_breaks, holds_any, holds_power,
+    insufficient, may_attempt, may_confer, missing_error, missing_grants, roles_of,
+    validate_record, Lookup, Subject,
 };
 use crate::schema::{
     normalise_address, Action, FieldDef, Grant, InvitationDef, ObjectTypeDef, Resource, TeamDef,
@@ -905,6 +906,20 @@ fn create_record(
         return Err(draft.reject(ErrorKind::InvalidIntent, problem));
     }
     let ctx = draft.ctx;
+    // The permission comes before the defaults (WG-5665): a caller whom no grant or policy could
+    // allow to create on this type is refused before any default is evaluated. The refusal is the
+    // one the record decision below gives such a caller, produced by the same `require`, with no
+    // record: when no policy applies, its checks and message do not depend on the record, so the
+    // error and its evidence are the same whichever way the caller is refused. A caller who could
+    // create still gets the full decision on the record, after the defaults, as before.
+    let target = Resource::Object(object.clone());
+    if !may_attempt(draft.tenant, &ctx.principal, Action::Create, &target) {
+        draft.require(Action::Create, &target, Subject::default())?;
+        return Err(draft.reject(
+            ErrorKind::Unauthorized,
+            format!("{:?} may not Create {target:?}", ctx.principal),
+        ));
+    }
     let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
 
@@ -1280,6 +1295,28 @@ fn delete_record(
         }
     }
     for (before, mut rewrite) in cleared.into_values() {
+        // WG-5664: the referrer's constraints must hold on the record the clearing leaves. A delete
+        // that would leave one violated is refused with the constraint error, as a restrict refuses
+        // the delete with `StillReferenced`, rather than store the violating record.
+        if let Some(referrer_def) = draft.tenant.schema.objects.get(&before.object) {
+            if constraint_breaks(lookup, referrer_def, &rewrite, &ctx.principal, ctx.now)? {
+                let rule = format!("constraint:{}", before.object);
+                draft.evidence.push(Check::fail(
+                    rule,
+                    format!(
+                        "{} {} would violate a constraint once cleared",
+                        before.object, rewrite.id
+                    ),
+                ));
+                return Err(draft.reject(
+                    ErrorKind::ConstraintViolated,
+                    format!(
+                        "{} {} would violate a constraint when {object} {id} is deleted",
+                        before.object, rewrite.id
+                    ),
+                ));
+            }
+        }
         rewrite.version += 1;
         rewrite.updated_at = ctx.now;
         let after = Arc::new(rewrite);

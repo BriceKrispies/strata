@@ -1011,3 +1011,42 @@ pub fn validate_record(
     }
     Ok(out)
 }
+
+/// Whether one constraint of `object` fails on `candidate`: a constraint that is `false` or cannot
+/// be evaluated (WG-5664). `null` and `true` do not fail. This is the test a delete applies to each
+/// record its clearing of a set-null reference rewrites: the delete is refused rather than leave
+/// a stored record violating a constraint. A missing record that the snapshot does not cover is
+/// the need it names, as in [`validate_record`].
+pub(crate) fn constraint_breaks(
+    lookup: Lookup<'_>,
+    object: &ObjectTypeDef,
+    candidate: &Record,
+    principal: &Principal,
+    now: Timestamp,
+) -> Result<bool, DomainError> {
+    let roles = roles_of(lookup.tenant, principal);
+    let no_params = BTreeMap::new();
+    let env = Env {
+        record: Some(candidate),
+        old: None,
+        new: Some(candidate),
+        params: &no_params,
+        now,
+        principal,
+        roles: &roles,
+        lookup: Some(lookup),
+    };
+    for constraint in object.constraints.values() {
+        match expr::eval(&constraint.expr, &env) {
+            Ok(Value::Bool(false)) => return Ok(true),
+            Ok(_) => {}
+            Err(_) => {
+                if let Some(missing) = missing_error(&constraint.expr, &env) {
+                    return Err(missing);
+                }
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}

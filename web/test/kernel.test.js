@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { prose } from '../src/components/parts.js';
 import { explain } from '../src/generated/errors.js';
+import * as forms from '../src/generated/forms.js';
 import { initialState, parseHref, slugify, update } from '../src/kernel/update.js';
 import { view } from '../src/kernel/view.js';
 
@@ -323,4 +324,102 @@ test('a message on screen is given a timer and leaves when it fires', () => {
   const timer = replied.effects.find((e) => e.type === 'timer' && e.name === 'toast');
   assert.equal(timer.token, replied.state.toasts[0].id);
   assert.equal(update(replied.state, { type: 'timer', name: 'toast', token: timer.token, ...stamp }).state.toasts.length, 0);
+});
+
+// A person signed in, as the gateway answers the session read.
+const member = { ...anonymous, authenticated: true, principal: 'user:ines', display_name: 'Inès', csrf_token: 'tok', roles: ['public', 'editor'], may: { post: ['create'] } };
+
+// F1 (gap analysis, section 7): on a page that needs no session, a session end kept the view model read
+// for the former person, and the page drew it for the visitor until the next reply. The spec's
+// `switched` drops the model whatever the page, and the view is read again.
+test('a session end drops the view read for the former person, on a page that needs no session', () => {
+  const start = boot({ path: '/', session: { session: member }, view: homeModel() }).state;
+  assert.equal(start.view.model.view, 'home', 'the page holds the model read for the signed-in person');
+  const ended = update(start, { type: 'ws_message', message: { type: 'session', state: 'expired' }, ...stamp });
+  assert.equal(ended.state.view.model, null, 'the former person\'s model is not drawn for the visitor');
+  assert.equal(ended.state.view.status, 'loading', 'the page waits for the view it reads again');
+  assert.ok(ended.effects.some((e) => e.type === 'http'), 'the view is read again');
+});
+
+// F3: a session read that names another person, or nobody, left the former person's state in place: the
+// session changed and the model read for the former person stayed on the page. The spec's sessionChanged
+// is a change of person (switched): the model is dropped and the view is read again.
+test('a session read naming another person, or nobody, drops what the former person held', () => {
+  const others = [{ ...member, principal: 'user:omar', display_name: 'Omar', csrf_token: 'tok2' }, anonymous];
+  for (const session of others) {
+    const start = boot({ path: '/', session: { session: member }, view: homeModel() }).state;
+    // A refused socket upgrade reads the session again; the read answers with the other session.
+    const refused = update(start, { type: 'ws_closed', refused: true, ...stamp });
+    const read = refused.effects.find((e) => e.type === 'http' && e.path === '/api/session');
+    const replied = update(refused.state, { type: 'http_result', id: read.id, ok: true, status: 200, body: { session }, ...stamp });
+    assert.equal(replied.state.view.model, null, 'the model read for the former person is dropped');
+    assert.equal(replied.state.generation, 1, 'the change of person is counted');
+    assert.ok(replied.effects.some((e) => e.type === 'http' && e.path.startsWith('/api/view')), 'the view is read again');
+  }
+});
+
+// F2: a view asked for before the person changed was applied after the change, because a view request was not
+// a person-scoped kind: its reply was judged by its request id alone. The spec drops the replies to the former
+// person's requests (the generation moves on). The change here is a session read naming another person; a
+// session end refreshes the view quietly and so already replaces the request id, which is why the session
+// read is the path that shows it on the current code.
+test('a view asked for before the person changed is not applied after the change', () => {
+  const start = boot({ path: '/', session: { session: member }, view: homeModel() }).state;
+  const visit = update(start, { type: 'navigate', href: '/topics', ...stamp });
+  const asked = visit.effects.find((e) => e.type === 'http');
+  const refused = update(visit.state, { type: 'ws_closed', refused: true, ...stamp });
+  const read = refused.effects.find((e) => e.type === 'http' && e.path === '/api/session');
+  const changed = update(refused.state, { type: 'http_result', id: read.id, ok: true, status: 200, body: { session: { ...member, principal: 'user:omar', csrf_token: 'tok2' } }, ...stamp });
+  const late = update(changed.state, { type: 'http_result', id: asked.id, ok: true, status: 200, body: homeModel({ view: 'topics', path: '/topics' }), ...stamp });
+  assert.equal(late.state.view.model, null, 'the reply for the former person\'s view is not held');
+  assert.equal(late.state.view.status, 'loading', 'the page waits for the view it reads again');
+});
+
+// F4: a cold start held a view that answered before the session was known, and never read the view again once the
+// session answered. The spec holds no view until the session is known: an early answer is dropped, and the view is
+// read again when the session answers.
+test('a cold start holds no view that answers before the session does, and reads it again once the session is known', () => {
+  const cold = boot(null);
+  const session = cold.effects.find((e) => e.type === 'http' && e.path === '/api/session');
+  const asked = cold.effects.find((e) => e.type === 'http' && e.path.startsWith('/api/view'));
+  const early = update(cold.state, { type: 'http_result', id: asked.id, ok: true, status: 200, body: homeModel(), ...stamp });
+  assert.equal(early.state.view.model, null, 'the view is not held before the session is known');
+  const learned = update(early.state, { type: 'http_result', id: session.id, ok: true, status: 200, body: { session: anonymous }, ...stamp });
+  assert.equal(learned.state.view.model, null, 'and nothing is drawn while the view is read again');
+  assert.ok(learned.effects.some((e) => e.type === 'http' && e.path.startsWith('/api/view')), 'the view is read again');
+});
+
+// F6: a change of person kept the login name typed into the sign-in form (only the password was cleared). The
+// spec's switched clears the whole form: its values and its refusal.
+test('a change of person clears the sign-in form, the typed name too', () => {
+  const start = boot({ path: '/', session: { session: member }, view: homeModel() }).state;
+  const typed = update(start, { type: 'input', form: 'login', name: 'login', value: 'ines', ...stamp }).state;
+  assert.equal(typed.forms.login.values.login, 'ines', 'the name is typed in');
+  const ended = update(typed, { type: 'ws_message', message: { type: 'session', state: 'expired' }, ...stamp }).state;
+  assert.deepEqual(ended.forms.login.values, forms.initialValues('form-sign-in', {}), 'the sign-in form is cleared');
+  assert.equal(ended.forms.login.error, '');
+});
+
+// F7: a refused socket upgrade was counted when the session read answered; the spec counts it when the socket
+// closes (wsRefusedKeep, wsRefusedStop), and the fifth refusal stops live updates at that close.
+test('a refused upgrade is counted when the socket closes, and the fifth stops live updates', () => {
+  let state = boot({ path: '/', session: { session: anonymous }, view: homeModel() }).state;
+  const counts = [];
+  for (let i = 0; i < 5; i += 1) {
+    const closed = update(state, { type: 'ws_closed', refused: true, ...stamp });
+    counts.push(closed.state.wsRefusals);
+    if (i === 0) {
+      const read = closed.effects.find((e) => e.type === 'http' && e.path === '/api/session');
+      const replied = update(closed.state, { type: 'http_result', id: read.id, ok: true, status: 200, body: { session: anonymous }, ...stamp }).state;
+      assert.equal(replied.wsRefusals, 1, 'the session read does not count the refusal again');
+    }
+    state = closed.state;
+    if (i < 4) {
+      // The reconnect timer runs out and the socket connects again, to be refused again.
+      const timer = closed.effects.find((e) => e.type === 'timer' && e.name === 'reconnect');
+      state = update(state, { type: 'timer', name: 'reconnect', token: timer.token, ...stamp }).state;
+    }
+  }
+  assert.deepEqual(counts, [1, 2, 3, 4, 5]);
+  assert.equal(state.wsStopped, true, 'the fifth refusal stops live updates');
 });

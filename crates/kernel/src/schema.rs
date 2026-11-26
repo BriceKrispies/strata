@@ -519,6 +519,25 @@ impl TenantSchemaExt for TenantSchema {
                             transition.name
                         ));
                     }
+                    // A transition may not assign the field of another workflow of its type, and may
+                    // assign its own workflow field only a string literal (the states are checked
+                    // below). A null or computed value cannot be checked against the states here.
+                    let own = *field == workflow.field;
+                    if self.workflows.values().any(|other| {
+                        other.id != workflow.id
+                            && other.object == workflow.object
+                            && other.field == *field
+                    }) {
+                        problems.push(format!(
+                            "{at}.{}: sets {field}, the field of another workflow of {}: a transition may not assign it",
+                            transition.name, workflow.object
+                        ));
+                    } else if own && !matches!(value, Expr::Lit(Value::Str(_))) {
+                        problems.push(format!(
+                            "{at}.{}: sets {field} to a value that is not a string literal: a workflow field takes only a state written as a literal",
+                            transition.name
+                        ));
+                    }
                     if let Err(e) = expr::check(value, &env) {
                         problems.push(format!("{at}.{}: set {field}: {e}", transition.name));
                     }
