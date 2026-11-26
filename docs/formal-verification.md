@@ -942,7 +942,6 @@ no `native_decide`.
 path from tenant data reached those names, since the views fix them in code, but the renderer did
 not enforce it, and the model's UI tree allows any name. `h()` now enforces the vocabulary.
 
-
 **Checked mechanically, on every change.**
 
 - `web/test/no-sinks.test.js` (in `npm run test:web`) fails on an HTML or script sink in `web/src`:
