@@ -2926,3 +2926,8 @@ op 1 100 segment remove 1
 op 1 100 type 20 update 1 1=s:p200 2=i:1
 op 1 100 segment remove 1
 end
+scenario h-segment-member-change-re-evaluates-a-principal-predicate
+op 1 100 type 20 create 1=s:p101 2=i:9
+op 1 100 segment define 3 seg_3 20 1 - eq f1 prin
+op 1 100 assign 101 0
+end

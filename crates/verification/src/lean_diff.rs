@@ -3244,6 +3244,8 @@ pub const SEGMENT_KINDS: &[&str] = &[
     "segment-event exited change",
     "segment-event entered predicate-change",
     "segment-event exited predicate-change",
+    "segment-event entered member-change",
+    "segment-event exited member-change",
     "segment start-automation",
     "segment decline-automation hop-limit",
 ];
@@ -3253,7 +3255,7 @@ pub const SEGMENT_KINDS: &[&str] = &[
 /// triggers on segment 1) by its reason. These are the `segment-event` lines and the effect lines of the operation's
 /// group, which `op_outcomes` attributes to the operation that caused them.
 pub fn segment_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
-    group
+    let mut shapes: Vec<String> = group
         .iter()
         .filter_map(|line| {
             let line = line.as_ref();
@@ -3276,7 +3278,20 @@ pub fn segment_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
                 None
             }
         })
-        .collect()
+        .collect();
+    // An entry or exit that a member change caused: the operation's group holds the `member-changed` event of the change,
+    // and the kernel's plan includes the users whose roles it changed (slice 16).
+    if group.iter().any(|line| line.as_ref().contains(" member-changed ")) {
+        for line in group {
+            let line = line.as_ref();
+            if line.starts_with("segment-event ") {
+                if let Some(dir) = line.split_whitespace().find_map(|w| w.strip_prefix("direction=")) {
+                    shapes.push(format!("segment-event {dir} member-change"));
+                }
+            }
+        }
+    }
+    shapes
 }
 
 /// The scenario of case `seed` with its searches, aggregates, settings and ledger operations placed in (see

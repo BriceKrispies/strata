@@ -4870,8 +4870,8 @@ theorem define_object_limit_refused (t : Tenant) (p : Principal) (id : SegmentId
   simp [Except.map, h, hb, hl, ht, ho, hty, hpf, hp, hr, hc, hk]
 
 end Strata
-
 namespace Strata
+
 
 theorem memberOf_dropMember_self (ms : List Membership) (s : SegmentId) (P : PrincipalId) :
     memberOf? (dropMember ms s P) s P = none := by
@@ -4902,7 +4902,6 @@ theorem memberOf_setMember_other (ms : List Membership) (s : SegmentId) (P : Pri
   grind [List.find?_cons]
 
 
-namespace Strata
 
 theorem memberOf_some_key (ms : List Membership) (s : SegmentId) (P : PrincipalId) (w : Membership)
     (h : memberOf? ms s P = some w) : w.segment = s && w.person = P := by
@@ -5007,7 +5006,6 @@ theorem segPair_entered_iff (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Pr
       simp [segEvent, hd] <;> (intro x hx h1 h2; first | exact absurd ⟨h1, h2⟩ (hacc x hx) | (split at hx <;> first | exact absurd ⟨h1, h2⟩ (hacc x hx) | simp_all [segEvent]))
 
 
-namespace Strata
 
 theorem segPair_exited_iff (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
     (P : PrincipalId) (acc : List Membership × List SegEvent)
@@ -5232,6 +5230,58 @@ theorem segment_trigger_matches_entries (s : SegmentId) (e : SegEvent) :
     TriggerOn.matchesSeg (.segmentEntered s) e = true ↔ e.direction = .entered ∧ s = e.segment := by
   simp [TriggerOn.matchesSeg]
 
+
+theorem memberUsers_mem (evs : List DomainEvent) (ev : DomainEvent) (u : PrincipalId) (roles : List RoleId)
+    (he : ev ∈ evs) (hb : ev.body = .memberChanged (.user u) roles) : u ∈ memberUsers evs := by
+  unfold memberUsers
+  rw [List.mem_filterMap]
+  exact ⟨ev, he, by simp [hb]⟩
+
+theorem segChangedPersons_member (s : SegmentDef) (evs : List DomainEvent) (u : PrincipalId)
+    (ev : DomainEvent) (roles : List RoleId) (hp : predRoles s.predicate = true)
+    (he : ev ∈ evs) (hb : ev.body = .memberChanged (.user u) roles) :
+    u ∈ segChangedPersons s evs := by
+  unfold segChangedPersons
+  simp only [hp, ite_true]
+  rw [sortPersons, List.mem_mergeSort]
+  rw [List.mem_eraseDups, List.mem_append]
+  exact Or.inr (memberUsers_mem evs ev u roles he hb)
+
+theorem segChangedPersons_nodup (s : SegmentDef) (evs : List DomainEvent) :
+    (segChangedPersons s evs).Nodup := by
+  unfold segChangedPersons sortPersons
+  exact (List.mergeSort_perm _ _).nodup_iff.2 (eraseDups_nodup' _)
+
+
+
+/-- For any accepted step's events, a segment's re-evaluated person gets an entry event exactly when the decision makes
+    the person a member and the membership was absent before (the record pass and the member pass alike, SEG-008). -/
+theorem step_entered_iff (t : Tenant) (evs : List DomainEvent) (p : Principal) (hop : Nat) (s : SegmentDef)
+    (P : PrincipalId) (hP : P ∈ segChangedPersons s evs) :
+    (∃ e ∈ (segPairs t t.revision hop .change p s (segChangedPersons s evs) (t.memberships, [])).2,
+        e.segment = s.id ∧ e.person = P ∧ e.direction = .entered) ↔
+      (segDecide t s P = some true ∧ (memberOf? t.memberships s.id P).isNone = true) :=
+  fold_entered_iff t t.revision hop .change p s P _ _ (segChangedPersons_nodup s evs) hP (by simp)
+
+/-- The exit counterpart: an exit exactly when the decision stops a member. -/
+theorem step_exited_iff (t : Tenant) (evs : List DomainEvent) (p : Principal) (hop : Nat) (s : SegmentDef)
+    (P : PrincipalId) (hP : P ∈ segChangedPersons s evs) :
+    (∃ e ∈ (segPairs t t.revision hop .change p s (segChangedPersons s evs) (t.memberships, [])).2,
+        e.segment = s.id ∧ e.person = P ∧ e.direction = .exited) ↔
+      (segDecide t s P = some false ∧ (memberOf? t.memberships s.id P).isSome = true) :=
+  fold_exited_iff t t.revision hop .change p s P _ _ (segChangedPersons_nodup s evs) hP (by simp)
+
+/-- A user whose roles a step changes is re-evaluated in a segment whose predicate reads the principal, and the entry or
+    exit that follows is exactly the membership change for that user. -/
+theorem member_change_entry_iff (t : Tenant) (evs : List DomainEvent) (p : Principal) (hop : Nat) (s : SegmentDef)
+    (u : PrincipalId) (ev : DomainEvent) (roles : List RoleId) (hp : predRoles s.predicate = true)
+    (he : ev ∈ evs) (hb : ev.body = .memberChanged (.user u) roles) :
+    (∃ e ∈ (segPairs t t.revision hop .change p s (segChangedPersons s evs) (t.memberships, [])).2,
+        e.segment = s.id ∧ e.person = u ∧ e.direction = .entered) ↔
+      (segDecide t s u = some true ∧ (memberOf? t.memberships s.id u).isNone = true) :=
+  step_entered_iff t evs p hop s u (segChangedPersons_member s evs u ev roles hp he hb)
+
+
 end Strata
 
 -- Slice 16: segments.
@@ -5259,3 +5309,9 @@ end Strata
 #print axioms Strata.segTrigger_missing_automation_declined
 #print axioms Strata.segTrigger_suspended_declined
 #print axioms Strata.segment_trigger_matches_entries
+#print axioms Strata.memberUsers_mem
+#print axioms Strata.segChangedPersons_member
+#print axioms Strata.segChangedPersons_nodup
+#print axioms Strata.step_entered_iff
+#print axioms Strata.step_exited_iff
+#print axioms Strata.member_change_entry_iff

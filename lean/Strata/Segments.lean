@@ -358,13 +358,34 @@ def segRelevant (s : SegmentDef) (ty : TypeId) (before after : Option Record) : 
          (changedFields b a).any (fun f => f == s.principalField || (predFields s.predicate).contains f)
      | _, _ => true)
 
-/-- The persons whose membership in a segment a step can change: those of the relevant records it changed, before and
-    after, in the order of their strings. -/
+/-- Whether a predicate reads the principal (the kernel's `reads.roles`, set by `principal` and `has_role`): then a change
+    of a person's roles re-evaluates the person (SEG-027). -/
+def predRoles : Expr → Bool
+  | .principal => true
+  | .cmp _ a b => predRoles a || predRoles b
+  | .and a b => predRoles a || predRoles b
+  | .or a b => predRoles a || predRoles b
+  | .not a => predRoles a
+  | .isNull a => predRoles a
+  | _ => false
+
+/-- The users whose roles a step changed: the persons of its `MemberChanged` events (a team names no user, and a team's
+    own event concerns no person). -/
+def memberUsers (evs : List DomainEvent) : List PrincipalId :=
+  evs.filterMap (fun ev => match ev.body with
+    | .memberChanged (.user u) _ => some u
+    | _ => none)
+
+/-- The persons whose membership in a segment a step re-evaluates (the kernel's `plan_change`): the persons of the relevant
+    records it changed, before and after, and, for a segment whose predicate reads the principal, the users whose roles it
+    changed. In the order of their strings. -/
 def segChangedPersons (s : SegmentDef) (evs : List DomainEvent) : List PrincipalId :=
-  sortPersons (((recordChanges evs).flatMap (fun c =>
+  let fromRecords := (recordChanges evs).flatMap (fun c =>
     if segRelevant s c.1 c.2.1 c.2.2 then
       (c.2.2.bind (recordPerson s.principalField)).toList ++ (c.2.1.bind (recordPerson s.principalField)).toList
-    else [])).eraseDups)
+    else [])
+  let fromMembers := if predRoles s.predicate then memberUsers evs else []
+  sortPersons ((fromRecords ++ fromMembers).eraseDups)
 
 /-- The memberships and the events an accepted step decides (`segRecordPass`): for each segment in id order, the persons its
     changed records concern, decided on the tenant after the step at its revision. -/
