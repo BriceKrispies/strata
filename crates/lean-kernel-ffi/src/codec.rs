@@ -33,11 +33,11 @@
 //! naturals), its teams (a list of entries, each the id and then the label, the members and the roles)
 //! and its invitations (each the id, then the address, the roles, the issuer, the expiry, the redeemer
 //! and the revoker, the last two optional). The kernel's refusals `InvalidIntent`, `UnknownRole`,
-//! `LastOwner` and `TenantExists` are tags `14` to `17`. An intent is tag `6` for a creation of a tenant
-//! (its owner, then its name) or `7` for a membership intent: a second tag (`0` assign a role, `1`
-//! revoke one, `2` define a team, `3` and `4` give a team a role and take one away, `5` and `6` add a
-//! team member and remove one, `7` create an invitation, `8` revoke one, `9` redeem one) and its fields
-//! in declaration order.
+//! `LastOwner` and `TenantExists` are tags `14` to `17`, `WorkflowViolation` `18` and `SchemaConflict`
+//! (slice 11) `19`. An intent is tag `6` for a creation of a tenant (its owner, then its
+//! name) or `7` for a membership intent: a second tag (`0` assign a role, `1` revoke one, `2` define
+//! a team, `3` and `4` give a team a role and take one away, `5` and `6` add a team member and remove
+//! one, `7` create an invitation, `8` revoke one, `9` redeem one) and its fields in declaration order.
 //!
 //! Slice 9 adds the kernel's names and the revision of a tenant: a workflow is its id (a string) before
 //! its field, a transition is its name (a string) before its source, and a tenant ends with its revision,
@@ -329,6 +329,7 @@ pub enum Refusal {
     LastOwner,
     TenantExists,
     WorkflowViolation,
+    SchemaConflict,
 }
 
 /// A membership intent (slice 7). Lean's `MemberIntent`.
@@ -991,6 +992,7 @@ fn put_refusal(out: &mut Vec<u8>, e: &Refusal) {
         Refusal::LastOwner => 16,
         Refusal::TenantExists => 17,
         Refusal::WorkflowViolation => 18,
+        Refusal::SchemaConflict => 19,
     });
 }
 
@@ -1726,6 +1728,7 @@ fn get_refusal(r: &mut Reader<'_>) -> Option<Refusal> {
         16 => Some(Refusal::LastOwner),
         17 => Some(Refusal::TenantExists),
         18 => Some(Refusal::WorkflowViolation),
+        19 => Some(Refusal::SchemaConflict),
         _ => None,
     }
 }

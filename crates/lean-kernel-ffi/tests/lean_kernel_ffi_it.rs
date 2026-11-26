@@ -905,7 +905,9 @@ fn gen_refusal(rng: &mut Rng) -> Refusal {
         15 => Refusal::UnknownRole,
         16 => Refusal::LastOwner,
         17 => Refusal::TenantExists,
-        _ => Refusal::WorkflowViolation,
+        18 => Refusal::WorkflowViolation,
+        19 => Refusal::SchemaConflict,
+        _ => unreachable!("an unknown refusal tag"),
     }
 }
 

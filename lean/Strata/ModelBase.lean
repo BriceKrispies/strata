@@ -513,6 +513,8 @@ inductive Err where
   /-- A record's workflow field is not an initial state on a create, or an update changes it without a
       declared transition whose guard is true, or leaves it a state that is not one (slice 8). -/
   | workflowViolation
+  /-- A schema change names an expected version that is not the schema version (slice 11). -/
+  | schemaConflict
   deriving DecidableEq, Repr
 
 /-- The first constraint that fails on the record, in the order given: `false` is

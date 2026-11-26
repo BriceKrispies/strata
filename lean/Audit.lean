@@ -3,6 +3,7 @@ Prints, for each theorem the project claims, the axioms its proof depends on.
 Run with `lake env lean Audit.lean`. A theorem proved with `sorry` would list `sorryAx`.
 -/
 import Strata
+import Strata.SchemaChangeProofs
 
 #print axioms Strata.step_preserves_wf
 #print axioms Strata.stepTenant_preserves_wf
@@ -2478,3 +2479,24 @@ end Strata
 #print axioms Strata.take_lt_drop
 #print axioms Strata.take_take_le
 #print axioms Strata.types_sorted_strict
+
+-- Slice 11, part a: the schema change in general (Strata/SchemaChange.lean, Strata/SchemaChangeProofs.lean).
+#print axioms Strata.changeSchemaT_unauthorized
+#print axioms Strata.changeSchemaT_conflict
+#print axioms Strata.changeSchemaT_empty
+#print axioms Strata.changeSchemaT_limit
+#print axioms Strata.applyChanges_cons
+#print axioms Strata.changeSchemaT_ok
+#print axioms Strata.applyChanges_valid
+#print axioms Strata.changeSchemaT_valid
+#print axioms Strata.changeSchemaT_rules
+#print axioms Strata.changeSchemaT_strict_not_violated
+#print axioms Strata.changeSchemaT_strict_conforms
+#print axioms Strata.applyChanges_singleton
+#print axioms Strata.lookup_putTypeList_self
+#print axioms Strata.removeField_drops
+#print axioms Strata.removeType_refused_with_records
+#print axioms Strata.removeType_ok_empty
+#print axioms Strata.lookup_filter_removed
+#print axioms Strata.removeType_deleted_gone
+#print axioms Strata.changeSchemaT_removeField

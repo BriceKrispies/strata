@@ -61,7 +61,7 @@ theorem lawful_onDelete : Lawful encOnDelete decOnDelete := by
 
 /-- The kernel's errors: nineteen tags, no payload. `unknownObject` is tag `11`,
     `constraintViolated` `12` and `evaluation` `13`; slice 7 adds `invalidIntent` `14`,
-    `unknownRole` `15`, `lastOwner` `16` and `tenantExists` `17`; slice 8 adds `workflowViolation` `18`. -/
+    `unknownRole` `15`, `lastOwner` `16` and `tenantExists` `17`; slice 8 adds `workflowViolation` `18`; slice 11 adds `schemaConflict` `19`. -/
 def encErr : Err → Bytes
   | .noTenant => [tag 0]
   | .unauthorized => [tag 1]
@@ -82,6 +82,7 @@ def encErr : Err → Bytes
   | .lastOwner => [tag 16]
   | .tenantExists => [tag 17]
   | .workflowViolation => [tag 18]
+  | .schemaConflict => [tag 19]
 
 def decErr : Dec Err := fun bs =>
   match bs with
@@ -107,6 +108,7 @@ def decErr : Dec Err := fun bs =>
     | 16 => some (.lastOwner, r)
     | 17 => some (.tenantExists, r)
     | 18 => some (.workflowViolation, r)
+    | 19 => some (.schemaConflict, r)
     | _ => none
 
 theorem lawful_err : Lawful encErr decErr := by
@@ -120,9 +122,9 @@ theorem lawful_err : Lawful encErr decErr := by
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
           b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨
           b.toNat = 10 ∨ b.toNat = 11 ∨ b.toNat = 12 ∨ b.toNat = 13 ∨ b.toNat = 14 ∨
-          b.toNat = 15 ∨ b.toNat = 16 ∨ b.toNat = 17 ∨ b.toNat = 18 ∨ 19 ≤ b.toNat by omega)
+          b.toNat = 15 ∨ b.toNat = 16 ∨ b.toNat = 17 ∨ b.toNat = 18 ∨ b.toNat = 19 ∨ 20 ≤ b.toNat by omega)
         with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk |
-          hk | hk | hk
+          hk | hk | hk | hk
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 0 hk]
@@ -180,6 +182,9 @@ theorem lawful_err : Lawful encErr decErr := by
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 18 hk]
+      · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encErr, byte_eq_tag b 19 hk]
       · simp only [decErr] at h
         repeat' split at h
         all_goals first | omega | simp at h

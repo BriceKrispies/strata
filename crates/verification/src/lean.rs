@@ -1393,6 +1393,7 @@ fn show_error(kind: ErrorKind) -> &'static str {
         ErrorKind::LastOwner => "last_owner",
         ErrorKind::TenantExists => "tenant_exists",
         ErrorKind::WorkflowViolation => "workflow_violation",
+        ErrorKind::SchemaConflict => "schema_conflict",
         ErrorKind::UnknownQuery => "unknown_query",
         _ => "unmodelled",
     }

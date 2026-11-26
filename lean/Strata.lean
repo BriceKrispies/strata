@@ -1,4 +1,6 @@
 import Strata.Model
+import Strata.SchemaChange
+import Strata.SchemaChangeProofs
 import Strata.Members
 import Strata.MembersProofs
 import Strata.References
